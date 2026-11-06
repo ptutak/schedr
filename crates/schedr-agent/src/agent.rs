@@ -802,6 +802,15 @@ impl ProcessExecutor {
         files: Vec<String>,
         code: ParseCode,
     ) -> Result<Vec<ParsedFile>, String> {
+        // A library in the root is shipped and hashed, never loaded here (decision 305).
+        let searched = dir.clone();
+        let files =
+            tokio::task::spawn_blocking(move || crate::scan::split_dag_files(&searched, files).0)
+                .await
+                .map_err(|e| e.to_string())?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
         let mut runner = ProcessParseRunner {
             process: ProcessSpec {

@@ -17,7 +17,7 @@ the [CLI reference](../_generated/04-reference/02-cli.md).
 `schedr dags check <path>` imports the DAG files with the runner and reports what they
 define. It starts a new process for that import. A worker's parse job can be forked; this
 command is not. A directory is scanned like a DAG root, honouring `.schedrignore`. A file
-is checked alone.
+is checked alone. A named special file is refused.
 
 ```
 ok     helpers.py: no DAGs
@@ -28,7 +28,9 @@ ok     sync.py: sync_customers (3 tasks)
 `ok` is followed by five spaces. A file that defines several DAGs lists them on its line,
 separated by commas. A file that fails to import prints `error`, two spaces, the path,
 the exception type and the message, then the traceback indented under the path. The
-summary counts that file, and the process exits 1. Exit 0 means every file imported.
+summary counts that file, and the process exits 1. Files whose bytes don't contain `schedr`
+are skipped, even when named alone. The text output prints `skipped <file>` and why;
+skipped files aren't in the summary or `--json`. Exit 0 means every checked file imported.
 Exit 2 is wrong usage.
 
 A Python warning raised while a file is imported follows that file's line, as `warn`, three

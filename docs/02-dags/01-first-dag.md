@@ -46,7 +46,7 @@ own process, and prints the logs and a table.
 |---|---|
 | One `with Dag(...)` | Records that DAG |
 | Several `with Dag(...)` blocks, one after another | Records each of them. [Schedules](04-schedules.md) is a file of five. |
-| No `with Dag(...)` | Records nothing. `schedr dags check` prints `ok     helpers.py: no DAGs`. A `@task` function defined here can be called inside another file's `with Dag(...)`. |
+| No `with Dag(...)` | Records nothing. Its `@task` functions can be called in another DAG. |
 | `with Dag(...)` inside another `with Dag(...)` | `RuntimeError`: `` `with Dag('inner')` inside `with Dag('outer')`: DAGs can't be nested `` |
 
 A DAG ID is explicit. It is up to 250 bytes: ASCII letters, digits and `_ . - : / #`. The
@@ -55,3 +55,39 @@ that is resolved ([Parsing and code versions](../03-guide/06-parsing.md)).
 
 A new DAG is stored paused. `schedr dags unpause <id>` lets the scheduler create its runs
 ([Schedules](04-schedules.md#pausing)).
+
+## Libraries in a root
+
+Python files whose bytes contain `schedr` are imported by the parser. Other files are
+copied and hashed with the root, but aren't loaded on their own. They can still be imported
+normally by a DAG. For example, a root can contain:
+
+```text
+sync.py
+mylib/__init__.py
+mylib/core.py
+mylib/util.py
+```
+
+```python
+# mylib/util.py
+VALUE = "hello"
+```
+
+```python
+# mylib/core.py
+from .util import VALUE
+
+def greeting():
+    return VALUE
+```
+
+`sync.py` can import `greeting` with `from mylib.core import greeting` and use it in a
+task. The parser doesn't load `core.py` on its own, so its relative import works when the
+package is imported normally.
+
+A file defining DAGs must mention `schedr`. Usually `from schedr import Dag` does that.
+If it gets `Dag` through a company module instead, add `import schedr` or a `# schedr`
+comment. Otherwise the file is skipped and its DAGs count as removed. A DAG belongs to
+the file calling `Dag(...)`; a function in a helper file creating a DAG defines nothing
+for now, even when called from a DAG file.

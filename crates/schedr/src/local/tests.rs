@@ -35,7 +35,8 @@ fn a_directory_is_a_root_of_its_python_files() {
     let dir = TempDir::new().unwrap();
     let root = dir.path().join("etl");
     std::fs::create_dir_all(root.join("team")).unwrap();
-    std::fs::write(root.join("team/sync.py"), "").unwrap();
+    std::fs::write(root.join("team/sync.py"), "import schedr\n").unwrap();
+    std::fs::write(root.join("team/util.py"), "").unwrap();
     std::fs::write(root.join("notes.md"), "").unwrap();
     std::fs::write(root.join("old.py"), "").unwrap();
     std::fs::write(root.join(".schedrignore"), "old.py\n").unwrap();
@@ -43,15 +44,32 @@ fn a_directory_is_a_root_of_its_python_files() {
     assert_eq!(found.name, "etl");
     assert_eq!(found.dir, root.canonicalize().unwrap());
     assert_eq!(found.files, ["team/sync.py"]);
+    assert_eq!(found.skipped, ["team/util.py"]);
 }
 
 #[test]
 fn a_file_is_a_root_of_one_file_in_its_directory() {
     let dir = TempDir::new().unwrap();
-    std::fs::write(dir.path().join("sync.py"), "").unwrap();
+    std::fs::write(dir.path().join("sync.py"), "import schedr\n").unwrap();
     let found = LocalRoot::at(&dir.path().join("sync.py")).unwrap();
     assert_eq!(found.dir, dir.path().canonicalize().unwrap());
     assert_eq!(found.files, ["sync.py"]);
+}
+
+#[test]
+fn a_named_special_file_is_refused_rather_than_opened() {
+    let dir = TempDir::new().unwrap();
+    let pipe = dir.path().join("pipe.py");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let error = LocalRoot::at(&pipe).unwrap_err();
+    assert!(
+        error.to_string().contains("not a file or a directory"),
+        "{error}"
+    );
 }
 
 /// A configuration with interpreter `bash`, and the script roots given.

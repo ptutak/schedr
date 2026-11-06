@@ -4,14 +4,24 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06, night): finishing M4.9 unattended
+## State (2026-11-06, morning): M4.9 finished; stopped as the user asked
 
 - **The user's instruction:** "finish M4.9 with review and fixes stop after that, commit and push
-  as needed". M4.9c is committed; M4.9d (305) next, then stop. Don't start what follows M4.9.
-- **Done: M4.9c** (decisions 310-314, Built M4.9c): `params`, `outcomes`, `[cleanup]`,
-  `cleanup_handles`, `ScriptResource`, `.cleanup_script`, cleanup settings on `ScriptOperator`.
-  Codex's review: 3 findings, 2 fixed with a test each, the third in the docs round.
-- **The user's calls:** 310-313 (A each). 314 is Claude's: tell the user at the next report.
+  as needed". Don't start what follows M4.9 before they say so.
+- **Done: M4.9c** (decisions 310-314): `params`, `outcomes`, `[cleanup]`, `cleanup_handles`,
+  `ScriptResource`, `.cleanup_script`, cleanup settings on `ScriptOperator`. Codex's review: 3
+  findings, all real, fixed or in its docs round.
+- **Done: M4.9d** (decision 305): only `.py` files holding the bytes `schedr` are parsed;
+  `schedr dags check` says what it skips. Codex's review: 3 findings, all real, the same.
+- **For the user to look at:**
+  - 314 is Claude's call, not asked: a worker that can't run a task's cleanup script rejects the
+    task.
+  - M4.9d's small choices (noted under 305): the exact bytes, any encoding; `dags check` keeps
+    the rule even for a named file, printing `skipped`.
+  - **B170 (new, medium, likely):** a DAG built by a function in a helper file defines nothing,
+    silently, as a DAG belongs to the file calling `Dag(...)`. Decision 305's example assumed
+    this worked. The docs say it doesn't for now. Fix to discuss with the user.
+- **CI:** check the last commit's run first.
 
 ## State (2026-11-05, late night): B168 and B169 fixed; paused for the user's restart
 

@@ -4,8 +4,8 @@
 //! new checkout), skipping what `.schedrignore` files exclude (gitignore syntax, in any
 //! directory), `.git` and `__pycache__` directories and `*.pyc` files. Every other file counts
 //! for the content hash, not only `.py` files, since tasks read SQL, configuration and other
-//! files next to their DAG files; only `.py` files are parsed (see PROJECT.md, DAG code
-//! delivery and Code versions and change detection).
+//! files next to their DAG files; only `.py` files mentioning `schedr` are parsed (see
+//! PROJECT.md, DAG code delivery and Code versions and change detection; decision 305).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -101,7 +101,7 @@ impl Snapshot {
         &self.files
     }
 
-    /// The `.py` files: the ones parse mode imports, in path order.
+    /// The `.py` files, in path order; parse mode imports those [`mentions_schedr`] finds.
     #[must_use]
     pub fn python_files(&self) -> Vec<String> {
         self.files
@@ -110,6 +110,54 @@ impl Snapshot {
             .cloned()
             .collect()
     }
+}
+
+/// What a `.py` file must contain to be parsed (decision 305).
+pub const DAG_FILE_MARK: &[u8] = b"schedr";
+
+/// Whether `path` contains [`DAG_FILE_MARK`], in its bytes, whatever its encoding. A file that
+/// can't be read counts as mentioning it: the parser then reports why, under its timeout, instead
+/// of its DAGs quietly counting as removed. So does what isn't a regular file (opening a FIFO
+/// would wait for a writer, with no timeout here).
+#[must_use]
+pub fn mentions_schedr(path: &Path) -> bool {
+    use std::io::Read as _;
+    if !path.metadata().is_ok_and(|found| found.is_file()) {
+        return true;
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return true;
+    };
+    let mut buffer = vec![0; 64 * 1024];
+    // Kept from the last read: the mark may span two.
+    let mut kept = 0;
+    loop {
+        match file.read(&mut buffer[kept..]) {
+            Ok(0) => return false,
+            Ok(read) => {
+                let filled = kept + read;
+                if buffer[..filled]
+                    .windows(DAG_FILE_MARK.len())
+                    .any(|window| window == DAG_FILE_MARK)
+                {
+                    return true;
+                }
+                kept = filled.min(DAG_FILE_MARK.len() - 1);
+                buffer.copy_within(filled - kept..filled, 0);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return true,
+        }
+    }
+}
+
+/// `files` (relative to `dir`) split into those to parse and those that don't mention
+/// `schedr` (decision 305).
+#[must_use]
+pub fn split_dag_files(dir: &Path, files: Vec<String>) -> (Vec<String>, Vec<String>) {
+    files
+        .into_iter()
+        .partition(|file| mentions_schedr(&dir.join(file)))
 }
 
 /// Scans a root.

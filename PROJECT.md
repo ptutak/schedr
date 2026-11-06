@@ -1746,6 +1746,12 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   loading a file inside a package under its package name (relative imports fixed, but every
   library module still run on each parse); `PYTHONPATH` (it finds modules for `import`, but the
   parser loads each file by its path).
+  A file that can't be read is parsed anyway, so the parser reports why rather than its DAGs
+  counting as removed. The mark is the exact bytes `schedr`, any encoding. `schedr dags check` keeps
+  the rule, even for a file it is named (it would otherwise pass what a deployment skips), and
+  prints `skipped <file>` with why; `--json` stays what a parse reports. Found building this: a
+  factory call defines nothing today even with the mention, as a DAG belongs to the file calling
+  `Dag(...)`, the helper (B170); the rule holds for a file re-exporting `Dag` through another.
 - **New DAGs are paused** when first found; a user unpauses them from the UI or CLI.
 - **Removed DAGs disappear.** When a DAG's file is deleted (or no longer defines that DAG), the
   DAG is removed from the web UI and from all listings, and its schedule stops.
@@ -7445,6 +7451,9 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   a recovered cleanup runs its task's copy of the script root and holds it. A moved or recovered
   cleanup plans only what the cleanup runs (`use_cleanup_script`), so a worker lacking just the
   task's interpreter can take it. Only `notify` is still not available.
+- **Built (M4.9d; decision 305):** the real executor parses only the `.py` files holding the bytes
+  `schedr` (`scan::mentions_schedr`, in the copy being parsed), and starts no runner for a root
+  with none; `schedr dags check` the same, naming what it skips.
 
 - **Built (M4.8c1; decisions 259-269):** `@resource`, `Resource(name)`, `@res.cleanup`, `uses=` on
   tasks, operators and groups, the `requirement` edge kind and `Dag.resources` (setup, cleanup,

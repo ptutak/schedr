@@ -48,8 +48,10 @@ pub struct LocalRoot {
     pub name: String,
     /// The directory.
     pub dir: PathBuf,
-    /// The `.py` files, relative to `dir`.
+    /// The `.py` files to parse, relative to `dir`.
     pub files: Vec<String>,
+    /// The `.py` files a parse skips: they don't mention `schedr` (decision 305).
+    pub skipped: Vec<String>,
 }
 
 impl LocalRoot {
@@ -66,6 +68,11 @@ impl LocalRoot {
         let (dir, files) = if resolved.is_dir() {
             let snapshot = scan(&resolved).map_err(|e| AppError::BadArgument(e.to_string()))?;
             (resolved, snapshot.python_files())
+        } else if !resolved.is_file() {
+            return Err(AppError::BadArgument(format!(
+                "{}: not a file or a directory",
+                path.display()
+            )));
         } else {
             let dir = resolved
                 .parent()
@@ -76,10 +83,16 @@ impl LocalRoot {
                 .unwrap_or_default();
             (dir, vec![name])
         };
+        let (files, skipped) = schedr_agent::scan::split_dag_files(&dir, files);
         let name = dir
             .file_name()
             .map_or_else(|| "root".to_owned(), |n| n.to_string_lossy().into_owned());
-        Ok(Self { name, dir, files })
+        Ok(Self {
+            name,
+            dir,
+            files,
+            skipped,
+        })
     }
 }
 
@@ -175,6 +188,16 @@ async fn check_path(
     }
     let root = LocalRoot::at(path)?;
     let mut files = check_root(&root, config, env).await?;
+    // Not in `--json`'s output: it stays what a parse reports.
+    if !client.json {
+        for file in &root.skipped {
+            writeln!(
+                out,
+                "skipped {file}: it doesn't mention `schedr`, so it is never parsed (a file \
+                 defining DAGs needs at least `import schedr`)"
+            )?;
+        }
+    }
     if path.is_dir() {
         // A whole root: what its tasks declare in `connections=` is checked against its own.
         files = schedr_master::validate::connection_problems(files);

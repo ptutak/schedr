@@ -137,9 +137,10 @@ fn check_lists_the_dags_of_good_files() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(
         out,
-        "ok     helpers.py: no DAGs\n\
+        "skipped helpers.py: it doesn't mention `schedr`, so it is never parsed (a file defining \
+         DAGs needs at least `import schedr`)\n\
          ok     sync.py: sync (2 tasks)\n\
-         2 file(s), 1 DAG(s), 0 error(s)\n"
+         1 file(s), 1 DAG(s), 0 error(s)\n"
     );
 }
 
@@ -147,7 +148,7 @@ fn check_lists_the_dags_of_good_files() {
 fn check_reports_broken_and_invalid_files_and_fails() {
     let local = Local::new(&[
         ("sync.py", GOOD),
-        ("broken.py", "import nowhere_to_be_found\n"),
+        ("broken.py", "import schedr\nimport nowhere_to_be_found\n"),
         ("bad_cron.py", INVALID),
     ]);
     let (code, out, err) = local.check(&[]);
@@ -162,6 +163,29 @@ fn check_reports_broken_and_invalid_files_and_fails() {
     assert!(err.contains("2 file(s) with errors"), "{err}");
     // The traceback starts at the user's code, not in schedr or importlib.
     assert!(!out.contains("importlib"), "{out}");
+}
+
+#[test]
+fn check_skips_what_a_parse_skips_and_says_why() {
+    let dag = "from schedr import Dag\n\nwith Dag(\"found\"):\n    pass\n";
+    let local = Local::new(&[
+        ("found.py", dag),
+        ("library.py", "raise ValueError('run')\n"),
+    ]);
+    let root = local.root();
+    let (code, out, _) = local.dags_with(&["check", path_str(&root)], &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("ok     found.py: found"), "{out}");
+    assert!(
+        out.contains("skipped library.py: it doesn't mention `schedr`"),
+        "{out}"
+    );
+    // Named on its own, as a deployment would treat it: never run.
+    let library = root.join("library.py");
+    let (code, out, _) = local.dags_with(&["check", path_str(&library)], &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("skipped library.py"), "{out}");
+    assert!(!out.contains("ValueError"), "{out}");
 }
 
 #[test]
@@ -200,7 +224,7 @@ with Dag("typo"):
 fn check_with_json_gives_each_file() {
     let local = Local::new(&[
         ("sync.py", GOOD),
-        ("broken.py", "raise RuntimeError('boom')\n"),
+        ("broken.py", "# schedr\nraise RuntimeError('boom')\n"),
     ]);
     let (code, out, _) = local.check(&["--json"]);
     assert_eq!(code, 1);
@@ -217,7 +241,10 @@ fn check_with_json_gives_each_file() {
 
 #[test]
 fn check_of_one_file_checks_only_it() {
-    let local = Local::new(&[("sync.py", GOOD), ("broken.py", "raise RuntimeError\n")]);
+    let local = Local::new(&[
+        ("sync.py", GOOD),
+        ("broken.py", "# schedr\nraise RuntimeError\n"),
+    ]);
     let file = local.root().join("sync.py");
     let (code, out, err) = local.dags(&["check", path_str(&file)]);
     assert_eq!(code, 0, "{err}");
@@ -316,7 +343,10 @@ fn an_unknown_dag_is_an_error() {
 
 #[test]
 fn an_unknown_dag_names_the_files_that_didnt_import() {
-    let local = Local::new(&[("sync.py", GOOD), ("broken.py", "raise RuntimeError\n")]);
+    let local = Local::new(&[
+        ("sync.py", GOOD),
+        ("broken.py", "# schedr\nraise RuntimeError\n"),
+    ]);
     let (code, _, err) = local.test("nope", &[]);
     assert_eq!(code, 1);
     assert!(

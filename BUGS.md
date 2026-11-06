@@ -53,34 +53,49 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 2 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 3 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 8 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 9 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 10 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 11 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 12 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 13 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 14 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 15 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 16 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 17 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 18 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 19 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 20 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 21 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 22 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 23 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 24 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 25 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 26 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 27 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 28 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B170: A DAG built by a function in a helper file defines nothing, silently | 6 | medium | likely | usability |
+| 2 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 3 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 4 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 9 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 10 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 11 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 12 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 13 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 14 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 15 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 16 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 17 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 18 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 19 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 20 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 21 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 22 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 23 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 24 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 25 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 26 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 27 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 28 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 29 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B170: A DAG built by a function in a helper file defines nothing, silently
+
+- **Rating:** severity **medium**, probability **likely**, usability (score 6): `from factory import build; build("x")` shows no DAG and no error, in `dags check` and on a worker; common when coming from Airflow.
+- **Found:** building M4.9d (2026-11-06), with `# schedr` in the calling file. `Dag.__init__` takes
+  its location from the frame calling it (`sys._getframe(1)`, `python/schedr/dag.py`), so the DAG
+  belongs to the helper; the parser keeps only a file's own DAGs (B110's filter in
+  `python/schedr/runner/parse.py`), and the helper never calls its own function when parsed.
+  `schedr dags check` reports `ok with_mention.py: no DAGs`. Decision 305's example assumed this
+  pattern worked.
+- **A fix:** to discuss with the user: a DAG belongs to the file being parsed when created during
+  that file's import (a task's import must then find it through the same file), or an import error
+  saying a DAG was defined outside the file. B110's reason must keep holding: a module imported by
+  several files must not make the master refuse them.
 
 ## B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15)
 

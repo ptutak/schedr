@@ -348,3 +348,47 @@ fn the_examples_root_holds_no_test_files() {
     assert!(tests.is_empty(), "{tests:?}");
     assert!(snapshot.files().contains_key("sync.py"));
 }
+
+#[test]
+fn a_file_mentions_schedr_anywhere_in_its_bytes_even_across_reads() {
+    let dir = root_with(&[
+        ("import.py", "from schedr import Dag\n"),
+        ("comment.py", "# schedr\nfrom factory import build\n"),
+        ("upper.py", "SCHEDR = 1\n"),
+        ("library.py", "from .util import clean\n"),
+        ("empty.py", ""),
+    ]);
+    let wanted = |name: &str| mentions_schedr(&dir.path().join(name));
+    assert!(wanted("import.py"));
+    assert!(wanted("comment.py"));
+    assert!(!wanted("upper.py"), "the exact text only");
+    assert!(!wanted("library.py"));
+    assert!(!wanted("empty.py"));
+    // Bytes that aren't UTF-8, and the mark across the read buffer's end.
+    let mut bytes = vec![0xff; 64 * 1024 - 3];
+    bytes.extend_from_slice(b"schedr");
+    fs::write(dir.path().join("spanning.py"), &bytes).unwrap();
+    assert!(wanted("spanning.py"));
+    bytes.truncate(bytes.len() - 1);
+    fs::write(dir.path().join("cut.py"), &bytes).unwrap();
+    assert!(!wanted("cut.py"));
+    // A long file with the mark nearly at each read's end, never whole.
+    fs::write(dir.path().join("long.py"), "sched\n".repeat(50_000)).unwrap();
+    assert!(!wanted("long.py"));
+}
+
+#[test]
+fn a_file_that_cant_be_read_is_left_to_the_parser_to_report() {
+    let dir = root_with(&[("a.py", "x")]);
+    assert!(mentions_schedr(&dir.path().join("gone.py")));
+    assert!(
+        mentions_schedr(dir.path()),
+        "not a regular file: never opened"
+    );
+    let (parsed, skipped) =
+        split_dag_files(dir.path(), vec!["a.py".to_owned(), "gone.py".to_owned()]);
+    assert_eq!(
+        (parsed.as_slice(), skipped.as_slice()),
+        (&["gone.py".to_owned()][..], &["a.py".to_owned()][..])
+    );
+}

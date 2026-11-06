@@ -13,7 +13,7 @@ flowchart LR
     files -- "scan every 30 s,<br/>settle 5 s, hash" --> agent["agent"]
     agent -- "CodeVersionChanged<br/>(root, hash)" --> master["master"]
     master -- "AssignParse<br/>(one worker)" --> agent2["agent"]
-    agent2 -- "import every .py file<br/>in a runner" --> runner["python runner"]
+    agent2 -- "import matching .py files<br/>in a runner" --> runner["python runner"]
     agent2 -- "UploadParseResult<br/>(DAG JSON, import errors)" --> master
     master -- "store DAG versions" --> db[("database")]
 ```
@@ -27,9 +27,11 @@ flowchart LR
 3. **Report.** `CodeVersionChanged(root, hash)` goes to the master. Every worker reports on its
    own, but the master creates **one parse job per (root, hash, schedr version)**.
 4. **Parse.** One worker that reported the hash gets `AssignParse`. Its parse slot (one per
-   worker, separate from task slots) runs a Python runner that imports each `.py` file from
-   the copy of that hash. When
-   the worker has fork servers, that runner is a fresh child for the job: the preloaded
+   worker, separate from task slots) runs a Python runner that imports `.py` files whose
+   bytes contain `schedr` from the copy of that hash. Other files are still copied and
+   hashed. A file that can't be read or isn't regular is left to the parser to report.
+   If no `.py` file qualifies, the worker starts no runner for that root. When the worker
+   has fork servers, that runner is a fresh child for the job: the preloaded
    server, then the bare one, then a new process. `schedr dags check` starts a new process
    and does not ask the fork servers. The native API only *records* DAGs while a file is
    imported; no task runs. A file's DAGs are those defined in it: one defined in a module it

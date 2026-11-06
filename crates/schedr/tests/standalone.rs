@@ -71,7 +71,9 @@ impl Standalone {
         let root = dir.path().join("dags/etl");
         std::fs::create_dir_all(&root).unwrap();
         for (name, text) in files {
-            std::fs::write(root.join(name), text).unwrap();
+            let file = root.join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
         }
         // Port 0: standalone binds free ports itself and its banner says which (picking free
         // ports for it races with the tests running in parallel; B3).
@@ -1001,7 +1003,7 @@ fn files_added_changed_and_removed_update_the_dag_list() {
     });
     std::fs::remove_file(root.join("b.py")).unwrap();
     standalone.wait("`b` removed", || standalone.dag_ids() == ["a2"]);
-    std::fs::write(root.join("a.py"), "this is not python").unwrap();
+    std::fs::write(root.join("a.py"), "# schedr\nthis is not python").unwrap();
     std::fs::write(root.join("c.py"), dag("c")).unwrap();
     standalone.wait("`c` added", || {
         standalone.dag_ids().contains(&"c".to_owned())
@@ -1264,6 +1266,62 @@ fn a_script_has_params_outcomes_a_cleanup_and_can_be_a_resource() {
     let lines = marked();
     assert_eq!(lines.matches("check-cleanup").count(), 2, "{lines}");
     assert_eq!(lines.matches("dropped c-8").count(), 1, "{lines}");
+}
+
+/// M4.9d (decision 305): a package with relative imports in a root, imported by a DAG.
+#[test]
+fn a_library_in_a_root_is_never_parsed_and_a_dag_file_must_mention_schedr() {
+    let dag = r#"
+from mylib.core import greeting
+from schedr import Dag, task
+
+@task
+def hello() -> str:
+    return greeting()
+
+with Dag("uses_library"):
+    hello()
+"#;
+    let standalone = Standalone::start(
+        &[
+            ("uses_library.py", dag),
+            ("mylib/__init__.py", ""),
+            ("mylib/util.py", "VALUE = 'hi'\n"),
+            // Loaded by its path on its own, it would be an import error.
+            (
+                "mylib/core.py",
+                "from .util import VALUE\n\ndef greeting():\n    return VALUE\n",
+            ),
+            // Run by a parse, it would be one too.
+            ("not_a_dag.py", "raise ValueError('run by a parse')\n"),
+            ("shim.py", "from schedr import Dag\n"),
+            // Its text doesn't say `schedr`: skipped, whatever it would define.
+            (
+                "without_mention.py",
+                "from shim import Dag\n\nwith Dag('never_found'):\n    pass\n",
+            ),
+            (
+                "with_mention.py",
+                "# schedr\nfrom shim import Dag\n\nwith Dag('found'):\n    pass\n",
+            ),
+        ],
+        None,
+    );
+    standalone.wait("the DAGs", || {
+        standalone.dag_ids() == ["found", "uses_library"]
+    });
+    let errors = standalone.get("/api/v1/import-errors").unwrap_or_default();
+    assert_eq!(
+        errors["errors"].as_array().map_or(0, Vec::len),
+        0,
+        "{errors}"
+    );
+    let run_id = standalone.trigger("uses_library");
+    standalone.wait_for_state(&run_id, "success");
+    let output = standalone
+        .get(&format!("/api/v1/runs/{run_id}/tasks/hello/output"))
+        .unwrap();
+    assert_eq!(output["value"], "hi");
 }
 
 #[test]
