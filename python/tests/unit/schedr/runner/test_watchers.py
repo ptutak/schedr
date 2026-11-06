@@ -428,7 +428,7 @@ def test_a_call_runs_for_the_watcher_that_made_it_not_for_the_one_a_thread_start
     async def main() -> list[int | None]:
         def who() -> int | None:
             own = watchers._WATCHER.get()
-            return None if own is None else own._watcher
+            return None if own is None else own.watcher
 
         async def from_watcher(watcher: int) -> int | None:
             _watching(host, watcher)
@@ -582,3 +582,55 @@ def test_a_call_stopped_waiting_for_its_turn_to_ask_never_asks() -> None:
             agent._sock.recv(1)
 
     asyncio.run(main())
+
+
+def _watched(steps: Callable[[], Coroutine[Any, Any, None]], limit: float) -> list[dict[str, Any]]:
+    """What the watchdog says while `steps` run on the loop."""
+    host, agent = _host()
+    said: list[dict[str, Any]] = []
+
+    def listen() -> None:
+        with contextlib.suppress(Exception):
+            while True:
+                said.append(agent.receive())
+
+    threading.Thread(target=listen, daemon=True).start()
+
+    async def main() -> None:
+        loop = asyncio.get_running_loop()
+        threading.Thread(
+            target=watchers._watch_the_loop, args=(host, loop, (limit, limit)), daemon=True
+        ).start()
+        await steps()
+        await asyncio.sleep(0.05)
+
+    asyncio.run(main())
+    return [message for message in said if message["type"] != "host_alive"]
+
+
+def test_many_taking_turns_past_the_limit_blame_no_one() -> None:
+    async def takes_turns() -> None:
+        time.sleep(0.15)
+        await asyncio.sleep(0)
+        time.sleep(0.15)
+
+    async def steps() -> None:
+        await asyncio.gather(*(takes_turns() for _ in range(4)))
+
+    assert _watched(steps, 0.4) == []
+
+
+def test_one_holding_the_loop_past_the_limit_is_named() -> None:
+    host = _host()[0]
+
+    async def holds() -> None:
+        _watching(host, 42)
+        time.sleep(0.6)
+
+    async def steps() -> None:
+        await asyncio.create_task(holds())
+
+    said = _watched(steps, 0.2)
+    assert [message["type"] for message in said] == ["loop_blocked"]
+    assert said[0]["watcher"] == 42
+    assert "holds" in said[0]["stack"]

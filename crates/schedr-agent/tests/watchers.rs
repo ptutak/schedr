@@ -28,6 +28,7 @@ use tempfile::TempDir;
 /// What parsing refuses is reached with `getattr` here: these test what happens at run time.
 const DAGS: &str = r#"
 import asyncio
+import ctypes
 import os
 import subprocess
 import threading
@@ -42,6 +43,8 @@ WAIT = 30
 
 with Path(os.environ["IMPORTS"]).open("a") as f:
     f.write("imported\n")
+if Path(os.environ["IMPORTS"]).with_name("slow_import").exists():
+    time.sleep(2)
 
 
 @sensor
@@ -154,9 +157,9 @@ async def refused_async_process() -> int:
 
 def _spins_until_stopped() -> None:
     marks = Path(os.environ["IMPORTS"]).parent
-    print("thread says hunter22-pw", flush=True)
-    (marks / "spinning").write_text("yes")
     try:
+        print("thread says hunter22-pw", flush=True)
+        (marks / "spinning").write_text("yes")
         while True:
             time.sleep(0.01)
     finally:
@@ -196,6 +199,46 @@ async def thread_stopping_slowly() -> int:
 
 
 @sensor
+async def holds_the_loop() -> int:
+    time.sleep(600)
+    return 1
+
+
+@sensor(max_wait=timedelta(seconds=WAIT))
+async def waits_for_release() -> int:
+    marks = Path(os.environ["IMPORTS"]).parent
+    with (marks / "waits_starts").open("a") as f:
+        f.write("started\n")
+    while not (marks / "release").exists():
+        await asyncio.sleep(0.02)
+    return os.getpid()
+
+
+@sensor(max_wait=timedelta(seconds=3))
+async def waits_out_its_time() -> int:
+    marks = Path(os.environ["IMPORTS"]).parent
+    with (marks / "waits_starts").open("a") as f:
+        f.write(f"{time.time()}\n")
+    await asyncio.sleep(600)
+    return 1
+
+
+@sensor
+async def holds_everything() -> int:
+    # In C, keeping the interpreter's lock: not even the watchdog runs.
+    getattr(ctypes, "PyDLL")(None).sleep(600)
+    return 1
+
+
+@sensor
+async def leaves_a_thread() -> int:
+    getattr(threading, "Thread")(
+        target=time.sleep, args=(2,), name="left-behind", daemon=True
+    ).start()
+    return 1
+
+
+@sensor
 async def floods_its_log() -> int:
     for line in range(500):
         print(f"line {line}")
@@ -204,6 +247,7 @@ async def floods_its_log() -> int:
 
 @sensor(secrets=[SecretPrefix("etl/")])
 async def slow_reader() -> int:
+    Path(os.environ["IMPORTS"]).with_name("reading").write_text("yes")
     try:
         await task_ctx.asecret("etl/db", "password")
     finally:
@@ -229,6 +273,11 @@ async def slow_call() -> str | NotYet:
 
 with Dag("sync"):
     native_printer()
+    holds_everything()
+    leaves_a_thread()
+    holds_the_loop()
+    waits_for_release()
+    waits_out_its_time()
     thread_stopping_slowly()
     floods_its_log()
     in_a_thread_stoppable()
@@ -316,6 +365,42 @@ impl Worker {
             dag: parsed[0].dags[0].clone(),
             dir,
         }
+    }
+
+    /// `waits_for_release` has made its first call.
+    async fn peer_started(&self) {
+        let starts = self.dir.path().join("waits_starts");
+        while !starts.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// `waits_for_release` started again, on a new host: it may now end.
+    async fn release_peer_started_again(&self) {
+        let starts = self.dir.path().join("waits_starts");
+        while std::fs::read_to_string(&starts)
+            .unwrap_or_default()
+            .lines()
+            .count()
+            < 2
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        std::fs::write(self.dir.path().join("release"), "").unwrap();
+    }
+
+    fn assert_started_again(&self, peer: &Ran) {
+        assert!(
+            matches!(
+                peer.runner_result,
+                Some(RunnerMessage::TaskSucceeded { .. })
+            ),
+            "{:?}",
+            peer.runner_result
+        );
+        assert_eq!(peer.host_lost, None);
+        let log = self.log("waits_for_release");
+        assert!(log.contains("starts again on a new host"), "{log}");
     }
 
     fn imports(&self) -> usize {
@@ -503,19 +588,22 @@ async fn a_cancel_ends_only_its_watcher_and_runs_its_finally() {
 async fn one_that_wont_be_cancelled_has_its_host_killed() {
     let worker = Worker::new().await;
     let (cancel, stops) = Stops::new();
-    let refuses = worker.run("refuses", stops, mask_none());
-    let forever = worker.run("forever", no_stop(), mask_none());
-    let cancelling = async {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        cancel.send(StopReason::Cancelled).unwrap();
+    let peer = worker.run("waits_for_release", no_stop(), mask_none());
+    let refusing = async {
+        worker.peer_started().await;
+        let refuses = worker.run("refuses", stops, mask_none());
+        let cancelling = async {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            cancel.send(StopReason::Cancelled).unwrap();
+        };
+        let (refuses, ()) = tokio::join!(refuses, cancelling);
+        worker.release_peer_started_again().await;
+        refuses
     };
-    let (refuses, forever, ()) = tokio::join!(refuses, forever, cancelling);
+    let (peer, refuses) = tokio::join!(peer, refusing);
     assert!(refuses.supervised.killed);
     assert_eq!(refuses.supervised.termination, Termination::Signaled(9));
-    assert_eq!(forever.runner_result, None);
-    assert_eq!(forever.supervised.stopped, None);
-    assert_eq!(forever.supervised.termination, Termination::Signaled(9));
-    assert_eq!(worker.hosts.running().await, 0);
+    worker.assert_started_again(&peer);
 }
 
 #[tokio::test]
@@ -528,6 +616,13 @@ async fn a_crash_ends_all_on_the_host_and_the_next_gets_a_new_one() {
     assert_eq!(crashes.supervised.termination, Termination::Exited(7));
     assert_eq!(forever.supervised.termination, Termination::Exited(7));
     assert_eq!(forever.runner_result, None);
+    // Nothing to blame: it ends `lost`, using a retry.
+    let why = forever.host_lost.unwrap();
+    assert!(why.contains("Exited(7)"), "{why}");
+    assert!(
+        why.contains("sync.crashes") && why.contains("sync.forever"),
+        "{why}"
+    );
     let alpha = worker.run("alpha", no_stop(), mask_none()).await;
     assert!(matches!(
         alpha.runner_result,
@@ -604,7 +699,13 @@ async fn poke_with_new_code(worker: &Worker, new_code: &str) -> Ran {
     let changing = async {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         worker.hosts.code_changed(&copies);
-        tokio::time::sleep(Duration::from_millis(2000)).await;
+        // Moved, or said why not.
+        for _ in 0..600 {
+            if worker.log("polls").contains("new code") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         std::fs::write(worker.dir.path().join("ready"), "").unwrap();
     };
     let (ran, ()) = tokio::join!(worker.run("polls", no_stop(), mask_none()), changing);
@@ -757,7 +858,9 @@ async fn a_moved_poke_stays_masked_in_its_new_hosts_log() {
     let changing = async {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         worker.hosts.code_changed(&copies);
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        while !worker.log("polls").contains("moved to new code") {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         std::fs::write(worker.dir.path().join("ready"), "").unwrap();
     };
     let (ran, ()) = tokio::join!(
@@ -818,7 +921,11 @@ async fn losing_the_agent_ends_what_watchers_started() {
         .await
         .unwrap();
     let sys_path = vec![worker.root.display().to_string()];
-    let request = AgentMessage::Watchers(WatchersRequest { sys_path });
+    let request = AgentMessage::Watchers(WatchersRequest {
+        sys_path,
+        block_limit_ms: 30_000,
+        import_limit_ms: 30_000,
+    });
     write_message(&mut runner.stream, &request).await.unwrap();
     let first = AgentMessage::StartWatcher {
         watcher: 1,
@@ -940,7 +1047,10 @@ async fn a_cancel_during_a_slow_secret_read_leaves_the_others_alone() {
     let (cancel_peer, peer_stops) = Stops::new();
     let peer = worker.run("forever", peer_stops, mask_none());
     let stopping = async {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        while !worker.dir.path().join("reading").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
         cancel.send(StopReason::Cancelled).unwrap();
         // Past its grace: a host killed for it would have ended the peer by now.
         tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -957,20 +1067,21 @@ async fn a_cancel_during_a_slow_secret_read_leaves_the_others_alone() {
 #[tokio::test]
 async fn an_attempt_dropped_is_still_held_to_its_cancels_grace() {
     let worker = Worker::new().await;
-    let peer = worker.run("forever", no_stop(), mask_none());
+    let peer = worker.run("waits_for_release", no_stop(), mask_none());
     let dropped = async {
+        worker.peer_started().await;
         let refusing = worker.run("refuses", no_stop(), mask_none());
         let _ = tokio::time::timeout(Duration::from_millis(1500), refusing).await;
+        // Its coroutine won't end, so the host goes, and the peer starts again.
+        worker.release_peer_started_again().await;
     };
-    // Its coroutine won't end, so the host goes, and the peer on it with it.
     let (peer, ()) = tokio::time::timeout(
-        Duration::from_secs(20),
+        Duration::from_secs(30),
         Box::pin(async { tokio::join!(peer, dropped) }),
     )
     .await
     .expect("the host wasn't killed");
-    assert_eq!(peer.runner_result, None);
-    assert_eq!(peer.supervised.stopped, None);
+    worker.assert_started_again(&peer);
 }
 
 #[tokio::test]
@@ -1008,6 +1119,108 @@ async fn a_thread_has_its_own_steps_grace_not_that_of_who_started_the_host() {
         Some(RunnerMessage::TaskSucceeded { .. })
     ));
     assert_eq!(peer.supervised.stopped, Some(StopReason::Cancelled));
+}
+
+#[tokio::test]
+async fn a_blocked_loop_fails_who_blocked_it_and_the_others_start_again() {
+    let mut worker = Worker::new().await;
+    worker.setup.timeouts.watcher_block_limit = Duration::from_millis(800);
+    let peer = worker.run("waits_for_release", no_stop(), mask_none());
+    let blocking = async {
+        worker.peer_started().await;
+        let ran = worker.run("holds_the_loop", no_stop(), mask_none()).await;
+        worker.release_peer_started_again().await;
+        ran
+    };
+    let (peer, blocker) = tokio::join!(peer, blocking);
+    let Some(RunnerMessage::TaskFailed { error, kind }) = &blocker.runner_result else {
+        panic!("{:?}", blocker.runner_result);
+    };
+    assert_eq!(kind.as_deref(), Some("blocked_event_loop"));
+    assert!(error.traceback.contains("holds_the_loop"), "{error:?}");
+    assert!(error.message.contains("block_limit"), "{error:?}");
+    // Its retries are untouched: it ran on, on another host.
+    worker.assert_started_again(&peer);
+}
+
+#[tokio::test]
+async fn a_host_that_stops_answering_is_killed_and_its_wait_steps_are_lost() {
+    let mut worker = Worker::new().await;
+    worker.setup.timeouts.watcher_block_limit = Duration::from_millis(500);
+    worker.setup.timeouts.watcher_import_limit = Duration::from_millis(500);
+    let ran = worker.run("holds_everything", no_stop(), mask_none()).await;
+    assert_eq!(ran.runner_result, None);
+    let why = ran.host_lost.unwrap();
+    assert!(why.contains("didn't answer"), "{why}");
+}
+
+#[tokio::test]
+async fn a_slow_import_isnt_a_blocked_loop() {
+    let mut worker = Worker::new().await;
+    worker.setup.timeouts.watcher_block_limit = Duration::from_millis(300);
+    std::fs::write(worker.dir.path().join("slow_import"), "").unwrap();
+    let ran = worker.run("alpha", no_stop(), mask_none()).await;
+    assert!(
+        matches!(ran.runner_result, Some(RunnerMessage::TaskSucceeded { .. })),
+        "{:?}",
+        ran.runner_result
+    );
+}
+
+#[tokio::test]
+async fn a_thread_a_step_left_running_is_said_in_its_log() {
+    let worker = Worker::new().await;
+    let ran = worker.run("leaves_a_thread", no_stop(), mask_none()).await;
+    assert!(matches!(
+        ran.runner_result,
+        Some(RunnerMessage::TaskSucceeded { .. })
+    ));
+    let log = worker.log("leaves_a_thread");
+    assert!(
+        log.contains("still running") && log.contains("left-behind"),
+        "{log}"
+    );
+}
+
+#[tokio::test]
+async fn one_starting_again_keeps_its_deadline_whatever_its_new_host_takes() {
+    let mut worker = Worker::new().await;
+    worker.setup.timeouts.watcher_block_limit = Duration::from_millis(500);
+    worker.setup.timeouts.watcher_import_limit = Duration::from_secs(30);
+    let peer = worker.run("waits_out_its_time", no_stop(), mask_none());
+    let starts = worker.dir.path().join("waits_starts");
+    let blocking = async {
+        worker.peer_started().await;
+        // Two of its 3 s go on the new host's import.
+        std::fs::write(worker.dir.path().join("slow_import"), "").unwrap();
+        worker.run("holds_the_loop", no_stop(), mask_none()).await
+    };
+    let (peer, _) = tokio::join!(peer, blocking);
+    let ended = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    assert!(
+        matches!(&peer.runner_result, Some(RunnerMessage::TaskSucceeded { outcome, .. }) if outcome == "TimedOut"),
+        "{:?}",
+        peer.runner_result
+    );
+    let starts = std::fs::read_to_string(&starts).unwrap();
+    let times: Vec<f64> = starts.lines().map(|line| line.parse().unwrap()).collect();
+    assert_eq!(times.len(), 2, "{starts}");
+    // A fresh count on the new host would end over 5 s after the first call.
+    let took = ended - times[0];
+    assert!(took < 4.5, "{took} s for a `max_wait` of 3 s");
+}
+
+#[tokio::test]
+async fn hosts_over_their_memory_budget_end_their_wait_steps_lost() {
+    let mut worker = Worker::new().await;
+    worker.setup.timeouts.watcher_memory_budget = 1;
+    let ran = worker.run("forever", no_stop(), mask_none()).await;
+    assert_eq!(ran.runner_result, None);
+    let why = ran.host_lost.unwrap();
+    assert!(why.contains("memory_budget"), "{why}");
 }
 
 #[tokio::test]
@@ -1076,9 +1289,16 @@ async fn a_steps_time_running_out_stops_its_thread() {
 #[tokio::test]
 async fn a_thread_that_wont_stop_ends_its_host_after_telling_the_result() {
     let worker = Worker::new().await;
-    let forever = worker.run("forever", no_stop(), mask_none());
-    let stuck = worker.run("thread_blocked_in_c", no_stop(), mask_none());
-    let (forever, stuck) = tokio::join!(forever, stuck);
+    let peer = worker.run("waits_for_release", no_stop(), mask_none());
+    let stuck = async {
+        worker.peer_started().await;
+        let stuck = worker
+            .run("thread_blocked_in_c", no_stop(), mask_none())
+            .await;
+        worker.release_peer_started_again().await;
+        stuck
+    };
+    let (peer, stuck) = tokio::join!(peer, stuck);
     assert!(
         matches!(&stuck.runner_result, Some(RunnerMessage::TaskSucceeded { outcome, .. }) if outcome == "TimedOut"),
         "{:?}",
@@ -1086,8 +1306,7 @@ async fn a_thread_that_wont_stop_ends_its_host_after_telling_the_result() {
     );
     let log = worker.log("thread_blocked_in_c");
     assert!(log.contains("didn't stop in time"), "{log}");
-    assert_eq!(forever.runner_result, None);
-    assert_eq!(worker.hosts.running().await, 0);
+    worker.assert_started_again(&peer);
 }
 
 #[tokio::test]

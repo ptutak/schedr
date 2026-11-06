@@ -3490,6 +3490,8 @@ fn stopped_before_start(
         forked: false,
         ended: crate::usage::Ended::default(),
         moved_to: None,
+        host_lost: None,
+        struck: false,
     };
     finished(&spec.attempt_id, &spec.task, &ran)
 }

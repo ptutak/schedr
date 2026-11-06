@@ -163,8 +163,15 @@ deploys with long waits can retain many copies. Retries start on the newest code
 [Wait steps](../02-dags/18-sensors.md#running-and-deploying-wait-steps).
 
 Cancellation cancels the coroutine. If it does not end within its grace, the agent kills the
-host, and the other wait steps there fail; a host crash also fails its wait steps. There is
-currently no host memory budget or blocked-loop watchdog. Asyncio tasks left by a step are
+host; the other wait steps start again on a new host in the same attempt, keeping their time
+and using no retry. The same happens to the others when a step blocks the loop past
+`[watchers] block_limit`; the blocking step fails `blocked_event_loop` without a retry.
+
+A host crash, memory kill, or host that stops answering ends its wait steps `lost` with
+`watcher_host_lost`, each using a retry. No wait step is switched off: none can be blamed, so
+the error names the wait steps that were on the host.
+`[watchers] memory_budget` limits all of a worker's watcher hosts together (default 1 GiB);
+when they exceed it, the largest host is killed. Asyncio tasks left by a step are
 cancelled and awaited when it ends. A wait step can't start a process
 ([Wait steps](../02-dags/18-sensors.md#running-and-deploying-wait-steps)); one C code started runs
 until the host stops, and a host that loses the agent's socket kills its process group.
@@ -493,8 +500,7 @@ journal: a second agent with the same ID and data directory exits at once.
 
 All tasks on a worker share the pod's memory limit. If the kernel's out-of-memory killer
 fires, it kills everything in the container, the agent included. So the agent enforces
-**budgets** itself for task and parse processes. Watcher hosts do not yet have a memory
-budget:
+**budgets** itself for task and parse processes and watcher hosts:
 
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
   budget is `[worker] memory_budget`, else (limit − 10 %) ÷ slots. The parse runner gets the

@@ -174,6 +174,15 @@ pub const INLINE_INPUTS_LIMIT: usize = 4 * 1024 * 1024;
 /// Inputs over this size make the task fail (`inputs_too_large`, never retried).
 pub const MAX_INPUTS: usize = 64 * 1024 * 1024;
 
+/// An attempt's failure the master itself decides.
+fn failed_by_master(kind: &str, exception: &str, why: &str) -> AttemptEnd {
+    AttemptEnd {
+        error_kind: Some(kind.to_owned()),
+        error_summary: Some(ErrorSummary::json(exception, why)),
+        ..AttemptEnd::by_master(AttemptStatus::Failed)
+    }
+}
+
 /// The error kind of a task whose inputs are over [`MAX_INPUTS`].
 pub const INPUTS_TOO_LARGE: &str = "inputs_too_large";
 
@@ -240,6 +249,8 @@ pub struct Dispatcher {
     execution: Execution,
     workers: Workers,
     cancel_grace: Duration,
+    /// After how many host kills in a row a wait step is switched off (0: never).
+    switch_off_after: u32,
     /// Workers that rejected a task instance for a worker-specific reason, with the detail.
     rejections: BTreeMap<String, BTreeMap<String, String>>,
     /// Task instances whose code a worker didn't have: since when, and which workers said so.
@@ -319,6 +330,7 @@ impl Dispatcher {
             db,
             workers: Workers::new(),
             cancel_grace,
+            switch_off_after: 3,
             rejections: BTreeMap::new(),
             code_missing: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
@@ -340,6 +352,13 @@ impl Dispatcher {
             current_versions: BTreeMap::new(),
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
+    }
+
+    /// After how many host kills in a row a wait step is switched off (0: never).
+    #[must_use]
+    pub const fn with_switch_off_after(mut self, times: u32) -> Self {
+        self.switch_off_after = times;
+        self
     }
 
     /// Counts assignments, rejections, ended attempts, waiting tasks and finished runs in
@@ -1010,6 +1029,11 @@ impl Dispatcher {
         let Some(task) = ready.dag.task(&ready.task_id) else {
             return Ok(());
         };
+        if matches!(task.kind, schedr_model::TaskKind::Sensor { .. })
+            && self.failed_as_switched_off(ready, now).await?
+        {
+            return Ok(());
+        }
         // Its concurrency limits first: a task over one waits for it, whatever the workers.
         if self.held_back(ready, tally).await? {
             return Ok(());
@@ -1064,14 +1088,8 @@ impl Dispatcher {
             Ok(inputs) => inputs,
             Err(InputsError::Db(error)) => return Err(error.into()),
             Err(InputsError::NotArguments(why)) => {
-                let end = AttemptEnd {
-                    error_kind: Some(INPUT_MISMATCH.to_owned()),
-                    error_summary: Some(ErrorSummary::json("InputMismatch", &why)),
-                    ..AttemptEnd::by_master(AttemptStatus::Failed)
-                };
-                let instance = (&ready.task_id, ready.map_index);
-                self.end(&attempt_id, &ready.run_id, instance, end, now)
-                    .await?;
+                let end = failed_by_master(INPUT_MISMATCH, "InputMismatch", &why);
+                self.end_ready(ready, &attempt_id, end, now).await?;
                 return Ok(());
             }
         };
@@ -1295,6 +1313,7 @@ impl Dispatcher {
                 );
                 return Ok(finished_ack(worker_id, &finished.attempt_id));
             }
+            self.count_strike(&attempt, finished, status, now).await?;
             let mut error_summary = (!finished.error_summary_json.is_empty())
                 .then(|| String::from_utf8_lossy(&finished.error_summary_json).into_owned());
             // Only for a result not stored yet (a repeated one is dropped anyway).
@@ -1329,6 +1348,101 @@ impl Dispatcher {
             self.record(&attempt, &end, &result, now).await?;
         }
         Ok(finished_ack(worker_id, &finished.attempt_id))
+    }
+
+    /// Fails a wait step switched off, whatever the workers: a run isn't kept open by what won't
+    /// run. Returns whether it was.
+    async fn failed_as_switched_off(
+        &mut self,
+        ready: &ReadyInstance,
+        now: Timestamp,
+    ) -> Result<bool, DispatchError> {
+        let Some(why) = self.switched_off(ready).await? else {
+            return Ok(false);
+        };
+        if let Some((attempt_id, _)) = self.db.assign_attempt(&ready.instance_id, "", now).await? {
+            let end = failed_by_master(schedr_model::runner::SWITCHED_OFF, "SwitchedOff", &why);
+            self.end_ready(ready, &attempt_id, end, now).await?;
+        }
+        Ok(true)
+    }
+
+    /// Ends an attempt just assigned, without its worker having heard of it.
+    async fn end_ready(
+        &mut self,
+        ready: &ReadyInstance,
+        attempt_id: &str,
+        end: AttemptEnd,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        let instance = (&ready.task_id, ready.map_index);
+        self.end(attempt_id, &ready.run_id, instance, end, now)
+            .await?;
+        Ok(())
+    }
+
+    /// Why a wait step about to start can't, if it is switched off; on new code it is on again,
+    /// with one chance (decision 338).
+    async fn switched_off(&self, ready: &ReadyInstance) -> Result<Option<String>, DispatchError> {
+        let (dag, task) = (ready.dag.id.as_str(), ready.task_id.as_str());
+        let Some(strikes) = self.db.wait_step_strikes(dag, task).await? else {
+            return Ok(None);
+        };
+        if strikes.off_at.is_none() {
+            return Ok(None);
+        }
+        if self.code_is_gone(&ready.dag, strikes.off_code.as_deref().unwrap_or_default()) {
+            self.db.wait_step_on_new_code(dag, task).await?;
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "this wait step is switched off: it got its host killed too many times in a row, \
+             holding up the wait steps it shares a process with. New code switches it on, or \
+             `schedr sensors switch-on {dag} {task}`"
+        )))
+    }
+
+    /// Whether a DAG's code has moved on from `code`: workers run other code now, and none is
+    /// let run it. What isn't known yet (after a restart) hasn't moved on.
+    fn code_is_gone(&self, dag: &schedr_model::Dag, code: &str) -> bool {
+        self.current_code
+            .get(dag.location.root.as_str())
+            .is_some_and(|(accepted, _)| !accepted.is_empty() && !accepted.contains(code))
+    }
+
+    /// Counts how a wait step's attempt ended, the first time it is told (decision 338).
+    async fn count_strike(
+        &self,
+        attempt: &StoredAttempt,
+        finished: &pb::Finished,
+        status: AttemptStatus,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        if !finished.wait_step
+            || attempt.status.is_some()
+            || !(finished.struck || status == AttemptStatus::Success)
+        {
+            return Ok(());
+        }
+        let Some(dag) = self.db.run_dag(&attempt.run_id).await.ok().flatten() else {
+            return Ok(());
+        };
+        let (dag_id, task_id) = (dag.id.as_str(), attempt.task_id.as_str());
+        if !finished.struck {
+            self.db.clear_wait_step(dag_id, task_id).await?;
+            return Ok(());
+        }
+        // The code it ran: an old attempt says nothing of what came since.
+        let code = finished.code_hash.as_str();
+        let limit = self.switch_off_after;
+        if self
+            .db
+            .strike_wait_step((dag_id, task_id), limit, code, now)
+            .await?
+        {
+            tracing::warn!(dag_id, task_id, "a wait step was switched off");
+        }
+        Ok(())
     }
 
     /// The cleanup of the handles the master never got, added to `attempt`'s (B169): the

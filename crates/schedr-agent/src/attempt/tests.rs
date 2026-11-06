@@ -365,6 +365,8 @@ fn ran(
         forked: false,
         ended: crate::usage::Ended::default(),
         moved_to: None,
+        host_lost: None,
+        struck: false,
     }
 }
 

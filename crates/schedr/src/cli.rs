@@ -107,6 +107,24 @@ pub enum Command {
         #[command(subcommand)]
         command: ConnectionsCommand,
     },
+    /// Wait steps switched off for getting their host killed.
+    Sensors {
+        /// How to reach the server.
+        #[command(flatten)]
+        client: ClientArgs,
+        /// The sensor command.
+        #[command(subcommand)]
+        command: SensorsCommand,
+    },
+    /// A run's resources.
+    Resources {
+        /// How to reach the server.
+        #[command(flatten)]
+        client: ClientArgs,
+        /// The resource command.
+        #[command(subcommand)]
+        command: ResourcesCommand,
+    },
     /// Drain and resume workers.
     Workers {
         /// How to reach the server.
@@ -402,6 +420,30 @@ fn test_timeout(text: &str) -> Result<std::time::Duration, String> {
     Ok(timeout)
 }
 
+/// `schedr sensors ...` (decision 338).
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum SensorsCommand {
+    /// List the wait steps switched off.
+    SwitchedOff,
+    /// Switch a wait step back on, forgetting its strikes.
+    SwitchOn {
+        /// Its DAG.
+        dag: String,
+        /// The wait step's task ID.
+        sensor: String,
+    },
+}
+
+/// `schedr resources ...` (decision 340).
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ResourcesCommand {
+    /// List a run's resources.
+    List {
+        /// The run.
+        run: String,
+    },
+}
+
 /// `schedr workers ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum WorkersCommand {
@@ -567,6 +609,8 @@ impl Command {
             | Self::Ui
             | Self::Tasks { .. }
             | Self::Workers { .. }
+            | Self::Sensors { .. }
+            | Self::Resources { .. }
             | Self::Connections { .. }
             | Self::DagCtx { .. }
             | Self::TaskCtx { .. } => None,
@@ -588,6 +632,8 @@ impl Command {
             Self::Runs { .. } => "runs",
             Self::Tasks { .. } => "tasks",
             Self::Workers { .. } => "workers",
+            Self::Sensors { .. } => "sensors",
+            Self::Resources { .. } => "resources",
             Self::Connections { .. } => "connections",
             Self::TaskCtx { .. } => "task-ctx",
             Self::DagCtx { .. } => "dag-ctx",

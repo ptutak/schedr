@@ -102,6 +102,9 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         cleanup: config.worker.cleanup_timeout,
         resource_cleanup: config.worker.resource_cleanup_timeout,
         sensor_max_wait: config.sensors.default_max_wait,
+        watcher_block_limit: config.watchers.block_limit,
+        watcher_import_limit: config.dags.parse_file_timeout,
+        watcher_memory_budget: config.watchers.memory_budget,
         output_drain: config.timings.output_drain_timeout,
         fork_answer: config.timings.fork_answer_timeout,
         fork_backoff: schedr_agent::fork::ForkBackoff {
@@ -133,6 +136,7 @@ pub fn master_settings(config: &Config) -> Settings {
         heartbeat_interval: config.timings.heartbeat_interval,
         lease_timeout: config.timings.lease_timeout,
         cancel_grace: config.master.cancel_grace,
+        switch_off_after: config.watchers.switch_off_after,
         parse_job_timeout: config.master.parse_job_timeout,
         code_wait: config.master.code_wait,
         set_aside: config.timings.set_aside,

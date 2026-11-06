@@ -36,6 +36,10 @@ pub use state::ApiState;
         routes::get_dag,
         routes::pause_dag,
         routes::unpause_dag,
+        routes::list_run_resources,
+        routes::get_run_resource,
+        routes::list_switched_off_sensors,
+        routes::switch_on_sensor,
         routes::list_runs,
         routes::trigger_run,
         routes::list_all_runs,
@@ -135,6 +139,22 @@ pub fn router(state: ApiState) -> Router {
             get(routes::get_output),
         )
         .route("/api/v1/runs/{run_id}/cancel", post(routes::cancel_run))
+        .route(
+            "/api/v1/runs/{run_id}/resources",
+            get(routes::list_run_resources),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/resources/{resource}",
+            get(routes::get_run_resource),
+        )
+        .route(
+            "/api/v1/sensors/switched-off",
+            get(routes::list_switched_off_sensors),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/sensors/{sensor}/switch-on",
+            post(routes::switch_on_sensor),
+        )
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/attempts",
             get(routes::list_attempts),

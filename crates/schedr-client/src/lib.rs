@@ -12,7 +12,8 @@ use jiff::Timestamp;
 use schedr_api::views::{
     AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
     DagList, DagView, DeploymentView, ImportErrorList, LogChunk, OutputView, PauseRequest,
-    RunDetail, RunList, TestConnectionRequest, TriggerRequest, WorkerList,
+    ResourceList, RunDetail, RunList, SensorList, TestConnectionRequest, TriggerRequest,
+    WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -618,6 +619,52 @@ impl<T: Transport> Client<T> {
     pub async fn workers(&self) -> Result<WorkerList, ClientError> {
         self.call(Method::Get, "/api/v1/workers".to_owned(), None)
             .await
+    }
+
+    /// `GET /api/v1/sensors/switched-off`: the wait steps switched off.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn switched_off_sensors(&self) -> Result<SensorList, ClientError> {
+        self.call(Method::Get, "/api/v1/sensors/switched-off".to_owned(), None)
+            .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/sensors/{sensor}/switch-on`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn switch_on_sensor(
+        &self,
+        dag: &str,
+        sensor: &str,
+    ) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Post,
+            format!(
+                "/api/v1/dags/{}/sensors/{}/switch-on",
+                path(dag),
+                path(sensor)
+            ),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/runs/{run}/resources`: a run's resources.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn run_resources(&self, run: &str) -> Result<ResourceList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/runs/{}/resources", path(run)),
+            None,
+        )
+        .await
     }
 
     /// `GET /api/v1/deployment`: the deployment's nodes and their configurations (masked).

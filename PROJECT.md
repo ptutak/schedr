@@ -6742,8 +6742,18 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   top level isn't run again for each attempt; a failed import is tried again by the next one. Its
   folder is the worker's log folder and its environment the allow-list plus `pass_env`, as they
   can't be a run's: a wait step reads run values from `dag_ctx` and `task_ctx`, never
-  `SCHEDR_*` variables, and uses absolute paths. Until M4.11a3: a wait step not ending in its grace time kills its
-  host, and its host's other watchers just fail. Until M4.11a4: a wait step holds a task slot.
+  `SCHEDR_*` variables, and uses absolute paths. Until M4.11a4: a wait step holds a task slot.
+- **Built in M4.11a3 (decision 341, Claude's calls):** whoever gets a host killed is blamed: a loop held
+  past `block_limit` (`loop_blocked`), a thread stuck past its grace (`watcher_stuck`), a cancel not
+  taken in its grace. The others on it start again on a new host in the same attempt, their `max_wait`
+  and `timeout` running on and no retry used; a poke that moved starts on what it moved to. While a DAG
+  file is first imported on the loop, the limit is `parse_file_timeout`, so a slow import is no
+  strike. Only one holding the loop on its own is blamed: many taking their turns can hold up a turn of
+  the loop, and blame no one. A log not being written for that long kills its host too, with nobody
+  to blame. A host silent for twice the longer limit (C holding the interpreter's lock, so its watchdog
+  can't run either) is killed with nobody to blame, as for a crash or a memory kill: all on it end
+  `lost`, error kind `watcher_host_lost`, each using a retry. `[watchers] memory_budget` kills the
+  largest host when all together are over.
 - **A poke moves to new code, and a move can't fail it** (decision 335, the user's, 2026-11-06): a
   `@sensor.poke` finishes its current call and makes its next one on the new code, using no retry and
   keeping its deadline, if it can start there: the new host imports the file, finds the task under its
@@ -6773,11 +6783,30 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
 - **A wait step or trigger that keeps blocking is switched off** (decision 338, the user's,
   2026-11-06; built in M4.11a3): the master counts strikes per DAG and task (a blocked loop, a stuck
   thread, an ignored cancel). After `[watchers] switch_off_after` in a row (default 3), new attempts
-  fail at once with a clear error and never reach a host. A success resets the count; new code or a
-  CLI or UI command switches it back on. A host crash isn't counted: it can't be pinned on one step.
+  fail at once with error kind `switched_off` and never reach a host. A success resets the count. New
+  code or a command switches it back on: with new code it has **one chance**, a single strike switching
+  it off again until a success (a hash covers the whole root, so any deploy counts, and hourly deploys
+  mustn't hit its neighbours three times each). Sensors have **their own names, not `tasks`**:
+  `schedr sensors switch-on <dag> <sensor>`, `schedr sensors switched-off`, `POST
+  /api/v1/dags/{dag}/sensors/{sensor}/switch-on`; triggers get theirs in M4.11b. A host crash isn't
+  counted: it can't be pinned on one step. A `to_thread` stop that lands doesn't replace the host; a
+  metric counts them.
   Not chosen: running an offender in a host of its own (a process per offender and more placement
   code; the others are hit a few times instead of once); a host of its own and never off (it keeps
   using up its time and retries).
+- **Sensors and resources have endpoints of their own** (decision 340, the user's, 2026-11-06), not
+  `tasks`: resources are only inside a run's detail so far. Built with the switch-off in M4.11a3.
+- **Repeated crashes and memory kills are made visible, not stopped** (decision 342, the user's,
+  2026-11-06): no wait step can be blamed, so none is switched off; each `lost` uses a retry, which
+  bounds a run. A lost attempt's error names the wait steps that were on its host, and a metric (M4.11a4)
+  counts these ends per code set. Not chosen: separating them into a process each after a loss, to find
+  the culprit (the most memory right after a memory kill, and the most code; it can be added later);
+  a strike for all on the host (healthy long waits would be switched off with the culprit).
+- **Blame is what a host says** (Grok's review): a wait step with the will to can reach the shared
+  socket and name a neighbour, which then gets its strikes or an ended attempt. That is within "a worker
+  is one trust domain": they share a process and can read each other's memory anyway. Blame for an
+  ID not on the host blames no one (all `lost`), and a stack passes the host's mask, which has
+  every value read on it.
 - **Libraries' own threads are watched, not refused** (decision 339, the user's, 2026-11-06; built in
   M4.11a3 and its UI in M4.11a4): polars 2.1 in `to_thread` left the loop free (8 ms at worst) and its
   pool is one per process, about 30 native threads idle after a query, so no list of libraries is

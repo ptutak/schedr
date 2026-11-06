@@ -937,6 +937,22 @@
         ],
         "type": "object"
       },
+      "ResourceList": {
+        "description": "A run's resources.",
+        "properties": {
+          "resources": {
+            "description": "In the DAG's order.",
+            "items": {
+              "$ref": "#/components/schemas/ResourceView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "resources"
+        ],
+        "type": "object"
+      },
       "ResourceView": {
         "description": "A resource of a run: its setup, its cleanup and its users.",
         "properties": {
@@ -1121,6 +1137,52 @@
           "since",
           "triggered_at",
           "triggered_by"
+        ],
+        "type": "object"
+      },
+      "SensorList": {
+        "description": "The wait steps switched off.",
+        "properties": {
+          "sensors": {
+            "description": "By DAG and task.",
+            "items": {
+              "$ref": "#/components/schemas/SensorView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sensors"
+        ],
+        "type": "object"
+      },
+      "SensorView": {
+        "description": "A wait step switched off for getting its host killed too many times in a row (decision 338).",
+        "properties": {
+          "dag_id": {
+            "description": "Its DAG.",
+            "type": "string"
+          },
+          "sensor": {
+            "description": "The wait step.",
+            "type": "string"
+          },
+          "strikes": {
+            "description": "Its host kills in a row.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "switched_off_at": {
+            "description": "When it was switched off (RFC 3339).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dag_id",
+          "sensor",
+          "strikes",
+          "switched_off_at"
         ],
         "type": "object"
       },
@@ -1939,6 +2001,67 @@
         ]
       }
     },
+    "/api/v1/dags/{dag_id}/sensors/{sensor}/switch-on": {
+      "post": {
+        "operationId": "switch_on_sensor",
+        "parameters": [
+          {
+            "description": "A key of the client's for this request",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The wait step's task ID",
+            "in": "path",
+            "name": "sensor",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Switch a wait step back on, forgetting its strikes. Applied by the master; poll the command\nfor the decision.",
+        "tags": [
+          "sensors"
+        ]
+      }
+    },
     "/api/v1/dags/{dag_id}/unpause": {
       "post": {
         "operationId": "unpause_dag",
@@ -2296,6 +2419,95 @@
         "summary": "The DAG a run ran with: its version's DAG JSON (tasks, dependencies, settings), for its\ngraph.",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/resources": {
+      "get": {
+        "operationId": "list_run_resources",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A run's resources, each with its setup, cleanup, users and state (decision 340).",
+        "tags": [
+          "resources"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/resources/{resource}": {
+      "get": {
+        "operationId": "get_run_resource",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The resource: its setup's task ID",
+            "in": "path",
+            "name": "resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceView"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One resource of a run, by its name (decision 340).",
+        "tags": [
+          "resources"
         ]
       }
     },
@@ -2693,6 +2905,26 @@
         "summary": "Retry an `unschedulable` task of an unfinished run (`schedr tasks retry`). Applied by the\nmaster; poll the command for the decision.",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/api/v1/sensors/switched-off": {
+      "get": {
+        "operationId": "list_switched_off_sensors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensorList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The wait steps switched off for getting their host killed too many times in a row\n(decision 338).",
+        "tags": [
+          "sensors"
         ]
       }
     },

@@ -45,7 +45,11 @@ directory and environment belong to the host, not a run: use absolute paths and 
 values from `dag_ctx` and `task_ctx`, never `SCHEDR_*` environment variables.
 
 Use asynchronous clients and yield while waiting: a blocking call holds up the other wait
-steps on the host. Read declared secrets with `await task_ctx.asecret(...)` or
+steps on the host. If one holds the loop past `[watchers] block_limit` (30 seconds by
+default), its host is killed and it fails `blocked_event_loop` without a retry. The other
+wait steps start again on a new host in the same attempt, with their `max_wait` and `timeout`
+still running and no retry used. Put heavy work in a task. Read declared secrets with
+`await task_ctx.asecret(...)` or
 `await task_ctx.asecret_value(...)`; the plain forms hold the loop when a secret under a
 `SecretPrefix` must be fetched. See [Secrets](13-secrets.md#reading-a-secret-inside-a-task).
 
@@ -72,8 +76,8 @@ your own `asyncio.timeout`) or the step ends with the call still running, `StepE
 in its thread at its next Python line. It isn't an `Exception`, so `except Exception` doesn't stop
 it, and `finally` runs. Python can't reach a thread blocked in C (`time.sleep(600)`, a read with no
 timeout): if it hasn't ended after the cancel grace, the step's result is reported and the host is
-killed, with the other wait steps on it. So give blocking calls a timeout of their own, and put
-heavy work, such as a large query in a library with its own threads, in a task.
+killed; the other wait steps start again as described above. Give blocking calls a timeout of
+their own, and put heavy work, such as a large query in a library with its own threads, in a task.
 
 That error can land on any Python line, also halfway through a library updating its own state, such
 as a connection pool or a cache. `with` and `finally` run, but code with no cleanup for it stays
@@ -83,7 +87,8 @@ that has a timeout of its own, and ends by itself, is always the safer way to st
 When a step ends, asyncio tasks it left running are cancelled and awaited. `print` and Python logging from the step go to its
 attempt log, as does a thread it started; output from C code, or from a thread still running after
 its step ended, goes to the host's log, masked for secrets. Nothing can stop a running thread from
-outside: end the ones you start, or they live until the host stops.
+outside: end the ones you start, or they live until the host stops. The step's log warns if a
+library leaves a thread running.
 
 When new code arrives, a `@sensor.poke` moves between calls if it can start on that code.
 It keeps its deadline and uses no retry; its log says it moved and the attempt reports the
@@ -94,8 +99,14 @@ frequent deploys with very long waits can therefore cost memory. A retry starts 
 code.
 
 A wait step currently holds a task slot and its clock is per attempt. Cancellation gives it
-the usual grace time; if it does not end, its host is killed and the other wait steps there
-fail. A host crash also fails its wait steps.
+the usual grace time; if it does not end, its host is killed and the other wait steps start
+again as above. A host crash is handled differently; see [The watcher host](../03-guide/05-workers.md#the-watcher-host).
+
+After `[watchers] switch_off_after` host kills in a row (default 3), a wait step is switched
+off: new attempts fail `switched_off` without reaching a host. A success resets the count.
+New code gives it one chance: another strike switches it off again until a success. List these
+steps with `schedr sensors switched-off` and switch one on with
+`schedr sensors switch-on <dag> <sensor>`.
 
 ## Limits for now
 

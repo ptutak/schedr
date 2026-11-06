@@ -31,6 +31,15 @@ pub const CONNECTION_DENIED: &str = "connection_denied";
 /// the hash the master expects (the newest code): the file is gone, not on its way.
 pub const DAG_FILE_MISSING: &str = "dag_file_missing";
 
+/// The error kind of a wait step that held its host's event loop past `[watchers] block_limit`.
+pub const BLOCKED_EVENT_LOOP: &str = "blocked_event_loop";
+
+/// The error kind of a wait step switched off for getting its host killed (decision 338).
+pub const SWITCHED_OFF: &str = "switched_off";
+
+/// The error kind of a wait step whose host ended with no wait step to blame.
+pub const WATCHER_HOST_LOST: &str = "watcher_host_lost";
+
 /// What the runner was started to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -288,6 +297,18 @@ pub enum RunnerMessage {
         /// exception from the task's own code.
         kind: Option<String>,
     },
+    /// A watcher host's event loop has been held past its limit: it can only be killed.
+    LoopBlocked {
+        /// The watcher holding it; `None` if no watcher is to blame.
+        watcher: Option<u64>,
+        /// Where the loop's thread is.
+        stack: String,
+    },
+    /// A watcher host is there, its event loop held or not.
+    HostAlive,
+    /// A thread of this watcher didn't stop in its grace time: its host ends after its result
+    /// (inside a [`Self::WatcherMessage`]).
+    WatcherStuck,
     /// Of one watcher, in a watcher host: what a task's runner would send.
     WatcherMessage {
         /// The watcher's ID.
@@ -515,6 +536,10 @@ pub struct ForkRequest {
 pub struct WatchersRequest {
     /// Directories put first on `sys.path` (every DAG root's copy).
     pub sys_path: Vec<String>,
+    /// How long a watcher may hold the event loop (`[watchers] block_limit`).
+    pub block_limit_ms: u64,
+    /// How long importing a DAG file may hold it (`[dags] parse_file_timeout`).
+    pub import_limit_ms: u64,
 }
 
 /// A message from the agent to the runner.

@@ -31,7 +31,6 @@ use crate::process::{OsProcess, ProcessSpec, spawn, spawn_passing};
 use crate::secrets::{AttemptSecrets, ConnectionError, SecretError};
 use crate::status::{StopReason, Termination};
 use crate::supervise::{Limits, Process, Signal, Stops, Supervised, supervise};
-use crate::usage::Ended;
 
 /// The environment variable with the runner's descriptor of its socket to the agent.
 pub const FD_ENV: &str = "SCHEDR_AGENT_FD";
@@ -454,20 +453,12 @@ pub async fn run_python(
         // Cancelled or timed out before its hello: stopped as a running task is, the reason
         // given back for `supervise` to take first; no request was sent, so no result.
         Start::NotStarted(reason) => {
-            return Ok(Ran {
-                supervised: Supervised {
-                    termination: Termination::Unknown,
-                    stopped: Some(reason),
-                    killed: false,
-                },
-                runner_result: None,
-                output: None,
-                duration: started.elapsed(),
-                start: None,
-                forked: false,
-                ended: Ended::default(),
-                moved_to: None,
-            });
+            let supervised = Supervised {
+                termination: Termination::Unknown,
+                stopped: Some(reason),
+                killed: false,
+            };
+            return Ok(Ran::with_no_process(supervised, None, started.elapsed()));
         }
         Start::Stopped(mut process, reason) => {
             let forked = matches!(process, TaskProcess::Forked(_));
@@ -487,6 +478,8 @@ pub async fn run_python(
                 forked,
                 ended,
                 moved_to: None,
+                host_lost: None,
+                struck: false,
             });
         }
     };
@@ -529,6 +522,8 @@ pub async fn run_python(
         forked,
         ended,
         moved_to: None,
+        host_lost: None,
+        struck: false,
     })
 }
 
@@ -585,6 +580,8 @@ pub async fn run_command(
         forked: false,
         ended,
         moved_to: None,
+        host_lost: None,
+        struck: false,
     })
 }
 

@@ -180,6 +180,9 @@ message Finished {
   bool core_dumped = 13;
   // How the task's cleanup ended; absent for a task without one.
   optional CleanupResult cleanup = 14;
+  // A wait step (decision 338): whether it got its host killed.
+  bool wait_step = 15;
+  bool struck = 16;
 }
 
 // A task with a cleanup: its process ended and the cleanup starts (decision 229). `Finished`

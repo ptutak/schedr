@@ -339,6 +339,12 @@ pub struct WorkerTimeouts {
     pub cleanup: Duration,
     /// How long a wait step without a `max_wait` waits (`[sensors] default_max_wait`).
     pub sensor_max_wait: Duration,
+    /// How long a wait step may hold its host's loop (`[watchers] block_limit`).
+    pub watcher_block_limit: Duration,
+    /// How long importing a DAG file may hold it (`[dags] parse_file_timeout`).
+    pub watcher_import_limit: Duration,
+    /// The memory of all watcher hosts together (`[watchers] memory_budget`).
+    pub watcher_memory_budget: u64,
     /// One try of a resource's cleanup that sets no `timeout` (`resource_cleanup_timeout`).
     pub resource_cleanup: Duration,
     /// How long a stopped process's output may take to reach its log (`output_drain_timeout`).
@@ -380,6 +386,9 @@ impl Default for WorkerTimeouts {
             fork_preload: crate::fork::PRELOAD_TIMEOUT,
             cleanup: Duration::from_mins(5),
             sensor_max_wait: Duration::from_hours(24),
+            watcher_block_limit: Duration::from_secs(30),
+            watcher_import_limit: Duration::from_mins(1),
+            watcher_memory_budget: 1024 * 1024 * 1024,
             resource_cleanup: Duration::from_mins(30),
             output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
             fork_answer: crate::fork::FORK_ANSWER_TIMEOUT,
@@ -852,6 +861,33 @@ pub struct Ran {
     /// The code it ended on, when that isn't the code it started on: a poke moved to new code
     /// (decision 335).
     pub moved_to: Option<String>,
+    /// A wait step's host ended with none of them to blame: why. Its attempt ends `lost`.
+    pub host_lost: Option<String>,
+    /// A wait step's: whether it got its host killed (decision 338).
+    pub struck: bool,
+}
+
+impl Ran {
+    /// A run with no process of its own to tell more: none started, or a wait step on its host.
+    #[must_use]
+    pub fn with_no_process(
+        supervised: Supervised,
+        runner_result: Option<RunnerMessage>,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            supervised,
+            runner_result,
+            output: None,
+            duration,
+            start: None,
+            forked: false,
+            ended: crate::usage::Ended::default(),
+            moved_to: None,
+            host_lost: None,
+            struck: false,
+        }
+    }
 }
 
 /// How long a Python task's process took to start, by phase.
@@ -890,6 +926,8 @@ pub fn finished(attempt_id: &str, task: &Task, ran: &Ran) -> pb::Finished {
             involuntary_context_switches: u.involuntary_context_switches,
         }),
         core_dumped: ran.ended.core_dumped,
+        wait_step: matches!(task.kind, schedr_model::TaskKind::Sensor { .. }),
+        struck: ran.struck,
         ..pb::Finished::default()
     };
     match termination {
@@ -908,6 +946,13 @@ pub fn finished(attempt_id: &str, task: &Task, ran: &Ran) -> pb::Finished {
         } else {
             message.error_summary_json = bytes;
         }
+        return message;
+    }
+    if let Some(why) = &ran.host_lost {
+        // Not its own doing: as a lost worker's tasks, each uses a retry (M4.11a3).
+        message.status = attempt_status_to_proto(AttemptStatus::Lost).into();
+        schedr_model::runner::WATCHER_HOST_LOST.clone_into(&mut message.error_kind);
+        message.error_summary_json = summary("WatcherHostLost", why);
         return message;
     }
     match (&ran.runner_result, status) {

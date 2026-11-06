@@ -42,7 +42,9 @@ mod tests;
 /// isn't permitted, and what the same inputs always do again. (`secret_unavailable`, a secret
 /// storage that is down, and `import_failed` / `task_not_found`, which new code can fix, are
 /// retried.)
-pub const NOT_RETRIED_ERRORS: [&str; 9] = [
+pub const NOT_RETRIED_ERRORS: [&str; 11] = [
+    schedr_model::runner::SWITCHED_OFF,
+    schedr_model::runner::BLOCKED_EVENT_LOOP,
     "secret_not_found",
     "secret_denied",
     "connection_denied",

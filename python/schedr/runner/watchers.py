@@ -29,6 +29,8 @@ import queue
 import signal
 import sys
 import threading
+import time
+import traceback
 from typing import TYPE_CHECKING, Any, TextIO
 
 from schedr.runner.coroutines import loop_factory
@@ -42,6 +44,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from schedr._model import registry
+
+_CHECK_EVERY = 1.0
+"""How often, in seconds, the watchdog looks at the loop."""
+
+_POOL_THREADS = "schedr-wait-step"
+"""How the loop's own threads are named."""
 
 _LOG_CHUNK = MAX_MESSAGE_SIZE // 16
 """The most text of one log message: a huge ``print`` goes in several."""
@@ -190,12 +198,13 @@ class WatcherChannel:
             watcher: The watcher's ID.
         """
         self._host = host
-        self._watcher = watcher
+        self.watcher = watcher
         self._asking = threading.Lock()
         self.answers: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
         self._owed = 0
         self.ended = False
         self.calls: set[_ThreadCall[Any]] = set()
+        self.threads: list[threading.Thread] = []
         self.moving = asyncio.Event()
         self.go: asyncio.Future[int | None] | None = None
 
@@ -205,7 +214,7 @@ class WatcherChannel:
         Args:
             message: A JSON object with a ``type``.
         """
-        self._host.send({"type": "watcher_message", "watcher": self._watcher, "message": message})
+        self._host.send({"type": "watcher_message", "watcher": self.watcher, "message": message})
 
     def ask(self, message: dict[str, Any]) -> dict[str, Any]:
         """Sends a request and waits for its answer, holding what called it.
@@ -298,6 +307,7 @@ class _Host:
         self._watchers: dict[int, tuple[WatcherChannel, asyncio.Task[Any]]] = {}
         self._ending: set[asyncio.Task[None]] = set()
         self._entries: dict[tuple[str, str, str], list[registry.DefinedDag]] = {}
+        self.importing = 0
 
     def send(self, message: dict[str, Any]) -> None:
         with self._sending:
@@ -307,7 +317,11 @@ class _Host:
         """A DAG file's DAGs, imported once: on failure, again by the next attempt."""
         key = (root, str(root_dir), path)
         if key not in self._entries:
-            self._entries[key] = import_dag_entries(root, root_dir, path)
+            self.importing += 1
+            try:
+                self._entries[key] = import_dag_entries(root, root_dir, path)
+            finally:
+                self.importing -= 1
         return self._entries[key]
 
     def start(
@@ -350,7 +364,9 @@ class _Host:
             result = step.result()
         await _stopped_children(own)
         stopped = await _stopped_threads(own, grace)
+        _warn_of_threads(own)
         if not stopped:
+            own.send({"type": "watcher_stuck"})
             own.send(
                 {
                     "type": "watcher_log",
@@ -430,6 +446,19 @@ async def _stopped_threads(own: WatcherChannel, grace: float) -> bool:
     return not late
 
 
+def _warn_of_threads(own: WatcherChannel) -> None:
+    """Says what a step's library left running: not refused, but nothing can stop it (339)."""
+    alive = sorted({thread.name for thread in own.threads if thread.is_alive()})
+    if alive:
+        own.send(
+            {
+                "type": "watcher_log",
+                "stream": "stderr",
+                "text": f"warning: threads started by this wait step are still running: {alive}\n",
+            }
+        )
+
+
 def _tell(own: WatcherChannel, result: dict[str, Any]) -> None:
     """Sends a step's end: a result that can't be sent is its failure, never its silence.
 
@@ -483,6 +512,66 @@ def _warn(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
     print(f"warning: {context.get('message', 'asyncio')}{detail}", file=sys.stderr)
 
 
+def _watch_threads() -> None:
+    """Has each Python thread remembered by the watcher that started it, for its end."""
+    start = threading.Thread.start
+
+    def started(thread: threading.Thread) -> None:
+        own = _WATCHER.get()
+        if own is not None and not thread.name.startswith(_POOL_THREADS):
+            own.threads.append(thread)
+        start(thread)
+
+    threading.Thread.start = started  # type: ignore[method-assign, assignment]  # the one way to see them all
+
+
+def _watch_the_loop(
+    host: _Host,
+    loop: asyncio.AbstractEventLoop,
+    limits: tuple[float, float],
+) -> None:
+    """The host's watchdog: says it is there, and who holds the loop past its limit.
+
+    The agent kills the host for that: Python can't cancel what doesn't yield.
+
+    Args:
+        host: The host.
+        loop: Its loop, on this process's main thread.
+        limits: How long the loop may be held, in seconds, and while a DAG file is imported.
+    """
+    block_limit, import_limit = limits
+    loop_thread = threading.main_thread().ident
+    turned = time.monotonic()
+    holding: object = None
+    holding_since = turned
+
+    def turn() -> None:
+        nonlocal turned
+        turned = time.monotonic()
+
+    while True:
+        time.sleep(min(_CHECK_EVERY, block_limit / 4))
+        loop.call_soon_threadsafe(turn)
+        host.send({"type": "host_alive"})
+        now = time.monotonic()
+        running = asyncio.current_task(loop)
+        # Many taking their turns can hold up a turn of the loop: only one on its own is to blame.
+        if running is not holding:
+            holding, holding_since = running, now
+        limit = import_limit if host.importing else block_limit
+        if min(now - turned, now - holding_since) > limit:
+            own = None if running is None else running.get_context().get(_WATCHER)
+            frame = sys._current_frames().get(loop_thread or 0)  # the one way to see it
+            host.send(
+                {
+                    "type": "loop_blocked",
+                    "watcher": None if own is None else own.watcher,
+                    "stack": "" if frame is None else "".join(traceback.format_stack(frame)),
+                }
+            )
+            return
+
+
 def guarded_loop_factory() -> Callable[[], asyncio.AbstractEventLoop] | None:
     """The host's event loop: ``uvloop`` starts processes where the audit hook can't see them.
 
@@ -522,10 +611,15 @@ def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
 
     async def main() -> None:
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(_WatcherThreads(thread_name_prefix="schedr-wait-step"))
+        loop.set_default_executor(_WatcherThreads(thread_name_prefix=_POOL_THREADS))
+        _watch_threads()
         loop.set_exception_handler(_warn)
         threading.Thread(
             target=_read, args=(channel, host, loop), name="schedr-agent", daemon=True
+        ).start()
+        limits = (request["block_limit_ms"] / 1000, request["import_limit_ms"] / 1000)
+        threading.Thread(
+            target=_watch_the_loop, args=(host, loop, limits), name="schedr-watchdog", daemon=True
         ).start()
         await asyncio.Event().wait()
 

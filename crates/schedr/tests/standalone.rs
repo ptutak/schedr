@@ -1276,6 +1276,7 @@ fn a_script_has_params_outcomes_a_cleanup_and_can_be_a_resource() {
     let lines = marked();
     assert_eq!(lines.matches("check-cleanup").count(), 2, "{lines}");
     assert_eq!(lines.matches("dropped c-8").count(), 1, "{lines}");
+    resources_have_their_own_endpoints(&standalone, &run_id, &run);
 }
 
 /// M4.9d (decision 305): a package with relative imports in a root, imported by a DAG.
@@ -2120,6 +2121,108 @@ fn a_poke_renamed_in_new_code_finishes_its_run_on_a_real_worker() {
         |old| old.replace("polls", "renamed"),
         "it stays on its code",
     );
+}
+
+fn resources_have_their_own_endpoints(standalone: &Standalone, run_id: &str, run: &Value) {
+    // Resources have their own endpoints (decision 340), as the run's detail shows them.
+    let listed = standalone
+        .get(&format!("/api/v1/runs/{run_id}/resources"))
+        .unwrap();
+    assert_eq!(listed["resources"], run["resources"], "{listed}");
+    let name = listed["resources"][0]["setup"].as_str().unwrap();
+    let one = standalone
+        .get(&format!("/api/v1/runs/{run_id}/resources/{name}"))
+        .unwrap();
+    assert_eq!(one, listed["resources"][0]);
+    assert!(
+        standalone
+            .get(&format!("/api/v1/runs/{run_id}/resources/nothing"))
+            .is_none()
+    );
+    let (code, out, err) = standalone.cli(&["resources", "list", run_id]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains(name), "{out}");
+}
+
+const BLOCKS: &str = r#"import time
+
+from schedr import Dag, sensor
+
+
+@sensor
+async def blocks() -> int:
+    time.sleep(600)
+    return 1
+
+
+with Dag("blocking"):
+    blocks()
+"#;
+
+fn run_blocks_with_kind(standalone: &Standalone, kind: &str) {
+    let run = standalone.trigger("blocking");
+    standalone.wait_for_state(&run, "failed");
+    let attempts: Value = standalone
+        .get(&format!("/api/v1/runs/{run}/tasks/blocks/attempts"))
+        .unwrap();
+    assert_eq!(attempts["attempts"][0]["error_kind"], kind, "{attempts}");
+    assert_eq!(
+        attempts["attempts"].as_array().unwrap().len(),
+        1,
+        "{attempts}"
+    );
+}
+
+#[test]
+fn a_wait_step_that_keeps_blocking_is_switched_off_until_new_code_or_by_hand() {
+    keeps_blocking(None);
+}
+
+#[test]
+fn a_wait_step_that_keeps_blocking_is_switched_off_on_postgres() {
+    keeps_blocking(Some(&postgres_database()));
+}
+
+fn keeps_blocking(url: Option<&str>) {
+    let config = "[watchers]\nblock_limit = \"1s\"\nswitch_off_after = 2\n";
+    let standalone = Standalone::start_configured(&[("blocks.py", BLOCKS)], url, &[], config, &[]);
+    standalone.wait("the DAG", || {
+        standalone.dag_ids().contains(&"blocking".to_owned())
+    });
+    run_blocks_with_kind(&standalone, "blocked_event_loop");
+    run_blocks_with_kind(&standalone, "blocked_event_loop");
+    run_blocks_with_kind(&standalone, "switched_off");
+    let off = standalone.cli_json(&["sensors", "switched-off"]);
+    assert_eq!(off["sensors"][0]["sensor"], "blocks", "{off}");
+    for (dag, sensor) in [("blocking", "nothing"), ("nothing", "blocks")] {
+        let (code, _, err) = standalone.cli(&["sensors", "switch-on", dag, sensor]);
+        assert_ne!(code, 0, "{dag} {sensor}");
+        assert!(err.contains("no "), "{err}");
+    }
+    // By hand: the full count again.
+    let (code, out, err) = standalone.cli(&["sensors", "switch-on", "blocking", "blocks"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("switched on"), "{out}");
+    let off = standalone.cli_json(&["sensors", "switched-off"]);
+    assert_eq!(off["sensors"], json!([]), "{off}");
+    run_blocks_with_kind(&standalone, "blocked_event_loop");
+    run_blocks_with_kind(&standalone, "blocked_event_loop");
+    run_blocks_with_kind(&standalone, "switched_off");
+    // New code: one chance.
+    std::fs::write(
+        standalone.root().join("blocks.py"),
+        format!("{BLOCKS}\n# new code\n"),
+    )
+    .unwrap();
+    standalone.wait("it to be on again on new code", || {
+        let run = standalone.trigger("blocking");
+        standalone.wait_for_state(&run, "failed");
+        let attempts: Value = standalone
+            .get(&format!("/api/v1/runs/{run}/tasks/blocks/attempts"))
+            .unwrap();
+        attempts["attempts"][0]["error_kind"] == "blocked_event_loop"
+    });
+    run_blocks_with_kind(&standalone, "switched_off");
 }
 
 /// A folder of this name somewhere under `dir`.

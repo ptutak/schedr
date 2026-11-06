@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use schedr_model::runner::{
-    AgentMessage, OutputStream, RunnerMessage, RunnerMode, TaskRequest, WatchersRequest,
+    AgentMessage, ErrorSummary, OutputStream, RunnerMessage, RunnerMode, TaskRequest,
+    WatchersRequest,
 };
 use schedr_model::task::{SensorMode, TaskKind};
 use tokio::io::AsyncWriteExt as _;
@@ -31,7 +32,6 @@ use crate::process::{OsProcess, ProcessSpec};
 use crate::secrets::AttemptSecrets;
 use crate::status::{StopReason, Termination};
 use crate::supervise::{Limits, Process, Signal, Stops, Supervised};
-use crate::usage::Ended;
 
 /// The exit code a failed watcher stands for: as a task's process that reports a failure.
 const FAILED_EXIT_CODE: i32 = 1;
@@ -42,6 +42,9 @@ const TERMINATED: i32 = 15;
 /// The signal number of a host that had to be killed.
 const KILLED: i32 = 9;
 
+#[cfg(test)]
+mod tests;
+
 /// The hosts of a worker, by code set (cheap to clone; clones share them).
 #[derive(Debug, Clone, Default)]
 pub struct WatcherHosts {
@@ -51,6 +54,28 @@ pub struct WatcherHosts {
     code_sets: Arc<StdMutex<BTreeSet<Vec<String>>>>,
     /// The copy of each DAG root the worker runs now.
     code: Arc<StdMutex<Option<watch::Sender<Copies>>>>,
+    /// Whether their memory is being watched.
+    watching_memory: Arc<AtomicBool>,
+}
+
+/// The wait step a host is killed for: the others on it start again.
+#[derive(Debug, Clone)]
+struct Blamed {
+    watcher: u64,
+    /// Where it held the event loop, if that is why.
+    stack: Option<String>,
+}
+
+/// Why a host has to go.
+#[derive(Debug, Default)]
+struct Going {
+    blamed: Option<Blamed>,
+    /// With no wait step to blame.
+    why: Option<String>,
+    /// Its process has ended: nothing done now can be why.
+    dead: bool,
+    /// The wait steps on it, by watcher: a lost attempt's error names them (decision 342).
+    names: BTreeMap<u64, String>,
 }
 
 type Copies = BTreeMap<String, PathBuf>;
@@ -73,6 +98,7 @@ struct Host {
     /// What its own log masks: every value of every watcher it has had (decision 334: output
     /// of a thread or C code can't be told apart, and may come after its watcher ended).
     mask: Arc<MaskSet>,
+    going: Arc<StdMutex<Going>>,
 }
 
 impl Host {
@@ -83,10 +109,12 @@ impl Host {
         let spec = host_spec(setup, sys_path, Mask(Some(Arc::clone(&mask))));
         let runner = start_runner(&spec, RunnerMode::Watchers, |_| {}).await?;
         let pid = runner.process.id();
-        let (mut reader, mut writer) = runner.stream.into_split();
+        let (reader, mut writer) = runner.stream.into_split();
         let (outbox, mut outgoing) = mpsc::unbounded_channel::<AgentMessage>();
         let _ = outbox.send(AgentMessage::Watchers(WatchersRequest {
             sys_path: sys_path.to_vec(),
+            block_limit_ms: millis(setup.timeouts.watcher_block_limit),
+            import_limit_ms: millis(setup.timeouts.watcher_import_limit),
         }));
         let stop = Arc::new(Notify::new());
         let routes = Routes::default();
@@ -97,40 +125,27 @@ impl Host {
                 }
             }
         });
-        let reading = {
-            let routes = Arc::clone(&routes);
-            let stop = Arc::clone(&stop);
-            tokio::spawn(async move {
-                loop {
-                    match read_message::<_, RunnerMessage>(&mut reader).await {
-                        Ok(RunnerMessage::WatcherMessage { watcher, message }) => {
-                            let route = routes
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .get(&watcher)
-                                .cloned();
-                            if let Some(route) = route {
-                                let _ = route.send(*message).await;
-                            }
-                        }
-                        Ok(other) => {
-                            tracing::warn!(?other, "a watcher host sent something unexpected");
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, pid, "a watcher host's channel ended");
-                            stop.notify_one();
-                            return;
-                        }
-                    }
-                }
-            })
-        };
+        let going = Arc::new(StdMutex::new(Going::default()));
+        // Its watchdog says it is there; twice the limit, so that it can say whom to blame first.
+        let silence = setup
+            .timeouts
+            .watcher_block_limit
+            .max(setup.timeouts.watcher_import_limit)
+            * 2;
+        let reading = tokio::spawn(read_host(
+            reader,
+            Arc::clone(&routes),
+            Arc::clone(&stop),
+            Arc::clone(&going),
+            (silence, pid, Arc::clone(&mask)),
+        ));
         let (ended_sender, ended) = watch::channel(None);
         let watch_over = HostEnd {
             stopping: Arc::clone(&stop),
             routes: Arc::clone(&routes),
             ended: ended_sender,
             drain: spec.output_drain,
+            going: Arc::clone(&going),
         };
         tokio::spawn(watch_over.run(runner.process, reading, writing));
         Ok(Self {
@@ -140,12 +155,160 @@ impl Host {
             stop,
             ended,
             mask,
+            going,
         })
     }
 
     fn alive(&self) -> bool {
         self.ended.borrow().is_none()
     }
+
+    /// Kills it for a wait step that wouldn't end.
+    fn kill_for(&self, watcher: u64) {
+        let dead = self
+            .going
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .dead;
+        if !dead {
+            blame(&self.going, watcher, None);
+        }
+        self.stop.notify_one();
+    }
+
+    /// Remembers what a watcher on it runs.
+    fn named(&self, watcher: u64, request: &TaskRequest) {
+        self.going
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .names
+            .insert(watcher, format!("{}.{}", request.dag_id, request.task.id));
+    }
+
+    /// Forgets one that ended; those on it when it ended stay, for the errors they are named in.
+    fn unnamed(&self, watcher: u64) {
+        if self.alive() {
+            self.going
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .names
+                .remove(&watcher);
+        }
+    }
+
+    /// Those on it, for a lost attempt's error.
+    fn names(&self) -> String {
+        let going = self.going.lock().unwrap_or_else(PoisonError::into_inner);
+        let names: BTreeSet<&str> = going.names.values().map(String::as_str).collect();
+        names.into_iter().collect::<Vec<_>>().join(", ")
+    }
+
+    fn going(&self) -> (Option<Blamed>, Option<String>) {
+        let going = self.going.lock().unwrap_or_else(PoisonError::into_inner);
+        (going.blamed.clone(), going.why.clone())
+    }
+}
+
+/// Reads a host's messages until it is to go: each watcher's goes to it, and what it says of
+/// itself is taken here.
+async fn read_host(
+    mut reader: tokio::net::unix::OwnedReadHalf,
+    routes: Routes,
+    stop: Arc<Notify>,
+    going: Arc<StdMutex<Going>>,
+    (silence, pid, mask): (Duration, i32, Arc<MaskSet>),
+) {
+    loop {
+        let read = read_message::<_, RunnerMessage>(&mut reader);
+        let Ok(read) = tokio::time::timeout(silence, read).await else {
+            tracing::warn!(pid, "a watcher host stopped answering: killing it");
+            set_why(&going, format!("its host didn't answer for {silence:?}"));
+            stop.notify_one();
+            return;
+        };
+        match read {
+            Ok(RunnerMessage::WatcherMessage { watcher, message }) => {
+                if matches!(*message, RunnerMessage::WatcherStuck) {
+                    if is_on_it(&routes, watcher) {
+                        blame(&going, watcher, None);
+                    }
+                    continue;
+                }
+                let route = routes
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&watcher)
+                    .cloned();
+                // Past it the host's own sends wait too, its watchdog's among them: this is
+                // what its silence would be.
+                if let Some(route) = route
+                    && tokio::time::timeout(silence, route.send(*message))
+                        .await
+                        .is_err()
+                {
+                    tracing::warn!(pid, watcher, "a wait step's log isn't being written");
+                    set_why(
+                        &going,
+                        format!("a log on its host wasn't written for {silence:?}"),
+                    );
+                    stop.notify_one();
+                    return;
+                }
+            }
+            Ok(RunnerMessage::HostAlive) => {}
+            Ok(RunnerMessage::LoopBlocked { watcher, stack }) => {
+                tracing::warn!(pid, ?watcher, "a watcher blocked its host's loop");
+                // What every wait step on it read is in this process, and may be in its stack.
+                let stack = mask.mask_text(&stack);
+                // Only one on it can be blamed: anyone else would leave all to start again.
+                match watcher.filter(|watcher| is_on_it(&routes, *watcher)) {
+                    Some(watcher) => blame(&going, watcher, Some(stack)),
+                    None => set_why(
+                        &going,
+                        format!("its host's event loop was held by no wait step:\n{stack}"),
+                    ),
+                }
+                // What was sent before it is still read.
+                stop.notify_one();
+            }
+            Ok(other) => {
+                tracing::warn!(?other, "a watcher host sent something unexpected");
+            }
+            Err(error) => {
+                tracing::warn!(%error, pid, "a watcher host's channel ended");
+                stop.notify_one();
+                return;
+            }
+        }
+    }
+}
+
+fn is_on_it(routes: &Routes, watcher: u64) -> bool {
+    routes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains_key(&watcher)
+}
+
+/// The first to blame stays: what comes after is a result of it.
+fn blame(going: &StdMutex<Going>, watcher: u64, stack: Option<String>) {
+    going
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .blamed
+        .get_or_insert(Blamed { watcher, stack });
+}
+
+fn set_why(going: &StdMutex<Going>, why: String) {
+    going
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .why
+        .get_or_insert(why);
+}
+
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Waits for a host's end, or stops it, and tells its watchers.
@@ -154,6 +317,7 @@ struct HostEnd {
     routes: Routes,
     ended: watch::Sender<Option<Termination>>,
     drain: Duration,
+    going: Arc<StdMutex<Going>>,
 }
 
 impl HostEnd {
@@ -171,10 +335,21 @@ impl HostEnd {
             }
             termination = process.wait() => termination,
         };
+        self.going
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .dead = true;
         // What it started goes with it.
         let _ = process.signal(Signal::Kill);
         let _ = tokio::time::timeout(self.drain, process.output()).await;
-        reading.abort();
+        // What it sent before it ended counts: a result, and whom to blame.
+        let mut reading = reading;
+        if tokio::time::timeout(self.drain, &mut reading)
+            .await
+            .is_err()
+        {
+            reading.abort();
+        }
         writing.abort();
         let _ = self
             .ended
@@ -240,6 +415,7 @@ impl WatcherHosts {
         sys_path: &[String],
         grace: Duration,
     ) -> Result<Entered, LaunchError> {
+        self.watch_memory(setup);
         let mut hosts = self.hosts.lock().await;
         let running = hosts.get(sys_path).filter(|host| host.alive()).cloned();
         let host = if let Some(host) = running {
@@ -273,8 +449,57 @@ impl WatcherHosts {
         })
     }
 
+    /// From the first wait step on, keeps all hosts together under `[watchers] memory_budget`.
+    /// Past it the largest is killed: no wait step can be blamed, as memory isn't told apart.
+    fn watch_memory(&self, setup: &WorkerSetup) {
+        if self.watching_memory.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let hosts = self.clone();
+        let watch = setup.memory.clone();
+        let budget = setup.timeouts.watcher_memory_budget;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(watch.interval);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let running: Vec<Arc<Host>> = hosts.hosts.lock().await.values().cloned().collect();
+                let root = watch.proc_root.clone();
+                let pids: Vec<i32> = running.iter().map(|host| host.pid).collect();
+                let Ok(sizes) = tokio::task::spawn_blocking(move || {
+                    pids.iter()
+                        .map(|pid| crate::memory::group_memory(&root, *pid, true).unwrap_or(0))
+                        .collect::<Vec<u64>>()
+                })
+                .await
+                else {
+                    continue;
+                };
+                let used: u64 = sizes.iter().sum();
+                let largest = sizes.iter().enumerate().max_by_key(|(_, size)| **size);
+                if used > budget
+                    && let Some((index, _)) = largest
+                {
+                    let host = &running[index];
+                    tracing::warn!(pid = host.pid, used, budget, "killing a watcher host");
+                    set_why(
+                        &host.going,
+                        format!(
+                            "its host was killed: wait step hosts use {}, over `[watchers] \
+                             memory_budget` of {}",
+                            crate::memory::show_size(used),
+                            crate::memory::show_size(budget),
+                        ),
+                    );
+                    host.stop.notify_one();
+                }
+            }
+        });
+    }
+
     /// Takes a watcher out; a host left without any stops.
     async fn leave(&self, host: &Arc<Host>, watcher: u64) {
+        host.unnamed(watcher);
         let mut hosts = self.hosts.lock().await;
         let empty = {
             let mut routes = host.routes.lock().unwrap_or_else(PoisonError::into_inner);
@@ -385,7 +610,7 @@ impl Drop for Entered {
                 }
             };
             if tokio::time::timeout(grace, ended).await.is_err() {
-                host.stop.notify_one();
+                host.kill_for(watcher);
             }
             hosts.leave(&host, watcher).await;
         });
@@ -395,7 +620,7 @@ impl Drop for Entered {
 impl Entered {
     /// Its grace, for its host to hold what it left running to.
     fn cancel_grace_ms(&self) -> u64 {
-        u64::try_from(self.grace.as_millis()).unwrap_or(u64::MAX)
+        millis(self.grace)
     }
 }
 
@@ -693,9 +918,54 @@ struct Place {
     cancelling: AtomicBool,
     /// The hash of the code it moved to, if it moved.
     moved_to: StdMutex<Option<String>>,
+    /// What it runs now: a move changes it.
+    request: StdMutex<TaskRequest>,
+    /// Started again: its first call waits to be told what is left of its time since this.
+    going_when_imported: StdMutex<Option<Instant>>,
 }
 
 impl Place {
+    /// Its place, having told the host to start it; `running_since`: it started again, and its
+    /// first call waits for its import, which takes none of its time left.
+    fn started(entered: &Entered, request: &TaskRequest, running_since: Option<Instant>) -> Self {
+        let _ = entered.host.outbox.send(AgentMessage::StartWatcher {
+            watcher: entered.watcher,
+            task: Box::new(request.clone()),
+            cancel_grace_ms: entered.cancel_grace_ms(),
+            moved_in: running_since.is_some(),
+        });
+        entered.host.named(entered.watcher, request);
+        Self {
+            host: StdMutex::new(Arc::clone(&entered.host)),
+            watcher: AtomicU64::new(entered.watcher),
+            cancelling: AtomicBool::new(false),
+            moved_to: StdMutex::new(None),
+            request: StdMutex::new(request.clone()),
+            going_when_imported: StdMutex::new(running_since),
+        }
+    }
+
+    /// Lets one started again make its first call, with what is left of its time.
+    fn go_when_imported(&self, entered: &Entered) {
+        let since = self
+            .going_when_imported
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let Some(since) = since else {
+            return;
+        };
+        let request = self.request.lock().unwrap_or_else(PoisonError::into_inner);
+        let max_wait_ms = match request.task.kind {
+            TaskKind::Sensor { max_wait_ms, .. } => max_wait_ms,
+            _ => None,
+        };
+        let _ = entered.host.outbox.send(AgentMessage::GoWatcher {
+            watcher: entered.watcher,
+            max_wait_ms: max_wait_ms.map(|max| max.saturating_sub(millis(since.elapsed()))),
+        });
+    }
+
     fn host(&self) -> Arc<Host> {
         Arc::clone(&self.host.lock().unwrap_or_else(PoisonError::into_inner))
     }
@@ -759,7 +1029,8 @@ async fn conversation(
             Some(_) = answers.pending.join_next() => Happened::NewCode,
         };
         match happened {
-            Happened::NewCode | Happened::Old(Some(RunnerMessage::TaskImported)) => {}
+            Happened::NewCode => {}
+            Happened::Old(Some(RunnerMessage::TaskImported)) => place.go_when_imported(&entered),
             Happened::Old(None) => break None,
             Happened::Old(Some(RunnerMessage::WatcherMoved)) => {
                 if place.cancelling.load(Ordering::SeqCst) {
@@ -770,6 +1041,11 @@ async fn conversation(
                 };
                 match moved(poke, log).await {
                     Ok(to) => {
+                        place
+                            .request
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .clone_from(&poke.request);
                         *place.host.lock().unwrap_or_else(PoisonError::into_inner) =
                             Arc::clone(&to.0.host);
                         place.watcher.store(to.0.watcher, Ordering::SeqCst);
@@ -827,6 +1103,7 @@ async fn moved(
         code_hash,
     }) = poke.moving.take()
     {
+        to.host.named(to.watcher, &request);
         let _ = to.host.outbox.send(AgentMessage::GoWatcher {
             watcher: to.watcher,
             max_wait_ms: left,
@@ -846,6 +1123,7 @@ async fn moved(
         cancel_grace_ms: to.cancel_grace_ms(),
         moved_in: true,
     });
+    to.host.named(to.watcher, &poke.request);
     let _ = to.host.outbox.send(AgentMessage::GoWatcher {
         watcher: to.watcher,
         max_wait_ms: left,
@@ -877,7 +1155,7 @@ pub async fn run_watcher(
     spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
     let PythonTask {
-        request,
+        mut request,
         secrets,
         handles,
     } = task;
@@ -885,79 +1163,150 @@ pub async fn run_watcher(
     let deadline = limits
         .timeout
         .map(|timeout| tokio::time::Instant::from_std(started) + timeout);
-    let ran = |supervised, runner_result| Ran {
-        supervised,
-        runner_result,
-        output: None,
-        duration: started.elapsed(),
-        start: None,
-        forked: false,
-        ended: Ended::default(),
-        moved_to: None,
+    let ran = |supervised, runner_result| {
+        Ran::with_no_process(supervised, runner_result, started.elapsed())
     };
-    let sys_path = request.sys_path.clone();
-    let entering = hosts.enter(setup, &sys_path, limits.grace);
-    let entered = match unless_stopped(entering, Some((&mut stop, deadline))).await {
-        Ok(entered) => entered?,
-        Err(reason) => {
-            let supervised = Supervised {
-                termination: Termination::Unknown,
-                stopped: Some(reason),
-                killed: false,
-            };
-            return Ok(ran(supervised, None));
-        }
-    };
-    spawned(entered.host.pid);
-    if let Some(mask) = &process.mask.0 {
-        mask.also_in(Arc::clone(&entered.host.mask));
-    }
     let mut log = AttemptLog::open(process)
         .await
         .map_err(|source| LaunchError::Start {
             what: process.log_file.display().to_string(),
             source,
         })?;
-    let poke = poke_of(
-        hosts,
-        setup,
-        &request,
-        started,
-        (&process.mask, limits.grace),
-    );
-    let _ = entered.host.outbox.send(AgentMessage::StartWatcher {
-        watcher: entered.watcher,
-        task: Box::new(request),
-        cancel_grace_ms: entered.cancel_grace_ms(),
-        moved_in: false,
-    });
-    let place = Place {
-        host: StdMutex::new(Arc::clone(&entered.host)),
-        watcher: AtomicU64::new(entered.watcher),
-        cancelling: AtomicBool::new(false),
-        moved_to: StdMutex::new(None),
-    };
-    let (message, reason, killed) = {
-        let answers = Answers {
-            secrets,
-            handles,
-            pending: tokio::task::JoinSet::new(),
+    let mut spawned = Some(spawned);
+    let mut moved_to = None;
+    let mut again = false;
+    loop {
+        let sys_path = request.sys_path.clone();
+        let entering = hosts.enter(setup, &sys_path, limits.grace);
+        let entered = match unless_stopped(entering, Some((&mut stop, deadline))).await {
+            Ok(entered) => entered?,
+            Err(reason) => {
+                let supervised = Supervised {
+                    termination: Termination::Unknown,
+                    stopped: Some(reason),
+                    killed: false,
+                };
+                return Ok(ran(supervised, None));
+            }
         };
-        let talking = conversation(entered, poke, &place, answers, &mut log);
-        let talking = Box::pin(talking);
-        until_ended(talking, &mut stop, deadline, &place, limits).await
-    };
-    log.finish().await;
-    let supervised = Supervised {
-        termination: termination_of(message.as_ref(), killed, &place).await,
-        stopped: reason,
-        killed,
-    };
-    let result = message.filter(|message| !matches!(message, RunnerMessage::WatcherCancelled));
-    Ok(Ran {
-        moved_to: place.moved_to(),
-        ..ran(supervised, result)
-    })
+        if let Some(spawned) = spawned.take() {
+            spawned(entered.host.pid);
+        }
+        if let Some(mask) = &process.mask.0 {
+            mask.also_in(Arc::clone(&entered.host.mask));
+        }
+        let poke = poke_of(
+            hosts,
+            setup,
+            &request,
+            started,
+            (&process.mask, limits.grace),
+        );
+        // Its time starts when it does; starting again, it runs on.
+        let starts = again.then_some(started);
+        let place = Place::started(&entered, &request, starts);
+        let (message, reason, killed) = {
+            let answers = Answers {
+                secrets: secrets.clone(),
+                handles: handles.clone(),
+                pending: tokio::task::JoinSet::new(),
+            };
+            let talking = conversation(entered, poke, &place, answers, &mut log);
+            let talking = Box::pin(talking);
+            until_ended(talking, &mut stop, deadline, &place, limits).await
+        };
+        moved_to = place.moved_to().or(moved_to);
+        let (message, host_lost) = if message.is_none() && reason.is_none() {
+            match after_host_ended(&place, setup).await {
+                AfterHost::Fails(message) => (Some(message), None),
+                AfterHost::Lost(why) => (None, Some(why)),
+                AfterHost::StartsAgain => {
+                    // Not its doing: its time runs on, and it uses no retry.
+                    log.note(STARTS_AGAIN).await;
+                    request = place
+                        .request
+                        .into_inner()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    again = true;
+                    continue;
+                }
+            }
+        } else {
+            (message, None)
+        };
+        log.finish().await;
+        let struck = place
+            .host()
+            .going()
+            .0
+            .is_some_and(|blamed| blamed.watcher == place.watcher.load(Ordering::SeqCst));
+        let supervised = Supervised {
+            termination: termination_of(message.as_ref(), killed, &place).await,
+            stopped: reason,
+            killed,
+        };
+        let result = message.filter(|message| !matches!(message, RunnerMessage::WatcherCancelled));
+        return Ok(Ran {
+            moved_to,
+            host_lost,
+            struck,
+            ..ran(supervised, result)
+        });
+    }
+}
+
+const STARTS_AGAIN: &str =
+    "another wait step had its host killed: this one starts again on a new host\n";
+
+/// What a wait step's host's end, with no result from it, means for it.
+enum AfterHost {
+    /// It is to blame.
+    Fails(RunnerMessage),
+    /// Another was.
+    StartsAgain,
+    /// None was: why it ended.
+    Lost(String),
+}
+
+async fn after_host_ended(place: &Place, setup: &WorkerSetup) -> AfterHost {
+    let host = place.host();
+    let termination = ended_host(&host).await;
+    match host.going() {
+        (Some(blamed), _) if blamed.watcher == place.watcher.load(Ordering::SeqCst) => {
+            AfterHost::Fails(blocked(setup, blamed.stack))
+        }
+        (Some(_), _) => AfterHost::StartsAgain,
+        (None, why) => {
+            let why = why.unwrap_or_else(|| format!("its host ended: {termination:?}"));
+            let names = host.names();
+            AfterHost::Lost(format!(
+                "{why}\nNo wait step can be blamed. On its host: {names}"
+            ))
+        }
+    }
+}
+
+/// The end of a wait step that held its host's event loop.
+fn blocked(setup: &WorkerSetup, stack: Option<String>) -> RunnerMessage {
+    let limit = setup.timeouts.watcher_block_limit;
+    RunnerMessage::TaskFailed {
+        error: ErrorSummary {
+            exception: "BlockedEventLoop".to_owned(),
+            message: stack.as_ref().map_or_else(
+                || "it wouldn't end in its grace time, so its host was killed".to_owned(),
+                |_| {
+                    format!(
+                        "it didn't reach an `await` within `[watchers] block_limit` ({} s), \
+                         holding up every wait step on its host. Use an async client or \
+                         `asyncio.to_thread`",
+                        limit.as_secs_f64()
+                    )
+                },
+            ),
+            traceback: stack.unwrap_or_default(),
+        },
+        kind: Some(schedr_model::runner::BLOCKED_EVENT_LOOP.to_owned()),
+    }
 }
 
 /// Waits for a watcher's end, cancelling it at the first reason to stop. Gives its last message,
@@ -1066,7 +1415,7 @@ async fn cancelled(
             }
             message = &mut *talking => return (message, false),
             () = tokio::time::sleep_until(kill_at) => {
-                place.host().stop.notify_one();
+                place.host().kill_for(place.watcher.load(Ordering::SeqCst));
                 return (None, true);
             }
         }

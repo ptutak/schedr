@@ -190,7 +190,8 @@ cancels what follows its group; cancelling a non-blocking cleanup cancels nothin
 
 The run's Resources table shows each resource's state, setup, cleanup and users. In the
 [graph](../03-guide/12-ui.md#the-graph), setup and cleanup are caps joined by a rail,
-with lines to their users; the task panel's Cleanup tab links the two parts. Use
+with lines to their users; the task panel's Cleanup tab links the two parts.
+`schedr resources list <run>` and `GET /api/v1/runs/{run}/resources` list them too. Use
 [`run_dag`](07-testing.md#run_dag) to assert a resource's state.
 
 ## Full example

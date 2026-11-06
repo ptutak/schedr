@@ -272,6 +272,43 @@ impl Default for Timings {
     }
 }
 
+/// `[watchers]`: the worker's watcher hosts, which run wait steps.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct WatchersSection {
+    /// How long a wait step may hold its host's event loop before reaching an `await`. Past it
+    /// the host is killed: the wait step fails with `blocked_event_loop`, and the others on the
+    /// host start again without using a retry.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub block_limit: Duration,
+    /// The memory all of a worker's hosts may use together. Past it the largest is killed: its
+    /// wait steps end `lost`, each using a retry.
+    #[serde(
+        deserialize_with = "deserialize_size",
+        serialize_with = "serialize_size"
+    )]
+    #[schemars(with = "SizeText")]
+    pub memory_budget: u64,
+    /// After how many times in a row a wait step gets its host killed it is switched off: its
+    /// attempts then fail at once, until it succeeds on new code or `schedr sensors switch-on`.
+    /// 0: never.
+    pub switch_off_after: u32,
+}
+
+impl Default for WatchersSection {
+    fn default() -> Self {
+        Self {
+            block_limit: Duration::from_secs(30),
+            memory_budget: 1024 * 1024 * 1024,
+            switch_off_after: 3,
+        }
+    }
+}
+
 /// `[sensors]`: wait steps (`@sensor`, `@sensor.poke`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -322,6 +359,8 @@ pub struct Config {
     /// `[worker]`: this worker's identity, capacity and data directory.
     pub worker: WorkerSection,
     /// `[sensors]`: wait steps (`@sensor`, `@sensor.poke`).
+    pub watchers: WatchersSection,
+    /// `[sensors]`.
     pub sensors: SensorsSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,

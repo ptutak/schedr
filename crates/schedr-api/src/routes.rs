@@ -31,8 +31,9 @@ use crate::views::{
     AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
     DagList, DagView, DeploymentView, ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery,
     LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView, PauseRequest,
-    ProblemView, ResourceView, RunDetail, RunList, RunView, RunsQuery, TaskView,
-    TestConnectionRequest, TriggerRequest, WorkerList, WorkerNodeView, WorkerView,
+    ProblemView, ResourceList, ResourceView, RunDetail, RunList, RunView, RunsQuery, SensorList,
+    SensorView, TaskView, TestConnectionRequest, TriggerRequest, WorkerList, WorkerNodeView,
+    WorkerView,
 };
 
 #[cfg(test)]
@@ -690,13 +691,7 @@ pub async fn get_run(
     let resources = dag
         .iter()
         .flat_map(|dag| &dag.resources)
-        .map(|r| ResourceView {
-            setup: r.setup.to_string(),
-            cleanup: r.cleanup.to_string(),
-            users: r.users.iter().map(ToString::to_string).collect(),
-            blocking: r.blocking,
-            state: name_of(ResourceState::of(state_of(&r.setup), state_of(&r.cleanup))),
-        })
+        .map(|r| resource_view(r, &state_of))
         .collect();
     let count = |task: &TaskId| {
         tasks
@@ -745,6 +740,97 @@ fn worst_cleanup(tasks: &[schedr_db::reads::InstanceRecord], task: &TaskId) -> O
         .filter_map(|i| i.cleanup_result)
         .max_by_key(|r| rank(*r))
         .map(|r| r.to_string())
+}
+
+fn resource_view(
+    resource: &schedr_model::Resource,
+    state_of: &impl Fn(&TaskId) -> TaskInstanceState,
+) -> ResourceView {
+    ResourceView {
+        setup: resource.setup.to_string(),
+        cleanup: resource.cleanup.to_string(),
+        users: resource.users.iter().map(ToString::to_string).collect(),
+        blocking: resource.blocking,
+        state: name_of(ResourceState::of(
+            state_of(&resource.setup),
+            state_of(&resource.cleanup),
+        )),
+    }
+}
+
+/// A run's resources, each with its setup, cleanup, users and state (decision 340).
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/resources", tag = "resources",
+    params(("run_id" = String, Path, description = "The run's ID")),
+    responses((status = 200, body = ResourceList), (status = 404, body = ErrorBody)))]
+pub async fn list_run_resources(
+    State(state): State<ApiState>,
+    Path(run_id): Path<String>,
+) -> ApiResult<ResourceList> {
+    let run = known_run(&state, &run_id).await?;
+    let resources = get_run(State(state), Path(run.id)).await?.0.resources;
+    Ok(Json(ResourceList { resources }))
+}
+
+/// One resource of a run, by its name (decision 340).
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/resources/{resource}", tag = "resources",
+    params(("run_id" = String, Path, description = "The run's ID"),
+        ("resource" = String, Path, description = "The resource: its setup's task ID")),
+    responses((status = 200, body = ResourceView), (status = 404, body = ErrorBody)))]
+pub async fn get_run_resource(
+    State(state): State<ApiState>,
+    Path((run_id, resource)): Path<(String, String)>,
+) -> ApiResult<ResourceView> {
+    let run = known_run(&state, &run_id).await?;
+    let resources = get_run(State(state), Path(run.id)).await?.0.resources;
+    resources
+        .into_iter()
+        .find(|found| found.setup == resource)
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("no resource `{resource}` in run `{run_id}`")))
+}
+
+/// The wait steps switched off for getting their host killed too many times in a row
+/// (decision 338).
+#[utoipa::path(get, path = "/api/v1/sensors/switched-off", tag = "sensors",
+    responses((status = 200, body = SensorList)))]
+pub async fn list_switched_off_sensors(State(state): State<ApiState>) -> ApiResult<SensorList> {
+    let sensors = state
+        .db
+        .switched_off_wait_steps()
+        .await?
+        .into_iter()
+        .map(|strikes| SensorView {
+            dag_id: strikes.dag_id,
+            sensor: strikes.task_id,
+            strikes: strikes.strikes,
+            switched_off_at: strikes.off_at.map(|at| at.to_string()).unwrap_or_default(),
+        })
+        .collect();
+    Ok(Json(SensorList { sensors }))
+}
+
+/// Switch a wait step back on, forgetting its strikes. Applied by the master; poll the command
+/// for the decision.
+#[utoipa::path(post, path = "/api/v1/dags/{dag_id}/sensors/{sensor}/switch-on", tag = "sensors",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request"),
+        ("dag_id" = String, Path, description = "The DAG's ID"),
+        ("sensor" = String, Path, description = "The wait step's task ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn switch_on_sensor(
+    State(state): State<ApiState>,
+    Path((dag_id, sensor)): Path<(String, String)>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+) -> Accepted {
+    let dag_id = parse_dag_id(&dag_id)?;
+    let sensor = TaskId::new(sensor).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    submit(
+        &state,
+        &user,
+        key,
+        Command::SwitchOnSensor { dag_id, sensor },
+    )
+    .await
 }
 
 /// A resource's state as the API names it (`waiting_for_users`).

@@ -4,20 +4,16 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06): M4.11a2 ready, waiting for acceptance; M4.11a3 is next
+## State (2026-11-06): M4.11a3 committed; M4.11a4 is next
 
-- **M4.11a2, uncommitted on main's working tree (needs the user's acceptance to commit):** the watcher host, a poke moving
-  to new code (decision 335), no process or thread of its own in a wait step (336: refused at parsing in
-  `schedr/_wait_rules.py`, processes also at run time), `asyncio.to_thread` tied to its step and timed out with it (337:
-  `StepEndedError` raised in its thread; one stuck past its grace kills the host after telling the result). A watcher's
-  messages are bounded. Reviews: Codex 3 rounds (4, 7, 9 findings, all real, fixed), Grok security (2: bounded queue fixed, log
-  modes logged as B182). At commit: remove worktrees `schedr-codex-4.11a2` and `schedr-grok-4.11a2`, branches, pyenv envs.
-- **M4.11a3, next:** the block watchdog and `blocked_event_loop`, memory budget, crash and loss; **decision 338:** the master
-  counts strikes per DAG and task (blocked loop, stuck thread, ignored cancel), after `[watchers] switch_off_after` in a row
-  (default 3) attempts fail at once without reaching a host; a success resets; new code or a CLI/UI command switches it on.
-  **Decision 339:** libraries' threads are watched, not refused: a Python thread alive past its step warns in its log (wrap
-  `Thread.start`; the `_thread.start_new_thread` audit event misses `threading.Thread`), a host's thread count is a metric.
-- **M4.11a4:** slots, kept deadline, drain, metrics, UI with each host's threads, tied and untied (339). Then M4.11b.
+- **M4.11a3, committed:** the block watchdog
+  (`loop_blocked`, `blocked_event_loop`, never retried), blame (a held loop, a stuck thread, an ignored cancel), the others
+  starting again on a new host keeping their time and using no retry, `lost` with `watcher_host_lost` for a crash, a memory
+  kill or a silent host, `[watchers] block_limit`, `memory_budget`, `switch_off_after`; decision 338 (strikes in
+  `wait_step_strikes`, `schedr sensors switched-off`, `sensors switch-on`), 339 (a thread left running warns in the log), 340
+  (`schedr resources list`, `GET /runs/{run}/resources[/{resource}]`), 341, 342 (crashes and memory kills visible, not switched off). Reviews: Codex twice (5 and 6), Grok security (3): all fixed or decided.
+- **M4.11a4, next:** slots, kept deadline, drain, metrics (kills, `to_thread` stops that land), UI with each host's threads, tied
+  and untied, and switched-off sensors (339). Then M4.11b, where triggers get their own endpoints like sensors.
 - **Open offers with no answer:** `Path` as an output type; a Grok security pass on M4.10's connection code.
 
 ## Earlier (2026-11-06): M4.11L committed

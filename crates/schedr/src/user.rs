@@ -15,7 +15,8 @@ use schedr_api::views::{
 
 use crate::app::AppError;
 use crate::cli::{
-    ConnectionsCommand, DagsCommand, LogsArgs, RunsCommand, TasksCommand, WorkersCommand,
+    ConnectionsCommand, DagsCommand, LogsArgs, ResourcesCommand, RunsCommand, SensorsCommand,
+    TasksCommand, WorkersCommand,
 };
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short, trigger_text};
@@ -92,6 +93,87 @@ pub async fn run_dags<T: Transport>(
 }
 
 /// Runs a `schedr workers` command (`list`; draining comes with M2.6).
+///
+/// # Errors
+///
+/// [`AppError::Client`] as for [`run_dags`] (a rejection carries the master's reason).
+pub async fn run_sensors<T: Transport>(
+    command: &SensorsCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    match command {
+        SensorsCommand::SwitchedOff => {
+            let list = client.switched_off_sensors().await?;
+            if output.json {
+                return print_json(out, &list);
+            }
+            let rows: Vec<Vec<String>> = list
+                .sensors
+                .iter()
+                .map(|s| {
+                    vec![
+                        s.dag_id.clone(),
+                        s.sensor.clone(),
+                        s.strikes.to_string(),
+                        s.switched_off_at.clone(),
+                    ]
+                })
+                .collect();
+            write_table(out, &["DAG", "SENSOR", "STRIKES", "SWITCHED OFF"], &rows)?;
+            Ok(())
+        }
+        SensorsCommand::SwitchOn { dag, sensor } => {
+            let command = client
+                .wait(
+                    client
+                        .send_command(|| client.switch_on_sensor(dag, sensor))
+                        .await?,
+                )
+                .await?;
+            if output.json {
+                return print_json(out, &command);
+            }
+            writeln!(out, "switched on {dag} {sensor}")?;
+            Ok(())
+        }
+    }
+}
+
+/// `schedr resources ...`.
+///
+/// # Errors
+///
+/// [`AppError::Client`] as for [`run_dags`].
+pub async fn run_resources<T: Transport>(
+    command: &ResourcesCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let ResourcesCommand::List { run } = command;
+    let list = client.run_resources(run).await?;
+    if output.json {
+        return print_json(out, &list);
+    }
+    let rows: Vec<Vec<String>> = list
+        .resources
+        .iter()
+        .map(|r| {
+            vec![
+                r.setup.clone(),
+                r.cleanup.clone(),
+                r.state.clone(),
+                r.users.join(","),
+            ]
+        })
+        .collect();
+    write_table(out, &["RESOURCE", "CLEANUP", "STATE", "USERS"], &rows)?;
+    Ok(())
+}
+
+/// `schedr workers ...`.
 ///
 /// # Errors
 ///

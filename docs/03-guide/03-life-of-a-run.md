@@ -198,7 +198,8 @@ it from the worker that ran the attempt (see [Workers](05-workers.md)). The
 [run page](12-ui.md#a-run) shows that run: its state, its graph, its tasks, a task's
 attempts, cleanup, output and log, its resources, and the commands about it. The API's run
 detail includes each task's cleanup result and the resources, their parts, users, blocking
-setting and state. Each attempt can include its cleanup result, tries, duration, error,
+setting and state. `schedr resources list <run>` and `GET /api/v1/runs/{run}/resources`
+list the run's resources. Each attempt can include its cleanup result, tries, duration, error,
 moves and handles; the shown handles are masked as task data.
 
 ## A mapped task

@@ -43,6 +43,13 @@ pub enum Command {
         /// The DAG.
         dag_id: DagId,
     },
+    /// Switch a wait step back on (`schedr sensors switch-on`, decision 338).
+    SwitchOnSensor {
+        /// Its DAG.
+        dag_id: DagId,
+        /// The wait step.
+        sensor: TaskId,
+    },
     /// Cancel one task of a run (`schedr tasks cancel`): stopped if it runs, cancelled at
     /// once if it hasn't started; the tasks downstream of it are cancelled.
     CancelTask {
@@ -221,6 +228,7 @@ impl Command {
             Self::CancelRun { .. } => "cancel_run",
             Self::PauseDag { .. } => "pause_dag",
             Self::UnpauseDag { .. } => "unpause_dag",
+            Self::SwitchOnSensor { .. } => "switch_on_sensor",
             Self::CancelTask { .. } => "cancel_task",
             Self::RetryTask { .. } => "retry_task",
             Self::DrainWorker { .. } => "drain_worker",

@@ -47,6 +47,8 @@ pub struct Settings {
     pub lease_timeout: Duration,
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
     pub cancel_grace: Duration,
+    /// After how many host kills in a row a wait step is switched off (0: never).
+    pub switch_off_after: u32,
     /// How long a worker has for a parse job.
     pub parse_job_timeout: Duration,
     /// How long a task's code may be missing on every eligible worker.
@@ -115,6 +117,7 @@ impl Default for Settings {
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
             cancel_grace: DEFAULT_CANCEL_GRACE,
+            switch_off_after: 3,
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
@@ -202,6 +205,8 @@ fn not_stored(finished: &pb::Finished, error: &CoreError) -> pb::Finished {
         usage: finished.usage,
         core_dumped: finished.core_dumped,
         cleanup: finished.cleanup.clone(),
+        wait_step: finished.wait_step,
+        struck: finished.struck,
     }
 }
 
@@ -348,6 +353,7 @@ impl MasterCore {
         .with_max_message_size(settings.max_message_size);
         discovery.set_wakes(wakes.clone());
         let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
+            .with_switch_off_after(settings.switch_off_after)
             .with_code_wait(settings.code_wait)
             .with_set_aside(settings.set_aside, settings.read_back)
             .with_cleanup_move_wait(

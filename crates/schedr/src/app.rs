@@ -218,6 +218,10 @@ pub async fn execute(
             let (api, output) = connect(client, env);
             run_workers(command, &api, &output, out).await
         }
+        (Command::Sensors { client, command }, None) => sensors(command, client, env, out).await,
+        (Command::Resources { client, command }, None) => {
+            resources(command, client, env, out).await
+        }
         (Command::Runs { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_runs(command, &api, &output, out, err).await
@@ -329,4 +333,24 @@ pub fn connect(
         local: local_zone(env.get("TZ").map(String::as_str)),
     };
     (client, output)
+}
+
+async fn sensors(
+    command: &crate::cli::SensorsCommand,
+    client: &crate::cli::ClientArgs,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let (api, output) = connect(client, env);
+    crate::user::run_sensors(command, &api, &output, out).await
+}
+
+async fn resources(
+    command: &crate::cli::ResourcesCommand,
+    client: &crate::cli::ClientArgs,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let (api, output) = connect(client, env);
+    crate::user::run_resources(command, &api, &output, out).await
 }

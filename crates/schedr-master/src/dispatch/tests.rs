@@ -2959,3 +2959,131 @@ async fn a_mapped_user_timing_out_stops_its_running_instances() {
         ["tmp.cleanup"]
     );
 }
+
+/// A DAG of one wait step.
+fn sensor_dag() -> Dag {
+    let mut wait = task("wait", &json!({}), 0);
+    wait["kind"] = json!("sensor");
+    wait["mode"] = json!("loop");
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1,
+        "tasks": [wait],
+        "edges": []
+    }))
+    .unwrap()
+}
+
+async fn switched_off_on_h1(db: &Database) {
+    assert!(
+        db.strike_wait_step(("sync", "wait"), 1, "h1", ts(NOW))
+            .await
+            .unwrap()
+    );
+}
+
+fn accepted(hashes: &[&str]) -> BTreeSet<String> {
+    hashes.iter().map(ToString::to_string).collect()
+}
+
+#[tokio::test]
+async fn a_switched_off_wait_step_fails_at_once_even_with_no_worker_to_take_it() {
+    let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
+    switched_off_on_h1(&db).await;
+    dispatcher.set_current_code("etl", &accepted(&["h1"]), None);
+    // No slot free anywhere.
+    dispatcher
+        .register("w1", "i2", &[], 0, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), 0);
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Failed
+    );
+}
+
+#[tokio::test]
+async fn while_its_code_can_still_run_it_stays_off() {
+    for known in [&["h1"][..], &["h1", "h2"][..], &[][..]] {
+        let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
+        switched_off_on_h1(&db).await;
+        dispatcher.set_current_code("etl", &accepted(known), None);
+        assert_eq!(
+            dispatcher.step(ts(NOW)).await.unwrap().len(),
+            0,
+            "{known:?}"
+        );
+        assert_eq!(
+            state_of(&db, &run_id, "wait").await.0,
+            TaskInstanceState::Failed
+        );
+    }
+}
+
+#[tokio::test]
+async fn after_a_restart_with_no_code_known_it_stays_off() {
+    let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
+    switched_off_on_h1(&db).await;
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Failed
+    );
+}
+
+#[tokio::test]
+async fn once_its_code_is_gone_it_has_one_chance() {
+    let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
+    switched_off_on_h1(&db).await;
+    dispatcher.set_current_code("etl", &accepted(&["h2"]), None);
+    // It isn't failed; no worker has that code yet, so it waits for one.
+    dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    let on = db.wait_step_strikes("sync", "wait").await.unwrap().unwrap();
+    assert_eq!((on.off_at, on.one_chance), (None, true));
+}
+
+#[tokio::test]
+async fn a_strike_is_of_the_code_the_attempt_ran_and_counted_once() {
+    let (mut dispatcher, db, _) = with_run(sensor_dag()).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    // New code came while it ran.
+    dispatcher.set_current_code("etl", &accepted(&["h2"]), None);
+    let done = pb::Finished {
+        wait_step: true,
+        struck: true,
+        code_hash: "h1".to_owned(),
+        ..finished(&attempt, pb::AttemptStatus::Failed, &json!(null))
+    };
+    let mut dispatcher = dispatcher.with_switch_off_after(1);
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    let off = db.wait_step_strikes("sync", "wait").await.unwrap().unwrap();
+    assert_eq!(off.strikes, 1);
+    assert_eq!(off.off_code.as_deref(), Some("h1"));
+}
+
+#[tokio::test]
+async fn a_success_forgets_its_strikes() {
+    let (mut dispatcher, db, _) = with_run(sensor_dag()).await;
+    assert!(
+        !db.strike_wait_step(("sync", "wait"), 3, "h1", ts(NOW))
+            .await
+            .unwrap()
+    );
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let done = pb::Finished {
+        wait_step: true,
+        ..finished(&attempt, pb::AttemptStatus::Success, &json!(1))
+    };
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    assert_eq!(db.wait_step_strikes("sync", "wait").await.unwrap(), None);
+}

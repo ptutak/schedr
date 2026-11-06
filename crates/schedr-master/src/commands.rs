@@ -202,6 +202,28 @@ impl Commander {
         self.metrics.command_latency.observe(waited.max(0.0));
     }
 
+    /// Forgets a wait step's strikes; anything else named is refused, as it would look done.
+    async fn switch_on(&self, dag_id: &DagId, sensor: &TaskId) -> Result<Outcome, CommandError> {
+        let Some(dag) = self.db.stored_dag(dag_id).await? else {
+            return Ok(no_dag(dag_id));
+        };
+        let is_sensor = dag.current.is_some_and(|current| {
+            current
+                .dag
+                .task(sensor)
+                .is_some_and(|task| matches!(task.kind, schedr_model::TaskKind::Sensor { .. }))
+        });
+        if !is_sensor {
+            return Ok(Outcome::Rejected(format!(
+                "no wait step `{sensor}` in DAG `{dag_id}`"
+            )));
+        }
+        self.db
+            .clear_wait_step(dag_id.as_str(), sensor.as_str())
+            .await?;
+        Ok(Outcome::Applied(json!({})))
+    }
+
     async fn apply(
         &self,
         pending: &PendingCommand,
@@ -271,6 +293,7 @@ impl Commander {
                 }
                 Ok(Outcome::Applied(json!({})))
             }
+            Command::SwitchOnSensor { dag_id, sensor } => self.switch_on(dag_id, sensor).await,
             Command::CancelTask {
                 run_id,
                 task_id,

@@ -332,6 +332,33 @@ pub struct RunDetail {
     pub resources: Vec<ResourceView>,
 }
 
+/// A run's resources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ResourceList {
+    /// In the DAG's order.
+    pub resources: Vec<ResourceView>,
+}
+
+/// A wait step switched off for getting its host killed too many times in a row (decision 338).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SensorView {
+    /// Its DAG.
+    pub dag_id: String,
+    /// The wait step.
+    pub sensor: String,
+    /// Its host kills in a row.
+    pub strikes: u32,
+    /// When it was switched off (RFC 3339).
+    pub switched_off_at: String,
+}
+
+/// The wait steps switched off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SensorList {
+    /// By DAG and task.
+    pub sensors: Vec<SensorView>,
+}
+
 /// A resource of a run: its setup, its cleanup and its users.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ResourceView {

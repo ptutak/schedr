@@ -106,6 +106,19 @@ CREATE TABLE dags (
     conflict           TEXT
 );
 
+-- A wait step that got its host killed (decision 338): gone at its next success.
+CREATE TABLE wait_step_strikes (
+    dag_id       TEXT NOT NULL,
+    task_id      TEXT NOT NULL,
+    strikes      INTEGER NOT NULL,
+    -- Switched on by new code: one strike switches it off again.
+    one_chance   INTEGER NOT NULL DEFAULT 0,
+    -- Set while it is switched off, with the code it was switched off on.
+    off_at       TEXT,
+    off_code     TEXT,
+    PRIMARY KEY (dag_id, task_id)
+);
+
 CREATE TABLE dag_versions (
     id              TEXT PRIMARY KEY,
     dag_id          TEXT NOT NULL REFERENCES dags (dag_id),
