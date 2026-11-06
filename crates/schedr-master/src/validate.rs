@@ -12,8 +12,8 @@ use std::path::{Component, Path};
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::task::{CleanupRun, Task};
 use schedr_model::{
-    CommandLine, Dag, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl, TaskId,
-    TaskKind, Template, TemplatePart, TypeDesc, Value,
+    CommandLine, Dag, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl,
+    SensorMode, TaskId, TaskKind, Template, TemplatePart, TypeDesc, Value,
 };
 
 use crate::fire_times::FireTimes;
@@ -120,6 +120,9 @@ fn cleanup_problem(task: &Task) -> Option<String> {
     let id = &task.id;
     let run = &task.cleanup.as_ref()?.run;
     match (&task.kind, run) {
+        (TaskKind::Sensor { .. }, _) => Some(format!(
+            "task `{id}`: a wait step has no cleanup; use `finally` in its function"
+        )),
         (TaskKind::Python { .. }, CleanupRun::Python)
         | (TaskKind::Command { .. }, CleanupRun::Command(_))
         | (TaskKind::Script { .. }, CleanupRun::Script { .. }) => None,
@@ -252,6 +255,32 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
         TaskKind::Python { arguments, .. } => {
             for value in arguments.values() {
                 in_text.extend(value_templates(value));
+            }
+        }
+        TaskKind::Sensor {
+            arguments,
+            mode,
+            every_ms,
+            max_wait_ms,
+        } => {
+            for value in arguments.values() {
+                in_text.extend(value_templates(value));
+            }
+            match (mode, every_ms) {
+                (SensorMode::Poke, None | Some(0)) => {
+                    problems.push(format!(
+                        "task `{id}`: a @sensor.poke needs `every` above zero"
+                    ));
+                }
+                (SensorMode::Loop, Some(_)) => {
+                    problems.push(format!("task `{id}`: only a @sensor.poke has `every`"));
+                }
+                _ => {}
+            }
+            if *max_wait_ms == Some(0) {
+                problems.push(format!(
+                    "task `{id}`: a wait step's `max_wait` must be above zero"
+                ));
             }
         }
         TaskKind::Empty => {}
@@ -822,7 +851,7 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
             let streams = match task.kind {
                 TaskKind::Empty => return None,
                 TaskKind::Command { .. } | TaskKind::Script { .. } => 2,
-                TaskKind::Python { .. } => 1,
+                TaskKind::Python { .. } | TaskKind::Sensor { .. } => 1,
             };
             let size = task.settings.max_output_size;
             let needed = size.saturating_mul(streams).saturating_add(RESULT_OVERHEAD);

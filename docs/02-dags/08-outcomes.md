@@ -29,6 +29,7 @@ exist only in Python.
 | How it is declared | Outcome names | Stored `(output, outcome)` |
 |---|---|---|
 | Ordinary return (`-> int`, `-> Rows`, `-> int \| None`) | `SUCCESS` | The value, and `SUCCESS` |
+| Wait step returning `str` | `SUCCESS`, `TimedOut` | The value and `SUCCESS`, or `TimedOut` and its outcome |
 | A union of two or more dataclasses, Pydantic models and `None` (`-> Rows \| Unavailable`) | `Rows`, `Unavailable` | The value, and the class name (`"None"` for `None`) |
 | `-> Check` (`Outcome` enum) | The members' names | `(null, "CHANGED")` |
 | `CommandOperator(..., outcomes=Check)` | The members' names | The `ProcessResult`, and the member whose value is the exit code |
@@ -38,6 +39,7 @@ exist only in Python.
 
 `SUCCESS` is `DefaultOutcome.SUCCESS`. Users never write the pair: they write return
 types, `outcomes=` and `.on(...)`; the runner (Python) or the agent (commands) builds it.
+[Wait steps](18-sensors.md) describes timeout routing and its special plain `>>` rule.
 
 Outcome classes derive from `schedr.Data` (`class Rows(Data, frozen=True)`, a dataclass),
 so type checkers accept `.on(Rows)`; a plain `@dataclass` works too, with a `TypingHint`
@@ -69,7 +71,8 @@ outcome.
 
 `.on(...)` is an edge and data. It makes the downstream task depend on those outcomes
 and passes the output **narrowed** to them. An edge whose outcome did not happen is not
-taken. A plain reference or plain `>>` is taken on any outcome.
+taken. A plain reference or plain `>>` is taken on any outcome, except that a plain `>>`
+from a wait step is taken only when it has its value.
 
 ```python
 load(primary.on(Rows), mirror.on(Rows))
@@ -124,7 +127,7 @@ Both decide **as soon as the result is certain**: the first failure makes the ta
 once no other edge can still fail (a failure wins).
 
 Set it on `@task`, `.override(...)`, `CommandOperator`, `EmptyOperator` and
-`TaskDefaults`. `load` in the example uses the default, so it runs from one `Rows`
+`StepDefaults`. `load` in the example uses the default, so it runs from one `Rows`
 source. `all_ok` sets `RunIf.ALL_SUCCEEDED` and is skipped because `to_gcs` was.
 
 ## When a parameter must allow `None`

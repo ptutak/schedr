@@ -2079,6 +2079,21 @@
       ],
       "type": "object"
     },
+    "SensorMode": {
+      "description": "How a wait step waits.",
+      "oneOf": [
+        {
+          "const": "loop",
+          "description": "`@sensor`: its function does the waiting.",
+          "type": "string"
+        },
+        {
+          "const": "poke",
+          "description": "`@sensor.poke`: its function is called every `every_ms`.",
+          "type": "string"
+        }
+      ]
+    },
     "Task": {
       "description": "A task of a DAG.",
       "oneOf": [
@@ -2104,6 +2119,50 @@
           },
           "required": [
             "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A wait step (`@sensor`, `@sensor.poke`): found by task ID, as a `Python` task, and ending\nwith its value or with the `TimedOut` outcome.",
+          "properties": {
+            "arguments": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              },
+              "default": {},
+              "description": "The arguments by parameter name.",
+              "type": "object"
+            },
+            "every_ms": {
+              "description": "How often to call it (`Poke`), in milliseconds.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "sensor",
+              "type": "string"
+            },
+            "max_wait_ms": {
+              "description": "How long it waits, in milliseconds; `None`: the worker's `[sensors] default_max_wait`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "$ref": "#/$defs/SensorMode",
+              "description": "How it waits."
+            }
+          },
+          "required": [
+            "kind",
+            "mode"
           ],
           "type": "object"
         },

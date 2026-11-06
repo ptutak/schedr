@@ -254,6 +254,10 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
         ),
         ("[worker] cleanup_timeout", config.worker.cleanup_timeout),
         (
+            "[sensors] default_max_wait",
+            config.sensors.default_max_wait,
+        ),
+        (
             "[worker] resource_cleanup_timeout",
             config.worker.resource_cleanup_timeout,
         ),

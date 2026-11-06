@@ -62,6 +62,11 @@ def test_doc_example_runs(path: Path) -> None:
             if task.state not in {"success", "skipped"}
         ]
         assert ended == [], dag.id
+        if path.name == "sensors.py":
+            assert result.tasks["partner_file"].output.startswith("s3://in/orders_")
+            assert result.tasks["approval"].outcome == "TimedOut"
+            assert result.tasks["after_approval"].state == "skipped"
+            assert result.tasks["alert"].state == "success"
         if path.name == "async_tasks.py":
             # Ten pages, each the base URL's length and its number.
             assert result.tasks["fetch_all"].output == 10 * len("https://api.example.com") + 45

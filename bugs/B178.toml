@@ -1,0 +1,13 @@
+title = "A file in a DAG root can stop the runner from starting"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "reliability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a root's file shadowing something the runner imports closes the runner during its start, rather than reporting an error for that file"
+found = 2026-11-06
+suspected = false
+details = '''
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenarios 95 and 96 (Codex's report; not reproduced by Claude). The runner's launch sites lack `-P`: `crates/schedr/src/local.rs:345`, `crates/schedr-agent/src/agent.rs:819`, `attempt.rs:529`, `fork.rs:356`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+'''

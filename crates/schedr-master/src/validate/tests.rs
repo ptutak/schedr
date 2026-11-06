@@ -1045,3 +1045,35 @@ fn a_command_resources_parts_name_their_roles() {
         vec!["task `lone`: a resource setup, but no resource has it as its setup"]
     );
 }
+
+fn sensor(mode: &str, every_ms: Option<u64>, max_wait_ms: Option<u64>) -> Json {
+    let mut sensor = task("wait", &json!({}));
+    sensor["kind"] = json!("sensor");
+    sensor["mode"] = json!(mode);
+    if let Some(every_ms) = every_ms {
+        sensor["every_ms"] = json!(every_ms);
+    }
+    if let Some(max_wait_ms) = max_wait_ms {
+        sensor["max_wait_ms"] = json!(max_wait_ms);
+    }
+    sensor
+}
+
+#[test]
+fn a_wait_step_needs_what_its_mode_waits_by() {
+    let found = |task: Json| problems(&json!({"tasks": [task], "edges": []})).join("\n");
+    assert_eq!(found(sensor("loop", None, None)), "");
+    assert_eq!(found(sensor("poke", Some(1000), Some(5000))), "");
+    assert!(found(sensor("poke", None, None)).contains("needs `every`"));
+    assert!(found(sensor("poke", Some(0), None)).contains("needs `every`"));
+    assert!(found(sensor("loop", Some(1000), None)).contains("only a @sensor.poke"));
+    assert!(found(sensor("loop", None, Some(0))).contains("`max_wait` must be above zero"));
+}
+
+#[test]
+fn a_wait_step_has_no_cleanup() {
+    let mut task = sensor("loop", None, None);
+    task["cleanup"] = json!({"run": "python", "retries": 0, "retry_delay_ms": 0});
+    let found = problems(&json!({"tasks": [task], "edges": []})).join("\n");
+    assert!(found.contains("a wait step has no cleanup"), "{found}");
+}

@@ -13,7 +13,7 @@ from schedr import (
     EmptyOperator,
     Every,
     Once,
-    TaskDefaults,
+    StepDefaults,
     chain,
     dag_ctx,
     group,
@@ -171,7 +171,7 @@ def test_catchup_is_set_on_the_trigger() -> None:
 
 
 def test_task_defaults_apply_and_task_arguments_win() -> None:
-    defaults = TaskDefaults(
+    defaults = StepDefaults(
         retries=2,
         retry_delay=timedelta(minutes=1),
         timeout=timedelta(hours=1),
@@ -199,7 +199,7 @@ def test_how_python_tasks_start_is_a_default_and_a_tasks_own_argument_wins() -> 
     def forks() -> int:
         return 3
 
-    with Dag("d", defaults=TaskDefaults(preload=False, fresh_process=True)):
+    with Dag("d", defaults=StepDefaults(preload=False, fresh_process=True)):
         keeps()
         follows()
         forks()
@@ -322,7 +322,7 @@ def test_concurrency_limits_reach_the_dag_json_and_follow_the_defaults() -> None
     def own(n: int) -> int:
         return n
 
-    with Dag("d", max_active_tasks=5, defaults=TaskDefaults(max_active=3, max_active_per_run=10)):
+    with Dag("d", max_active_tasks=5, defaults=StepDefaults(max_active=3, max_active_per_run=10)):
         locked()
         item.expand(n=[1, 2])
         own.expand(n=[1, 2])
@@ -358,7 +358,7 @@ def test_a_task_limit_below_one_is_an_error(limit: str) -> None:
 
 
 def test_max_active_per_run_on_an_unmapped_task_is_hinted_unless_a_default() -> None:
-    # Decision 90A: it limits nothing there; from `TaskDefaults` it is meant for the mapped
+    # Decision 90A: it limits nothing there; from `StepDefaults` it is meant for the mapped
     # tasks, so no hint.
     @task(max_active_per_run=2)
     def single() -> int:
@@ -377,7 +377,7 @@ def test_max_active_per_run_on_an_unmapped_task_is_hinted_unless_a_default() -> 
         single()
     with warnings.catch_warnings():
         warnings.simplefilter("error", DagHint)
-        with Dag("e", defaults=TaskDefaults(max_active_per_run=2)):
+        with Dag("e", defaults=StepDefaults(max_active_per_run=2)):
             plain()
             mapped.expand(n=[1, 2])
     with pytest.warns(DagHint, match="task `cmd`"), Dag("f"):

@@ -10,9 +10,10 @@ check that stops catching a mistake fails `make lint`.
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from schedr import (
+    NOT_YET,
     Chosen,
     CommandOperator,
     Dag,
@@ -20,8 +21,10 @@ from schedr import (
     DefaultOutcome,
     Done,
     EmptyOperator,
+    NotYet,
     Outcome,
     Task,
+    TimedOut,
     branch,
     chain,
     connection,
@@ -29,6 +32,7 @@ from schedr import (
     group,
     on,
     secrets,
+    sensor,
     task,
     task_ctx,
     text,
@@ -430,6 +434,56 @@ async def async_values_in_a_test() -> None:
     done: Done = await async_nothing.fn()  # type: ignore[func-returns-value,assignment]  # pyright: ignore[reportAssignmentType]
     chosen: list[Task] | Task = await async_choice.fn()
     del done, chosen
+
+
+@sensor(max_wait=timedelta(hours=1))
+async def waits_for(name: str) -> int:
+    return len(name)
+
+
+@sensor.poke(every=timedelta(minutes=1))
+async def poked(name: str) -> str | NotYet:
+    return name or NOT_YET
+
+
+@sensor.poke(every=timedelta(minutes=1))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+def plain_poke() -> str | NotYet:
+    return NOT_YET
+
+
+@task
+def takes_text(text: str) -> None:
+    del text
+
+
+@task
+def takes_number(number: int) -> None:
+    del number
+
+
+@task
+def takes_either(number: int | TimedOut) -> None:
+    del number
+
+
+with Dag("sensors_typed"):
+    # A wait step's call is its value or `TimedOut`: a task taking the value says which it wants.
+    waited = waits_for("a")
+    takes_number(waited.on(int))
+    takes_number(waited)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    takes_text(waited.on(int))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    takes_either(waited.on(int, TimedOut))
+    waited >> takes_text("after")
+    waited.on(TimedOut) >> takes_text("late")
+    chain(waited.on(int, TimedOut), takes_text("always"))
+    takes_text(poked("a").on(str))
+
+
+async def sensors_in_a_test() -> None:
+    number: int = await waits_for.fn("a")
+    maybe: str | NotYet = await poked.fn("a")
+    text: str = await poked.fn("a")  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
+    del number, maybe, text
 
 
 @task

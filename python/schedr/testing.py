@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from schedr._model import CommandKind, PythonKind, SecretRef, registry
+from schedr._model import CommandKind, PythonKind, SecretRef, SensorKind, registry
 from schedr._model.values import covers
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
@@ -40,8 +40,10 @@ from schedr.context import (
     declared_secrets,
     running,
 )
+from schedr.outcomes import TIMED_OUT_NAME, TimedOut
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
+from schedr.sensors import output_hint
 from schedr.types import Json, ProcessResult
 
 RUN_KINDS = frozenset({"scheduled", "manual", "backfill", "chained", "event"})
@@ -453,6 +455,11 @@ class _OutputTypes:
             return decode_any(data)
         entry = self._load(self._location)
         kind = next((t.kind for t in entry.model.tasks if t.id == task_id), None)
+        if isinstance(kind, SensorKind):
+            hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
+            if outcome == TIMED_OUT_NAME:
+                return decode(data, TimedOut)
+            return decode(data, member_named(output_hint(hints.get("return", Any)), outcome))
         if isinstance(kind, PythonKind):
             hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
             return decode(data, member_named(hints.get("return", Any), outcome))

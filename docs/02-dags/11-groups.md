@@ -27,7 +27,7 @@ flowchart LR
 ## Writing a group
 
 ```python
-with group("load", defaults=TaskDefaults(retries=2), run_if=RunIf.ALL_SUCCEEDED) as load:
+with group("load", defaults=StepDefaults(retries=2), run_if=RunIf.ALL_SUCCEEDED) as load:
     transformed = transform(extract())
 ```
 

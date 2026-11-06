@@ -158,6 +158,10 @@ returns `None` when awaited. `await task()` also runs outside a DAG, but type ch
 it: a task call is typed as its value for use in the DAG. Without an async test plugin,
 use `asyncio.run(task.fn(...))` in a synchronous test.
 
+A [wait step](18-sensors.md) is tested the same way: `await wait.fn(...)` (or
+`asyncio.run(wait.fn(...))`) calls the function itself. For a poke, that is one call and
+it may return `NOT_YET`. Use `run_dag` to run the wait and its routing for real.
+
 `with task_context(...):` makes `dag_ctx` and `task_ctx` return values for the block, with
 no process.
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from schedr import CommandOperator, Dag, TaskDefaults, cleanup_handle, secrets, task
+from schedr import CommandOperator, Dag, StepDefaults, cleanup_handle, secrets, task
 from schedr._model import registry
 from schedr.context import TaskValues, handle_classes
 from schedr.runner.task import cleanup_call, handle_adder
@@ -53,7 +53,7 @@ def test_a_task_records_its_cleanup_with_the_defaults_and_its_handle_types() -> 
 
 
 def test_the_dags_defaults_and_the_tasks_own_settings_apply() -> None:
-    defaults = TaskDefaults(cleanup_retries=1, cleanup_retry_delay=timedelta(seconds=2))
+    defaults = StepDefaults(cleanup_retries=1, cleanup_retry_delay=timedelta(seconds=2))
     with Dag("d2", defaults=defaults) as dag:
         export.override(cleanup_timeout=timedelta(minutes=1))("2026-11-04")
     found = _cleanup_json(dag, "export")
@@ -67,7 +67,7 @@ def test_cleanup_anywhere_is_set_on_the_task_or_in_the_dags_defaults() -> None:
     with Dag("d5") as own:
         export.override(cleanup_anywhere=True)("2026-11-04")
     assert _cleanup_json(own, "export")["anywhere"] is True
-    with Dag("d6", defaults=TaskDefaults(cleanup_anywhere=True)) as defaulted:
+    with Dag("d6", defaults=StepDefaults(cleanup_anywhere=True)) as defaulted:
         export("2026-11-04")
     assert _cleanup_json(defaulted, "export")["anywhere"] is True
     with Dag("d7") as command:

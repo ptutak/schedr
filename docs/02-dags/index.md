@@ -33,4 +33,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 15-cleanup
 16-resources
 17-plain-scripts
+18-sensors
 ```

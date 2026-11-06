@@ -1,0 +1,13 @@
+title = "A class in a module named like `pydanticish` counts as a Pydantic model"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = 'both classifiers test `startswith("pydantic")`, so any module starting with those letters passes'
+found = 2026-11-06
+suspected = false
+details = '''
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** Codex's probe (not reproduced by Claude): a plain `BaseModel` class in `pydanticish.sync`. `python/schedr/_serialization/models.py:34`, `python/schedr/outcomes.py:264`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+'''

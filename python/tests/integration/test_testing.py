@@ -16,9 +16,9 @@ FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
 FAILING = """
 from datetime import timedelta
 
-from schedr import Dag, TaskDefaults, task
+from schedr import Dag, StepDefaults, task
 
-with Dag("fails", defaults=TaskDefaults(retries=1, retry_delay=timedelta(0))):
+with Dag("fails", defaults=StepDefaults(retries=1, retry_delay=timedelta(0))):
 
     @task
     def extract() -> int:
@@ -558,7 +558,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from schedr import Dag, EmptyOperator, Resource, TaskDefaults, group, resource, task
+from schedr import Dag, EmptyOperator, Resource, StepDefaults, group, resource, task
 
 MARKS = Path("{marks}")
 
@@ -605,7 +605,7 @@ def report() -> None:
     mark("report")
 
 
-with Dag("resourced", defaults=TaskDefaults(retries=0, retry_delay=timedelta(0))):
+with Dag("resourced", defaults=StepDefaults(retries=0, retry_delay=timedelta(0))):
     with group("work") as work:
         made = cluster(8)
         load(made)

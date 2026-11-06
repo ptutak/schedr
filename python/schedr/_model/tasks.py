@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from schedr._model.ids import validate_task_id
@@ -200,6 +201,56 @@ class PythonKind:
         return result
 
 
+class SensorMode(StrEnum):
+    """How a wait step waits."""
+
+    LOOP = "loop"
+    """``@sensor``: its function does the waiting."""
+
+    POKE = "poke"
+    """``@sensor.poke``: schedr calls its function every ``every_ms``."""
+
+
+@dataclass(frozen=True, slots=True)
+class SensorKind:
+    """A wait step, ``@sensor`` or ``@sensor.poke``: found by task ID, as a ``PythonKind``.
+
+    Attributes:
+        arguments: The arguments by parameter name.
+        mode: How it waits.
+        every_ms: How often to call it (``POKE``).
+        max_wait_ms: How long it waits; ``None``: the worker's ``[sensors] default_max_wait``.
+    """
+
+    arguments: Mapping[str, Value] = field(default_factory=dict)
+    mode: SensorMode = SensorMode.LOOP
+    every_ms: int | None = None
+    max_wait_ms: int | None = None
+
+    def references(self) -> list[Reference]:
+        """The arguments' references.
+
+        Returns:
+            Every reference, by parameter name order (as stored).
+        """
+        return [r for name in sorted(self.arguments) for r in self.arguments[name].references()]
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind's fields as DAG JSON.
+
+        Returns:
+            ``{"kind": "sensor", "arguments": {...}, "mode": ...}``, with ``every_ms`` and
+            ``max_wait_ms`` where they are set.
+        """
+        arguments = {name: self.arguments[name].to_json() for name in sorted(self.arguments)}
+        result: dict[str, Any] = {"kind": "sensor", "arguments": arguments, "mode": self.mode.value}
+        if self.every_ms is not None:
+            result["every_ms"] = self.every_ms
+        if self.max_wait_ms is not None:
+            result["max_wait_ms"] = self.max_wait_ms
+        return result
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceRole:
     """A command's part in a resource, for ``schedr task-ctx resource set|get``.
@@ -371,7 +422,7 @@ class ScriptKind:
         return result
 
 
-type TaskKind = PythonKind | CommandKind | ScriptKind | EmptyKind
+type TaskKind = PythonKind | SensorKind | CommandKind | ScriptKind | EmptyKind
 """Any task kind."""
 
 

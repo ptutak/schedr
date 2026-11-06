@@ -16,11 +16,22 @@ from schedr.connections import (
     connection,
 )
 from schedr.context import SecretError, acleanup_handle, cleanup_handle, dag_ctx, task_ctx
-from schedr.dag import Dag, TaskDefaults
+from schedr.dag import Dag, StepDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
-from schedr.outcomes import DagHint, Data, DefaultOutcome, Done, Outcome, RunIf, TypingHint
+from schedr.outcomes import (
+    DagHint,
+    Data,
+    DefaultOutcome,
+    Done,
+    Outcome,
+    RunIf,
+    TimedOut,
+    TypingHint,
+    Waited,
+)
 from schedr.resources import CommandResource, Resource, ScriptResource, resource
+from schedr.sensors import NOT_YET, NotYet, SensorFunction, sensor
 from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
 from schedr.types import KiB, MiB
@@ -29,6 +40,7 @@ __all__ = [
     "DAILY",
     "HOURLY",
     "MONTHLY",
+    "NOT_YET",
     "WEEKLY",
     "YEARLY",
     "AsyncConnection",
@@ -50,6 +62,7 @@ __all__ = [
     "KiB",
     "Mapped",
     "MiB",
+    "NotYet",
     "Once",
     "Outcome",
     "Output",
@@ -59,10 +72,13 @@ __all__ = [
     "ScriptResource",
     "SecretError",
     "SecretPrefix",
+    "SensorFunction",
+    "StepDefaults",
     "Task",
-    "TaskDefaults",
+    "TimedOut",
     "Trigger",
     "TypingHint",
+    "Waited",
     "acleanup_handle",
     "branch",
     "chain",
@@ -73,6 +89,7 @@ __all__ = [
     "on",
     "resource",
     "secrets",
+    "sensor",
     "task",
     "task_ctx",
     "text",

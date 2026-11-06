@@ -53,36 +53,117 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B170: A DAG built by a function in a helper file defines nothing, silently | 6 | medium | likely | usability |
-| 2 | B172: A package module that mentions schedr and uses a relative import shows a false import error | 4 | medium | possible | usability |
-| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 5 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 6 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 7 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 8 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 9 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 10 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 11 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 12 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 13 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 14 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 15 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 16 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 17 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 18 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 19 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 20 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 21 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 22 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 23 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 24 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 25 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 26 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 27 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 28 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 29 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 30 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B175: A preloaded library wins over a DAG root's module of the same name | 8 | critical | possible | correctness |
+| 2 | B174: A task can import another root's module depending on how it starts | 8 | critical | possible | correctness |
+| 3 | B173: A change to a library in another DAG root doesn't reparse the DAGs that import it | 8 | critical | possible | correctness |
+| 4 | B178: A file in a DAG root can stop the runner from starting | 6 | high | possible | reliability |
+| 5 | B176: Importing other files of a root can change the DAG stored for a file | 6 | high | possible | correctness |
+| 6 | B181: `dags test` leaves its read-only code copies behind | 6 | medium | likely | performance |
+| 7 | B179: `dags check` passes a DAG importing a package a worker doesn't get | 6 | medium | likely | usability |
+| 8 | B170: A DAG built by a function in a helper file defines nothing, silently | 6 | medium | likely | usability |
+| 9 | B177: A root named `local` can take a DAG defined outside it | 4 | critical | rare | correctness |
+| 10 | B180: A class in a module named like `pydanticish` counts as a Pydantic model | 4 | medium | possible | correctness |
+| 11 | B172: A package module that mentions schedr and uses a relative import shows a false import error | 4 | medium | possible | usability |
+| 12 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 13 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 14 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 15 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 16 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 17 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 18 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 19 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 20 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 21 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 22 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 23 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 24 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 25 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 26 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 27 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 28 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 29 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 30 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 31 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 32 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 33 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 34 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 35 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 36 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 37 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 38 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 39 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B181: `dags test` leaves its read-only code copies behind
+
+- **Rating:** severity **medium**, probability **likely**, performance (score 6): the temporary `schedr-test-*` folders stay, as their read-only copies can't be removed and the error is dropped.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** seen by Claude: `rm` of `target/imp-audit/schedr-test-*/code/...` fails with `Permission denied`. `crates/schedr/src/local.rs:909`; the code has a helper for read-only trees.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B180: A class in a module named like `pydanticish` counts as a Pydantic model
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): both classifiers test `startswith("pydantic")`, so any module starting with those letters passes.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** Codex's probe (not reproduced by Claude): a plain `BaseModel` class in `pydanticish.sync`. `python/schedr/_serialization/models.py:34`, `python/schedr/outcomes.py:264`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B179: `dags check` passes a DAG importing a package a worker doesn't get
+
+- **Rating:** severity **medium**, probability **likely**, usability (score 6): `dags check` reads the live folder, while `dags test` and workers use the copy without `.schedrignore`'s files.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 65: `dags check` says `dags=d`; a real worker reports `ModuleNotFoundError: No module named 'mylib'`; `dags test` says `no DAG d`. `crates/schedr/src/local.rs:354`, `:370`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B178: A file in a DAG root can stop the runner from starting
+
+- **Rating:** severity **high**, probability **possible**, reliability (score 6): a root's file shadowing something the runner imports closes the runner during its start, rather than reporting an error for that file.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenarios 95 and 96 (Codex's report; not reproduced by Claude). The runner's launch sites lack `-P`: `crates/schedr/src/local.rs:345`, `crates/schedr-agent/src/agent.rs:819`, `attempt.rs:529`, `fork.rs:356`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B177: A root named `local` can take a DAG defined outside it
+
+- **Rating:** severity **critical**, probability **rare**, correctness (score 4): the registry's `local` fallback reports a DAG from a file outside the root as this root's file of the same name.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 107: `external.py: dags=foreign`. `python/schedr/_model/registry.py:117`, `python/schedr/runner/parse.py:82`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B176: Importing other files of a root can change the DAG stored for a file
+
+- **Rating:** severity **high**, probability **possible**, correctness (score 6): files of a root are parsed in one process, so one file's change to a helper's state shapes another's DAG, and a task, importing alone, doesn't find what was stored.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 110, on a real worker: description `True`, tasks `extra` and `t`; the task prints `ENABLE False` and fails `TaskSetupError: DAG d has no Python task extra`. `python/schedr/runner/parse.py:220`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B175: A preloaded library wins over a DAG root's module of the same name
+
+- **Rating:** severity **critical**, probability **possible**, correctness (score 8): a local module named like a preloaded library (`colorsys`) is used under spawn, and the library under fork, silently.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 98, on a real worker: `CUSTOM True` under spawn, `CUSTOM False` under a fork server preloading `colorsys`. `python/schedr/runner/fork_server.py:113`, `:246`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B174: A task can import another root's module depending on how it starts
+
+- **Rating:** severity **critical**, probability **possible**, correctness (score 8): the order of the roots on `sys.path` differs between a spawned process and a forked one, so one task picks different code by its start method.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 105, on a real worker: prints `PRIMARY` under spawn and `OTHER` under fork, with the same files. `python/schedr/runner/parse.py:201`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+
+## B173: A change to a library in another DAG root doesn't reparse the DAGs that import it
+
+- **Rating:** severity **critical**, probability **possible**, correctness (score 8): after editing a library in another root, the stored DAG stays as it was while its tasks run the new code, so a task the new code adds silently doesn't exist.
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 104 of `import_scenarios.py`, on a real worker: the stored description stays `False`, the run has only `t`, its log says `ENABLE True`. `crates/schedr-agent/src/agent.rs:1736`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
 
 ## B172: A package module that mentions schedr and uses a relative import shows a false import error
 
@@ -91,9 +172,8 @@ step touches their code or the user schedules them.
   stops the false errors only for files that never mention `schedr`; a file that does is still
   loaded alone by its path (`python/schedr/runner/parse.py`), not as part of its package. The word
   in a comment is enough.
-- **Workaround:** list the helper's package in `.schedrignore`; the error goes.
-- **A fix:** to discuss with the user: document the case and the workaround, or import such a file
-  as part of its package.
+- **Workaround:** absolute imports from the root. `.schedrignore` is no workaround: see B179.
+- **A fix:** Codex's investigation recommends ordinary package imports; for the user to decide.
 
 ## B170: A DAG built by a function in a helper file defines nothing, silently
 

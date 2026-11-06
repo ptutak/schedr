@@ -14,7 +14,7 @@ from schedr import (
     Resource,
     ScriptOperator,
     ScriptResource,
-    TaskDefaults,
+    StepDefaults,
     dag_ctx,
     resource,
     task,
@@ -455,7 +455,7 @@ def test_the_operator_changes_a_cleanups_settings_over_the_declared_and_the_defa
     assert (cleanup["retries"], cleanup["timeout_ms"], cleanup["retry_delay_ms"]) == (7, 9000, 2000)
     assert cleanup["anywhere"] is True
     assert cleanup["run"]["script"]["script"] == "sales/undo.sh"
-    defaults = TaskDefaults(cleanup_retries=5, cleanup_retry_delay=timedelta(seconds=1))
+    defaults = StepDefaults(cleanup_retries=5, cleanup_retry_delay=timedelta(seconds=1))
     with _asking(answer), Dag("d", defaults=defaults):
         ScriptOperator("clean", _RESOURCE_JOB)
     cleanup = only_dag().tasks[0].to_json()["cleanup"]

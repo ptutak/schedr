@@ -272,6 +272,28 @@ impl Default for Timings {
     }
 }
 
+/// `[sensors]`: wait steps (`@sensor`, `@sensor.poke`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SensorsSection {
+    /// How long a wait step without a `max_wait` of its own waits, before it ends with the
+    /// `TimedOut` outcome.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub default_max_wait: Duration,
+}
+
+impl Default for SensorsSection {
+    fn default() -> Self {
+        Self {
+            default_max_wait: Duration::from_hours(24),
+        }
+    }
+}
+
 /// The whole configuration, after loading and validation.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -299,6 +321,8 @@ pub struct Config {
     pub ui: UiSection,
     /// `[worker]`: this worker's identity, capacity and data directory.
     pub worker: WorkerSection,
+    /// `[sensors]`: wait steps (`@sensor`, `@sensor.poke`).
+    pub sensors: SensorsSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).

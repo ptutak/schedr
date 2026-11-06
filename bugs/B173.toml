@@ -1,0 +1,13 @@
+title = "A change to a library in another DAG root doesn't reparse the DAGs that import it"
+severity = "critical"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "after editing a library in another root, the stored DAG stays as it was while its tasks run the new code, so a task the new code adds silently doesn't exist"
+found = 2026-11-06
+suspected = false
+details = '''
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 104 of `import_scenarios.py`, on a real worker: the stored description stays `False`, the run has only `t`, its log says `ENABLE True`. `crates/schedr-agent/src/agent.rs:1736`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+'''

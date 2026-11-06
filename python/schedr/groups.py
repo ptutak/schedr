@@ -16,7 +16,7 @@ from types import TracebackType
 from typing import Self
 
 from schedr import _build
-from schedr.dag import TaskDefaults
+from schedr.dag import StepDefaults
 from schedr.outcomes import RunIf
 
 __all__ = ["Group", "group"]
@@ -40,13 +40,13 @@ class Group:
         self,
         name: str,
         *,
-        defaults: TaskDefaults | None = None,
+        defaults: StepDefaults | None = None,
         run_if: RunIf | None = None,
         uses: Sequence[object] | None = None,
     ) -> None:
         """Records the group's settings; it opens when its ``with`` block starts."""
         self._name = name
-        own = (defaults or TaskDefaults()).options()
+        own = (defaults or StepDefaults()).options()
         wanted = None if uses is None else tuple(uses)
         self._options = _build.TaskOptions(run_if=run_if, uses=wanted).over(own)
         self._scope: _build.GroupScope | None = None
@@ -138,4 +138,4 @@ class Group:
 
 
 group = Group
-"""``with group("load", defaults=TaskDefaults(retries=3)) as load:`` (see :class:`Group`)."""
+"""``with group("load", defaults=StepDefaults(retries=3)) as load:`` (see :class:`Group`)."""

@@ -1,4 +1,4 @@
-"""``Dag``, the context manager that defines a DAG, and ``TaskDefaults``.
+"""``Dag``, the context manager that defines a DAG, and ``StepDefaults``.
 
 Tasks created inside ``with Dag(...)`` belong to it. When the block ends, the DAG is checked
 (no cycles) and recorded for the runner (see PROJECT.md, Native API).
@@ -27,14 +27,16 @@ from schedr.triggers import Cron, Every, Once, Trigger
 
 
 @dataclass(frozen=True, slots=True)
-class TaskDefaults:
-    """Defaults for every task of a DAG; a task's own arguments win.
+class StepDefaults:
+    """Defaults for the steps of a DAG or group, its tasks and wait steps; a step's own win.
 
     Attributes:
         retries: How many times a failed attempt is retried.
         retry_delay: The delay before each retry.
-        timeout: The attempt's timeout.
-        queue: The queue tasks go to.
+        timeout: A task's attempt's timeout; a wait step has ``max_wait`` instead.
+        max_wait: How long a wait step waits (default: ``[sensors] default_max_wait``); not
+            for tasks.
+        queue: The queue steps go to.
         max_output_size: The output size limit in bytes (e.g. ``8 * MiB``).
         preload: Python tasks fork from the preloaded fork server (``False``: only from the
             bare one, for code that misbehaves next to the preloaded libraries).
@@ -56,6 +58,7 @@ class TaskDefaults:
     retries: int | None = None
     retry_delay: timedelta | None = None
     timeout: timedelta | None = None
+    max_wait: timedelta | None = None
     queue: str | None = None
     max_output_size: int | None = None
     preload: bool | None = None
@@ -78,6 +81,7 @@ class TaskDefaults:
             retries=self.retries,
             retry_delay=self.retry_delay,
             timeout=self.timeout,
+            max_wait=self.max_wait,
             queue=self.queue,
             max_output_size=self.max_output_size,
             preload=self.preload,
@@ -132,7 +136,7 @@ class Dag:
         initial_since: datetime | date | str | None = None,
         max_active_runs: int | None = 1,
         max_active_tasks: int | None = None,
-        defaults: TaskDefaults | None = None,
+        defaults: StepDefaults | None = None,
         description: str | None = None,
         tags: Sequence[str] = (),
         params: type | None = None,
@@ -155,7 +159,7 @@ class Dag:
         if max_active_tasks is not None and max_active_tasks <= 0:
             raise ValueError(f"max_active_tasks must be positive or None, got {max_active_tasks}")
         self.max_active_tasks = max_active_tasks
-        self.defaults = defaults or TaskDefaults()
+        self.defaults = defaults or StepDefaults()
         self.description = description
         self.tags = tuple(tags)
         self.params = params

@@ -37,15 +37,14 @@ start as it is for a task that can share the worker's preloaded libraries. Set
 `preload=False` when the task misbehaves next to those libraries: it still forks, but only
 from the bare fork server. Set `fresh_process=True` when the task misbehaves after a fork:
 it is always a new process, and never forked. The same two arguments are on `.override(...)`
-and `TaskDefaults(...)`, and the task's own argument wins. What the worker does with them is
+and `StepDefaults(...)`, and the task's own argument wins. What the worker does with them is
 [The fork server](../03-guide/05-workers.md#the-fork-server).
 
 ## Async tasks
 
 Use `async def` for concurrent waits inside one attempt, for example several HTTP calls
 with `asyncio.gather`. A slow synchronous call blocks the event loop and the other waits.
-For waiting for an external event without holding a task slot, see
-[Sensors and triggers](../_generated/05-design/07-python-api-structure.md#sensors-and-triggers).
+For waiting for an external event, see [Wait steps](18-sensors.md).
 
 ```{literalinclude} ../../examples/docs/async_tasks.py
 :language: python

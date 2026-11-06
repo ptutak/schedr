@@ -842,3 +842,34 @@ fn a_script_or_working_dir_leaving_its_script_root_isnt_run() {
         }
     }
 }
+
+#[test]
+fn a_wait_step_without_a_max_wait_gets_the_workers_default_and_a_limit_past_its_grace() {
+    let timeouts = WorkerTimeouts {
+        sensor_max_wait: Duration::from_hours(2),
+        ..WorkerTimeouts::default()
+    };
+    let margin = u64::try_from(timeouts.runner_start.as_millis()).unwrap() + 3000;
+    let wait_of = |mut task: serde_json::Value| {
+        task["kind"] = json!("sensor");
+        task["mode"] = json!("loop");
+        task["settings"]["timeout_ms"] = json!(null);
+        let message = pb::AssignTask {
+            cancel_grace_ms: 3000,
+            ..assign(&task)
+        };
+        let mut spec = AttemptSpec::from_assign(&message, None).unwrap();
+        spec.default_timeout(&message, &timeouts);
+        let TaskKind::Sensor { max_wait_ms, .. } = spec.task.kind else {
+            panic!("a wait step");
+        };
+        (max_wait_ms, spec.task.settings.timeout_ms)
+    };
+    assert_eq!(
+        wait_of(python_task()),
+        (Some(7_200_000), Some(7_200_000 + margin))
+    );
+    let mut own = python_task();
+    own["max_wait_ms"] = json!(5000);
+    assert_eq!(wait_of(own), (Some(5000), Some(5000 + margin)));
+}

@@ -335,9 +335,9 @@ asked it. A task with `fresh_process` true is always a new process, never forked
 that misbehaves after a fork, and `start_method` stays `spawn`. Left unset, `preload` is
 true and `fresh_process` is false, so the task asks the preloaded server. When both are
 set, `fresh_process` true wins. The DAG author sets them on `@task(...)`, `.override(...)`
-and `TaskDefaults(...)`. The task's own argument wins, and they are stored as `preload`
+and `StepDefaults(...)`. The task's own argument wins, and they are stored as `preload`
 and `fresh_process` in the task's settings. They apply to a Python task. A command is
-always a new process. `CommandOperator` does not take them. A `TaskDefaults` value is
+always a new process. `CommandOperator` does not take them. A `StepDefaults` value is
 stored on every task and used only when that task is Python.
 
 A server that does not fork the task counts in

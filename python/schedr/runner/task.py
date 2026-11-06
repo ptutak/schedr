@@ -9,7 +9,9 @@ Rust/Python integration).
 
 import contextlib
 import dataclasses
+import functools
 import inspect
+import operator
 import sys
 import types
 from collections.abc import Callable, Mapping, Sequence
@@ -46,9 +48,10 @@ from schedr.context import (
     handle_classes,
     running,
 )
-from schedr.outcomes import from_return_type, outcome_enum
+from schedr.outcomes import TIMED_OUT_NAME, TimedOut, from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
 from schedr.runner.protocol import Channel
+from schedr.sensors import output_hint
 
 SUCCESS = "SUCCESS"
 """The outcome of a task without outcomes of its own (``DefaultOutcome.SUCCESS``)."""
@@ -430,6 +433,11 @@ def member_named(annotation: object, outcome: object) -> object:
         types.UnionType,
     }:
         return annotation
+    if outcome == SUCCESS:
+        # A wait step's value, in a parameter expecting `TimedOut` too (decision 324).
+        kept = [m for m in get_args(unwrap(annotation)) if unwrap(m) is not TimedOut]
+        if len(kept) < len(get_args(unwrap(annotation))):
+            return functools.reduce(operator.or_, kept)
     for member in get_args(unwrap(annotation)):
         target = unwrap(member)
         if getattr(get_origin(target) or target, "__name__", None) == outcome:
@@ -683,7 +691,8 @@ def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
             task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
         )
         with running(run_values(run, params_class), own):
-            result = function(**arguments)
+            sensing = task.get("kind") == "sensor"
+            result = _sensed(function, arguments, task) if sensing else function(**arguments)
             # Asked of the result, not the function: a decorator can wrap an `async def`.
             if inspect.iscoroutine(result):
                 from schedr.runner.coroutines import run_coroutine  # noqa: PLC0415  # see there
@@ -699,6 +708,10 @@ def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
         return failure(e, None)
     if request.get("cleanup") is not None:
         return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
+    if sensing and isinstance(result, TimedOut):
+        return _stored(result, TimedOut, task, TIMED_OUT_NAME)
+    if sensing:
+        return _stored(result, output_hint(hints.get("return", Any)), task)
     if not task.get("branch"):
         return _stored(result, hints.get("return", Any), task)
     try:
@@ -880,9 +893,23 @@ def outcome_of(result: object, annotation: object) -> tuple[str, object, object]
     return SUCCESS, result, annotation
 
 
-def _stored(result: object, annotation: object, task: Mapping[str, Any]) -> dict[str, Any]:
+def _sensed(
+    function: Callable[..., Any], arguments: Mapping[str, object], task: Mapping[str, Any]
+) -> object:
+    """A wait step's coroutine, waiting for its value or its deadline."""
+    # Slow to import; most tasks aren't wait steps.
+    from schedr.runner.waiting import waited  # noqa: PLC0415
+
+    return waited(function, arguments, task)
+
+
+def _stored(
+    result: object, annotation: object, task: Mapping[str, Any], named: str | None = None
+) -> dict[str, Any]:
     try:
-        outcome, result, annotation = outcome_of(result, annotation)
+        outcome, result, annotation = (
+            outcome_of(result, annotation) if named is None else (named, result, annotation)
+        )
         output = encode(result, annotation)
     except CodecError as e:
         return failure(

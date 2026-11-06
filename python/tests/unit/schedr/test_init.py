@@ -16,7 +16,7 @@ def test_the_public_api_is_exported() -> None:
     expected = {
         "Dag",
         "task",
-        "TaskDefaults",
+        "StepDefaults",
         "CommandOperator",
         "EmptyOperator",
         "Cron",

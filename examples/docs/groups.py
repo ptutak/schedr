@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from schedr import Dag, EmptyOperator, TaskDefaults, group, task
+from schedr import Dag, EmptyOperator, StepDefaults, group, task
 
 with Dag("grouped_load", trigger=None):
 
@@ -23,7 +23,7 @@ with Dag("grouped_load", trigger=None):
     loaded: dict[str, int] = {}
     for source in ("eu", "us"):
         # Each group's tasks are `eu.extract`, `eu.load`, ...; retries for these only.
-        defaults = TaskDefaults(retries=2, retry_delay=timedelta(seconds=30))
+        defaults = StepDefaults(retries=2, retry_delay=timedelta(seconds=30))
         with group(source, defaults=defaults) as per_source:
             loaded[source] = load(extract(source))
         start >> per_source  # before the group's roots: `eu.extract`

@@ -7,12 +7,12 @@ DAGs are defined using schedr's own Python API, but also other schedulers compat
 ```python
 from datetime import timedelta
 
-from schedr import CommandOperator, Cron, Dag, TaskDefaults, dag_ctx, task
+from schedr import CommandOperator, Cron, Dag, StepDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
     trigger=Cron("0 3 * * *", tz="Europe/Warsaw", start="2026-01-01"),
-    defaults=TaskDefaults(retries=2, retry_delay=timedelta(minutes=5)),
+    defaults=StepDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):
 
     @task
@@ -51,7 +51,7 @@ then 1.0.0. The Airflow layer is M5. See `PLAN.md` and the roadmap in `PROJECT.m
 What works on `main` (*main only* marks what came after 0.1.0):
 
 - **The native API:** `Dag`, `@task` (Python), `CommandOperator`, `EmptyOperator`, data flow
-  between tasks, `>>` and `chain`, `Cron` / `Every` / `Once` and presets, `TaskDefaults`
+  between tasks, `>>` and `chain`, `Cron` / `Every` / `Once` and presets, `StepDefaults`
   (retries, timeouts, queues), `dag_ctx`; outcomes and `.on(...)`, `@branch`, task groups,
   mapping (`.partial` / `.expand`), concurrency limits, run parameters (`Dag(params=)`, a form
   in the UI); `schedr dag-ctx` (params, the run) for commands and plain scripts, over the

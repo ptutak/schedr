@@ -10,8 +10,8 @@ from schedr import (
     EmptyOperator,
     Group,
     RunIf,
+    StepDefaults,
     Task,
-    TaskDefaults,
     branch,
     chain,
     group,
@@ -82,11 +82,11 @@ def test_one_task_function_in_two_groups_needs_no_override() -> None:
 
 def test_settings_come_from_the_dag_the_groups_and_the_task_in_that_order() -> None:
     with (
-        Dag("d", defaults=TaskDefaults(retries=1, queue="dag")),
-        group("outer", defaults=TaskDefaults(retries=2, queue="outer"), run_if=RunIf.ALL_SUCCEEDED),
+        Dag("d", defaults=StepDefaults(retries=1, queue="dag")),
+        group("outer", defaults=StepDefaults(retries=2, queue="outer"), run_if=RunIf.ALL_SUCCEEDED),
     ):
         extract()
-        with group("inner", defaults=TaskDefaults(retries=3)):
+        with group("inner", defaults=StepDefaults(retries=3)):
             audit()
             transform.override(retries=4)(5)
     settings = {t.id: t.settings for t in only_dag().tasks}

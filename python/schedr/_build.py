@@ -9,7 +9,7 @@ import dataclasses
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from types import FrameType
@@ -40,6 +40,7 @@ from schedr._model import (
     ScalarType,
     SecretDecl,
     SecretRef,
+    SensorKind,
     Task,
     TaskCleanup,
     TaskKind,
@@ -78,7 +79,7 @@ from schedr._serialization.annotations import (
 from schedr._serialization.models import is_model
 from schedr._templates import check_in_text, is_tstring
 from schedr._templates import to_template as tstring_to_template
-from schedr.outcomes import DEFAULT, DagHint, OutcomeSpec, RunIf
+from schedr.outcomes import DEFAULT, TIMED_OUT_NAME, DagHint, OutcomeSpec, RunIf
 
 type Upstream = tuple[str, tuple[str, ...]]
 """An upstream task a value references, with the outcomes its edge is taken on (``()``: any)."""
@@ -121,12 +122,13 @@ class CleanupWanted:
 
 @dataclass(frozen=True, slots=True)
 class TaskOptions:
-    """Settings given on a task or in ``TaskDefaults``; ``None`` means "not set here".
+    """Settings given on a task or in ``StepDefaults``; ``None`` means "not set here".
 
     Attributes:
         retries: How many times a failed attempt is retried.
         retry_delay: The delay before each retry.
         timeout: The attempt's timeout.
+        max_wait: How long a wait step waits.
         queue: The queue the task goes to.
         max_output_size: The output size limit in bytes.
         preload: A Python task forks from the preloaded fork server.
@@ -155,6 +157,7 @@ class TaskOptions:
     cleanup_retry_delay: timedelta | None = None
     cleanup_anywhere: bool | None = None
     uses: tuple[object, ...] | None = None
+    max_wait: timedelta | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -169,6 +172,7 @@ class TaskOptions:
             retries=base.retries if self.retries is None else self.retries,
             retry_delay=base.retry_delay if self.retry_delay is None else self.retry_delay,
             timeout=base.timeout if self.timeout is None else self.timeout,
+            max_wait=base.max_wait if self.max_wait is None else self.max_wait,
             queue=base.queue if self.queue is None else self.queue,
             max_output_size=(
                 base.max_output_size if self.max_output_size is None else self.max_output_size
@@ -285,7 +289,7 @@ class TaskOptions:
 def hint_unmapped_per_run(options: TaskOptions, task_id: str, stacklevel: int) -> None:
     """Warns that ``max_active_per_run`` set on an unmapped task limits nothing (decision 90A).
 
-    Only for a value the task sets itself: one from ``TaskDefaults`` is meant for the DAG's
+    Only for a value the task sets itself: one from ``StepDefaults`` is meant for the DAG's
     mapped tasks.
 
     Args:
@@ -622,6 +626,14 @@ class DagBuilder:
         if resolved.uses:
             self.uses[task_id] = resolved.uses
         settings = resolved.settings()
+        if isinstance(kind, SensorKind):
+            # `timeout` is a limit on a task's work; it waits `max_wait`, then ends `TimedOut`.
+            settings = replace(settings, timeout_ms=None)
+            if resolved.max_wait is not None:
+                if resolved.max_wait <= timedelta(0):
+                    raise TypeError(f"@sensor `{task_id}`: `max_wait` must be more than zero")
+                waits = round(resolved.max_wait / timedelta(milliseconds=1))
+                kind = replace(kind, max_wait_ms=waits)
         self.tasks[task_id] = Task(
             task_id,
             kind,
@@ -792,6 +804,10 @@ class DagBuilder:
         if isinstance(task.kind, PythonKind) and task.kind.branch and not plain:
             # Every edge out of a branch is taken only when it chose its target.
             kind = EdgeKind.SELECTION
+        names = self.outcomes[from_].names if from_ in self.outcomes else ()
+        if kind == EdgeKind.ORDER and not on and TIMED_OUT_NAME in names:
+            # A plain `>>` from a wait step means "when it has its value" (decision 324).
+            on = tuple(name for name in names if name != TIMED_OUT_NAME)
         edge = Edge(from_, to, kind, on)
         if edge not in self.edges:
             self.edges.append(edge)

@@ -2063,7 +2063,7 @@ anywhere = false                   # native cleanup_anywhere
   winning over the declaration, the declaration over the DAG's defaults, as `retries` does; its
   script stays the declared one, and a `cleanup_*` on a declaration without one is a parse error.
   A `cleanup_script`'s options win over the declaration's settings, which win over a cleanup's
-  defaults (3 tries, 30 s, the setup's queue). Not chosen: no overrides (`TaskDefaults`' cleanup
+  defaults (3 tries, 30 s, the setup's queue). Not chosen: no overrides (`StepDefaults`' cleanup
   settings would need a rule of their own).
 - **314. A worker that couldn't run a task's cleanup script rejects the task (2026-11-05):** the
   cleanup's interpreter or script missing there is rejection 3 or 5, as for the task's own, so the
@@ -3029,7 +3029,7 @@ permission to create pods.
     one (only `schedr`), so both are ready when needed. A task or parse job forks from the
     preloaded one; when it is off (a failed preload, a thread after preloading, crashed and
     restarting) from the bare one; spawn only when both are off. A task can pick the bare one
-    with **`@task(preload=False)`** (also in `TaskDefaults`), for code that misbehaves next to
+    with **`@task(preload=False)`** (also in `StepDefaults`), for code that misbehaves next to
     preloaded libraries. Per interpreter because each `[interpreters]` entry may be a different
     virtualenv and a child must come from a parent with the same environment; today a worker
     runs one interpreter (`[dags] interpreter`), so one pair. Not chosen: one fork server
@@ -3063,7 +3063,7 @@ permission to create pods.
     parent never sees DAG code). **`script` tasks always spawn**, even with a Python
     interpreter (a plain script expects a fresh interpreter: `__main__`, `sys.argv`, `atexit`;
     and needs no `schedr`); `command` tasks aren't Python. A task can opt out with
-    **`@task(fresh_process=True)`** (also in `TaskDefaults`), for code that misbehaves after a
+    **`@task(fresh_process=True)`** (also in `StepDefaults`), for code that misbehaves after a
     fork.
   - **Process model** (decided 2026-10-27, replacing "the agent is a child subreaper"): the
     agent starts `<interpreter> -m schedr.runner fork_server` **when the worker starts** (the
@@ -5232,7 +5232,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     (`@task(max_active_per_run=10)`, 1,000 instances, 10 at a time).
   - **`max_active`** on a task (default `None`): the same **across all runs** (e.g. a task holding
     an exclusive external lock).
-  - Task limits also on operators and in `TaskDefaults`; an unmapped task has one instance per
+  - Task limits also on operators and in `StepDefaults`; an unmapped task has one instance per
     run. `schedr.toml` jobs need no key (one-task DAGs: `max_active_runs` covers them).
   - **Across DAGs** (a named limit shared by several DAGs, Airflow's pools): not now; queues (a
     dedicated worker group with a fixed number of slots) cover it. Possibly later: named
@@ -5254,7 +5254,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
       does.
     - **90, `max_active_per_run` on an unmapped task** (A): a parse-time warning shown by
       `dags check` (it limits nothing: one instance a run), not for a value from
-      `TaskDefaults`. Not chosen: B silent; C an error (breaks defaults shared with mapped
+      `StepDefaults`. Not chosen: B silent; C an error (breaks defaults shared with mapped
       tasks).
     - **91, the reason and the metric:** "waiting: `max_active_per_run` (10) reached" (the
       limit and its value); `master_tasks_waiting{reason="max_active_tasks" | "max_active" |
@@ -5273,7 +5273,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
       lowering a limit lets the running finish and holds new ones until under it; tasks
       waiting to retry and tasks the master completes never count; the counts follow the
       master's rollback rules (a rolled-back message restores them).
-- **Defaults are typed, not a dict:** `Dag(defaults=TaskDefaults(retries=2, ...))` instead of
+- **Defaults are typed, not a dict:** `Dag(defaults=StepDefaults(retries=2, ...))` instead of
   `default_args={...}`. Groups can set their own defaults; a task's own arguments win.
 - **Routing: outcomes first, `@branch` for subsets** (see Task results and outcomes). To
   route on what a task found, the task returns an **outcome** and downstream tasks use
@@ -5318,7 +5318,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   edges.
   - **What it is for:** reusing a piece of DAG (a function building extract → transform →
     load, called once per source, each call in its own group so the IDs don't collide);
-    shared settings (its own `TaskDefaults`, `run_if`, `uses=`; an inner group's override an
+    shared settings (its own `StepDefaults`, `run_if`, `uses=`; an inner group's override an
     outer one's, a task's own arguments win over both); depending on a block of work
     (`start >> load >> publish` without listing what `load` holds); reading the graph (the UI
     draws a box around its tasks).
@@ -5345,7 +5345,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     whose in-group upstream was skipped still runs on the outer edge, and Airflow's
     translation would need a rule of its own); C every task for `x >> group` and the leaves
     for `group >> y` (neither rule's simplicity).
-  - **Built in M4.2b** (2026-10-29): `with group("load", defaults=TaskDefaults(...),
+  - **Built in M4.2b** (2026-10-29): `with group("load", defaults=StepDefaults(...),
     run_if=...) as load:` (`schedr.group`, a `Group` handle); a group's name is one ID part;
     it may not repeat in its parent nor be a task's ID; the same `@task` function in two
     groups needs no `.override()`; a group whose block raised (the error caught in the DAG
@@ -5531,12 +5531,12 @@ other than `default` and secrets in `env` come with M2 and M4):
 ```python
 from datetime import timedelta
 
-from schedr import CommandOperator, Cron, Dag, TaskDefaults, dag_ctx, task
+from schedr import CommandOperator, Cron, Dag, StepDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
     trigger=Cron("0 3 * * *", tz="Europe/Warsaw", start="2026-01-01"),
-    defaults=TaskDefaults(retries=2, retry_delay=timedelta(minutes=5)),
+    defaults=StepDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):
 
     @task
@@ -5617,7 +5617,7 @@ with Dag(
     Without skipped upstream tasks this is exactly Airflow's `all_success`; after a branch,
     joins work with nothing to configure.
   - **`AllSucceeded`** (opt-in: `@task(run_if=RunIf.ALL_SUCCEEDED)`, also on operators,
-    groups and in `TaskDefaults`; enum `RunIf { NONE_FAILED, ALL_SUCCEEDED }`, default
+    groups and in `StepDefaults`; enum `RunIf { NONE_FAILED, ALL_SUCCEEDED }`, default
     `NONE_FAILED`): runs only when **every** upstream task succeeded; any
     failure → `upstream_failed`; otherwise any skip → skipped. For "run only if every upstream
     task really ran":
@@ -6492,19 +6492,19 @@ the graph, is a parse error too.
 **Wait steps.**
 
 ```python
-@sensor(timeout=timedelta(hours=6))
-async def partner_file(day: date) -> Path:          # full control: the user writes the loop
+@sensor(max_wait=timedelta(hours=6))
+async def partner_file(day: datetime) -> str:       # full control: the user writes the loop
     async with listen("orders_ready") as channel:    # e.g. Postgres LISTEN
         ...
         return path
 
-@sensor.poke(every=timedelta(minutes=1), timeout=timedelta(hours=6))
-async def partner_file(day: date) -> Path | NotYet:  # schedr calls it every minute
+@sensor.poke(every=timedelta(minutes=1), max_wait=timedelta(hours=6))
+async def partner_file(day: datetime) -> str | NotYet:   # schedr calls it every minute
     path = f"s3://in/orders_{day}.csv"
-    return Path(path) if await exists(path) else NOT_YET
+    return path if await exists(path) else NOT_YET
 
 with Dag("sync_orders", trigger=DAILY):
-    load(partner_file(dag_ctx.run.planned_for.date()))
+    load(partner_file(dag_ctx.run.planned_for).on(str))
 ```
 
 - A wait step is a **task kind** (`sensor` in DAG JSON, next to `python`, `command`, `empty`,
@@ -6516,10 +6516,55 @@ with Dag("sync_orders", trigger=DAILY):
   `NotYet`. schedr calls it every `every`, each call limited to `every` (calls never overlap);
   a call that raises is a failure with the usual retries (a flaky source is the user's to catch
   and turn into `NOT_YET`).
-- **Timeout:** a wait step that hasn't finished within its `timeout` (or `[sensors]
+  A call blocking the loop past a limit can't be cancelled, so its own time decides: what it then returns
+  came too late.
+  A call that runs out its `every` is cancelled and is a failure too, with a clear message
+  (decision 322, the user's, 2026-11-06): a poke that is always too slow shows at once. Not
+  chosen: counting it as `NOT_YET` (it looks like a normal wait until `TimedOut`); a separate
+  `call_timeout=` (one more option to explain).
+- **`max_wait`:** a wait step that hasn't finished within its `max_wait` (or `[sensors]
   default_timeout`, 24 h) ends with the **`TimedOut` outcome**, not a failure: waiting in vain
-  is an expected problem (see Outcomes, failures and joins); tasks branch on it with `.on(...)`,
-  and plain `>>` downstream tasks are skipped.
+  is an expected problem (see Outcomes, failures and joins). **The clock starts at the instance's first start**
+  and is kept across retries and moves (decision 321, the user's, 2026-11-06): `max_wait=6h` means the
+  run waits at most about 6 h, whatever happens to workers. Not chosen: per attempt, as a task's
+  (`max_wait=6h` with 3 retries could wait 24 h).
+- **What downstream tasks see** (decision 324, the user's, 2026-11-06): a call reads as `Waited[T]`,
+  its value or `TimedOut` (schedr's, never written in the function's return type), so the timeout
+  shows where the value is used. `load(file)` with `path: str` is refused at parse and by type
+  checkers; `load(file.on(str))` runs on the value and is skipped on a timeout;
+  `file.on(TimedOut) >> alert()` runs on a timeout; a parameter `str | TimedOut` gets either
+  (`.on(str, TimedOut)` for type checkers, which can't read `Waited[str]` as that union). One
+  rule of its own: **a plain `>>` from a wait step means "when it has its value"**, since
+  `wait >> process` is the commonest use and must not run without the file; `.on(str, TimedOut)`
+  runs after either. A value or `TimedOut`, not a failure: a failed wait step's downstream tasks are
+  `upstream_failed` as usual. With another upstream task, an edge not taken is as for any `.on(...)`:
+  `run_if` decides. Not chosen: a plain `>>` on any outcome, as for other tasks (no rule of its own,
+  but `wait >> process` silently runs after a timeout); a call reading as `T` with plain edges
+  only on a value (shorter, but the timeout is invisible in the code). Named `TimedOut` (the user's):
+  not `SensorTimeout` (reads wrong on approvals), nor `NoEvent` (an event is what a trigger yields).
+- **Options:** `@task`'s, except `cleanup=` and its settings (a parse error saying to use `finally`;
+  decision 323, the user's, 2026-11-06: waiting rarely leaves anything behind, and it can come
+  later without breaking anyone; not chosen: a cleanup process on a task slot, tying the two kinds of
+  slot together), and `preload`/`fresh_process`, which don't apply.
+
+- **Not mapped for now** (Claude's call, 2026-11-06, for the user to look at): `.expand()` on a wait
+  step is an error, as each instance could end its own way and `TimedOut` has no element-wise
+  routing yet. The list a mapped task gets can come from one, or be mapped over one's value.
+- **`max_wait`, and `StepDefaults`** (decision 325, the user's, 2026-11-06): a wait step's limit has its
+  own name, as `timeout` means "fail if the work runs too long" on a task and "stop waiting, not a
+  failure" here; `timeout=` on a wait step, and `max_wait=` on a task, are errors. `TaskDefaults` is
+  renamed `StepDefaults`, for a DAG's or group's steps, tasks and wait steps: `retries`, `queue` and
+  the like apply to both, `timeout` to tasks, `max_wait` to wait steps. No alias: it is a preview.
+  Order: the wait step's own, its group's, the DAG's, `[sensors] default_max_wait`. Not chosen: `timeout`
+  for both (`StepDefaults(timeout=5m)` would silently cut waits short; not inheriting it was unclear
+  too); `TaskDefaults` and `SensorDefaults` on a shared base (shared settings written twice, and a
+  parameter more on `Dag`, groups); a plain `Defaults` ("defaults for what?"); a narrower
+  `TaskDefaults` beside `StepDefaults` (two ways to set `retries`).
+- **Until the host is built** (M4.11a1): a wait step runs as a task's process does, on a task slot,
+  with a clock per attempt; M4.11a2 to a4 move it to the host, its watcher slots and the kept
+  deadline. The waiting itself (`runner/waiting.py`) stays the same.
+  A function ignoring its cancel at the timeout is stopped by the agent past its grace, like a task
+  over its time: `timed_out`, a failure.
 
 **Triggers.**
 
@@ -6597,14 +6642,24 @@ memory_budget = "1GiB"      # for the host as a whole
 block_limit = "30s"         # a wait step or trigger must reach an `await` within this
 
 [sensors]                   # wait steps (@sensor, @sensor.poke)
-default_timeout = "24h"     # for wait steps without their own `timeout`
+default_max_wait = "24h"    # for wait steps without their own `max_wait`
 
 [triggers]                  # triggers (@trigger, @trigger.poke)
 max_queued_events = 1000    # queued event runs per DAG before its trigger is stopped
 failing_after = 5           # consecutive errors before TRIGGER_FAILING
 ```
 
-- **One per worker:** the agent starts `python -m schedr.runner watchers`, one long-lived
+- **One per code set** (decision 320, the user's, 2026-11-06; the design first said one per
+  worker, importing a DAG file under a name with its hash, which left helper modules cached once
+  in `sys.modules` and one `sys.path` for all, so new DAG code could silently run with old helpers,
+  and two roots with one package name would collide): one host per interpreter and set of root
+  copies. A new code version starts a new host; the old one exits when its last watcher ends, so
+  usually 1 or 2 processes, and imports behave as in a task. `[watchers] memory_budget` is a
+  total across a worker's hosts. Not chosen: restarting the host on new code (a deploy of any DAG
+  loses every full-control wait step's progress, and doesn't solve two roots); one host with an
+  import finder giving each version its own helpers (brittle: pickling, dataclass lookups, C
+  extensions); one host, documented (wrong code silently).
+- **Each host:** the agent starts `python -m schedr.runner watchers`, one long-lived
   asyncio process, and supervises it like any runner (same socket protocol, multiplexed by
   watcher ID: `start_watcher`, `cancel_watcher`, `event_ack` from the agent; `watcher_done`,
   `watcher_failed`, `event`, `log`, `loop_blocked` from the host). Every wait step and trigger assigned to the
@@ -6635,9 +6690,8 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   `logging` are routed per watcher; lines go over the socket to the agent, which masks secrets
   and writes the watcher's log file as for any attempt. Output from threads or C code goes to the host's own
   log.
-- **Code:** in the host a DAG file is imported under a module name that includes its content
-  hash, so old and new code run side by side; `AssignTask` therefore carries the expected code
-  hash.
+- **Code:** `AssignTask` carries the expected code hash, and a host holds one code set
+  (decision 320), so old and new code run side by side in different hosts.
 - **Isolation:** watchers on one worker share a process and can read each other's memory and
   secrets: within "a worker is one trust domain" (see Rust/Python integration), documented;
   teams that must be separated use separate queues and workers.
@@ -6851,7 +6905,7 @@ def export(day: date) -> Exported:
   the cleanup's in `Finished` (decision 229).
   Not chosen: reporting the task's result at once and cleaning up in parallel (a retry or
   downstream task could meet the previous attempt's resources, e.g. a lock not yet released).
-- **`cleanup_timeout`** per task (and in `TaskDefaults`), server default **5 minutes**. On
+- **`cleanup_timeout`** per task (and in `StepDefaults`), server default **5 minutes**. On
   timeout the agent kills the cleanup (SIGTERM, then SIGKILL): that cleanup attempt failed.
   Cleanup retries run on the same worker.
 - **Cancel:** the agent kills the task, then runs the cleanup (a cancelled export should cancel
@@ -6970,7 +7024,7 @@ with Dag("etl", trigger=DAILY):
   cleanup is empty (decision 260).
 - **Users:** a task **taking a resource's output** as data is a user (only a resource's output
   counts; not general inference from data flow); a task needing the resource but not its data
-  declares **`uses=[cluster]`** (also on operators and groups, not in `TaskDefaults`: too easy
+  declares **`uses=[cluster]`** (also on operators and groups, not in `StepDefaults`: too easy
   to make every task a user). The setup is implicitly a user. Users depend on the setup, so
   they never start before the resource exists.
 - **`uses=` adds a requirement edge** (see Task results and outcomes: edge kinds), which can
@@ -7076,7 +7130,7 @@ with Dag("etl", trigger=DAILY):
 
 - **Built (M4.8a; decisions 216-219, 221-226, 228-230):** cleanups on the same worker.
   `@task(cleanup=fn)` and `CommandOperator(cleanup=...)`, with `cleanup_timeout`,
-  `cleanup_retries`, `cleanup_retry_delay` (also in `TaskDefaults`), `cleanup_handles=` for a
+  `cleanup_retries`, `cleanup_retry_delay` (also in `StepDefaults`), `cleanup_handles=` for a
   command; `cleanup_handle(x)` and `schedr task-ctx cleanup add|list`; `TaskEnded` when the
   process ends, moving the instance to `cleaning_up`, and `Finished` with the task's result and
   the cleanup's. Small decisions: a cleanup is a task request with `cleanup` set, as a
@@ -7101,7 +7155,7 @@ records (a test calls the cleanup itself).
   timeout during the reads): cleanup result `not needed`. Not chosen: running it anyway (nothing
   to clean, and it would fail on the same missing secret).
 - **217. Cleanups retry 3 times, 30 s apart, by default:** `cleanup_retries`,
-  `cleanup_retry_delay`, on the task and in `TaskDefaults`. A stuck cleanup can hold its slot
+  `cleanup_retry_delay`, on the task and in `StepDefaults`. A stuck cleanup can hold its slot
   about 21 minutes. Not chosen: 0 (one network blip fails a run).
 - **218. A cleanup gets the connections its task declared,** as it gets its `secrets`: a
   command's variables and files stay until the cleanup ends. Not chosen: none (cancelling remote
@@ -7297,7 +7351,7 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   refuses a resource's cleanup (amended by 279: it stops one). As 264. Not chosen: cancel as for
   any task (a resource left behind).
   Claude's small calls with it: a cleanup ignores `max_active_tasks`, `max_active` and
-  `max_active_per_run` (`TaskDefaults` would hand it limits otherwise); `blocking` and
+  `max_active_per_run` (`StepDefaults` would hand it limits otherwise); `blocking` and
   `unschedulable_timeout` are in the DAG JSON's resource entry.
 - **278. A resource's cleanup without a `timeout` gets `[worker] resource_cleanup_timeout`, 30
   minutes by default** (public; the user picked 30 minutes over Claude's hour): its run doesn't cancel it (277) and ends only after it, keeping its
@@ -7841,7 +7895,7 @@ their output is a `ProcessResult` (a dataclass in the `schedr` package): `stdout
     useless).
   - stdout/stderr over the limit: **truncated** to the last part and marked truncated; a
     downstream `.stdout` / `.stderr` reference to it gets an error.
-- A DAG author can **raise the limit per task** (or in `TaskDefaults`) with **`max_output_size`**
+- A DAG author can **raise the limit per task** (or in `StepDefaults`) with **`max_output_size`**
   (bytes; constants `KiB`, `MiB` in `schedr`, e.g. `@task(max_output_size=8 * MiB)`), but
   **never above the server-wide maximum**. A task asking for more is rejected when the master
   validates the DAG (shown as a DAG error in the UI).
@@ -8184,7 +8238,7 @@ primary one.
   | `tags=`, `description=` | `tags=`, `description=` |
   | `max_active_tasks=` (default 16, `max_active_tasks_per_dag`) | `max_active_tasks=` (set explicitly to 16 when not given) |
   | `max_active_tis_per_dagrun=` / `max_active_tis_per_dag=` | `max_active_per_run=` / `max_active=` |
-  | `default_args={...}` | `defaults=TaskDefaults(...)` (keys translated the same way) |
+  | `default_args={...}` | `defaults=StepDefaults(...)` (keys translated the same way) |
   | `BashOperator(bash_command=...)` | `CommandOperator(command=...)` |
   | `PythonOperator(python_callable=f, op_args=..., op_kwargs=...)` | a `@task` wrapping `f` |
   | `execution_timeout=` | `timeout=` |
@@ -8340,7 +8394,7 @@ each case is described below.
 - **`TaskGroup` (context manager) and `@task_group`: supported.** `group_id.task_id` names,
   `prefix_group_id=False`, dependencies on a group (its roots and leaves, as in the native API:
   decision 56A), nested groups, per-group `default_args`
-  (→ group `TaskDefaults`); `tooltip`, `ui_color`, `ui_fgcolor` kept as metadata.
+  (→ group `StepDefaults`); `tooltip`, `ui_color`, `ui_fgcolor` kept as metadata.
 - **Mapped task groups** (`@task_group(...).expand(...)`): **not supported for now** (an
   error). The native API has none either; if added later, in both APIs together.
 

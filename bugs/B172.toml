@@ -10,7 +10,6 @@ details = '''
   stops the false errors only for files that never mention `schedr`; a file that does is still
   loaded alone by its path (`python/schedr/runner/parse.py`), not as part of its package. The word
   in a comment is enough.
-- **Workaround:** list the helper's package in `.schedrignore`; the error goes.
-- **A fix:** to discuss with the user: document the case and the workaround, or import such a file
-  as part of its package.
+- **Workaround:** absolute imports from the root. `.schedrignore` is no workaround: see B179.
+- **A fix:** Codex's investigation recommends ordinary package imports; for the user to decide.
 '''

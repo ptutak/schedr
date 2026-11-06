@@ -4,16 +4,14 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06): M4.10 committed; imports under investigation
+## State (2026-11-06): M4.11a1 committed; the loader is next
 
-- **M4.10, async task functions** (decisions 315-319): done, pushed. The next step is in `PLAN.md`;
-  check the commit's CI first. Not tested on purpose (the user's call): a real `mongodb+srv://` with
-  TLS; the CA-file fix has a fake-client unit test, and Codex's mocked-SRV script proved the bug.
-- **Codex on DAG loading** (B172, `/home/ptutak/Git/schedr-codex-imports`, branch codex/imports, env
-  schedr-codex-imports; `import_scenarios.py` there): report to verify and give the user, who
-  decides. B172 and its guide note are uncommitted; B170 still to discuss. Remove the worktree after.
-- `.schedrignore` is not a workaround for B172 (`dags test` then says `no DAG`); absolute imports
-  from the root work.
+- **M4.10** and **M4.11a1** (decisions 315-325) are in. Next: **the loader** (B172, the user's, 2026-11-06: all six of
+  Codex's recommendations, plus the fork server per file), **before M4.11a2**. Its report:
+  the session's scratchpad `codex-imports-report.md`; `import_scenarios.py` in `/home/ptutak/Git/schedr-codex-imports`
+  (also in the scratchpad). Its patch's Rust parts were never compiled. Removes B170, B172-B180; B181 in the same step.
+  Measure parse cost; test B175 on both start methods. Both colleagues review it.
+- Until about 12:50 on 2026-11-06, a review goes to Grok if Codex's 5 h window is above 95%.
 
 ## Before that (2026-11-06, morning): M4.9 finished
 

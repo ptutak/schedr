@@ -50,7 +50,7 @@ the master's `Continue`.
 
 Set `cleanup_anywhere=True` on `@task`, `CommandOperator`, `ScriptOperator`, `.override()`, or
 in
-`TaskDefaults` to let the master move a started attempt's cleanup when its worker is lost.
+`StepDefaults` to let the master move a started attempt's cleanup when its worker is lost.
 Use it when the cleanup can work with the registered handles and the other worker's code and
 resources. Do not use it for worker-local files or processes that another pod cannot access:
 idempotence alone does not make a cleanup safe on another pod.
@@ -113,7 +113,7 @@ to the cleanup too. Don't put secrets directly in the cleanup command.
 `cleanup_timeout` limits each cleanup try; when omitted, `[worker] cleanup_timeout` supplies it
 (five minutes by default; see [Timings](../03-guide/14-timings.md)). `cleanup_retries` is the
 number of retries after a failure (default three), and `cleanup_retry_delay` is the delay
-before each retry (default 30 seconds). Set them on the task or in `TaskDefaults`. A cancel
+before each retry (default 30 seconds). Set them on the task or in `StepDefaults`. A cancel
 does not stop a cleanup already running; its timeout still applies.
 
 The attempt holds its worker slot through cleanup, retries and their delays. Its instance is

@@ -18,11 +18,12 @@ import types
 import typing
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntEnum, StrEnum
 from typing import (
     TYPE_CHECKING,
     Any,
+    Final,
     Protocol,
     Self,
     TypeAliasType,
@@ -184,6 +185,57 @@ class DefaultOutcome(Outcome):
     SUCCESS = 0
 
 
+class TimedOut(Data, frozen=True):
+    """How a wait step ends when its ``timeout`` runs out: an expected problem, not a failure.
+
+    ``wait().on(TimedOut) >> alert()`` runs on it. A task taking a wait step's output says what
+    it expects: ``load(wait().on(Path))``, or a parameter ``Path | TimedOut``.
+    """
+
+
+class Waited[T](Protocol):
+    """What type checkers read a wait step's call as: its value ``T``, or ``TimedOut``.
+
+    At run time it is an ``Output``. It isn't ``T``, so a task taking ``T`` can't be given it
+    without saying what happens on a timeout (decision 324).
+    """
+
+    @overload
+    def on[U](self, kind: type[U], /) -> U: ...
+    @overload
+    def on[U, V](self, kind: type[U], other: type[V], /) -> U | V: ...
+    @overload
+    def on(self, kind: None, /) -> Done: ...
+    @overload
+    def on(self, kind: DefaultOutcome, /) -> T: ...
+    def on(self, *kinds: object) -> object:
+        """Narrows to its value's type, ``TimedOut``, or both (see ``Output.on``)."""
+        ...
+
+    def __rshift__(self, other: object, /) -> object:
+        """``self >> other``: ``other`` runs after it, when it has its value."""
+        ...
+
+    def __rrshift__(self, other: object, /) -> Self:
+        """``[a, b] >> self``: it runs after the tasks in the list."""
+        ...
+
+    def __lshift__(self, other: object, /) -> object:
+        """``self << other``: it runs after ``other``."""
+        ...
+
+    def __rlshift__(self, other: object, /) -> Self:
+        """``[a, b] << self``: the tasks in the list run after it, when it has its value."""
+        ...
+
+
+SUCCESS_NAME: Final = "SUCCESS"
+"""The name of ``DefaultOutcome.SUCCESS``."""
+
+TIMED_OUT_NAME: Final = "TimedOut"
+"""The name of the ``TimedOut`` outcome."""
+
+
 class RunIf(StrEnum):
     """When a task runs, from its upstream edges (its trigger rule).
 
@@ -211,6 +263,8 @@ class OutcomeSpec:
         exit_codes: Whether the names carry exit codes (a command's).
         codes: A ``schedr.toml``'s ``[outcomes]``, each name with its exit code; empty otherwise
             (there is no enum to route on: ``outcomes=`` gives one).
+        timed_out: A wait step without an outcome union: ``SUCCESS``, or ``TimedOut``.
+        value: Such a wait step's type, which ``.on(...)`` names ``SUCCESS`` by.
     """
 
     names: tuple[str, ...]
@@ -218,6 +272,8 @@ class OutcomeSpec:
     enum: type[Outcome] = DefaultOutcome
     exit_codes: bool = False
     codes: tuple[tuple[str, int], ...] = ()
+    timed_out: bool = False
+    value: object = None
 
     @property
     def is_union(self) -> bool:
@@ -241,7 +297,7 @@ DEFAULT = OutcomeSpec(names=("SUCCESS",), exit_codes=True)
 """A plain task's outcomes: ``SUCCESS`` (exit code 0 for a command)."""
 
 
-def _resolve_alias(annotation: object) -> object:
+def resolve_alias(annotation: object) -> object:
     """The type under ``type`` aliases and ``Annotated`` (B113: as serialization reads it)."""
     while True:
         if isinstance(annotation, TypeAliasType):
@@ -282,7 +338,7 @@ def outcome_enum(annotation: object) -> type[Outcome] | None:
     Returns:
         The enum (a subclass of ``Outcome``), or ``None``.
     """
-    annotation = _resolve_alias(annotation)
+    annotation = resolve_alias(annotation)
     if isinstance(annotation, type) and issubclass(annotation, Outcome):
         return annotation
     return None
@@ -304,13 +360,13 @@ def from_return_type(annotation: object, where: str) -> OutcomeSpec:
             (one a subclass of another, one class with different type parameters, two classes
             of one name), or one mixing an ``Outcome`` enum in.
     """
-    annotation = _resolve_alias(annotation)
+    annotation = resolve_alias(annotation)
     enum = outcome_enum(annotation)
     if enum is not None:
         return OutcomeSpec(names=tuple(m.name for m in enum), enum=enum)
     if get_origin(annotation) not in {Union, types.UnionType}:
         return DEFAULT
-    members = [_resolve_alias(m) for m in get_args(annotation)]
+    members = [resolve_alias(m) for m in get_args(annotation)]
     if any(outcome_enum(m) is not None for m in members):
         raise TypeError(
             f"{where}: a task's outcomes are either a union of classes or one Outcome enum, "
@@ -324,6 +380,33 @@ def from_return_type(annotation: object, where: str) -> OutcomeSpec:
         names=tuple(_member_name(m) for m in members),
         classes=tuple(typing.cast("type", m) for m in members),
     )
+
+
+def with_timed_out(spec: OutcomeSpec, annotation: object, where: str) -> OutcomeSpec:
+    """A wait step's outcomes: what its return type declares, and ``TimedOut``.
+
+    Args:
+        spec: The outcomes of its return type.
+        annotation: Its return type.
+        where: Where it is declared, for messages.
+
+    Returns:
+        The outcomes with ``TimedOut``.
+
+    Raises:
+        TypeError: For an ``Outcome`` enum (it couldn't hold ``TimedOut``), or a union that
+            already has ``TimedOut``.
+    """
+    if spec.enum is not DefaultOutcome:
+        raise TypeError(
+            f"{where}: a wait step can't return an `Outcome` enum, which has no `TimedOut`; "
+            "return a union of classes, or a value"
+        )
+    if TIMED_OUT_NAME in spec.names:
+        raise TypeError(f"{where}: `TimedOut` is schedr's to return: leave it out of the type")
+    if spec.is_union:
+        return replace(spec, names=(*spec.names, TIMED_OUT_NAME), classes=(*spec.classes, TimedOut))
+    return OutcomeSpec(names=(SUCCESS_NAME, TIMED_OUT_NAME), timed_out=True, value=annotation)
 
 
 def _hint_plain_classes(members: Sequence[object], where: str) -> None:
@@ -436,6 +519,15 @@ def names_for(spec: OutcomeSpec, kinds: Sequence[Any], where: str) -> tuple[str,
                     f"({', '.join(spec.names)})"
                 )
             names.append(_member_name(member))
+        elif spec.timed_out and kind is TimedOut:
+            names.append(TIMED_OUT_NAME)
+        elif spec.timed_out and _stands_for(kind) == _stands_for(spec.value):
+            names.append(SUCCESS_NAME)
+        elif spec.timed_out and not isinstance(kind, Outcome):
+            raise TypeError(
+                f"{where}.on({_label(kind)}): a wait step ends with its value, "
+                f"`{_label(spec.value)}`, or `TimedOut`"
+            )
         elif isinstance(kind, Outcome) and type(kind) is spec.enum and kind.name in spec.names:
             names.append(kind.name)
         elif spec.codes:
@@ -449,6 +541,15 @@ def names_for(spec: OutcomeSpec, kinds: Sequence[Any], where: str) -> tuple[str,
                 f"{spec.enum.__name__}'s ({', '.join(spec.names)})"
             )
     return tuple(dict.fromkeys(names))
+
+
+def _stands_for(kind: object) -> object:
+    """The type behind an alias, ``Annotated`` or ``NewType``; ``None`` is ``NoneType``."""
+    if kind is None:
+        return types.NoneType
+    resolved = resolve_alias(kind)
+    supertype = getattr(resolved, "__supertype__", None)
+    return resolved if supertype is None else _stands_for(supertype)
 
 
 def _label(kind: object) -> str:

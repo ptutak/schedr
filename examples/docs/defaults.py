@@ -2,12 +2,12 @@
 
 from datetime import timedelta
 
-from schedr import Dag, MiB, TaskDefaults, task
+from schedr import Dag, MiB, StepDefaults, task
 
 with Dag(
     "defaults_demo",
     trigger=None,
-    defaults=TaskDefaults(
+    defaults=StepDefaults(
         retries=2,
         retry_delay=timedelta(minutes=5),
         timeout=timedelta(minutes=30),

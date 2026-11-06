@@ -22,6 +22,7 @@ it would be for an ordinary call.
 |---|---|
 | A call of a task returning `T` | `T` |
 | A call of a task returning `None` | `Done`: nothing to pass, `>>` orders it |
+| A wait step returning `T` | `Waited[T]`: `.on(T)` and `.on(TimedOut)` narrow it; `.on(T, TimedOut)` is typed as `T \| TimedOut` |
 | A call of a `@branch` task | `Chosen`: `>>` orders it (`chosen >> [a, b]`) |
 | `.on(Found)` on an outcome union | `Found`; `.on(A, B)` is `A \| B`, `.on(None)` is `Done` |
 | A call of a task returning an `Outcome` enum | The enum; `.outcome` is the enum, `.on(member)` is `Done` |
@@ -36,6 +37,9 @@ it would be for an ordinary call.
 outcome class or enum, or a command's output. Between two values of builtin types
 (`rows >> counts`, a `list` and an `int`), it type-checks on neither side: write
 `chain(rows, counts)`.
+
+For wait-step values without `>>`, such as `str`, use `chain` to order after a narrowed
+value. See [Wait steps](18-sensors.md) for routing after a value or timeout.
 
 For an async task in a test, use `await task.fn(...)`: it is typed as a coroutine and
 retains the task's declarations. `await task()` runs outside a DAG but type checkers flag it,

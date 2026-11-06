@@ -1,6 +1,6 @@
 //! Tasks in DAG JSON: their kind, what they run, and their resolved settings.
 //!
-//! Settings are stored **resolved** (the Python API applies `TaskDefaults` and group
+//! Settings are stored **resolved** (the Python API applies `StepDefaults` and group
 //! defaults), so the master never needs to know where a value came from.
 
 use std::collections::BTreeMap;
@@ -162,6 +162,16 @@ impl CommandLine {
     }
 }
 
+/// How a wait step waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorMode {
+    /// `@sensor`: its function does the waiting.
+    Loop,
+    /// `@sensor.poke`: its function is called every `every_ms`.
+    Poke,
+}
+
 /// The kind of a task and what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -175,6 +185,21 @@ pub enum TaskKind {
         /// its outgoing edges are selection edges.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         branch: bool,
+    },
+    /// A wait step (`@sensor`, `@sensor.poke`): found by task ID, as a `Python` task, and ending
+    /// with its value or with the `TimedOut` outcome.
+    Sensor {
+        /// The arguments by parameter name.
+        #[serde(default)]
+        arguments: BTreeMap<String, Value>,
+        /// How it waits.
+        mode: SensorMode,
+        /// How often to call it (`Poke`), in milliseconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        every_ms: Option<u64>,
+        /// How long it waits, in milliseconds; `None`: the worker's `[sensors] default_max_wait`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_wait_ms: Option<u64>,
     },
     /// An inline command, run by the agent.
     Command {
@@ -401,7 +426,7 @@ impl Task {
     #[must_use]
     pub fn argument_references(&self) -> Vec<&Reference> {
         match &self.kind {
-            TaskKind::Python { arguments, .. } => {
+            TaskKind::Python { arguments, .. } | TaskKind::Sensor { arguments, .. } => {
                 arguments.values().flat_map(Value::references).collect()
             }
             TaskKind::Command { command, env, .. } => command

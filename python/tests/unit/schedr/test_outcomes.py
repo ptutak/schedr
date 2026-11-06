@@ -14,7 +14,7 @@ from schedr import (
     EmptyOperator,
     Outcome,
     RunIf,
-    TaskDefaults,
+    StepDefaults,
     TypingHint,
     on,
     task,
@@ -422,7 +422,7 @@ def test_outcomes_for_a_command_are_checked() -> None:
 
 
 def test_task_defaults_give_run_if() -> None:
-    with Dag("d", defaults=TaskDefaults(run_if=RunIf.ALL_SUCCEEDED)):
+    with Dag("d", defaults=StepDefaults(run_if=RunIf.ALL_SUCCEEDED)):
         count()
     assert only_dag().tasks[0].settings.run_if == "all_succeeded"
 

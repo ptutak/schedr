@@ -5,7 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import timedelta
 
-from schedr import CommandOperator, Dag, TaskDefaults, cleanup_handle, task
+from schedr import CommandOperator, Dag, StepDefaults, cleanup_handle, task
 
 
 @dataclass
@@ -45,7 +45,7 @@ def export(day: str) -> None:
     cleanup_handle(ExportJob(f"job-{day}"))
 
 
-with Dag("cleanup", defaults=TaskDefaults(cleanup_retries=1)):
+with Dag("cleanup", defaults=StepDefaults(cleanup_retries=1)):
     export("2026-11-04") >> CommandOperator(
         "publish",
         'id=$(date +%s); schedr task-ctx cleanup add Publication id="$id"',

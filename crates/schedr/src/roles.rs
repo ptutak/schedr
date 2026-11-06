@@ -100,6 +100,7 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         fork_preload: config.worker.fork_server_preload_timeout,
         cleanup: config.worker.cleanup_timeout,
         resource_cleanup: config.worker.resource_cleanup_timeout,
+        sensor_max_wait: config.sensors.default_max_wait,
         output_drain: config.timings.output_drain_timeout,
         fork_answer: config.timings.fork_answer_timeout,
         fork_backoff: schedr_agent::fork::ForkBackoff {

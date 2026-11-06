@@ -1,0 +1,13 @@
+title = "A preloaded library wins over a DAG root's module of the same name"
+severity = "critical"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = 'a local module named like a preloaded library (`colorsys`) is used under spawn, and the library under fork, silently'
+found = 2026-11-06
+suspected = false
+details = '''
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 98, on a real worker: `CUSTOM True` under spawn, `CUSTOM False` under a fork server preloading `colorsys`. `python/schedr/runner/fork_server.py:113`, `:246`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+'''

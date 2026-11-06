@@ -2,12 +2,12 @@
 
 from datetime import timedelta
 
-from schedr import CommandOperator, Cron, Dag, TaskDefaults, dag_ctx, task
+from schedr import CommandOperator, Cron, Dag, StepDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
     trigger=Cron("0 3 * * *", tz="Europe/Warsaw", start="2026-01-01"),
-    defaults=TaskDefaults(retries=2, retry_delay=timedelta(minutes=5)),
+    defaults=StepDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):
 
     @task

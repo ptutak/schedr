@@ -301,6 +301,24 @@ impl AttemptSpec {
             self.task.settings.timeout_ms =
                 Some(u64::try_from(timeouts.resource_cleanup.as_millis()).unwrap_or(u64::MAX));
         }
+        if let TaskKind::Sensor {
+            max_wait_ms: wait @ None,
+            ..
+        } = &mut self.task.kind
+        {
+            *wait = Some(u64::try_from(timeouts.sensor_max_wait.as_millis()).unwrap_or(u64::MAX));
+        }
+        if let TaskKind::Sensor {
+            max_wait_ms: Some(wait),
+            ..
+        } = self.task.kind
+        {
+            // It ends itself at its `max_wait`, with `TimedOut`. This is for one that ignores the
+            // cancel: past its grace, it is stopped like any task over its time.
+            let margin = self.cancel_grace.saturating_add(timeouts.runner_start);
+            let margin = u64::try_from(margin.as_millis()).unwrap_or(u64::MAX);
+            self.task.settings.timeout_ms = Some(wait.saturating_add(margin));
+        }
     }
 
     /// The task's timeout, if any.
@@ -319,6 +337,8 @@ pub struct WorkerTimeouts {
     pub fork_preload: Duration,
     /// One try of a cleanup that sets no timeout of its own (`cleanup_timeout`).
     pub cleanup: Duration,
+    /// How long a wait step without a `max_wait` waits (`[sensors] default_max_wait`).
+    pub sensor_max_wait: Duration,
     /// One try of a resource's cleanup that sets no `timeout` (`resource_cleanup_timeout`).
     pub resource_cleanup: Duration,
     /// How long a stopped process's output may take to reach its log (`output_drain_timeout`).
@@ -359,6 +379,7 @@ impl Default for WorkerTimeouts {
             runner_start: crate::launch::RUNNER_START_TIMEOUT,
             fork_preload: crate::fork::PRELOAD_TIMEOUT,
             cleanup: Duration::from_mins(5),
+            sensor_max_wait: Duration::from_hours(24),
             resource_cleanup: Duration::from_mins(30),
             output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
             fork_answer: crate::fork::FORK_ANSWER_TIMEOUT,
@@ -519,7 +540,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
     let log_file = setup.log_file(&spec.attempt_id);
     let max_output_size = usize::try_from(spec.task.settings.max_output_size).unwrap_or(usize::MAX);
     match &spec.task.kind {
-        TaskKind::Python { .. } => {
+        TaskKind::Python { .. } | TaskKind::Sensor { .. } => {
             let env = task_environment(&setup.agent_env, &setup.pass_env, &BTreeMap::new(), &vars)
                 .map_err(|e| failed(RENDER_FAILED, &e))?;
             Ok(Plan::Python {

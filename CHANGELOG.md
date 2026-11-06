@@ -100,7 +100,7 @@ standalone and workers, the base for your own image) and `ghcr.io/ptutak/schedr-
 What it has (milestones M1 to M4.5 in PLAN.md):
 
 - **DAGs in Python:** `Dag`, `@task`, `CommandOperator`, `EmptyOperator`; data flow between
-  tasks, `>>` and `chain`; `Cron`, `Every`, `Once` and presets; `TaskDefaults` (retries,
+  tasks, `>>` and `chain`; `Cron`, `Every`, `Once` and presets; `StepDefaults` (retries,
   timeouts, queues); typed outputs (dataclasses, Pydantic models with `schedr[pydantic]`),
   outcomes and routing on them (`.on(...)`, `@branch`), task groups, mapping
   (`.partial(...).expand(...)`), concurrency limits.

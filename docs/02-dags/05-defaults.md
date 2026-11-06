@@ -1,7 +1,8 @@
 # Defaults and retries
 
-`defaults` on the DAG applies to every task. A task's own arguments replace the fields they
-set; a field left unset keeps the DAG's value, then the built-in one.
+`defaults` on the DAG applies to its steps, that is its tasks and [wait steps](18-sensors.md). A
+step's own arguments replace the fields they set; a field left unset keeps the DAG's value, then the
+built-in one. `timeout` applies to tasks and `max_wait` to wait steps; the others apply to both.
 
 ```{literalinclude} ../../examples/docs/defaults.py
 :language: python
@@ -28,10 +29,10 @@ A duration is a `timedelta` of whole milliseconds. `retry_delay` must not be neg
 `timeout` must be positive. `retries` and `max_output_size` must not be negative, and
 `queue` must not be empty. `retries`, `retry_delay`, `timeout`, `queue` and
 `max_output_size` exist on `@task`, `.override(...)` and `CommandOperator`. `preload` and
-`fresh_process` exist on `@task`, `.override(...)` and `TaskDefaults(...)`; they are stored
+`fresh_process` exist on `@task`, `.override(...)` and `StepDefaults(...)`; they are stored
 on the task and matter for a Python task only. A command always starts a new process, and
 `CommandOperator` does not take them. `run_if` exists on all of those and on
-`EmptyOperator`. A task's own argument wins over the DAG's `defaults`. A `TaskDefaults`
+`EmptyOperator`. A task's own argument wins over the DAG's `defaults`. A `StepDefaults`
 value is still stored on every task, including a command and an `EmptyOperator`.
 `EmptyOperator` takes its ID and `run_if`; the master completes it, and no worker is
 involved.
@@ -64,14 +65,14 @@ with Dag("sync", max_active_tasks=20):
     fetch.expand(url=urls)
 ```
 
-`max_active` and `max_active_per_run` exist on `@task`, `.override(...)`, `TaskDefaults` and
+`max_active` and `max_active_per_run` exist on `@task`, `.override(...)`, `StepDefaults` and
 `CommandOperator`. `None`, the default, means no limit, and a value below 1 is a
 `ValueError` (the master refuses it too). Each instance of a mapped task counts toward all
 three. A task counts while its attempt is open: assigned and not yet started, running, or
 cleaning up. A task waiting for its retry, an `EmptyOperator` and a task the master
 completes never count. `max_active_per_run` set on a task that isn't mapped limits nothing,
 since it has one instance a run: `schedr dags check` warns (a `DagHint`), except for a
-value from `TaskDefaults`, which is meant for the mapped ones.
+value from `StepDefaults`, which is meant for the mapped ones.
 
 A ready task whose limit is reached stays `queued`, with the reason shown in the UI and the
 API: "waiting: `max_active_per_run` (10) reached". When a place frees, the oldest ready task

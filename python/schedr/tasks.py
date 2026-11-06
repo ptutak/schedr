@@ -34,6 +34,8 @@ from schedr._model import (
     RefValue,
     ScalarType,
     SecretRef,
+    TaskKind,
+    TypeDesc,
     Value,
 )
 from schedr._secrets import SecretsArg
@@ -194,13 +196,15 @@ class Output[T]:
 
         Raises:
             TypeError: On a task whose outcomes are a union of classes (the value's class
-                already says which), or on a part of the output.
+                already says which), on a wait step, or on a part of the output.
         """
         if self._path or self._on:
             raise TypeError(f"{self!r}.outcome: take it from the whole output")
         builder = _build.require_active("`.outcome`")
         _build.check_same_dag(self._dag, self._task)
         spec = builder.outcomes.get(self._task, _outcomes.DEFAULT)
+        if _outcomes.TIMED_OUT_NAME in spec.names:
+            raise TypeError(f"`{self._task}.outcome`: a wait step routes with `.on(TimedOut)`")
         if spec.codes and spec.names != _outcomes.DEFAULT.names:
             raise TypeError(
                 f"`{self._task}.outcome`: its `schedr.toml` declares {', '.join(spec.names)}; "
@@ -667,12 +671,8 @@ class TaskFunction[**P, R]:
         if expand is not None and self._branch:
             raise TypeError(f"{where}: a @branch task can't be mapped (`.expand()`)")
         hints = type_hints(self._fn, where)
-        # A branch's output is the IDs of the tasks it chose; its outcome SUCCESS.
-        spec = (
-            _outcomes.DEFAULT
-            if self._branch
-            else _outcomes.from_return_type(hints["return"], where)
-        )
+        annotation = self._output_hint(hints, where)
+        spec = self._outcome_spec(annotation, where)
         try:
             # An Outcome enum task's output is None: the member is its outcome.
             output_type = describe(
@@ -680,15 +680,11 @@ class TaskFunction[**P, R]:
                 if self._branch
                 else None
                 if spec.enum is not _outcomes.DefaultOutcome
-                else hints["return"]
+                else self._produced(annotation)
             )
-            outcome_types = (
-                {name: describe(cls) for name, cls in zip(spec.names, spec.classes, strict=True)}
-                if spec.is_union
-                else {}
-            )
+            outcome_types = self._outcome_types(spec, annotation, describe)
         except TypeModelError as e:
-            raise TypeModelError(f"{where}: return type `{label(hints['return'])}`: {e}") from None
+            raise TypeModelError(f"{where}: return type `{label(annotation)}`: {e}") from None
         upstream: list[_build.Upstream] = []
         fixed = self._with_secret_defaults(fixed, expand)
         # The None checks its arguments queue are its own: dropped if it isn't added (an ID
@@ -718,7 +714,7 @@ class TaskFunction[**P, R]:
                 wanted = _build.CleanupWanted(None, handles)
             builder.add_task(
                 task_id,
-                PythonKind(arguments, branch=self._branch),
+                self._kind(arguments),
                 output_type,
                 self._options,
                 spec,
@@ -736,6 +732,35 @@ class TaskFunction[**P, R]:
             builder.add_edge(up, task_id, EdgeKind.DATA, on)
         # A reference, which type checkers read as the value (see above).
         return Output[R](task_id, dag=builder)
+
+    def _output_hint(self, hints: Mapping[str, object], where: str) -> object:
+        """The type of its output, from its function's type hints."""
+        del where
+        return hints["return"]
+
+    def _produced(self, annotation: object) -> object:
+        """What it can store: what its function returns, for a plain task."""
+        return annotation
+
+    def _outcome_spec(self, annotation: object, where: str) -> _outcomes.OutcomeSpec:
+        """Its outcomes: a branch's output is the IDs of the tasks it chose, its outcome SUCCESS."""
+        return _outcomes.DEFAULT if self._branch else _outcomes.from_return_type(annotation, where)
+
+    def _outcome_types(
+        self,
+        spec: _outcomes.OutcomeSpec,
+        annotation: object,
+        describe: Callable[[object], TypeDesc],
+    ) -> dict[str, TypeDesc]:
+        """What ``.on()`` narrows to, by outcome: each class of an outcome union."""
+        del annotation
+        if not spec.is_union:
+            return {}
+        return {name: describe(cls) for name, cls in zip(spec.names, spec.classes, strict=True)}
+
+    def _kind(self, arguments: Mapping[str, Value]) -> TaskKind:
+        """Its kind in DAG JSON."""
+        return PythonKind(arguments, branch=self._branch)
 
     def _mapped(
         self,
@@ -870,6 +895,7 @@ class TaskFunction[**P, R]:
         cleanup_retry_delay: timedelta | None = None,
         cleanup_anywhere: bool | None = None,
         uses: Sequence[object] | None = None,
+        max_wait: timedelta | None = None,
     ) -> Self:
         """The same function as another task, e.g. ``load.override(task_id="load_eu")(...)``.
 
@@ -893,6 +919,7 @@ class TaskFunction[**P, R]:
             cleanup_retry_delay: Overrides the delay before each cleanup retry.
             cleanup_anywhere: Overrides whether the cleanup may run on another worker.
             uses: Overrides the resources it needs.
+            max_wait: Overrides how long a wait step waits; a wait step's only.
 
         Returns:
             A new task function; this one is unchanged.
@@ -917,6 +944,7 @@ class TaskFunction[**P, R]:
             cleanup_retry_delay=cleanup_retry_delay,
             cleanup_anywhere=cleanup_anywhere,
             uses=None if uses is None else tuple(uses),
+            max_wait=max_wait,
         )
         return self._again(
             task_id or self._task_id,
@@ -931,6 +959,8 @@ class TaskFunction[**P, R]:
         cleanup: Callable[..., object] | None,
     ) -> Self:
         """The same function with other settings (``.override()``)."""
+        if options.max_wait is not None:
+            raise TypeError(f"task `{task_id}`: only a wait step has `max_wait`")
         # A subclass gives its own: this is the case of a plain task.
         return typing.cast("Self", _made(self._fn, task_id, options, self._branch, cleanup))
 

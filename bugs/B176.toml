@@ -1,0 +1,13 @@
+title = "Importing other files of a root can change the DAG stored for a file"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = "files of a root are parsed in one process, so one file's change to a helper's state shapes another's DAG, and a task, importing alone, doesn't find what was stored"
+found = 2026-11-06
+suspected = false
+details = '''
+- **Found:** Codex's investigation of how DAG files load (B172). Scenarios are in its
+  `import_scenarios.py`; reproduced by Claude unless said otherwise.
+- **Evidence:** scenario 110, on a real worker: description `True`, tasks `extra` and `t`; the task prints `ENABLE False` and fails `TaskSetupError: DAG d has no Python task extra`. `python/schedr/runner/parse.py:220`.
+- **A fix:** part of the loader's design, for the user to decide (see B172).
+'''
