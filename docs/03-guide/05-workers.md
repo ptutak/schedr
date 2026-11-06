@@ -72,6 +72,10 @@ being killed stops the process it left behind. See [Secret
 storage](13-secrets.md#checking-a-deployments-connections)
 and [State and failures](07-failures.md#connection-jobs).
 
+`[worker] pass_env` passes the named environment variables to parsing and the fork server
+as well as tasks, so imports see the same settings. Secrets do not belong in `pass_env`:
+DAG code can read them during parsing, and parse tracebacks are not masked.
+
 ## Running a task
 
 For [built-in connections](../02-dags/14-connections.md#built-in-types), install the client
@@ -206,9 +210,9 @@ python = "/usr/bin/python3"
 
 To fork, that same name is a table. `path` is the executable. `preload` is the libraries
 the preloaded server imports, in that order. Preload a library that is slow to import and
-that most tasks use. Leave a library that starts a thread off the list: the preloaded
-server is then disabled until the worker process starts again, and the log's `reason`
-names the threads.
+that most tasks or DAG files use; the list speeds parsing too. Leave a library that starts a
+thread off the list: the preloaded server is then disabled until the worker process starts
+again, and the log's `reason` names the threads.
 
 ```toml
 [dags]
@@ -356,10 +360,9 @@ one does, the worker takes the process ID from `process_started` and sends the s
 never says hello fails the attempt with error kind `start_failed`. The worker does not
 spawn another process for it.
 
-A parse job forks one fresh child when the worker has fork servers: the preloaded server,
-then the bare one, then a new process. Each server that does not fork it counts in the
-same metric, with the same reasons. `schedr dags check` starts a new process and does not
-ask the fork servers.
+A parse job starts a fresh child for each file, asking the preloaded server, then the bare
+one, then spawning a process. Each server that does not fork it counts in the same metric,
+with the same reasons. `schedr dags check` also uses its configured fork servers when usable.
 
 A forked task or parse job that the worker drops before the process has ended is killed,
 as a spawned process is.
@@ -464,7 +467,8 @@ fires, it kills everything in the container, the agent included. So the agent en
 
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
   budget is `[worker] memory_budget`, else (limit − 10 %) ÷ slots. The parse runner gets the
-  same budget.
+  same budget for each file process. Parsing is separate from task slots, so concurrent
+  parsers can together exceed the pod limit; see [Parsing capacity](06-parsing.md#imports-and-parsing-capacity).
 - Every [second](14-timings.md#fixed-timings) the agent measures each task's process group
   (PSS, so shared pages aren't counted twice). A spawned task uses resident set size (RSS)
   for a process whose PSS can't be read. A forked task shares pages with its fork server, so

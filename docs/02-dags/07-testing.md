@@ -15,9 +15,13 @@ the [CLI reference](../_generated/04-reference/02-cli.md).
 ## `schedr dags check`
 
 `schedr dags check <path>` imports the DAG files with the runner and reports what they
-define. It starts a new process for that import. A worker's parse job can be forked; this
-command is not. A directory is scanned like a DAG root, honouring `.schedrignore`. A file
-is checked alone. A named special file is refused.
+define. Each file is imported in its own process, forked from the configured fork server when
+usable, or spawned otherwise. A directory is scanned like a DAG root, and everything is read
+from a copy filtered by `.schedrignore`, as workers do.
+A named file or folder inside a configured root keeps that root and can import the other
+configured roots; a named file excluded from the copy is an error. A folder check parses the
+whole root to check its connections, but reports only files in the selected folder. A single
+file is checked alone, without that root-wide connection check. A named special file is refused.
 
 ```
 ok     helpers.py: no DAGs
@@ -107,7 +111,8 @@ active worker). `message` is the same line the text output prints (`ok: ...` on 
 `schedr dags test <dag> [--for TIME] [--path PATH] [-p FIELD] [--params JSON]` runs one
 real run in a temporary standalone: its own SQLite database, and every task in its own
 process. `--path` is a file or a directory. A file is tested alone: only it is parsed,
-though it can import the modules beside it. Without `--path`, the command uses the
+though it can import the modules beside it. A folder inside a configured root parses all of
+that root, whose connections its tasks can use, as a worker does. Without `--path`, the command uses the
 configured DAG roots, or the current directory.
 
 The run is manual. `--for` is its `planned_for`; omitted, it is now. The window follows

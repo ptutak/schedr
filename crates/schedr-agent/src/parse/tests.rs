@@ -23,8 +23,8 @@ enum Step {
 /// Each started session plays the next script; the requests and stops are recorded.
 #[derive(Default)]
 struct FakeRunner {
-    scripts: VecDeque<Vec<Step>>,
-    requests: Vec<Vec<String>>,
+    scripts: Mutex<VecDeque<Vec<Step>>>,
+    requests: Mutex<Vec<Vec<String>>>,
     stops: Arc<Mutex<usize>>,
     answers: Arc<Mutex<Vec<AgentMessage>>>,
     refuse: bool,
@@ -66,14 +66,20 @@ impl ParseSession for FakeSession {
 impl ParseRunner for FakeRunner {
     type Session = FakeSession;
 
-    async fn start(&mut self, request: ParseRequest) -> Result<FakeSession, ChannelError> {
+    async fn start(&self, request: ParseRequest) -> Result<FakeSession, ChannelError> {
         tokio::task::yield_now().await; // a real runner starts a process here
         if self.refuse {
             return Err(ChannelError::Refused("versions differ".to_owned()));
         }
-        self.requests.push(request.files);
+        self.requests.lock().unwrap().push(request.files);
         Ok(FakeSession {
-            steps: self.scripts.pop_front().unwrap_or_default().into(),
+            steps: self
+                .scripts
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default()
+                .into(),
             stops: Arc::clone(&self.stops),
             answers: Arc::clone(&self.answers),
         })
@@ -83,9 +89,13 @@ impl ParseRunner for FakeRunner {
 impl FakeRunner {
     fn with(scripts: Vec<Vec<Step>>) -> Self {
         Self {
-            scripts: scripts.into(),
+            scripts: Mutex::new(scripts.into()),
             ..Self::default()
         }
+    }
+
+    fn requests(&self) -> Vec<Vec<String>> {
+        self.requests.lock().unwrap().clone()
     }
 
     fn stops(&self) -> usize {
@@ -148,23 +158,28 @@ fn ok(path: &str, dags: Vec<Dag>) -> ParsedFile {
 }
 
 #[tokio::test(start_paused = true)]
-async fn one_runner_parses_every_file() {
-    let mut runner = FakeRunner::with(vec![vec![
-        started("a.py"),
-        parsed("a.py", vec![dag("a", "a.py")]),
-        started("helpers.py"),
-        parsed("helpers.py", vec![]),
-        finished(),
-    ]]);
-    let files = parse_files(&mut runner, request(&["a.py", "helpers.py"]), PER_FILE)
+async fn each_file_has_a_runner_of_its_own() {
+    let runner = FakeRunner::with(vec![
+        vec![
+            started("a.py"),
+            parsed("a.py", vec![dag("a", "a.py")]),
+            finished(),
+        ],
+        vec![
+            started("helpers.py"),
+            parsed("helpers.py", vec![]),
+            finished(),
+        ],
+    ]);
+    let files = parse_files(&runner, request(&["a.py", "helpers.py"]), PER_FILE)
         .await
         .unwrap();
     assert_eq!(
         files,
         [ok("a.py", vec![dag("a", "a.py")]), ok("helpers.py", vec![])]
     );
-    assert_eq!(runner.requests, [["a.py", "helpers.py"]]);
-    assert_eq!(runner.stops(), 1);
+    assert_eq!(runner.requests(), [["a.py"], ["helpers.py"]]);
+    assert_eq!(runner.stops(), 2);
 }
 
 #[tokio::test(start_paused = true)]
@@ -174,7 +189,7 @@ async fn import_errors_are_kept_per_file() {
         message: "no module".to_owned(),
         traceback: "...".to_owned(),
     };
-    let mut runner = FakeRunner::with(vec![vec![
+    let runner = FakeRunner::with(vec![vec![
         started("a.py"),
         Step::Send(RunnerMessage::FileParsed {
             path: "a.py".to_owned(),
@@ -185,7 +200,7 @@ async fn import_errors_are_kept_per_file() {
         }),
         finished(),
     ]]);
-    let files = parse_files(&mut runner, request(&["a.py"]), PER_FILE)
+    let files = parse_files(&runner, request(&["a.py"]), PER_FILE)
         .await
         .unwrap();
     assert_eq!(files[0].error, Some(error));
@@ -193,16 +208,12 @@ async fn import_errors_are_kept_per_file() {
 
 #[tokio::test(start_paused = true)]
 async fn a_file_that_times_out_gets_an_error_and_a_new_runner_continues() {
-    let mut runner = FakeRunner::with(vec![
-        vec![
-            started("a.py"),
-            parsed("a.py", vec![]),
-            started("slow.py"),
-            Step::Hang,
-        ],
+    let runner = FakeRunner::with(vec![
+        vec![started("a.py"), parsed("a.py", vec![]), finished()],
+        vec![started("slow.py"), Step::Hang],
         vec![started("c.py"), parsed("c.py", vec![]), finished()],
     ]);
-    let files = parse_files(&mut runner, request(&["a.py", "slow.py", "c.py"]), PER_FILE)
+    let files = parse_files(&runner, request(&["a.py", "slow.py", "c.py"]), PER_FILE)
         .await
         .unwrap();
     assert_eq!(files.len(), 3);
@@ -215,20 +226,17 @@ async fn a_file_that_times_out_gets_an_error_and_a_new_runner_continues() {
         "importing the file took longer than the parse timeout of 10 s"
     );
     assert_eq!(files[2], ok("c.py", vec![]));
-    assert_eq!(
-        runner.requests,
-        [vec!["a.py", "slow.py", "c.py"], vec!["c.py"]]
-    );
-    assert_eq!(runner.stops(), 2);
+    assert_eq!(runner.requests(), [["a.py"], ["slow.py"], ["c.py"]]);
+    assert_eq!(runner.stops(), 3);
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_runner_that_dies_in_a_file_blames_that_file() {
-    let mut runner = FakeRunner::with(vec![
+    let runner = FakeRunner::with(vec![
         vec![started("crash.py"), Step::Close],
         vec![started("b.py"), parsed("b.py", vec![]), finished()],
     ]);
-    let files = parse_files(&mut runner, request(&["crash.py", "b.py"]), PER_FILE)
+    let files = parse_files(&runner, request(&["crash.py", "b.py"]), PER_FILE)
         .await
         .unwrap();
     let error = files[0].error.as_ref().unwrap();
@@ -241,77 +249,54 @@ async fn a_runner_that_dies_in_a_file_blames_that_file() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_file_over_the_memory_budget_after_others_is_tried_alone_before_it_is_blamed() {
-    let mut runner = FakeRunner::with(vec![
-        // `b.py` crosses the budget with `a.py` still imported...
-        vec![
-            started("a.py"),
-            parsed("a.py", vec![]),
-            started("b.py"),
-            Step::OverMemory,
-        ],
-        // ... is fine in a runner of its own, and `c.py` is over the budget by itself.
-        vec![
-            started("b.py"),
-            parsed("b.py", vec![]),
-            started("c.py"),
-            Step::OverMemory,
-        ],
-        vec![started("c.py"), Step::OverMemory],
+async fn a_file_over_the_memory_budget_is_blamed_and_the_next_goes_on() {
+    let runner = FakeRunner::with(vec![
+        vec![started("big.py"), Step::OverMemory],
+        vec![started("b.py"), parsed("b.py", vec![]), finished()],
     ]);
-    let files = parse_files(&mut runner, request(&["a.py", "b.py", "c.py"]), PER_FILE)
+    let files = parse_files(&runner, request(&["big.py", "b.py"]), PER_FILE)
         .await
         .unwrap();
-    assert_eq!(files[0], ok("a.py", vec![]));
-    assert_eq!(files[1], ok("b.py", vec![]));
-    let error = files[2].error.as_ref().unwrap();
+    let error = files[0].error.as_ref().unwrap();
     assert_eq!(
         error.message,
         "the runner stopped while importing the file (the runner exceeded memory budget 100 \
          MiB (130 MiB used))"
     );
-    assert_eq!(
-        runner.requests,
-        [
-            vec!["a.py", "b.py", "c.py"],
-            vec!["b.py", "c.py"],
-            vec!["c.py"]
-        ]
-    );
+    assert_eq!(files[1], ok("b.py", vec![]));
+    assert_eq!(runner.requests(), [["big.py"], ["b.py"]]);
 }
 
 #[tokio::test(start_paused = true)]
 async fn the_last_file_timing_out_needs_no_new_runner() {
-    let mut runner = FakeRunner::with(vec![vec![started("slow.py"), Step::Hang]]);
-    let files = parse_files(&mut runner, request(&["slow.py"]), PER_FILE)
+    let runner = FakeRunner::with(vec![vec![started("slow.py"), Step::Hang]]);
+    let files = parse_files(&runner, request(&["slow.py"]), PER_FILE)
         .await
         .unwrap();
     assert_eq!(
         files[0].error.as_ref().unwrap().exception,
         TIMEOUT_EXCEPTION
     );
-    assert_eq!(runner.requests.len(), 1);
+    assert_eq!(runner.requests().len(), 1);
 }
 
 #[tokio::test(start_paused = true)]
 async fn no_files_start_no_runner() {
-    let mut runner = FakeRunner::default();
+    let runner = FakeRunner::default();
     assert_eq!(
-        parse_files(&mut runner, request(&[]), PER_FILE)
-            .await
-            .unwrap(),
+        parse_files(&runner, request(&[]), PER_FILE).await.unwrap(),
         []
     );
-    assert_eq!(runner.requests, Vec::<Vec<String>>::new());
+    assert_eq!(runner.requests(), Vec::<Vec<String>>::new());
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_runner_that_cant_start_fails_the_job() {
-    let mut runner = FakeRunner {
+    let runner = FakeRunner {
         refuse: true,
         ..FakeRunner::default()
     };
-    let error = parse_files(&mut runner, request(&["a.py"]), PER_FILE)
+    let error = parse_files(&runner, request(&["a.py"]), PER_FILE)
         .await
         .unwrap_err();
     assert_eq!(
@@ -322,8 +307,8 @@ async fn a_runner_that_cant_start_fails_the_job() {
 
 #[tokio::test(start_paused = true)]
 async fn silence_outside_a_file_fails_the_job() {
-    let mut runner = FakeRunner::with(vec![vec![Step::Hang]]);
-    let error = parse_files(&mut runner, request(&["a.py"]), PER_FILE)
+    let runner = FakeRunner::with(vec![vec![Step::Hang]]);
+    let error = parse_files(&runner, request(&["a.py"]), PER_FILE)
         .await
         .unwrap_err();
     assert_eq!(
@@ -335,12 +320,12 @@ async fn silence_outside_a_file_fails_the_job() {
 
 #[tokio::test(start_paused = true)]
 async fn closing_outside_a_file_fails_the_job() {
-    let mut runner = FakeRunner::with(vec![vec![
+    let runner = FakeRunner::with(vec![vec![
         started("a.py"),
         parsed("a.py", vec![]),
         Step::Close,
     ]]);
-    let error = parse_files(&mut runner, request(&["a.py", "b.py"]), PER_FILE)
+    let error = parse_files(&runner, request(&["a.py", "b.py"]), PER_FILE)
         .await
         .unwrap_err();
     assert_eq!(
@@ -354,7 +339,7 @@ async fn messages_out_of_order_fail_the_job() {
     let cases = [
         (
             vec![started("b.py")],
-            "expected file_started for the next file, got file_started",
+            "expected file_started for its file, got file_started",
         ),
         (
             vec![started("a.py"), parsed("b.py", vec![])],
@@ -366,12 +351,12 @@ async fn messages_out_of_order_fail_the_job() {
         ),
         (
             vec![finished()],
-            "expected file_started for the next file, got parse_finished",
+            "expected file_started for its file, got parse_finished",
         ),
     ];
     for (script, message) in cases {
-        let mut runner = FakeRunner::with(vec![script]);
-        let error = parse_files(&mut runner, request(&["a.py"]), PER_FILE)
+        let runner = FakeRunner::with(vec![script]);
+        let error = parse_files(&runner, request(&["a.py"]), PER_FILE)
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), format!("parse runner: {message}"));
@@ -401,19 +386,25 @@ async fn a_script_operator_is_answered_from_the_script_roots_copy_and_its_root_r
             copy: copy.path().to_path_buf(),
         },
     )]);
-    let mut runner = FakeRunner::with(vec![vec![
-        started("a.py"),
-        asks("etl-scripts:sales/schedr.toml#clean"),
-        asks("/scripts/etl/sales/schedr.toml#gone"),
-        asks("elsewhere:x/schedr.toml#clean"),
-        parsed("a.py", vec![]),
-        started("b.py"),
-        parsed("b.py", vec![]),
-        finished(),
-    ]]);
-    let files = parse_files_with(&mut runner, request(&["a.py", "b.py"]), PER_FILE, &scripts)
-        .await
-        .unwrap();
+    let runner = FakeRunner::with(vec![
+        vec![
+            started("a.py"),
+            asks("etl-scripts:sales/schedr.toml#clean"),
+            asks("/scripts/etl/sales/schedr.toml#gone"),
+            asks("elsewhere:x/schedr.toml#clean"),
+            parsed("a.py", vec![]),
+            finished(),
+        ],
+        vec![started("b.py"), parsed("b.py", vec![]), finished()],
+    ]);
+    let files = parse_files_with(
+        &runner,
+        request(&["a.py", "b.py"]),
+        ParseLimits::one_at_a_time(PER_FILE),
+        &scripts,
+    )
+    .await
+    .unwrap();
     // Every root it named counts, found or not (decision 304); a later file starts afresh.
     assert_eq!(files[0].script_roots, ["elsewhere", "etl-scripts"]);
     assert_eq!(files[1].script_roots, Vec::<String>::new());
@@ -459,8 +450,8 @@ async fn a_files_questions_dont_restart_its_timeout() {
     }
     steps.push(parsed("a.py", vec![]));
     steps.push(finished());
-    let mut runner = FakeRunner::with(vec![steps]);
-    let files = parse_files(&mut runner, request(&["a.py"]), PER_FILE)
+    let runner = FakeRunner::with(vec![steps]);
+    let files = parse_files(&runner, request(&["a.py"]), PER_FILE)
         .await
         .unwrap();
     assert_eq!(
@@ -472,4 +463,135 @@ async fn a_files_questions_dont_restart_its_timeout() {
         ["nowhere"],
         "asked before it timed out"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn files_are_parsed_at_once_up_to_the_limit_and_keep_their_order() {
+    // Each file takes 10 s: three at once finish the six in 20 s, one at a time would take 60.
+    let names = ["a.py", "b.py", "c.py", "d.py", "e.py", "f.py"];
+    let runner = SlowRunner::default();
+    let files = names.map(ToOwned::to_owned).to_vec();
+    let begun = tokio::time::Instant::now();
+    let limits = ParseLimits {
+        per_file: PER_FILE * 2,
+        concurrency: 3,
+    };
+    let parsed = parse_files_with(
+        &runner,
+        ParseRequest {
+            root: "etl".to_owned(),
+            root_dir: "/dags".to_owned(),
+            files,
+            sys_path: Vec::new(),
+        },
+        limits,
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(begun.elapsed(), Duration::from_secs(20));
+    assert_eq!(
+        parsed.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+        names,
+    );
+    assert_eq!(*runner.most.lock().unwrap(), 3);
+}
+
+#[tokio::test]
+async fn a_failure_lets_the_files_being_parsed_finish_and_starts_no_more() {
+    // One runner breaks at once, outside its file; the other, begun with it, is still stopped
+    // when it ends, and `c.py` never starts.
+    let runner = FakeRunner::with(vec![
+        vec![Step::Close],
+        vec![Step::Wait(Duration::from_millis(50)), Step::Close],
+    ]);
+    let limits = ParseLimits {
+        per_file: PER_FILE,
+        concurrency: 2,
+    };
+    let error = parse_files_with(
+        &runner,
+        request(&["a.py", "b.py", "c.py"]),
+        limits,
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "parse runner: the runner closed the connection"
+    );
+    let mut started = runner.requests();
+    started.sort();
+    assert_eq!(started, [["a.py"], ["b.py"]]);
+    assert_eq!(runner.stops(), 2);
+}
+
+#[test]
+fn the_limit_is_capped_at_the_cores_and_never_zero() {
+    assert_eq!(capped(4, 16), 4);
+    assert_eq!(capped(4, 2), 2);
+    assert_eq!(capped(1, 16), 1);
+    assert_eq!(capped(0, 16), 1);
+}
+
+/// Each file takes 10 s; counts how many run at once.
+#[derive(Default)]
+struct SlowRunner {
+    running: Arc<Mutex<usize>>,
+    most: Arc<Mutex<usize>>,
+}
+
+struct SlowSession {
+    file: String,
+    step: usize,
+    running: Arc<Mutex<usize>>,
+}
+
+impl ParseRunner for SlowRunner {
+    type Session = SlowSession;
+
+    async fn start(&self, request: ParseRequest) -> Result<SlowSession, ChannelError> {
+        tokio::task::yield_now().await; // a real runner starts a process here
+        let mut running = self.running.lock().unwrap();
+        *running += 1;
+        let mut most = self.most.lock().unwrap();
+        *most = (*most).max(*running);
+        Ok(SlowSession {
+            file: request.files[0].clone(),
+            step: 0,
+            running: Arc::clone(&self.running),
+        })
+    }
+}
+
+impl ParseSession for SlowSession {
+    async fn next(&mut self) -> Result<RunnerMessage, ChannelError> {
+        self.step += 1;
+        match self.step {
+            1 => Ok(RunnerMessage::FileStarted {
+                path: self.file.clone(),
+            }),
+            2 => {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                Ok(RunnerMessage::FileParsed {
+                    path: self.file.clone(),
+                    dags: Vec::new(),
+                    connections: Vec::new(),
+                    error: None,
+                    warnings: Vec::new(),
+                })
+            }
+            _ => Ok(RunnerMessage::ParseFinished),
+        }
+    }
+
+    async fn send(&mut self, _message: AgentMessage) -> Result<(), ChannelError> {
+        tokio::task::yield_now().await; // a real session writes to the runner
+        Ok(())
+    }
+
+    async fn stop(self) {
+        *self.running.lock().unwrap() -= 1;
+    }
 }

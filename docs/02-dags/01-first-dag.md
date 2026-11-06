@@ -34,9 +34,9 @@ schedr dags check examples/sync.py
 schedr dags test sync_customers --path examples/sync.py --for 2026-10-15T01:00Z
 ```
 
-`dags check` imports the file and prints one line per file. It starts a new process; a
-worker's parse job can be forked instead. `dags test` runs one real run, each task in its
-own process, and prints the logs and a table.
+`dags check` imports each file in its own process and prints one line per file. It uses
+the configured fork server when usable, as a worker's parse does. `dags test` runs one real
+run, each task in its own process, and prints the logs and a table.
 [Testing a DAG](07-testing.md) is both commands, and how a pytest does the same thing.
 [Life of a run](../03-guide/03-life-of-a-run.md) is what that run does inside schedr.
 
@@ -83,11 +83,11 @@ def greeting():
 ```
 
 `sync.py` can import `greeting` with `from mylib.core import greeting` and use it in a
-task. The parser doesn't load `core.py` on its own, so its relative import works when the
-package is imported normally.
+task. Relative imports resolve in the helper's package, including when the parser loads a
+helper that mentions `schedr` on its own.
 
 A file defining DAGs must mention `schedr`. Usually `from schedr import Dag` does that.
 If it gets `Dag` through a company module instead, add `import schedr` or a `# schedr`
 comment. Otherwise the file is skipped and its DAGs count as removed. A DAG belongs to
-the file calling `Dag(...)`; a function in a helper file creating a DAG defines nothing
-for now, even when called from a DAG file.
+the file running its `with Dag(...)` block. A helper function can build a DAG for the file
+that calls it.

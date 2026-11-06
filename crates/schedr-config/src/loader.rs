@@ -94,6 +94,9 @@ pub enum ConfigError {
     /// `[mapping] max_instances` is zero.
     #[error("[mapping] max_instances must be at least 1")]
     NoInstances,
+    /// `[dags] parse_concurrency` is zero.
+    #[error("[dags] parse_concurrency must be at least 1")]
+    NoParseConcurrency,
     /// The DAG interpreter isn't an `[interpreters]` entry.
     #[error("[dags] interpreter `{name}` is not defined in [interpreters] (defined: {defined})")]
     UnknownInterpreter {
@@ -183,6 +186,9 @@ pub fn load(
         return Err(ConfigError::MessageSize {
             size: format_size(config.master.grpc_max_message_size),
         });
+    }
+    if config.dags.parse_concurrency == 0 {
+        return Err(ConfigError::NoParseConcurrency);
     }
     if config.mapping.max_instances == 0 {
         return Err(ConfigError::NoInstances);

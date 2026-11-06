@@ -30,6 +30,7 @@ use schedr_agent::memory::{
     MIN_BUDGET, MemoryWatch, Reserve, WORKER_RESERVE, budget, cgroup_limit, show_size,
 };
 use schedr_agent::metrics::AgentMetrics;
+use schedr_agent::parse::ParseLimits;
 use schedr_agent::retention::{LogRetention, sweep_logs};
 use schedr_api::auth::Auth;
 use schedr_api::logs::HttpLogSource;
@@ -318,7 +319,7 @@ pub fn agent_settings(
 }
 
 /// The DAG interpreter's fork server settings, when `fork_server = true`.
-fn fork_config(config: &Config) -> Option<ForkConfig> {
+pub(crate) fn fork_config(config: &Config) -> Option<ForkConfig> {
     let interpreter = config.interpreters.get(&config.dags.interpreter)?;
     interpreter.fork_server.then(|| ForkConfig {
         interpreter: config.dags.interpreter.clone(),
@@ -933,7 +934,7 @@ pub struct WorkerLinks {
 /// retention beside it until then.
 pub async fn run_worker(
     agent: AgentSettings,
-    parse_file_timeout: Duration,
+    parse: ParseLimits,
     links: WorkerLinks,
     observed: Observed<'_, AgentMetrics>,
     stop: watch::Receiver<u32>,
@@ -977,7 +978,7 @@ pub async fn run_worker(
     ));
     let executor = ProcessExecutor {
         setup: agent.setup.clone(),
-        parse_file_timeout,
+        parse,
         metrics: observed.metrics.clone(),
         drain_terminate_period: agent.drain.terminate_period,
         forks: ForkServers::for_worker(&agent.setup, &observed.metrics.fork),
@@ -1697,7 +1698,10 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     };
     Box::pin(run_worker(
         agent,
-        config.dags.parse_file_timeout,
+        ParseLimits::configured(
+            config.dags.parse_file_timeout,
+            config.dags.parse_concurrency,
+        ),
         links,
         observed,
         stop,

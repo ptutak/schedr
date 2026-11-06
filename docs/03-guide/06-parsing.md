@@ -13,7 +13,7 @@ flowchart LR
     files -- "scan every 30 s,<br/>settle 5 s, hash" --> agent["agent"]
     agent -- "CodeVersionChanged<br/>(root, hash)" --> master["master"]
     master -- "AssignParse<br/>(one worker)" --> agent2["agent"]
-    agent2 -- "import matching .py files<br/>in a runner" --> runner["python runner"]
+    agent2 -- "import each matching .py file<br/>in its own runner" --> runner["python runners"]
     agent2 -- "UploadParseResult<br/>(DAG JSON, import errors)" --> master
     master -- "store DAG versions" --> db[("database")]
 ```
@@ -27,20 +27,18 @@ flowchart LR
 3. **Report.** `CodeVersionChanged(root, hash)` goes to the master. Every worker reports on its
    own, but the master creates **one parse job per (root, hash, schedr version)**.
 4. **Parse.** One worker that reported the hash gets `AssignParse`. Its parse slot (one per
-   worker, separate from task slots) runs a Python runner that imports `.py` files whose
-   bytes contain `schedr` from the copy of that hash. Other files are still copied and
-   hashed. A file that can't be read or isn't regular is left to the parser to report.
-   If no `.py` file qualifies, the worker starts no runner for that root. When the worker
-   has fork servers, that runner is a fresh child for the job: the preloaded
-   server, then the bare one, then a new process. `schedr dags check` starts a new process
-   and does not ask the fork servers. The native API only *records* DAGs while a file is
-   imported; no task runs. A file's DAGs are those defined in it: one defined in a module it
-   imports belongs to that module's own file. A file that takes longer than `[dags] parse_file_timeout` (60 s)
-   is an import error, and so is a runner that died while importing it. Neither holds the
-   file's DAGs: the file is parsed again ([Parsed again](#parsed-again)). The runner also
-   returns the Python warnings each import raised (a `TypingHint` for an outcome class type
-   checkers can't narrow, for example). Only `schedr dags check` shows them; the agent
-   doesn't upload them.
+   worker, separate from task slots) imports each `.py` file whose bytes contain `schedr`
+   from the copy of that hash, each in a process of its own. Other files are still copied and
+   hashed. A file that can't be read or isn't regular is left to the parser to report. If no
+   `.py` file qualifies, the worker starts no runner. With fork servers, each runner is a
+   fresh child of the preloaded server, then the bare one if needed, falling back to a new
+   process; without them it is spawned. `schedr dags check` follows the same choice. The native
+   API only *records* DAGs while a file is imported; no task runs. A file that takes longer
+   than `[dags] parse_file_timeout` (60 s) is an import error, and so is a runner that died
+   while importing it. Neither holds the file's DAGs: the file is parsed again
+   ([Parsed again](#parsed-again)). The runner also returns the Python warnings each import
+   raised (a `TypingHint` for an outcome class type checkers can't narrow, for example).
+   Only `schedr dags check` shows them; the agent doesn't upload them.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file.
    The master validates them and stores a new DAG version for each DAG that changed. A new
    DAG is stored **paused**. The upload is a stream: a header, then one message per file, so
@@ -52,6 +50,10 @@ flowchart LR
    was imported does too
    ([When a file fails to import](#when-a-file-fails-to-import)). The
    upload runs beside the worker's session, so heartbeats go on while it is sent.
+
+A DAG root's reported hash folds in the content hashes of the other DAG roots on its
+`sys.path`: a change in any of them reparses this root too. Workers serving a root must agree
+on the roots. With only one DAG root, there is no other DAG root hash to fold in.
 
 A DAG root's reported hash also folds in the hashes of the script roots used by its last
 parse. Editing a used script root therefore causes the DAG root to be parsed again; a root
@@ -75,6 +77,33 @@ worker that reported the same hash. Parse jobs live only in the master's memory.
 master restart, workers report their hashes again and the jobs are created again. A
 stored parse is parsed again only when a file of it failed transiently
 ([Parsed again](#parsed-again)).
+
+## Imports and parsing capacity
+
+Files import by ordinary Python names: `team/sync.py` is `team.sync`, and parent packages'
+`__init__.py` files run. Dots in file or folder names are refused. A helper's relative
+imports resolve in its own package even when the parser imports the helper itself. Each
+file's top level runs once per process, so a helper imported by several files can run several
+times. A DAG belongs to the file running its `with Dag(...)` block: a helper function can
+build a DAG for its caller, while a DAG built at an imported module's top level belongs to
+that module. A file defining a DAG must mention `schedr` to be selected for parsing.
+
+A top-level name in two DAG roots, or shared by a DAG root and a library, fails the file
+using that name and files importing it; other files and tasks continue. Libraries importing
+that name still get the library. A folder of modules without `__init__.py` clashes only with
+another root or a namespace library of the same name; an ordinary library wins over it.
+Rename a conflicting name or exclude it with `.schedrignore`.
+
+`[dags] parse_concurrency` limits files parsed at once, default 4, capped at the cores the
+agent may use; `1` parses one at a time. It also applies to `dags check`. Parsing does not
+use task slots, and each process has its own memory budget. With the default two task slots,
+four parsers with heavy imports can exceed a pod's memory limit even if none exceeds its own
+budget; the kernel may kill the agent. On a tight pod, set `parse_concurrency = 1` or use a
+preload list. In stress scenario 22 (12 cores, 1,000 files importing `pydantic`), spawn took
+585 s at concurrency 1 and 143 s at 4; fork took 42 s and 14 s. Four at once peaked at
+about 60 MiB more than one at a time when spawned, and 20 MiB more when forked; a library
+heavier than `pydantic` raises this. On that system a fresh process cost about
+0.4 s per file to start parsing, a fork about 5 ms; imports not preloaded still run per file.
 
 ## Connections in a parse
 
@@ -182,8 +211,9 @@ place) leaves running jobs alone. So:
 - **Other DAG roots are on `sys.path` at their copies.** A parse also sees the other DAG
   roots and script roots at their copies. These copies are kept while the parse runs; task
   copies are kept while the task or its recovered cleanup runs.
-- **Only the hashed files are in it.** What `.schedrignore` excludes is not, so read such a
-  file by its full path under the configured root.
+- **Only the hashed files are in it.** What `.schedrignore` excludes is not shipped to
+  parsing or tasks, so read such a file by its full path under the configured root.
+  `dags check` uses the same filtered copy, so ignored files cannot be imported there either.
 - A copy is removed once newer code replaced it and nothing running uses it: one or two per
   root at a time.
 

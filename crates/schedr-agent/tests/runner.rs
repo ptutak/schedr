@@ -106,7 +106,7 @@ async fn parse_watched(
     per_file: Duration,
     memory: schedr_agent::memory::MemoryWatch,
 ) -> Vec<ParsedFile> {
-    let mut runner = ProcessParseRunner {
+    let runner = ProcessParseRunner {
         process: runner("parse", dir, &dir.join("parse.log")),
         memory,
         kills: prometheus_client::metrics::counter::Counter::default(),
@@ -124,7 +124,7 @@ async fn parse_watched(
         files,
         sys_path: vec![dir.to_string_lossy().into_owned()],
     };
-    parse_files(&mut runner, request, per_file).await.unwrap()
+    parse_files(&runner, request, per_file).await.unwrap()
 }
 
 #[tokio::test]
@@ -595,7 +595,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
             timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
             fork_server: None,
         },
-        parse_file_timeout: Duration::from_secs(5),
+        parse: schedr_agent::parse::ParseLimits::one_at_a_time(Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
         drain_terminate_period: Duration::from_secs(1),
         forks: None,

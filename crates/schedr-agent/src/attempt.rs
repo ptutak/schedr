@@ -547,6 +547,8 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                 process: ProcessSpec {
                     program: setup.python.clone(),
                     args: vec![
+                        // Not the working directory first: a root's file can't shadow what the runner imports (B178).
+                        "-P".to_owned(),
                         "-m".to_owned(),
                         "schedr.runner".to_owned(),
                         "task".to_owned(),

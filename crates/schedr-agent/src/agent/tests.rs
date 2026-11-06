@@ -1996,7 +1996,7 @@ fn command_needing_secret(
     .unwrap();
     let executor = ProcessExecutor {
         setup: setup.clone(),
-        parse_file_timeout: std::time::Duration::from_secs(5),
+        parse: crate::parse::ParseLimits::one_at_a_time(std::time::Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
         drain_terminate_period: std::time::Duration::from_secs(1),
         forks: None,
@@ -2234,7 +2234,7 @@ async fn command_with_connection(
     };
     let executor = ProcessExecutor {
         setup: setup.clone(),
-        parse_file_timeout: Duration::from_secs(5),
+        parse: crate::parse::ParseLimits::one_at_a_time(Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
         drain_terminate_period: Duration::from_secs(1),
         forks: None,
@@ -2532,7 +2532,7 @@ fn attempt_with_timed_cleanup(
     };
     let executor = ProcessExecutor {
         setup: setup.clone(),
-        parse_file_timeout: Duration::from_secs(5),
+        parse: crate::parse::ParseLimits::one_at_a_time(Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
         drain_terminate_period: Duration::from_secs(1),
         forks: None,

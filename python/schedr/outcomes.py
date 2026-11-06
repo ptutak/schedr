@@ -317,7 +317,7 @@ def _is_outcome_member(member: object) -> bool:
     if dataclasses.is_dataclass(target):
         return True
     return any(
-        base.__module__.startswith("pydantic") and base.__name__ == "BaseModel"
+        base.__module__.startswith("pydantic.") and base.__name__ == "BaseModel"
         for base in target.__mro__
     )
 

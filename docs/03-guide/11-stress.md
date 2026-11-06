@@ -63,6 +63,7 @@ are in the report.
 | 19 | Slow links: 200 ms per chunk on every worker, then 1.5 s on one | no failures |
 | 20 | Worker frozen with `SIGSTOP` past the lease and cleanup move, then thawed | its tasks continue while its agent is frozen |
 | 21 | Seeded random cuts, slow links and freezes under load | recovery under a reproducible fault schedule |
+| 22 | Parsing many files (`22_parse_many_files`): `schedr dags check` of files importing a shared helper and a slow library, spawned and forked, one at a time and four at once | seconds and peak memory for each; every file parsed |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything

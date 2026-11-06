@@ -6,9 +6,9 @@ fills it in. The master never sees a value, and the DAG JSON holds only the name
 the values live (schedr's own database or Vault) is the deployment's choice
 ([Secret storage](../03-guide/13-secrets.md)). The same DAG runs against either.
 
-```{literalinclude} ../../examples/docs/secrets.py
+```{literalinclude} ../../examples/docs/secrets_demo.py
 :language: python
-:caption: examples/docs/secrets.py
+:caption: examples/docs/secrets_demo.py
 ```
 
 ## Naming a secret

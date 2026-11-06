@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use schedr_agent::launch::ProcessParseRunner;
-use schedr_agent::parse::parse_files_with;
+use schedr_agent::parse::{ParseLimits, parse_files_with};
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::scan::scan;
 use schedr_api::views::{AttemptList, LocationView, RunDetail, WorkerView};
@@ -52,9 +52,78 @@ pub struct LocalRoot {
     pub files: Vec<String>,
     /// The `.py` files a parse skips: they don't mention `schedr` (decision 305).
     pub skipped: Vec<String>,
+    /// The root's other `.py` files, when a file or folder of it was named.
+    pub unselected: Vec<String>,
 }
 
 impl LocalRoot {
+    /// The same files, read from a copy of the root.
+    fn clone_at(&self, dir: &Path) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            ..self.clone()
+        }
+    }
+
+    /// The root for `path` within a configured root, if it is in one: the file or folder is
+    /// selected, the root's boundary and names kept, so package imports work as on a worker
+    /// (decision 331).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::BadArgument`] for an unreadable path, one in several roots, or one a
+    /// worker doesn't get (`.schedrignore`).
+    pub fn at_in(path: &Path, config: &Config) -> Result<Self, AppError> {
+        let bad = |e: std::io::Error| AppError::BadArgument(format!("{}: {e}", path.display()));
+        let given = std::path::absolute(path).map_err(bad)?;
+        let resolved = path.canonicalize().map_err(bad)?;
+        let matches: Vec<_> = config
+            .dag_roots
+            .iter()
+            .filter_map(|configured| {
+                let base = configured.path.canonicalize().ok()?;
+                let given_base = std::path::absolute(&configured.path).ok()?;
+                let relative = given
+                    .strip_prefix(given_base)
+                    .ok()
+                    .filter(|relative| {
+                        !relative
+                            .components()
+                            .any(|c| matches!(c, std::path::Component::ParentDir))
+                    })
+                    .or_else(|| resolved.strip_prefix(&base).ok())?;
+                let selected = base.join(relative);
+                Some((configured, base, selected))
+            })
+            .collect();
+        if matches.len() > 1 {
+            return Err(AppError::BadArgument(format!(
+                "{} is inside several DAG roots; configure one root that holds it",
+                path.display()
+            )));
+        }
+        let Some((configured, base, selected)) = matches.first() else {
+            return Self::at(path);
+        };
+        let mut root = Self::at(base)?;
+        root.name.clone_from(&configured.name);
+        let (files, unselected) = std::mem::take(&mut root.files)
+            .into_iter()
+            .partition(|relative| base.join(relative).starts_with(selected));
+        root.files = files;
+        root.unselected = unselected;
+        root.skipped
+            .retain(|relative| base.join(relative).starts_with(selected));
+        if selected.is_file() && root.files.is_empty() && root.skipped.is_empty() {
+            return Err(AppError::BadArgument(format!(
+                "{} is left out of DAG root `{}` (`.schedrignore`), so workers don't get it",
+                path.display(),
+                configured.name
+            )));
+        }
+        Ok(root)
+    }
+
     /// The root for `path`: a directory scanned like a DAG root (`.schedrignore` honoured), or
     /// a single file.
     ///
@@ -92,6 +161,7 @@ impl LocalRoot {
             dir,
             files,
             skipped,
+            unselected: Vec::new(),
         })
     }
 }
@@ -186,8 +256,15 @@ async fn check_path(
         };
         return finish_check(&files, version, client.json, out);
     }
-    let root = LocalRoot::at(path)?;
-    let mut files = check_root(&root, config, env).await?;
+    let root = LocalRoot::at_in(path, config)?;
+    // A folder's connections can be defined anywhere in its root: all is parsed, as a worker
+    // does, and what was named is reported.
+    let mut whole = root.clone();
+    if path.is_dir() {
+        whole.files.extend(whole.unselected.iter().cloned());
+        whole.files.sort();
+    }
+    let mut files = check_root(&whole, config, env).await?;
     // Not in `--json`'s output: it stays what a parse reports.
     if !client.json {
         for file in &root.skipped {
@@ -201,6 +278,7 @@ async fn check_path(
     if path.is_dir() {
         // A whole root: what its tasks declare in `connections=` is checked against its own.
         files = schedr_master::validate::connection_problems(files);
+        files.retain(|file| !root.unselected.contains(&file.path));
     }
     let version = match against {
         Some(url) => Some(worker_versions(url, client, env).await),
@@ -327,6 +405,27 @@ pub async fn check_root(
     config: &Config,
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<ParsedFile>, AppError> {
+    // What a worker gets: `.schedrignore`'s files aren't there to import (decision 330, B179).
+    let mut copies = BTreeMap::from([(root.name.clone(), CheckCopy::new(&root.name, &root.dir)?)]);
+    let configured = |path: &Path| path.canonicalize().ok().as_deref() == Some(root.dir.as_path());
+    if config.dag_roots.iter().any(|other| configured(&other.path)) {
+        for other in config
+            .dag_roots
+            .iter()
+            .filter(|other| !configured(&other.path))
+        {
+            copies.insert(
+                other.name.clone(),
+                CheckCopy::new(&other.name, &other.path)?,
+            );
+        }
+    }
+    let sys_path: Vec<String> = copies
+        .values()
+        .map(|copy| copy.dir.to_string_lossy().into_owned())
+        .collect();
+    let in_copy = root.clone_at(&copies[&root.name].dir);
+    let root = &in_copy;
     let python = config
         .interpreters
         .get(&config.dags.interpreter)
@@ -338,17 +437,23 @@ pub async fn check_root(
             ))
         })?;
     let log_file = std::env::temp_dir().join(format!("schedr-check-{}.log", std::process::id()));
-    let mut runner = ProcessParseRunner {
+    let check_forks = CheckForks::start(config, env).await?;
+    let runner = ProcessParseRunner {
         process: ProcessSpec {
             program: python,
             args: vec![
+                // Not the working directory first: a root's file can't shadow what the runner imports (B178).
+                "-P".to_owned(),
                 "-m".to_owned(),
                 "schedr.runner".to_owned(),
                 "parse".to_owned(),
             ],
             env: env
                 .iter()
-                .filter(|(name, _)| schedr_agent::env::is_allowed(name))
+                // As a task's (`PYTHONPATH` changes what imports find).
+                .filter(|(name, _)| {
+                    schedr_agent::env::is_allowed(name) || config.worker.pass_env.contains(name)
+                })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             working_dir: root.dir.clone(),
@@ -360,14 +465,14 @@ pub async fn check_root(
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
         kills: prometheus_client::metrics::counter::Counter::default(),
-        // `schedr dags check` parses once: a fork server would only add its start.
-        forks: None,
+        // As tasks will run (decision 326): forked from the configured fork server.
+        forks: check_forks.as_ref().map(|started| started.servers.clone()),
     };
     let request = ParseRequest {
         root: root.name.clone(),
         root_dir: root.dir.to_string_lossy().into_owned(),
         files: root.files.clone(),
-        sys_path: vec![root.dir.to_string_lossy().into_owned()],
+        sys_path,
     };
     // A `ScriptOperator` is looked up in the configured script roots, read in place.
     let scripts = config
@@ -381,13 +486,12 @@ pub async fn check_root(
             (script.name.clone(), at)
         })
         .collect();
-    let parsed = parse_files_with(
-        &mut runner,
-        request,
+    let limits = ParseLimits::configured(
         config.dags.parse_file_timeout,
-        &scripts,
-    )
-    .await;
+        config.dags.parse_concurrency,
+    );
+    let parsed = parse_files_with(&runner, request, limits, &scripts).await;
+    drop(check_forks);
     let output = std::fs::read_to_string(&log_file).unwrap_or_default();
     let _ = std::fs::remove_file(&log_file);
     let parsed = parsed.map_err(|e| {
@@ -825,14 +929,28 @@ async fn test_dag(
 ) -> Result<(), AppError> {
     let roots: Vec<Root> = match path {
         Some(path) => {
-            // A file is tested alone: only it is parsed, its siblings importable (B118).
-            let only = path.is_file().then_some(());
-            let root = LocalRoot::at(path)?;
-            vec![Root {
+            // A named file alone is parsed, with the root it is in (B118, decision 331); a
+            // folder, all of its root, whose connections it can use, as on a worker. The other
+            // configured roots are importable.
+            let root = LocalRoot::at_in(path, config)?;
+            let name = root.name.clone();
+            let mut roots = vec![Root {
+                only: path.is_file().then_some(root.files),
                 name: root.name,
-                path: root.dir,
-                only: only.map(|()| root.files),
-            }]
+                path: root.dir.clone(),
+            }];
+            if config
+                .dag_roots
+                .iter()
+                .any(|known| known.path.canonicalize().ok().as_ref() == Some(&root.dir))
+            {
+                for known in config.dag_roots.iter().filter(|known| known.name != name) {
+                    let mut library = known.clone();
+                    library.only = Some(Vec::new());
+                    roots.push(library);
+                }
+            }
+            roots
         }
         None if !config.dag_roots.is_empty() => config.dag_roots.clone(),
         None => {
@@ -906,8 +1024,88 @@ async fn test_dag(
     if let Ok(Err(error)) = server.await {
         tracing::warn!(%error, "local schedr stopped with an error");
     }
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = schedr_agent::scan::remove_tree(&data);
     result
+}
+
+/// The DAG interpreter's fork servers for one check, when it has `fork_server = true`: their logs
+/// go to a folder removed when dropped.
+struct CheckForks {
+    servers: schedr_agent::fork::ForkServers,
+    logs: PathBuf,
+}
+
+impl CheckForks {
+    /// Started and settled: a check runs as tasks will, so it doesn't spawn because the server
+    /// is still starting. What is wrong with one (a preload failing) is logged as a warning.
+    async fn start(
+        config: &Config,
+        env: &BTreeMap<String, String>,
+    ) -> Result<Option<Self>, AppError> {
+        if crate::roles::fork_config(config).is_none() {
+            return Ok(None);
+        }
+        let logs = std::env::temp_dir().join(format!("schedr-check-{}", uuid::Uuid::now_v7()));
+        let settings = crate::roles::agent_settings(
+            config,
+            env,
+            &logs,
+            schedr_agent::memory::STANDALONE_RESERVE,
+        )?;
+        std::fs::create_dir_all(&settings.setup.log_dir)
+            .map_err(|e| AppError::BadArgument(format!("{}: {e}", logs.display())))?;
+        let metrics = schedr_agent::fork::ForkMetrics::default();
+        let Some(servers) = schedr_agent::fork::ForkServers::for_worker(&settings.setup, &metrics)
+        else {
+            return Ok(None);
+        };
+        for warning in servers
+            .settled(config.worker.fork_server_preload_timeout)
+            .await
+        {
+            tracing::warn!(%warning, "fork server");
+        }
+        Ok(Some(Self { servers, logs }))
+    }
+}
+
+impl Drop for CheckForks {
+    fn drop(&mut self) {
+        let _ = schedr_agent::scan::remove_tree(&self.logs);
+    }
+}
+
+/// A root's read-only copy for one check, as a worker's: removed when dropped.
+struct CheckCopy {
+    store: PathBuf,
+    dir: PathBuf,
+}
+
+impl CheckCopy {
+    fn new(name: &str, root: &Path) -> Result<Self, AppError> {
+        let bad = |e: schedr_agent::scan::ScanError| {
+            AppError::BadArgument(format!("can't scan DAG root `{name}`: {e}"))
+        };
+        let store = std::env::temp_dir().join(format!("schedr-check-{}", uuid::Uuid::now_v7()));
+        let before = scan(root).map_err(bad)?;
+        let captured = schedr_agent::scan::capture(&before, &store).map_err(bad)?;
+        let copy = Self {
+            store,
+            dir: captured.dir,
+        };
+        if scan(root).map_err(bad)? != before {
+            return Err(AppError::BadArgument(
+                "the DAG files changed while being copied; run the check again".to_owned(),
+            ));
+        }
+        Ok(copy)
+    }
+}
+
+impl Drop for CheckCopy {
+    fn drop(&mut self) {
+        let _ = schedr_agent::scan::remove_tree(&self.store);
+    }
 }
 
 /// Fails at once if a root can't be scanned and copied as its agent will (B103): the agent

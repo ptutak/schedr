@@ -384,6 +384,9 @@ pub struct DagsSection {
     )]
     #[schemars(with = "DurationText")]
     pub parse_file_timeout: Duration,
+    /// How many DAG files are parsed at once, each in a process of its own. Capped at the cores
+    /// the agent may use; 1 parses them one at a time.
+    pub parse_concurrency: u32,
 }
 
 impl Default for DagsSection {
@@ -397,6 +400,7 @@ impl Default for DagsSection {
             poll_interval: Duration::from_secs(30),
             settle_time: Duration::from_secs(5),
             parse_file_timeout: Duration::from_secs(60),
+            parse_concurrency: 4,
         }
     }
 }

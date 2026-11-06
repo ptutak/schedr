@@ -21,7 +21,7 @@ FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
 # The values a docs DAG's secrets are given (`schedr dags test --secret`).
 SECRETS = {
     "async_tasks.py": {"etl/api#token": "s3cret-api-token"},
-    "secrets.py": {
+    "secrets_demo.py": {
         "etl/db#password": "s3cret-db-password",
         "etl/api#token": "s3cret-api-token",
         "tenants/acme#api_key": "s3cret-acme-key",
@@ -70,7 +70,7 @@ def test_doc_example_runs(path: Path) -> None:
         if path.name == "async_tasks.py":
             # Ten pages, each the base URL's length and its number.
             assert result.tasks["fetch_all"].output == 10 * len("https://api.example.com") + 45
-        if path.name == "secrets.py":
+        if path.name == "secrets_demo.py":
             # Masked when stored: a secret's value never reaches the database.
             assert result.tasks["connect"].output == "postgresql://etl:****@db.example.com/etl"
             assert result.tasks["call_api"].output == "acme: a key of 15 characters, a token of 16"

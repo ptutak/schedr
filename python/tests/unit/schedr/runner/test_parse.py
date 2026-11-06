@@ -94,14 +94,6 @@ def restore_sys_path() -> Iterator[None]:
     sys.path[:] = saved
 
 
-def test_module_names_are_valid_stable_and_distinct() -> None:
-    name = module_name("etl-repo", "team_a/sync.py")
-    assert name.isidentifier()
-    assert name.startswith("_schedr_dag_etl_repo_team_a_sync_")
-    assert name == module_name("etl-repo", "team_a/sync.py")
-    assert name != module_name("etl_repo", "team_a/sync.py")
-
-
 def test_import_dag_file_returns_the_dags_located_in_their_root(root: Path) -> None:
     (dag,) = import_dag_file("etl", root, "team_a/sync.py")
     assert dag.id == "sync"

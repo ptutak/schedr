@@ -161,6 +161,9 @@ def register(
         params_class: The class its run parameters are declared with.
         cleanups: The ``cleanup=`` function of each Python task with one, by task ID.
     """
+    if parse_root_active() and filename is not None and root_location(filename) is None:
+        # From outside the root: it can't be this root's, even in a root named `local` (B177).
+        return
     entry = DefinedDag(dag, dict(functions or {}), params_class, dict(cleanups or {}))
     _DEFINED.append(entry)
     if filename is not None:

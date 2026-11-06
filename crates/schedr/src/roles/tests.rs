@@ -212,7 +212,7 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
     };
     let worker = Box::pin(run_worker(
         agent,
-        Duration::from_secs(1),
+        schedr_agent::parse::ParseLimits::one_at_a_time(Duration::from_secs(1)),
         links,
         observed,
         stopped,

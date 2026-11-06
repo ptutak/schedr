@@ -67,7 +67,9 @@ impl Local {
         let root = dir.path().join("etl");
         std::fs::create_dir_all(&root).unwrap();
         for (name, text) in files {
-            std::fs::write(root.join(name), text).unwrap();
+            let file = root.join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
         }
         let python = std::env::var("SCHEDR_TEST_PYTHON").expect(
             "SCHEDR_TEST_PYTHON: the Python with schedr installed (`make test-integration` sets it)",
@@ -689,7 +691,7 @@ const SECRET_ARGS: [&str; 4] = [
 #[test]
 fn secrets_are_read_by_commands_and_python_tasks_and_masked() {
     let dag = secrets_dag();
-    let local = Local::new(&[("secrets.py", dag.as_str())]);
+    let local = Local::new(&[("secret_reads.py", dag.as_str())]);
     let mut args = vec!["--json"];
     args.extend(SECRET_ARGS);
     let (code, out, err) = local.test("ok", &args);
@@ -720,7 +722,7 @@ fn secrets_are_read_by_commands_and_python_tasks_and_masked() {
 #[test]
 fn a_secret_read_that_fails_fails_the_task_with_its_kind() {
     let dag = secrets_dag();
-    let local = Local::new(&[("secrets.py", dag.as_str())]);
+    let local = Local::new(&[("secret_reads.py", dag.as_str())]);
     for (dag, kind) in [
         ("denied", "secret_denied"),
         ("not_found", "secret_not_found"),
@@ -869,4 +871,242 @@ fn a_handle_for_a_cleanup_without_a_handles_parameter_fails_the_attempt() {
     let (code, stdout, stderr) = local.test("other_handle", &[]);
     assert_ne!(code, 0, "{stdout}\n{stderr}");
     assert!(stdout.contains("takes no handles"), "{stdout}");
+}
+
+/// As [`Local::new`], with more configuration after the interpreter.
+fn local_with(files: &[(&str, &str)], interpreter: &str) -> Local {
+    let local = Local::new(files);
+    let python = std::env::var("SCHEDR_TEST_PYTHON").unwrap();
+    std::fs::write(
+        local.dir.path().join("config.toml"),
+        interpreter.replace("@python@", &python),
+    )
+    .unwrap();
+    local
+}
+
+const FORKED: &str = "[interpreters.python]\npath = \"@python@\"\nfork_server = true\n\
+                      preload = [\"wave\"]\n";
+
+/// A DAG file that says whether it was forked from a server preloading `wave`.
+const WAVE_LOADED: &str = r#"import sys
+
+from schedr import Dag
+
+assert "wave" in sys.modules, "not forked from the preloaded server"
+
+with Dag("preloaded"):
+    pass
+"#;
+
+#[test]
+fn check_forks_from_the_configured_fork_server() {
+    // A check runs as tasks will (decision 326).
+    let local = local_with(&[("preloaded.py", WAVE_LOADED)], FORKED);
+    let (code, out, err) = local.check(&[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("1 DAG(s), 0 error(s)"), "{out}");
+}
+
+#[test]
+fn check_spawns_without_a_fork_server() {
+    let local = Local::new(&[("preloaded.py", WAVE_LOADED)]);
+    let (code, out, _) = local.check(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("not forked from the preloaded server"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_root_module_named_as_a_preloaded_library_is_a_clear_error_on_both_start_methods() {
+    // B175: forked, the preloaded library would win silently over the root's own module.
+    let files = [
+        ("wave.py", "CUSTOM = True\n"),
+        (
+            "main.py",
+            "import wave\n\nfrom schedr import Dag\n\nwith Dag(\"m\", description=str(wave)):\n    pass\n",
+        ),
+    ];
+    for local in [Local::new(&files), local_with(&files, FORKED)] {
+        let (code, out, err) = local.check(&[]);
+        assert_eq!(code, 1, "{out}\n{err}");
+        assert!(out.contains("main.py"), "{out}");
+        assert!(out.contains("`wave`"), "{out}");
+        assert!(out.contains("0 DAG(s), 1 error(s)"), "{out}");
+    }
+}
+
+#[test]
+fn a_file_named_as_what_the_runner_imports_cant_stop_it() {
+    // B178: the root isn't first on `sys.path` while the runner starts.
+    let local = Local::new(&[
+        ("sync.py", GOOD),
+        ("typing.py", "raise RuntimeError('mine')\n"),
+    ]);
+    let (code, out, err) = local.check(&[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ok     sync.py: sync"), "{out}");
+}
+
+#[test]
+fn check_cant_import_what_a_worker_doesnt_get() {
+    // B179: `.schedrignore`'s files aren't in a worker's copy, so not in a check's either.
+    let local = Local::new(&[
+        (".schedrignore", "ignored/\n"),
+        ("ignored/__init__.py", "X = 1\n"),
+        (
+            "main.py",
+            "import ignored\n\nfrom schedr import Dag\n\nwith Dag(\"m\"):\n    pass\n",
+        ),
+    ]);
+    let (code, out, _) = local.check(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("No module named 'ignored'"), "{out}");
+}
+
+#[test]
+fn check_and_test_leave_no_copies_behind() {
+    // B181: the copies are read-only; removing them takes more than `remove_dir_all`.
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let temp = local.dir.path().join("temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let env = [("TMPDIR", path_str(&temp))];
+    let root = local.root();
+    let (code, out, err) = local.dags_with(&["check", path_str(&root)], &env);
+    assert_eq!(code, 0, "{out}\n{err}");
+    let (code, out, err) = local.dags_with(&["test", "sync", "--path", path_str(&root)], &env);
+    assert_eq!(code, 0, "{out}\n{err}");
+    let left: Vec<_> = std::fs::read_dir(&temp)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, Vec::<std::ffi::OsString>::new());
+}
+
+#[test]
+fn files_parsed_at_once_are_reported_in_order_with_a_slow_one_timed_out_alone() {
+    let local = local_with(
+        &[
+            (
+                "a.py",
+                "from schedr import Dag\n\nwith Dag(\"a\"):\n    pass\n",
+            ),
+            ("b.py", "# schedr\nimport time\n\ntime.sleep(60)\n"),
+            (
+                "c.py",
+                "from schedr import Dag\n\nwith Dag(\"c\"):\n    pass\n",
+            ),
+        ],
+        "[interpreters]\npython = \"@python@\"\n[dags]\nparse_concurrency = 3\nparse_file_timeout = \"3s\"\n",
+    );
+    let (code, out, _) = local.check(&[]);
+    assert_eq!(code, 1, "{out}");
+    let a = out.find("a.py").unwrap();
+    let b = out.find("b.py").unwrap();
+    let c = out.find("c.py").unwrap();
+    assert!(a < b && b < c, "{out}");
+    assert!(out.contains("2 DAG(s), 1 error(s)"), "{out}");
+}
+
+const CONNECTION_LIB: &str = r"from schedr import connection
+
+@connection()
+def warehouse():
+    yield 1
+";
+
+const USES_CONNECTION: &str = r#"from lib.connections import warehouse
+
+from schedr import Dag, task
+
+
+@task(connections=[warehouse])
+def load() -> None:
+    pass
+
+
+with Dag("sync"):
+    load()
+"#;
+
+#[test]
+fn a_folder_of_a_root_sees_the_connections_of_the_whole_root() {
+    let local = Local::new(&[
+        ("lib/connections.py", CONNECTION_LIB),
+        ("team/job.py", USES_CONNECTION),
+    ]);
+    let root = local.root();
+    let env = [("SCHEDR_DAG_PATH", path_str(&root))];
+    let folder = root.join("team");
+    let (code, out, err) = local.dags_with(&["check", path_str(&root)], &env);
+    assert_eq!(code, 0, "{out}\n{err}");
+    let (code, out, err) = local.dags_with(&["check", path_str(&folder)], &env);
+    assert_eq!(code, 0, "{out}\n{err}");
+    // Only what was named is reported.
+    assert!(out.contains("1 file(s), 1 DAG(s), 0 error(s)"), "{out}");
+    assert!(!out.contains("lib/connections.py"), "{out}");
+    let (code, out, err) = local.dags_with(&["test", "sync", "--path", path_str(&folder)], &env);
+    assert_eq!(code, 0, "{out}\n{err}");
+}
+
+#[test]
+fn pass_env_reaches_what_parses_and_runs_on_both_start_methods() {
+    // A `PYTHONPATH` in `pass_env` gave a spawned task one module, and a parse and a forked task
+    // another.
+    let dag = r#"import extra_helper
+
+from schedr import Dag, task
+
+
+@task
+def uses() -> None:
+    assert extra_helper.VALUE == "extra"
+
+
+with Dag("uses_extra"):
+    uses()
+"#;
+    let extra = TempDir::new().unwrap();
+    std::fs::write(extra.path().join("extra_helper.py"), "VALUE = \"extra\"\n").unwrap();
+    let env = [("PYTHONPATH", path_str(extra.path()))];
+    for interpreter in [
+        "[interpreters]\npython = \"@python@\"\n[worker]\npass_env = [\"PYTHONPATH\"]\n",
+        "[interpreters.python]\npath = \"@python@\"\nfork_server = true\npreload = [\"wave\"]\n\
+         [worker]\npass_env = [\"PYTHONPATH\"]\n",
+    ] {
+        let local = local_with(&[("uses.py", dag)], interpreter);
+        let root = local.root();
+        let (code, out, err) = local.dags_with(&["check", path_str(&root)], &env);
+        assert_eq!(code, 0, "{interpreter}{out}\n{err}");
+        let (code, out, err) =
+            local.dags_with(&["test", "uses_extra", "--path", path_str(&root)], &env);
+        assert_eq!(code, 0, "{interpreter}{out}\n{err}");
+    }
+}
+
+#[test]
+fn a_failing_preload_leaves_nothing_behind_either() {
+    // Its server keeps retrying: not once its check has ended, which would make the folder anew.
+    let dag = "import time\n\nfrom schedr import Dag, task\n\n\n@task\ndef slow() -> None:\n    \
+               time.sleep(3)\n\n\nwith Dag(\"slow\"):\n    slow()\n";
+    let local = local_with(
+        &[("slow.py", dag)],
+        "[interpreters.python]\npath = \"@python@\"\nfork_server = true\n\
+         preload = [\"no_such_library\"]\n",
+    );
+    let temp = local.dir.path().join("temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let root = local.root();
+    let (code, out, err) = local.dags_with(
+        &["test", "slow", "--path", path_str(&root)],
+        &[("TMPDIR", path_str(&temp))],
+    );
+    assert_eq!(code, 0, "{out}\n{err}");
+    let left: Vec<_> = std::fs::read_dir(&temp)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, Vec::<std::ffi::OsString>::new());
 }

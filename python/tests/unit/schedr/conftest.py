@@ -1,12 +1,15 @@
 """Shared fixtures: schema validation of produced JSON, and a clean DAG registry per test."""
 
 import json
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
+
+from schedr.runner import sources
 
 SCHEMA_DIR = Path(__file__).parents[4] / "schema"
 SCHEMA_PATH = SCHEMA_DIR / "dag.schema.json"
@@ -59,3 +62,19 @@ def clean_registry() -> Iterator[None]:
     registry.take_defined()
     yield
     registry.take_defined()
+
+
+@pytest.fixture(autouse=True)
+def _dag_files_are_forgotten() -> Iterator[None]:
+    """A process imports one set of DAG roots, as a runner does: each test is such a process."""
+    modules = dict(sys.modules)
+    path = list(sys.path)
+    roots = set(sources._ROOTS)
+    yield
+    for name in set(sys.modules) - set(modules):
+        del sys.modules[name]
+    sys.path[:] = path
+    sources._ROOTS.clear()
+    sources._ROOTS.update(roots)
+    sources.search_for_clashes([], [])
+    sys.path_importer_cache.clear()

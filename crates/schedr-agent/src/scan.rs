@@ -377,6 +377,27 @@ fn set_dirs_read_only(dir: &Path) -> io::Result<()> {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555))
 }
 
+/// Removes a folder that may hold read-only copies of code (a local run's, B181).
+///
+/// # Errors
+///
+/// The I/O error of making it writable or of removing it.
+pub fn remove_tree(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fn writable(dir: &Path) -> io::Result<()> {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))?;
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                writable(&entry.path())?;
+            }
+        }
+        Ok(())
+    }
+    writable(dir)?;
+    std::fs::remove_dir_all(dir)
+}
+
 /// Removes a copy made by [`capture`], read-only as it is: first renamed to a temporary name,
 /// so a removal cut short never leaves a partial copy under its hash's name (which a later
 /// capture of that hash would use as it is).

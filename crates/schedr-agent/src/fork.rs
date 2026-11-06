@@ -353,14 +353,17 @@ impl ForkServers {
         let process = ProcessSpec {
             program: setup.python.clone(),
             args: vec![
+                // Not the working directory first: a root's file can't shadow what the runner imports (B178).
+                "-P".to_owned(),
                 "-m".to_owned(),
                 "schedr.runner".to_owned(),
                 "fork_server".to_owned(),
             ],
+            // As a task's: a forked one keeps the `sys.path` this `PYTHONPATH` gives.
             env: setup
                 .agent_env
                 .iter()
-                .filter(|(name, _)| crate::env::is_allowed(name))
+                .filter(|(name, _)| crate::env::is_allowed(name) || setup.pass_env.contains(name))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             working_dir: setup.log_dir.clone(),
@@ -435,6 +438,36 @@ impl ForkServers {
             warnings: watching,
             answer_timeout: setup.timeouts.fork_answer,
         }
+    }
+
+    /// Waits until each server takes requests or something is wrong with one, for at most
+    /// `within`, and says what is wrong: for a one-off that wants to fork, where a worker lets
+    /// its first tasks spawn.
+    pub async fn settled(&self, within: Duration) -> Vec<String> {
+        let mut warnings = self.warnings();
+        let _ = tokio::time::timeout(within, async {
+            loop {
+                if !warnings.borrow_and_update().is_empty() || self.all_settled().await {
+                    return;
+                }
+                let _ = tokio::time::timeout(Duration::from_millis(20), warnings.changed()).await;
+            }
+        })
+        .await;
+        warnings
+            .borrow()
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect()
+    }
+
+    async fn all_settled(&self) -> bool {
+        for server in self.servers.iter() {
+            if matches!(*server.state.lock().await, State::Down) {
+                return false;
+            }
+        }
+        true
     }
 
     /// The worker's warnings about these fork servers (one per disabled server), as they
@@ -579,6 +612,10 @@ async fn keep_up(
         };
         backoff = spacing.next(backoff, up_for);
         tokio::time::sleep(backoff).await;
+        // No one wants it any more: starting it would make its folders anew.
+        if servers.strong_count() == 0 {
+            return;
+        }
     }
 }
 

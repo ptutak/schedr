@@ -85,7 +85,7 @@ fn everything_listens_on_localhost_with_the_configured_settings() {
     );
     assert_eq!(setup.agent.setup.roots["etl"], PathBuf::from("/dags/etl"));
     assert_eq!(setup.agent.setup.python, PathBuf::from("/usr/bin/python3"));
-    assert_eq!(setup.parse_file_timeout, Duration::from_secs(60));
+    assert_eq!(setup.parse.per_file, Duration::from_secs(60));
     configured.worker.id = Some("worker-1".to_owned());
     assert_eq!(
         plan(&configured, &env(&[("HOME", "/h")]))

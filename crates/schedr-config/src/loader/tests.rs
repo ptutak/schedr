@@ -719,6 +719,19 @@ fn the_new_timeouts_are_read_from_a_file() {
     );
 }
 
+#[test]
+fn no_files_parsed_at_once_is_refused() {
+    assert_eq!(
+        load(
+            Some(file("[dags]\nparse_concurrency = 0\n")),
+            &env(&[]),
+            &[]
+        )
+        .unwrap_err(),
+        ConfigError::NoParseConcurrency
+    );
+}
+
 #[rstest]
 #[case("[dags]\npoll_interval = \"0s\"\n", "[dags] poll_interval")]
 #[case("[dags]\nparse_file_timeout = \"0s\"\n", "[dags] parse_file_timeout")]

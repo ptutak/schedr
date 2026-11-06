@@ -286,8 +286,8 @@ fn warn_unidentified(pid: i32, error: &std::io::Error) {
 pub struct ProcessExecutor {
     /// How tasks run here.
     pub setup: WorkerSetup,
-    /// How long one file may take to import.
-    pub parse_file_timeout: Duration,
+    /// How long one file may take to import, and how many are parsed at once.
+    pub parse: crate::parse::ParseLimits,
     /// Where the watchdog's kills are counted.
     pub metrics: AgentMetrics,
     /// From an interrupted task's SIGTERM to its SIGKILL (`[worker] drain_terminate_period`).
@@ -812,10 +812,12 @@ impl ProcessExecutor {
             return Ok(Vec::new());
         }
         let _ = tokio::fs::create_dir_all(&self.setup.log_dir).await;
-        let mut runner = ProcessParseRunner {
+        let runner = ProcessParseRunner {
             process: ProcessSpec {
                 program: self.setup.python.clone(),
                 args: vec![
+                    // Not the working directory first: a root's file can't shadow what the runner imports (B178).
+                    "-P".to_owned(),
                     "-m".to_owned(),
                     "schedr.runner".to_owned(),
                     "parse".to_owned(),
@@ -824,7 +826,10 @@ impl ProcessExecutor {
                     .setup
                     .agent_env
                     .iter()
-                    .filter(|(name, _)| crate::env::is_allowed(name))
+                    // As a task's (`PYTHONPATH` changes what imports find).
+                    .filter(|(name, _)| {
+                        crate::env::is_allowed(name) || self.setup.pass_env.contains(name)
+                    })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 working_dir: dir.clone(),
@@ -846,7 +851,7 @@ impl ProcessExecutor {
             root_dir: dir.to_string_lossy().into_owned(),
             files,
         };
-        crate::parse::parse_files_with(&mut runner, request, self.parse_file_timeout, &code.scripts)
+        crate::parse::parse_files_with(&runner, request, self.parse, &code.scripts)
             .await
             .map_err(|e| e.to_string())
     }
@@ -1726,22 +1731,34 @@ impl<E: Executor> Agent<E> {
     /// DAG root it can't offer (decision 303). A script root's is its content hash marked as
     /// a script root's, so a parse of the same files as a DAG root never counts for it
     /// (B167); a DAG root's folds in the reported hashes of the script roots it uses (decision
-    /// 301), so a change to one of them is new code for it.
+    /// 301) and the content hashes of the other DAG roots, all on its `sys.path` (decision 327,
+    /// B173), so a change to any of them is new code for it.
     fn reported_hash(&self, name: &str) -> Option<String> {
         let content = self.watchers.get(name)?.hash()?;
         let scripts = &self.settings.setup.script_roots;
         if scripts.contains_key(name) {
             return Some(fold_hash("script", content, &[]));
         }
-        let Some(used) = self.uses.get(name).filter(|used| !used.is_empty()) else {
-            return Some(content.to_owned());
-        };
-        let mut folded = Vec::with_capacity(used.len());
-        for script in used {
+        let mut folded = Vec::new();
+        // Their content hashes, not their reported ones: DAG roots can import each other.
+        for other in self
+            .settings
+            .setup
+            .roots
+            .keys()
+            .filter(|other| *other != name)
+        {
+            let hash = self.watchers.get(other)?.hash()?;
+            folded.push((format!("dag:{other}"), hash.to_owned()));
+        }
+        for script in self.uses.get(name).into_iter().flatten() {
             if !scripts.contains_key(script) {
                 return None;
             }
             folded.push((script.clone(), self.reported_hash(script)?));
+        }
+        if folded.is_empty() {
+            return Some(content.to_owned());
         }
         Some(fold_hash("dag", content, &folded))
     }

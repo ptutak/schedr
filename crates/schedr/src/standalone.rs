@@ -88,8 +88,8 @@ pub struct Standalone {
     pub tick: Duration,
     /// The worker agent.
     pub agent: AgentSettings,
-    /// How long one DAG file may take to import.
-    pub parse_file_timeout: Duration,
+    /// How long one DAG file may take to import, and how many are parsed at once.
+    pub parse: schedr_agent::parse::ParseLimits,
     /// Who the user is (`[webserver.auth]`).
     pub auth: AuthSection,
     /// The token a UI elsewhere presents to pass users' names on (`[webserver] ui_token_file`:
@@ -159,7 +159,10 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         secret_storage: crate::secret_storage::SecretPlan::new(&config.secret_storage, env)
             .renewing(&config.timings),
-        parse_file_timeout: config.dags.parse_file_timeout,
+        parse: schedr_agent::parse::ParseLimits::configured(
+            config.dags.parse_file_timeout,
+            config.dags.parse_concurrency,
+        ),
         auth: config.webserver.auth.clone(),
         ui_token_file: config.webserver.ui_token_file.clone(),
         api_timings: crate::roles::ApiTimings::of(config),
@@ -309,7 +312,7 @@ pub async fn run(
     };
     let worker = Box::pin(run_worker(
         agent,
-        setup.parse_file_timeout,
+        setup.parse,
         links,
         agent_observed,
         requests,

@@ -24,7 +24,8 @@ The names used across the documentation, the API and the logs.
   client, or `Generic` for values of one's own. See [Built-in types](../02-dags/14-connections.md#built-in-types).
 
 **Content hash**
-: A hash of every file in a root (paths and contents). Workers with the same code report the
+: A hash of every file in a root (paths and contents), combined for DAG roots with the
+  hashes of other DAG roots and any used script roots. Workers with the same code report the
   same hash, so the master knows which workers have which code.
 
 **Parse job**

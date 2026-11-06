@@ -1,14 +1,16 @@
 //! Parse jobs on the worker: the runner in `parse` mode over a root's files, with a per-file
 //! timeout.
 //!
-//! One runner process parses the files of a parse job one at a time and reports each file. If
-//! a file doesn't finish within the per-file timeout, or the runner dies while importing it,
-//! the agent stops the runner, records an import error for that file and starts a new runner
-//! for the remaining files (see PROJECT.md, Rust/Python integration: parsing granularity).
+//! Each file of a parse job gets a runner process of its own, a few at once (`[dags]
+//! parse_concurrency`). If a file doesn't finish within the per-file timeout, or its runner dies
+//! while importing it, the agent stops the runner and records an import error for that file
+//! (see PROJECT.md, Rust/Python integration: parsing granularity).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use futures_util::StreamExt as _;
+use futures_util::stream::FuturesUnordered;
 use schedr_model::runner::{AgentMessage, ErrorSummary, ParseRequest, ParsedFile, RunnerMessage};
 
 use crate::channel::ChannelError;
@@ -50,147 +52,220 @@ pub trait ParseSession: Send {
 }
 
 /// Starts runners in parse mode.
-pub trait ParseRunner: Send {
+pub trait ParseRunner: Sync {
     /// The started runner.
     type Session: ParseSession;
 
-    /// Starts a runner, completes the handshake and sends it the request.
+    /// Starts a runner, completes the handshake and sends it the request. Called for several
+    /// files at once.
     fn start(
-        &mut self,
+        &self,
         request: ParseRequest,
     ) -> impl Future<Output = Result<Self::Session, ChannelError>> + Send;
 }
 
-/// Parses the files of `request`, starting a new runner after each file that times out or
-/// kills its runner; a file over the memory budget after others in the same runner is tried
-/// again first in a fresh one before it is blamed.
+/// How a parse job runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseLimits {
+    /// How long one file may take to import.
+    pub per_file: Duration,
+    /// How many files are parsed at once.
+    pub concurrency: usize,
+}
+
+impl ParseLimits {
+    /// One file at a time.
+    #[must_use]
+    pub const fn one_at_a_time(per_file: Duration) -> Self {
+        Self {
+            per_file,
+            concurrency: 1,
+        }
+    }
+
+    /// `[dags] parse_file_timeout` and `parse_concurrency`, the latter capped at the cores this
+    /// process may use: more would only make the files' timeouts tighter.
+    #[must_use]
+    pub fn configured(per_file: Duration, concurrency: u32) -> Self {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        Self {
+            per_file,
+            concurrency: capped(concurrency, cores),
+        }
+    }
+}
+
+fn capped(concurrency: u32, cores: usize) -> usize {
+    usize::try_from(concurrency)
+        .unwrap_or(usize::MAX)
+        .min(cores)
+        .max(1)
+}
+
+/// Parses the files of `request`, one at a time, each in a runner of its own: one file's imports
+/// and what they change can't reach another's, as they can't reach a task's (decision 326).
 ///
 /// # Errors
 ///
 /// [`ParseError`] if a runner can't be started or talked to outside a file; errors inside a
 /// file become that file's import error.
 pub async fn parse_files<R: ParseRunner>(
-    runner: &mut R,
+    runner: &R,
     request: ParseRequest,
     per_file: Duration,
 ) -> Result<Vec<ParsedFile>, ParseError> {
-    parse_files_with(runner, request, per_file, &BTreeMap::new()).await
+    parse_files_with(
+        runner,
+        request,
+        ParseLimits::one_at_a_time(per_file),
+        &BTreeMap::new(),
+    )
+    .await
 }
 
-/// As [`parse_files`], answering a `ScriptOperator`'s questions from the script roots
-/// `scripts` (their copies, decision 293) and recording in each file the script roots it
-/// asked about (decision 304).
+/// As [`parse_files`], `limits.concurrency` files at once, with the files in the order of the
+/// request, answering a `ScriptOperator`'s questions from the script roots `scripts` (their
+/// copies, decision 293) and recording in each file the script roots it asked about (decision
+/// 304).
+///
+/// After a failure no new file starts, and those being parsed are finished: their runners end
+/// as usual, not by being dropped.
 ///
 /// # Errors
 ///
-/// As [`parse_files`].
+/// As [`parse_files`], the first failure.
 pub async fn parse_files_with<R: ParseRunner>(
-    runner: &mut R,
-    request: ParseRequest,
-    per_file: Duration,
+    runner: &R,
+    mut request: ParseRequest,
+    limits: ParseLimits,
     scripts: &BTreeMap<String, ScriptRoot>,
 ) -> Result<Vec<ParsedFile>, ParseError> {
-    let mut remaining: VecDeque<String> = request.files.iter().cloned().collect();
-    let mut parsed = Vec::with_capacity(remaining.len());
-    while !remaining.is_empty() {
-        let mut session = runner
-            .start(ParseRequest {
-                files: remaining.iter().cloned().collect(),
-                ..request.clone()
-            })
-            .await?;
-        let mut asked = BTreeSet::new();
-        let step = run_session(
-            &mut session,
-            (&mut remaining, &mut parsed),
-            per_file,
-            (scripts, &mut asked),
-        )
-        .await;
-        session.stop().await;
-        match step {
-            // Done, or the file goes first in a fresh runner (it alone is then measured).
-            Ok(()) | Err(SessionEnd::FreshRunner) => {}
-            Err(SessionEnd::Lost(path, error)) => {
-                remaining.pop_front();
-                parsed.push(ParsedFile {
-                    // What it asked before it was lost still counts (decision 304).
-                    script_roots: asked.into_iter().collect(),
-                    path,
-                    dags: Vec::new(),
-                    connections: Vec::new(),
-                    error: Some(error),
-                    warnings: Vec::new(),
-                });
-            }
-            Err(SessionEnd::Failed(error)) => return Err(error),
+    let files = std::mem::take(&mut request.files);
+    let request = &request;
+    let mut parsed: Vec<Option<ParsedFile>> = files.iter().map(|_| None).collect();
+    let mut waiting = files.into_iter().enumerate();
+    let mut parsing = FuturesUnordered::new();
+    let mut failure = None;
+    loop {
+        while failure.is_none() && parsing.len() < limits.concurrency.max(1) {
+            let Some((index, file)) = waiting.next() else {
+                break;
+            };
+            parsing.push(parse_file(
+                runner,
+                request,
+                index,
+                file,
+                limits.per_file,
+                scripts,
+            ));
+        }
+        match parsing.next().await {
+            Some(Ok((index, file))) => parsed[index] = Some(file),
+            Some(Err(error)) => failure = failure.or(Some(error)),
+            None => break,
         }
     }
-    Ok(parsed)
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(parsed.into_iter().flatten().collect()),
+    }
+}
+
+/// One file, in a runner of its own.
+async fn parse_file<R: ParseRunner>(
+    runner: &R,
+    request: &ParseRequest,
+    index: usize,
+    file: String,
+    per_file: Duration,
+    scripts: &BTreeMap<String, ScriptRoot>,
+) -> Result<(usize, ParsedFile), ParseError> {
+    let mut session = runner
+        .start(ParseRequest {
+            files: vec![file.clone()],
+            ..request.clone()
+        })
+        .await?;
+    let mut asked = BTreeSet::new();
+    let step = run_session(&mut session, &file, per_file, (scripts, &mut asked)).await;
+    session.stop().await;
+    match step {
+        Ok(parsed) => Ok((index, parsed)),
+        Err(SessionEnd::Lost(error)) => Ok((
+            index,
+            ParsedFile {
+                // What it asked before it was lost still counts (decision 304).
+                script_roots: asked.into_iter().collect(),
+                path: file,
+                dags: Vec::new(),
+                connections: Vec::new(),
+                error: Some(error),
+                warnings: Vec::new(),
+            },
+        )),
+        Err(SessionEnd::Failed(error)) => Err(error),
+    }
 }
 
 /// How a session ended early.
 enum SessionEnd {
     /// The file being imported timed out or killed the runner.
-    Lost(String, ErrorSummary),
-    /// The runner went over its memory budget while importing a file after others: what the
-    /// earlier imports hold counts too, so the file is tried again first in a fresh runner.
-    FreshRunner,
-    /// Nothing can be blamed on a file.
+    Lost(ErrorSummary),
+    /// Nothing can be blamed on the file.
     Failed(ParseError),
 }
 
 async fn run_session<S: ParseSession>(
     session: &mut S,
-    (remaining, parsed): (&mut VecDeque<String>, &mut Vec<ParsedFile>),
+    file: &str,
     per_file: Duration,
     (scripts, asked): (&BTreeMap<String, ScriptRoot>, &mut BTreeSet<String>),
-) -> Result<(), SessionEnd> {
-    let mut current: Option<String> = None;
-    let mut imported = 0;
+) -> Result<ParsedFile, SessionEnd> {
+    let mut started = false;
+    let mut done = None;
     // A file's whole import has `per_file`, its `ScriptOperator`s' questions included.
     let mut deadline = tokio::time::Instant::now() + per_file;
     loop {
-        if current.is_none() {
+        // A runner still to say it started has `per_file` from now on.
+        if !started {
             deadline = tokio::time::Instant::now() + per_file;
         }
         let message = match tokio::time::timeout_at(deadline, session.next()).await {
             Ok(Ok(message)) => message,
             Ok(Err(error)) => {
-                return Err(match current {
-                    Some(_) if imported > 0 && matches!(error, ChannelError::OverMemory(_)) => {
-                        SessionEnd::FreshRunner
-                    }
-                    Some(path) => SessionEnd::Lost(path, died(&error)),
-                    None => SessionEnd::Failed(error.into()),
+                return Err(if started && done.is_none() {
+                    SessionEnd::Lost(died(&error))
+                } else {
+                    SessionEnd::Failed(error.into())
                 });
             }
             Err(_) => {
-                return Err(match current {
-                    Some(path) => SessionEnd::Lost(path, timed_out(per_file)),
-                    None => SessionEnd::Failed(ParseError::Unresponsive(per_file)),
+                return Err(if started && done.is_none() {
+                    SessionEnd::Lost(timed_out(per_file))
+                } else {
+                    SessionEnd::Failed(ParseError::Unresponsive(per_file))
                 });
             }
         };
+        let importing = started && done.is_none();
         match message {
-            RunnerMessage::FileStarted { path }
-                if current.is_none() && remaining.front() == Some(&path) =>
-            {
-                asked.clear();
-                current = Some(path);
+            RunnerMessage::FileStarted { path } if !started && path == file => {
+                started = true;
+                // Its import starts now.
+                deadline = tokio::time::Instant::now() + per_file;
             }
-            RunnerMessage::ScriptDeclaration { reference } if current.is_some() => {
+            RunnerMessage::ScriptDeclaration { reference } if importing => {
                 let (root, found) = crate::jobs::lookup(&reference, scripts);
                 asked.extend(root);
                 let answer = match found {
                     Ok(declaration) => AgentMessage::ScriptDeclaration(Box::new(declaration)),
                     Err(message) => AgentMessage::ScriptNotFound { message },
                 };
-                let path = || current.clone().unwrap_or_default();
                 match tokio::time::timeout_at(deadline, session.send(answer)).await {
                     Ok(Ok(())) => {}
-                    Ok(Err(error)) => return Err(SessionEnd::Lost(path(), died(&error))),
-                    Err(_) => return Err(SessionEnd::Lost(path(), timed_out(per_file))),
+                    Ok(Err(error)) => return Err(SessionEnd::Lost(died(&error))),
+                    Err(_) => return Err(SessionEnd::Lost(timed_out(per_file))),
                 }
             }
             RunnerMessage::FileParsed {
@@ -199,11 +274,8 @@ async fn run_session<S: ParseSession>(
                 connections,
                 error,
                 warnings,
-            } if current.as_ref() == Some(&path) => {
-                current = None;
-                imported += 1;
-                remaining.pop_front();
-                parsed.push(ParsedFile {
+            } if importing && path == file => {
+                done = Some(ParsedFile {
                     script_roots: std::mem::take(asked).into_iter().collect(),
                     path,
                     dags,
@@ -211,15 +283,17 @@ async fn run_session<S: ParseSession>(
                     error,
                     warnings,
                 });
+                // The wait for its end is a wait of its own.
+                deadline = tokio::time::Instant::now() + per_file;
             }
-            RunnerMessage::ParseFinished if current.is_none() && remaining.is_empty() => {
-                return Ok(());
+            RunnerMessage::ParseFinished if done.is_some() => {
+                return done.ok_or(SessionEnd::Failed(ParseError::Unresponsive(per_file)));
             }
             other => {
-                let expected = match (&current, remaining.front()) {
-                    (Some(_), _) => "file_parsed for the file started",
-                    (None, Some(_)) => "file_started for the next file",
-                    (None, None) => "parse_finished",
+                let expected = match (started, done.is_some()) {
+                    (true, false) => "file_parsed for the file started",
+                    (false, _) => "file_started for its file",
+                    (true, true) => "parse_finished",
                 };
                 return Err(SessionEnd::Failed(ParseError::Channel(
                     ChannelError::Unexpected {

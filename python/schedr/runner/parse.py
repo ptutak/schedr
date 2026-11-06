@@ -1,16 +1,13 @@
-"""Parse mode: import the files of one DAG root and report the DAGs they define.
+"""Parse mode: import DAG files by their ordinary names, and report the DAGs they define.
 
-Each file is imported under a stable module name derived from its root and path, and kept in
-``sys.modules`` (dataclasses need their module there for their type hints to resolve). Task
-mode imports a DAG file under the same name. Files that define no DAG report none; a file that
-raises reports an import error and doesn't stop the others.
+A file is imported as Python would (``team/sync.py`` is ``team.sync``), each in a process of
+its own, and a task's process imports it the same way (decision 326). Files that define no DAG
+report none; a file that raises reports an import error and doesn't stop the others.
 """
 
-import hashlib
-import importlib.machinery
+import importlib
 import importlib.util
 import os
-import re
 import sys
 import traceback
 import warnings
@@ -21,25 +18,84 @@ from schedr._model import Dag, DagLocation, registry
 from schedr.connections import take_connections
 from schedr.outcomes import DagHint, TypingHint
 from schedr.runner.protocol import Channel
-from schedr.runner.sources import SourceOnlyLoader, import_from_source
+from schedr.runner.sources import (
+    clash,
+    forgotten_roots,
+    import_from_source,
+    registered_roots,
+    search_for_clashes,
+)
 
 TRACEBACK_LINES = 20
 """How many traceback lines an import error keeps."""
 
 
 def module_name(root: str, path: str) -> str:
-    """The module name a DAG file is imported under.
+    """The name a DAG file is imported under: the ordinary one, from the root it is in.
+
+    ``team/sync.py`` is ``team.sync``, so relative imports, ``__init__.py``, cycles and
+    ``sys.modules`` work as Python's do (decision 326). The root is a label, not a package.
 
     Args:
         root: The DAG root's name.
         path: The file's path relative to the root.
 
     Returns:
-        A valid, unique module name, e.g. ``_schedr_dag_etl_repo_team_a_sync_1a2b3c4d``.
+        The module's name.
+
+    Raises:
+        ImportError: For a path with no name of its own (``a.b.py`` would mean ``a/b.py``).
     """
-    readable = re.sub(r"\W", "_", f"{root}/{path.removesuffix('.py')}", flags=re.ASCII)
-    digest = hashlib.sha256(f"{root}\0{path}".encode()).hexdigest()[:8]
-    return f"_schedr_dag_{readable}_{digest}"
+    del root
+    relative = PurePosixPath(path)
+    if relative.is_absolute() or not relative.parts or relative.suffix != ".py":
+        raise ImportError(f"can't import {path}: not a Python source file")
+    bits = list(relative.parts)
+    if bits[-1] == "__init__.py" and len(bits) > 1:
+        bits.pop()
+    else:
+        bits[-1] = bits[-1].removesuffix(".py")
+    if any("." in part for part in bits):
+        raise ImportError(
+            f"can't import {path}: a dot in a file or folder name has no import name; rename it"
+        )
+    return ".".join(bits)
+
+
+def _same_place(found: str, wanted: Path) -> bool:
+    """Whether two paths are one place, as given or through links."""
+    return os.path.abspath(found) == os.path.abspath(wanted) or os.path.realpath(
+        found
+    ) == os.path.realpath(wanted)
+
+
+def _collision(name: str, wanted: Path, found: object) -> ImportError:
+    return ImportError(
+        f"`{name}` must come from {wanted}, but Python finds {found}: another package has that "
+        "name; rename it, or list it in `.schedrignore`"
+    )
+
+
+def _import_checked(root_dir: Path, path: str, name: str) -> None:
+    """Imports the module, each parent first, refusing one that resolves somewhere else."""
+    bits = name.split(".")
+    if (why := clash(bits[0])) is not None:
+        raise ImportError(why)
+    for size in range(1, len(bits) + 1):
+        prefix = ".".join(bits[:size])
+        loaded = sys.modules.get(prefix)
+        spec = loaded.__spec__ if loaded is not None else importlib.util.find_spec(prefix)
+        if size == len(bits):
+            wanted = root_dir / path
+            origin = None if spec is None else spec.origin
+            if origin is None or not _same_place(origin, wanted):
+                raise _collision(prefix, wanted, origin)
+        else:
+            wanted = root_dir.joinpath(*bits[:size])
+            places = [] if spec is None else list(spec.submodule_search_locations or ())
+            if not any(_same_place(place, wanted) for place in places):
+                raise _collision(prefix, wanted, places)
+        importlib.import_module(prefix)
 
 
 def import_dag_entries(root: str, root_dir: Path, path: str) -> list[registry.DefinedDag]:
@@ -54,28 +110,19 @@ def import_dag_entries(root: str, root_dir: Path, path: str) -> list[registry.De
         The DAGs, in definition order (empty for a helper module).
 
     Raises:
-        BaseException: Whatever importing the file raised (the module is then removed from
-            ``sys.modules`` and its partial DAGs are dropped).
+        BaseException: Whatever importing the file raised (its partial DAGs are dropped).
     """
     name = module_name(root, path)
-    # From its source, never stale bytecode (B59); a given loader would take any file.
-    location = str(root_dir / path)
-    if not location.endswith(tuple(importlib.machinery.SOURCE_SUFFIXES)):
-        raise ImportError(f"can't import {path}: not a Python source file")
-    spec = importlib.util.spec_from_file_location(
-        name, location, loader=SourceOnlyLoader(name, location)
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"can't import {path}: not a Python source file")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    try:
-        with registry.parse_root(root, root_dir):
-            spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(name, None)
-        registry.take_entries()
-        raise
+    if os.path.abspath(root_dir) not in sys.path:
+        extend_sys_path([*registered_roots(), str(root_dir)])
+    # Imported again in one process (a test's): its top level runs again, for its DAGs.
+    sys.modules.pop(name, None)
+    with registry.parse_root(root, root_dir):
+        try:
+            _import_checked(root_dir, path, name)
+        except BaseException:
+            registry.take_entries()
+            raise
     # Only this file's own: a module it imports may define DAGs too, found when that module's
     # file is parsed (B110: they made the master refuse this file).
     here = DagLocation(root, PurePosixPath(path).as_posix())
@@ -99,8 +146,11 @@ def import_dag_file(root: str, root_dir: Path, path: str) -> list[Dag]:
 _SCHEDR_DIR = str(Path(__file__).resolve().parents[1]) + os.sep
 
 
+_IMPORTLIB_DIR = str(Path(importlib.__file__).resolve().parent) + os.sep
+
+
 def _internal(filename: str) -> bool:
-    return filename.startswith((_SCHEDR_DIR, "<frozen importlib"))
+    return filename.startswith((_SCHEDR_DIR, _IMPORTLIB_DIR, "<frozen importlib"))
 
 
 def import_error(error: BaseException) -> dict[str, str]:
@@ -190,17 +240,29 @@ def own_connections(root: str, path: str) -> list[dict[str, Any]]:
 
 
 def extend_sys_path(entries: list[str]) -> None:
-    """Puts directories first on ``sys.path``, in order, each at most once.
+    """Makes these directories the DAG roots on ``sys.path``, first and in this order.
 
-    Modules found there are imported from their source, never from bytecode (B59).
+    Modules found there are imported from their source, never from bytecode (B59). A name
+    that can't be told apart fails what uses it, saying why (decision 328). In a
+    process used for several roots (a test's), what the earlier ones gave is forgotten.
 
     Args:
         entries: The directories (every DAG root).
     """
-    import_from_source(entries)
-    for entry in reversed(list(dict.fromkeys(entries))):
-        if entry not in sys.path:
-            sys.path.insert(0, entry)
+    ordered = list(dict.fromkeys(os.path.abspath(entry) for entry in entries))
+    gone = forgotten_roots(ordered)
+    for name, loaded in tuple(sys.modules.items()):
+        place = getattr(loaded, "__file__", None) or next(
+            iter(getattr(loaded, "__path__", ()) or ()), None
+        )
+        if isinstance(place, str) and any(
+            os.path.abspath(place).startswith(root + os.sep) for root in gone
+        ):
+            del sys.modules[name]
+    others = [p for p in sys.path if os.path.abspath(p or os.curdir) not in {*ordered, *gone}]
+    sys.path[:] = ordered + others
+    import_from_source(ordered)
+    search_for_clashes(ordered, others)
 
 
 def run_parse(channel: Channel, request: dict[str, Any]) -> None:

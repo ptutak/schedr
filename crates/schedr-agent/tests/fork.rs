@@ -167,7 +167,7 @@ async fn the_dag(dir: &Path) -> Dag {
         dir,
         "parse.log",
     );
-    let mut runner = schedr_agent::launch::ProcessParseRunner {
+    let runner = schedr_agent::launch::ProcessParseRunner {
         process,
         memory: schedr_agent::memory::MemoryWatch {
             budget: None,
@@ -183,7 +183,7 @@ async fn the_dag(dir: &Path) -> Dag {
         files: vec!["a_sync.py".to_owned()],
         sys_path: vec![dir.to_string_lossy().into_owned()],
     };
-    let files = schedr_agent::parse::parse_files(&mut runner, request, Duration::from_secs(30))
+    let files = schedr_agent::parse::parse_files(&runner, request, Duration::from_secs(30))
         .await
         .unwrap();
     files[0].dags[0].clone()
@@ -720,7 +720,7 @@ async fn parsed_ids(dir: &Path, file: &str, forks: Option<ForkServers>) -> Vec<S
         dir,
         "parse.log",
     );
-    let mut runner = schedr_agent::launch::ProcessParseRunner {
+    let runner = schedr_agent::launch::ProcessParseRunner {
         process,
         memory: schedr_agent::memory::MemoryWatch {
             budget: None,
@@ -736,7 +736,7 @@ async fn parsed_ids(dir: &Path, file: &str, forks: Option<ForkServers>) -> Vec<S
         files: vec![file.to_owned()],
         sys_path: vec![dir.to_string_lossy().into_owned()],
     };
-    let files = schedr_agent::parse::parse_files(&mut runner, request, Duration::from_secs(30))
+    let files = schedr_agent::parse::parse_files(&runner, request, Duration::from_secs(30))
         .await
         .unwrap();
     files[0].dags.iter().map(|d| d.id.to_string()).collect()
@@ -790,7 +790,7 @@ async fn a_forked_parse_dropped_unfinished_is_killed() {
         state(&metrics, "preloaded", "up") == 1
     })
     .await;
-    let mut runner = schedr_agent::launch::ProcessParseRunner {
+    let runner = schedr_agent::launch::ProcessParseRunner {
         process: spec(
             python(),
             &["-m", "schedr.runner", "parse"],

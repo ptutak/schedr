@@ -227,6 +227,7 @@ fn url_has_password_looks_at_the_user_info_only(#[case] url: &str, #[case] expec
 fn master_and_webserver_defaults() {
     let config = Config::default();
     assert_eq!(config.dags.parse_file_timeout, Duration::from_secs(60));
+    assert_eq!(config.dags.parse_concurrency, 4);
     assert_eq!(
         config.master,
         MasterSection {

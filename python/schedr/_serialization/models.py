@@ -31,7 +31,7 @@ def is_model(annotation: object) -> bool:
         True for a subclass of ``pydantic.BaseModel``.
     """
     return isinstance(annotation, type) and any(
-        base.__name__ == "BaseModel" and base.__module__.startswith("pydantic")
+        base.__name__ == "BaseModel" and base.__module__.startswith("pydantic.")
         for base in annotation.__mro__
     )
 

@@ -1555,3 +1555,153 @@ with Dag("{id}", max_active_tasks=6, max_active_runs=2):
 "#
     )
 }
+
+/// The memory of a process and all below it (KiB): proportional set sizes, so what forked
+/// processes share counts once.
+fn tree_pss_kib(root: u32) -> u64 {
+    let mut parents = Vec::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        // `pid (name) state ppid ...`: the name can hold anything, up to its last `)`.
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        let parent = stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+            .and_then(|ppid| ppid.parse::<u32>().ok());
+        if let Some(parent) = parent {
+            parents.push((pid, parent));
+        }
+    }
+    let mut tree = vec![root];
+    let mut at = 0;
+    while let Some(&pid) = tree.get(at) {
+        at += 1;
+        tree.extend(parents.iter().filter(|(_, p)| *p == pid).map(|(c, _)| *c));
+    }
+    tree.iter()
+        .filter_map(|pid| std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).ok())
+        .filter_map(|rollup| {
+            let line = rollup.lines().find(|l| l.starts_with("Pss:"))?.to_owned();
+            line.split_whitespace().nth(1)?.parse::<u64>().ok()
+        })
+        .sum()
+}
+
+/// Scenario 22: what a parse takes: `schedr dags check` over many files importing a shared helper
+/// package and a slow library, spawned and forked, one file at a time and four at once: seconds,
+/// and peak memory of all its processes. Each file's process starts afresh (decision 326), so
+/// this is the price of that.
+#[test]
+fn stress_22_parse_many_files() {
+    let size = load::Size::get();
+    let mut report = Report::new("22_parse_many_files");
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    report.set("cores", f64::from(u32::try_from(cores).unwrap_or(u32::MAX)));
+    let mut slowest = [0.0_f64; 2];
+    for files in [size.n(20, 100), size.n(50, 500), size.n(100, 1000)] {
+        for concurrency in [1, 4] {
+            for fork in [false, true] {
+                let method = if fork { "fork" } else { "spawn" };
+                let name = format!("{method}_{files}_files_{concurrency}_at_once");
+                let took = timed_check(&mut report, &name, fork, concurrency, files);
+                let per_file = took / f64::from(u32::try_from(files).unwrap_or(u32::MAX));
+                slowest[usize::from(fork)] = slowest[usize::from(fork)].max(per_file);
+            }
+        }
+    }
+    // Only a gross regression: the numbers are in the report.
+    report.at_most("slowest_spawn_s_per_file", slowest[0], 5.0);
+    report.at_most("slowest_fork_s_per_file", slowest[1], 1.0);
+    report.finish(String::new);
+}
+
+/// One `schedr dags check` of `files` new files: its seconds and peak memory go in the report,
+/// under `name`, and any file not parsed fails the scenario. Returns the seconds.
+fn timed_check(report: &mut Report, name: &str, fork: bool, concurrency: u32, files: usize) -> f64 {
+    let python = support::python();
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().join("etl");
+    std::fs::create_dir_all(root.join("common")).unwrap();
+    std::fs::write(
+        root.join("common/__init__.py"),
+        "import pydantic\n\nfrom schedr import Dag, task\n",
+    )
+    .unwrap();
+    for file in 0..files {
+        std::fs::write(
+            root.join(format!("d{file}.py")),
+            format!(
+                "from common import Dag, task\n\n\
+                 @task\ndef work() -> int:\n    return 1\n\n\
+                 with Dag(\"d{file}\"):\n    work()\n# schedr\n"
+            ),
+        )
+        .unwrap();
+    }
+    let interpreter = if fork {
+        format!(
+            "[interpreters.python]\npath = \"{python}\"\nfork_server = true\n\
+             preload = [\"pydantic\"]\n"
+        )
+    } else {
+        format!("[interpreters]\npython = \"{python}\"\n")
+    };
+    std::fs::write(
+        dir.path().join("config.toml"),
+        format!("{interpreter}[dags]\nparse_concurrency = {concurrency}\n"),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let child = std::process::Command::new(support::BINARY)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env("TZ", "UTC")
+        .arg("--config")
+        .arg(dir.path().join("config.toml"))
+        .args(["dags", "check"])
+        .arg(&root)
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let done = AtomicBool::new(false);
+    let (ended, kib) = std::thread::scope(|scope| {
+        let sampler = scope.spawn(|| {
+            let mut peak = 0;
+            while !done.load(Ordering::Relaxed) {
+                peak = peak.max(tree_pss_kib(pid));
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            peak
+        });
+        let output = child.wait_with_output().unwrap();
+        done.store(true, Ordering::Relaxed);
+        (output, sampler.join().unwrap())
+    });
+    let took = started.elapsed().as_secs_f64();
+    let mib = f64::from(u32::try_from(kib / 1024).unwrap_or(u32::MAX));
+    let stdout = String::from_utf8_lossy(&ended.stdout);
+    let parsed = format!("{files} DAG(s), 0 error(s)");
+    if !ended.status.success() || !stdout.contains(&parsed) {
+        report.broken(vec![format!(
+            "{name}: {} expected `{parsed}`: {stdout} {}",
+            ended.status,
+            String::from_utf8_lossy(&ended.stderr)
+        )]);
+    }
+    report.set(&format!("{name}_s"), took);
+    report.set(&format!("{name}_peak_mib"), mib);
+    println!("{name}: {took:.1} s, peak {mib:.0} MiB");
+    took
+}

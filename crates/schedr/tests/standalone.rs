@@ -70,6 +70,16 @@ impl Standalone {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("dags/etl");
         std::fs::create_dir_all(&root).unwrap();
+        // A file under `../shared/` makes a second DAG root.
+        let dag_path = if files.iter().any(|(name, _)| name.starts_with("../shared/")) {
+            format!(
+                "{}:{}",
+                root.display(),
+                dir.path().join("dags/shared").display()
+            )
+        } else {
+            root.display().to_string()
+        };
         for (name, text) in files {
             let file = root.join(name);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -103,7 +113,7 @@ impl Standalone {
             .args(extra)
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", dir.path())
-            .env("SCHEDR_DAG_PATH", &root)
+            .env("SCHEDR_DAG_PATH", &dag_path)
             .env("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", "100ms")
             .env("SCHEDR_SECRET_KEY", SECRET_KEY)
             .stdout(Stdio::from(log.try_clone().unwrap()))
@@ -357,7 +367,7 @@ fn secrets_set_with_the_cli_reach_a_task(standalone: &Standalone, database_url: 
 
 #[test]
 fn a_task_reads_secrets_set_with_the_cli() {
-    let standalone = Standalone::start(&[("secrets.py", SECRETS)], None);
+    let standalone = Standalone::start(&[("secret_reads.py", SECRETS)], None);
     secrets_set_with_the_cli_reach_a_task(&standalone, None);
     // Encrypted at rest: no value in the SQLite files.
     for entry in std::fs::read_dir(standalone.dir.path().join("data")).unwrap() {
@@ -537,7 +547,7 @@ fn the_same_run_works_on_postgres() {
 #[test]
 fn a_task_reads_secrets_set_with_the_cli_on_postgres() {
     let url = postgres_database();
-    let standalone = Standalone::start(&[("secrets.py", SECRETS)], Some(&url));
+    let standalone = Standalone::start(&[("secret_reads.py", SECRETS)], Some(&url));
     secrets_set_with_the_cli_reach_a_task(&standalone, Some(&url));
     let stored = Command::new("psql")
         .args([url.as_str(), "-tAc", "SELECT data FROM secrets"])
@@ -1957,5 +1967,72 @@ fn on_postgres_a_cleanup_shows_cleaning_up_and_its_failure_fails_the_run() {
     assert!(
         query("SELECT cleanup_error_summary FROM attempts").contains("can't clean"),
         "the cleanup's error is stored"
+    );
+}
+
+/// A DAG reading a flag of a library in the other root, into its description.
+const USES_SHARED: &str = r#"from flags_lib import FLAG
+
+from schedr import Dag, task
+
+
+@task
+def uses() -> str:
+    import flags_lib
+
+    return flags_lib.FLAG
+
+
+with Dag("uses_shared", description=FLAG):
+    uses()
+"#;
+
+fn description(standalone: &Standalone, dag: &str) -> Option<String> {
+    standalone.dags().into_iter().find_map(|(id, value)| {
+        (id == dag).then(|| value["description"].as_str().unwrap_or_default().to_owned())
+    })
+}
+
+fn other_root_library_is_used_by_tasks_and_a_change_reparses(
+    more_config: &str,
+    env: &[(&str, &str)],
+) {
+    let standalone = Standalone::start_configured(
+        &[
+            ("uses.py", USES_SHARED),
+            ("../shared/flags_lib.py", "FLAG = \"one\"\n# schedr\n"),
+        ],
+        None,
+        &[],
+        more_config,
+        env,
+    );
+    standalone.wait("the DAG", || {
+        description(&standalone, "uses_shared").as_deref() == Some("one")
+    });
+    // B174: the task finds the other root's module however it starts.
+    let run = standalone.trigger("uses_shared");
+    standalone.wait_for_state(&run, "success");
+    // B173: a change in the other root alone reparses the DAG that imports it.
+    let library = standalone.dir.path().join("dags/shared/flags_lib.py");
+    std::fs::write(library, "FLAG = \"two\"\n# schedr\n").unwrap();
+    standalone.wait("the new library in the DAG", || {
+        description(&standalone, "uses_shared").as_deref() == Some("two")
+    });
+}
+
+#[test]
+fn a_library_in_another_root_is_used_and_reparses_spawned() {
+    other_root_library_is_used_by_tasks_and_a_change_reparses("", &[]);
+}
+
+#[test]
+fn a_library_in_another_root_is_used_and_reparses_forked() {
+    other_root_library_is_used_by_tasks_and_a_change_reparses(
+        &format!(
+            "\n[interpreters.forked]\npath = \"{}\"\nfork_server = true\npreload = [\"wave\"]\n",
+            python()
+        ),
+        &[("SCHEDR_CONFIG__DAGS__INTERPRETER", "forked")],
     );
 }

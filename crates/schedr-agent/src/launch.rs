@@ -652,7 +652,7 @@ impl ParseSession for ProcessParseSession {
 impl ParseRunner for ProcessParseRunner {
     type Session = ProcessParseSession;
 
-    async fn start(&mut self, request: ParseRequest) -> Result<ProcessParseSession, ChannelError> {
+    async fn start(&self, request: ParseRequest) -> Result<ProcessParseSession, ChannelError> {
         let seen = SharedSeen::default();
         // Declared before the watch, so it is dropped after it on any path (locals go in
         // reverse order), a cancelled start included.

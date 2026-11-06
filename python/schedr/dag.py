@@ -8,7 +8,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from types import TracebackType
+from types import FrameType, TracebackType
 from typing import Self
 
 from schedr import _build, _params
@@ -23,6 +23,7 @@ from schedr._model import (
     validate_dag_id,
 )
 from schedr.outcomes import RunIf
+from schedr.runner.sources import IMPORTING
 from schedr.triggers import Cron, Every, Once, Trigger
 
 
@@ -182,12 +183,32 @@ class Dag:
         Raises:
             RuntimeError: If another DAG is being defined.
         """
+        self._locate_in_module()
         self._builder = _build.DagBuilder(self.dag_id, self.defaults.options())
         if self._params is not None:
             self._builder.params_class = self.params
             self._builder.params_type = self._params.type_desc
         _build.push(self._builder)
         return self
+
+    def _locate_in_module(self) -> None:
+        """Gives the DAG to the module whose top level enters it, while one of a DAG root runs.
+
+        A function in a helper can then build it (decision 329, B170), and a module imported by
+        another still owns its own DAGs (B110).
+        """
+        if IMPORTING.get() is None:
+            return
+        frame: FrameType | None = sys._getframe(2)
+        while frame is not None and frame.f_code.co_name != "<module>":
+            frame = frame.f_back
+        if frame is None:
+            return
+        spec = frame.f_globals.get("__spec__")
+        origin = getattr(spec, "origin", None) or frame.f_globals.get("__file__")
+        if isinstance(origin, str):
+            self._filename = origin
+            self._location = registry.location_for(origin)
 
     def __exit__(
         self,

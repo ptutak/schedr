@@ -201,7 +201,7 @@ fn a_python_task_runs_the_runner_with_the_request() {
         panic!("expected a Python plan")
     };
     assert_eq!(process.program, PathBuf::from("/usr/bin/python3"));
-    assert_eq!(process.args, ["-m", "schedr.runner", "task"]);
+    assert_eq!(process.args, ["-P", "-m", "schedr.runner", "task"]);
     assert_eq!(process.env["PATH"], "/usr/bin");
     assert!(!process.env.contains_key("SECRET"));
     assert_eq!(process.env["SCHEDR_TRY_NUMBER"], "2");

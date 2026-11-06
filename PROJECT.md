@@ -1838,6 +1838,50 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   treated as a **failed import** (`InvalidDag`, listing every problem; a bad path is
   `InvalidPath`): all its DAGs keep their last good version.
 
+**326-333. How DAG files load** (the user's, 2026-11-06, from Codex's investigation of B172: 118 scenarios through the
+CLI and real workers; `tests` keeps them):
+
+- **326. Ordinary imports, a process per file:** `team/sync.py` is `team.sync`, in a process of its own for each
+  file parsed; a task's process imports it the same way. Relative imports, `__init__.py`, cycles and `sys.modules` work
+  as in Python, and parsing tests the program a task runs. A file's top level runs once per process: parsing can repeat
+  a helper's. A dot in a file or folder name has no import name, and is refused. Not chosen: private names with
+  `__package__` set (double loads, stdlib siblings); a private package per root (two copies of one module); one process
+  per root with its definitions kept (it checked two DAGs that then failed as tasks, and one file's helper state shaped
+  another's DAG).
+- **327. A root's version covers what is on its `sys.path`:** the content hashes of the other DAG roots fold into a DAG
+  root's reported hash, so editing a library in another root reparses its users (B173). Conservative: any edit reparses
+  the others; workers serving a root must agree on the roots. One root alone keeps its plain hash. Not chosen: declared
+  import sets (configuration and dependency rules that don't exist); only the root's own files on `sys.path`.
+- **328. Names that can't be told apart fail what uses them:** a top-level name in two roots, or also a library's
+  (the standard library's, an installed one, a preloaded one). Only that file and the root's files importing it fail, with
+  why (checked at compile time, inside functions too, so the start method can't matter); other files and tasks go on, and a
+  library importing that name always gets the library. Not chosen: failing the whole root (the user took it, then a side
+  note showed a stray `queue.py` would stop every DAG and task of a deployment); Python's first match (the wrong code,
+  silently, by start method: B174, B175).
+- **329. A DAG belongs to the module running its `with` block:** a helper's function can build it (B170); a module
+  imported by another still owns its own (B110). Decision 305 stays: the file must mention `schedr`. Not chosen: an
+  explicit ownership API for factories.
+- **330. `.schedrignore` is about what is shipped:** `dags check` reads the same filtered copy as `dags test` and workers,
+  so it can't pass what they can't import (B179). Not chosen: a separate discovery-only list.
+- **331. Naming a file or folder inside a configured root keeps that root:** so `schedr dags check team/sync.py` imports
+  `team.sync`, with the other roots importable; a named file a worker doesn't get is an error.
+- **332. `[dags] parse_concurrency`, default 4:** how many files are parsed at once, spawned or forked alike, capped at the
+  cores the agent may use; `1` is one at a time. `dags check` uses it, and forks when the interpreter has a fork server
+  ("parse as the task runs"). Measured (stress scenario 22, 12 cores, 1000 files importing `pydantic`): spawn 585 s one at a
+  time, 143 s four at once; fork 42 s and 14 s; peak memory about 60 MiB more spawned, 20 MiB forked. Parsing isn't counted
+  in task slots and each process has its own memory budget, so on a tight pod: `parse_concurrency = 1` or a preload list.
+  Name clashes are looked at per name imported, cached, so a process's start doesn't grow with the root.
+- **333. `[worker] pass_env` reaches parsing and the fork server too** (the user's, 2026-11-06, from Grok's review): spawned tasks
+  had a `PYTHONPATH` of `pass_env` on `sys.path`, while a parse and a forked task hadn't, and imported something else. A parse
+  and a fork server now get all of `pass_env`, as a task does, so a library needing such a variable at import works in both. Not
+  chosen: only `PYTHONPATH`. DAG authors could already read these from a task; now also at parse, so secrets don't belong in
+  `pass_env` (the guide says so), and parse tracebacks aren't masked.
+- **Parse as the task runs** (the user's, 2026-11-06): with a fork server on, a file is parsed in a fork of it, falling back
+  to a fresh process when it isn't usable; off, in a fresh process. An import that breaks only after a fork shows at parse time.
+  Fresh-process parsing costs about 0.4 s per file here, a fork about 5 ms; what isn't preloaded is imported per file, so the
+  preload list matters more. Measured by a stress scenario.
+
+
 ### Plain script delivery
 
 - Plain Python and Bash scripts live in directories listed in **`SCHEDR_SCRIPT_PATH`**, separate

@@ -4,14 +4,23 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06): M4.11a1 committed; the loader is next
+## State (2026-11-06): M4.11L committed; M4.11a2 is next
 
-- **M4.10** and **M4.11a1** (decisions 315-325) are in. Next: **the loader** (B172, the user's, 2026-11-06: all six of
-  Codex's recommendations, plus the fork server per file), **before M4.11a2**. Its report:
-  the session's scratchpad `codex-imports-report.md`; `import_scenarios.py` in `/home/ptutak/Git/schedr-codex-imports`
-  (also in the scratchpad). Its patch's Rust parts were never compiled. Removes B170, B172-B180; B181 in the same step.
-  Measure parse cost; test B175 on both start methods. Both colleagues review it.
-- Until about 12:50 on 2026-11-06, a review goes to Grok if Codex's 5 h window is above 95%.
+- **The user's instruction:** "accepted, you can commit and push and continue with M4.11". Next: **M4.11a2** (the
+  watcher host, decision 320), then the rest of M4.11 per `PLAN.md`.
+- **Done: M4.11L, the loader** (decisions 326-333): ordinary module names, a process per file, name clashes fail only what
+  uses them, `-P` on runners, root hashes fold the other DAG roots, `dags check` on a filtered copy and through the fork
+  server, `[dags] parse_concurrency` (default 4), `pass_env` reaches parsing and fork servers. Closes B170, B172-B181.
+  Stress scenario 22 measures it. Grok's review: 3 real, 1 the user's call. Codex's: 4 real, 2 of them in the fix of
+  Grok's. Worth remembering: a quick fix of a review finding gets reviewed as hard as the rest.
+- **Splits:** Codex every step review (Sol, high) and docs (Terra, medium), Grok security. If Codex really runs out: Grok
+  medium for docs and mechanical changes, high for bugs and reviews; ask about pending Codex resets first.
+- **Open offers, no answer yet:** log `Path` as a possible output type; a Grok security pass on M4.10's connection code.
+  Trigger examples in PROJECT still use `Event[Path]` (fix in M4.11b).
+
+## Before that (2026-11-06): M4.11a1 committed
+
+- **M4.10** and **M4.11a1** (decisions 315-325) are in.
 
 ## Before that (2026-11-06, morning): M4.9 finished
 
