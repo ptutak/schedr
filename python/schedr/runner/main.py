@@ -13,7 +13,7 @@ from schedr.runner.task import run_task
 FD_ENV = "SCHEDR_AGENT_FD"
 """The environment variable with the descriptor of the socket the agent handed over."""
 
-MODES = ("parse", "task", "fork_server")
+MODES = ("parse", "task", "fork_server", "watchers")
 """The modes the runner can be started in."""
 
 EXIT_ERROR = 1
@@ -30,7 +30,7 @@ def main(
     open_channel: Callable[[int], Channel] = from_fd,
     stderr: TextIO | None = None,
 ) -> int:
-    """Runs the runner: ``parse``, ``task`` or ``fork_server``.
+    """Runs the runner: ``parse``, ``task``, ``fork_server`` or ``watchers``.
 
     Args:
         argv: The arguments after ``-m schedr.runner``.
@@ -83,5 +83,10 @@ def _serve(channel: Channel, mode: str, err: TextIO) -> int:
         return run_task(channel, request)
     if mode == "fork_server":
         return run_fork_server(channel, request)
+    if mode == "watchers":
+        # Slow to import; only this mode starts with asyncio.
+        from schedr.runner.watchers import run_watchers  # noqa: PLC0415
+
+        return run_watchers(channel, request)
     run_parse(channel, request)
     return 0

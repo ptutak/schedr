@@ -71,7 +71,7 @@ def test_parse_mode_handshakes_then_parses(
 def test_wrong_arguments_print_usage(argv: list[str]) -> None:
     code, err = run(argv, FakeAgent())
     assert code == EXIT_USAGE
-    assert err == "usage: python -m schedr.runner {parse,task,fork_server}\n"
+    assert err == "usage: python -m schedr.runner {parse,task,fork_server,watchers}\n"
 
 
 def test_without_the_socket_variable_it_explains_who_starts_it() -> None:

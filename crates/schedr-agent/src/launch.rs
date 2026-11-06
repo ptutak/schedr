@@ -174,7 +174,7 @@ async fn handshake(
 
 /// `work`'s result, unless a reason in `stops` or their deadline comes first (reasons first,
 /// as in `supervise`); `work` is then dropped. Without `stops`, `work` alone.
-async fn unless_stopped<T>(
+pub(crate) async fn unless_stopped<T>(
     work: impl Future<Output = T>,
     stops: Option<(&mut Stops, Option<tokio::time::Instant>)>,
 ) -> Result<T, StopReason> {
@@ -466,6 +466,7 @@ pub async fn run_python(
                 start: None,
                 forked: false,
                 ended: Ended::default(),
+                moved_to: None,
             });
         }
         Start::Stopped(mut process, reason) => {
@@ -485,6 +486,7 @@ pub async fn run_python(
                 start: None,
                 forked,
                 ended,
+                moved_to: None,
             });
         }
     };
@@ -526,6 +528,7 @@ pub async fn run_python(
         }),
         forked,
         ended,
+        moved_to: None,
     })
 }
 
@@ -581,6 +584,7 @@ pub async fn run_command(
         duration: started.elapsed(),
         forked: false,
         ended,
+        moved_to: None,
     })
 }
 
@@ -714,7 +718,10 @@ impl ParseRunner for ProcessParseRunner {
 }
 
 /// The answer to a running Python task's `ConnectionGet` (decision 174).
-async fn connection_answer(secrets: Option<&AttemptSecrets>, name: &str) -> AgentMessage {
+pub(crate) async fn connection_answer(
+    secrets: Option<&AttemptSecrets>,
+    name: &str,
+) -> AgentMessage {
     let opened = match secrets {
         Some(secrets) => secrets.connection(name).await,
         None => Err(ConnectionError::NotFound(format!(
@@ -731,7 +738,10 @@ async fn connection_answer(secrets: Option<&AttemptSecrets>, name: &str) -> Agen
 }
 
 /// The answer to a running Python task's `SecretGet`.
-async fn secret_answer(secrets: Option<&AttemptSecrets>, secret: &SecretName) -> AgentMessage {
+pub(crate) async fn secret_answer(
+    secrets: Option<&AttemptSecrets>,
+    secret: &SecretName,
+) -> AgentMessage {
     let read = match secrets {
         Some(secrets) => secrets.read(secret).await,
         None => Err(SecretError::Denied(format!(

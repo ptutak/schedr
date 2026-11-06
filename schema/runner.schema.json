@@ -178,6 +178,163 @@
         },
         {
           "additionalProperties": false,
+          "description": "A watcher host's code set (its mode's request).",
+          "properties": {
+            "sys_path": {
+              "description": "Directories put first on `sys.path` (every DAG root's copy).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "watchers",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sys_path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start a wait step in a watcher host.",
+          "properties": {
+            "cancel_grace_ms": {
+              "description": "How long a thread it left running has to end before the host does (decision 337).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "moved_in": {
+              "description": "A poke moving here from older code (decision 335): it says `task_imported` when it\ncould start, or `task_failed`, and makes no call until a [`Self::GoWatcher`].",
+              "type": "boolean"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRequest",
+              "description": "What to run."
+            },
+            "type": {
+              "const": "start_watcher",
+              "type": "string"
+            },
+            "watcher": {
+              "description": "The watcher's ID, unique in the host.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "watcher",
+            "task",
+            "cancel_grace_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stop a poke between its calls: `watcher_moved`, unless it ended first.",
+          "properties": {
+            "type": {
+              "const": "move_watcher",
+              "type": "string"
+            },
+            "watcher": {
+              "description": "The watcher's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "watcher"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Let a poke that moved here make its first call.",
+          "properties": {
+            "max_wait_ms": {
+              "description": "What is left of its `max_wait`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "go_watcher",
+              "type": "string"
+            },
+            "watcher": {
+              "description": "The watcher's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "watcher"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cancel a watcher: `CancelledError` at its next `await`.",
+          "properties": {
+            "type": {
+              "const": "cancel_watcher",
+              "type": "string"
+            },
+            "watcher": {
+              "description": "The watcher's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "watcher"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An answer to one watcher, in a watcher host.",
+          "properties": {
+            "message": {
+              "$ref": "#/$defs/AgentMessage",
+              "description": "What a task's runner would get."
+            },
+            "type": {
+              "const": "to_watcher",
+              "type": "string"
+            },
+            "watcher": {
+              "description": "The watcher's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "watcher",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Start a runner process (to the fork server).",
           "properties": {
             "cwd": {
@@ -1043,6 +1200,21 @@
       ],
       "type": "object"
     },
+    "OutputStream": {
+      "description": "A process's output stream.",
+      "oneOf": [
+        {
+          "const": "stdout",
+          "description": "Standard output.",
+          "type": "string"
+        },
+        {
+          "const": "stderr",
+          "description": "Standard error.",
+          "type": "string"
+        }
+      ]
+    },
     "Params": {
       "additionalProperties": false,
       "description": "The run parameters a DAG takes (`Dag(params=SomeDataclass)`, decision 138).",
@@ -1707,6 +1879,84 @@
         },
         {
           "additionalProperties": false,
+          "description": "Of one watcher, in a watcher host: what a task's runner would send.",
+          "properties": {
+            "message": {
+              "$ref": "#/$defs/RunnerMessage",
+              "description": "The message: never a `watcher_message`."
+            },
+            "type": {
+              "const": "watcher_message",
+              "type": "string"
+            },
+            "watcher": {
+              "description": "The watcher's ID.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "watcher",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What a watcher printed: its attempt's log (inside a [`Self::WatcherMessage`]).",
+          "properties": {
+            "stream": {
+              "$ref": "#/$defs/OutputStream",
+              "description": "Which of its streams."
+            },
+            "text": {
+              "description": "The text.",
+              "type": "string"
+            },
+            "type": {
+              "const": "watcher_log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stream",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A watcher ended by its cancel (inside a [`Self::WatcherMessage`]).",
+          "properties": {
+            "type": {
+              "const": "watcher_cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A poke stopped between calls, as asked: its next one is on new code (decision 335).",
+          "properties": {
+            "type": {
+              "const": "watcher_moved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The fork server preloaded its libraries and is single-threaded: it takes `fork`\nrequests.",
           "properties": {
             "type": {
@@ -1877,6 +2127,11 @@
         {
           "const": "fork_server",
           "description": "Preload libraries, then fork a process per request (Linux only).",
+          "type": "string"
+        },
+        {
+          "const": "watchers",
+          "description": "Run the wait steps of one code set as coroutines, long-lived (decision 320).",
           "type": "string"
         }
       ]
@@ -2408,6 +2663,79 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$",
       "type": "string"
+    },
+    "TaskRequest": {
+      "additionalProperties": false,
+      "description": "One task attempt for the runner to run.",
+      "properties": {
+        "cleanup": {
+          "description": "Set for a cleanup: the task's cleanup function is called with the task's inputs and\nthese handles, in registration order, instead of the task.",
+          "items": {
+            "$ref": "#/$defs/CleanupHandle"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "connection_test": {
+          "description": "Set for `schedr connections test` (decision 174): no task is run; the file is\nimported, and this connection opened and checked (decision 198).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dag_file": {
+          "$ref": "#/$defs/DagFile",
+          "description": "The DAG file to import."
+        },
+        "dag_id": {
+          "description": "The DAG's ID (the file may define several DAGs).",
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "description": "The upstream outputs the task uses, by task ID, as stored JSON.",
+          "type": "object"
+        },
+        "outcomes": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "The upstream tasks' outcomes, by task ID: a name, or `null` for a skipped one (its\nreferences stand for `None`).",
+          "type": "object"
+        },
+        "run": {
+          "$ref": "#/$defs/RunInfo",
+          "description": "The run information."
+        },
+        "secrets": {
+          "description": "The secrets fetched for the attempt (those its arguments name and those it declares,\nprefixes aside): filled into its arguments and read by `task_ctx.secret(...)`.",
+          "items": {
+            "$ref": "#/$defs/SecretValue"
+          },
+          "type": "array"
+        },
+        "sys_path": {
+          "description": "Directories put first on `sys.path` (every DAG root).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "$ref": "#/$defs/Task",
+          "description": "The task as stored in DAG JSON (its arguments and settings)."
+        }
+      },
+      "required": [
+        "dag_file",
+        "dag_id",
+        "task",
+        "inputs",
+        "run",
+        "sys_path"
+      ],
+      "type": "object"
     },
     "TaskSettings": {
       "additionalProperties": false,

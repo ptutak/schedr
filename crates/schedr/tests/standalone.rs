@@ -2036,3 +2036,104 @@ fn a_library_in_another_root_is_used_and_reparses_forked() {
         &[("SCHEDR_CONFIG__DAGS__INTERPRETER", "forked")],
     );
 }
+
+const POLLS: &str = r#"from datetime import timedelta
+from pathlib import Path
+
+from schedr import NOT_YET, Dag, NotYet, sensor, task
+
+READY = "READY_FILE"
+CODE = "old"
+
+
+@sensor.poke(every=timedelta(milliseconds=100), max_wait=timedelta(seconds=60))
+async def polls() -> str | NotYet:
+    Path(READY + ".called").write_text("yes")
+    return CODE if Path(READY).exists() else NOT_YET
+
+
+@task
+def after(seen: str) -> str:
+    return seen
+
+
+with Dag("moves"):
+    after(polls().on(str))
+"#;
+
+fn poke_on_changing_code(
+    new_code: impl FnOnce(&str) -> String,
+    log_says: &str,
+) -> (Standalone, String) {
+    let ready_dir = TempDir::new().unwrap();
+    let ready = ready_dir.path().join("ready");
+    // `ready.called` is `READY + ".called"`.
+    let old = POLLS.replace("READY_FILE", ready.to_str().unwrap());
+    let standalone = Standalone::start(&[("moves.py", &old)], None);
+    standalone.wait("the DAG", || {
+        standalone.dag_ids().contains(&"moves".to_owned())
+    });
+    let run = standalone.trigger("moves");
+    // Its first call made: what it is told about new code it hears on its old code.
+    standalone.wait("the poke to run", || {
+        ready.with_extension("called").exists()
+    });
+    std::fs::write(standalone.root().join("moves.py"), new_code(&old)).unwrap();
+    standalone.wait("the move to be made or refused", || {
+        poke_log(&standalone, &run, "polls").contains(log_says)
+    });
+    std::fs::write(&ready, "").unwrap();
+    standalone.wait_for_state(&run, "success");
+    (standalone, run)
+}
+
+fn poke_log(standalone: &Standalone, run: &str, task: &str) -> String {
+    let (_, out, _) = standalone.cli(&["tasks", "logs", run, task]);
+    out
+}
+
+#[test]
+fn a_running_poke_moves_to_new_code_on_a_real_worker() {
+    let (standalone, run) = poke_on_changing_code(
+        |old| old.replace("CODE = \"old\"", "CODE = \"new\""),
+        "moved to new code",
+    );
+    // The poke's value and its task after it ran on the new code: only it is recorded.
+    let recorded = standalone.run(&run)["code_hashes"].clone();
+    assert_eq!(recorded.as_array().unwrap().len(), 1, "{recorded}");
+    let hash = recorded[0].as_str().unwrap();
+    let folder = hash.replace(':', "-");
+    let copies = standalone.dir.path().join("data/code");
+    let found = walk_for(&copies, &folder).expect("the copy it names");
+    assert!(
+        std::fs::read_to_string(found.join("moves.py"))
+            .unwrap()
+            .contains("CODE = \"new\""),
+        "{hash}"
+    );
+}
+
+#[test]
+fn a_poke_renamed_in_new_code_finishes_its_run_on_a_real_worker() {
+    // The user's example: a run polling `polls` while new code calls it `renamed`.
+    poke_on_changing_code(
+        |old| old.replace("polls", "renamed"),
+        "it stays on its code",
+    );
+}
+
+/// A folder of this name somewhere under `dir`.
+fn walk_for(dir: &Path, name: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if entry.file_name() == name {
+                return Some(path);
+            }
+            if let Some(found) = walk_for(&path, name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}

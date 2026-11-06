@@ -1,7 +1,7 @@
 # Workers
 
 A worker is the Rust **agent** (`schedr worker`) plus the subprocesses it starts. The agent
-never runs user code itself: each task and each parse job runs in a child process, so a
+never runs user code itself: tasks and parse jobs run in child processes, so a
 crash or a memory spike in user code doesn't take the agent down. A worker needs no
 database. All it needs is `[worker] master_url`.
 
@@ -78,6 +78,9 @@ DAG code can read them during parsing, and parse tracebacks are not masked.
 
 ## Running a task
 
+Wait steps share a watcher host and have different process and cancellation behavior; see
+[The watcher host](#the-watcher-host).
+
 For [built-in connections](../02-dags/14-connections.md#built-in-types), install the client
 libraries in the interpreter where tasks run: `schedr[http]`, `schedr[ssh]`,
 `schedr[mongo]`, `schedr[postgres]` and `schedr[mysql]`, as needed. A library is imported
@@ -141,6 +144,33 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    (2, 4, ... up to 32 intervals); after 8 such sends the agent reconnects, and the master's
    answer to its journal settles the result. `Finished` includes `usage` and `core_dumped`
    (below).
+
+### The watcher host
+
+Wait steps for one interpreter and set of root copies run as coroutines in a spawned,
+long-lived host. A new code set uses another host; each stops when its last wait step ends.
+They still hold task slots. The host imports each DAG file once, shares module globals, and
+uses the worker's log directory as its working directory and the allowed environment plus
+`pass_env`. Run-specific values come from `dag_ctx` and `task_ctx`; use absolute paths.
+Blocking the event loop holds up the host's other wait steps.
+Wait steps on a host share memory and can read each other's secrets; separate teams that
+must be isolated with separate queues and workers.
+
+A poke can move between calls to new code after the new host imports it and builds its call.
+It keeps its deadline and uses no retry. If preparation fails, it stays on the old code and
+logs why. A full-control `@sensor` keeps its host and code copy until it ends; frequent
+deploys with long waits can retain many copies. Retries start on the newest code. See
+[Wait steps](../02-dags/18-sensors.md#running-and-deploying-wait-steps).
+
+Cancellation cancels the coroutine. If it does not end within its grace, the agent kills the
+host, and the other wait steps there fail; a host crash also fails its wait steps. There is
+currently no host memory budget or blocked-loop watchdog. Asyncio tasks left by a step are
+cancelled and awaited when it ends. A wait step can't start a process
+([Wait steps](../02-dags/18-sensors.md#running-and-deploying-wait-steps)); one C code started runs
+until the host stops, and a host that loses the agent's socket kills its process group.
+Step output, a thread's it started included, goes to its attempt log; output from C code, or
+from a thread outliving its step, goes to the host's own log, masked using the secrets of every
+wait step the host has held.
 
 ### Commands' connection files
 
@@ -463,7 +493,8 @@ journal: a second agent with the same ID and data directory exits at once.
 
 All tasks on a worker share the pod's memory limit. If the kernel's out-of-memory killer
 fires, it kills everything in the container, the agent included. So the agent enforces
-**budgets** itself:
+**budgets** itself for task and parse processes. Watcher hosts do not yet have a memory
+budget:
 
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
   budget is `[worker] memory_budget`, else (limit − 10 %) ÷ slots. The parse runner gets the
@@ -481,7 +512,7 @@ fires, it kills everything in the container, the agent included. So the agent en
 - Without `/proc` (macOS) there is no cgroup limit and a task's memory can't be read, so the
   watchdog neither measures nor kills.
 
-Every attempt reports its peak memory, shown in the API, and its `start_method` once
+Task process attempts report their peak memory, shown in the API, and their `start_method` once
 `Started` has been stored. `usage`, stored with the result, is separate. For a forked
 process its peak resident size includes the fork server's pages. This peak is the watchdog's
 PSS, which counts only a share of those pages (see [The fork server](#the-fork-server)).

@@ -14,10 +14,10 @@ import inspect
 import operator
 import sys
 import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Union, get_args, get_origin, is_typeddict
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, is_typeddict
 from urllib.parse import quote
 
 from schedr._model import SecretRef, registry
@@ -50,8 +50,14 @@ from schedr.context import (
 )
 from schedr.outcomes import TIMED_OUT_NAME, TimedOut, from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
-from schedr.runner.protocol import Channel
+from schedr.runner.protocol import Asking, Channel
 from schedr.sensors import output_hint
+
+if TYPE_CHECKING:
+    import asyncio
+
+type EntriesOf = Callable[[str, Path, str], list[registry.DefinedDag]]
+"""Gives a DAG file's DAGs: its root's name and folder, and its path in it."""
 
 SUCCESS = "SUCCESS"
 """The outcome of a task without outcomes of its own (``DefaultOutcome.SUCCESS``)."""
@@ -158,7 +164,7 @@ def _label(name: Mapping[str, Any]) -> str:
     ).label()
 
 
-def secret_reader(channel: Channel) -> SecretReader:
+def secret_reader(channel: Asking) -> SecretReader:
     """Reads a secret through the agent (``secret_get``), one request at a time.
 
     Args:
@@ -181,7 +187,7 @@ def secret_reader(channel: Channel) -> SecretReader:
     return read
 
 
-def connection_opener(channel: Channel) -> ConnectionOpener:
+def connection_opener(channel: Asking) -> ConnectionOpener:
     """Opens connections, their values asked of the agent (``connection_get``).
 
     The agent renders them from what the parser recorded; one request at a time.
@@ -557,11 +563,14 @@ def find_task_of_dag(
     return entry.functions[task_id], downstream, entry.params_class
 
 
-def find_entry(request: Mapping[str, Any]) -> registry.DefinedDag:
+def find_entry(
+    request: Mapping[str, Any], entries_of: EntriesOf = import_dag_entries
+) -> registry.DefinedDag:
     """The DAG of a task request, its file imported, with the task's function in it.
 
     Args:
         request: The ``task`` message.
+        entries_of: Gives a DAG file's DAGs (imports it; a watcher host only once).
 
     Returns:
         The DAG.
@@ -570,7 +579,7 @@ def find_entry(request: Mapping[str, Any]) -> registry.DefinedDag:
         TaskSetupError: If the DAG or the task isn't in the file.
     """
     dag_file = request["dag_file"]
-    entries = import_dag_entries(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
+    entries = entries_of(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
     task_id = request["task"]["id"]
     for entry in entries:
         if entry.model.id == request["dag_id"]:
@@ -637,7 +646,99 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
     return {"type": "task_failed", "error": summary, "kind": kind}
 
 
-def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
+@dataclasses.dataclass
+class _Begun:
+    """A task ready for its function: everything before the call."""
+
+    function: Callable[..., Any]
+    arguments: dict[str, Any]
+    hints: Mapping[str, Any]
+    values: RunValues
+    own: TaskValues
+    downstream: frozenset[str]
+
+
+def _begin(
+    request: Mapping[str, Any],
+    imported: Callable[[], None],
+    secrets: SecretReader | None,
+    channel: Asking | None,
+    entries: EntriesOf = import_dag_entries,
+    *,
+    binding: bool = False,
+) -> _Begun | dict[str, Any]:
+    """Imports the DAG file and builds the call; a ``task_failed`` message when that fails.
+
+    With ``binding``, a call its function's signature doesn't take fails here, before anything
+    is told it can start (a poke moving to new code, which then stays on its own).
+    """
+    task, inputs, run = request["task"], request["inputs"], request["run"]
+    if request.get("secrets"):
+        fetched = {secret_key(s["name"]): s["value"] for s in request["secrets"]}
+        run = {**run, SECRETS: fetched}
+    outcomes = request.get("outcomes", {})
+    task_id = task["id"]
+    try:
+        entry = find_entry(request, entries)
+        function, params_class = entry.functions[task_id], entry.params_class
+        downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
+        hints = type_hints(function, f"task `{task_id}`")
+        arguments = {
+            name: build(value, hints.get(name, Any), inputs, run, outcomes)
+            for name, value in task.get("arguments", {}).items()
+        }
+        arguments.update(mapped_arguments(inputs, hints, run, outcomes))
+        handles = request.get("cleanup")
+        if handles is not None:
+            function, arguments = cleanup_call(entry, function, task_id, arguments, handles)
+        if binding:
+            inspect.signature(function).bind(**arguments)
+    except TaskSetupError as e:
+        return failure(e, "task_not_found")
+    except (TaskInputError, TypeModelError) as e:
+        return failure(e, "input_mismatch")
+    except (Exception, SystemExit) as e:
+        return failure(e, "import_failed")
+    imported()
+    opener = connection_opener(channel) if channel is not None else None
+    adder = handle_adder(channel) if channel is not None else None
+    own = TaskValues(
+        task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
+    )
+    return _Begun(function, arguments, hints, run_values(run, params_class), own, downstream)
+
+
+def _raised(error: BaseException) -> dict[str, Any]:
+    """The message for what a task's function raised."""
+    if isinstance(error, SecretError):
+        return failure(error, error.kind)
+    if isinstance(error, ConnectionNotFoundError):
+        return failure(error, CONNECTION_NOT_FOUND)
+    if isinstance(error, ConnectionDeniedError):
+        return failure(error, CONNECTION_DENIED)
+    return failure(error, None)
+
+
+def _finish(request: Mapping[str, Any], begun: _Begun, result: object) -> dict[str, Any]:
+    """The message for what a task's function returned."""
+    task, hints = request["task"], begun.hints
+    sensing = task.get("kind") == "sensor"
+    if request.get("cleanup") is not None:
+        return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
+    if sensing and isinstance(result, TimedOut):
+        return _stored(result, TimedOut, task, TIMED_OUT_NAME)
+    if sensing:
+        return _stored(result, output_hint(hints.get("return", Any)), task)
+    if not task.get("branch"):
+        return _stored(result, hints.get("return", Any), task)
+    try:
+        chosen = chosen_ids(result, begun.downstream, request["dag_id"])
+    except CodecError as e:
+        return failure(e, "output_not_serializable", f"`{task['id']}`: {e.reason}")
+    return _stored(chosen, list[str], task)
+
+
+def execute(
     request: Mapping[str, Any],
     imported: Callable[[], None] = lambda: None,
     secrets: SecretReader | None = None,
@@ -658,39 +759,13 @@ def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
     """
     if request.get("connection_test"):
         return run_connection_test(request, imported, channel)
-    task, inputs, run = request["task"], request["inputs"], request["run"]
-    if request.get("secrets"):
-        fetched = {secret_key(s["name"]): s["value"] for s in request["secrets"]}
-        run = {**run, SECRETS: fetched}
-    outcomes = request.get("outcomes", {})
-    task_id = task["id"]
+    begun = _begin(request, imported, secrets, channel)
+    if isinstance(begun, dict):
+        return begun
     try:
-        entry = find_entry(request)
-        function, params_class = entry.functions[task_id], entry.params_class
-        downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
-        hints = type_hints(function, f"task `{task_id}`")
-        arguments = {
-            name: build(value, hints.get(name, Any), inputs, run, outcomes)
-            for name, value in task.get("arguments", {}).items()
-        }
-        arguments.update(mapped_arguments(inputs, hints, run, outcomes))
-        handles = request.get("cleanup")
-        if handles is not None:
-            function, arguments = cleanup_call(entry, function, task_id, arguments, handles)
-    except TaskSetupError as e:
-        return failure(e, "task_not_found")
-    except (TaskInputError, TypeModelError) as e:
-        return failure(e, "input_mismatch")
-    except (Exception, SystemExit) as e:
-        return failure(e, "import_failed")
-    imported()
-    try:
-        opener = connection_opener(channel) if channel is not None else None
-        adder = handle_adder(channel) if channel is not None else None
-        own = TaskValues(
-            task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
-        )
-        with running(run_values(run, params_class), own):
+        with running(begun.values, begun.own):
+            task = request["task"]
+            function, arguments = begun.function, begun.arguments
             sensing = task.get("kind") == "sensor"
             result = _sensed(function, arguments, task) if sensing else function(**arguments)
             # Asked of the result, not the function: a decorator can wrap an `async def`.
@@ -698,27 +773,55 @@ def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
                 from schedr.runner.coroutines import run_coroutine  # noqa: PLC0415  # see there
 
                 result = run_coroutine(result)
-    except SecretError as e:
-        return failure(e, e.kind)
-    except ConnectionNotFoundError as e:
-        return failure(e, CONNECTION_NOT_FOUND)
-    except ConnectionDeniedError as e:
-        return failure(e, CONNECTION_DENIED)
     except (Exception, SystemExit) as e:
-        return failure(e, None)
-    if request.get("cleanup") is not None:
-        return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
-    if sensing and isinstance(result, TimedOut):
-        return _stored(result, TimedOut, task, TIMED_OUT_NAME)
-    if sensing:
-        return _stored(result, output_hint(hints.get("return", Any)), task)
-    if not task.get("branch"):
-        return _stored(result, hints.get("return", Any), task)
+        return _raised(e)
+    return _finish(request, begun, result)
+
+
+async def execute_watcher(
+    request: Mapping[str, Any],
+    channel: Asking,
+    entries: EntriesOf,
+    moving: asyncio.Event | None = None,
+    go: Callable[[], Awaitable[int | None]] | None = None,
+) -> dict[str, Any]:
+    """Runs a wait step in the watcher host's loop, its file imported at most once there.
+
+    Args:
+        request: The task, as for :func:`execute`.
+        channel: The watcher's channel to the agent.
+        entries: Gives a DAG file's DAGs.
+        moving: Set when a poke is to stop between calls, for new code.
+        go: For a poke moving here: everything is ready, and this waits for the old one's stop.
+            Gives what is left of its ``max_wait``, in milliseconds.
+
+    Returns:
+        ``task_succeeded`` with the encoded output, ``task_failed``, or ``watcher_moved``.
+    """
+    begun = _begin(
+        request,
+        lambda: channel.send({"type": "task_imported"}),
+        secret_reader(channel),
+        channel,
+        entries,
+        binding=go is not None,
+    )
+    if isinstance(begun, dict):
+        return begun
+    task = request["task"]
+    if go is not None:
+        task = {**task, "max_wait_ms": await go()}
+    # Slow to import; most tasks aren't wait steps.
+    from schedr.runner.waiting import WatcherMovedError  # noqa: PLC0415
+
     try:
-        chosen = chosen_ids(result, downstream, request["dag_id"])
-    except CodecError as e:
-        return failure(e, "output_not_serializable", f"`{task_id}`: {e.reason}")
-    return _stored(chosen, list[str], task)
+        with running(begun.values, begun.own):
+            result = await _sensed(begun.function, begun.arguments, task, moving)
+    except WatcherMovedError:
+        return {"type": "watcher_moved"}
+    except (Exception, SystemExit) as e:
+        return _raised(e)
+    return _finish(request, begun, result)
 
 
 def cleanup_call(
@@ -776,7 +879,7 @@ def _handle(handle: Mapping[str, Any], classes: Mapping[str, type], task_id: str
         raise TaskInputError(f"a `{name}` handle of task `{task_id}`: {e.reason}") from None
 
 
-def handle_adder(channel: Channel) -> HandleAdder:
+def handle_adder(channel: Asking) -> HandleAdder:
     """Registers cleanup handles with the agent (``handle_add``), one request at a time.
 
     Args:
@@ -894,13 +997,16 @@ def outcome_of(result: object, annotation: object) -> tuple[str, object, object]
 
 
 def _sensed(
-    function: Callable[..., Any], arguments: Mapping[str, object], task: Mapping[str, Any]
-) -> object:
+    function: Callable[..., Any],
+    arguments: Mapping[str, object],
+    task: Mapping[str, Any],
+    moving: asyncio.Event | None = None,
+) -> Coroutine[object, object, object]:
     """A wait step's coroutine, waiting for its value or its deadline."""
     # Slow to import; most tasks aren't wait steps.
     from schedr.runner.waiting import waited  # noqa: PLC0415
 
-    return waited(function, arguments, task)
+    return waited(function, arguments, task, moving)
 
 
 def _stored(

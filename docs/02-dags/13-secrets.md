@@ -80,7 +80,7 @@ when it needs it:
 
 | Where | Declare | Read |
 |---|---|---|
-| A Python task | `@task(secrets=["etl/api#token"])` | `task_ctx.secret("etl/api", "token")`, or `task_ctx.secret_value("etl/api#token")`; async: `await task_ctx.asecret(...)` or `await task_ctx.asecret_value(...)` |
+| A Python task or wait step | `@task(secrets=["etl/api#token"])` or `@sensor(secrets=["etl/api#token"])` | `task_ctx.secret("etl/api", "token")`, or `task_ctx.secret_value("etl/api#token")`; async: `await task_ctx.asecret(...)` or `await task_ctx.asecret_value(...)` |
 | A command | `CommandOperator(..., secrets=["etl/api#token"])` | `schedr task-ctx secret get 'etl/api#token'` |
 
 `secrets=` takes a string for the default storage (`"etl/api#token"`, or `"etl/api"` for a
@@ -93,6 +93,10 @@ the event loop. Each takes `storage=`, and `schedr task-ctx secret get [--storag
 the storage separately too, never inside the string. The CLI prints a key's value as it is,
 with no trailing newline, and a whole secret as one line of JSON. `.override(secrets=[...])`
 changes the list for one use of a task.
+
+In a wait step, prefer the async forms: named secrets are fetched before it runs, but a
+secret covered by a `SecretPrefix` is fetched from the agent when read. The plain forms hold
+the shared event loop while that fetch finishes.
 
 Only declared secrets can be read. Another one raises `SecretError` with the kind
 `secret_denied`, as a typo does: ``secret_denied: `secrets['etl/api']['tokn']` isn't

@@ -599,6 +599,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
         metrics: AgentMetrics::default(),
         drain_terminate_period: Duration::from_secs(1),
         forks: None,
+        watchers: schedr_agent::watchers::WatcherHosts::default(),
         secrets: Arc::new(SecretStores::none()),
     };
     let registry: Registry = serde_json::from_value(json!({

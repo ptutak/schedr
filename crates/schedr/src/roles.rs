@@ -982,6 +982,7 @@ pub async fn run_worker(
         metrics: observed.metrics.clone(),
         drain_terminate_period: agent.drain.terminate_period,
         forks: ForkServers::for_worker(&agent.setup, &observed.metrics.fork),
+        watchers: schedr_agent::watchers::WatcherHosts::default(),
         secrets: std::sync::Arc::clone(&agent.secrets),
     };
     let mut agent = Agent::new(agent, executor, uuid::Uuid::now_v7().to_string())

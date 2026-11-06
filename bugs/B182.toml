@@ -1,0 +1,13 @@
+title = "Attempt and host logs are created 0644, where journals and connection files are 0600"
+severity = "low"
+probability = "possible"
+kind = "security"
+summary = "`AttemptLog::open` (watchers.rs) and `open_log` (process.rs) set no mode, so under umask 0022 a log is readable by other uids on the node or log volume; anything the mask doesn't cover (shorter than `min_mask_length`) can be read outside the log API"
+found = 2026-11-06
+suspected = false
+details = '''
+- **Found:** 2026-11-06, Grok's security review of M4.11a2 (attempt_mode=644, host_mode=644,
+  parse_mode=644). The same holds for every task log, from before this step.
+- **Before changing it:** a log shipper running under another uid reads these files; 0600 would
+  silently stop it. Check that, or make the mode a key.
+'''

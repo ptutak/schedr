@@ -38,6 +38,16 @@ impl PartialEq for Mask {
 
 impl Eq for Mask {}
 
+/// Labels and values, never shown by `Debug`.
+#[derive(Default)]
+struct Values(Vec<(String, String)>);
+
+impl std::fmt::Debug for Values {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} values", self.0.len())
+    }
+}
+
 /// What a masked value is written as.
 pub const MASK: &str = "****";
 
@@ -46,6 +56,18 @@ pub const MASK: &str = "****";
 pub struct MaskSet {
     min_length: usize,
     inner: Mutex<Inner>,
+}
+
+impl MaskSet {
+    /// Masks in `other` too whatever is masked here, now and from now on: output shared by
+    /// several attempts can't be told apart, so it masks them all.
+    pub fn also_in(&self, other: std::sync::Arc<Self>) {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        for (label, value) in &inner.values.0 {
+            other.add(label, value);
+        }
+        inner.also.push(other);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -59,6 +81,10 @@ struct Inner {
     labels: Vec<String>,
     /// How many times each secret was masked.
     counts: Vec<u64>,
+    /// The values added, for [`MaskSet::also_in`].
+    values: Values,
+    /// The sets that mask these too.
+    also: Vec<std::sync::Arc<MaskSet>>,
 }
 
 impl MaskSet {
@@ -117,6 +143,12 @@ impl MaskSet {
             }
         }
         inner.index();
+        inner.values.0.push((label.to_owned(), value.to_owned()));
+        let also = inner.also.clone();
+        drop(inner);
+        for other in also {
+            other.add(label, value);
+        }
         true
     }
 

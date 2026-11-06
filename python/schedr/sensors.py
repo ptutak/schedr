@@ -29,6 +29,7 @@ from schedr import _build
 from schedr import outcomes as _outcomes
 from schedr._model import SensorKind, SensorMode
 from schedr._secrets import SecretsArg
+from schedr._wait_rules import refused_in
 from schedr.connections import ConnectionsArg
 from schedr.tasks import AsyncTaskFunction, Output, TaskFunction, is_async, task
 
@@ -141,6 +142,12 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         if expand is not None:
             # Each instance could end its own way, and `TimedOut` has no element-wise routing yet.
             raise TypeError(f"@sensor `{self._task_id}`: a wait step can't be mapped for now")
+        # Here, not at the decorator: the file has defined what it refers to by now.
+        refused = refused_in(self._fn)
+        if refused is not None:
+            raise TypeError(
+                f"@sensor `{self._task_id}`: `{refused.what}` ({refused.where}) {refused.why}"
+            )
         return super()._record(builder, fixed, expand)
 
     def _output_hint(self, hints: Mapping[str, object], where: str) -> object:

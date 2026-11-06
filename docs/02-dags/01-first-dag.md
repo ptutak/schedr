@@ -36,7 +36,7 @@ schedr dags test sync_customers --path examples/sync.py --for 2026-10-15T01:00Z
 
 `dags check` imports each file in its own process and prints one line per file. It uses
 the configured fork server when usable, as a worker's parse does. `dags test` runs one real
-run, each task in its own process, and prints the logs and a table.
+run, each task in this example in its own process, and prints the logs and a table.
 [Testing a DAG](07-testing.md) is both commands, and how a pytest does the same thing.
 [Life of a run](../03-guide/03-life-of-a-run.md) is what that run does inside schedr.
 

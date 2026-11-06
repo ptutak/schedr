@@ -849,6 +849,9 @@ pub struct Ran {
     pub forked: bool,
     /// What it used and whether it dumped core.
     pub ended: crate::usage::Ended,
+    /// The code it ended on, when that isn't the code it started on: a poke moved to new code
+    /// (decision 335).
+    pub moved_to: Option<String>,
 }
 
 /// How long a Python task's process took to start, by phase.
@@ -874,6 +877,7 @@ pub fn finished(attempt_id: &str, task: &Task, ran: &Ran) -> pb::Finished {
     };
     let status = attempt_status(termination, ran.supervised.stopped, &success_codes);
     let mut message = pb::Finished {
+        code_hash: ran.moved_to.clone().unwrap_or_default(),
         attempt_id: attempt_id.to_owned(),
         status: attempt_status_to_proto(status).into(),
         duration_ms: Some(u64::try_from(ran.duration.as_millis()).unwrap_or(u64::MAX)),

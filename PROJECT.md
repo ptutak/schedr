@@ -6705,8 +6705,9 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   extensions); one host, documented (wrong code silently).
 - **Each host:** the agent starts `python -m schedr.runner watchers`, one long-lived
   asyncio process, and supervises it like any runner (same socket protocol, multiplexed by
-  watcher ID: `start_watcher`, `cancel_watcher`, `event_ack` from the agent; `watcher_done`,
-  `watcher_failed`, `event`, `log`, `loop_blocked` from the host). Every wait step and trigger assigned to the
+  watcher ID: `start_watcher`, `cancel_watcher`, `to_watcher`, later `event_ack` from the agent;
+  `watcher_message` from the host, around what a task's runner would send, `watcher_log` and
+  `watcher_cancelled` besides, later `event`, `loop_blocked`). Every wait step and trigger assigned to the
   worker runs in it as a coroutine. Not chosen: a host per queue (more processes and
   configuration for a half isolation, since tasks on the worker still share it); a thread in
   the agent (Python inside the agent through PyO3: user code could crash the supervisor); Rust
@@ -6734,6 +6735,92 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   `logging` are routed per watcher; lines go over the socket to the agent, which masks secrets
   and writes the watcher's log file as for any attempt. Output from threads or C code goes to the host's own
   log.
+- **Built in M4.11a2 (decision 334, Claude's calls, for the user to look at):** a host is
+  stopped as soon as its last watcher ends, so a lone wait step pays for a process start, and no
+  timing or key is needed for an idle host. A host is always spawned, never forked: it lives for
+  hours beside the fork server's other children. A DAG file is imported once per host, so its
+  top level isn't run again for each attempt; a failed import is tried again by the next one. Its
+  folder is the worker's log folder and its environment the allow-list plus `pass_env`, as they
+  can't be a run's: a wait step reads run values from `dag_ctx` and `task_ctx`, never
+  `SCHEDR_*` variables, and uses absolute paths. Until M4.11a3: a wait step not ending in its grace time kills its
+  host, and its host's other watchers just fail. Until M4.11a4: a wait step holds a task slot.
+- **A poke moves to new code, and a move can't fail it** (decision 335, the user's, 2026-11-06): a
+  `@sensor.poke` finishes its current call and makes its next one on the new code, using no retry and
+  keeping its deadline, if it can start there: the new host imports the file, finds the task under its
+  ID and builds the call from the run's stored arguments. If not (the task renamed or removed, an
+  import error, a signature that no longer fits), it stays on its old code until it ends, and its log
+  says why. The new host prepares first, the old one stops between calls, then the new one calls: two
+  never poke at once. A full-control `@sensor` stays until it ends: its progress is in its coroutine,
+  so it can hold an old host and code copy. A retry starts on the newest code, as any Python task's
+  (`task_not_found` if the task is gone). Not chosen: nothing moves (a poke's bug fix waits up to its
+  `max_wait`, and with hourly deploys and 24 h sensors a worker holds about 24 hosts); moving without
+  the check (a rename would fail a healthy run); restarting `@sensor` too (see decision 320).
+- **What a host's own log masks:** every value of every watcher it has had, for its whole life
+  (what C code prints, or a thread outliving its step, can't be told apart, and may come later).
+- **`asyncio.to_thread` belongs to its wait step and has its time** (decision 337, the user's,
+  2026-11-06): the loop's default executor (`_WatcherThreads`) runs each call in the context of who
+  made it, so its log, secrets and refusals are its step's, and tracks it. A call cancelled, or still
+  running when its step ends, has `StepEndedError` (a `BaseException`) raised in its thread with
+  `PyThreadState_SetAsyncExc`, the one way Python has to reach one; a call waiting for an agent's
+  answer is woken instead, and the next one waits for that answer before asking, as answers can come
+  in any order. A thread that hasn't ended after that step's cancel grace (blocked in C) ends with its
+  host, after the step's result is told: only a process can be killed. Until M4.11a3 the other watchers on
+  it just fail. A thread pool of the author's own is refused at parsing. Not chosen: refusing
+  `to_thread` (the usual way to call a blocking client); leaving a stuck thread running, logged (it
+  holds a pool thread and overlaps a retry, again each time). **The known risk:** the error lands on
+  any Python line, also inside a library's own update, and the other watchers share that library; the
+  docs say so, and a host isn't restarted after such a stop.
+- **A wait step or trigger that keeps blocking is switched off** (decision 338, the user's,
+  2026-11-06; built in M4.11a3): the master counts strikes per DAG and task (a blocked loop, a stuck
+  thread, an ignored cancel). After `[watchers] switch_off_after` in a row (default 3), new attempts
+  fail at once with a clear error and never reach a host. A success resets the count; new code or a
+  CLI or UI command switches it back on. A host crash isn't counted: it can't be pinned on one step.
+  Not chosen: running an offender in a host of its own (a process per offender and more placement
+  code; the others are hit a few times instead of once); a host of its own and never off (it keeps
+  using up its time and retries).
+- **Libraries' own threads are watched, not refused** (decision 339, the user's, 2026-11-06; built in
+  M4.11a3 and its UI in M4.11a4): polars 2.1 in `to_thread` left the loop free (8 ms at worst) and its
+  pool is one per process, about 30 native threads idle after a query, so no list of libraries is
+  refused and a thread alone is no strike: only a step that doesn't end is. A Python thread started
+  during a step (wrapping `Thread.start`) and alive when it ends is a warning in that step's log.
+  The UI shows each watcher host's thread count, split into **tied** (the host's calls for a step)
+  and **untied** (the rest, from `/proc/self/task`: native threads can't be tied to a step), also as a
+  metric. Heavy queries belong in a task, as the docs say. Not chosen: a strike for a thread outliving
+  its step (a client library's harmless background thread would switch off a healthy sensor);
+  refusing named libraries (never complete, and refuses small queries).
+- **A watcher's messages are bounded** (Grok's finding): 16 wait for its attempt, past them its host's
+  socket waits too, so a step printing faster than its log is written slows down the host, not the
+  agent's memory.
+- **A moved poke's recorded code:** its attempt reports the hash it moved to, the code its value
+  came from; its log says it moved.
+- **A wait step can't start a process or a thread** (decision 336, the user's, 2026-11-06): it shares a
+  process and group with others, so nothing could stop what it left running when it ends, and a retry
+  could overlap it. **When its DAG is defined** (`schedr._wait_rules`), so `dags check` says so: its
+  compiled code is read for `subprocess`, `os.system`, `os.fork`, `os.spawn*`, `os.exec*`, `pty`,
+  `multiprocessing`, `ProcessPoolExecutor`, `asyncio.create_subprocess_*`, `threading.Thread`,
+  `threading.Timer`, `ThreadPoolExecutor` and `_thread`, also through the author's own functions and classes, and using one
+  is a `TypeError`: the file's import error. Libraries aren't read: they may start threads, and so
+  does `asyncio.to_thread`, so threads have no refusal at run time. **When it runs**, for what can't
+  be read (a library's insides, `getattr`, a function passed in): starting a process raises
+  `ProcessInWaitStepError`, a normal failure: `subprocess`, `os.system`,
+  `os.fork`, `os.spawn*`, `os.posix_spawn` and `multiprocessing` through an audit hook, and the loop's
+  own `subprocess_exec` as `uvloop` isn't audited; `asyncio.to_thread` included, as it inherits the
+  context. Allowed (Claude's call, for the user to look at): the standard library's `platform`,
+  `ctypes.util` and `uuid` helpers, which client libraries call and which wait for their command; a
+  blanket refusal would fail a normal database client. A host runs with `-X thread_inherit_context=1`,
+  so a thread a step starts is refused too and prints to the step's log, to the host's once the step
+  has ended. Not a sandbox: C code gets past it, and what it leaves runs until the host stops. A running
+  thread can't be stopped by anyone (Python has no way to, and an injected exception can't interrupt
+  a blocking C call): it lives until its own code ends it or the host stops. Not chosen: documenting it only
+  (nothing enforces it); tracking subprocesses per step (patches the standard library, misses `uvloop`
+  and grandchildren, a partial guarantee looking like a whole one). Asyncio tasks a step left running
+  are cancelled and awaited before its end is told, as `asyncio.run` does. A host that loses the
+  agent's socket kills its group, as a journal can't find what an ended host's group left.
+- **Secrets in a wait step:** `await task_ctx.asecret(...)` and `asecret_value(...)` (M4.10) read
+  without holding the loop, whatever the storage: the agent reads them all asynchronously, and the wait
+  is the runner's. `async with` a connection asks for its values the same way. Plain `task_ctx.secret`
+  still works in a coroutine: one declared by name was fetched already, and only one under a
+  `SecretPrefix` holds the loop.
 - **Code:** `AssignTask` carries the expected code hash, and a host holds one code set
   (decision 320), so old and new code run side by side in different hosts.
 - **Isolation:** watchers on one worker share a process and can read each other's memory and

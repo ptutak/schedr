@@ -41,6 +41,8 @@ pub enum RunnerMode {
     Task,
     /// Preload libraries, then fork a process per request (Linux only).
     ForkServer,
+    /// Run the wait steps of one code set as coroutines, long-lived (decision 320).
+    Watchers,
 }
 
 /// A structured error summary: why a DAG file couldn't be imported, or why a task failed.
@@ -197,6 +199,16 @@ pub struct ParsedFile {
     pub script_roots: Vec<String>,
 }
 
+/// A process's output stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputStream {
+    /// Standard output.
+    Stdout,
+    /// Standard error.
+    Stderr,
+}
+
 /// A message from the runner to the agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -276,6 +288,24 @@ pub enum RunnerMessage {
         /// exception from the task's own code.
         kind: Option<String>,
     },
+    /// Of one watcher, in a watcher host: what a task's runner would send.
+    WatcherMessage {
+        /// The watcher's ID.
+        watcher: u64,
+        /// The message: never a `watcher_message`.
+        message: Box<RunnerMessage>,
+    },
+    /// What a watcher printed: its attempt's log (inside a [`Self::WatcherMessage`]).
+    WatcherLog {
+        /// Which of its streams.
+        stream: OutputStream,
+        /// The text.
+        text: String,
+    },
+    /// A watcher ended by its cancel (inside a [`Self::WatcherMessage`]).
+    WatcherCancelled,
+    /// A poke stopped between calls, as asked: its next one is on new code (decision 335).
+    WatcherMoved,
     /// The fork server preloaded its libraries and is single-threaded: it takes `fork`
     /// requests.
     ForkServerReady,
@@ -479,6 +509,14 @@ pub struct ForkRequest {
     pub cwd: String,
 }
 
+/// A watcher host's request: what it holds for its whole life (decision 320).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WatchersRequest {
+    /// Directories put first on `sys.path` (every DAG root's copy).
+    pub sys_path: Vec<String>,
+}
+
 /// A message from the agent to the runner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -496,6 +534,45 @@ pub enum AgentMessage {
     Task(Box<TaskRequest>),
     /// The fork server's preload list (its mode's request).
     ForkServer(ForkServerRequest),
+    /// A watcher host's code set (its mode's request).
+    Watchers(WatchersRequest),
+    /// Start a wait step in a watcher host.
+    StartWatcher {
+        /// The watcher's ID, unique in the host.
+        watcher: u64,
+        /// What to run.
+        task: Box<TaskRequest>,
+        /// How long a thread it left running has to end before the host does (decision 337).
+        cancel_grace_ms: u64,
+        /// A poke moving here from older code (decision 335): it says `task_imported` when it
+        /// could start, or `task_failed`, and makes no call until a [`Self::GoWatcher`].
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        moved_in: bool,
+    },
+    /// Stop a poke between its calls: `watcher_moved`, unless it ended first.
+    MoveWatcher {
+        /// The watcher's ID.
+        watcher: u64,
+    },
+    /// Let a poke that moved here make its first call.
+    GoWatcher {
+        /// The watcher's ID.
+        watcher: u64,
+        /// What is left of its `max_wait`.
+        max_wait_ms: Option<u64>,
+    },
+    /// Cancel a watcher: `CancelledError` at its next `await`.
+    CancelWatcher {
+        /// The watcher's ID.
+        watcher: u64,
+    },
+    /// An answer to one watcher, in a watcher host.
+    ToWatcher {
+        /// The watcher's ID.
+        watcher: u64,
+        /// What a task's runner would get.
+        message: Box<AgentMessage>,
+    },
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
     /// The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.

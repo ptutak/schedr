@@ -108,7 +108,7 @@ If the checks pass, it records the attempt as running in its journal on disk, th
 back (`assignment_expired`) and queue the task again, without using a retry; one that arrived
 in time counts even if a busy master handles it later.
 
-The agent starts a Python runner in a new process group, with stdout and stderr going to the
+For a Python task, the agent starts a runner in a new process group, with stdout and stderr going to the
 attempt's log file. The runner says `hello`. The agent sends the task. Once the DAG file is
 imported and the arguments are built, the runner sends `task_imported` (no fields) and calls
 the function; it does not send that message when the import or the arguments fail. The agent
@@ -130,6 +130,10 @@ true, and a task those servers can't fork, is a new process (`spawn`). A forked 
 worker drops before it has ended is killed, as a spawned one is. A forked task whose PSS
 can't be read is not killed on resident set size, because that size includes the pages it
 shares with the fork server.
+
+A [wait step](../02-dags/18-sensors.md) instead runs in a shared watcher host and holds a
+task slot. Its host has no memory budget yet; its cancellation and deployment behavior are
+described in [The watcher host](05-workers.md#the-watcher-host).
 
 ## 6. The result comes back
 

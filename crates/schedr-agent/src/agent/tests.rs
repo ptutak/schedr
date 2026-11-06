@@ -2000,6 +2000,7 @@ fn command_needing_secret(
         metrics: AgentMetrics::default(),
         drain_terminate_period: std::time::Duration::from_secs(1),
         forks: None,
+        watchers: crate::watchers::WatcherHosts::default(),
         secrets: Arc::new(stores),
     };
     let task = json!({
@@ -2238,6 +2239,7 @@ async fn command_with_connection(
         metrics: AgentMetrics::default(),
         drain_terminate_period: Duration::from_secs(1),
         forks: None,
+        watchers: crate::watchers::WatcherHosts::default(),
         secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let task = json!({
@@ -2536,6 +2538,7 @@ fn attempt_with_timed_cleanup(
         metrics: AgentMetrics::default(),
         drain_terminate_period: Duration::from_secs(1),
         forks: None,
+        watchers: crate::watchers::WatcherHosts::default(),
         secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let line = |text: &str| json!({"argv": [[{"text": "sh"}], [{"text": "-c"}], [{"text": text}]]});

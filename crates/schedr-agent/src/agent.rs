@@ -202,6 +202,14 @@ pub trait Executor: Clone + Send + Sync + 'static {
         watch::channel(Vec::new()).1
     }
 
+    /// The worker's newest copy of each DAG root: what runs may move to it.
+    fn code_changed(&self, _copies: BTreeMap<String, PathBuf>) {}
+
+    /// Folders of code copies in use besides the attempts' own.
+    fn code_in_use(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Parses `files` of the root `root` in `dir`, with the other roots' copies `code`.
     fn parse(
         &self,
@@ -294,11 +302,21 @@ pub struct ProcessExecutor {
     pub drain_terminate_period: Duration,
     /// The DAG interpreter's fork servers, when it has them (`fork_server = true`, Linux).
     pub forks: Option<ForkServers>,
+    /// The hosts running this worker's wait steps.
+    pub watchers: crate::watchers::WatcherHosts,
     /// The worker's secret storages.
     pub secrets: Arc<SecretStores>,
 }
 
 impl Executor for ProcessExecutor {
+    fn code_changed(&self, copies: BTreeMap<String, PathBuf>) {
+        self.watchers.code_changed(&copies);
+    }
+
+    fn code_in_use(&self) -> Vec<String> {
+        self.watchers.code_in_use()
+    }
+
     fn warnings(&self) -> watch::Receiver<Vec<pb::WorkerWarning>> {
         self.forks
             .as_ref()
@@ -734,6 +752,7 @@ impl ProcessExecutor {
         // reverse order), a dropped attempt included.
         let mut hold = None;
         let mut watching = None;
+        let shared_spawned = spawned;
         let spawned = |pid, forked| {
             started.store(true, Ordering::SeqCst);
             // The task's process leads its own group; watched from its first moment.
@@ -746,13 +765,39 @@ impl ProcessExecutor {
                 forked,
             ));
             match process_identity(pid) {
-                Ok(identity) => spawned(identity, forked),
+                Ok(identity) => shared_spawned(identity, forked),
                 Err(error) => warn_unidentified(pid, &error),
             }
         };
         let resource =
             AttemptResource::of(&spec.task, &spec.inputs, Arc::clone(&secrets.mask)).map(Arc::new);
         let ran = match plan {
+            // In a process shared with other wait steps: no budget of its own (the host's).
+            Plan::Python { process, request }
+                if matches!(request.task.kind, schedr_model::TaskKind::Sensor { .. }) =>
+            {
+                let task = PythonTask {
+                    request: *request,
+                    secrets: Some(Arc::clone(secrets)),
+                    handles: Some(Arc::clone(handles)),
+                };
+                crate::watchers::run_watcher(
+                    &self.watchers,
+                    &self.setup,
+                    &process,
+                    task,
+                    limits,
+                    stop,
+                    |pid| {
+                        started.store(true, Ordering::SeqCst);
+                        match process_identity(pid) {
+                            Ok(identity) => shared_spawned(identity, false),
+                            Err(error) => warn_unidentified(pid, &error),
+                        }
+                    },
+                )
+                .await
+            }
             Plan::Python { process, request } => {
                 let forks = self.forks.as_ref();
                 let task = PythonTask {
@@ -854,6 +899,14 @@ impl ProcessExecutor {
         crate::parse::parse_files_with(&runner, request, self.parse, &code.scripts)
             .await
             .map_err(|e| e.to_string())
+    }
+}
+
+/// The code an attempt started on, unless it says itself which it ended on: a moved poke
+/// (decision 335).
+fn with_code_hash(finished: &mut pb::Finished, started_on: String) {
+    if finished.code_hash.is_empty() {
+        finished.code_hash = started_on;
     }
 }
 
@@ -1660,7 +1713,11 @@ impl<E: Executor> Agent<E> {
         to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
     ) {
         fit_result(&mut finished, self.master_limit);
-        if let Some(hash) = self.code_hashes.get(&finished.attempt_id) {
+        // A moved poke says itself which code it ended on (decision 335).
+        if let (true, Some(hash)) = (
+            finished.code_hash.is_empty(),
+            self.code_hashes.get(&finished.attempt_id),
+        ) {
             finished.code_hash.clone_from(hash);
         }
         let id = finished.attempt_id.clone();
@@ -1766,6 +1823,15 @@ impl<E: Executor> Agent<E> {
     /// Reports each root whose hash changed since it was last reported: a new hash, or an
     /// empty one for a root withdrawn (decision 303).
     fn report_changes(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        self.executor.code_changed(
+            self.watchers
+                .iter()
+                .filter(|(name, _)| !self.settings.setup.script_roots.contains_key(*name))
+                .filter_map(|(name, watcher)| {
+                    Some((name.clone(), watcher.code_dir()?.to_path_buf()))
+                })
+                .collect(),
+        );
         let names: Vec<String> = self.watchers.keys().cloned().collect();
         for name in names {
             let now = self.reported_hash(&name);
@@ -2514,13 +2580,14 @@ impl<E: Executor> Agent<E> {
     /// Removes the copies of code (decision 102) nothing needs any more: each root's but its
     /// current hash's and those a running attempt or parse job imports from.
     fn collect_code(&self) {
-        let in_use: std::collections::BTreeSet<String> = self
+        let mut in_use: std::collections::BTreeSet<String> = self
             .code_hashes
             .values()
             .chain(self.other_copies.values().flatten())
             .chain(self.parsing.keys())
             .map(|hash| hash.replace(':', "-"))
             .collect();
+        in_use.extend(self.executor.code_in_use());
         for watcher in self.watchers.values() {
             let Ok(entries) = std::fs::read_dir(watcher.store()) else {
                 continue;
@@ -2795,7 +2862,7 @@ impl<E: Executor> Agent<E> {
                     .map_or_else(|_| "unknown".to_owned(), |s| s.to_string());
                 self.metrics.attempt_ended(&status);
                 if let Some(hash) = self.release_code(&finished.attempt_id) {
-                    finished.code_hash = hash;
+                    with_code_hash(&mut finished, hash);
                     self.collect_code();
                 }
                 if let Err(error) = self
@@ -3422,6 +3489,7 @@ fn stopped_before_start(
         start: None,
         forked: false,
         ended: crate::usage::Ended::default(),
+        moved_to: None,
     };
     finished(&spec.attempt_id, &spec.task, &ran)
 }

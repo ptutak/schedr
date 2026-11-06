@@ -1024,7 +1024,14 @@ async fn test_dag(
     if let Ok(Err(error)) = server.await {
         tracing::warn!(%error, "local schedr stopped with an error");
     }
-    let _ = schedr_agent::scan::remove_tree(&data);
+    // The master's background tasks aren't waited for, and one may be writing to the database:
+    // its journal appears while the folder is being removed. Once it is gone they can't bring it back.
+    for _ in 0..50 {
+        if schedr_agent::scan::remove_tree(&data).is_ok() || !data.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     result
 }
 

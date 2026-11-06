@@ -168,6 +168,34 @@ fn check_reports_broken_and_invalid_files_and_fails() {
 }
 
 #[test]
+fn check_says_a_wait_step_cant_start_a_process_with_its_line() {
+    let dag = r#"import subprocess
+
+from schedr import Dag, sensor
+
+
+def helper() -> None:
+    subprocess.run(["true"], check=True)
+
+
+@sensor
+async def waits() -> int:
+    helper()
+    return 1
+
+
+with Dag("refused"):
+    waits()
+"#;
+    let local = Local::new(&[("refused.py", dag)]);
+    let (code, out, _) = local.check(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("`subprocess.run`"), "{out}");
+    assert!(out.contains("refused.py:7"), "{out}");
+    assert!(out.contains("starts a process"), "{out}");
+}
+
+#[test]
 fn check_skips_what_a_parse_skips_and_says_why() {
     let dag = "from schedr import Dag\n\nwith Dag(\"found\"):\n    pass\n";
     let local = Local::new(&[
@@ -1109,4 +1137,62 @@ fn a_failing_preload_leaves_nothing_behind_either() {
         .map(|entry| entry.unwrap().file_name())
         .collect();
     assert_eq!(left, Vec::<std::ffi::OsString>::new());
+}
+
+#[test]
+fn a_wait_step_reads_its_secrets_and_they_are_masked() {
+    let dag = r#"
+from schedr import Dag, sensor, task_ctx
+
+
+@sensor(secrets=["etl/db#password"])
+async def reads() -> str:
+    value = task_ctx.secret("etl/db", "password")
+    print(value)
+    return "len " + str(len(value))
+
+
+with Dag("reads"):
+    reads()
+"#;
+    let local = Local::new(&[("reads.py", dag)]);
+    let (code, out, err) = local.test(
+        "reads",
+        &["--json", "--secret", "etl/db#password=hunter22-pw"],
+    );
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(!out.contains("hunter22-pw"), "{out}");
+    assert!(out.contains("len 11"), "{out}");
+}
+
+#[test]
+fn a_wait_step_reads_a_secret_under_its_prefix_without_holding_the_loop() {
+    // Another coroutine keeps turning while the read waits on a thread; the sync read is there too.
+    let dag = r#"
+import asyncio
+
+from schedr import Dag, SecretPrefix, sensor, task_ctx
+
+
+@sensor(secrets=[SecretPrefix("etl/")])
+async def reads() -> str:
+    value = await task_ctx.asecret("etl/db", "password")
+    same = await task_ctx.asecret_value("etl/db#password")
+    assert value == same == task_ctx.secret("etl/db", "password")
+    print(value)
+    await asyncio.sleep(0)
+    return "len " + str(len(value))
+
+
+with Dag("reads"):
+    reads()
+"#;
+    let local = Local::new(&[("reads.py", dag)]);
+    let (code, out, err) = local.test(
+        "reads",
+        &["--json", "--secret", "etl/db#password=hunter22-pw"],
+    );
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(!out.contains("hunter22-pw"), "{out}");
+    assert!(out.contains("len 11"), "{out}");
 }

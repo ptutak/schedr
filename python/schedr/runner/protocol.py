@@ -9,12 +9,24 @@ import json
 import os
 import socket
 import threading
-from typing import Any
+from typing import Any, Protocol
 
 MAX_MESSAGE_SIZE = 64 * 1024 * 1024
 """The largest message either side accepts, in bytes (as in ``schedr-model``)."""
 
 _HEADER = 4
+
+
+class Asking(Protocol):
+    """What a task needs of the channel: a task's whole channel, or a watcher's part of a host's."""
+
+    def ask(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Sends a request and receives its answer."""
+        ...
+
+    def send(self, message: dict[str, Any]) -> None:
+        """Sends one message."""
+        ...
 
 
 class ProtocolError(Exception):
@@ -62,7 +74,10 @@ class Channel:
         Raises:
             ProtocolError: If the encoded message is over :data:`MAX_MESSAGE_SIZE`.
         """
-        data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode()
+        # A lone surrogate (a file name that isn't UTF-8, in an error) can't be sent as itself.
+        data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8", "replace"
+        )
         if len(data) > MAX_MESSAGE_SIZE:
             raise ProtocolError(
                 f"message of {len(data)} bytes is over the limit of {MAX_MESSAGE_SIZE} bytes"

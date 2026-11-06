@@ -35,3 +35,4 @@ pub mod supervise;
 pub mod usage;
 pub mod vault;
 pub mod watch;
+pub mod watchers;
