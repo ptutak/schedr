@@ -152,6 +152,12 @@ implemented yet (milestone M4); running one task is
 Outside `with Dag(...)`, a `@task` function is the function. `extract()` in
 `examples/test_sync.py` returns the list, not an `Output`.
 
+For an async task, use `await task.fn(...)` in an async test. It is typed as the coroutine
+it is, and the task's declarations remain in force. For a task declared `-> None`, `.fn`
+returns `None` when awaited. `await task()` also runs outside a DAG, but type checkers flag
+it: a task call is typed as its value for use in the DAG. Without an async test plugin,
+use `asyncio.run(task.fn(...))` in a synchronous test.
+
 `with task_context(...):` makes `dag_ctx` and `task_ctx` return values for the block, with
 no process.
 

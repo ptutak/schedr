@@ -452,3 +452,148 @@ with Dag("c"):
     assert read.stderr.decode().strip() == (
         "Warning: mariadb: unknown variable 'loose-ssl-mode=REQUIRED'"
     )
+
+
+def test_http_async_with_gives_the_async_client(tmp_path: Path, api: str) -> None:
+    outputs = _run(
+        tmp_path,
+        f"""
+from schedr import Dag, secrets, task
+from schedr.connections import HTTP
+
+billing = HTTP("billing", base_url={api!r}, token=secrets["billing"]["token"])
+
+with Dag("c"):
+    @task(connections=[billing])
+    async def fetch() -> str:
+        async with billing() as client:
+            assert type(client).__name__ == "AsyncClient"
+            answer = await client.get("/invoices")
+        return answer.text
+
+    fetch()
+""",
+        {"billing#token": "s3cret"},
+    )
+    assert "/invoices" in str(outputs["fetch"])
+
+
+def test_generic_opens_either_way_and_ssh_has_no_async_side(tmp_path: Path) -> None:
+    outputs = _run(
+        tmp_path,
+        """
+from schedr import Dag, task
+from schedr.connections import SSH, Generic
+
+flags = Generic("flags", region="eu")
+box = SSH("box", host="localhost", user="u", insecure_skip_host_check=True)
+
+with Dag("c"):
+    @task(connections=[flags, box])
+    async def reads() -> str:
+        async with flags() as values:
+            region = values["region"]
+        with flags() as values:
+            assert values["region"] == region
+        try:
+            async with box():
+                raise AssertionError("opened")
+        except TypeError as e:
+            return f"{region}: {e}"
+
+    reads()
+""",
+        {},
+    )
+    assert str(outputs["reads"]).startswith("eu: "), outputs
+    assert "asynchronous context manager" in str(outputs["reads"]), outputs
+
+
+def test_mongo_async_with_gives_its_async_database(tmp_path: Path) -> None:
+    uri = _env("SCHEDR_TEST_MONGO_URI")
+    outputs = _run(
+        tmp_path,
+        f"""
+from schedr import Dag, task
+from schedr.connections import Mongo
+
+orders = Mongo("orders", uri={uri + "?tls=false"!r}, database="schedr_test")
+
+with Dag("c"):
+    @task(connections=[orders])
+    async def count() -> int:
+        async with orders() as db:
+            assert type(db).__name__ == "AsyncDatabase"
+            await db.async_orders.delete_many({{}})
+            await db.async_orders.insert_one({{"n": 1}})
+            return await db.async_orders.count_documents({{}})
+
+    count()
+""",
+        {},
+    )
+    assert outputs["count"] == 1
+
+
+def test_postgres_async_with_commits_and_rolls_back(tmp_path: Path) -> None:
+    url = _env("SCHEDR_TEST_POSTGRES_URL")
+    joined = "&" if "?" in url else "?"
+    outputs = _run(
+        tmp_path,
+        f"""
+from schedr import Dag, task
+from schedr.connections import SQL
+
+base = SQL("base", url={url + joined + "sslmode=disable"!r})
+
+with Dag("c"):
+    @task(connections=[base])
+    async def writes() -> int:
+        async with base() as db:
+            assert type(db).__name__ == "AsyncConnection"
+            await db.execute("CREATE TABLE IF NOT EXISTS async_rows (n int)")
+            await db.execute("DELETE FROM async_rows")
+            await db.execute("INSERT INTO async_rows VALUES (1)")
+        try:
+            async with base() as db:
+                await db.execute("INSERT INTO async_rows VALUES (2)")
+                raise ValueError("undone")
+        except ValueError:
+            pass
+        async with base() as db:
+            found = await db.execute("SELECT count(*) FROM async_rows")
+            row = await found.fetchone()
+            await db.execute("DROP TABLE async_rows")
+        assert row is not None
+        return int(row[0])
+
+    writes()
+""",
+        {},
+    )
+    assert outputs["writes"] == 1
+
+
+def test_mysql_async_with_says_to_use_with(tmp_path: Path) -> None:
+    outputs = _run(
+        tmp_path,
+        """
+from schedr import Dag, task
+from schedr.connections import SQL
+
+base = SQL("base", url="mysql://u:p@localhost/db?sslmode=disable")
+
+with Dag("c"):
+    @task(connections=[base])
+    async def refused() -> str:
+        try:
+            async with base():
+                raise AssertionError("opened")
+        except TypeError as e:
+            return str(e)
+
+    refused()
+""",
+        {},
+    )
+    assert "use `with`" in str(outputs["refused"])

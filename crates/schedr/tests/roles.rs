@@ -1788,3 +1788,162 @@ fn a_waiting_cleanup_goes_back_to_its_worker_holding_a_handle_the_master_never_g
         "{attempt}"
     );
 }
+
+/// One loop's DAG for [`async_tasks_run_and_stop_cleanly_on_each_start_method_and_loop`]: a task
+/// that ends and one stopped by its timeout, each forked and spawned. Each writes which loop it
+/// ran on and, when stopped, that its `finally` ran.
+fn async_dag(dag: &str, markers: &std::path::Path, guard: &str) -> String {
+    let markers = markers.display();
+    format!(
+        r#"
+import sys
+{guard}
+import asyncio
+from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+
+from schedr import Dag, acleanup_handle, task
+
+MARKERS = Path("{markers}")
+
+@dataclass
+class Job:
+    name: str
+
+def note(name: str, text: str) -> None:
+    with (MARKERS / name).open("a") as f:
+        f.write(text)
+
+def loop_name() -> str:
+    return type(asyncio.get_running_loop()).__module__.split(".")[0]
+
+async def undo(handles: list[Job]) -> None:
+    note(handles[0].name + ".cleanup", loop_name())
+
+async def ends(name: str) -> str:
+    await acleanup_handle(Job(name))
+    results = await asyncio.gather(asyncio.sleep(0, "a"), asyncio.sleep(0, "b"))
+    note(name, loop_name())
+    return "".join(results)
+
+async def stopped(name: str) -> None:
+    note(name, loop_name())
+    try:
+        await asyncio.sleep(120)
+    finally:
+        await asyncio.sleep(0)
+        note(name + ".finally", "ran")
+
+with Dag("{dag}"):
+    @task(cleanup=undo)
+    async def ends_forked() -> str:
+        return await ends("{dag}.ends_forked")
+
+    @task(cleanup=undo, fresh_process=True)
+    async def ends_spawned() -> str:
+        return await ends("{dag}.ends_spawned")
+
+    @task(timeout=timedelta(seconds=5))
+    async def stopped_forked() -> None:
+        await stopped("{dag}.stopped_forked")
+
+    @task(timeout=timedelta(seconds=5), fresh_process=True)
+    async def stopped_spawned() -> None:
+        await stopped("{dag}.stopped_spawned")
+
+    ends_forked()
+    ends_spawned()
+    stopped_forked()
+    stopped_spawned()
+"#
+    )
+}
+
+#[test]
+fn async_tasks_run_and_stop_cleanly_on_each_start_method_and_loop() {
+    // M4.10, decision 316: on a real worker, from its copy of the root, forked and spawned, on
+    // `uvloop` (it can be imported, here even preloaded) and on asyncio's (as if it couldn't).
+    let python = support::python();
+    let mut cluster = Cluster::new(None, "100ms");
+    let markers = cluster.dir.path().join("markers");
+    std::fs::create_dir(&markers).unwrap();
+    std::fs::remove_file(cluster.root().join("chain.py")).unwrap();
+    for (dag, guard) in [
+        ("on_uvloop", ""),
+        ("on_asyncio", "sys.modules[\"uvloop\"] = None"),
+    ] {
+        std::fs::write(
+            cluster.root().join(format!("{dag}.py")),
+            async_dag(dag, &markers, guard),
+        )
+        .unwrap();
+    }
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    cluster.start_with(
+        "worker",
+        &[
+            ("SCHEDR_CONFIG__WORKER__SLOTS", "8"),
+            ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH", python.as_str()),
+            ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER", "true"),
+            (
+                "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD",
+                "[\"asyncio\", \"uvloop\"]",
+            ),
+        ],
+    );
+    cluster.wait("the worker to be active", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    for (dag, loop_name) in [("on_uvloop", "uvloop"), ("on_asyncio", "asyncio")] {
+        cluster.wait("the DAG to be known", || {
+            cluster.cli_json(&["dags", "list"]).is_some_and(|dags| {
+                dags["dags"]
+                    .as_array()
+                    .is_some_and(|d| d.iter().any(|known| known["dag_id"] == dag))
+            })
+        });
+        let run_id = cluster.trigger(dag);
+        cluster.wait("the run to end", || cluster.run_state(&run_id) == "failed");
+        for (task, method) in [
+            ("ends_forked", "fork"),
+            ("ends_spawned", "spawn"),
+            ("stopped_forked", "fork"),
+            ("stopped_spawned", "spawn"),
+        ] {
+            let attempt = &cluster.attempts(&run_id, task)[0];
+            assert_eq!(attempt["start_method"], method, "{dag} {task}: {attempt}");
+            let wrote = |suffix: &str| {
+                std::fs::read_to_string(markers.join(format!("{dag}.{task}{suffix}")))
+                    .unwrap_or_else(|e| panic!("{dag} {task}{suffix}: {e}: {attempt}"))
+            };
+            assert_eq!(wrote(""), loop_name, "{dag} {task}");
+            let log = std::fs::read_to_string(
+                cluster
+                    .dir
+                    .path()
+                    .join("data/logs/w1")
+                    .join(format!("{}.log", attempt["attempt_id"].as_str().unwrap())),
+            )
+            .unwrap();
+            assert!(
+                log.contains(&format!("event loop: {loop_name}")),
+                "{dag} {task}: {log}"
+            );
+            if task.starts_with("ends") {
+                assert_eq!(attempt["status"], "success", "{dag} {task}: {attempt}");
+                assert_eq!(wrote(".cleanup"), loop_name, "{dag} {task}");
+                assert_eq!(
+                    attempt["cleanup"]["result"], "ok",
+                    "{dag} {task}: {attempt}"
+                );
+            } else {
+                assert_eq!(attempt["status"], "timed_out", "{dag} {task}: {attempt}");
+                assert_eq!(wrote(".finally"), "ran", "{dag} {task}");
+            }
+        }
+    }
+}

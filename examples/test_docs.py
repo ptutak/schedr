@@ -20,6 +20,7 @@ QUOTED = [HERE / "sync.py", HERE / "daily_report.py", *DOC_EXAMPLES]
 FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
 # The values a docs DAG's secrets are given (`schedr dags test --secret`).
 SECRETS = {
+    "async_tasks.py": {"etl/api#token": "s3cret-api-token"},
     "secrets.py": {
         "etl/db#password": "s3cret-db-password",
         "etl/api#token": "s3cret-api-token",
@@ -61,6 +62,9 @@ def test_doc_example_runs(path: Path) -> None:
             if task.state not in {"success", "skipped"}
         ]
         assert ended == [], dag.id
+        if path.name == "async_tasks.py":
+            # Ten pages, each the base URL's length and its number.
+            assert result.tasks["fetch_all"].output == 10 * len("https://api.example.com") + 45
         if path.name == "secrets.py":
             # Masked when stored: a secret's value never reaches the database.
             assert result.tasks["connect"].output == "postgresql://etl:****@db.example.com/etl"

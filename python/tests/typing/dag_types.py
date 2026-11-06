@@ -8,7 +8,7 @@ check that stops catching a mistake fails `make lint`.
 # The tasks here are signatures only: their bodies don't use their parameters.
 # pyright: reportUnusedParameter=false
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -33,7 +33,7 @@ from schedr import (
     task_ctx,
     text,
 )
-from schedr.connections import HTTP, SQL
+from schedr.connections import HTTP, SQL, SSH
 from schedr.types import ProcessResult
 
 
@@ -343,3 +343,98 @@ CommandOperator(
     connections={"DB": warehouse_db, "API": billing, "ORDERS": orders_api, "W": "warehouse"},
 )
 CommandOperator("bad", ["true"], connections={"DB": 3})  # type: ignore[dict-item]  # pyright: ignore[reportArgumentType]
+
+
+# Async tasks read as what they return (M4.10), so they pass on to other tasks as sync ones do.
+@task
+async def async_rows() -> int:
+    return 1
+
+
+@task
+async def async_done() -> None: ...
+
+
+@task
+async def async_takes(n: int) -> str:
+    return await task_ctx.asecret("etl/api", "token") + str(n)
+
+
+@connection(host="h")
+async def async_db(host: str) -> AsyncIterator[str]:
+    yield host
+
+
+async def async_use() -> str:
+    async with async_db() as client:
+        return client.upper()
+
+
+with Dag("async_types"):
+    async_takes(async_rows())
+    async_takes("no")  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    async_done() >> async_takes(async_rows())
+
+
+async def typed_connections_in_async_code() -> None:
+    api = HTTP("async_api", base_url="https://example.com")
+    base = SQL("async_base", url="postgresql://h/d")
+    box = SSH("async_box", host="h", user="u", insecure_skip_host_check=True)
+    async with api() as client:
+        answer = await client.get("/")
+        answer.raise_for_status()
+        # What `async with` gives is the async client: an unawaited call is no answer.
+        client.get("/").raise_for_status()  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+    with api() as sync_client:
+        sync_client.get("/").raise_for_status()
+    async with base() as db:
+        await db.execute("SELECT 1")
+    # No async side.
+    async with box():  # type: ignore[attr-defined]  # pyright: ignore[reportGeneralTypeIssues]
+        pass
+    # An `async def` connection is only for `async with`.
+    with async_db():  # type: ignore[attr-defined]  # pyright: ignore[reportGeneralTypeIssues]
+        pass
+
+
+async def async_tasks_in_a_test() -> None:
+    # `.fn` is the coroutine of what the task returns (decision 319).
+    rows: int = await async_rows.fn()
+    wrong: str = await async_rows.fn()  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
+    await async_takes.fn("no")  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    await async_takes.fn(rows)
+    del wrong
+
+
+@task
+async def async_nothing() -> None:
+    pass
+
+
+@task(retries=1)
+async def async_nothing_with_options() -> None:
+    pass
+
+
+@branch
+async def async_choice() -> list[Task]:
+    return []
+
+
+async def async_values_in_a_test() -> None:
+    # `-> None` is `Done` in a DAG, and `None` from `.fn`, as it is at run time.
+    nothing: Coroutine[object, object, None] = async_nothing.fn()
+    await nothing
+    await async_nothing_with_options.fn()
+    await async_nothing.override(retries=2).fn()
+    done: Done = await async_nothing.fn()  # type: ignore[func-returns-value,assignment]  # pyright: ignore[reportAssignmentType]
+    chosen: list[Task] | Task = await async_choice.fn()
+    del done, chosen
+
+
+@task
+def sync_rows() -> int:
+    return 1
+
+
+sync_rows.fn()  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]

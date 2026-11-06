@@ -13,7 +13,7 @@ For something shared by several tasks, see [Resources](16-resources.md).
 
 ## A Python task
 
-Give `@task(cleanup=undo_export)` a synchronous function. After each attempt whose process
+Give `@task(cleanup=undo_export)` a function; it may be `async def`. After each attempt whose process
 started, the worker runs it on the same worker, after the task process ends. It runs after
 success as well as failure; if the process never started, there is no cleanup.
 
@@ -23,7 +23,8 @@ use the task's declared secrets and connections. It receives neither the task's 
 status.
 
 For things known only during the attempt, call `cleanup_handle` with a dataclass instance as
-soon as the thing exists. The cleanup declares `handles: list[ExportJob | TempDir]` and gets
+soon as the thing exists. In an async task, use `await acleanup_handle(...)` to register it
+without blocking the event loop. The cleanup declares `handles: list[ExportJob | TempDir]` and gets
 the registered instances in order. A single type is `list[ExportJob]`. Only declared types
 are accepted; a cleanup without a `handles` parameter takes no handles. A handle cannot be
 removed after registration, and a cleanup cannot register more. The list may be empty: the

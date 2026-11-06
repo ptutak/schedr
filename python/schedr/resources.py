@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import inspect
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from string.templatelib import Interpolation
 from string.templatelib import Template as TString
-from typing import Any, Self, TypedDict, Unpack, overload
+from typing import Any, Protocol, Self, TypedDict, Unpack, cast, overload
 
 from schedr import _build, _secrets
 from schedr import outcomes as _outcomes
@@ -24,10 +24,10 @@ from schedr._secrets import SecretsArg
 from schedr._serialization.annotations import type_hints, unwrap
 from schedr._serialization.describe import describe
 from schedr._templates import is_tstring
-from schedr.connections import Connection, ConnectionsArg, declared_connections
+from schedr.connections import ConnectionBase, ConnectionsArg, declared_connections
 from schedr.operators import CommandSettings, Operator, ScriptSettings, add_command, add_script
 from schedr.outcomes import RunIf
-from schedr.tasks import Output, TaskFunction, task
+from schedr.tasks import AsyncTaskFunction, Output, TaskFunction, is_async, task
 
 NO_VALUE = (None, type(None))
 """What a setup without a value returns."""
@@ -703,7 +703,7 @@ class CommandResourceOptions(TypedDict, total=False):
     run_if: RunIf | None
     max_active: int | None
     secrets: SecretsArg
-    connections: ConnectionsArg | Mapping[str, Connection[object] | str]
+    connections: ConnectionsArg | Mapping[str, ConnectionBase[object] | str]
     cleanup: str | TString | Sequence[object] | None
     cleanup_timeout: timedelta | None
     cleanup_retries: int | None
@@ -1028,15 +1028,34 @@ class ScriptResource[T = None](_ReportingResource[T]):
         builder.add_resource(task_id, self._schedr_resource)
 
 
+class AsyncResourceFunction[**P, T](ResourceFunction[P, T], AsyncTaskFunction[P, T, T]):
+    """A setup that is ``async def``: ``await area.fn(...)`` in a test (decision 319)."""
+
+
+class _ResourceDecorator(Protocol):
+    """``@resource(...)``: an ``async def`` setup reads as what it returns."""
+
+    @overload
+    def __call__[**P, T](
+        self, fn: Callable[P, Coroutine[object, object, T]], /
+    ) -> AsyncResourceFunction[P, T]: ...
+    @overload
+    def __call__[**P, T](self, fn: Callable[P, T], /) -> ResourceFunction[P, T]: ...
+
+
+@overload
+def resource[**P, T](
+    fn: Callable[P, Coroutine[object, object, T]], /
+) -> AsyncResourceFunction[P, T]: ...
 @overload
 def resource[**P, T](fn: Callable[P, T], /) -> ResourceFunction[P, T]: ...
 @overload
+def resource(**options: Unpack[ResourceOptions]) -> _ResourceDecorator: ...
 def resource[**P, T](
+    fn: Callable[P, T] | Callable[P, Coroutine[object, object, T]] | None = None,
+    /,
     **options: Unpack[ResourceOptions],
-) -> Callable[[Callable[P, T]], ResourceFunction[P, T]]: ...
-def resource[**P, T](
-    fn: Callable[P, T] | None = None, /, **options: Unpack[ResourceOptions]
-) -> ResourceFunction[P, T] | Callable[[Callable[P, T]], ResourceFunction[P, T]]:
+) -> ResourceFunction[P, T] | _ResourceDecorator:
     """Marks a function as a resource's setup: what it returns is the resource.
 
     Args:
@@ -1052,11 +1071,13 @@ def resource[**P, T](
 
     def setup(function: Callable[P, T]) -> ResourceFunction[P, T]:
         made: TaskFunction[P, T] = task(**options)(function)
-        return ResourceFunction(
+        kind = AsyncResourceFunction if is_async(function) else ResourceFunction
+        return kind(
             function,
             made.task_id,
             made._options,
             made._cleanup,
         )
 
-    return setup if fn is None else setup(fn)
+    # An `async def` reads as what it returns: the overloads say so.
+    return cast("_ResourceDecorator", setup) if fn is None else setup(cast("Callable[P, T]", fn))

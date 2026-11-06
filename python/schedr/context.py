@@ -638,6 +638,17 @@ def cleanup_handle(handle: object) -> None:
     values.handles(handle, cls.__name__, encode(handle, cls))
 
 
+async def acleanup_handle(handle: object) -> None:
+    """:func:`cleanup_handle` for async code: it doesn't block the event loop while it waits.
+
+    Args:
+        handle: A dataclass instance, as for :func:`cleanup_handle`.
+    """
+    import asyncio  # noqa: PLC0415  # slow to import; most tasks don't need it
+
+    await asyncio.to_thread(cleanup_handle, handle)
+
+
 class TaskContext:
     """``task_ctx``: the running task's own context (decision 84), values only.
 
@@ -723,6 +734,45 @@ class TaskContext:
         if not isinstance(value, str):  # pragma: no cover - a key's value is text
             raise TypeError(f"`{ref.label()}`: not text")
         return value
+
+    @overload
+    async def asecret(self, path: str, key: str, *, storage: str | None = None) -> str: ...
+
+    @overload
+    async def asecret(self, path: str, *, storage: str | None = None) -> dict[str, str]: ...
+
+    async def asecret(
+        self, path: str, key: str | None = None, *, storage: str | None = None
+    ) -> str | dict[str, str]:
+        """:meth:`secret` for async code: it doesn't block the event loop while it waits.
+
+        Args:
+            path: The secret's path, ``etl/api``.
+            key: The key; none for the whole secret.
+            storage: The storage; ``None`` for the default one.
+
+        Returns:
+            A key's value (``str``), or the whole secret's keys and values.
+        """
+        import asyncio  # noqa: PLC0415  # slow to import; most tasks don't need it
+
+        if key is None:
+            return await asyncio.to_thread(self.secret, path, storage=storage)
+        return await asyncio.to_thread(self.secret, path, key, storage=storage)
+
+    async def asecret_value(self, spec: str, *, storage: str | None = None) -> str:
+        """:meth:`secret_value` for async code: it doesn't block the event loop while it waits.
+
+        Args:
+            spec: ``path#key``.
+            storage: The storage; ``None`` for the default one.
+
+        Returns:
+            The value.
+        """
+        import asyncio  # noqa: PLC0415  # slow to import; most tasks don't need it
+
+        return await asyncio.to_thread(self.secret_value, spec, storage=storage)
 
     def _read(self, ref: SecretRef) -> str | dict[str, str]:
         reader = _task().secrets

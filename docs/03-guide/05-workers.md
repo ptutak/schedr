@@ -120,7 +120,11 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    SIGKILL comes no later than the drain's. The reason the agent stopped it is the attempt's
    status
    (`timed_out`, `cancelled`, `interrupted`, or `lost` on cut-off), however the process then
-   exits.
+   exits. For an async task, SIGTERM cancels its coroutine so `finally` and `async with`
+   exits can run; the process then ends by SIGTERM as a sync task's does. A sync call that
+   blocks the loop prevents cancellation from running and the group is killed after the grace.
+   The [event loop](../02-dags/02-tasks.md#the-event-loop) is selected by the task's Python
+   environment.
 5. **Cleanup.** If the task process started and has a cleanup, the agent reports `TaskEnded`
    and runs it on the same worker. The attempt holds its slot through the cleanup and its
    retries; the instance is `cleaning_up` meanwhile. The task's secrets and connections remain

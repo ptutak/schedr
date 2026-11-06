@@ -256,15 +256,9 @@ def test_positional_only_parameters_are_rejected() -> None:
 
 
 def test_only_plain_functions_can_be_tasks() -> None:
-    async def coro() -> None: ...
-
     async def events() -> AsyncIterator[int]:
         yield 1
 
-    with pytest.raises(
-        TypeError, match=r"async tasks come with milestone M4; to wait .* \(@sensor"
-    ):
-        task(coro)
     with pytest.raises(TypeError, match=r"is an async generator: .* trigger \(@trigger"):
         task(events)
     with pytest.raises(TypeError, match="@task needs a function, got int"):

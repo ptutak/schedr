@@ -130,13 +130,18 @@ def test_handle_classes_refuses_anything_else(annotation: object) -> None:
         handle_classes(annotation)
 
 
-def test_an_async_or_generator_cleanup_is_refused() -> None:
-    async def later() -> None: ...
+def test_a_generator_cleanup_is_refused() -> None:
+    async def later() -> Any:
+        yield 1
 
     def steps() -> Any:
         yield 1
 
-    for cleanup, message in ((later, "async"), (steps, "generator"), (print, "needs a function")):
+    for cleanup, message in (
+        (later, "generator"),
+        (steps, "generator"),
+        (print, "needs a function"),
+    ):
         with pytest.raises(TypeError, match=message):
 
             @task(cleanup=cleanup)

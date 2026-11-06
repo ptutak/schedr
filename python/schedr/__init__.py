@@ -9,12 +9,13 @@ from importlib.metadata import version
 from schedr._secrets import SecretPrefix, secrets
 from schedr._templates import text
 from schedr.connections import (
+    AsyncConnection,
     Connection,
     ConnectionDeniedError,
     ConnectionNotFoundError,
     connection,
 )
-from schedr.context import SecretError, cleanup_handle, dag_ctx, task_ctx
+from schedr.context import SecretError, acleanup_handle, cleanup_handle, dag_ctx, task_ctx
 from schedr.dag import Dag, TaskDefaults
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
@@ -30,6 +31,7 @@ __all__ = [
     "MONTHLY",
     "WEEKLY",
     "YEARLY",
+    "AsyncConnection",
     "Chosen",
     "CommandOperator",
     "CommandResource",
@@ -61,6 +63,7 @@ __all__ = [
     "TaskDefaults",
     "Trigger",
     "TypingHint",
+    "acleanup_handle",
     "branch",
     "chain",
     "cleanup_handle",

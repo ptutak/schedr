@@ -30,10 +30,11 @@ import functools
 import inspect
 import json
 import typing
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import AsyncIterator, Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
 from string.templatelib import Template
+from types import TracebackType
 from typing import Any, Final, TypeVar, cast
 
 from schedr import _build, _secrets
@@ -59,19 +60,22 @@ from schedr._serialization import (
     type_name,
 )
 from schedr._serialization.annotations import label, type_hints
-from schedr.context import current_task
+from schedr.context import ConnectionOpener, current_task
 from schedr.context import declared_connections as _declared_in_test
 
 __all__ = [
     "HTTP",
     "SQL",
     "SSH",
+    "AsyncConnection",
     "Connection",
+    "ConnectionBase",
     "ConnectionDeniedError",
     "ConnectionNotFoundError",
     "DbApiConnection",
     "Generic",
     "Mongo",
+    "TwoWayConnection",
     "connection",
 ]
 
@@ -141,21 +145,20 @@ type Checker[T] = Callable[[T, Mapping[str, object]], object]
 # Declared, not inferred: `check`'s self-typed signature would make an inferred `T`
 # invariant (mypy), and `Connection[httpx.Client]` must be a `Connection[object]`.
 T_co = TypeVar("T_co", covariant=True)
+A_co = TypeVar("A_co", covariant=True)
 
 
-class Connection(typing.Generic[T_co]):  # noqa: UP046  # declared covariant (see `check`)
-    """A connection: ``with name() as client:`` in a task (see the module's description).
+class ConnectionBase(typing.Generic[T_co]):  # noqa: UP046  # declared covariant (see `check`)
+    """What :class:`Connection` and :class:`AsyncConnection` share.
 
     Attributes:
         name: Its name: the function's, or a typed connection's first argument.
         kind: A typed connection's type (``"http"``, ...); ``None`` for a ``@connection``.
-        fn: The function as a context manager, for calling it yourself (in a test) with values
-            of your own: ``with mongodb_default.fn(uri=..., database=...) as db:``.
     """
 
     def __init__(
         self,
-        function: Callable[..., Iterator[T_co]],
+        function: Callable[..., object],
         values: Mapping[str, Value],
         *,
         name: str | None = None,
@@ -181,13 +184,11 @@ class Connection(typing.Generic[T_co]):  # noqa: UP046  # declared covariant (se
         # `Connection` invariant (`Connection[httpx.Client]` no `Connection[object]` in
         # `connections=`); it is only ever called with what this connection yields.
         self._checker = cast("Checker[object] | None", checker)
-        self.fn: Final[Callable[..., AbstractContextManager[T_co]]] = contextlib.contextmanager(
-            function
-        )
         if name is None:
-            functools.update_wrapper(self, function)
+            # Not called through what it wraps: only its name and docstring are taken.
+            functools.update_wrapper(cast("Callable[..., object]", self), function)
 
-    def check[U, R](self: Connection[U], function: Callable[[U], R]) -> Callable[[U], R]:
+    def check[U, R](self: ConnectionBase[U], function: Callable[[U], R]) -> Callable[[U], R]:
         """Gives the connection a check (``@name.check``), replacing a typed one's own.
 
         ``schedr connections test NAME`` runs it on a worker: it gets the client and raises
@@ -206,17 +207,119 @@ class Connection(typing.Generic[T_co]):  # noqa: UP046  # declared covariant (se
         self._checker = lambda client, _values: given(client)
         return function
 
-    def run_check(self) -> None:
-        """Opens the connection and runs its check, in a running task.
+    def _the_checker(self) -> Checker[object]:
+        """Its check.
 
         Raises:
-            ValueError: When it has no check.
+            ValueError: When it has none.
         """
-        checker = self._checker
-        if checker is None:
+        if self._checker is None:
             raise ValueError(
                 f"connection `{self.name}` has no check: give it one with `@{self.name}.check`"
             )
+        return self._checker
+
+    def run_test(self) -> None:
+        """Opens the connection and runs its check, or opens and closes it without one.
+
+        What ``schedr connections test NAME`` runs on a worker (decision 198).
+        """
+        raise NotImplementedError
+
+    def _opener(self) -> ConnectionOpener:
+        """What opens it, in a running task (or a test's ``task_context``).
+
+        Raises:
+            ConnectionDeniedError: When a test's task doesn't declare it.
+            RuntimeError: Outside a running task.
+            ConnectionNotFoundError: When there are no connections here.
+        """
+        task = current_task()
+        declared = _declared_in_test()
+        if declared is not None and self.name not in declared:
+            raise ConnectionDeniedError(
+                f"connection `{self.name}` isn't declared in the task's `connections=`"
+            )
+        if task is None:
+            raise RuntimeError(
+                f"`{self.name}()` opens the connection inside a running task (or "
+                f"`schedr.testing.task_context`); to call it with values of your own, "
+                f"`{self.name}.fn(...)`"
+            )
+        if task.connections is None:
+            raise ConnectionNotFoundError(
+                f"connection `{self.name}`: no connections here (in a test, give a double: "
+                f"`task_context(connections={{{self.name!r}: ...}})`)"
+            )
+        return task.connections
+
+    def _call(self, stored: Mapping[str, object]) -> object:
+        """The function as a context manager, called with its rendered values."""
+        raise NotImplementedError
+
+    def _decoded(self, stored: Mapping[str, object]) -> dict[str, object]:
+        """Its rendered values (stored JSON), decoded by type."""
+        return {
+            name: decode(value, self._hints.get(name, self._others), name)
+            for name, value in stored.items()
+        }
+
+    def _enter(self, stored: Mapping[str, object]) -> AbstractContextManager[object]:
+        """The function called with its rendered values (stored JSON, decoded by type)."""
+        # Async too: `AsyncConnection` enters what this gives with `async with`.
+        return cast("AbstractContextManager[object]", self._call(stored))
+
+    @contextlib.asynccontextmanager
+    async def _aopened(
+        self, enter: Callable[[Mapping[str, object]], AbstractContextManager[object]]
+    ) -> AsyncIterator[T_co]:
+        import asyncio  # noqa: PLC0415  # slow to import; most tasks don't need it
+
+        # Its values come from the agent: a wait the event loop mustn't be blocked by.
+        opened = await asyncio.to_thread(self._opener(), self.name, enter)
+        # The function's own, or a test's double (`nullcontext`: both protocols).
+        async with cast("AbstractAsyncContextManager[T_co]", opened) as client:
+            yield client
+
+    def __repr__(self) -> str:
+        """The connection, by name."""
+        return f"<connection {self.name}>"
+
+
+class Connection(ConnectionBase[T_co]):
+    """A connection: ``with name() as client:`` in a task (see the module's description).
+
+    Attributes:
+        fn: The function as a context manager, for calling it yourself (in a test) with values
+            of your own: ``with mongodb_default.fn(uri=..., database=...) as db:``.
+    """
+
+    def __init__(
+        self,
+        function: Callable[..., Iterator[T_co]],
+        values: Mapping[str, Value],
+        *,
+        name: str | None = None,
+        kind: str | None = None,
+        checker: Checker[T_co] | None = None,
+    ) -> None:
+        """Wraps ``function``, given its values (already checked).
+
+        Args:
+            function: The generator function.
+            values: Its parameters' values, as DAG JSON values.
+            name: Its name (a typed connection's); else the function's.
+            kind: A typed connection's type.
+            checker: Its check (a typed connection's own); else none until ``@name.check``.
+        """
+        super().__init__(function, values, name=name, kind=kind, checker=checker)
+        self.fn: Final[Callable[..., AbstractContextManager[T_co]]] = contextlib.contextmanager(
+            function
+        )
+
+    def run_check(self) -> None:
+        """Opens the connection and runs its check, in a running task."""
+        checker = self._the_checker()
         given: dict[str, Mapping[str, object]] = {}
 
         def entered(stored: Mapping[str, object]) -> AbstractContextManager[object]:
@@ -249,43 +352,172 @@ class Connection(typing.Generic[T_co]):  # noqa: UP046  # declared covariant (se
     def _opened(
         self, enter: Callable[[Mapping[str, object]], AbstractContextManager[object]]
     ) -> Iterator[T_co]:
-        task = current_task()
-        declared = _declared_in_test()
-        if declared is not None and self.name not in declared:
-            raise ConnectionDeniedError(
-                f"connection `{self.name}` isn't declared in the task's `connections=`"
-            )
-        if task is None:
-            raise RuntimeError(
-                f"`{self.name}()` opens the connection inside a running task (or "
-                f"`schedr.testing.task_context`); to call it with values of your own, "
-                f"`{self.name}.fn(...)`"
-            )
-        if task.connections is None:
-            raise ConnectionNotFoundError(
-                f"connection `{self.name}`: no connections here (in a test, give a double: "
-                f"`task_context(connections={{{self.name!r}: ...}})`)"
-            )
-        with task.connections(self.name, enter) as client:
+        with self._opener()(self.name, enter) as client:
             yield client  # type: ignore[misc]  # the opener yields what `_enter` yields
 
-    def _enter(self, stored: Mapping[str, object]) -> AbstractContextManager[object]:
-        """The function called with its rendered values (stored JSON, decoded by type)."""
-        values = {
-            name: decode(value, self._hints.get(name, self._others), name)
-            for name, value in stored.items()
-        }
-        return self.fn(**values)
-
-    def __repr__(self) -> str:
-        """The connection, by name."""
-        return f"<connection {self.name}>"
+    def _call(self, stored: Mapping[str, object]) -> object:
+        return self.fn(**self._decoded(stored))
 
 
-def connection[T](
-    **values: object,
-) -> Callable[[Callable[..., Iterator[T]]], Connection[T]]:
+class AsyncConnection(ConnectionBase[T_co]):
+    """An ``async def`` connection: ``async with name() as client:`` in an ``async def`` task.
+
+    Attributes:
+        fn: The function as an async context manager, for calling it yourself (in a test) with
+            values of your own: ``async with mongodb_default.fn(uri=...) as db:``.
+    """
+
+    def __init__(self, function: Callable[..., AsyncIterator[T_co]], values: Mapping[str, Value]):
+        """Wraps ``function``, given its values (already checked).
+
+        Args:
+            function: The async generator function.
+            values: Its parameters' values, as DAG JSON values.
+        """
+        super().__init__(function, values)
+        self.fn: Final[Callable[..., AbstractAsyncContextManager[T_co]]] = (
+            contextlib.asynccontextmanager(function)
+        )
+
+    def __call__(self) -> AbstractAsyncContextManager[T_co]:
+        """Opens the connection, in a running task.
+
+        Returns:
+            The async context manager yielding what the function yields.
+        """
+        return self._aopened(self._enter)
+
+    def _call(self, stored: Mapping[str, object]) -> object:
+        return self.fn(**self._decoded(stored))
+
+    async def _tested(self) -> None:
+        checker = self._checker
+        given: dict[str, Mapping[str, object]] = {}
+
+        def entered(stored: Mapping[str, object]) -> AbstractContextManager[object]:
+            given["values"] = stored
+            return self._enter(stored)
+
+        async with self._aopened(entered) as client:
+            if checker is not None:
+                checked = checker(client, given.get("values", {}))
+                if inspect.isawaitable(checked):
+                    await checked
+
+    def run_test(self) -> None:
+        """Opens the connection and runs its check, or opens and closes it without one.
+
+        What ``schedr connections test NAME`` runs on a worker (decision 198); the check may be
+        ``async def``. As a task's coroutine: a timeout's stop signal lets its ``finally`` run.
+        """
+        # Slow to import; most tasks don't need it.
+        from schedr.runner.coroutines import run_coroutine  # noqa: PLC0415
+
+        run_coroutine(self._tested())
+
+
+class _Opening[S, A](AbstractContextManager[S], AbstractAsyncContextManager[A]):
+    """What opening a typed connection gives: either client, by how it is entered (decision 53)."""
+
+    def __init__(
+        self,
+        sync: Callable[[], AbstractContextManager[S]],
+        asynchronous: Callable[[], AbstractAsyncContextManager[A]],
+    ) -> None:
+        self._sync = sync
+        self._asynchronous = asynchronous
+        self._entered: AbstractContextManager[S] | None = None
+        self._aentered: AbstractAsyncContextManager[A] | None = None
+
+    def __enter__(self) -> S:
+        self._entered = self._sync()
+        return self._entered.__enter__()
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        trace: TracebackType | None,
+    ) -> bool | None:
+        assert self._entered is not None
+        return self._entered.__exit__(kind, error, trace)
+
+    async def __aenter__(self) -> A:
+        self._aentered = self._asynchronous()
+        return await self._aentered.__aenter__()
+
+    async def __aexit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        trace: TracebackType | None,
+    ) -> bool | None:
+        assert self._aentered is not None
+        return await self._aentered.__aexit__(kind, error, trace)
+
+
+class TwoWayConnection(Connection[T_co], typing.Generic[T_co, A_co]):  # noqa: UP046  # covariant
+    """A typed connection: ``with`` gives its sync client, ``async with`` its async one.
+
+    Attributes:
+        afn: The async function as an async context manager, as ``fn`` is the sync one.
+    """
+
+    def __init__(
+        self,
+        function: Callable[..., Iterator[T_co]],
+        async_function: Callable[..., AsyncIterator[A_co]],
+        values: Mapping[str, Value],
+        *,
+        name: str,
+        kind: str,
+        checker: Checker[T_co],
+    ) -> None:
+        """Wraps both functions, which take the same values (already checked).
+
+        Args:
+            function: The sync generator function.
+            async_function: The async one.
+            values: Their parameters' values, as DAG JSON values.
+            name: Its name.
+            kind: Its type.
+            checker: Its check, run with the sync client.
+        """
+        super().__init__(function, values, name=name, kind=kind, checker=checker)
+        self.afn: Final[Callable[..., AbstractAsyncContextManager[A_co]]] = (
+            contextlib.asynccontextmanager(async_function)
+        )
+
+    def __call__(self) -> _Opening[T_co, A_co]:
+        """Opens the connection, in a running task.
+
+        Returns:
+            What ``with`` or ``async with`` enters.
+        """
+        return _Opening(
+            lambda: self._opened(self._enter),
+            # What `_aenter` enters yields the async client, not the `T_co` `_aopened` says.
+            lambda: cast("AbstractAsyncContextManager[A_co]", self._aopened(self._aenter)),
+        )
+
+    def _aenter(self, stored: Mapping[str, object]) -> AbstractContextManager[object]:
+        # Entered with `async with`, by `_aopened`.
+        return cast("AbstractContextManager[object]", self.afn(**self._decoded(stored)))
+
+
+class _ConnectionDecorator(typing.Protocol):
+    """``@connection(...)``: what it makes depends on the function it is given."""
+
+    @typing.overload
+    def __call__[T](self, function: Callable[..., AsyncIterator[T]], /) -> AsyncConnection[T]: ...
+    @typing.overload
+    def __call__[T](self, function: Callable[..., Iterator[T]], /) -> Connection[T]: ...
+
+
+def connection(**values: object) -> _ConnectionDecorator:
     """Makes a generator function a connection, with its parameters' values.
+
+    An ``async def`` generator gives a connection for ``async with``.
 
     Args:
         **values: A value for each of its parameters (those with defaults may be left out):
@@ -296,9 +528,12 @@ def connection[T](
         The decorator.
     """
 
-    def define(function: Callable[..., Iterator[T]]) -> Connection[T]:
+    def define[T](
+        function: Callable[..., Iterator[T]] | Callable[..., AsyncIterator[T]],
+    ) -> Connection[T] | AsyncConnection[T]:
         name = getattr(function, "__name__", "")
-        if not inspect.isgeneratorfunction(function):
+        is_async = inspect.isasyncgenfunction(function)
+        if not is_async and not inspect.isgeneratorfunction(function):
             raise TypeError(
                 f"connection `{name}`: a connection is a generator function that yields what "
                 "a task gets (as with contextlib.contextmanager)"
@@ -306,9 +541,11 @@ def connection[T](
         converted = defined_values(
             function, values, name, None, inspect.getsourcefile(function) or ""
         )
-        return Connection(function, converted)
+        if is_async:
+            return AsyncConnection(cast("Callable[..., AsyncIterator[T]]", function), converted)
+        return Connection(cast("Callable[..., Iterator[T]]", function), converted)
 
-    return define
+    return cast("_ConnectionDecorator", define)  # its overloads say which function gives which
 
 
 def defined_values(
@@ -370,7 +607,7 @@ def defined_values(
     return converted
 
 
-type ConnectionsArg = Sequence[Connection[object] | str] | None
+type ConnectionsArg = Sequence[ConnectionBase[object] | str] | None
 """What ``connections=`` takes: ``@connection`` functions, or their names."""
 
 
@@ -390,11 +627,11 @@ def declared_connections(given: ConnectionsArg, where: str) -> tuple[str, ...] |
     """
     if given is None:
         return None
-    if isinstance(given, str | Connection):
+    if isinstance(given, str | ConnectionBase):
         given = [given]
     names: list[str] = []
     for item in given:
-        if isinstance(item, Connection):
+        if isinstance(item, ConnectionBase):
             name = item.name
         elif isinstance(item, str):
             try:

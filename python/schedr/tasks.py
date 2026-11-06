@@ -12,10 +12,10 @@ import functools
 import inspect
 import itertools
 import typing
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from datetime import timedelta
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, overload
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, Self, cast, overload
 
 from schedr import _build, _secrets
 from schedr import outcomes as _outcomes
@@ -415,11 +415,6 @@ def _check_function(fn: Callable[..., Any]) -> inspect.Signature:
             f"@task `{fn.__name__}` is an async generator: a function that yields events is a "
             "trigger (@trigger, milestone M4), not a task"
         )
-    if inspect.iscoroutinefunction(fn):
-        raise TypeError(
-            f"@task `{fn.__name__}`: async tasks come with milestone M4; to wait for something, "
-            "use a sensor (@sensor, milestone M4)"
-        )
     annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
     if "return" not in annotations:
         raise TypeError(
@@ -447,9 +442,7 @@ def _check_cleanup_function(cleanup: Callable[..., object], task_id: str) -> Non
     where = f"task `{task_id}`: cleanup="
     if not inspect.isfunction(cleanup):
         raise TypeError(f"{where} needs a function, got {type(cleanup).__name__}")
-    if inspect.iscoroutinefunction(cleanup) or inspect.isasyncgenfunction(cleanup):
-        raise TypeError(f"{where} `{cleanup.__name__}` must not be async")
-    if inspect.isgeneratorfunction(cleanup):
+    if inspect.isgeneratorfunction(cleanup) or inspect.isasyncgenfunction(cleanup):
         raise TypeError(f"{where} `{cleanup.__name__}` must not be a generator: it wouldn't run")
     signature = inspect.signature(cleanup, annotation_format=annotationlib.Format.FORWARDREF)
     for parameter in signature.parameters.values():
@@ -572,13 +565,22 @@ class TaskFunction[**P, R]:
         if builder is None:
             # In a test's `task_context`, a read it doesn't declare is refused, as on a worker.
             with declaring(self._options.secrets or (), self._options.connections or ()):
-                return self._fn(*args, **kwargs)
+                called = self._fn(*args, **kwargs)
+            if inspect.iscoroutine(called):
+                # To `await` in a test (decision 49): the body runs then, still declaring.
+                return cast("R", self._declaring_while(called))
+            return called
         task_id = builder.qualified(self._task_id)
         try:
             bound = self._signature.bind(*args, **kwargs)
         except TypeError as e:
             raise TypeError(f"task `{task_id}`: {e}") from None
         return self._record(builder, dict(bound.arguments), None)  # type: ignore[return-value]
+
+    async def _declaring_while[T](self, called: Coroutine[object, object, T]) -> T:
+        """Runs an ``async def`` task's coroutine with what the task declares in force."""
+        with declaring(self._options.secrets or (), self._options.connections or ()):
+            return await called
 
     def partial(self, **fixed: object) -> PartialTask[P, R]:
         """Fixes some arguments of a mapped task: ``load.partial(bucket="raw").expand(...)``.
@@ -930,7 +932,47 @@ class TaskFunction[**P, R]:
     ) -> Self:
         """The same function with other settings (``.override()``)."""
         # A subclass gives its own: this is the case of a plain task.
-        return typing.cast("Self", TaskFunction(self._fn, task_id, options, self._branch, cleanup))
+        return typing.cast("Self", _made(self._fn, task_id, options, self._branch, cleanup))
+
+
+class AsyncTaskFunction[**P, R, A = R](TaskFunction[P, R]):
+    """A function decorated with ``@task`` that is ``async def``.
+
+    A call reads, to a type checker, as ``R``, so ``load(extract())`` checks in a DAG; in a test,
+    ``await task.fn(...)`` is typed as the coroutine it is, of ``A``, what the function returns
+    (decision 319). They differ for ``-> None``, whose call in a DAG reads as ``Done``.
+    """
+
+    def fn(self, *args: P.args, **kwargs: P.kwargs) -> Coroutine[object, object, A]:
+        """Calls the function, to ``await`` in a test.
+
+        Args:
+            *args: Its arguments.
+            **kwargs: Its arguments.
+
+        Returns:
+            Its coroutine; what the task declares is in force while it runs.
+        """
+        # `_fn` is typed as what `@task` read `R` from: an `async def` gives this at run time.
+        called = cast("Coroutine[object, object, A]", self._fn(*args, **kwargs))
+        return self._declaring_while(called)
+
+
+def is_async(fn: Callable[..., object]) -> bool:
+    """Whether calling ``fn`` gives a coroutine, seeing through a ``functools.wraps`` decorator."""
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(inspect.unwrap(fn))
+
+
+def _made[**P, R](
+    fn: Callable[P, R],
+    task_id: str,
+    options: _build.TaskOptions,
+    branch: bool = False,
+    cleanup: Callable[..., object] | None = None,
+) -> TaskFunction[P, R]:
+    """``fn`` as a task function, of the class its kind has."""
+    kind = AsyncTaskFunction if is_async(fn) else TaskFunction
+    return kind(fn, task_id, options, branch, cleanup)
 
 
 class PartialTask[**P, R]:
@@ -1087,10 +1129,18 @@ class TaskDecorator:
         self._cleanup = cleanup
 
     @overload
+    def __call__[**Q](
+        self, fn: Callable[Q, Coroutine[object, object, None]], /
+    ) -> AsyncTaskFunction[Q, Done, None]: ...
+    @overload
+    def __call__[**Q, S](
+        self, fn: Callable[Q, Coroutine[object, object, S]], /
+    ) -> AsyncTaskFunction[Q, S]: ...
+    @overload
     def __call__[**Q](self, fn: Callable[Q, None], /) -> TaskFunction[Q, Done]: ...
     @overload
     def __call__[**Q, S](self, fn: Callable[Q, S], /) -> TaskFunction[Q, S]: ...
-    def __call__[**Q, S](self, fn: Callable[Q, S], /) -> TaskFunction[Q, S] | TaskFunction[Q, Done]:
+    def __call__(self, fn: Callable[..., object], /) -> object:
         """Makes ``fn`` a task (a function returning ``None`` gives ``Done`` when called).
 
         Args:
@@ -1100,7 +1150,17 @@ class TaskDecorator:
             The task function.
         """
         name: str = getattr(fn, "__name__", "")
-        return TaskFunction(fn, self._task_id or name, self._options, cleanup=self._cleanup)
+        return _made(fn, self._task_id or name, self._options, cleanup=self._cleanup)
+
+
+@overload
+def task[**P](
+    fn: Callable[P, Coroutine[object, object, None]], /
+) -> AsyncTaskFunction[P, Done, None]: ...
+
+
+@overload
+def task[**P, R](fn: Callable[P, Coroutine[object, object, R]], /) -> AsyncTaskFunction[P, R]: ...
 
 
 @overload
@@ -1136,8 +1196,8 @@ def task(
 ) -> TaskDecorator: ...
 
 
-def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
-    fn: Callable[P, R] | None = None,
+def task(  # noqa: PLR0913 (the task's options, by keyword)
+    fn: Callable[..., object] | None = None,
     /,
     *,
     task_id: str | None = None,
@@ -1159,7 +1219,7 @@ def task[**P, R](  # noqa: PLR0913 (the task's options, by keyword)
     cleanup_retry_delay: timedelta | None = None,
     cleanup_anywhere: bool | None = None,
     uses: Sequence[object] | None = None,
-) -> TaskFunction[P, R] | TaskFunction[P, Done] | TaskDecorator:
+) -> object:
     """Makes a function a Python task: ``@task`` or ``@task(retries=2, ...)``.
 
     The function must annotate its return type and declare each parameter (no ``*args`` /
@@ -1302,7 +1362,13 @@ def on[U](output: object, kind: type[U], /) -> U:
     return output.on(kind)  # type: ignore[return-value]
 
 
-def branch[**P](fn: Callable[P, list[Task] | Task], /) -> TaskFunction[P, Chosen]:
+@overload
+def branch[**P](
+    fn: Callable[P, Coroutine[object, object, list[Task] | Task]], /
+) -> AsyncTaskFunction[P, Chosen, list[Task] | Task]: ...
+@overload
+def branch[**P](fn: Callable[P, list[Task] | Task], /) -> TaskFunction[P, Chosen]: ...
+def branch(fn: Callable[..., object], /) -> object:
     """Makes a function a branch: it chooses which of its direct downstream tasks run.
 
     The function returns the chosen tasks' handles (one, or a list; ``[]`` for none, never
@@ -1320,6 +1386,5 @@ def branch[**P](fn: Callable[P, list[Task] | Task], /) -> TaskFunction[P, Chosen
         TypeError: If the function can't be a task.
     """
     name: str = getattr(fn, "__name__", "")
-    function = TaskFunction(fn, name, _build.TaskOptions(), branch=True)
     # Its call in a DAG body is what it chose, ordered with `>>` (type checkers' view).
-    return typing.cast("TaskFunction[P, Chosen]", function)
+    return _made(fn, name, _build.TaskOptions(), branch=True)

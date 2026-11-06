@@ -14,25 +14,31 @@ import contextlib
 import os
 import ssl
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from pathlib import Path
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from schedr import _build
-from schedr.connections import Connection, defined_values
+from schedr.connections import Connection, TwoWayConnection, defined_values
 
 # The clients' types, for type checkers; at run time `object`, so the annotations resolve
 # (schedr reads them) without the extras installed.
 if TYPE_CHECKING:
+    from httpx import AsyncClient as AsyncHttpClient
     from httpx import Client as HttpClient
     from paramiko import PKey, SSHClient
+    from psycopg import AsyncConnection as AsyncPostgres
+    from pymongo.asynchronous.database import AsyncDatabase
     from pymongo.database import Database
 
     MongoDatabase = Database[dict[str, object]]
+    AsyncMongoDatabase = AsyncDatabase[dict[str, object]]
+    AsyncSqlConnection = AsyncPostgres[tuple[object, ...]]
 else:
-    HttpClient = SSHClient = MongoDatabase = object
+    HttpClient = AsyncHttpClient = SSHClient = MongoDatabase = object
+    AsyncMongoDatabase = AsyncSqlConnection = object
 
 __all__ = ["HTTP", "SQL", "SSH", "DbApiConnection", "DbApiCursor", "Generic", "Mongo"]
 
@@ -89,6 +95,57 @@ def _http(
         import httpx  # noqa: PLC0415  # an extra, imported when a connection is opened
     except ImportError:
         raise _missing("httpx", "http", "HTTP") from None
+    sent, auth, context = _http_settings(
+        token, user, password, headers, ca_cert, client_cert, client_key
+    )
+    client = httpx.Client(
+        base_url=base_url, headers=sent, auth=auth, verify=context, timeout=timeout
+    )
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+async def _ahttp(  # the same values as `_http`
+    base_url: str,
+    token: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    headers: dict[str, str] | None = None,
+    ca_cert: str | None = None,
+    client_cert: str | None = None,
+    client_key: str | None = None,
+    timeout: float = 30.0,
+    check_path: str | None = None,
+) -> AsyncIterator[AsyncHttpClient]:
+    del check_path  # a check runs with the sync client
+    try:
+        import httpx  # noqa: PLC0415  # an extra, imported when a connection is opened
+    except ImportError:
+        raise _missing("httpx", "http", "HTTP") from None
+    sent, auth, context = _http_settings(
+        token, user, password, headers, ca_cert, client_cert, client_key
+    )
+    client = httpx.AsyncClient(
+        base_url=base_url, headers=sent, auth=auth, verify=context, timeout=timeout
+    )
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+def _http_settings(
+    token: str | None,
+    user: str | None,
+    password: str | None,
+    headers: dict[str, str] | None,
+    ca_cert: str | None,
+    client_cert: str | None,
+    client_key: str | None,
+) -> tuple[dict[str, str], tuple[str, str] | None, ssl.SSLContext]:
+    """What both clients take: the headers, the authentication and the TLS context."""
     sent = dict(headers or {})
     if token is not None:
         sent["Authorization"] = f"Bearer {token}"
@@ -100,13 +157,7 @@ def _http(
         with _private_file(client_cert) as cert, _private_file(client_key or "") as key:
             context.load_cert_chain(cert, key if client_key is not None else None)
     auth = (user, password or "") if user is not None else None
-    client = httpx.Client(
-        base_url=base_url, headers=sent, auth=auth, verify=context, timeout=timeout
-    )
-    try:
-        yield client
-    finally:
-        client.close()
+    return sent, auth, context
 
 
 def _path_only(path: str) -> None:
@@ -133,10 +184,11 @@ def _check_http(client: HttpClient, values: Mapping[str, object]) -> None:
         client.head("/")
 
 
-class HTTP(Connection[HttpClient]):
+class HTTP(TwoWayConnection[HttpClient, AsyncHttpClient]):
     """An HTTP API: an ``httpx.Client`` with its base URL, authentication and TLS settings.
 
-    ``with billing_api() as client: client.get("/invoices")``.
+    ``with billing_api() as client: client.get("/invoices")``; ``async with`` gives an
+    ``httpx.AsyncClient``.
     """
 
     def __init__(  # the type's shape
@@ -197,6 +249,7 @@ class HTTP(Connection[HttpClient]):
         }
         super().__init__(
             _http,
+            _ahttp,
             defined_values(_http, given, name, "http", _build.caller_file()),
             name=name,
             kind="http",
@@ -395,6 +448,58 @@ def _mongo(
         import pymongo  # noqa: PLC0415  # an extra, imported when a connection is opened
     except ImportError:
         raise _missing("pymongo", "mongo", "Mongo") from None
+    with _mongo_tls(uri, user, password, ca_cert) as (tls, ca_file):
+        client: pymongo.MongoClient[dict[str, object]] = pymongo.MongoClient(
+            uri,
+            document_class=dict,
+            serverSelectionTimeoutMS=round(timeout * 1000),
+            username=user,
+            password=password,
+            tls=tls,
+            tlsCAFile=ca_file,
+        )
+        # The CA file stays open with it: a client resolving `mongodb+srv://` at its first
+        # command (the async one always, the sync one with `connect=false`) reads it then.
+        try:
+            yield client[database]
+        finally:
+            client.close()
+
+
+async def _amongo(  # the same values as `_mongo`
+    uri: str,
+    database: str,
+    user: str | None = None,
+    password: str | None = None,
+    ca_cert: str | None = None,
+    timeout: float = 30.0,
+) -> AsyncIterator[AsyncMongoDatabase]:
+    try:
+        import pymongo  # noqa: PLC0415  # an extra, imported when a connection is opened
+    except ImportError:
+        raise _missing("pymongo", "mongo", "Mongo") from None
+    with _mongo_tls(uri, user, password, ca_cert) as (tls, ca_file):
+        client: pymongo.AsyncMongoClient[dict[str, object]] = pymongo.AsyncMongoClient(
+            uri,
+            document_class=dict,
+            serverSelectionTimeoutMS=round(timeout * 1000),
+            username=user,
+            password=password,
+            tls=tls,
+            tlsCAFile=ca_file,
+        )
+        # As the sync client: the CA file is read again at the first command for SRV.
+        try:
+            yield client[database]
+        finally:
+            await client.close()
+
+
+@contextlib.contextmanager
+def _mongo_tls(
+    uri: str, user: str | None, password: str | None, ca_cert: str | None
+) -> Iterator[tuple[bool, str | None]]:
+    """Whether both clients use TLS, and their CA file, which exists while the block runs."""
     _credentials(uri, user, password)
     options = {
         key.lower(): value for key, value in parse_qsl(urlsplit(uri).query, keep_blank_values=True)
@@ -405,27 +510,14 @@ def _mongo(
     tls = written.lower() == "true" if written is not None else True
     with contextlib.ExitStack() as files:
         ca_file = str(files.enter_context(_private_file(ca_cert))) if ca_cert is not None else None
-        # pymongo reads the CA file into its context here: it can go once the client is made.
-        client: pymongo.MongoClient[dict[str, object]] = pymongo.MongoClient(
-            uri,
-            document_class=dict,
-            serverSelectionTimeoutMS=round(timeout * 1000),
-            username=user,
-            password=password,
-            tls=tls,
-            tlsCAFile=ca_file,
-        )
-    try:
-        yield client[database]
-    finally:
-        client.close()
+        yield tls, ca_file
 
 
 def _check_mongo(db: MongoDatabase, _values: Mapping[str, object]) -> None:
     db.command("ping")
 
 
-class Mongo(Connection[MongoDatabase]):
+class Mongo(TwoWayConnection[MongoDatabase, AsyncMongoDatabase]):
     """A MongoDB database: a pymongo ``Database``, its client closed when the block ends.
 
     ``with orders_db() as db: db.orders.count_documents({})``. TLS is used and verified
@@ -479,6 +571,7 @@ class Mongo(Connection[MongoDatabase]):
         }
         super().__init__(
             _mongo,
+            _amongo,
             defined_values(_mongo, given, name, "mongo", _build.caller_file(), urls=("uri",)),
             name=name,
             kind="mongo",
@@ -575,6 +668,40 @@ def _postgres(
         import psycopg  # noqa: PLC0415  # an extra, imported when a connection is opened
     except ImportError:
         raise _missing("psycopg", "postgres", "Postgres") from None
+    with _postgres_settings(url, ca_cert) as (sslmode, sslrootcert):
+        # libpq reads the CA file while connecting: it can go once connected.
+        return psycopg.connect(
+            url,
+            connect_timeout=max(1, round(timeout)),
+            user=user,
+            password=password,
+            sslmode=sslmode,
+            sslrootcert=sslrootcert,
+        )
+
+
+async def _apostgres(
+    url: str, user: str | None, password: str | None, ca_cert: str | None, timeout: float
+) -> AsyncSqlConnection:
+    try:
+        import psycopg  # noqa: PLC0415  # an extra, imported when a connection is opened
+    except ImportError:
+        raise _missing("psycopg", "postgres", "Postgres") from None
+    with _postgres_settings(url, ca_cert) as (sslmode, sslrootcert):
+        # As the sync one: its CA file goes once connected.
+        return await psycopg.AsyncConnection.connect(
+            url,
+            connect_timeout=max(1, round(timeout)),
+            user=user,
+            password=password,
+            sslmode=sslmode,
+            sslrootcert=sslrootcert,
+        )
+
+
+@contextlib.contextmanager
+def _postgres_settings(url: str, ca_cert: str | None) -> Iterator[tuple[str | None, str | None]]:
+    """``sslmode`` and ``sslrootcert`` for both connections; the CA file exists in the block."""
     query = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
     mode = _sslmode(url, "postgresql")
     # A keyword overrides the URL's own; psycopg leaves out one that is `None`.
@@ -585,15 +712,7 @@ def _postgres(
             sslrootcert = str(files.enter_context(_private_file(ca_cert)))
         elif mode == "verify-full" and "sslrootcert" not in query:
             sslrootcert = "system"  # the system's CAs, as HTTP's (libpq 16+)
-        # libpq reads the CA file while connecting: it can go once connected.
-        return psycopg.connect(
-            url,
-            connect_timeout=max(1, round(timeout)),
-            user=user,
-            password=password,
-            sslmode=sslmode,
-            sslrootcert=sslrootcert,
-        )
+        yield sslmode, sslrootcert
 
 
 # WORKAROUND(pymysql==1.2.3): PyMySQL's MySQL 8 login without TLS returns no packet; fixed
@@ -687,6 +806,35 @@ def _sql(
         connection.close()
 
 
+async def _asql(  # the same values as `_sql`
+    url: str,
+    user: str | None = None,
+    password: str | None = None,
+    ca_cert: str | None = None,
+    timeout: float = 30.0,
+) -> AsyncIterator[AsyncSqlConnection]:
+    scheme = _scheme(url)
+    if scheme in _MYSQL:
+        raise TypeError(
+            f"`async with` on an SQL connection is for Postgres; a {scheme}:// one has no "
+            "async driver here: use `with` (decision 317)"
+        )
+    if scheme not in _POSTGRES:
+        raise ValueError(
+            f"an SQL connection's URL is postgresql://, mysql:// or mariadb://, not {scheme}://"
+        )
+    _credentials(url, user, password)
+    connection = await _apostgres(url, user, password, ca_cert, timeout)
+    try:
+        yield connection
+        await connection.commit()
+    except BaseException:
+        await connection.rollback()
+        raise
+    finally:
+        await connection.close()
+
+
 def _check_sql(connection: DbApiConnection, _values: Mapping[str, object]) -> None:
     cursor = connection.cursor()
     try:
@@ -706,7 +854,7 @@ def _scheme_written(url: object) -> str | None:
     return None
 
 
-class SQL(Connection[DbApiConnection]):
+class SQL(TwoWayConnection[DbApiConnection, AsyncSqlConnection]):
     """A Postgres or MySQL database, by URL: a DB-API connection (psycopg 3, PyMySQL).
 
     ``with warehouse() as db: cursor = db.cursor()``; the block's work is committed when it
@@ -772,6 +920,7 @@ class SQL(Connection[DbApiConnection]):
         }
         super().__init__(
             _sql,
+            _asql,
             defined_values(_sql, given, name, "sql", _build.caller_file(), urls=("url",)),
             name=name,
             kind="sql",
@@ -792,10 +941,14 @@ def _check_generic(_values_given: dict[str, object], _values: Mapping[str, objec
     """Nothing to reach: it holds values only."""
 
 
-class Generic(Connection[dict[str, object]]):
+async def _ageneric(**values: Any) -> AsyncIterator[dict[str, object]]:
+    yield dict(values)
+
+
+class Generic(TwoWayConnection[dict[str, object], dict[str, object]]):
     """Keys of one's own: the task gets them as a dict.
 
-    ``with feature_flags() as flags: flags["region"]``.
+    ``with feature_flags() as flags: flags["region"]``, or ``async with``.
     """
 
     def __init__(self, name: str, /, **values: object) -> None:
@@ -807,6 +960,7 @@ class Generic(Connection[dict[str, object]]):
         """
         super().__init__(
             _generic,
+            _ageneric,
             defined_values(_generic, values, name, "generic", _build.caller_file()),
             name=name,
             kind="generic",

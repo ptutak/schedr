@@ -37,6 +37,11 @@ outcome class or enum, or a command's output. Between two values of builtin type
 (`rows >> counts`, a `list` and an `int`), it type-checks on neither side: write
 `chain(rows, counts)`.
 
+For an async task in a test, use `await task.fn(...)`: it is typed as a coroutine and
+retains the task's declarations. `await task()` runs outside a DAG but type checkers flag it,
+because the call reads as the task's value in a DAG. For `-> None`, awaiting `.fn` gives
+`None`. Without an async test plugin, use `asyncio.run(task.fn(...))`.
+
 ## Outcome classes
 
 An outcome class (a member of a union a task returns) derives from **`schedr.Data`**,

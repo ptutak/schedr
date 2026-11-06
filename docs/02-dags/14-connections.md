@@ -15,7 +15,9 @@ production, because each deployment has its own [secret storage](../03-guide/13-
 `@connection(...)` goes on a generator function, as `contextlib.contextmanager` does. The
 function's parameters are the connection's shape, and the decorator's keyword arguments are
 their values. The code up to `yield` opens it; what it yields is what the task gets; the code
-after `yield` runs when the task's `with` block ends, on errors too.
+after `yield` runs when the task's `with` block ends, on errors too. An `async def`
+generator defines an async connection: open it only with `async with`. A connection made
+from a sync generator cannot be opened with `async with`.
 
 A value is a plain value (`"orders"`, `5432`, a date) or a secret (`secrets['etl/api']['token']`,
 `secrets['etl/db'].get('port', '5432')`), or a t-string of them
@@ -67,6 +69,10 @@ runs with those values, decoded to its parameters' types.
 A task opens only what it declares, as it reads at run time only the secrets its `secrets=`
 declares. Opening another fails the attempt as `connection_denied`, even when the folder
 defines it.
+
+A built-in connection with an async client uses the same definition and settings for both
+clients: use `with` for the sync client and `async with` for the async client. A sync client
+also works in an async task, but blocks its event loop.
 
 ### In a command
 
@@ -205,6 +211,17 @@ gives its client. Its name is the first argument, as an operator's task ID is:
 | `SQL` | `url` (`postgresql://`, `mysql://` or `mariadb://`, `?sslmode=...`); `user`, `password`; `ca_cert` (PEM text), `timeout` | a DB-API connection (psycopg 3, PyMySQL); the block's work committed when it ends, rolled back on an error | `SELECT 1` |
 | `Generic` | keys of your own | a `dict` | none |
 
+The async clients use the same TLS, certificate and authentication settings as the sync
+clients:
+
+| Type | `async with` gives |
+|---|---|
+| `HTTP` | `httpx.AsyncClient` |
+| `Mongo` | PyMongo's async database |
+| `Generic` | The same dict of values |
+| `SQL` | On Postgres, psycopg's `AsyncConnection`; commits at the end of the block and rolls back on an exception. On `mysql://` or `mariadb://`, opening raises an error directing you to use `with`. |
+| `SSH` | Sync only. `async with` is a type error, and raises Python's own error at run time. |
+
 Each client's library is an extra, installed where tasks run: `schedr[http]`,
 `schedr[ssh]`, `schedr[mongo]`, `schedr[postgres]`, `schedr[mysql]`, or all of them as
 `schedr[connections]`. It is imported only when a connection of its type is opened; without
@@ -289,6 +306,10 @@ opens it and raises when it doesn't work. A `@connection` of your own gets one w
 def reachable(api: ApiClient) -> None:
     api.get("/health")
 ```
+
+For an async-generator connection, the check may also be `async def`.
+`schedr connections test` runs it; on timeout, cancellation lets its `finally` run within
+the grace period. Built-in checks use the sync client.
 
 ## Checking them on a worker
 

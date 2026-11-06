@@ -4843,9 +4843,18 @@ def version() -> str:
   the type has both. `Mongo`: pymongo for both (`MongoClient`, and `AsyncMongoClient`, in
   pymongo since 4.10, replacing the deprecated motor). `HTTP`: httpx for both
   (`httpx.Client` / `httpx.AsyncClient`, one API in both modes; the table's
-  `requests.Session` becomes `httpx.Client`). `SSH` (paramiko) and `SQL` (DB-API; async
-  drivers differ per database) sync only for now: `async with` on them is a parse error
-  saying so. `Generic` is a dict, either way. Every built-in type has a `check()`: Mongo
+  `requests.Session` becomes `httpx.Client`). `SSH` (paramiko) sync only for now: `async with` on it is a type error, and Python's own error at
+  run time. `SQL` on Postgres only (decision 317, below): `async with` on mysql:// or mariadb:// is
+  an error when opened, saying so (not at parse: a `with` inside a function can't be read at parse
+  time, and an SQL URL's scheme may be a secret). **One definition kept** (decision 318, the user's,
+  2026-11-06). Not chosen: separate `AHTTP`, `AMongo`, `ASQL` and `AGeneric` (a `with` on them is a
+  type error, but a sync `HTTP` with `with` inside an `async def` still isn't, which is the mistake
+  that blocks a loop; and a root with sync and async tasks would need two connections, with their
+  settings to keep alike). `Generic` is a dict, either way. **`SQL`** (decision 317, the user's, 2026-11-06):
+  `async with` on a postgresql:// URL gives psycopg's `AsyncConnection`, with the same TLS rules
+  and commit or rollback at the end of the block; on mysql:// or mariadb:// it is an error
+  saying to use `with`. Not chosen: an async MySQL driver as well (aiomysql or asyncmy: a new
+  dependency, TLS and the MySQL 8 login to redo and test); SQL sync only (what 53 first said). Every built-in type has a `check()`: Mongo
   `ping`, HTTP a request to `check_path` (else connecting), SSH connecting and closing, SQL
   `SELECT 1`; a `@connection` of one's own may add `@its_name.check`; `schedr connections
   test <name>` runs it on a worker, sync or async as the type allows. Not chosen:
@@ -6414,9 +6423,36 @@ Rules:
   process holding a task slot.
 - **Help from the agent and runner:** SIGTERM cancels the main coroutine (a handler in the
   runner) so `finally` / `async with` blocks run within the grace time, then SIGKILL as today;
-  async variants of the in-task calls (`await task_ctx.secret(...)`, `await
-  cleanup_handle(...)`) over the same agent socket, so async code never blocks its own event
-  loop; optionally `uvloop` per interpreter in the configuration.
+  the process then ends by that signal, as a sync task's does, whatever the coroutine did with
+  the cancellation; async variants of the in-task calls (decision 315) over the same agent
+  socket, so async code never blocks its own event loop.
+- **Async in-task calls** (decision 315, the user's, 2026-11-06): an `a` prefix,
+  `await task_ctx.asecret(...)`, `await task_ctx.asecret_value(...)` and `await
+  acleanup_handle(...)`. The sync calls still work in async code, blocking its loop while they
+  wait. Not chosen: the same name returning something both a `str` and awaitable (type checkers
+  can't describe it without `Any`); sync calls only, wrapped by the author in `asyncio.to_thread`.
+- **`uvloop` whenever it is installed** (decision 316, the user's, 2026-11-06): an optional
+  speed-up. Async tasks and the watcher host run on `uvloop` whenever the interpreter can import
+  it, however it got there: schedr looks for the module, not for the extra. `schedr[uvloop]` is
+  only a convenient way to install it. Without it they use `asyncio`'s own loop, so `schedr` keeps
+  no required dependencies. So installing `uvloop` for any reason switches that interpreter's async
+  tasks to it, and each async attempt's log says which loop it ran on (`event loop: uvloop`), so a
+  difference between machines shows. No configuration key: being installed is the switch. Not chosen: a key per interpreter (what the design first said; a key
+  for what installing already says); `uvloop` as a required dependency, the only loop (one loop
+  to test, but the first compiled package every install must take); asyncio for tasks and
+  `uvloop` for watchers only (they share the interpreter, and would behave differently).
+- **Async connections:** `@connection` on an `async def` generator gives an `AsyncConnection`,
+  opened with `async with`; its `@name.check` may be `async def`, and `connections test` runs it
+  in a loop. Typed connections give both clients from one definition (decisions 53, 317 and 318), their
+  check running with the sync one. A sync connection works in an async task, blocking its loop.
+- **Calling an async task in a test** (decision 319, the user's, 2026-11-06): `await task.fn(...)`,
+  typed as the coroutine it is, with what the task declares in force. A plain call also gives the
+  coroutine (decision 49), but reads to a type checker as what the task returns, as a DAG's
+  `load(extract())` must check, so `await task()` is flagged. `.fn` gives what the function returns
+  (`None` for `-> None`, which is `Done` in a DAG). A `functools.wraps` decorator keeps it: the kind
+  is read through the wrapper. `.fn` is the name connections already
+  use. Not chosen: a cast or an ignore in authors' tests; a separate `@atask` (it would need the
+  same `.fn`).
 - Not chosen for tasks: Rust driving the coroutines inside the agent (no Python in the agent:
   user code could crash it); one shared async process for many tasks (no per-task memory
   budget or signal-based cancel, one crash or blocking call hurts all of them; watchers accept

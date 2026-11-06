@@ -35,7 +35,7 @@ from schedr._model import (
 )
 from schedr._secrets import SecretsArg
 from schedr._templates import is_tstring, shell_text
-from schedr.connections import Connection, ConnectionsArg, declared_connections
+from schedr.connections import ConnectionBase, ConnectionsArg, declared_connections
 from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command, from_declaration
 from schedr.tasks import Output
 from schedr.types import ProcessResult
@@ -127,7 +127,7 @@ class Operator:
 
 
 def _connection_env(
-    given: Mapping[str, Connection[object] | str],
+    given: Mapping[str, ConnectionBase[object] | str],
     env: Mapping[str, Template],
     where: str,
 ) -> dict[str, str]:
@@ -250,7 +250,7 @@ class CommandSettings:
     env: Mapping[str, object] | None = None
     options: _build.TaskOptions = field(default_factory=_build.TaskOptions)
     secrets: SecretsArg = None
-    connections: ConnectionsArg | Mapping[str, Connection[object] | str] = None
+    connections: ConnectionsArg | Mapping[str, ConnectionBase[object] | str] = None
     cleanup: str | TString | Sequence[object] | None = None
     cleanup_handles: Sequence[str] | None = None
     outcomes: type[Outcome] | None = None
@@ -426,7 +426,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         max_active: int | None = None,
         max_active_per_run: int | None = None,
         secrets: SecretsArg = None,
-        connections: ConnectionsArg | Mapping[str, Connection[object] | str] = None,
+        connections: ConnectionsArg | Mapping[str, ConnectionBase[object] | str] = None,
         cleanup: str | TString | Sequence[object] | None = None,
         cleanup_timeout: timedelta | None = None,
         cleanup_retries: int | None = None,

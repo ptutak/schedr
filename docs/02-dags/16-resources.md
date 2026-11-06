@@ -14,7 +14,8 @@ for something created once and shared by tasks, such as a cluster for a run.
 `@resource(queue="compute")`; its options are those of `@task`. The return value is the
 resource's value. `@cluster.cleanup` marks its cleanup, which takes that value as its one
 parameter. If the setup returns `None`, the cleanup takes no parameter. The decorator can
-also take options, as in `@cluster.cleanup(retries=5)`.
+also take options, as in `@cluster.cleanup(retries=5)`. Both setup and cleanup may be
+`async def`.
 
 The cleanup inherits the setup's secrets and connections and can declare more of its own.
 Its queue defaults to the setup's queue and can be overridden. It also accepts `timeout`,

@@ -80,7 +80,7 @@ when it needs it:
 
 | Where | Declare | Read |
 |---|---|---|
-| A Python task | `@task(secrets=["etl/api#token"])` | `task_ctx.secret("etl/api", "token")`, or `task_ctx.secret_value("etl/api#token")` |
+| A Python task | `@task(secrets=["etl/api#token"])` | `task_ctx.secret("etl/api", "token")`, or `task_ctx.secret_value("etl/api#token")`; async: `await task_ctx.asecret(...)` or `await task_ctx.asecret_value(...)` |
 | A command | `CommandOperator(..., secrets=["etl/api#token"])` | `schedr task-ctx secret get 'etl/api#token'` |
 
 `secrets=` takes a string for the default storage (`"etl/api#token"`, or `"etl/api"` for a
@@ -88,7 +88,8 @@ whole secret), a placeholder (`secrets.vault['etl/api']['token']`, `secrets['etl
 `SecretPrefix`. It never sets an environment variable, and a fallback has no place there.
 `task_ctx.secret(path, key)` is a key's value, `str`; `task_ctx.secret(path)` the whole
 secret, `dict[str, str]`; `task_ctx.secret_value("path#key")` a key's value written as one
-string. Each takes `storage=`, and `schedr task-ctx secret get [--storage NAME] SECRET` names
+string. The async forms take the same arguments and return the same values without blocking
+the event loop. Each takes `storage=`, and `schedr task-ctx secret get [--storage NAME] SECRET` names
 the storage separately too, never inside the string. The CLI prints a key's value as it is,
 with no trailing newline, and a whole secret as one line of JSON. `.override(secrets=[...])`
 changes the list for one use of a task.

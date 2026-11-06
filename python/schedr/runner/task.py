@@ -33,7 +33,7 @@ from schedr._serialization.annotations import (
 )
 from schedr._serialization.codec import escaped
 from schedr._templates import as_text
-from schedr.connections import Connection, ConnectionDeniedError, ConnectionNotFoundError
+from schedr.connections import ConnectionBase, ConnectionDeniedError, ConnectionNotFoundError
 from schedr.context import (
     HANDLES_PARAMETER,
     ConnectionEnter,
@@ -684,6 +684,11 @@ def execute(  # noqa: PLR0911, PLR0912 (a result for each way a task ends)
         )
         with running(run_values(run, params_class), own):
             result = function(**arguments)
+            # Asked of the result, not the function: a decorator can wrap an `async def`.
+            if inspect.iscoroutine(result):
+                from schedr.runner.coroutines import run_coroutine  # noqa: PLC0415  # see there
+
+                result = run_coroutine(result)
     except SecretError as e:
         return failure(e, e.kind)
     except ConnectionNotFoundError as e:
@@ -823,7 +828,7 @@ def run_connection_test(  # noqa: PLR0911 (a result for each way a test ends)
     return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
 
 
-def defined_connection(module: str, name: str) -> Connection[object]:
+def defined_connection(module: str, name: str) -> ConnectionBase[object]:
     """The connection ``name`` the module defines at its top level.
 
     Args:
@@ -837,9 +842,9 @@ def defined_connection(module: str, name: str) -> Connection[object]:
         TaskSetupError: When the module defines none by that name (any more).
     """
     loaded = sys.modules.get(module)
-    found: dict[int, Connection[object]] = {}
+    found: dict[int, ConnectionBase[object]] = {}
     for value in vars(loaded).values() if loaded is not None else ():
-        if isinstance(value, Connection) and value.name == name:
+        if isinstance(value, ConnectionBase) and value.name == name:
             found[id(value)] = value
     if len(found) > 1:
         # Which one the parse recorded can't be told: testing either could pass for the other.

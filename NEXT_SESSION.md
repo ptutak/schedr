@@ -4,7 +4,18 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06, morning): M4.9 finished; stopped as the user asked
+## State (2026-11-06): M4.10 committed; imports under investigation
+
+- **M4.10, async task functions** (decisions 315-319): done, pushed. The next step is in `PLAN.md`;
+  check the commit's CI first. Not tested on purpose (the user's call): a real `mongodb+srv://` with
+  TLS; the CA-file fix has a fake-client unit test, and Codex's mocked-SRV script proved the bug.
+- **Codex on DAG loading** (B172, `/home/ptutak/Git/schedr-codex-imports`, branch codex/imports, env
+  schedr-codex-imports; `import_scenarios.py` there): report to verify and give the user, who
+  decides. B172 and its guide note are uncommitted; B170 still to discuss. Remove the worktree after.
+- `.schedrignore` is not a workaround for B172 (`dags test` then says `no DAG`); absolute imports
+  from the root work.
+
+## Before that (2026-11-06, morning): M4.9 finished
 
 - **The user's instruction:** "finish M4.9 with review and fixes stop after that, commit and push
   as needed". Don't start what follows M4.9 before they say so.

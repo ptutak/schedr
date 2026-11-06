@@ -34,6 +34,9 @@ ssh = ["paramiko>=5.0,<6"]
 # psycopg 3 with its own libpq build (the binary package), so no system libpq is needed.
 postgres = ["psycopg[binary]>=3.2,<4"]
 mysql = ["pymysql[rsa]>=1.1,<2"]  # rsa: cryptography, for SHA-2 password auth without TLS
+# A faster event loop for async tasks and watchers: used whenever it can be imported, however
+# it was installed; this extra is one way to install it (decision 316).
+uvloop = ["uvloop>=0.23,<1"]
 # Every connection type's client at once (what the base image has).
 connections = ["schedr[http,mongo,ssh,postgres,mysql]"]
 
@@ -50,6 +53,8 @@ dev = [
     "basedpyright==1.40.2",
     # Tests `schedr.pydantic.Model` and Pydantic outcome unions; never a runtime dependency.
     "pydantic==2.14.1",
+    # The `uvloop` extra's loop, for the tests running on it.
+    "uvloop==0.23.0",
     # The typed connections' clients (the extras above), for their tests and type checks.
     "httpx==0.28.1",
     "pymongo==4.19.0",

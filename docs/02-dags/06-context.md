@@ -290,6 +290,9 @@ already has the descriptor.
 Unlike `dag_ctx`, it has no references: reading it in the DAG body, or anywhere outside a
 running task, raises `RuntimeError`. A test sets it with `task_context(task_id=...,
 try_number=..., map_index=...)` ([Testing a DAG](07-testing.md#one-task-and-its-context)).
-A declared secret is `task_ctx.secret(...)` ([Secrets](13-secrets.md)). Tasks can also use
-[connections](14-connections.md) and register [cleanup handles](15-cleanup.md). Resource
+A declared secret is `task_ctx.secret(...)` or `task_ctx.secret_value(...)`
+([Secrets](13-secrets.md)). In an async task, `await task_ctx.asecret(...)` and
+`await task_ctx.asecret_value(...)` do the same without blocking the event loop. Tasks can
+also use [connections](14-connections.md) and register [cleanup handles](15-cleanup.md);
+`await acleanup_handle(...)` registers a handle without blocking the loop. Resource
 values for command and script setups and cleanups use `schedr task-ctx resource` above.

@@ -181,9 +181,10 @@ preloaded fork server imports them except `polars`, by module name, from
 `images/schedr/preload.txt`: `yaml` for PyYAML, `dateutil` for python-dateutil, `dns` for
 dnspython, and the others under the names in the table. `polars` starts threads on import,
 so preloading it would disable that server. The image's build imports the list and fails if
-a thread is still running. Async libraries work inside a task with `asyncio.run(...)` until
-async task functions come (M4). Your DAGs' libraries go in an image of your own built
-`FROM` it:
+a thread is still running. Async task functions use the event loop available in their Python
+environment; installing `uvloop` selects it automatically
+([the event loop](../02-dags/02-tasks.md#the-event-loop)). Your DAGs' libraries go in an
+image of your own built `FROM` it:
 `examples/kubernetes/Dockerfile` does it in two stages, compiling in a builder stage what has
 no musl wheel, so no compiler ends up in your image.
 

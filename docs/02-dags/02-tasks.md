@@ -27,7 +27,7 @@ An operator is constructed inside the block. Outside it, `CommandOperator` and
 | Parameters | Each one is declared. `*args`, `**kwargs` and positional-only parameters (before `/`) are a `TypeError`: arguments are stored and passed by name. |
 | Arguments | Checked against the signature when the DAG is imported. A missing or extra argument is a `TypeError` naming the task. |
 | Calling it twice | The second call needs another ID: `load.override(task_id="load_again")(names)`. The same ID twice is `` task ID `load` is defined twice in DAG `tasks_demo` ``. |
-| `async def` | A `TypeError`. Async tasks, sensors and event triggers are [Async task functions](../_generated/05-design/07-python-api-structure.md#async-task-functions) and [Sensors and triggers](../_generated/05-design/07-python-api-structure.md#sensors-and-triggers). |
+| `async def` | Supported; see [Async tasks](#async-tasks). Async generators are refused. |
 
 `@task(timeout=..., retries=..., run_if=...)` sets that task's options. `.override(...)`
 returns a new task function and leaves the original unchanged. The options are
@@ -39,6 +39,34 @@ from the bare fork server. Set `fresh_process=True` when the task misbehaves aft
 it is always a new process, and never forked. The same two arguments are on `.override(...)`
 and `TaskDefaults(...)`, and the task's own argument wins. What the worker does with them is
 [The fork server](../03-guide/05-workers.md#the-fork-server).
+
+## Async tasks
+
+Use `async def` for concurrent waits inside one attempt, for example several HTTP calls
+with `asyncio.gather`. A slow synchronous call blocks the event loop and the other waits.
+For waiting for an external event without holding a task slot, see
+[Sensors and triggers](../_generated/05-design/07-python-api-structure.md#sensors-and-triggers).
+
+```{literalinclude} ../../examples/docs/async_tasks.py
+:language: python
+:caption: examples/docs/async_tasks.py
+```
+
+`@task`, `@branch`, `@resource` setups and cleanups can be async functions. Async
+generators are refused as tasks, as they are for triggers. Each async attempt runs in its
+own event loop. When its main coroutine ends, leftover tasks are cancelled; errors from
+them are logged as warnings and do not change the attempt's result. A timeout or cancel
+cancels the coroutine, allowing `finally` and `async with` exits to run within the grace
+period. A blocked loop may instead be killed when the grace expires
+([Workers](../03-guide/05-workers.md)).
+
+### The event loop
+
+schedr uses `uvloop` whenever the attempt's interpreter can import it, however it was
+installed; it looks for the module, not the extra. `pip install schedr[uvloop]` is one way
+to install it. Otherwise schedr uses asyncio's own loop. There is no configuration key:
+installing the module selects it. Each async attempt's log says `event loop: uvloop` or
+`event loop: asyncio`.
 
 ## Commands
 
