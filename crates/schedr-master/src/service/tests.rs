@@ -539,6 +539,85 @@ async fn a_master_that_isnt_leading_refuses_a_stream_at_once() {
 }
 
 #[tokio::test]
+async fn a_worker_that_gives_up_during_its_registration_can_register_again() {
+    // B171: a worker giving up resets its stream, which drops the server's call. Dropped inside
+    // the registration, the worker stayed live with no stream behind it, nothing to end it, and
+    // each try refused ("already has a live stream"), each refusal also renewing its lease.
+    let (_hub, db, mut client) = connected().await;
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("sqlite")
+    };
+    // The only connection: the registration stops at its first write, the worker marked live.
+    let held = pool.acquire().await.unwrap();
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut giving_up = client.clone();
+    let opening =
+        tokio::spawn(async move { giving_up.control(ReceiverStream::new(outbound)).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!opening.is_finished());
+    opening.abort();
+    drop(to_master);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(held);
+    // Refused at most while the abandoned registration ends.
+    let until = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut stream = loop {
+        let (to_master, outbound) = mpsc::channel(16);
+        to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+        match client.control(ReceiverStream::new(outbound)).await {
+            Ok(response) => break response.into_inner(),
+            Err(status) => {
+                assert_eq!(status.code(), tonic::Code::FailedPrecondition, "{status:?}");
+                assert!(
+                    tokio::time::Instant::now() < until,
+                    "still refused: {status:?}"
+                );
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_parse_upload_the_worker_gave_up_on_is_still_stored() {
+    // As B171: the upload arrived whole, so the worker's reset doesn't stop it half-way.
+    let (_hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("sqlite")
+    };
+    let held = pool.acquire().await.unwrap();
+    let mut giving_up = client.clone();
+    let uploading = tokio::spawn(async move { upload(&mut giving_up, parse_result()).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!uploading.is_finished());
+    uploading.abort();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(held);
+    let until = tokio::time::Instant::now() + Duration::from_secs(5);
+    while db
+        .stored_dag(&DagId::new("sync").unwrap())
+        .await
+        .unwrap()
+        .is_none()
+    {
+        assert!(tokio::time::Instant::now() < until, "not stored");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
 async fn a_master_paused_while_a_register_waits_for_the_lock_refuses_it() {
     // Codex's review of B165: the check came before the wait for the lock, behind a round
     // during which the master paused.

@@ -21,6 +21,11 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   - **B170 (new, medium, likely):** a DAG built by a function in a helper file defines nothing,
     silently, as a DAG belongs to the file calling `Dag(...)`. Decision 305's example assumed
     this worked. The docs say it doesn't for now. Fix to discuss with the user.
+- **B171 (found and fixed, high, by CI of M4.9d):** a worker that gave up (its lease) while the
+  master was inside its registration reset the stream, which dropped the server's call half-way:
+  the worker stayed live with no stream, refused for good ("already has a live stream"), each
+  refusal renewing its lease. The registration and the parse upload now run apart from the call.
+  This fix had no Codex review: tests only, shown failing first.
 - **CI:** check the last commit's run first.
 
 ## State (2026-11-05, late night): B168 and B169 fixed; paused for the user's restart

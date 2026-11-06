@@ -630,6 +630,89 @@ impl Hub {
         }
     }
 
+    /// Registers a worker on its stream, and serves the stream from then on. Not to be cancelled
+    /// half-way: it changes the core's state in steps (B171).
+    async fn open_stream(
+        self,
+        register: pb::Register,
+        inbound: Streaming<pb::WorkerMessage>,
+    ) -> Result<Response<ReceiverStream<Result<pb::MasterMessage, Status>>>, Status> {
+        // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
+        // a stall); and the attempts its journal reports have started, so none is taken back
+        // for want of a `Started` meanwhile (B50: lost with the old stream). Adopted, they are
+        // marked started, after which the reconciliation's decision stands.
+        self.arrivals.arrived(&register.worker_id, (self.clock)());
+        let added: Vec<&str> = register
+            .journal
+            .iter()
+            .filter(|entry| {
+                self.arrivals
+                    .start_known(&register.worker_id, &entry.attempt_id)
+            })
+            .map(|entry| entry.attempt_id.as_str())
+            .collect();
+        self.while_leading().await;
+        let mut core = self.core.lock().await;
+        // Paused while it waited for the lock (behind a round): refused as above, what it
+        // added gone.
+        if !*self.leading.borrow() {
+            drop(core);
+            for attempt_id in &added {
+                self.arrivals.start_handled(attempt_id);
+            }
+            return Err(Status::unavailable(NOT_LEADING));
+        }
+        let registered = core.register(&register, (self.clock)()).await;
+        match &registered {
+            // Its journal is the whole truth now: what it reports is adopted (started) or
+            // ended, and a start known of an attempt it doesn't report (a `Started` that
+            // couldn't be stored, its process gone with a restart) protects nothing any more:
+            // never started, it expires.
+            Ok(_) => self.arrivals.forget_starts(&register.worker_id),
+            // Never to be registered as it is: what it added goes; a start known before (a
+            // `Started` that couldn't be stored, its stream still live) stays.
+            Err(CoreError::Refused(_)) => {
+                for attempt_id in &added {
+                    self.arrivals.start_handled(attempt_id);
+                }
+            }
+            // A database failure: the worker registers again with the same journal; kept
+            // till then (and gone with the worker if it never comes back, by its lease).
+            Err(_) => {}
+        }
+        let (registered, outgoing) = registered.map_err(|error| match error {
+            CoreError::Refused(reason) => Status::failed_precondition(reason),
+            other => Status::internal(other.to_string()),
+        })?;
+        // Room for the registration's own messages (`Registered` and a parse for each new
+        // root, all sent before the worker reads any) on top of the usual buffer (B45).
+        let own = outgoing
+            .iter()
+            .filter(|message| message.worker_id == register.worker_id)
+            .count();
+        let (stream, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
+        let first = pb::MasterMessage {
+            message: Some(master_message::Message::Registered(registered)),
+        };
+        stream
+            .try_send(Ok(first))
+            .map_err(|_| Status::internal("the stream closed at once"))?;
+        // The worker's stream from now on, put in place before the lock is let go: a message
+        // of the old stream handled after this registration is known to be the old one's
+        // (B44).
+        self.streams
+            .lock()
+            .await
+            .insert(register.worker_id.clone(), stream.clone());
+        drop(core);
+        self.deliver(outgoing).await;
+        tokio::spawn(
+            self.clone()
+                .serve_stream(register.worker_id, stream, inbound),
+        );
+        Ok(Response::new(ReceiverStream::new(receiver)))
+    }
+
     /// Whether `stream` is still `worker_id`'s stream (not replaced by a newer registration).
     async fn is_current(&self, worker_id: &str, stream: &Outbound) -> bool {
         self.streams
@@ -735,80 +818,12 @@ impl Master for Hub {
         if !*self.leading.borrow() {
             return Err(Status::unavailable(NOT_LEADING));
         }
-        // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
-        // a stall); and the attempts its journal reports have started, so none is taken back
-        // for want of a `Started` meanwhile (B50: lost with the old stream). Adopted, they are
-        // marked started, after which the reconciliation's decision stands.
-        self.arrivals.arrived(&register.worker_id, (self.clock)());
-        let added: Vec<&str> = register
-            .journal
-            .iter()
-            .filter(|entry| {
-                self.arrivals
-                    .start_known(&register.worker_id, &entry.attempt_id)
-            })
-            .map(|entry| entry.attempt_id.as_str())
-            .collect();
-        self.while_leading().await;
-        let mut core = self.core.lock().await;
-        // Paused while it waited for the lock (behind a round): refused as above, what it
-        // added gone.
-        if !*self.leading.borrow() {
-            drop(core);
-            for attempt_id in &added {
-                self.arrivals.start_handled(attempt_id);
-            }
-            return Err(Status::unavailable(NOT_LEADING));
-        }
-        let registered = core.register(&register, (self.clock)()).await;
-        match &registered {
-            // Its journal is the whole truth now: what it reports is adopted (started) or
-            // ended, and a start known of an attempt it doesn't report (a `Started` that
-            // couldn't be stored, its process gone with a restart) protects nothing any more:
-            // never started, it expires.
-            Ok(_) => self.arrivals.forget_starts(&register.worker_id),
-            // Never to be registered as it is: what it added goes; a start known before (a
-            // `Started` that couldn't be stored, its stream still live) stays.
-            Err(CoreError::Refused(_)) => {
-                for attempt_id in &added {
-                    self.arrivals.start_handled(attempt_id);
-                }
-            }
-            // A database failure: the worker registers again with the same journal; kept
-            // till then (and gone with the worker if it never comes back, by its lease).
-            Err(_) => {}
-        }
-        let (registered, outgoing) = registered.map_err(|error| match error {
-            CoreError::Refused(reason) => Status::failed_precondition(reason),
-            other => Status::internal(other.to_string()),
-        })?;
-        // Room for the registration's own messages (`Registered` and a parse for each new
-        // root, all sent before the worker reads any) on top of the usual buffer (B45).
-        let own = outgoing
-            .iter()
-            .filter(|message| message.worker_id == register.worker_id)
-            .count();
-        let (stream, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
-        let first = pb::MasterMessage {
-            message: Some(master_message::Message::Registered(registered)),
-        };
-        stream
-            .try_send(Ok(first))
-            .map_err(|_| Status::internal("the stream closed at once"))?;
-        // The worker's stream from now on, put in place before the lock is let go: a message
-        // of the old stream handled after this registration is known to be the old one's
-        // (B44).
-        self.streams
-            .lock()
+        // Apart from this call, which ends when the worker resets its stream (giving up on a
+        // slow master): stopped half-way, the worker would stay live with no stream behind it,
+        // refused from then on (B171). Finished, its stream's end disconnects it as usual.
+        tokio::spawn(self.clone().open_stream(register, inbound))
             .await
-            .insert(register.worker_id.clone(), stream.clone());
-        drop(core);
-        self.deliver(outgoing).await;
-        tokio::spawn(
-            self.clone()
-                .serve_stream(register.worker_id, stream, inbound),
-        );
-        Ok(Response::new(ReceiverStream::new(receiver)))
+            .map_err(|e| Status::internal(format!("the registration failed: {e}")))?
     }
 
     async fn upload_parse_result(
@@ -826,8 +841,14 @@ impl Master for Hub {
         let result = upload
             .finish()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        self.while_leading().await;
-        let uploaded = self.core.lock().await.upload(result, (self.clock)()).await;
+        // Apart from this call, as a registration is: a reset stream doesn't stop it half-way.
+        let hub = self.clone();
+        let uploaded = tokio::spawn(async move {
+            hub.while_leading().await;
+            hub.core.lock().await.upload(result, (hub.clock)()).await
+        })
+        .await
+        .map_err(|e| Status::internal(format!("the upload failed: {e}")))?;
         match uploaded {
             Ok(()) => Ok(Response::new(pb::ParseResultAck {})),
             Err(error @ CoreError::BadMessage { .. }) => {
