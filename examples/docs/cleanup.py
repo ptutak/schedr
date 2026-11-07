@@ -38,7 +38,7 @@ def undo_export(day: str, handles: list[ExportJob | TempDir]) -> None:
                 shutil.rmtree(path, ignore_errors=True)
 
 
-@task(cleanup=undo_export, cleanup_timeout=timedelta(minutes=1))
+@task(cleanup=undo_export, cleanup_timeout=timedelta(seconds=20))
 def export(day: str) -> None:
     """Registers each thing before relying on it."""
     cleanup_handle(TempDir(tempfile.mkdtemp()))
@@ -51,4 +51,5 @@ with Dag("cleanup", defaults=StepDefaults(cleanup_retries=1)):
         'id=$(date +%s); schedr task-ctx cleanup add Publication id="$id"',
         cleanup="schedr task-ctx cleanup list Publication --field id | xargs -r echo withdrawing",
         cleanup_handles=["Publication"],
+        cleanup_timeout=timedelta(seconds=20),
     )

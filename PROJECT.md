@@ -6821,6 +6821,19 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   red (a declared outcome, and `.on(TimedOut)` routes on it); green (what it waited for didn't come);
   yellow when no task takes it, on the wait step or on the run (it would call an author's plan
   suspicious); failing such a run.
+- **A cleanup that doesn't fit in a drain** (decision 346, the user's, 2026-11-07): the agent doesn't stop
+  a running cleanup at the drain's deadline; only what ends the worker then (a pod's kill, a service
+  manager) can lose it. So `[worker] cleanup_timeout` not fitting `termination_grace_period` is said once,
+  at the worker's start, and a task's own `cleanup_timeout` once per task. Not chosen: a warning for each
+  task on the default (each cleanup task outside the chart, whose grace is 600 s, warned); a default of
+  25 s (slow cleanups would time out, on Kubernetes too); a default grace of 600 s (a plain stop could
+  wait 10 minutes).
+- **A task starts after its upstream tasks end** (decision 345, the user's, 2026-11-07): no `run_if`
+  starts one on the first of several. To act on the first, a wait step watches the others and ends
+  when one does; `examples/docs/sensors.py` shows it. Not chosen: `RunIf.ANY_SUCCEEDED` (too many
+  caveats for a simple API: inputs that depend on timing, `None` for "not finished" as well as "not
+  taken", order edges that no longer order, no mapping, and an arrow in the graph that no longer means
+  "after").
 - **Blame is what a host says** (Grok's review): a wait step with the will to can reach the shared
   socket and name a neighbour, which then gets its strikes or an ended attempt. That is within "a worker
   is one trust domain": they share a process and can read each other's memory anyway. Blame for an

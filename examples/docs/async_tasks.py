@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import timedelta
 
 from schedr import Dag, acleanup_handle, connection, task, task_ctx
 
@@ -15,7 +16,7 @@ class Export:
 
 
 @connection(base_url="https://api.example.com")
-async def orders_api(base_url: str) -> AsyncIterator[str]:
+async def async_orders_api(base_url: str) -> AsyncIterator[str]:
     """Stands in for an async client, opened with `async with`."""
     await asyncio.sleep(0)
     yield base_url
@@ -35,10 +36,14 @@ async def cancel_export(handles: list[Export]) -> None:
 
 with Dag("async_orders"):
 
-    @task(connections=[orders_api], cleanup=cancel_export)
+    @task(
+        connections=[async_orders_api],
+        cleanup=cancel_export,
+        cleanup_timeout=timedelta(seconds=20),
+    )
     async def fetch_all() -> int:
         await acleanup_handle(Export("export-1"))
-        async with orders_api() as base_url:
+        async with async_orders_api() as base_url:
             pages = await asyncio.gather(*(fetch_page(base_url, p) for p in range(10)))
         return sum(pages)
 

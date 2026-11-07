@@ -1,7 +1,10 @@
 """Documentation examples: each DAG's JSON matches the schema, and each docs DAG runs."""
 
+import http.server
 import importlib
 import json
+import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +34,33 @@ SECRETS = {
 }
 
 
+class _RunApi(http.server.BaseHTTPRequestHandler):
+    """Stands in for the webserver `sensors.py` asks: its slow task and a wait step succeeded."""
+
+    def do_GET(self) -> None:
+        tasks = [
+            {"task_id": "slow_task", "state": "success"},
+            {"task_id": "sees_slow_task", "state": "success"},
+        ]
+        body = json.dumps({"tasks": tasks}).encode()
+        self.send_response(200)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def run_api() -> Iterator[str]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RunApi)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    server.server_close()
+
+
 def _module_name(path: Path) -> str:
     return ".".join(path.relative_to(HERE).with_suffix("").parts)
 
@@ -52,9 +82,12 @@ def test_example_dag_json_matches_the_schema(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", DOC_EXAMPLES, ids=lambda path: path.name)
-def test_doc_example_runs(path: Path) -> None:
+def test_doc_example_runs(path: Path, run_api: str) -> None:
+    connections = {"schedr_api": {"base_url": run_api}} if path.name == "sensors.py" else None
     for dag in _load(path):
-        result = run_dag(path, dag.id, for_=FOR, secrets=SECRETS.get(path.name))
+        result = run_dag(
+            path, dag.id, for_=FOR, secrets=SECRETS.get(path.name), connections=connections
+        )
         assert result.state == "success", dag.id
         ended = [
             (task.task_id, task.state)
@@ -63,10 +96,13 @@ def test_doc_example_runs(path: Path) -> None:
         ]
         assert ended == [], dag.id
         if path.name == "sensors.py":
-            assert result.tasks["partner_file"].output.startswith("s3://in/orders_")
-            assert result.tasks["approval"].outcome == "TimedOut"
-            assert result.tasks["after_approval"].state == "skipped"
-            assert result.tasks["alert"].state == "success"
+            assert result.tasks["sees_slow_task"].output == "Task slow_task success"
+            assert result.tasks["sees_absent_task"].outcome == "TimedOut"
+            assert result.tasks["full_report"].output == (
+                "sees_slow_task: Task slow_task success; sees_absent_task: timed out"
+            )
+            assert result.tasks["sees_either"].output == "sees_slow_task"
+            assert result.tasks["fast_report"].output == "sees_slow_task ended first"
         if path.name == "async_tasks.py":
             # Ten pages, each the base URL's length and its number.
             assert result.tasks["fetch_all"].output == 10 * len("https://api.example.com") + 45

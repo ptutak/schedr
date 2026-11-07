@@ -982,6 +982,12 @@ pub async fn run_worker(
         timeouts.log_sweep,
         until(finished),
     ));
+    if let Some(warning) = agent
+        .drain
+        .default_cleanup_warning(agent.setup.timeouts.cleanup)
+    {
+        tracing::warn!("{warning}");
+    }
     let executor = ProcessExecutor {
         setup: agent.setup.clone(),
         parse,

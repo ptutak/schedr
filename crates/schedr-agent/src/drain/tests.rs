@@ -118,3 +118,28 @@ fn a_task_is_stopped_early_enough_for_one_try_of_its_cleanup() {
     assert!(drain.stop_due(start, secs(1000)), "too long: at once");
     assert!(drain.stop_due(start, Duration::MAX), "no overflow");
 }
+
+#[test]
+fn a_cleanup_fits_in_what_a_drain_leaves_of_its_grace_period() {
+    let drain = DrainPeriods {
+        grace: secs(30),
+        terminate_period: secs(3),
+        report_period: secs(2),
+        ..DrainPeriods::default()
+    };
+    assert!(drain.cleanup_fits(secs(25)));
+    assert!(!drain.cleanup_fits(secs(26)));
+    assert_eq!(drain.default_cleanup_warning(secs(25)), None);
+    let warning = drain.default_cleanup_warning(secs(300)).unwrap();
+    assert!(
+        warning.contains("`[worker] cleanup_timeout` (300s)"),
+        "{warning}"
+    );
+    assert!(warning.contains("would lose a cleanup"), "{warning}");
+    // The chart's 600 s: the default fits, so a deployment isn't warned.
+    let chart = DrainPeriods {
+        grace: secs(600),
+        ..drain
+    };
+    assert_eq!(chart.default_cleanup_warning(secs(300)), None);
+}

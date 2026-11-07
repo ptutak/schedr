@@ -2434,12 +2434,10 @@ impl<E: Executor> Agent<E> {
             .map_or(self.settings.setup.timeouts.cleanup, Duration::from_millis);
         self.cleanup_room.insert(spec.attempt_id.clone(), room);
         let drain = self.settings.drain;
-        let fits = room
-            .saturating_add(drain.terminate_period)
-            .saturating_add(drain.report_period)
-            <= drain.grace;
         let dag = assign.run.as_ref().map_or("", |run| run.dag_id.as_str());
-        if !fits
+        // The default is said once, at the worker's start: here, what the task itself asks for.
+        if cleanup.timeout_ms.is_some()
+            && !drain.cleanup_fits(room)
             && self
                 .warned_room
                 .insert((dag.to_owned(), assign.task_id.clone()))
@@ -2449,7 +2447,9 @@ impl<E: Executor> Agent<E> {
                 task = assign.task_id.as_str(),
                 cleanup_timeout = ?room,
                 grace = ?drain.grace,
-                "the task's cleanup doesn't fit in `termination_grace_period`: a drain may kill it"
+                "the task's `cleanup_timeout` doesn't fit in `termination_grace_period`: whatever \
+                 ends the worker at the end of a drain (a pod's kill, a service manager) would \
+                 lose its cleanup"
             );
         }
     }

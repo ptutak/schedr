@@ -29,6 +29,32 @@ pub struct DrainPeriods {
     pub ack_wait: Duration,
 }
 
+impl DrainPeriods {
+    /// Whether a cleanup try of `room` fits in the grace period, after what a drain keeps for
+    /// itself. One that doesn't still runs on: the agent waits for it, but whatever ends the
+    /// worker at the end of the grace period (a pod's kill, a service manager) would lose it.
+    #[must_use]
+    pub fn cleanup_fits(&self, room: Duration) -> bool {
+        room.saturating_add(self.terminate_period)
+            .saturating_add(self.report_period)
+            <= self.grace
+    }
+
+    /// What to say at a worker's start when `[worker] cleanup_timeout`, what a task's cleanup
+    /// gets unless it says otherwise, doesn't fit: said once, not for each task using it.
+    #[must_use]
+    pub fn default_cleanup_warning(&self, default_timeout: Duration) -> Option<String> {
+        (!self.cleanup_fits(default_timeout)).then(|| {
+            format!(
+                "`[worker] cleanup_timeout` ({default_timeout:?}) doesn't fit in \
+                 `termination_grace_period` ({:?}): whatever ends the worker at the end of a \
+                 drain (a pod's kill, a service manager) would lose a cleanup still running",
+                self.grace
+            )
+        })
+    }
+}
+
 impl Default for DrainPeriods {
     /// 30 s (Kubernetes' default), of which 3 s to SIGKILL and 2 s to report.
     fn default() -> Self {

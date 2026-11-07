@@ -542,7 +542,8 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 A running cleanup may outlast the grace period: the agent waits for it, but a pod killed
 meanwhile
 is lost. A cleanup held for the master's answer does not hold up a drain; the journal keeps it.
-The agent logs when a task's cleanup timeout cannot fit in the grace period. The two times must
+At its start the agent logs if `[worker] cleanup_timeout` cannot fit in the grace period, and it
+logs once for each task whose own `cleanup_timeout` cannot. The two times must
 fit in the grace period, else the worker doesn't start. A second
 SIGTERM interrupts at once.
 

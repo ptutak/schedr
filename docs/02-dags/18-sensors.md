@@ -37,6 +37,9 @@ downstream task has another upstream task, `run_if` decides what happens when an
 not taken, as described in [Routing by outcome](08-outcomes.md). A timeout leaves the run
 `success` whether or not a task takes it. Use `.on(TimedOut)` to do something about it.
 
+A task waits for all its upstream tasks to end. To act on the first of several, as
+`fast_report` does above, add a wait step that watches them and ends when one does.
+
 ## Running and deploying wait steps
 
 Wait steps using the same interpreter and code copies run as coroutines in one long-lived

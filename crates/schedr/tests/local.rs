@@ -195,6 +195,16 @@ with Dag("refused"):
     assert!(out.contains("starts a process"), "{out}");
 }
 
+/// Every example together, as someone trying schedr points a deployment at them: one root
+/// shares its connection names, which each example alone wouldn't show.
+#[test]
+fn the_examples_folder_is_one_good_dag_folder() {
+    let local = Local::new(&[]);
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let (code, out, err) = local.dags_with(&["check", path_str(&examples)], &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+}
+
 #[test]
 fn check_skips_what_a_parse_skips_and_says_why() {
     let dag = "from schedr import Dag\n\nwith Dag(\"found\"):\n    pass\n";
