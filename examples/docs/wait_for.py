@@ -4,12 +4,14 @@
 slot, no polling. Its value is that run's ID. `.on(Failed)` handles a run that didn't succeed;
 without it the step fails, and the run with it. Run alone, as `dags test` does, `report` finds no
 `orders` run and its wait runs out: `TimedOut`, which `late` handles. `tally_orders` is started by
-each run of `orders` that succeeds.
+each run of `orders` that succeeds. `checked_report` reads the run itself: an `@sensor` with
+`wait_for=` is called once that `load` has ended, with the run as its first parameter.
 """
 
 from datetime import timedelta
 
-from schedr import Dag, Failed, RunOf, TimedOut, task, wait_for
+from schedr import Dag, Failed, RunOf, RunResult, TimedOut, sensor, task, wait_for
+from schedr.sensors import NOT_YET, NotYet
 
 
 @task
@@ -56,3 +58,23 @@ with Dag("report"):
     build(loaded.on(str))
     say_failed(loaded.on(Failed))
     late(loaded.on(TimedOut))
+
+
+@sensor(wait_for=RunOf("orders", task="load", lag=timedelta(0)), max_wait=timedelta(seconds=3))
+async def loaded_orders(run: RunResult[int], least: int) -> int | NotYet:
+    """The orders once `load` has ended with enough; a failed or short run waits for a redo."""
+    if run.task_state != "success" or run.output is None or run.output < least:
+        return NOT_YET
+    return run.output
+
+
+@task
+def build_from(orders: int) -> str:
+    """Builds the report from that many orders."""
+    return f"report of {orders} orders"
+
+
+with Dag("checked_report"):
+    orders = loaded_orders(least=1)
+    build_from(orders.on(int))
+    late(orders.on(TimedOut))

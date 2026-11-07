@@ -582,3 +582,50 @@ def test_a_mapped_instance_gets_its_elements_resolved_or_built() -> None:
     assert mapped_arguments({}, hints) == {}
     with pytest.raises(TaskInputError, match="mapped argument `n`"):
         mapped_arguments({"$expand_values": {"n": {"template": [{"text": "x"}]}}}, hints, RUN)
+
+
+def test_a_sensor_waiting_for_a_run_says_not_yet_for_the_run_it_was_given() -> None:
+    from schedr.runner.task import _sensed_result  # noqa: PLC0415 (a private helper)
+    from schedr.sensors import NOT_YET, NOT_YET_OUTCOME, NotYet  # noqa: PLC0415
+
+    hints = {"return": int | NotYet}
+    waiting = {"kind": "sensor", "wait_for": {"run_of": {"dag": "orders"}, "param": "run"}}
+    assert _sensed_result(NOT_YET, hints, waiting) == {
+        "type": "task_succeeded",
+        "output": None,
+        "outcome": NOT_YET_OUTCOME,
+    }
+    sized = {**waiting, "id": "enough", "settings": {"max_output_size": 1024}}
+    found = _sensed_result(12, hints, sized)
+    assert (found["type"], found["outcome"]) == ("task_succeeded", "SUCCESS")
+
+
+@dataclass(frozen=True)
+class _Primary:
+    """One shape."""
+
+    n: int
+
+
+@dataclass(frozen=True)
+class _Mirror:
+    """The same shape, another class."""
+
+    n: int
+
+
+def test_the_run_handed_to_a_sensor_keeps_its_tasks_outcome_class() -> None:
+    from schedr import RunResult  # noqa: PLC0415
+
+    handed = {
+        "run_id": "r1",
+        "dag_id": "orders",
+        "planned_for": {"$datetime": "2026-11-01T00:00:00Z"},
+        "state": "success",
+        "task_id": "load",
+        "task_state": "success",
+        "outcome": "_Mirror",
+        "output": {"n": 7},
+    }
+    run = build({"literal": handed}, RunResult[_Primary | _Mirror], {}, {})
+    assert isinstance(run.output, _Mirror), run

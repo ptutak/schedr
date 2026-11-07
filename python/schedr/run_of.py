@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from schedr import _build
@@ -72,6 +72,40 @@ class RunOf(Trigger):
         if self.lag is not None and self.lag < timedelta(0):
             raise ValueError(f"RunOf as a trigger: `lag` can't be negative, got {self.lag}")
         return RunOfTrigger(self.dag, self.task, self.lag_ms)
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult[T = None]:
+    """The run of another DAG an ``@sensor(wait_for=RunOf(...))`` is called for (decision 353).
+
+    Its function's first parameter: ``async def check(run: RunResult[Orders]) -> Report |
+    NotYet``. It is called once that run (or its task) has ended, whatever its state; returning
+    ``NOT_YET`` waits for a later matching run (with ``lag``, a newer one for the same moment,
+    as when it is run again), until ``max_wait``.
+
+    Attributes:
+        run_id: The run's ID.
+        dag_id: Its DAG.
+        planned_for: Its ``planned_for``.
+        state: How it ended: ``success``, ``failed``, ``cancelled``, ...; still ``running`` when
+            only its task (``RunOf(task=...)``) is what was waited for.
+        ended_at: When it ended, if it has.
+        task_id: With ``RunOf(task=...)``, that task.
+        task_state: Its state: ``success``, ``failed``, ...; ``None`` if the run ended without it.
+        outcome: Its outcome (``SUCCESS``, or an outcome class's name), if it succeeded.
+        output: Its output, as ``T``, if it succeeded (a mapped task's, the list of its
+            elements'), masked as the API masks it: secret fields and URL passwords ``****``.
+    """
+
+    run_id: str
+    dag_id: str
+    planned_for: datetime
+    state: str
+    ended_at: datetime | None = None
+    task_id: str | None = None
+    task_state: str | None = None
+    outcome: str | None = None
+    output: T | None = None
 
 
 def _free_id(builder: _build.DagBuilder, run_of: RunOf) -> str:

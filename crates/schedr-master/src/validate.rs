@@ -367,9 +367,13 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
             mode,
             every_ms,
             max_wait_ms,
+            wait_for,
         } => {
             for value in arguments.values() {
                 in_text.extend(value_templates(value));
+            }
+            if let Some(wait_for) = wait_for {
+                sensor_wait_for_problems(task, *mode, arguments, wait_for, problems);
             }
             match (mode, every_ms) {
                 (SensorMode::Poke, None | Some(0)) => {
@@ -395,6 +399,39 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
         TaskKind::Empty | TaskKind::FirstOf { .. } => {}
     }
     in_text
+}
+
+/// What an `@sensor(wait_for=RunOf(...))` (decision 353) can't be: a poke (it is called per
+/// run, never on a timer; the user's, option A), given its run's parameter as an argument too, or
+/// mapped.
+fn sensor_wait_for_problems(
+    task: &Task,
+    mode: SensorMode,
+    arguments: &BTreeMap<String, Value>,
+    wait_for: &schedr_model::task::SensorWaitFor,
+    problems: &mut Vec<String>,
+) {
+    let id = &task.id;
+    if mode == SensorMode::Poke {
+        problems.push(format!(
+            "task `{id}`: a @sensor.poke can't take `wait_for=`: it is called once per matching \
+             run, never on a timer (a poke can read the run from the API itself)"
+        ));
+    }
+    if arguments.contains_key(&wait_for.param) {
+        problems.push(format!(
+            "task `{id}`: `{}` is given the run it waits for, so it takes no argument",
+            wait_for.param
+        ));
+    }
+    if let Some(why) = lag_problem(&wait_for.run_of) {
+        problems.push(format!("task `{id}`: {why}"));
+    }
+    if mapping::is_mapped(task) {
+        problems.push(format!(
+            "task `{id}`: a @sensor with `wait_for=` can't be mapped"
+        ));
+    }
 }
 
 /// What a `wait_for` step (decision 353) can't be.

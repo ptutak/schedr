@@ -191,6 +191,17 @@ pub struct RunOf {
     pub lag_ms: Option<i64>,
 }
 
+/// What an `@sensor(wait_for=RunOf(...))` waits for, and the parameter its function is given the
+/// run in (its first: a `RunResult`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SensorWaitFor {
+    /// The run, and of it which task.
+    pub run_of: RunOf,
+    /// The function's parameter given the run.
+    pub param: String,
+}
+
 /// The kind of a task and what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -219,6 +230,10 @@ pub enum TaskKind {
         /// How long it waits, in milliseconds; `None`: the worker's `[sensors] default_max_wait`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_wait_ms: Option<u64>,
+        /// `@sensor(wait_for=RunOf(...))` (decision 353): called once a matching run of another
+        /// DAG has ended, with it as `param`, rather than at once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wait_for: Option<SensorWaitFor>,
     },
     /// `first_of` / `at_least` (decision 347): ended by the master, no process and no slot, as
     /// soon as enough of its upstream edges are taken. Its output is `{"$value": ..., "winner":

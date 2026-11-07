@@ -40,6 +40,34 @@ While it waits, the step is `queued` with a reason, `waiting for task `load` of 
 A DAG that isn't loaded is said there too; the step waits all the same, as that DAG may come from a
 folder that loads later.
 
+## Reading the run: `@sensor(wait_for=...)`
+
+When the step has to look at that run, an `@sensor` takes `wait_for=RunOf(...)`. The master waits
+as for `wait_for(...)`, with no call and no slot, and once a matching run (or its task) has ended,
+whatever its state, calls the function once, with that run as its first parameter:
+
+```python
+@sensor(wait_for=RunOf("orders", task="load", lag=timedelta(0)), max_wait=timedelta(hours=6))
+async def loaded_orders(run: RunResult[int], least: int) -> int | NotYet:
+    if run.task_state != "success" or run.output is None or run.output < least:
+        return NOT_YET
+    return run.output
+```
+
+`RunResult[T]` has the run's `run_id`, `dag_id`, `planned_for`, `state` and `ended_at`, and with
+`task=` that task's `task_state`, `outcome` and `output`, read as `T` (a mapped task's is the list
+of its elements'). The output is masked as the API masks it for anyone reading another DAG's runs:
+secret fields and passwords in URLs come as `****`. The DAG gives the other parameters as usual:
+`loaded_orders(least=1)`. A run that ended within `max_wait` is handed though little of it is left:
+the call then gets at least a minute.
+
+What it returns is its value. `NOT_YET` says "not this run": the step waits for a later matching
+one, until `max_wait`. With `lag` that is a newer run for the same moment, as when `orders` is run
+again for that day; without it, the next run of `orders` to end. So it fits two cases: waiting for
+a redo after a run that failed or was short, and picking the next run by what it holds. It is not
+"ask again later": to check the same run again and again, write a `@sensor.poke` that reads it
+from the API. A poke can't take `wait_for=`: it is called on a timer, never per run.
+
 ## Starting a DAG after another
 
 `Dag("tally_orders", trigger=RunOf("orders", lag=timedelta(0)))` starts a run of `tally_orders` for

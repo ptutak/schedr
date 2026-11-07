@@ -6918,7 +6918,18 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   function sees every run that ends (succeeded, failed, cancelled), the no-code form covering successes; it returns
   `Event[T] | None`, the key the other run's ID unless it gives one; a raise fails a sensor's attempt (its retries) and is a
   trigger failure (backoff, `failing_after`) that tries the same run again, the cursor not moving past it (not chosen: a task
-  slot per match; successes only; a `bool`; skipping a run whose function raised). Not chosen: the latest
+  slot per match; successes only; a `bool`; skipping a run whose function raised). The sensor form (the user's, 2026-11-07):
+  the run is the function's first parameter, `run: RunResult[T]` (not chosen: any parameter so annotated); it is called for
+  every run that ends, failed ones too (not chosen: successes only, a failure ending the step as the node does); a
+  `@sensor.poke` can't take `wait_for=` (option A; not chosen: both, a timer and a run calling one function); `NOT_YET`
+  means "not this run", waiting for a later match until `max_wait`: with `lag` a newer run for the moment, a redo (option
+  A, kept when the user asked what it adds over the master's match: a failed run's redo, and picking runs by content; not
+  chosen: no `NOT_YET` there). The master holds such a sensor queued, recording on its instance since when it waits (its
+  `max_wait` runs from there over its calls), the run handed and the last said NOT_YET to (a retry gets the same run), and
+  hands the run as the literal value of its first parameter; the codec decodes generic dataclasses (`RunResult[int]`).
+  After the reviews (Claude's): the output is masked as the API masks it (decision 131); a mapped task's is its elements'
+  list; `T` is narrowed by the task's outcome; a retry gets the same run; a run that ended within `max_wait` is handed,
+  its call given at least `SCHEDR_HIDDEN__MASTER__HANDED_CALL_MIN` (1 min); the wait starts at the instance's `ready_at`. Not chosen: the latest
   run, or the latest that succeeded (hard to follow over backfills and reruns); failing at once when no run exists yet;
   `offset=` (too broad; its sign would flip between the forms) and `planned_for_with_offset=` (long), for what is `lag`
   inside `RunOf`; `wait_for_run(...)` for the node; a skip counting as done (the function form sees the real state); a trigger for every run that ends, whatever its state; catching up runs that ended while paused; refusing an unknown DAG at load.

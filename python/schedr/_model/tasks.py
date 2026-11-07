@@ -220,12 +220,14 @@ class SensorKind:
         mode: How it waits.
         every_ms: How often to call it (``POKE``).
         max_wait_ms: How long it waits; ``None``: the worker's ``[sensors] default_max_wait``.
+        wait_for: ``@sensor(wait_for=RunOf(...))``: the run it is called for (decision 353).
     """
 
     arguments: Mapping[str, Value] = field(default_factory=dict)
     mode: SensorMode = SensorMode.LOOP
     every_ms: int | None = None
     max_wait_ms: int | None = None
+    wait_for: SensorWaitFor | None = None
 
     def references(self) -> list[Reference]:
         """The arguments' references.
@@ -248,7 +250,39 @@ class SensorKind:
             result["every_ms"] = self.every_ms
         if self.max_wait_ms is not None:
             result["max_wait_ms"] = self.max_wait_ms
+        if self.wait_for is not None:
+            result["wait_for"] = self.wait_for.to_json()
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class SensorWaitFor:
+    """What an ``@sensor(wait_for=RunOf(...))`` is called for (decision 353).
+
+    Attributes:
+        dag: The other DAG.
+        task: Its task; ``None``: the whole run.
+        lag_ms: The run planned this long before the waiting run's; ``None``: the next to end.
+        param: The function's parameter given the run (its first).
+    """
+
+    dag: str
+    task: str | None
+    lag_ms: int | None
+    param: str
+
+    def to_json(self) -> dict[str, Any]:
+        """As DAG JSON.
+
+        Returns:
+            ``{"run_of": {"dag": ...}, "param": ...}``, with what is set.
+        """
+        run_of: dict[str, Any] = {"dag": self.dag}
+        if self.task is not None:
+            run_of["task"] = self.task
+        if self.lag_ms is not None:
+            run_of["lag_ms"] = self.lag_ms
+        return {"run_of": run_of, "param": self.param}
 
 
 @dataclass(frozen=True, slots=True)

@@ -37,6 +37,7 @@ use schedr_model::ctx::MAX_CTX_MESSAGE_SIZE;
 use schedr_model::runner::{
     CleanupHandle, DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND,
 };
+use schedr_model::task::SensorWaitFor;
 use schedr_model::task::{CleanupRun, RunOf, TaskCleanup};
 use schedr_model::{
     AttemptStatus, CleanupResult, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
@@ -179,6 +180,10 @@ pub const MAX_INPUTS: usize = 64 * 1024 * 1024;
 /// The outcome of a wait step that ran out of time (`schedr.outcomes.TIMED_OUT_NAME`).
 const TIMED_OUT_OUTCOME: &str = "TimedOut";
 
+/// The least an `@sensor(wait_for=...)`'s call gets once it is handed a run that ended within its
+/// `max_wait`, though little or none of that is left (`SCHEDR_HIDDEN__MASTER__HANDED_CALL_MIN`).
+pub const DEFAULT_HANDED_CALL_MIN: Duration = Duration::from_mins(1);
+
 /// An attempt's failure the master itself decides.
 fn failed_by_master(kind: &str, exception: &str, why: &str) -> AttemptEnd {
     AttemptEnd {
@@ -296,6 +301,11 @@ pub struct Dispatcher {
     /// Each DAG's current version, read at each round with tasks ready: the limits across runs
     /// are its (87A).
     current_versions: BTreeMap<DagId, String>,
+    /// The run each `@sensor(wait_for=...)` assigned this round is given, by instance
+    /// (decision 353): its function's first argument.
+    handing: BTreeMap<String, serde_json::Value>,
+    /// The least such a call gets of its `max_wait`, the run having ended within it.
+    handed_call_min: Duration,
 }
 
 /// The dispatcher's memory that a worker's message changes (see [`Dispatcher::memory`]).
@@ -348,6 +358,8 @@ impl Dispatcher {
             arrivals: Arrivals::default(),
             adopted_unrecorded: BTreeSet::new(),
             set_aside: BTreeMap::new(),
+            handing: BTreeMap::new(),
+            handed_call_min: DEFAULT_HANDED_CALL_MIN,
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
                 .unwrap_or(SignedDuration::MAX),
             start_timeout: START_TIMEOUT,
@@ -476,6 +488,14 @@ impl Dispatcher {
     pub fn with_set_aside(mut self, set_aside: Duration, read_back: ReadBack) -> Self {
         self.set_aside_for = SignedDuration::try_from(set_aside).unwrap_or(SignedDuration::MAX);
         self.read_back = read_back;
+        self
+    }
+
+    /// The dispatcher giving an `@sensor(wait_for=...)`'s call at least `least` once it is handed
+    /// its run (see [`DEFAULT_HANDED_CALL_MIN`]).
+    #[must_use]
+    pub const fn with_handed_call_min(mut self, least: Duration) -> Self {
+        self.handed_call_min = least;
         self
     }
 
@@ -817,18 +837,16 @@ impl Dispatcher {
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
-        let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = self
+        let (waits, mut ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = self
             .db
             .ready_instances(now)
             .await?
             .into_iter()
             .filter(|r| !self.set_aside.contains_key(&r.instance_id))
-            .partition(|r| {
-                r.dag
-                    .task(&r.task_id)
-                    .is_some_and(|t| matches!(t.kind, TaskKind::WaitFor { .. }))
-            });
-        self.wait_for_runs(now, &waits).await?;
+            .partition(|r| r.dag.task(&r.task_id).is_some_and(waits_for_a_run));
+        self.handing.clear();
+        // The `@sensor(wait_for=...)`s whose run has come are assigned with the others.
+        ready.extend(self.wait_for_runs(now, &waits).await?);
         // Nothing ready (an idle round): no transaction, nothing to keep.
         if ready.is_empty() {
             self.metrics.set_waiting(&[]);
@@ -919,50 +937,38 @@ impl Dispatcher {
         &mut self,
         now: Timestamp,
         waits: &[ReadyInstance],
-    ) -> Result<(), DispatchError> {
+    ) -> Result<Vec<ReadyInstance>, DispatchError> {
         let mut reasons = Vec::new();
+        let mut handed = Vec::new();
         for waiting in waits {
-            let Some(TaskKind::WaitFor {
-                run_of,
-                max_wait_ms,
-            }) = waiting.dag.task(&waiting.task_id).map(|t| &t.kind)
-            else {
-                continue;
+            let (run_of, max_wait_ms) = match waiting.dag.task(&waiting.task_id).map(|t| &t.kind) {
+                Some(TaskKind::WaitFor {
+                    run_of,
+                    max_wait_ms,
+                }) => (run_of, max_wait_ms),
+                Some(TaskKind::Sensor {
+                    wait_for: Some(wait_for),
+                    max_wait_ms,
+                    ..
+                }) => {
+                    if self
+                        .sensor_run(waiting, wait_for, *max_wait_ms, now, &mut reasons)
+                        .await?
+                    {
+                        handed.push(waiting.clone());
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             let Some(since) = self.db.ready_since(&waiting.instance_id).await? else {
                 continue;
             };
-            // A lag past the times there are matches no run: the step waits out its time.
-            let matching = match run_of.lag_ms {
-                Some(lag) => waiting
-                    .planned_for
-                    .checked_sub(SignedDuration::from_millis(lag))
-                    .ok()
-                    .map(Matching::PlannedFor),
-                None => Some(Matching::EndedAfter(since)),
-            };
-            let task = run_of.task.as_ref().map(TaskId::as_str);
-            let found = match matching {
-                Some(matching) => self.db.runs_of(run_of.dag.as_str(), task, matching).await?,
-                None => Vec::new(),
-            };
-            let max_wait = max_wait_ms.map_or(self.sensor_max_wait, Duration::from_millis);
-            let deadline = SignedDuration::try_from(max_wait)
-                .ok()
-                .and_then(|wait| since.checked_add(wait).ok())
-                .unwrap_or(Timestamp::MAX);
-            // What ended after its time ran out doesn't count, though seen only now (a round
-            // late, a master restarting).
-            let found: Vec<OtherRun> = found
-                .into_iter()
-                .map(|mut run| {
-                    if run.ended_at.is_some_and(|at| at > deadline) {
-                        "running".clone_into(&mut run.state);
-                    }
-                    run
-                })
-                .collect();
-            let ended = match decide(found.first()) {
+            let deadline = self.deadline(since, *max_wait_ms);
+            let found = self
+                .matching_run(run_of, waiting.planned_for, since, None, deadline)
+                .await?;
+            let ended = match decide(found.as_ref()) {
                 Some(ended) => ended,
                 None if now >= deadline => WaitEnd::TimedOut,
                 None => {
@@ -985,7 +991,121 @@ impl Dispatcher {
         if !reasons.is_empty() {
             self.db.set_queued_reasons(&reasons, now).await?;
         }
-        Ok(())
+        Ok(handed)
+    }
+
+    /// An `@sensor(wait_for=...)` queued (decision 353): once a matching run has ended (one its
+    /// function hasn't said `NOT_YET` to), it is to be assigned with that run, which is recorded;
+    /// past its `max_wait` it ends `TimedOut` here; else it says what it waits for. Returns
+    /// whether it is to be assigned.
+    async fn sensor_run(
+        &mut self,
+        waiting: &ReadyInstance,
+        wait_for: &SensorWaitFor,
+        max_wait_ms: Option<u64>,
+        now: Timestamp,
+        reasons: &mut Vec<(String, String)>,
+    ) -> Result<bool, DispatchError> {
+        let Some(wait) = self.db.sensor_wait(&waiting.instance_id, now).await? else {
+            return Ok(false);
+        };
+        let deadline = self.deadline(wait.since, max_wait_ms);
+        let run_of = &wait_for.run_of;
+        // A retry gets the run it was handed, unless its function said `NOT_YET` to it: the
+        // data a call failed on isn't swapped for a newer run's (decision 353).
+        let again = wait
+            .handed
+            .clone()
+            .filter(|(handed, _)| wait.waited.as_ref().is_none_or(|(seen, _)| seen != handed));
+        let found = match again {
+            Some(handed) => Some(handed),
+            None => self
+                .matching_run(
+                    run_of,
+                    waiting.planned_for,
+                    wait.since,
+                    wait.waited.as_ref(),
+                    deadline,
+                )
+                .await?
+                .filter(|run| run_ended(&run.state))
+                .map(|run| (run.run_id, run.ended_at.unwrap_or(now))),
+        };
+        if let Some((run_id, ended)) = found
+            && let Some(mut result) = self.db.run_result(&run_id, run_of.task.as_ref()).await?
+        {
+            // Another DAG's output, as anyone reading it through the API sees it (decision
+            // 131; Grok's review of M4.11d2): secret fields and passwords masked.
+            if let Some(output) = result.get_mut("output") {
+                schedr_config::masked::mask_data(output);
+            }
+            self.db
+                .hand_run(&waiting.instance_id, &run_id, ended)
+                .await?;
+            self.handing.insert(waiting.instance_id.clone(), result);
+            return Ok(true);
+        }
+        if now >= deadline {
+            // One transaction: the attempt's end and the step's, or neither.
+            self.whole(async |me| me.time_out(waiting, now).await)
+                .await?;
+            return Ok(false);
+        }
+        let reason = self.wait_reason(run_of).await?;
+        if waiting.queued_reason.as_deref() != Some(reason.as_str()) {
+            reasons.push((waiting.instance_id.clone(), reason));
+        }
+        Ok(false)
+    }
+
+    /// When a wait waiting `since` with `max_wait_ms` (else `[sensors] default_max_wait`) times
+    /// out.
+    fn deadline(&self, since: Timestamp, max_wait_ms: Option<u64>) -> Timestamp {
+        let max_wait = max_wait_ms.map_or(self.sensor_max_wait, Duration::from_millis);
+        SignedDuration::try_from(max_wait)
+            .ok()
+            .and_then(|wait| since.checked_add(wait).ok())
+            .unwrap_or(Timestamp::MAX)
+    }
+
+    /// The run of `run_of` a wait planned for `planned_for`, waiting `since`, matches (decision
+    /// 353): with `lag` the newest planned for that moment, else the first to end since then;
+    /// after `seen` (one its function said `NOT_YET` to), a later one. A run that ended after
+    /// `deadline` still runs as far as the wait knows, though seen only now (a round late, a
+    /// master restarting).
+    async fn matching_run(
+        &self,
+        run_of: &RunOf,
+        planned_for: Timestamp,
+        since: Timestamp,
+        seen: Option<&(String, Timestamp)>,
+        deadline: Timestamp,
+    ) -> Result<Option<OtherRun>, DispatchError> {
+        // A lag past the times there are matches no run: the step waits out its time.
+        let matching = match (run_of.lag_ms, seen) {
+            (Some(lag), _) => planned_for
+                .checked_sub(SignedDuration::from_millis(lag))
+                .ok()
+                .map(Matching::PlannedFor),
+            (None, Some((run, at))) => Some(Matching::EndedAfterRun(*at, run.clone())),
+            (None, None) => Some(Matching::EndedAfter(since)),
+        };
+        let task = run_of.task.as_ref().map(TaskId::as_str);
+        let Some(matching) = matching else {
+            return Ok(None);
+        };
+        let found = self.db.runs_of(run_of.dag.as_str(), task, matching).await?;
+        Ok(found
+            .into_iter()
+            .next()
+            // With `lag`, the one said NOT_YET to stays the newest until a newer one comes.
+            .filter(|run| seen.is_none_or(|(seen, _)| &run.run_id != seen))
+            .map(|mut run| {
+                if run.ended_at.is_some_and(|at| at > deadline) {
+                    "running".clone_into(&mut run.state);
+                }
+                run
+            }))
     }
 
     /// What a `wait_for` step says it waits for; that its DAG isn't loaded, if it isn't (it may
@@ -1195,10 +1315,7 @@ impl Dispatcher {
         let Some(task) = ready.dag.task(&ready.task_id) else {
             return Ok(());
         };
-        if matches!(task.kind, schedr_model::TaskKind::Sensor { .. })
-            && (self.failed_as_switched_off(ready, now).await?
-                || self.timed_out_waiting(ready, task, now).await?)
-        {
+        if self.ended_before_its_call(ready, task, now).await? {
             return Ok(());
         }
         // Its concurrency limits first: a task over one waits for it, whatever the workers.
@@ -1519,6 +1636,23 @@ impl Dispatcher {
         Ok(finished_ack(worker_id, &finished.attempt_id))
     }
 
+    /// Whether a wait step ended here, without a call: switched off, or out of time. A sensor
+    /// handed a run that ended within its `max_wait` is called, though little of it is left
+    /// (Grok's review of M4.11d2): the wait was answered in time.
+    async fn ended_before_its_call(
+        &mut self,
+        ready: &ReadyInstance,
+        task: &schedr_model::Task,
+        now: Timestamp,
+    ) -> Result<bool, DispatchError> {
+        if !matches!(task.kind, schedr_model::TaskKind::Sensor { .. }) {
+            return Ok(false);
+        }
+        let handed = self.handing.contains_key(&ready.instance_id);
+        Ok(self.failed_as_switched_off(ready, now).await?
+            || (!handed && self.timed_out_waiting(ready, task, now).await?))
+    }
+
     /// Fails a wait step switched off, whatever the workers: a run isn't kept open by what won't
     /// run. Returns whether it was.
     async fn failed_as_switched_off(
@@ -1551,12 +1685,27 @@ impl Dispatcher {
         task: &schedr_model::Task,
         now: Timestamp,
     ) -> Result<Option<u64>, DispatchError> {
-        let schedr_model::TaskKind::Sensor { max_wait_ms, .. } = task.kind else {
+        let schedr_model::TaskKind::Sensor {
+            max_wait_ms,
+            wait_for,
+            ..
+        } = &task.kind
+        else {
             return Ok(None);
         };
-        let Some(first) = self.db.first_start(&ready.instance_id).await? else {
+        // An `@sensor(wait_for=...)`'s runs from when it began to wait, over its calls (353).
+        let first = if wait_for.is_some() {
+            self.db
+                .sensor_wait(&ready.instance_id, now)
+                .await?
+                .map(|wait| wait.since)
+        } else {
+            self.db.first_start(&ready.instance_id).await?
+        };
+        let Some(first) = first else {
             return Ok(None);
         };
+        let max_wait_ms = *max_wait_ms;
         let max_wait = max_wait_ms
             .unwrap_or_else(|| u64::try_from(self.sensor_max_wait.as_millis()).unwrap_or(u64::MAX));
         let gone = now.duration_since(first).as_millis().max(0);
@@ -1577,9 +1726,19 @@ impl Dispatcher {
         if self.time_left(ready, task, now).await? != Some(0) {
             return Ok(false);
         }
+        self.time_out(ready, now).await?;
+        Ok(true)
+    }
+
+    /// Ends a wait step `TimedOut` by the master, no worker hearing of it.
+    async fn time_out(
+        &mut self,
+        ready: &ReadyInstance,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
         let Some((attempt_id, _)) = self.db.assign_attempt(&ready.instance_id, "", now).await?
         else {
-            return Ok(true);
+            return Ok(());
         };
         if let Some(attempt) = self.db.attempt(&attempt_id).await? {
             let end = AttemptEnd::by_master(AttemptStatus::Success);
@@ -1590,7 +1749,7 @@ impl Dispatcher {
             };
             self.record(&attempt, &end, &result, now).await?;
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Takes the slot its kind of task runs on.
@@ -1618,12 +1777,33 @@ impl Dispatcher {
         message: &mut pb::AssignTask,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
-        let Some(left) = self.time_left(ready, task, now).await? else {
+        let handed = self.handing.get(&ready.instance_id);
+        let left = self.time_left(ready, task, now).await?;
+        if left.is_none() && handed.is_none() {
             return Ok(());
-        };
+        }
         let mut task = task.clone();
-        if let schedr_model::TaskKind::Sensor { max_wait_ms, .. } = &mut task.kind {
-            *max_wait_ms = Some(left);
+        if let schedr_model::TaskKind::Sensor {
+            max_wait_ms,
+            wait_for,
+            arguments,
+            ..
+        } = &mut task.kind
+        {
+            if left.is_some() {
+                *max_wait_ms = left;
+            }
+            if handed.is_some() {
+                let least = u64::try_from(self.handed_call_min.as_millis()).unwrap_or(u64::MAX);
+                *max_wait_ms = Some(max_wait_ms.unwrap_or(least).max(least));
+            }
+            // The run it waited for, as its function's first argument (decision 353).
+            if let (Some(wait_for), Some(run)) = (wait_for, handed) {
+                arguments.insert(
+                    wait_for.param.clone(),
+                    schedr_model::value::Value::Literal(run.clone()),
+                );
+            }
         }
         message.task_json = serde_json::to_vec(&as_sent(&task)).unwrap_or_default();
         Ok(())
@@ -2988,6 +3168,28 @@ fn task_specific(error: &DispatchError) -> bool {
         DispatchError::Execution(_) | DispatchError::BadMessage { .. } => return true,
     };
     db.is_data_fault()
+}
+
+/// Whether a task waits for another DAG's run before anything runs it: a `wait_for` node, or an
+/// `@sensor(wait_for=...)` (decision 353).
+fn waits_for_a_run(task: &schedr_model::Task) -> bool {
+    matches!(
+        task.kind,
+        TaskKind::WaitFor { .. }
+            | TaskKind::Sensor {
+                wait_for: Some(_),
+                ..
+            }
+    )
+}
+
+/// Whether a run found (or its task) has ended, whatever its state: an `@sensor(wait_for=...)`
+/// is called for any (`missing`: the run ended without the task).
+fn run_ended(state: &str) -> bool {
+    matches!(
+        state,
+        "success" | "failed" | "upstream_failed" | "skipped" | "cancelled" | "missing"
+    )
 }
 
 /// What the run found says (the newest planned for the moment, or the first to end): its ID

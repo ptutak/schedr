@@ -67,6 +67,7 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__READ_BACK_INTERVAL` | 500 ms | Interval between reads within the read-back window. |
 | `SCHEDR_HIDDEN__OPS__LOOP_STALL_TIMEOUT` | 120 s | Liveness fails if a role's main loop (the master's, a worker agent's) has not turned for this long; query and lease limits must be shorter. |
 | `SCHEDR_HIDDEN__MASTER__SET_ASIDE` | 1 min | Time an assignment that failed on its own is left out of rounds before retry, so other tasks can proceed. |
+| `SCHEDR_HIDDEN__MASTER__HANDED_CALL_MIN` | 1 min | The least an `@sensor(wait_for=...)`'s call gets once it is handed a run that ended within its `max_wait`, though little or none of that is left. |
 | `SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT` | 10 s | Time a lost worker's cleanup waits before it moves to another worker, on top of the cancel grace: a worker only cut off has stopped the task by then. |
 | `SCHEDR_HIDDEN__MASTER__LISTEN_RETRY` | 30 min | How often the master retries starting command listening after failure; it polls meanwhile. |
 | `SCHEDR_HIDDEN__MASTER__QUIET_DAG_AFTER` | 1 min | Time after the last active visit before a formerly busy DAG becomes quiet, unless its fire time is within the wake-ahead time. An otherwise idle DAG is quiet at once. |

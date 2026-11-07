@@ -59,7 +59,7 @@ from schedr.outcomes import (
 )
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
 from schedr.runner.protocol import Asking, Channel
-from schedr.sensors import output_hint
+from schedr.sensors import NOT_YET, NOT_YET_OUTCOME, output_hint
 
 if TYPE_CHECKING:
     import asyncio
@@ -328,7 +328,7 @@ def build(
     """
     try:
         if "literal" in value:
-            return decode(value["literal"], annotation)
+            return decode(value["literal"], _run_result_narrowed(annotation, value["literal"]))
         if "ref" in value:
             return decode(
                 resolve(value["ref"], inputs, run, outcomes),
@@ -436,6 +436,19 @@ def _narrowed(
     if reference.get("kind") != "output" or (path and path != [FIRST_OF_VALUE]):
         return annotation
     return member_named(annotation, outcome)
+
+
+def _run_result_narrowed(annotation: object, data: object) -> object:
+    """``RunResult[A | B]`` narrowed to the class its task's outcome names (decision 353).
+
+    ``RunResult[B]`` for a ``B``, as an input's union is narrowed by its upstream's outcome.
+    """
+    from schedr.run_of import RunResult  # noqa: PLC0415 (only an @sensor(wait_for=...) needs it)
+
+    if get_origin(annotation) is not RunResult or not isinstance(data, Mapping):
+        return annotation
+    (output,) = get_args(annotation)
+    return RunResult[member_named(output, data.get("outcome"))]  # type: ignore[misc]
 
 
 def member_named(annotation: object, outcome: object) -> object:
@@ -804,10 +817,8 @@ def _finish(request: Mapping[str, Any], begun: _Begun, result: object) -> dict[s
     sensing = task.get("kind") == "sensor"
     if request.get("cleanup") is not None:
         return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
-    if sensing and isinstance(result, TimedOut):
-        return _stored(result, TimedOut, task, TIMED_OUT_NAME)
     if sensing:
-        return _stored(result, output_hint(hints.get("return", Any)), task)
+        return _sensed_result(result, hints, task)
     if not task.get("branch"):
         return _stored(result, hints.get("return", Any), task)
     try:
@@ -815,6 +826,18 @@ def _finish(request: Mapping[str, Any], begun: _Begun, result: object) -> dict[s
     except CodecError as e:
         return failure(e, "output_not_serializable", f"`{task['id']}`: {e.reason}")
     return _stored(chosen, list[str], task)
+
+
+def _sensed_result(
+    result: object, hints: Mapping[str, object], task: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The message for what a wait step's function returned."""
+    if isinstance(result, TimedOut):
+        return _stored(result, TimedOut, task, TIMED_OUT_NAME)
+    if result is NOT_YET and task.get("wait_for") is not None:
+        # Not the run it was given: the master waits for a later one (decision 353).
+        return {"type": "task_succeeded", "output": None, "outcome": NOT_YET_OUTCOME}
+    return _stored(result, output_hint(hints.get("return", Any)), task)
 
 
 def execute(

@@ -69,6 +69,9 @@ pub struct Timings {
     /// How long a task whose assignment fails on its own (its data won't read, the database
     /// refuses it) is left out of the rounds, so the others go on, before it is tried again.
     pub set_aside: Duration,
+    /// The least an `@sensor(wait_for=...)`'s call gets once it is handed its run, though its
+    /// `max_wait` is nearly or already out: the run ended within it (decision 353).
+    pub handed_call_min: Duration,
     /// How long a lost worker's cleanup waits, on top of the cancel grace, before it moves: a
     /// worker only cut off has stopped the task by then (decision 256).
     pub cleanup_move_wait: Duration,
@@ -219,6 +222,7 @@ impl Default for Timings {
             query_timeout: Duration::from_secs(10),
             loop_stall_timeout: Duration::from_secs(120),
             set_aside: Duration::from_mins(1),
+            handed_call_min: Duration::from_mins(1),
             cleanup_move_wait: Duration::from_secs(10),
             listen_retry: Duration::from_mins(30),
             quiet_dag_after: Duration::from_mins(1),

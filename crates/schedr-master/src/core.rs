@@ -63,6 +63,8 @@ pub struct Settings {
     pub code_wait: Duration,
     /// How long a task whose assignment fails on its own is set aside.
     pub set_aside: Duration,
+    /// The least an `@sensor(wait_for=...)`'s call gets once handed its run (decision 353).
+    pub handed_call_min: Duration,
     /// How long a lost worker's cleanup waits before it moves, on top of `cancel_grace`.
     pub cleanup_move_wait: Duration,
     /// How long no alive worker must report a script root (counted from the master's start
@@ -141,6 +143,7 @@ impl Default for Settings {
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
+            handed_call_min: crate::dispatch::DEFAULT_HANDED_CALL_MIN,
             cleanup_move_wait: Duration::from_secs(10),
             script_root_grace: DEFAULT_SCRIPT_ROOT_GRACE,
             read_back: crate::dispatch::ReadBack::default(),
@@ -462,6 +465,7 @@ impl MasterCore {
             .with_sensor_max_wait(settings.sensor_max_wait)
             .with_code_wait(settings.code_wait)
             .with_set_aside(settings.set_aside, settings.read_back)
+            .with_handed_call_min(settings.handed_call_min)
             .with_cleanup_move_wait(
                 settings
                     .cancel_grace

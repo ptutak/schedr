@@ -143,6 +143,7 @@ pub fn master_settings(config: &Config) -> Settings {
         parse_job_timeout: config.master.parse_job_timeout,
         code_wait: config.master.code_wait,
         set_aside: config.timings.set_aside,
+        handed_call_min: config.timings.handed_call_min,
         cleanup_move_wait: config.timings.cleanup_move_wait,
         script_root_grace: config.timings.script_root_grace,
         timings: schedr_master::core::MasterTimings {

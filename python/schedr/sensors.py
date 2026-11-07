@@ -7,6 +7,7 @@ with the ``TimedOut`` outcome (waiting in vain is an expected problem, not a fai
 from __future__ import annotations
 
 import functools
+import inspect
 import types
 import typing
 from dataclasses import replace
@@ -15,6 +16,7 @@ from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
+    Concatenate,
     Final,
     Self,
     Union,
@@ -27,10 +29,11 @@ from typing import (
 
 from schedr import _build
 from schedr import outcomes as _outcomes
-from schedr._model import SensorKind, SensorMode
+from schedr._model import SensorKind, SensorMode, SensorWaitFor
 from schedr._secrets import SecretsArg
 from schedr._wait_rules import refused_in
 from schedr.connections import ConnectionsArg
+from schedr.run_of import RunOf, RunResult
 from schedr.tasks import AsyncTaskFunction, Output, TaskFunction, is_async, task
 
 if TYPE_CHECKING:
@@ -46,7 +49,12 @@ class NotYet(Enum):
 
 
 NOT_YET: Final = NotYet.NOT_YET
-"""What a ``@sensor.poke`` function returns until it has its value (so ``None`` is a value)."""
+"""What a ``@sensor.poke`` function returns until it has its value (so ``None`` is a value); an
+``@sensor(wait_for=...)`` returns it for a run that isn't the one, to wait for a later one."""
+
+NOT_YET_OUTCOME: Final = "NotYet"
+"""The outcome an ``@sensor(wait_for=...)``'s attempt ends with when it returned ``NOT_YET``:
+the master then waits for a later matching run (its ``NOT_YET_OUTCOME``)."""
 
 
 class SensorOptions(typing.TypedDict, total=False):
@@ -109,6 +117,7 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         task_id: str,
         options: _build.TaskOptions,
         every: timedelta | None,
+        wait_for: RunOf | None = None,
     ) -> None:
         """Wraps ``fn`` as a wait step.
 
@@ -117,12 +126,21 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             task_id: The task's ID.
             options: The task's own options, with how long it waits.
             every: How often to call it (``@sensor.poke``); ``None``: called once.
+            wait_for: ``@sensor(wait_for=RunOf(...))``: called once that run has ended, with it
+                as its first parameter (decision 353).
 
         Raises:
             TypeError: If ``fn`` can't be a wait step.
         """
         where = f"@sensor `{task_id}`"
         super().__init__(fn, task_id, options)
+        self._wait_for = wait_for
+        self._run_param: str | None = None
+        if wait_for is not None:
+            self._run_param = _run_parameter(fn, where)
+            # The DAG never gives it: the master does, with the run (see `_kind`).
+            rest = list(self._signature.parameters.values())[1:]
+            self._signature = self._signature.replace(parameters=rest)
         if not is_async(fn):
             raise TypeError(
                 f"{where} is a plain `def`: a wait step shares its event loop with others, so it "
@@ -152,6 +170,9 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
 
     def _output_hint(self, hints: Mapping[str, object], where: str) -> object:
         annotation = hints["return"]
+        if self._wait_for is not None:
+            # NOT_YET waits for a later run: never its output.
+            return output_hint(annotation)
         if self._every is None:
             return annotation
         if not _has_not_yet(annotation):
@@ -183,8 +204,14 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
 
     def _kind(self, arguments: Mapping[str, Value]) -> TaskKind:
         mode = SensorMode.LOOP if self._every is None else SensorMode.POKE
+        wait_for = self._wait_for
+        waits = (
+            None
+            if wait_for is None or self._run_param is None
+            else SensorWaitFor(wait_for.dag, wait_for.task, wait_for.lag_ms, self._run_param)
+        )
         # `max_wait` comes with the options, from the defaults too: see `add_task`.
-        return SensorKind(arguments, mode, self._every_ms)
+        return SensorKind(arguments, mode, self._every_ms, wait_for=waits)
 
     def _again(
         self,
@@ -198,8 +225,33 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             raise TypeError(
                 f"@sensor `{task_id}`: `timeout` limits a task's work; a wait step has `max_wait`"
             )
-        made = SensorFunction(self._fn, task_id, options, self._every)
+        made = SensorFunction(self._fn, task_id, options, self._every, self._wait_for)
         return cast("Self", made)
+
+
+def _run_parameter(fn: Callable[..., object], where: str) -> str:
+    """The name of an ``@sensor(wait_for=...)``'s first parameter, the run's: ``RunResult[T]``.
+
+    Raises:
+        TypeError: If it has none, or it isn't annotated ``RunResult``.
+    """
+    parameters = list(inspect.signature(fn).parameters.values())
+    if not parameters or parameters[0].kind not in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }:
+        raise TypeError(
+            f"{where}: with `wait_for=`, its first parameter is the run it waits for: "
+            "`run: RunResult[...]`"
+        )
+    first = parameters[0]
+    annotation = typing.get_type_hints(fn).get(first.name)
+    if annotation is not RunResult and get_origin(annotation) is not RunResult:
+        raise TypeError(
+            f"{where}: with `wait_for=`, its first parameter `{first.name}` is the run it waits "
+            f"for: annotate it `RunResult[...]`, got `{annotation}`"
+        )
+    return first.name
 
 
 def _no_cleanup(task_id: str) -> str:
@@ -213,13 +265,20 @@ def _made[**P, R, A](
     fn: Callable[P, object],
     every: timedelta | None,
     options: SensorOptions,
+    wait_for: RunOf | None = None,
 ) -> SensorFunction[P, R, A]:
     max_wait = options.pop("max_wait", None)
+    if wait_for is not None and not isinstance(wait_for, RunOf):
+        raise TypeError(f"@sensor: `wait_for` takes a RunOf, got {wait_for!r}")
     for name in options:
         if name not in SensorOptions.__annotations__:
             raise TypeError(
                 _no_cleanup(getattr(fn, "__name__", ""))
                 if name.startswith("cleanup")
+                # The user's, option A: a poke is called on a timer, never per run.
+                else "@sensor.poke: `wait_for=` is for `@sensor`, called once per matching run; "
+                "a poke is called on a timer, and can read a run from the API itself"
+                if name == "wait_for"
                 else "@sensor: `timeout` limits a task's work; a wait step has `max_wait`"
                 if name == "timeout"
                 else f"@sensor: `{name}` isn't an option of a wait step"
@@ -228,7 +287,7 @@ def _made[**P, R, A](
     decorate = cast("Callable[..., Callable[..., TaskFunction[..., object]]]", task)
     plain = decorate(**options)(fn)
     made = replace(plain._options, max_wait=max_wait)
-    return SensorFunction(cast("Callable[P, R]", fn), plain.task_id, made, every)
+    return SensorFunction(cast("Callable[P, R]", fn), plain.task_id, made, every, wait_for)
 
 
 class _SensorDecorator(typing.Protocol):
@@ -242,6 +301,14 @@ class _SensorDecorator(typing.Protocol):
     def __call__[**P, R](
         self, fn: Callable[P, Coroutine[object, object, R]], /
     ) -> SensorFunction[P, _outcomes.Waited[R], R]: ...
+
+
+class _WaitForDecorator(typing.Protocol):
+    """What ``@sensor(wait_for=...)`` gives: the run is its first parameter, never the DAG's."""
+
+    def __call__[**P, T, R](
+        self, fn: Callable[Concatenate[RunResult[T], P], Coroutine[object, object, R | NotYet]], /
+    ) -> SensorFunction[P, _outcomes.Waited[R], R | NotYet]: ...
 
 
 class _PokeDecorator(typing.Protocol):
@@ -264,14 +331,30 @@ class _Sensor:
         self, fn: Callable[P, Coroutine[object, object, R]], /
     ) -> SensorFunction[P, _outcomes.Waited[R], R]: ...
     @overload
+    def __call__(
+        self, /, *, wait_for: RunOf, **options: Unpack[SensorOptions]
+    ) -> _WaitForDecorator: ...
+    @overload
     def __call__(self, /, **options: Unpack[SensorOptions]) -> _SensorDecorator: ...
     def __call__(
-        self, fn: Callable[..., object] | None = None, /, **options: Unpack[SensorOptions]
+        self,
+        fn: Callable[..., object] | None = None,
+        /,
+        *,
+        wait_for: RunOf | None = None,
+        **options: Unpack[SensorOptions],
     ) -> object:
         """Makes an ``async def`` function a wait step, which you write the waiting of.
 
+        With ``wait_for=RunOf(...)`` the master waits, with no call and no slot, until a matching
+        run of that DAG (or its task) has ended, whatever its state, then calls the function once
+        with it as its first parameter, ``run: RunResult[T]``. Returning ``NOT_YET`` waits for a
+        later matching run (with ``lag``, a newer one for the same moment, as when it is run
+        again), until ``max_wait`` (decision 353).
+
         Args:
             fn: The function (``@sensor`` without arguments).
+            wait_for: The run it is called for.
             **options: ``max_wait``, how long it waits before ending with the ``TimedOut``
                 outcome; the others as for ``@task``, but for ``cleanup=`` (use ``finally``).
 
@@ -280,7 +363,7 @@ class _Sensor:
         """
 
         def made(function: Callable[..., object]) -> object:
-            return _made(function, None, options.copy())
+            return _made(function, None, options.copy(), wait_for)
 
         return made if fn is None else made(fn)
 

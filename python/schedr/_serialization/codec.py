@@ -21,8 +21,9 @@ them (``model_dump(mode="json")``) and read back as JSON with ``model_validate_j
 import dataclasses
 import json
 import math
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
-from typing import Any, Literal, cast, get_args, get_origin, is_typeddict
+from typing import Any, Literal, NoDefault, TypeVar, cast, get_args, get_origin, is_typeddict
 
 from schedr._serialization import models
 from schedr._serialization.annotations import (
@@ -466,7 +467,24 @@ def decode(data: Any, annotation: object, at: str = "") -> Any:  # noqa: PLR0911
             raise CodecError(at, f"{annotation.__name__}: {e}") from e
     if isinstance(annotation, type) and dataclasses.is_dataclass(annotation):
         return _decode_dataclass(data, annotation, at)
+    if isinstance(origin, type) and dataclasses.is_dataclass(origin):
+        # A generic dataclass given its parameters (`RunResult[Orders]`).
+        parameters = getattr(origin, "__parameters__", ())
+        return _decode_dataclass(data, origin, at, dict(zip(parameters, args, strict=False)))
     raise TypeModelError(f"`{label(annotation)}` is not supported")
+
+
+def _substituted(hint: object, given: Mapping[object, object]) -> object:
+    """``hint`` with the type parameters ``given`` put in, a missing one its default or ``Any``."""
+    if isinstance(hint, TypeVar):
+        if hint in given:
+            return given[hint]
+        default = getattr(hint, "__default__", NoDefault)
+        return Any if default is NoDefault else default
+    parameters = getattr(hint, "__parameters__", ())
+    if not parameters:
+        return hint
+    return hint[tuple(_substituted(p, given) for p in parameters)]  # type: ignore[index]
 
 
 def json_form(data: Any) -> Any:
@@ -539,10 +557,14 @@ def _decode_time(data: Any, annotation: object, at: str) -> Any:
         raise CodecError(at, f"bad {tag} value {text!r}") from e
 
 
-def _decode_dataclass(data: Any, cls: type, at: str) -> Any:
+def _decode_dataclass(
+    data: Any, cls: type, at: str, given: Mapping[object, object] | None = None
+) -> Any:
     if not isinstance(data, dict):
         raise CodecError(at, f"expected {cls.__name__} (an object), got {_type_of(data)}")
     hints = type_hints(cls, f"`{cls.__name__}`")
+    if getattr(cls, "__parameters__", ()):
+        hints = {name: _substituted(hint, given or {}) for name, hint in hints.items()}
     fields = {f.name: f for f in dataclasses.fields(cls)}
     unknown = sorted(set(data) - set(fields))
     if unknown:

@@ -245,6 +245,14 @@ CREATE TABLE task_instances (
     -- When it reached a final state (a later cleanup report changes `updated_at`, not this): what a
     -- `wait_for` of it matches (decision 353).
     ended_at      TIMESTAMPTZ,
+    -- `@sensor(wait_for=RunOf(...))` (decision 353): since when it waits (its `max_wait` runs from
+    -- there, over its calls), the run last handed to its function, and the last it returned
+    -- NOT_YET for (the next call is for a later one; a retry gets the same), with when each ended.
+    waiting_since TIMESTAMPTZ,
+    handed_run    TEXT,
+    handed_at     TIMESTAMPTZ,
+    waited_run    TEXT,
+    waited_at     TIMESTAMPTZ,
     UNIQUE (run_id, task_id, map_index)
 );
 

@@ -4,7 +4,7 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-07): M4.11d1 done (two commits, pushed); M4.11d2 is next, its questions first. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
+## State (2026-11-07): M4.11d1 done, B182/B183 fixed, option C in (all pushed); M4.11d2 is next, its questions answered. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
 
 - **M4.11b part 3:** `schedr triggers`, the trigger endpoints, manual runs with an event (`--event`, `--event-key`,
   `--event-data`, `--event-at`), the DAG page's panel, `run_trigger`, `run_dag(event=)`, the example, `docs/02-dags/19-triggers.md`
@@ -25,13 +25,26 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   statement that pauses, removes, brings back or changes the trigger; a strict cursor (end, run ID) on the `triggers` row tied
   to its `RunOf`; queue room per pass; `lag` at most 10 years (wait_for too); the UI's dialog asks for the event. Reviews:
   Codex 6, Grok 6 (3 the same, on the snapshot before Codex's fixes), all fixed.
-- **Next, M4.11d2:** the function forms `@sensor(wait_for=RunOf)` and `@trigger(wait_for=RunOf)` with `RunResult[T]`. Its
+- **M4.11d2, in progress (uncommitted):** the sensor form is built and tested (model `Sensor.wait_for {run_of, param}`,
+  dispatch `sensor_run`/`matching_run`, `task_instances.waiting_since/handed_run/handed_at/waited_run/waited_at`, NOT_YET
+  outcome `NotYet` requeued in `attempt_finished`, `RunResult[T]` in `run_of.py`, codec generic dataclasses, a standalone
+  end-to-end test, example `checked_report`, docs section). Next: the trigger function form `@trigger(wait_for=RunOf)`,
+  then one review round over all of d2 (Codex, fix, then Grok), make check, commit.
+- **d2 part 2, decided (the user, 2026-11-07, option C with an opt-in):** a run a trigger function always raises on is
+  passed by `schedr triggers skip <dag>` (API, UI button; recorded; the panel shows the run and error), and by an opt-in
+  `@trigger(..., run_retries=N)` that skips it after N failures (recorded, logged); without it the same run is retried.
+  Built as one `AssignTrigger` per ended run (run as first argument, clean end moves the cursor, key defaults to run ID).
+- **M4.11d2 (was next):** the function forms `@sensor(wait_for=RunOf)` and `@trigger(wait_for=RunOf)` with `RunResult[T]`. Its
   questions, answered by the user 2026-11-07 (l A, m A, n A, o A): the function runs on a watcher slot, the master handing it
   each matching run's `RunResult` once it ends; a trigger function sees every run that ends (success, failed, cancelled); it
   returns `Event[T] | None` (key defaulting to the other run's ID); a raise fails a sensor's attempt (its retries), and counts
   as a trigger failure that retries the same run (the cursor doesn't move). Record them in decision 353 when building d2.
-- **Before d2: option C (the user's, 2026-11-07):** `wait_for` with `lag` takes only the newest run for that moment (by
-  `triggered_at`); its result decides, a failed newer run gives `Failed` though an older one succeeded. Its own commit.
+- **Done after d1 (pushed 60fa56c, 972a938):** option C (the user's): `wait_for` with `lag` takes only the newest run for the
+  moment. B182 (`[worker] log_mode`, 0600, set on each log and at start on the folder and old logs) and B183 (report
+  limits, hidden `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_*`; an oversized registration refused). Security bugs are fixed at
+  once now (the user's rule). Legend "an option" (B).
+- **Prompts and logs for colleagues:** in `$CLAUDE_JOB_DIR/tmp`, not `target/`: `make check`'s size guard runs `cargo
+  clean` past 50 GiB and wiped `target/prompts`.
 - **Reviews one at a time (the user, 2026-11-07):** Codex, fix, then Grok security on the fixed tree.
 - **Questions waiting for the user; number 2 blocks M4.11e, nothing before it:**
   1. Settled by the user: M4.11d, e, f come before M4.12 (`PLAN.md`); a batched run reads `list[Event[T]]` (352).

@@ -737,6 +737,25 @@
         }
       ]
     },
+    "SensorWaitFor": {
+      "additionalProperties": false,
+      "description": "What an `@sensor(wait_for=RunOf(...))` waits for, and the parameter its function is given the\nrun in (its first: a `RunResult`).",
+      "properties": {
+        "param": {
+          "description": "The function's parameter given the run.",
+          "type": "string"
+        },
+        "run_of": {
+          "$ref": "#/$defs/RunOf",
+          "description": "The run, and of it which task."
+        }
+      },
+      "required": [
+        "run_of",
+        "param"
+      ],
+      "type": "object"
+    },
     "Task": {
       "description": "A task of a DAG.",
       "oneOf": [
@@ -801,6 +820,17 @@
             "mode": {
               "$ref": "#/$defs/SensorMode",
               "description": "How it waits."
+            },
+            "wait_for": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SensorWaitFor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`@sensor(wait_for=RunOf(...))` (decision 353): called once a matching run of another\nDAG has ended, with it as `param`, rather than at once."
             }
           },
           "required": [

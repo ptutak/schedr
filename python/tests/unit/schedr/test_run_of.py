@@ -1,12 +1,14 @@
 """`RunOf` and `wait_for`: what a DAG file says."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-from schedr import Dag, Failed, RunOf, TimedOut, dag_ctx, task, wait_for
+from schedr import Dag, Failed, RunOf, RunResult, TimedOut, dag_ctx, sensor, task, wait_for
 from schedr._model import registry
+from schedr._serialization import decode
+from schedr.sensors import NOT_YET, NotYet
 
 
 @task
@@ -135,3 +137,80 @@ def test_a_dag_started_by_runs_reads_which_run_as_its_event() -> None:
         consume(dag_ctx.event.data)
     (dag,) = registry.take_defined()
     assert dag.to_json()["trigger"]["kind"] == "run_of"
+
+
+@sensor(wait_for=RunOf("orders", task="load", lag=timedelta(0)))
+async def enough(run: RunResult[int], least: int) -> int | NotYet:
+    """Takes the run's rows once there are enough, else waits for a redo."""
+    if run.output is None or run.output < least:
+        return NOT_YET
+    return run.output
+
+
+@task
+def report(rows: int) -> str:
+    """Reports the rows."""
+    return str(rows)
+
+
+def test_a_sensor_waiting_for_a_run_is_given_it_by_the_master() -> None:
+    with Dag("reports"):
+        report(enough(least=10).on(int))
+    (dag,) = registry.take_defined()
+    wait = next(t for t in dag.to_json()["tasks"] if t["id"] == "enough")
+    assert wait["kind"] == "sensor"
+    assert wait["arguments"] == {"least": {"literal": 10}}, "the run isn't an argument"
+    assert wait["wait_for"] == {
+        "run_of": {"dag": "orders", "task": "load", "lag_ms": 0},
+        "param": "run",
+    }
+    assert wait["output_type"]["variants"][0] == {"type": "int"}, "NOT_YET isn't its output"
+
+
+def test_a_sensor_waiting_for_a_run_takes_it_first_and_no_poke_takes_one() -> None:
+    async def untyped(run: str) -> int:
+        """Its first parameter isn't the run."""
+        del run
+        return 1
+
+    with pytest.raises(TypeError, match=r"annotate it `RunResult\[\.\.\.\]`"):
+        sensor(wait_for=RunOf("orders"))(untyped)  # type: ignore[arg-type]
+
+    async def nothing() -> int:
+        """Has no parameter for the run."""
+        return 1
+
+    with pytest.raises(TypeError, match="its first parameter is the run"):
+        sensor(wait_for=RunOf("orders"))(nothing)  # type: ignore[arg-type]
+
+    async def poked(run: RunResult[int]) -> int | NotYet:
+        """A poke can't wait for a run."""
+        del run
+        return NOT_YET
+
+    with pytest.raises(TypeError, match="a poke is called on a timer"):
+        sensor.poke(every=timedelta(seconds=5), wait_for=RunOf("orders"))(poked)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="takes a RunOf"):
+        sensor(wait_for="orders")(poked)  # type: ignore[call-overload]
+
+
+def test_the_run_handed_over_reads_as_its_result_with_the_tasks_output() -> None:
+    stored = {
+        "run_id": "r1",
+        "dag_id": "orders",
+        "planned_for": {"$datetime": "2026-11-01T00:00:00Z"},
+        "state": "running",
+        "ended_at": None,
+        "task_id": "load",
+        "task_state": "success",
+        "outcome": "SUCCESS",
+        "output": 12,
+    }
+    run = decode(stored, RunResult[int])
+    assert (run.run_id, run.output, run.planned_for) == (
+        "r1",
+        12,
+        datetime(2026, 11, 1, tzinfo=UTC),
+    )
+    whole = decode({**stored, "output": None, "task_id": None}, RunResult)
+    assert whole.output is None

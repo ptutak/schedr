@@ -17,6 +17,10 @@ use schedr_model::{
 
 use serde_json::json;
 
+/// What an `@sensor(wait_for=...)`'s attempt ends with when its function returned `NOT_YET` for
+/// the run it was given (decision 353): it waits for a later one.
+pub const NOT_YET_OUTCOME: &str = "NotYet";
+
 /// `wait_for`'s outcome for a run, or task, it waited for that didn't succeed.
 pub const FAILED: &str = "Failed";
 
@@ -335,6 +339,12 @@ impl Execution {
             .as_deref()
             .filter(|o| !o.is_empty())
             .unwrap_or(SUCCESS);
+        if let Some(recorded) = self
+            .not_yet((run_id, &run, &instance), task, state, outcome, now)
+            .await?
+        {
+            return Ok(recorded);
+        }
         if state == TaskInstanceState::Success {
             let value = result.output.clone().unwrap_or(serde_json::Value::Null);
             self.db.store_output(&instance.id, outcome, &value).await?;
@@ -351,6 +361,44 @@ impl Execution {
             run_result,
             stops,
         })
+    }
+
+    /// An `@sensor(wait_for=...)` saying `NOT_YET` to its run waits for a later one, as it
+    /// waited for the first: queued again, no retry used (decision 353). `None` for any other
+    /// result.
+    async fn not_yet(
+        &self,
+        (run_id, run, instance): (&str, &RunTasks, &schedr_db::instances::StoredInstance),
+        task: &schedr_model::Task,
+        state: TaskInstanceState,
+        outcome: &str,
+        now: Timestamp,
+    ) -> Result<Option<Recorded>, ExecutionError> {
+        let waits = matches!(
+            task.kind,
+            TaskKind::Sensor {
+                wait_for: Some(_),
+                ..
+            }
+        );
+        if !(waits && state == TaskInstanceState::Success && outcome == NOT_YET_OUTCOME) {
+            return Ok(None);
+        }
+        self.db.not_yet(&instance.id).await?;
+        let waiting = InstanceUpdate {
+            ready_at: Some(now),
+            ..update(
+                &instance.task_id,
+                instance.map_index,
+                TaskInstanceState::Queued,
+            )
+        };
+        let (run_result, stops) = self.advance(run_id, run, vec![waiting], now).await?;
+        Ok(Some(Recorded {
+            state: Some(TaskInstanceState::Queued),
+            run_result,
+            stops,
+        }))
     }
 
     /// A running instance's task ended and its cleanup runs: its attempt stays open, and

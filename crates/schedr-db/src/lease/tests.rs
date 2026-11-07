@@ -130,3 +130,20 @@ async fn a_writes_start_on_postgres_limits_it_and_fences_a_masters() {
     );
     assert!(fenced.ends_with(FENCE_POSTGRES), "{fenced}");
 }
+
+#[tokio::test]
+async fn a_deposed_master_doesnt_record_the_run_a_sensor_was_handed() {
+    // Codex's review of M4.11d2: a late write would overwrite what the leader handed.
+    let db = migrated().await;
+    let period = Duration::from_millis(300);
+    let epoch = db.take_lease("a", period).await.unwrap().unwrap();
+    let master = db.fenced("a", epoch);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(db.take_lease("b", period).await.unwrap(), Some(2));
+    let now: Timestamp = "2026-10-23T08:00:00Z".parse().unwrap();
+    let instance = "01a1b600-0000-7000-8000-000000000000";
+    let handed = master.hand_run(instance, "r1", now).await;
+    assert!(matches!(handed, Err(DbError::NotLeading)), "{handed:?}");
+    let seen = master.not_yet(instance).await;
+    assert!(matches!(seen, Err(DbError::NotLeading)), "{seen:?}");
+}

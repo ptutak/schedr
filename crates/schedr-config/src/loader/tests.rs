@@ -784,7 +784,7 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .split('`')
         .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
         .collect();
-    assert_eq!(names.len(), 67, "{names:?}");
+    assert_eq!(names.len(), 68, "{names:?}");
     for name in names {
         let loaded = load(None, &env(&[(name, "1s")]), &[]);
         if HIDDEN_LIMITS.iter().any(|limit| name.ends_with(limit)) {

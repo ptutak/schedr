@@ -3656,3 +3656,266 @@ async fn only_the_newest_run_for_the_moment_decides() {
         "the newer one failed: not routed, the step fails"
     );
 }
+
+/// DAG `sync`: `wait`, an `@sensor(wait_for=...)` of `run_of` given the run as `run`.
+fn run_sensor_dag(run_of: &Json) -> Dag {
+    let mut dag = serde_json::to_value(sensor_dag()).unwrap();
+    dag["tasks"][0]["wait_for"] = json!({"run_of": run_of, "param": "run"});
+    dag["tasks"][0]["max_wait_ms"] = json!(60_000);
+    serde_json::from_value(dag).unwrap()
+}
+
+/// The `run` argument an assignment gives its sensor's function.
+fn handed_run(outgoing: &Outgoing) -> Json {
+    let task: Json = serde_json::from_slice(&assignment(outgoing).task_json).unwrap();
+    task["arguments"]["run"]["literal"].clone()
+}
+
+#[tokio::test]
+async fn a_sensor_waiting_for_a_run_is_called_once_it_ends_and_then_for_a_newer_one() {
+    let (mut dispatcher, db, run_id) =
+        with_run(run_sensor_dag(&json!({"dag": "orders", "lag_ms": 0}))).await;
+    // Nothing of `orders` yet: no call, no slot; it says what it waits for.
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    let (state, _) = state_of(&db, &run_id, "wait").await;
+    assert_eq!(state, TaskInstanceState::Queued);
+    let failed = orders_run(&db, ts(NOW), RunState::Failed, later(1)).await;
+    let out = dispatcher.step(later(2)).await.unwrap();
+    assert_eq!(
+        out.len(),
+        1,
+        "called once the run ended, whatever its state"
+    );
+    let run = handed_run(&out[0]);
+    assert_eq!(
+        (&run["run_id"], &run["dag_id"], &run["state"]),
+        (&json!(failed), &json!("orders"), &json!("failed"))
+    );
+    assert_eq!(
+        run["planned_for"],
+        json!({"$datetime": ts(NOW).to_string()})
+    );
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(2))
+        .await
+        .unwrap();
+    let not_yet = pb::Finished {
+        outcome: "NotYet".to_owned(),
+        ..finished(&attempt, pb::AttemptStatus::Success, &json!(null))
+    };
+    dispatcher.finished("w1", &not_yet, later(3)).await.unwrap();
+    let tasks = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = tasks
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("wait"))
+        .unwrap();
+    assert_eq!(
+        (wait.state, wait.retries_used),
+        (TaskInstanceState::Queued, 0),
+        "no retry used"
+    );
+    // The same run isn't given again: it waits for a newer one for the moment.
+    assert_eq!(dispatcher.step(later(4)).await.unwrap().len(), 0);
+    let again = orders_run(&db, ts(NOW), RunState::Success, later(5)).await;
+    let out = dispatcher.step(later(6)).await.unwrap();
+    assert_eq!(handed_run(&out[0])["run_id"], json!(again));
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(6))
+        .await
+        .unwrap();
+    let done = finished(&attempt, pb::AttemptStatus::Success, &json!("rows"));
+    dispatcher.finished("w1", &done, later(7)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
+}
+
+#[tokio::test]
+async fn a_sensor_waiting_for_a_run_times_out_from_when_it_began_to_wait() {
+    let (mut dispatcher, db, run_id) =
+        with_run(run_sensor_dag(&json!({"dag": "orders", "task": "load"}))).await;
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    // Without `lag`, the next to end after it began waiting; and its task's output comes too.
+    assert_eq!(dispatcher.step(later(59)).await.unwrap().len(), 0);
+    assert_eq!(dispatcher.step(later(61)).await.unwrap().len(), 0);
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = run
+        .instances
+        .iter()
+        .find(|i| i.task_id.as_str() == "wait")
+        .unwrap();
+    assert_eq!(
+        (wait.state, wait.outcome.as_deref()),
+        (TaskInstanceState::Success, Some("TimedOut"))
+    );
+}
+
+#[tokio::test]
+async fn a_sensor_retried_after_its_function_raised_gets_the_same_run() {
+    // Codex's review of M4.11d2: the retry got a newer run, hiding the one it failed on.
+    let mut dag =
+        serde_json::to_value(run_sensor_dag(&json!({"dag": "orders", "lag_ms": 0}))).unwrap();
+    dag["tasks"][0]["settings"]["retries"] = json!(1);
+    dag["tasks"][0]["settings"]["retry_delay_ms"] = json!(0);
+    let (mut dispatcher, db, _) = with_run(serde_json::from_value(dag).unwrap()).await;
+    let first = orders_run(&db, ts(NOW), RunState::Failed, later(1)).await;
+    let out = dispatcher.step(later(2)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(2))
+        .await
+        .unwrap();
+    let raised = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
+    dispatcher.finished("w1", &raised, later(3)).await.unwrap();
+    orders_run(&db, ts(NOW), RunState::Success, later(4)).await;
+    let out = dispatcher.step(later(5)).await.unwrap();
+    assert_eq!(handed_run(&out[0])["run_id"], json!(first));
+}
+
+#[tokio::test]
+async fn a_sensor_timing_out_while_it_waits_is_done_whole_though_a_write_fails() {
+    // Codex's review of M4.11d2: its attempt ended, the step left `running` with none open.
+    let waiting = || async {
+        let (mut dispatcher, db, run_id) =
+            with_run(run_sensor_dag(&json!({"dag": "orders"}))).await;
+        dispatcher.step(ts(NOW)).await.unwrap();
+        (dispatcher, db, run_id)
+    };
+    let (mut dispatcher, db, _) = waiting().await;
+    db.count_writes();
+    dispatcher.step(later(61)).await.unwrap();
+    let writes = db.writes();
+    assert!(writes >= 2, "{writes}");
+    for nth in 1..=writes {
+        let (mut dispatcher, db, run_id) = waiting().await;
+        db.fail_write(nth);
+        let _ = dispatcher.step(later(61)).await;
+        db.fail_write(0);
+        dispatcher.step(later(62)).await.unwrap();
+        let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+        let wait = run
+            .instances
+            .iter()
+            .find(|i| i.task_id == id("wait"))
+            .unwrap();
+        assert_eq!(
+            (wait.state, wait.outcome.as_deref()),
+            (TaskInstanceState::Success, Some("TimedOut")),
+            "write {nth}"
+        );
+    }
+}
+
+/// `orders`'s run planned for `NOW`, ended at `ended`, its `load` stored as `elements` (mapped:
+/// each an element's output) or `output`.
+async fn orders_with_load(
+    db: &Database,
+    ended: Timestamp,
+    output: Option<&Json>,
+    elements: &[Json],
+) -> String {
+    let run = orders_run(db, ts(NOW), RunState::Success, ended).await;
+    let mut instances = vec![(id("load"), -1, TaskInstanceState::Success)];
+    instances.extend((0..elements.len()).map(|n| {
+        (
+            id("load"),
+            i32::try_from(n).unwrap(),
+            TaskInstanceState::Success,
+        )
+    }));
+    db.create_instances(&run, &instances, ts(NOW))
+        .await
+        .unwrap();
+    let stored = db.run_tasks(&run).await.unwrap().unwrap();
+    for instance in &stored.instances {
+        let value = match instance.map_index {
+            -1 => output.cloned(),
+            n => Some(elements[usize::try_from(n).unwrap()].clone()),
+        };
+        if let Some(value) = value {
+            db.store_output(&instance.id, "SUCCESS", &value)
+                .await
+                .unwrap();
+        }
+    }
+    run
+}
+
+#[tokio::test]
+async fn a_sensors_run_ending_within_its_wait_is_handed_though_seen_on_the_deadline() {
+    // Grok's review of M4.11d2: found, then timed out before the call.
+    let (mut dispatcher, db, _) =
+        with_run(run_sensor_dag(&json!({"dag": "orders", "lag_ms": 0}))).await;
+    dispatcher.step(ts(NOW)).await.unwrap();
+    let ended = orders_run(&db, ts(NOW), RunState::Success, later(59)).await;
+    let out = dispatcher.step(later(60)).await.unwrap();
+    assert_eq!(handed_run(&out[0])["run_id"], json!(ended));
+    let task: Json = serde_json::from_slice(&assignment(&out[0]).task_json).unwrap();
+    assert_eq!(
+        task["max_wait_ms"],
+        json!(60_000),
+        "the call gets the least it is given"
+    );
+}
+
+#[tokio::test]
+async fn a_sensor_is_handed_another_dags_output_masked_and_a_mapped_tasks_as_a_list() {
+    // Grok's review of M4.11d2: the API masks what the sensor got whole; a mapped task's came null.
+    let (mut dispatcher, db, _) = with_run(run_sensor_dag(
+        &json!({"dag": "orders", "task": "load", "lag_ms": 0}),
+    ))
+    .await;
+    let secret = json!({"password": "hunter2", "dsn": "postgres://u:s3cret@db/app", "rows": 3});
+    orders_with_load(&db, later(1), Some(&secret), &[]).await;
+    let out = dispatcher.step(later(2)).await.unwrap();
+    assert_eq!(
+        handed_run(&out[0])["output"],
+        json!({"password": "****", "dsn": "postgres://u:****@db/app", "rows": 3})
+    );
+    let (mut dispatcher, db, _) = with_run(run_sensor_dag(
+        &json!({"dag": "orders", "task": "load", "lag_ms": 0}),
+    ))
+    .await;
+    orders_with_load(&db, later(1), None, &[json!({"n": 7}), json!({"n": 8})]).await;
+    let out = dispatcher.step(later(2)).await.unwrap();
+    assert_eq!(handed_run(&out[0])["output"], json!([{"n": 7}, {"n": 8}]));
+}
+
+#[tokio::test]
+async fn a_sensor_waits_from_when_it_was_queued_and_an_idle_round_writes_nothing() {
+    // Grok's review of M4.11d2: from the first round that looked, and a write every round.
+    let (mut dispatcher, db, run_id) = with_run(run_sensor_dag(&json!({"dag": "orders"}))).await;
+    dispatcher.step(ts(NOW)).await.unwrap();
+    let pool = match db.pool() {
+        schedr_db::Pool::Sqlite(pool) => pool.clone(),
+        schedr_db::Pool::Postgres(_) => unreachable!(),
+    };
+    sqlx::query("UPDATE task_instances SET waiting_since = NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let tasks = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = tasks
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("wait"))
+        .unwrap();
+    let since = db
+        .sensor_wait(&wait.id, later(5))
+        .await
+        .unwrap()
+        .unwrap()
+        .since;
+    assert_eq!(
+        since,
+        ts(NOW),
+        "from when it was queued, not the round that looked"
+    );
+    db.count_writes();
+    dispatcher.step(later(6)).await.unwrap();
+    assert_eq!(db.writes(), 0, "an idle round only reads");
+}

@@ -2586,3 +2586,52 @@ with Dag("ingest", trigger=found()):
     assert_ne!(code, 0);
     assert!(err.contains("nothing"), "{err}");
 }
+
+/// `report` waits, with an `@sensor(wait_for=...)`, for the `load` of the `orders` run planned
+/// for the same moment, and builds on its output (decision 353).
+const RUN_OF: &str = r#"
+from datetime import timedelta
+from schedr import Dag, RunOf, RunResult, sensor, task
+from schedr.sensors import NotYet
+
+@task
+def load() -> int:
+    return 3
+
+@sensor(wait_for=RunOf("orders", task="load", lag=timedelta(0)), max_wait=timedelta(minutes=1))
+async def loaded(run: RunResult[int], times: int) -> int | NotYet:
+    print("given", run.dag_id, run.task_state, run.output)
+    return (run.output or 0) * times
+
+@task
+def report(rows: int) -> None:
+    print("rows", rows)
+
+with Dag("orders"):
+    load()
+
+with Dag("report"):
+    report(loaded(times=2).on(int))
+"#;
+
+#[test]
+fn a_sensor_waiting_for_another_dags_run_is_given_it_and_builds_on_its_output() {
+    let standalone = Standalone::start(&[("run_of.py", RUN_OF)], None);
+    standalone.wait("DAGs `orders` and `report`", || {
+        standalone.dag_ids() == ["orders", "report"]
+    });
+    let moment = "2026-10-15T00:00:00Z";
+    let trigger = |dag: &str| {
+        let command = standalone.cli_json(&["runs", "trigger", dag, "--for", moment]);
+        command["result"]["run_id"].as_str().unwrap().to_owned()
+    };
+    let report = trigger("report");
+    let orders = trigger("orders");
+    standalone.wait_for_state(&orders, "success");
+    standalone.wait_for_state(&report, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains("given orders success 3") && logs.contains("rows 6"),
+        "{logs}"
+    );
+}
