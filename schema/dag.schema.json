@@ -1541,6 +1541,25 @@
             "task"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`trigger=RunOf(...)` (decision 353): a run per run of another DAG (or its task) that\nsucceeded while this one is live, planned for that run's `planned_for` plus `lag`, or for\nthe moment the master saw it.",
+          "properties": {
+            "kind": {
+              "const": "run_of",
+              "type": "string"
+            },
+            "run_of": {
+              "$ref": "#/$defs/RunOf",
+              "description": "Which runs."
+            }
+          },
+          "required": [
+            "kind",
+            "run_of"
+          ],
+          "type": "object"
         }
       ]
     },

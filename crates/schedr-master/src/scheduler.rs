@@ -316,7 +316,7 @@ impl Scheduler {
                 held,
             });
         }
-        if active.dag.trigger.is_event() != event.is_some() {
+        if active.dag.trigger.brings_event() != event.is_some() {
             return Err(if event.is_some() {
                 SchedulerError::NoEventTrigger(dag_id.clone())
             } else {

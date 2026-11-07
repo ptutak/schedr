@@ -145,6 +145,14 @@ pub fn trigger_text(trigger: &serde_json::Value, local: &TimeZone) -> String {
             )
         }
         Some("once") => format!("once at {}", time("at").unwrap_or_default()),
+        Some("run_of") => {
+            let of = &trigger["run_of"];
+            let dag = of["dag"].as_str().unwrap_or_default();
+            match of["task"].as_str() {
+                Some(task) => format!("after {dag} {task}"),
+                None => format!("after {dag}"),
+            }
+        }
         Some("event") => format!(
             "@trigger {}",
             trigger["task"]["id"].as_str().unwrap_or_default()

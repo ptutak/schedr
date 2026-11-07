@@ -172,6 +172,10 @@ pub enum SensorMode {
     Poke,
 }
 
+/// The longest `lag` of a [`RunOf`], either way: 10 years (3650 days), so a planned moment plus
+/// or minus it stays a timestamp.
+pub const MAX_LAG_MS: i64 = 3_650 * 24 * 3_600_000;
+
 /// Which run of another DAG a step waits for, and of it which task (decision 353).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

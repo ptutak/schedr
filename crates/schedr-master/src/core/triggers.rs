@@ -5,11 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
+use schedr_db::run_of::{RunOfFrom, RunOfSeen};
 use schedr_db::runs::ActiveDag;
 use schedr_db::triggers::{STOPPED_BACK_PRESSURE, STOPPED_RETURNED, TriggerRecord};
 use schedr_model::trigger::check_event_key;
-use schedr_model::{DagId, RunEvent, SensorMode, TaskKind, Trigger};
+use schedr_model::{DagId, RunEvent, SensorMode, TaskId, TaskKind, Trigger};
 use schedr_proto::pb::{self, master_message, worker_message};
+use serde_json::json;
 
 use super::{CoreError, MasterCore};
 use crate::dispatch::Outgoing;
@@ -82,6 +84,9 @@ fn backoff(failures: u32, first: Duration, most: Duration) -> Duration {
     first.saturating_mul(doubled).min(most)
 }
 
+/// How many runs one pass starts for a DAG started by `RunOf`; the rest wait for the next.
+const RUNS_OF_A_PASS: u32 = 50;
+
 impl MasterCore {
     /// Stops the triggers that should not run where they are, and starts those that should run
     /// and don't.
@@ -113,6 +118,90 @@ impl MasterCore {
             }
         }
         self.count_triggers(&active, now).await?;
+        for dag in active
+            .iter()
+            .filter(|a| matches!(a.dag.trigger, Trigger::RunOf { .. }))
+        {
+            self.run_of_pass(dag, queued_of(dag.dag.id.as_str()), now)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// A DAG started by `RunOf` (decision 353): a run per run of the other DAG (or its task)
+    /// that succeeded while it is live, as an event keyed by that run's ID, so each starts
+    /// one; planned for that run's `planned_for` plus `lag`, or for now. Only what ended since
+    /// it is live (`dags.live_since`, kept with each pause, unpause and removal) counts: what
+    /// ends while it is paused or gone is never caught up; held (its file failing to import),
+    /// it waits and goes on after. At most what `[triggers] max_queued_events` leaves room for.
+    async fn run_of_pass(
+        &self,
+        dag: &ActiveDag,
+        queued: i64,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let Trigger::RunOf { run_of } = &dag.dag.trigger else {
+            return Ok(());
+        };
+        let id = dag.dag.id.as_str();
+        if dag.paused || dag.held.is_some() {
+            return Ok(());
+        }
+        let Some(live) = self.db.live_since(id).await? else {
+            return Ok(());
+        };
+        let most = self.settings.max_queued_events;
+        let room = if most == 0 {
+            RUNS_OF_A_PASS
+        } else {
+            let left = i64::from(most).saturating_sub(queued);
+            u32::try_from(left.clamp(0, i64::from(RUNS_OF_A_PASS))).unwrap_or(0)
+        };
+        if room == 0 {
+            return Ok(());
+        }
+        // The cursor is of this source only: a trigger changed starts from when it was live again.
+        let source = serde_json::to_string(run_of).unwrap_or_default();
+        let seen = self.db.run_of_seen(id, &source).await?;
+        // From what it has seen, never from before it was live (decision 353, none caught up).
+        let from = match &seen {
+            Some(seen) if seen.at >= live => RunOfFrom::After(seen),
+            _ => RunOfFrom::Since(live),
+        };
+        let task = run_of.task.as_ref().map(TaskId::as_str);
+        let found = self
+            .db
+            .succeeded_since((run_of.dag.as_str(), task), id, from, room)
+            .await?;
+        let mut last_planned_for = self.db.trigger(id).await?.and_then(|r| r.last_planned_for);
+        let mut last = None;
+        for (other, planned_for, ended) in found {
+            let at = run_of.lag_ms.and_then(|lag| {
+                planned_for
+                    .checked_add(SignedDuration::from_millis(lag))
+                    .ok()
+            });
+            let event = RunEvent {
+                key: other.clone(),
+                data: json!({
+                    "run_id": other,
+                    "dag_id": run_of.dag.as_str(),
+                    "planned_for": planned_for.to_string(),
+                }),
+                at,
+            };
+            self.scheduler
+                .event_run(dag, &event, last_planned_for, now)
+                .await?;
+            last_planned_for = Some(at.unwrap_or(now));
+            last = Some(RunOfSeen {
+                at: ended,
+                run: other,
+            });
+        }
+        if let Some(last) = last {
+            self.db.set_run_of_seen(id, &source, &last).await?;
+        }
         Ok(())
     }
 

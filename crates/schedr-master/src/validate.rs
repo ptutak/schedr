@@ -100,6 +100,39 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     problems
 }
 
+/// A `trigger=RunOf(...)` (decision 353) starts runs after another DAG's, never before them and
+/// never after its own (a DAG starting itself would run for ever).
+fn run_of_trigger_problems(
+    dag: &Dag,
+    run_of: &schedr_model::task::RunOf,
+    problems: &mut Vec<String>,
+) {
+    if run_of.dag == dag.id {
+        problems.push(format!(
+            "DAG `{}`: its trigger is a run of itself, which would start it for ever",
+            dag.id
+        ));
+    }
+    if let Some(why) = lag_problem(run_of) {
+        problems.push(format!("DAG `{}`: {why}", dag.id));
+    }
+    if run_of.lag_ms.is_some_and(|lag| lag < 0) {
+        problems.push(format!(
+            "DAG `{}`: a RunOf trigger's `lag` can't be negative: a run can't be planned \
+             before the one starting it",
+            dag.id
+        ));
+    }
+}
+
+/// A `RunOf`'s lag over [`schedr_model::task::MAX_LAG_MS`] either way.
+fn lag_problem(run_of: &schedr_model::task::RunOf) -> Option<String> {
+    run_of
+        .lag_ms
+        .filter(|lag| lag.unsigned_abs() > schedr_model::task::MAX_LAG_MS.unsigned_abs())
+        .map(|lag| format!("RunOf's `lag` is at most 10 years either way, got {lag} ms"))
+}
+
 /// A trigger is a sensor with literal arguments, named unlike the DAG's tasks; only where one
 /// starts the runs is there an event to read.
 fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
@@ -109,6 +142,10 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
         ..
     } = &dag.trigger
     else {
+        if let schedr_model::Trigger::RunOf { run_of } = &dag.trigger {
+            run_of_trigger_problems(dag, run_of, problems);
+            return;
+        }
         for task in &dag.tasks {
             let reads = task.references().into_iter().any(|reference| {
                 matches!(
@@ -351,19 +388,34 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
                 ));
             }
         }
-        TaskKind::WaitFor { max_wait_ms, .. } => {
-            if *max_wait_ms == Some(0) {
-                problems.push(format!(
-                    "task `{id}`: wait_for's `max_wait` must be above zero"
-                ));
-            }
-            if mapping::is_mapped(task) {
-                problems.push(format!("task `{id}`: wait_for can't be mapped"));
-            }
-        }
+        TaskKind::WaitFor {
+            max_wait_ms,
+            run_of,
+        } => wait_for_problems(task, run_of, *max_wait_ms, problems),
         TaskKind::Empty | TaskKind::FirstOf { .. } => {}
     }
     in_text
+}
+
+/// What a `wait_for` step (decision 353) can't be.
+fn wait_for_problems(
+    task: &Task,
+    run_of: &schedr_model::task::RunOf,
+    max_wait_ms: Option<u64>,
+    problems: &mut Vec<String>,
+) {
+    let id = &task.id;
+    if let Some(why) = lag_problem(run_of) {
+        problems.push(format!("task `{id}`: {why}"));
+    }
+    if max_wait_ms == Some(0) {
+        problems.push(format!(
+            "task `{id}`: wait_for's `max_wait` must be above zero"
+        ));
+    }
+    if mapping::is_mapped(task) {
+        problems.push(format!("task `{id}`: wait_for can't be mapped"));
+    }
 }
 
 /// The templates inside a value, at any depth.

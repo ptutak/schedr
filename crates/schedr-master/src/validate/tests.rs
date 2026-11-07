@@ -1140,3 +1140,32 @@ fn nothing_is_ordered_before_a_first_of() {
         "{found}"
     );
 }
+
+#[test]
+fn a_run_of_lag_stays_within_ten_years_and_a_trigger_starts_no_dag_by_itself_or_before() {
+    const OVER: i64 = 3_650 * 24 * 3_600_000 + 1;
+    let trigger =
+        |run_of: Json| problems(&json!({"trigger": {"kind": "run_of", "run_of": run_of}}));
+    assert_eq!(
+        trigger(json!({"dag": "orders", "lag_ms": 1000})),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        trigger(json!({"dag": "sync"})),
+        ["DAG `sync`: its trigger is a run of itself, which would start it for ever"]
+    );
+    assert!(trigger(json!({"dag": "orders", "lag_ms": -1}))[0].contains("can't be negative"));
+    assert!(trigger(json!({"dag": "orders", "lag_ms": OVER}))[0].contains("at most 10 years"));
+    let mut wait = task("wait", &json!({}));
+    wait["kind"] = json!("wait_for");
+    wait.as_object_mut().unwrap().remove("arguments");
+    wait["run_of"] = json!({"dag": "orders", "lag_ms": -OVER});
+    let found = problems(&json!({"tasks": [wait], "edges": []}));
+    assert_eq!(
+        found,
+        [format!(
+            "task `wait`: RunOf's `lag` is at most 10 years either way, got {} ms",
+            -OVER
+        )]
+    );
+}

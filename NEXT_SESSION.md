@@ -4,7 +4,7 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-07): M4.11b done (three commits, pushed); M4.11c is next. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
+## State (2026-11-07): M4.11d1 done (two commits, pushed); M4.11d2 is next, its questions first. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
 
 - **M4.11b part 3:** `schedr triggers`, the trigger endpoints, manual runs with an event (`--event`, `--event-key`,
   `--event-data`, `--event-at`), the DAG page's panel, `run_trigger`, `run_dag(event=)`, the example, `docs/02-dags/19-triggers.md`
@@ -20,9 +20,19 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   no worker; value the run's ID, `Failed` routed or a failed step (option B), `TimedOut`), `task_instances.ended_at`, indexes
   `runs_ended` and `task_instances_ended`, `Failed` in Python. Reviews: Codex 6, Grok 6 (4 the same), all fixed but Grok's
   first (a success is enough while a rerun goes: kept, docs say so).
-- **Next, M4.11d1 part 2:** `trigger=RunOf(...)`: a run per succeeded run (or task) ending while the DAG is live, through
-  `event_run` (key the other run's ID), live-since on the `triggers` row, reset on pause; `RunOf` becomes a `Trigger` in
-  Python; `add_event` for these DAGs too. Then d2, the function forms with `RunResult[T]`.
+- **M4.11d1 part 2, committed:** `trigger=RunOf(...)`: a run per succeeded run (or task) ending while the DAG is live, through
+  `event_run` (key the other run's ID, data `{"run_id","dag_id","planned_for"}`); `dags.live_since` set by the database in the
+  statement that pauses, removes, brings back or changes the trigger; a strict cursor (end, run ID) on the `triggers` row tied
+  to its `RunOf`; queue room per pass; `lag` at most 10 years (wait_for too); the UI's dialog asks for the event. Reviews:
+  Codex 6, Grok 6 (3 the same, on the snapshot before Codex's fixes), all fixed.
+- **Next, M4.11d2:** the function forms `@sensor(wait_for=RunOf)` and `@trigger(wait_for=RunOf)` with `RunResult[T]`. Its
+  questions, answered by the user 2026-11-07 (l A, m A, n A, o A): the function runs on a watcher slot, the master handing it
+  each matching run's `RunResult` once it ends; a trigger function sees every run that ends (success, failed, cancelled); it
+  returns `Event[T] | None` (key defaulting to the other run's ID); a raise fails a sensor's attempt (its retries), and counts
+  as a trigger failure that retries the same run (the cursor doesn't move). Record them in decision 353 when building d2.
+- **Before d2: option C (the user's, 2026-11-07):** `wait_for` with `lag` takes only the newest run for that moment (by
+  `triggered_at`); its result decides, a failed newer run gives `Failed` though an older one succeeded. Its own commit.
+- **Reviews one at a time (the user, 2026-11-07):** Codex, fix, then Grok security on the fixed tree.
 - **Questions waiting for the user; number 2 blocks M4.11e, nothing before it:**
   1. Settled by the user: M4.11d, e, f come before M4.12 (`PLAN.md`); a batched run reads `list[Event[T]]` (352).
   2. M4.11e, asked 2026-11-07, Claude's picks: (6) one `event=` word, or `wait_for=EventNamed(...)` like `RunOf`, for `@trigger`

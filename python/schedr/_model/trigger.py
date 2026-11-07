@@ -151,5 +151,33 @@ class EventTrigger:
         return result
 
 
-type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger | EventTrigger
+@dataclass(frozen=True, slots=True)
+class RunOfTrigger:
+    """``trigger=RunOf(...)``: a run per run of another DAG that succeeded (decision 353).
+
+    Attributes:
+        dag: That DAG.
+        task: Its task; ``None``: the whole run.
+        lag_ms: The new run is planned this long after that one; ``None``: when it is seen.
+    """
+
+    dag: str
+    task: str | None = None
+    lag_ms: int | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        """The trigger as DAG JSON.
+
+        Returns:
+            ``{"kind": "run_of", "run_of": {"dag": ...}}``, with what is set.
+        """
+        run_of: dict[str, Any] = {"dag": self.dag}
+        if self.task is not None:
+            run_of["task"] = self.task
+        if self.lag_ms is not None:
+            run_of["lag_ms"] = self.lag_ms
+        return {"kind": "run_of", "run_of": run_of}
+
+
+type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger | EventTrigger | RunOfTrigger
 """Any trigger."""

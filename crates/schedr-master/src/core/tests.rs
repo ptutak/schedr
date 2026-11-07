@@ -2839,3 +2839,186 @@ async fn events_past_the_queue_limit_stop_the_trigger_at_once() {
     assert_eq!(stored.bookmark.as_deref(), Some("b"));
     assert_eq!(stored.stopped_why.as_deref(), Some("back_pressure"));
 }
+
+/// [`dag_file`] with `sync` started by runs of `orders` (`run_of`), and `orders` beside it.
+fn run_of_file(run_of: &serde_json::Value) -> ParsedFile {
+    let mut file = serde_json::to_value(dag_file()).unwrap();
+    let mut orders = file["dags"][0].clone();
+    orders["id"] = json!("orders");
+    orders["max_active_runs"] = json!(5);
+    file["dags"][0]["trigger"] = json!({"kind": "run_of", "run_of": run_of});
+    file["dags"][0]["max_active_runs"] = json!(5);
+    file["dags"].as_array_mut().unwrap().push(orders);
+    serde_json::from_value(file).unwrap()
+}
+
+/// A run of `orders` planned for `planned_for` that succeeded at `ended`.
+async fn orders_succeeded(core: &MasterCore, planned_for: Timestamp, ended: Timestamp) -> String {
+    let orders = DagId::new("orders").unwrap();
+    let version = core
+        .db
+        .stored_dag(&orders)
+        .await
+        .unwrap()
+        .unwrap()
+        .current
+        .unwrap()
+        .version_id;
+    let run_id = core
+        .db
+        .insert_run(&schedr_db::runs::NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
+            event: None,
+            dag_id: &orders,
+            dag_version_id: &version,
+            kind: schedr_model::RunKind::Manual,
+            state: schedr_model::RunState::Running,
+            planned_for,
+            since: planned_for,
+            triggered_at: planned_for,
+            triggered_by: "anna",
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    core.db
+        .finish_run(&run_id, schedr_model::RunState::Success, ended)
+        .await
+        .unwrap();
+    run_id
+}
+
+async fn sync_runs(core: &MasterCore) -> Vec<(Timestamp, schedr_model::RunKind)> {
+    let sync = DagId::new("sync").unwrap();
+    let mut runs: Vec<_> = core
+        .db
+        .dag_runs(&sync, None, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|run| (run.planned_for, run.kind))
+        .collect();
+    runs.sort_by_key(|(at, _)| *at);
+    runs
+}
+
+#[tokio::test]
+async fn a_dag_started_by_runs_of_another_starts_once_for_each_that_succeeds_while_live() {
+    let mut core = with_dag_of(&run_of_file(&json!({"dag": "orders", "lag_ms": 3_600_000}))).await;
+    let sync = DagId::new("sync").unwrap();
+    // Before it is live: not caught up.
+    orders_succeeded(&core, ts("2026-10-20T00:00:00Z"), ts(NOW)).await;
+    for dag in ["sync", "orders"] {
+        core.db
+            .set_paused_at(&DagId::new(dag).unwrap(), false, later(1))
+            .await
+            .unwrap();
+    }
+    core.tick(later(1)).await.unwrap();
+    core.tick(later(2)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 0);
+    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(3)).await;
+    core.tick(later(4)).await.unwrap();
+    core.tick(later(5)).await.unwrap();
+    let runs = sync_runs(&core).await;
+    assert_eq!(runs.len(), 1, "once, however many passes see it");
+    assert_eq!(
+        runs[0].0,
+        ts("2026-10-21T01:00:00Z"),
+        "planned for its own plus lag"
+    );
+    // Paused, what ends meanwhile is never caught up.
+    core.db.set_paused_at(&sync, true, later(6)).await.unwrap();
+    orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(7)).await;
+    core.tick(later(8)).await.unwrap();
+    core.db.set_paused_at(&sync, false, later(9)).await.unwrap();
+    core.tick(later(9)).await.unwrap();
+    core.tick(later(10)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_dag_started_by_runs_of_another_queues_no_more_than_the_limit_in_one_pass() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let settings = Settings {
+        max_queued_events: 2,
+        ..Settings::default()
+    };
+    let mut core = MasterCore::new(db, settings);
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    let file = run_of_file(&json!({"dag": "orders"}));
+    core.upload(upload_of(&job.parse_job_id, &file), ts(NOW))
+        .await
+        .unwrap();
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), false, later(1))
+        .await
+        .unwrap();
+    for day in 21..24 {
+        let planned_for = ts(&format!("2026-10-{day}T00:00:00Z"));
+        orders_succeeded(&core, planned_for, later(2)).await;
+    }
+    core.tick(later(3)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 2, "the limit, not the three");
+}
+
+#[tokio::test]
+async fn a_run_of_a_dag_started_by_another_can_be_run_again_by_hand_with_its_event() {
+    let mut core = with_dag_of(&run_of_file(&json!({"dag": "orders"}))).await;
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), false, later(1))
+        .await
+        .unwrap();
+    let other = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    core.tick(later(3)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 1);
+    let command = schedr_model::commands::Command::TriggerRun {
+        event: Some(schedr_model::commands::AskedEvent::Stored { key: other }),
+        params: None,
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: Some(ts("2026-10-20T00:00:00Z")),
+    };
+    let id = core
+        .db
+        .insert_command(&command, "anna", later(4))
+        .await
+        .unwrap();
+    core.tick(later(5)).await.unwrap();
+    let record = core.db.command(&id).await.unwrap().unwrap();
+    assert_eq!(
+        (record.status, record.reason),
+        (CommandStatus::Applied, None)
+    );
+    assert_eq!(sync_runs(&core).await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_dag_started_by_runs_of_another_starts_once_even_when_the_events_are_gone() {
+    let mut core = with_dag_of(&run_of_file(&json!({"dag": "orders"}))).await;
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), false, later(1))
+        .await
+        .unwrap();
+    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    orders_succeeded(&core, ts("2026-10-20T00:00:00Z"), later(2)).await;
+    core.tick(later(3)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 2);
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let pool = pool.clone();
+    sqlx::query("DELETE FROM events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    core.tick(later(4)).await.unwrap();
+    core.tick(later(5)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 2, "kept events or not");
+}

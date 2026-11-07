@@ -30,10 +30,12 @@ The names used across the documentation, the API and the logs.
 
 **Trigger** (event trigger)
 : A watcher belonging to a DAG that finds events and starts runs for new keys. See
-  [Event triggers](../02-dags/19-triggers.md).
+  [Event triggers](../02-dags/19-triggers.md). A DAG can also use
+  [`RunOf`](../02-dags/21-wait-for.md#starting-a-dag-after-another) to start runs after another DAG succeeds.
 
 **Event**
-: A trigger's finding, identified by a key within its DAG, with data and an optional time.
+: A trigger's finding, or a successful run found by `RunOf`, identified by a key within its DAG,
+  with data and an optional time.
   A new key starts an event run.
 
 **Bookmark**

@@ -568,11 +568,29 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn set_paused(&self, dag_id: &DagId, paused: bool) -> Result<bool, DbError> {
-        const PAUSE: &str = "UPDATE dags SET paused = $1 WHERE dag_id = $2";
+        self.set_paused_at(dag_id, paused, Timestamp::now()).await
+    }
+
+    /// As [`Self::set_paused`], unpausing at `now`: its `live_since` (decision 353) changes in the
+    /// same statement, cleared by a pause, set by an unpause unless it was live already.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_paused_at(
+        &self,
+        dag_id: &DagId,
+        paused: bool,
+        now: Timestamp,
+    ) -> Result<bool, DbError> {
+        const PAUSE: &str = "UPDATE dags SET paused = $1, live_since = CASE WHEN $1 THEN NULL \
+            WHEN removed_at IS NULL AND conflict IS NULL THEN COALESCE(live_since, $3{ts}) END \
+            WHERE dag_id = $2";
         let changed = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, PAUSE))
                 .bind(paused)
                 .bind(dag_id.as_str())
+                .bind(db_time(now))
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -596,13 +614,21 @@ impl Database {
             (id, dag_id, parse_result_id, dag_json, created_at) \
             VALUES ($1{uuid}, $2, $3{uuid}, $4{json}, $5{ts}) \
             ON CONFLICT (dag_id, parse_result_id) DO NOTHING";
+        // `live_since` (decision 353) in the same statement: kept while it stays live with the same
+        // trigger, set when it comes back unpaused or its trigger changes ($5), cleared while it is
+        // paused, in conflict or removed.
+        const OLD_TRIGGER: &str = "SELECT v.dag_json{text} FROM dags d \
+            JOIN dag_versions v ON v.id = d.current_version_id WHERE d.dag_id = $1";
         const CURRENT: &str = "UPDATE dags SET current_version_id = (SELECT id FROM dag_versions \
             WHERE dag_id = $1 AND parse_result_id = $2{uuid}), \
+            live_since = CASE WHEN (paused OR $3) THEN NULL \
+                WHEN removed_at IS NULL AND conflict IS NULL AND NOT $5 \
+                THEN COALESCE(live_since, $4{ts}) ELSE $4{ts} END, \
             removed_at = NULL, conflict = NULL, paused = (paused OR $3) WHERE dag_id = $1";
         const CONFLICT: &str = "UPDATE dags SET conflict = $1{json}, removed_at = NULL, \
-            paused = (paused OR $2) WHERE dag_id = $3";
-        const REMOVE: &str =
-            "UPDATE dags SET removed_at = $1{ts}, conflict = NULL WHERE dag_id = $2";
+            live_since = NULL, paused = (paused OR $2) WHERE dag_id = $3";
+        const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL, \
+            live_since = NULL WHERE dag_id = $2";
         let now = db_time(now);
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for change in changes {
@@ -625,10 +651,24 @@ impl Database {
                             .bind(&now)
                             .execute(&mut *tx)
                             .await?;
+                        let old: Option<(String,)> = sqlx::query_as(sql(backend, OLD_TRIGGER))
+                            .bind(dag.id.as_str())
+                            .fetch_optional(&mut *tx)
+                            .await?;
+                        let new_trigger = old.is_some_and(|(json,)| {
+                            serde_json::from_str::<serde_json::Value>(&json)
+                                .ok()
+                                .and_then(|mut old| {
+                                    old.get_mut("trigger").map(serde_json::Value::take)
+                                })
+                                != serde_json::to_value(&dag.trigger).ok()
+                        });
                         sqlx::query(sql(backend, CURRENT))
                             .bind(dag.id.as_str())
                             .bind(parse_id)
                             .bind(*pause)
+                            .bind(&now)
+                            .bind(new_trigger)
                             .execute(&mut *tx)
                             .await?;
                     }

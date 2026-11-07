@@ -194,6 +194,10 @@ no limit). At the limit, schedr stops the trigger and starts it again from its b
 once no event runs are queued. `[triggers] failing_after` (default 5) sets the consecutive
 failure count at which it is counted as `failing` in the master metric.
 
+The master handles [`RunOf` triggers](../02-dags/21-wait-for.md#starting-a-dag-after-another)
+without a watcher slot. Their queued runs also count against `max_queued_events`; at the limit,
+the master waits for room before looking for more runs.
+
 If a trigger repeatedly gets its watcher host killed, it is switched off like a sensor;
 `schedr sensors switched-off` lists it. Use `schedr triggers switch-on <dag>` to clear its
 strikes, or `schedr triggers restart <dag>` to restart it from its bookmark. If its host is

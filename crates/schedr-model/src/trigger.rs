@@ -70,6 +70,13 @@ pub enum Trigger {
         #[serde(default)]
         end: Option<Timestamp>,
     },
+    /// `trigger=RunOf(...)` (decision 353): a run per run of another DAG (or its task) that
+    /// succeeded while this one is live, planned for that run's `planned_for` plus `lag`, or for
+    /// the moment the master saw it.
+    RunOf {
+        /// Which runs.
+        run_of: crate::task::RunOf,
+    },
 }
 
 /// The longest key an event may have, in bytes: it is stored with every event and sent back as a
@@ -119,13 +126,20 @@ impl Trigger {
         matches!(self, Self::Event { .. })
     }
 
+    /// Whether its runs bring an event: a `@trigger`'s, or the run of another DAG that started
+    /// it (`RunOf`).
+    #[must_use]
+    pub const fn brings_event(&self) -> bool {
+        matches!(self, Self::Event { .. } | Self::RunOf { .. })
+    }
+
     /// Whether missed fire times get runs in order; `false` for triggers without `catchup`
     /// (a single fire time has nothing to catch up on).
     #[must_use]
     pub const fn catchup(&self) -> bool {
         match self {
             Self::Cron { catchup, .. } | Self::Every { catchup, .. } => *catchup,
-            Self::None | Self::Once { .. } | Self::Event { .. } => false,
+            Self::None | Self::Once { .. } | Self::Event { .. } | Self::RunOf { .. } => false,
         }
     }
 
@@ -137,7 +151,7 @@ impl Trigger {
             Self::Cron { start, .. } | Self::Every { start, .. } | Self::Event { start, .. } => {
                 *start
             }
-            Self::None | Self::Once { .. } => None,
+            Self::None | Self::Once { .. } | Self::RunOf { .. } => None,
         }
     }
 
@@ -146,7 +160,7 @@ impl Trigger {
     pub const fn end(&self) -> Option<Timestamp> {
         match self {
             Self::Cron { end, .. } | Self::Every { end, .. } | Self::Event { end, .. } => *end,
-            Self::None | Self::Once { .. } => None,
+            Self::None | Self::Once { .. } | Self::RunOf { .. } => None,
         }
     }
 }

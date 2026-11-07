@@ -36,9 +36,18 @@ SECRETS = {
 }
 
 
-# The event a docs DAG's run brings, when a trigger starts its runs.
+# The event a docs DAG's run brings, by DAG, when a trigger starts its runs.
 EVENTS: dict[str, Event[Any]] = {
-    "event_triggers.py": Event("a.csv", {"path": "/in/a.csv", "size": 3}, at=FOR),
+    "event_triggers": Event("a.csv", {"path": "/in/a.csv", "size": 3}, at=FOR),
+    "tally_orders": Event(
+        "01a1b600-0000-7000-8000-000000000000",
+        {
+            "run_id": "01a1b600-0000-7000-8000-000000000000",
+            "dag_id": "orders",
+            "planned_for": FOR.isoformat(),
+        },
+        at=FOR,
+    ),
 }
 
 
@@ -99,7 +108,7 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
             for_=FOR,
             secrets=SECRETS.get(path.name),
             connections=connections,
-            event=EVENTS.get(path.name),
+            event=EVENTS.get(dag.id),
         )
         assert result.state == "success", dag.id
         ended = [

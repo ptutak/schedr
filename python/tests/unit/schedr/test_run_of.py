@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from schedr import Dag, Failed, RunOf, TimedOut, task, wait_for
+from schedr import Dag, Failed, RunOf, TimedOut, dag_ctx, task, wait_for
 from schedr._model import registry
 
 
@@ -99,3 +99,39 @@ def test_it_says_its_value_failed_and_timed_out_as_its_output_type() -> None:
         wait_for(RunOf("orders"))
     shown = _wait_task()
     assert shown["output_type"]["type"] == "union"
+
+
+def test_as_a_trigger_it_starts_a_run_per_run_of_the_other_dag() -> None:
+    with Dag("report", trigger=RunOf("orders", task="load", lag=timedelta(hours=6))):
+        build(dag_ctx.event.key)
+    (dag,) = registry.take_defined()
+    assert dag.to_json()["trigger"] == {
+        "kind": "run_of",
+        "run_of": {"dag": "orders", "task": "load", "lag_ms": 21_600_000},
+    }
+
+
+def test_a_dag_started_by_its_own_runs_or_before_them_is_refused() -> None:
+    with pytest.raises(ValueError, match="run of itself"), Dag("orders", trigger=RunOf("orders")):
+        pass
+    with (
+        pytest.raises(ValueError, match="can't be negative"),
+        Dag("report", trigger=RunOf("orders", lag=timedelta(hours=-1))),
+    ):
+        pass
+    with pytest.raises(ValueError, match="at most 10 years"):
+        RunOf("orders", lag=timedelta(days=3651))
+    with pytest.raises(ValueError, match="at most 10 years"):
+        RunOf("orders", lag=-timedelta(days=3651))
+    assert RunOf("orders", lag=timedelta(days=3650)).lag_ms == 315_360_000_000
+
+
+def test_a_dag_started_by_runs_reads_which_run_as_its_event() -> None:
+    @task
+    def consume(data: dict[str, str]) -> str:
+        return data["run_id"]
+
+    with Dag("report", trigger=RunOf("orders")):
+        consume(dag_ctx.event.data)
+    (dag,) = registry.take_defined()
+    assert dag.to_json()["trigger"]["kind"] == "run_of"

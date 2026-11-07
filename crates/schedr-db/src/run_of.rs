@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, on_pool, parse_time, sql};
+use crate::query::{db_time, in_tx, on_pool, parse_time, sql};
 
 /// A run of the DAG waited for, as far as the step needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,4 +94,150 @@ impl Database {
         row.map(|(at,)| parse_time("task_instances.ready_at", &at))
             .transpose()
     }
+
+    /// The runs of `dag` (or of its `task`) that succeeded after `after` (or, without it, since
+    /// `since`), oldest first, to `limit`, that haven't started a run of `started` yet
+    /// (decision 353): with each its `planned_for` and when it (or its task) ended. `after` is
+    /// strict, by end and run ID, so a run is never read twice, events kept or not.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn succeeded_since(
+        &self,
+        (dag, task): (&str, Option<&str>),
+        started: &str,
+        from: RunOfFrom<'_>,
+        limit: u32,
+    ) -> Result<Vec<(String, Timestamp, Timestamp)>, DbError> {
+        const RUNS: &str = "SELECT r.id{text}, {ts<}r.planned_for{>ts}, {ts<}r.ended_at{>ts} FROM runs r \
+            WHERE r.dag_id = $1 AND r.state = 'success' AND r.ended_at >= $2{ts} \
+            AND (r.ended_at > $2{ts} OR $5 IS NULL OR r.id > $5{uuid}) \
+            AND NOT EXISTS (SELECT 1 FROM events e WHERE e.dag_id = $3 AND e.key = r.id{text}) \
+            ORDER BY r.ended_at, r.id LIMIT $4";
+        const TASKS: &str = "SELECT r.id{text}, {ts<}r.planned_for{>ts}, {ts<}t.ended_at{>ts} \
+            FROM task_instances t JOIN runs r ON r.id = t.run_id \
+            WHERE t.task_id = $6 AND t.map_index = -1 AND t.state = 'success' \
+            AND t.ended_at >= $2{ts} AND r.dag_id = $1 \
+            AND (t.ended_at > $2{ts} OR $5 IS NULL OR r.id > $5{uuid}) \
+            AND NOT EXISTS (SELECT 1 FROM events e WHERE e.dag_id = $3 AND e.key = r.id{text}) \
+            ORDER BY t.ended_at, r.id LIMIT $4";
+        let (since, after_run) = match from {
+            RunOfFrom::Since(at) => (at, None),
+            RunOfFrom::After(seen) => (seen.at, Some(seen.run.as_str())),
+        };
+        let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
+            let mut statement =
+                sqlx::query_as(sql(backend, if task.is_some() { TASKS } else { RUNS }))
+                    .bind(dag)
+                    .bind(db_time(since))
+                    .bind(started)
+                    .bind(i64::from(limit))
+                    .bind(after_run);
+            if let Some(task) = task {
+                statement = statement.bind(task);
+            }
+            statement.fetch_all(pool).await?
+        });
+        rows.into_iter()
+            .map(|(id, at, ended)| {
+                Ok::<_, DbError>((
+                    id,
+                    parse_time("runs.planned_for", &at)?,
+                    parse_time("ended_at", &ended)?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Since when a DAG has been live: unpaused and defined without a break (decision 353).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored time doesn't read.
+    pub async fn live_since(&self, dag: &str) -> Result<Option<Timestamp>, DbError> {
+        const SINCE: &str =
+            "SELECT {ts<}live_since{>ts} FROM dags WHERE dag_id = $1 AND live_since IS NOT NULL";
+        let row: Option<(String,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, SINCE))
+                .bind(dag)
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(|(at,)| parse_time("dags.live_since", &at))
+            .transpose()
+    }
+
+    /// How far a `trigger=RunOf(...)` reading `source` has looked: the last run it started one
+    /// for. A cursor of another source (the trigger changed) counts as none.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored time doesn't read.
+    pub async fn run_of_seen(&self, dag: &str, source: &str) -> Result<Option<RunOfSeen>, DbError> {
+        const SEEN: &str = "SELECT {ts<}run_of_seen_at{>ts}, run_of_seen_run FROM triggers \
+            WHERE dag_id = $1 AND run_of_source = $2 AND run_of_seen_at IS NOT NULL \
+            AND run_of_seen_run IS NOT NULL";
+        let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, SEEN))
+                .bind(dag)
+                .bind(source)
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(|(at, run)| {
+            Ok(RunOfSeen {
+                at: parse_time("triggers.run_of_seen_at", &at)?,
+                run,
+            })
+        })
+        .transpose()
+    }
+
+    /// Records the last run a `trigger=RunOf(...)` reading `source` started one for, on its
+    /// `triggers` row.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_run_of_seen(
+        &self,
+        dag: &str,
+        source: &str,
+        seen: &RunOfSeen,
+    ) -> Result<(), DbError> {
+        const SET: &str = "INSERT INTO triggers \
+            (dag_id, failures, run_of_source, run_of_seen_at, run_of_seen_run) \
+            VALUES ($1, 0, $2, $3{ts}, $4) ON CONFLICT (dag_id) DO UPDATE SET \
+            run_of_source = excluded.run_of_source, run_of_seen_at = excluded.run_of_seen_at, \
+            run_of_seen_run = excluded.run_of_seen_run";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(dag)
+                .bind(source)
+                .bind(db_time(seen.at))
+                .bind(&seen.run)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+}
+
+/// The last run a `trigger=RunOf(...)` started one for: when it (or its task) ended, and its ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOfSeen {
+    /// When it (or its task) ended.
+    pub at: Timestamp,
+    /// Its run ID.
+    pub run: String,
+}
+
+/// Where a pass of `trigger=RunOf(...)` reads from.
+#[derive(Debug, Clone, Copy)]
+pub enum RunOfFrom<'a> {
+    /// From this moment on, inclusive: when the DAG became live.
+    Since(Timestamp),
+    /// Strictly after this run.
+    After(&'a RunOfSeen),
 }

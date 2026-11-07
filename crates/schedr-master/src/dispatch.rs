@@ -2624,7 +2624,7 @@ impl Dispatcher {
         ready: &ReadyInstance,
         message: &mut pb::AssignTask,
     ) -> Result<(), DispatchError> {
-        if !ready.dag.trigger.is_event() {
+        if !ready.dag.trigger.brings_event() {
             return Ok(());
         }
         if let (Some(run), Some(event)) =

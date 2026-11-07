@@ -463,3 +463,80 @@ async fn a_files_script_roots_are_stored_and_read_back_with_it() {
     let stored = read.iter().find(|f| f.path == asked[0].path).unwrap();
     assert_eq!(stored.script_roots, ["etl-scripts", "ml-scripts"]);
 }
+
+#[tokio::test]
+async fn a_dag_is_live_since_it_last_came_on_and_never_while_paused_removed_or_in_conflict() {
+    let db = migrated().await;
+    let parse_id = store_parse(&db, "sha256:a", &files()).await;
+    let define = |pause| DagChange::Define {
+        dag: Box::new(dag("sync", "sync.py")),
+        parse_id: parse_id.clone(),
+        pause,
+    };
+    let at = |seconds: i64| {
+        now()
+            .checked_add(jiff::SignedDuration::from_secs(seconds))
+            .unwrap()
+    };
+    db.apply_dag_changes(&[define(false)], at(0)).await.unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), None, "new is paused");
+    db.set_paused_at(&id("sync"), false, at(1)).await.unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), Some(at(1)));
+    db.apply_dag_changes(&[define(false)], at(2)).await.unwrap();
+    db.set_paused_at(&id("sync"), false, at(3)).await.unwrap();
+    assert_eq!(
+        db.live_since("sync").await.unwrap(),
+        Some(at(1)),
+        "a new version or unpausing again keeps it"
+    );
+    db.set_paused_at(&id("sync"), true, at(4)).await.unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), None);
+    db.set_paused_at(&id("sync"), false, at(5)).await.unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), Some(at(5)));
+    db.apply_dag_changes(&[DagChange::Remove { dag_id: id("sync") }], at(6))
+        .await
+        .unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), None);
+    db.set_paused_at(&id("sync"), true, at(7)).await.unwrap();
+    db.set_paused_at(&id("sync"), false, at(8)).await.unwrap();
+    assert_eq!(
+        db.live_since("sync").await.unwrap(),
+        None,
+        "unpaused while removed"
+    );
+    db.apply_dag_changes(&[define(false)], at(9)).await.unwrap();
+    assert_eq!(
+        db.live_since("sync").await.unwrap(),
+        Some(at(9)),
+        "back, from its return"
+    );
+    db.apply_dag_changes(
+        &[DagChange::Conflict {
+            dag_id: id("sync"),
+            places: vec![place("a.py"), place("b.py")],
+            pause: false,
+        }],
+        at(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), None);
+    db.apply_dag_changes(&[define(false)], at(11))
+        .await
+        .unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), Some(at(11)));
+    let mut other = dag("sync", "sync.py");
+    other.trigger =
+        serde_json::from_value(json!({"kind": "run_of", "run_of": {"dag": "orders"}})).unwrap();
+    let changed = DagChange::Define {
+        dag: Box::new(other),
+        parse_id: store_parse(&db, "sha256:b", &files()).await,
+        pause: false,
+    };
+    db.apply_dag_changes(&[changed], at(12)).await.unwrap();
+    assert_eq!(
+        db.live_since("sync").await.unwrap(),
+        Some(at(12)),
+        "another trigger is live from now"
+    );
+}

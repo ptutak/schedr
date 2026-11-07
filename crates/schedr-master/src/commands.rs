@@ -344,7 +344,7 @@ impl Commander {
                 dag_id,
                 cancel_runs,
             } => {
-                if !self.db.set_paused(dag_id, true).await? {
+                if !self.db.set_paused_at(dag_id, true, now).await? {
                     return Ok(no_dag(dag_id));
                 }
                 let mut cancelled = Vec::new();
@@ -357,7 +357,7 @@ impl Commander {
                 Ok(Outcome::Applied(json!({"cancelled_runs": cancelled})))
             }
             Command::UnpauseDag { dag_id } => {
-                if !self.db.set_paused(dag_id, false).await? {
+                if !self.db.set_paused_at(dag_id, false, now).await? {
                     return Ok(no_dag(dag_id));
                 }
                 Ok(Outcome::Applied(json!({})))

@@ -8,20 +8,27 @@ from typing import TYPE_CHECKING
 
 from schedr import _build
 from schedr import outcomes as _outcomes
-from schedr._model import ScalarType, WaitForKind, validate_dag_id, validate_task_id
+from schedr._model import RunOfTrigger, ScalarType, WaitForKind, validate_dag_id, validate_task_id
 from schedr._serialization.describe import describe
 from schedr.tasks import Output
+from schedr.triggers import Trigger
 
 if TYPE_CHECKING:
     from schedr.outcomes import Waited
 
+MAX_LAG = timedelta(days=3650)
+"""The longest ``lag``, either way: 10 years (the master's ``MAX_LAG_MS``)."""
+
 
 @dataclass(frozen=True, slots=True)
-class RunOf:
-    """Which run of another DAG to wait for, and of it which task.
+class RunOf(Trigger):
+    """Which run of another DAG to wait for, or, as a DAG's trigger, which runs start one of it.
 
     ``RunOf("orders")`` is the next run of ``orders`` to end; ``RunOf("orders", task="load",
-    lag=timedelta(hours=6))`` is the ``load`` of the run planned six hours before this one.
+    lag=timedelta(hours=6))`` is the ``load`` of the run planned six hours before this one. As
+    ``Dag("report", trigger=RunOf("orders", lag=timedelta(hours=6)))``, each run of ``orders``
+    that succeeds starts one of ``report``, planned six hours after it (without ``lag``, for the
+    moment it is seen); only those ending while ``report`` is live count, none caught up.
 
     Attributes:
         dag: The DAG's ID.
@@ -38,18 +45,33 @@ class RunOf:
         """Checks the IDs and the lag.
 
         Raises:
-            ValueError: For a lag that isn't whole milliseconds.
+            ValueError: For a lag that isn't whole milliseconds, or over 10 years.
         """
         validate_dag_id(self.dag)
         if self.task is not None:
             validate_task_id(self.task)
         if self.lag is not None and self.lag % timedelta(milliseconds=1):
             raise ValueError(f"RunOf: `lag` is whole milliseconds, got {self.lag}")
+        if self.lag is not None and abs(self.lag) > MAX_LAG:
+            raise ValueError(f"RunOf: `lag` is at most 10 years either way, got {self.lag}")
 
     @property
     def lag_ms(self) -> int | None:
         """The lag in milliseconds, as stored."""
         return None if self.lag is None else self.lag // timedelta(milliseconds=1)
+
+    def to_model(self) -> RunOfTrigger:
+        """The trigger in DAG JSON.
+
+        Returns:
+            Its model.
+
+        Raises:
+            ValueError: For a negative lag: a run can't be planned before the one starting it.
+        """
+        if self.lag is not None and self.lag < timedelta(0):
+            raise ValueError(f"RunOf as a trigger: `lag` can't be negative, got {self.lag}")
+        return RunOfTrigger(self.dag, self.task, self.lag_ms)
 
 
 def _free_id(builder: _build.DagBuilder, run_of: RunOf) -> str:

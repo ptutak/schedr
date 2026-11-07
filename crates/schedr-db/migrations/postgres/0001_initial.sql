@@ -108,7 +108,10 @@ CREATE TABLE dags (
     first_seen_at      TIMESTAMPTZ NOT NULL,
     removed_at         TIMESTAMPTZ,
     -- Set while the DAG ID is defined in more than one place: a JSON array of {root, path}.
-    conflict           JSONB
+    conflict           JSONB,
+    -- Since when it has been unpaused and defined, without a break: a `trigger=RunOf(...)` counts
+    -- only runs ending from then on (decision 353). Kept with the change, in the same statement.
+    live_since         TIMESTAMPTZ
 );
 
 -- What triggers found (M4.11b): one row per key, as a key seen before starts no run. Old ones go
@@ -148,7 +151,12 @@ CREATE TABLE triggers (
     started_at   TIMESTAMPTZ,
     last_event_at TIMESTAMPTZ,
     last_restart_at TIMESTAMPTZ,
-    last_poked_at TIMESTAMPTZ
+    last_poked_at TIMESTAMPTZ,
+    -- `trigger=RunOf(...)` (decision 353): the source it read, and the end and run ID of the last
+    -- run it started one for; a pass reads only what ended after.
+    run_of_source TEXT,
+    run_of_seen_at TIMESTAMPTZ,
+    run_of_seen_run TEXT
 );
 
 -- A wait step that got its host killed (decision 338): gone at its next success.

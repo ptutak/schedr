@@ -3,7 +3,8 @@
 `wait_for(RunOf(...))` is a step the master ends when that run's `load` has ended: no process, no
 slot, no polling. Its value is that run's ID. `.on(Failed)` handles a run that didn't succeed;
 without it the step fails, and the run with it. Run alone, as `dags test` does, `report` finds no
-`orders` run and its wait runs out: `TimedOut`, which `late` handles.
+`orders` run and its wait runs out: `TimedOut`, which `late` handles. `tally_orders` is started by
+each run of `orders` that succeeds.
 """
 
 from datetime import timedelta
@@ -38,6 +39,17 @@ def late(timed_out: TimedOut) -> str:
 
 with Dag("orders"):
     load()
+
+
+@task
+def tally() -> str:
+    """Counts the day's orders once they are loaded."""
+    return "tallied"
+
+
+# A run of `tally_orders` for each run of `orders` that succeeds, planned for the same moment.
+with Dag("tally_orders", trigger=RunOf("orders", lag=timedelta(0))):
+    tally()
 
 with Dag("report"):
     loaded = wait_for(RunOf("orders", task="load", lag=timedelta(0)), max_wait=timedelta(seconds=3))

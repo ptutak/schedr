@@ -40,6 +40,7 @@ from schedr._model.trigger import (
     EveryTrigger,
     NoTrigger,
     OnceTrigger,
+    RunOfTrigger,
     Trigger,
 )
 from schedr._model.types import (
@@ -118,6 +119,7 @@ __all__ = [
     "Reference",
     "Resource",
     "ResourceRole",
+    "RunOfTrigger",
     "ScalarType",
     "SchedrVersion",
     "ScriptKind",

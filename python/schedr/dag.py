@@ -18,10 +18,12 @@ from schedr._model import (
     DagCtxRef,
     Group,
     NoTrigger,
+    RunOfTrigger,
     parse_moment,
     registry,
     validate_dag_id,
 )
+from schedr._serialization.describe import describe
 from schedr.event_triggers import EventTrigger
 from schedr.outcomes import RunIf
 from schedr.runner.sources import IMPORTING
@@ -189,6 +191,9 @@ class Dag:
         self._builder = _build.DagBuilder(self.dag_id, self.defaults.options())
         if isinstance(self.trigger, EventTrigger):
             self._builder.event_data = self.trigger.function.data_type()
+        elif self.trigger is not None and isinstance(self.trigger.to_model(), RunOfTrigger):
+            # The run that started it: `{"run_id", "dag_id", "planned_for"}` (decision 353).
+            self._builder.event_data = describe(dict[str, str])
         if self._params is not None:
             self._builder.params_class = self.params
             self._builder.params_type = self._params.type_desc
@@ -244,12 +249,18 @@ class Dag:
         builder.check_nones()
         self._check_since(builder)
         self._check_event(builder)
+        trigger = NoTrigger() if self.trigger is None else self.trigger.to_model()
+        if isinstance(trigger, RunOfTrigger) and trigger.dag == self.dag_id:
+            raise ValueError(
+                f"DAG `{self.dag_id}`: its trigger is a run of itself, which would start it "
+                "for ever"
+            )
         self.model = DagModel(
             id=self.dag_id,
             location=self._location,
             tasks=list(builder.tasks.values()),
             edges=list(builder.edges),
-            trigger=NoTrigger() if self.trigger is None else self.trigger.to_model(),
+            trigger=trigger,
             initial_since=self.initial_since,
             max_active_runs=self.max_active_runs,
             max_active_tasks=self.max_active_tasks,
@@ -280,6 +291,8 @@ class Dag:
                 )
             builder.functions[name] = self.trigger.function.fn
             return
+        if self.trigger is not None and isinstance(self.trigger.to_model(), RunOfTrigger):
+            return  # its runs bring the run that started them as their event
         fields = {DagCtxField.EVENT_KEY, DagCtxField.EVENT_DATA, DagCtxField.EVENT_AT}
         for task in builder.tasks.values():
             if {DagCtxRef(field) for field in fields} & set(task.references()):

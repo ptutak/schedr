@@ -3,6 +3,8 @@
 This page follows one manual run of a two-task DAG `sync` (`extract` → `load`) from the CLI to
 its result. A scheduled run goes the same way, except that the scheduler creates it in step 3
 with the DAG's default parameters, instead of a command.
+A [`RunOf` trigger](../02-dags/21-wait-for.md#starting-a-dag-after-another) starts a run
+when another DAG's run or task succeeds; the new run carries an event identifying it.
 
 ```mermaid
 sequenceDiagram
@@ -77,7 +79,8 @@ A DAG whose file fails to import, other than a timeout or a runner that died, is
 scheduler creates no run of it, a fire time during the hold is missed as while it is paused,
 and a queued run is not started. A run that has already started is not cancelled. A timeout
 or a runner that died holds nothing: the file is parsed again.
-[Parsing](06-parsing.md#a-held-dag) is the whole of it.
+[Parsing](06-parsing.md#a-held-dag) is the whole of it. A `RunOf` trigger waits through a
+hold and resumes looking when the hold clears.
 
 ## 4. The same round dispatches
 

@@ -1884,3 +1884,83 @@ async fn a_trigger_s_events_and_bookmark_are_stored() {
     assert_eq!(ended.not_before, Some(ts(NOW)));
     assert_eq!(ended.bookmark.as_deref(), Some("a"));
 }
+
+#[tokio::test]
+async fn the_runs_of_another_dag_are_found_after_a_cursor_on_postgres() {
+    use schedr_db::run_of::{Matching, RunOfFrom, RunOfSeen};
+    let (db, run_id) = with_instances().await;
+    let ended = ts("2026-10-21T08:30:00Z");
+    db.update_instances(
+        &run_id,
+        &[plain_update("extract", TaskInstanceState::Success)],
+        ended,
+    )
+    .await
+    .unwrap();
+    db.finish_run(&run_id, RunState::Success, ended)
+        .await
+        .unwrap();
+    let before = ts("2026-10-21T00:00:00Z");
+    for task in [None, Some("extract")] {
+        let found = db
+            .runs_of("sync", task, Matching::EndedAfter(before))
+            .await
+            .unwrap();
+        assert_eq!(
+            (found.len(), found[0].run_id.as_str()),
+            (1, run_id.as_str())
+        );
+        let planned = db
+            .runs_of(
+                "sync",
+                task,
+                Matching::PlannedFor(ts("2026-10-21T07:00:00Z")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(planned.len(), 1);
+        let since = db
+            .succeeded_since(("sync", task), "sync", RunOfFrom::Since(before), 10)
+            .await
+            .unwrap();
+        assert_eq!(since.len(), 1, "{task:?}");
+        assert_eq!(since[0].0, run_id);
+        let seen = RunOfSeen {
+            at: since[0].2,
+            run: run_id.clone(),
+        };
+        let after = db
+            .succeeded_since(("sync", task), "sync", RunOfFrom::After(&seen), 10)
+            .await
+            .unwrap();
+        assert_eq!(after, [], "strictly after");
+        let earlier = RunOfSeen {
+            at: since[0].2,
+            run: "00000000-0000-0000-0000-000000000000".to_owned(),
+        };
+        let tie = db
+            .succeeded_since(("sync", task), "sync", RunOfFrom::After(&earlier), 10)
+            .await
+            .unwrap();
+        assert_eq!(tie.len(), 1, "the same end, a later run ID");
+    }
+    let seen = RunOfSeen {
+        at: ended,
+        run: run_id.clone(),
+    };
+    db.set_run_of_seen("sync", r#"{"dag":"orders"}"#, &seen)
+        .await
+        .unwrap();
+    assert_eq!(
+        db.run_of_seen("sync", r#"{"dag":"orders"}"#).await.unwrap(),
+        Some(seen)
+    );
+    assert_eq!(
+        db.run_of_seen("sync", r#"{"dag":"other"}"#).await.unwrap(),
+        None
+    );
+    db.set_paused_at(&sync(), true, ts(NOW)).await.unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), None);
+    db.set_paused_at(&sync(), false, ended).await.unwrap();
+    assert_eq!(db.live_since("sync").await.unwrap(), Some(ended));
+}

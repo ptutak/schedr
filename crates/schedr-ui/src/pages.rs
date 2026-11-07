@@ -104,6 +104,14 @@ async fn switched_off_in<T: Transport>(
     (switched_off, why)
 }
 
+/// Whether a manual run of the DAG brings an event: an event trigger's or a `RunOf`'s
+/// (decision 353).
+fn takes_event(dag: &DagView) -> bool {
+    dag.trigger
+        .as_ref()
+        .is_some_and(|trigger| matches!(trigger["kind"].as_str(), Some("event" | "run_of")))
+}
+
 /// Its trigger, for a DAG a trigger starts.
 async fn dag_trigger_panel<T: Transport>(
     page: &Page,
@@ -429,7 +437,7 @@ pub async fn dag<T: Transport>(
         switched_off_in(&page, deployment, &dag.dag_id).await;
     let trigger = dag_trigger_panel(&page, deployment, &dag).await;
     let params_html = match TriggerParams::of(&dag.params).render() {
-        Ok(html) if trigger.is_some() => format!("{html}{EVENT_FIELDS}"),
+        Ok(html) if takes_event(&dag) => format!("{html}{EVENT_FIELDS}"),
         Ok(html) => html,
         Err(error) => {
             return error_page(
