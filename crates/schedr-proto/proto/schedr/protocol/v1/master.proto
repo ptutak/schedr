@@ -45,6 +45,7 @@ message WorkerMessage {
     HandlesAdded handles_added = 12;
     TriggerEvent trigger_event = 13;
     TriggerStopped trigger_stopped = 14;
+    TriggerPoked trigger_poked = 15;
   }
 }
 
@@ -61,12 +62,26 @@ message TriggerEvent {
 }
 
 // A trigger ended on this worker: it raised, its generator returned, or it was stopped.
+// How a poke trigger's calls have gone: sent when that changes, and with a heartbeat if not.
+message TriggerPoked {
+  string dag_id = 1;
+  string instance_id = 2;
+  google.protobuf.Timestamp at = 3;
+  // Why the last call failed; "" when it went well.
+  string error = 4;
+  // Its failures in a row.
+  uint32 failures = 5;
+}
+
 message TriggerStopped {
   string dag_id = 4;
   string instance_id = 1;
   // "" when it was asked to stop.
   string error_kind = 2;
   string message = 3;
+  // It got its host killed: counted as a sensor's strike, on the code it ran.
+  bool struck = 5;
+  string code_hash = 6;
 }
 
 enum RootKind {
@@ -331,6 +346,8 @@ message AssignTrigger {
   uint64 cancel_grace_ms = 7;
   // The connections of its root, as on `AssignTask`.
   bytes connections_json = 8;
+  // Its errors in a row so far: a poke's next report goes on from them.
+  uint32 failures = 9;
 }
 
 message CancelTrigger {

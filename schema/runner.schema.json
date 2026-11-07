@@ -2030,6 +2030,27 @@
         },
         {
           "additionalProperties": false,
+          "description": "A poke trigger's call ended; `error` is why it failed. Nothing answers it.",
+          "properties": {
+            "error": {
+              "description": "Why the call failed.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "trigger_poked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "A watcher host is there, its event loop held or not, and how it is doing.",
           "properties": {
             "loop_lag_ms": {

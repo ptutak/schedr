@@ -6847,6 +6847,20 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   what breaks that fails the trigger with `event_refused`. Blocking triggers are stopped as sensors are
   (`[watchers] switch_off_after`, the user's). Not chosen: a table of attempts for triggers (nothing about a
   trigger's life is a try of anything), and a process of their own (a trigger is a wait step: decision 334).
+- **How a trigger goes on, and when it doesn't** (decision 349, Claude's within what this section says, 2026-11-07;
+  built in M4.11b): a poke's raise, or a call past `every`, tells the worker, which keeps the failures in a row and the
+  last error and tells the master when that changes, otherwise with a heartbeat (so a poke every 100 ms is no write
+  every 100 ms); its bookmark stays and the next call comes. A generator's return is `trigger_returned`, stopped until
+  its version or code changes. At `[triggers] max_queued_events` queued event runs (0: no limit) it is stopped and
+  starts again once none is queued. `restart_if_idle` stops a generator with no event for that long, and it starts
+  again at once. Its host killed for another watcher: it starts again from the bookmark, with the wait, rather than
+  from what it was given. A strike is as a sensor's (decision 338), in the same table by the function's name; an event,
+  or a poke's call that went well, clears it. A trigger told to stop keeps its watcher slot on the master's count until
+  its worker says it ended, as the worker counts it, and what it ended with still counts; one that ended while the
+  master was away is told on the next stream, on which it is still listed as running. A new instance goes on from the
+  errors in a row the last one left. `[triggers] failing_after` makes it `failing` in `master_triggers`, on its
+  status (M4.11b part 3), and for `TRIGGER_FAILING` once notifications exist (none are built yet; their `Event` enum
+  will need another name, `Event` is what a trigger yields).
 - **`first_of`: acting on the first of several, in the graph** (decision 347, the user's, 2026-11-07; built
   in M4.11c): `first_of(a.on(str), b.on(str)) >> fast_report` is a node the master ends, as it does
   `empty`: no Python, no slot, no polling. It ends as soon as one edge is taken, with that value and the

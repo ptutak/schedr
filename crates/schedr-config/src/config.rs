@@ -318,6 +318,27 @@ impl Default for WatchersSection {
     }
 }
 
+/// `[triggers]`: event triggers (`@trigger`, `@trigger.poke`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TriggersSection {
+    /// How many queued event runs a DAG may have before its trigger is stopped. It starts again
+    /// from its bookmark once they have all started: the events wait in the source, not in
+    /// schedr's database.
+    pub max_queued_events: u32,
+    /// How many errors in a row make a trigger `failing`.
+    pub failing_after: u32,
+}
+
+impl Default for TriggersSection {
+    fn default() -> Self {
+        Self {
+            max_queued_events: 1000,
+            failing_after: 5,
+        }
+    }
+}
+
 /// `[sensors]`: wait steps (`@sensor`, `@sensor.poke`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -371,6 +392,8 @@ pub struct Config {
     pub watchers: WatchersSection,
     /// `[sensors]`.
     pub sensors: SensorsSection,
+    /// Event triggers.
+    pub triggers: TriggersSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).

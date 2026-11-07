@@ -41,6 +41,8 @@ fn every_metric_is_registered_as_documented() {
         .inc();
     metrics.set_dags(3, 600, 2);
     metrics.dag_woken("timer");
+    metrics.set_triggers(crate::metrics::TriggerCounts::default());
+    metrics.trigger_event(true);
     let out = text(&metrics);
     assert_eq!(
         scrape_mismatches(&out, Some("schedr"), METRICS),

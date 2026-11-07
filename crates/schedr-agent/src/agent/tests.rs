@@ -71,7 +71,7 @@ impl Executor for Fake {
         // A trigger says what it found, from what it was told, and ends as its name says.
         if let Some((start, sink)) = &spec.trigger {
             let after = start.after.clone().unwrap_or_default();
-            drop((sink.0)(crate::watchers::FoundEvent {
+            drop((sink.found)(crate::watchers::FoundEvent {
                 key: format!("after-{after}"),
                 data: json!(1),
                 at: Some(jiff::Timestamp::UNIX_EPOCH),
@@ -83,6 +83,7 @@ impl Executor for Fake {
                 self.stops.lock().unwrap().push(reason);
                 (pb::AttemptStatus::Cancelled, "")
             };
+            (sink.poked)(Some("ValueError: not now".to_owned()));
             return pb::Finished {
                 attempt_id: spec.attempt_id,
                 status: status.into(),
@@ -804,6 +805,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
             worker_message::Message::Heartbeat(_) | worker_message::Message::Warnings(_) => None,
             worker_message::Message::TriggerEvent(_) => Some("trigger event"),
             worker_message::Message::TriggerStopped(_) => Some("trigger stopped"),
+            worker_message::Message::TriggerPoked(_) => Some("trigger poked"),
             worker_message::Message::CodeVersionChanged(_) => Some("code"),
             worker_message::Message::Started(_) => Some("started"),
             worker_message::Message::TaskEnded(_) => Some("task ended"),

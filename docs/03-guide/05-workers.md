@@ -230,14 +230,27 @@ previous event's `planned_for`. Event runs queue like manual runs when the DAG i
 Plain manual runs of an event-triggered DAG are refused for now.
 
 Use `new_files(...).override(queue=..., restart_if_idle=..., start=..., end=...)` to select
-the worker queue, restart after a period without events, or limit when the trigger runs.
-`restart_if_idle` takes a positive `timedelta`; it is off by default. `start` and `end`
+the worker queue, restart a generator after a period without events, or limit when the trigger runs.
+`restart_if_idle` takes a positive `timedelta`; it is off by default. It applies only to
+generators; a poke needs no idle restart. `start` and `end`
 bound the trigger's activity, with naive times read in UTC.
 
 Pausing the DAG stops its trigger; unpausing starts it from the bookmark. A new DAG version
 or code, a worker drain, or a lost worker also moves or restarts it from the bookmark. A
 failure restarts it after 5 seconds, doubling the wait up to 5 minutes. A generator that
-returns or a poke that raises counts as a failure.
+returns stops with `trigger_returned` until a new DAG version or new code. If a poke raises
+or takes longer than `every`, it keeps its bookmark and its next call comes on time. Its
+last error and consecutive failure count are kept on its status; a successful call clears
+the count.
+
+`[triggers] max_queued_events` limits queued event runs per trigger (default 1000; 0 means
+no limit). At the limit, schedr stops the trigger and starts it again from its bookmark
+once no event runs are queued. `[triggers] failing_after` (default 5) sets the consecutive
+failure count at which the trigger is counted as `failing` in the master metric.
+
+If a trigger repeatedly gets its watcher host killed, it is switched off like a sensor;
+`schedr sensors switched-off` lists it. If its host is killed for another watcher, it
+restarts from its bookmark after the wait. See [switched-off wait steps](../02-dags/18-sensors.md).
 
 Keys must be 1 to 1024 UTF-8 bytes and contain no NUL. Event data is limited by
 `max_output_size` (1 MiB by default). Secrets are masked in events, subject to the same masking rules as task

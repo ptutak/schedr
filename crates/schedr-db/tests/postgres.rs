@@ -1836,6 +1836,7 @@ async fn a_trigger_s_events_and_bookmark_are_stored() {
         "w1",
         &version,
         "h1",
+        ts(NOW),
     )
     .await
     .unwrap();

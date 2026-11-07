@@ -316,6 +316,12 @@ pub enum RunnerMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<jiff::Timestamp>,
     },
+    /// A poke trigger's call ended; `error` is why it failed. Nothing answers it.
+    TriggerPoked {
+        /// Why the call failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// A watcher host is there, its event loop held or not, and how it is doing.
     HostAlive {
         /// Its process's threads.

@@ -108,9 +108,16 @@ async fn a_new_key_starts_a_run_a_repeat_doesnt_and_either_is_the_bookmark() {
 #[tokio::test]
 async fn only_the_run_of_a_trigger_it_names_is_ended() {
     let (db, dag, version) = with_dag().await;
-    db.trigger_assigned(dag.as_str(), "new", "w1", &version, "h1")
-        .await
-        .unwrap();
+    db.trigger_assigned(
+        dag.as_str(),
+        "new",
+        "w1",
+        &version,
+        "h1",
+        ts("2026-10-14T02:00:00Z"),
+    )
+    .await
+    .unwrap();
     let later = ts("2026-10-14T03:00:00Z");
     assert!(
         !db.trigger_ended(dag.as_str(), "old", Some("boom"), Some(later))

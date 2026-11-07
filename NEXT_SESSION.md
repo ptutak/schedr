@@ -9,9 +9,12 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 - **M4.11b part 1:** `@trigger`, `@trigger.poke`, `Event`, `dag_ctx.event`, tables `events` and `triggers`, event runs, the
   master's placing and stopping (`crates/schedr-master/src/core/triggers.rs`), decision 348. Reviews: Codex 6 (5 fixed; the
   switch-off belongs to part 2), Grok 4 (all fixed).
-- **Next, part 2:** restarts, `[triggers] max_queued_events`, `failing_after`, a poke's raise not stopping it, a returned generator
-  staying stopped, switch-off as sensors (`struck` on `TriggerStopped`), `restart_if_idle`, metrics. **Part 3:** CLI, API, UI,
-  `run_trigger`, `run_dag(event=)`, `--event`, retention, `TRIGGER_FAILING`, the example DAG (draft in the session's scratchpad).
+- **M4.11b part 2, committed:** a poke's errors don't stop it, a returned generator stays stopped, `[triggers]
+  max_queued_events` and `failing_after`, `restart_if_idle`, switch-off as sensors, metrics (decision 349). Reviews: Codex 7 and
+  Grok 1 (the same as Codex's first), all fixed. For the user to know: notifications aren't built, so `TRIGGER_FAILING` has
+  nothing to go through; and their planned `Event` enum needs another name, `Event` is what a trigger yields.
+- **Next, part 3:** CLI, API, UI, `run_trigger`, `run_dag(event=)`, `--event`, retention, the example DAG (draft in the session's
+  scratchpad), and a page in `docs/02-dags`.
   **Then M4.11c:** `first_of` (decision 347); `sensors_demo` drops its third sensor.
 
 ## Earlier (2026-11-07): M4.11a4 done (two commits, part 2 pushed when green, as the user pre-accepted); M4.11b is next

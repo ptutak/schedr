@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from schedr import Dag, Event, Every, dag_ctx, task, trigger
-from schedr.runner.waiting import PokeTooSlowError, run_trigger
+from schedr.runner.waiting import run_trigger
 from schedr.triggers import Trigger
 
 
@@ -138,6 +138,10 @@ def test_the_datas_type_is_checked_against_the_parameter() -> None:
         _define(yields(), lambda: reads(dag_ctx.event.data))
 
 
+def _no_poke(error: str | None) -> None:
+    raise AssertionError(error)
+
+
 def test_a_generator_tells_what_it_yields_in_order_and_starts_after_the_bookmark() -> None:
     told: list[str] = []
 
@@ -148,47 +152,76 @@ def test_a_generator_tells_what_it_yields_in_order_and_starts_after_the_bookmark
         for i in range(n):
             yield Event(f"{after}-{i}", i)
 
-    asyncio.run(run_trigger(gives, {"n": 3}, {}, "b", tell))
+    asyncio.run(run_trigger(gives, {"n": 3}, {}, "b", tell, _no_poke))
     assert told == ["b-0", "b-1", "b-2"]
 
 
-def test_a_poke_is_called_again_from_the_last_key_told() -> None:
+class _Enough(BaseException):
+    """Ends a poke's calls."""
+
+
+def _poking(function: Callable[..., object], calls: int = 3) -> tuple[list[str], list[str | None]]:
     told: list[str] = []
-    seen: list[str | None] = []
+    poked: list[str | None] = []
 
     async def tell(event: Event[object]) -> None:
         told.append(event.key)
-        if len(told) == 3:
-            raise KeyboardInterrupt
+
+    def said(error: str | None) -> None:
+        poked.append(error)
+        if len(poked) == calls:
+            raise _Enough
+
+    with pytest.raises(_Enough):
+        asyncio.run(run_trigger(function, {}, {"every_ms": 1}, None, tell, said))
+    return told, poked
+
+
+def test_a_poke_is_called_again_from_the_last_key_told() -> None:
+    seen: list[str | None] = []
 
     async def gives(after: str | None) -> list[Event[int]]:
         seen.append(after)
         return [Event(f"{len(seen)}", 0)]
 
-    with pytest.raises(KeyboardInterrupt):
-        asyncio.run(run_trigger(gives, {}, {"every_ms": 1}, None, tell))
+    told, poked = _poking(gives)
     assert seen == [None, "1", "2"]
+    assert told == ["1", "2", "3"]
+    assert poked == [None, None, None]
 
 
-def test_a_poke_that_blocked_past_its_time_tells_nothing() -> None:
-    async def tell(event: Event[object]) -> None:
-        raise AssertionError(event)
+def test_a_raising_poke_keeps_its_bookmark_says_why_and_is_called_again() -> None:
+    seen: list[str | None] = []
 
-    async def blocks(after: str | None) -> list[Event[int]]:
-        time.sleep(0.02)  # what is refused
-        return [Event(str(after), 0)]
+    async def fails(after: str | None) -> list[Event[int]]:
+        seen.append(after)
+        if len(seen) == 2:
+            raise ValueError("not now")
+        return [Event(f"{len(seen)}", 0)]
 
-    with pytest.raises(PokeTooSlowError):
-        asyncio.run(run_trigger(blocks, {}, {"every_ms": 1}, None, tell))
+    told, poked = _poking(fails)
+    assert seen == [None, "1", "1"]
+    assert told == ["1", "3"]
+    assert poked == [None, "ValueError: not now", None]
 
 
-def test_a_poke_past_its_time_raises() -> None:
-    async def tell(event: Event[object]) -> None:
-        raise AssertionError(event)
-
+def test_a_poke_past_its_time_tells_nothing_and_says_so() -> None:
     async def slow(after: str | None) -> list[Event[int]]:
         await asyncio.sleep(60)
         return [Event(str(after), 0)]
 
-    with pytest.raises(PokeTooSlowError):
-        asyncio.run(run_trigger(slow, {}, {"every_ms": 1}, None, tell))
+    async def blocks(after: str | None) -> list[Event[int]]:
+        time.sleep(0.02)
+        return [Event(str(after), 0)]
+
+    for function in (slow, blocks):
+        told, poked = _poking(function, calls=1)
+        assert told == []
+        assert "PokeTooSlowError" in str(poked[0])
+
+
+def test_a_poke_with_nothing_to_say_tells_nothing() -> None:
+    async def quiet(after: str | None) -> list[Event[int]]:
+        return [] if after is None else [Event(after, 0)]
+
+    assert _poking(quiet) == ([], [None, None, None])

@@ -51,6 +51,10 @@ pub struct Settings {
     pub cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
     pub switch_off_after: u32,
+    /// Queued event runs of a DAG that stop its trigger.
+    pub max_queued_events: u32,
+    /// Errors in a row that make a trigger `failing`.
+    pub failing_after: u32,
     /// How long a wait step without a `max_wait` waits.
     pub sensor_max_wait: Duration,
     /// How long a worker has for a parse job.
@@ -128,6 +132,8 @@ impl Default for Settings {
             lease_timeout: Duration::from_secs(60),
             cancel_grace: DEFAULT_CANCEL_GRACE,
             switch_off_after: 3,
+            max_queued_events: 1000,
+            failing_after: 5,
             sensor_max_wait: Duration::from_hours(24),
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
@@ -346,6 +352,10 @@ pub struct MasterCore {
     /// The connection jobs sent and not answered, by job ID, with their worker (lost with
     /// it) and when they are given up on (`schedr connections check` / `test`).
     connection_jobs: BTreeMap<String, (String, Timestamp)>,
+    /// Triggers told to stop and not heard of since, by instance, with their worker and DAG: each
+    /// keeps its watcher slot, as the worker's own count does, and what it ends with still counts
+    /// (a strike for getting its host killed on the way).
+    stopping_triggers: BTreeMap<String, (String, String)>,
 }
 
 impl MasterCore {
@@ -391,6 +401,7 @@ impl MasterCore {
             sent_uses: crate::discovery::ScriptUses::new(),
             script_roots_seen: (BTreeMap::new(), None),
             connection_jobs: BTreeMap::new(),
+            stopping_triggers: BTreeMap::new(),
             settings,
             db,
         }
@@ -811,11 +822,10 @@ impl MasterCore {
                 self.triggers_reported(worker_id, &beat.running_triggers)
                     .await?
             }
-            worker_message::Message::TriggerEvent(event) => {
-                self.trigger_event(worker_id, event, now).await?
-            }
-            worker_message::Message::TriggerStopped(stopped) => {
-                self.trigger_stopped(worker_id, stopped, now).await?
+            message @ (worker_message::Message::TriggerEvent(_)
+            | worker_message::Message::TriggerPoked(_)
+            | worker_message::Message::TriggerStopped(_)) => {
+                self.trigger_message(worker_id, message, now).await?
             }
             // For people, like the last heartbeat: a failed write is logged, not the message's
             // failure (the worker sends them again after its next registration).
@@ -1519,6 +1529,8 @@ impl MasterCore {
         self.sync_code();
         self.connections.remove(worker_id);
         self.arrivals.forget(worker_id);
+        self.stopping_triggers
+            .retain(|_, (worker, _)| worker != worker_id);
         // After what is retried: its failure is logged, the CLI giving up after its timeout.
         if let Err(error) = self
             .connection_jobs_lost(

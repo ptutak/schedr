@@ -1545,14 +1545,7 @@ impl Dispatcher {
     /// with one chance (decision 338).
     async fn switched_off(&self, ready: &ReadyInstance) -> Result<Option<String>, DispatchError> {
         let (dag, task) = (ready.dag.id.as_str(), ready.task_id.as_str());
-        let Some(strikes) = self.db.wait_step_strikes(dag, task).await? else {
-            return Ok(None);
-        };
-        if strikes.off_at.is_none() {
-            return Ok(None);
-        }
-        if self.code_is_gone(&ready.dag, strikes.off_code.as_deref().unwrap_or_default()) {
-            self.db.wait_step_on_new_code(dag, task).await?;
+        if !self.is_switched_off(&ready.dag, task).await? {
             return Ok(None);
         }
         Ok(Some(format!(
@@ -1562,9 +1555,29 @@ impl Dispatcher {
         )))
     }
 
+    /// Whether a wait step or trigger is switched off now; on new code it is on again, with one
+    /// chance (decision 338).
+    pub(crate) async fn is_switched_off(
+        &self,
+        dag: &schedr_model::Dag,
+        task: &str,
+    ) -> Result<bool, DispatchError> {
+        let Some(strikes) = self.db.wait_step_strikes(dag.id.as_str(), task).await? else {
+            return Ok(false);
+        };
+        if strikes.off_at.is_none() {
+            return Ok(false);
+        }
+        if self.code_is_gone(dag, strikes.off_code.as_deref().unwrap_or_default()) {
+            self.db.wait_step_on_new_code(dag.id.as_str(), task).await?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     /// Whether a DAG's code has moved on from `code`: workers run other code now, and none is
     /// let run it. What isn't known yet (after a restart) hasn't moved on.
-    fn code_is_gone(&self, dag: &schedr_model::Dag, code: &str) -> bool {
+    pub(crate) fn code_is_gone(&self, dag: &schedr_model::Dag, code: &str) -> bool {
         self.current_code
             .get(dag.location.root.as_str())
             .is_some_and(|(accepted, _)| !accepted.is_empty() && !accepted.contains(code))
@@ -2442,7 +2455,7 @@ impl Dispatcher {
         &mut self,
         active: &schedr_db::runs::ActiveDag,
         instance: &str,
-        after: Option<String>,
+        (after, failures): (Option<String>, u32),
         now: Timestamp,
     ) -> Option<(Outgoing, String)> {
         let dag = &active.dag;
@@ -2467,6 +2480,7 @@ impl Dispatcher {
             }),
             expected_code_hash: code.clone(),
             after,
+            failures,
             cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),
             connections_json: match self.registry(root) {
                 Some(registry) if !task.connections.is_empty() => {

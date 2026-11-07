@@ -138,7 +138,15 @@ CREATE TABLE triggers (
     last_error   TEXT,
     failures     INTEGER NOT NULL DEFAULT 0,
     -- Not started again before this moment.
-    not_before   TIMESTAMPTZ
+    not_before   TIMESTAMPTZ,
+    -- Why it isn't to run although its DAG wants it: back_pressure, until the queue drains; returned,
+    -- until what `stopped_on` names (its DAG version and code) changes.
+    stopped_why  TEXT,
+    stopped_on   TEXT,
+    started_at   TIMESTAMPTZ,
+    last_event_at TIMESTAMPTZ,
+    last_restart_at TIMESTAMPTZ,
+    last_poked_at TIMESTAMPTZ
 );
 
 -- A wait step that got its host killed (decision 338): gone at its next success.

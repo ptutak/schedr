@@ -141,8 +141,60 @@ const DAG_WAKES: MetricDoc = MetricDoc {
         something to do (a missed wake)",
 };
 
+const TRIGGERS: MetricDoc = MetricDoc {
+    name: "master_triggers",
+    kind: MetricKind::Gauge,
+    labels: &["state"],
+    help: "Triggers of DAGs that want them running, by state: running, waiting (for a free watcher \
+        slot or to start again), stopped (back-pressure, a generator that returned) or failing \
+        (`[triggers] failing_after` errors in a row)",
+};
+const TRIGGER_EVENTS: MetricDoc = MetricDoc {
+    name: "master_trigger_events",
+    kind: MetricKind::Counter,
+    labels: &["result"],
+    help: "Events received from triggers, by result: new (it started a run) or repeat (its key was \
+        seen before, and it started none)",
+};
+const TRIGGER_BACK_PRESSURE_STOPS: MetricDoc = MetricDoc {
+    name: "master_trigger_back_pressure_stops",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Triggers stopped for having `[triggers] max_queued_events` queued runs",
+};
+const TRIGGER_IDLE_RESTARTS: MetricDoc = MetricDoc {
+    name: "master_trigger_idle_restarts",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Triggers started again for finding nothing for their `restart_if_idle`",
+};
+
+/// The triggers by state, for the gauge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TriggerCounts {
+    /// Running on a worker.
+    pub running: usize,
+    /// Waiting for a free watcher slot or to start again.
+    pub waiting: usize,
+    /// Stopped by back-pressure or a generator that returned.
+    pub stopped: usize,
+    /// With `[triggers] failing_after` errors in a row.
+    pub failing: usize,
+}
+
+/// A trigger event's label.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct EventResultLabels {
+    /// `new` or `repeat`.
+    pub result: String,
+}
+
 /// The master's metrics, as registered (under `schedr_`).
 pub const METRICS: &[MetricDoc] = &[
+    TRIGGERS,
+    TRIGGER_EVENTS,
+    TRIGGER_BACK_PRESSURE_STOPS,
+    TRIGGER_IDLE_RESTARTS,
     TICK_DURATION,
     RUNS,
     RUNS_FINISHED,
@@ -259,6 +311,14 @@ pub struct MasterMetrics {
     pub dags: Family<StateLabels, Gauge>,
     /// Quiet DAGs woken, by reason.
     pub dag_wakes: Family<ReasonLabels, Counter>,
+    /// Triggers by state.
+    pub triggers: Family<StateLabels, Gauge>,
+    /// Events received from triggers, by result.
+    pub trigger_events: Family<EventResultLabels, Counter>,
+    /// Triggers stopped by back-pressure.
+    pub trigger_back_pressure_stops: Counter,
+    /// Triggers started again for finding nothing for too long.
+    pub trigger_idle_restarts: Counter,
     /// The label sets the gauges have had: one that is gone reads 0 rather than vanishing.
     seen: Arc<Mutex<Seen>>,
 }
@@ -296,6 +356,10 @@ impl Default for MasterMetrics {
             leading: Gauge::default(),
             dags: Family::default(),
             dag_wakes: Family::default(),
+            triggers: Family::default(),
+            trigger_events: Family::default(),
+            trigger_back_pressure_stops: Counter::default(),
+            trigger_idle_restarts: Counter::default(),
             seen: Arc::default(),
         }
     }
@@ -360,6 +424,22 @@ impl MasterMetrics {
         r.register(LEADING.name, LEADING.help, self.leading.clone());
         r.register(DAGS.name, DAGS.help, self.dags.clone());
         r.register(DAG_WAKES.name, DAG_WAKES.help, self.dag_wakes.clone());
+        r.register(TRIGGERS.name, TRIGGERS.help, self.triggers.clone());
+        r.register(
+            TRIGGER_EVENTS.name,
+            TRIGGER_EVENTS.help,
+            self.trigger_events.clone(),
+        );
+        r.register(
+            TRIGGER_BACK_PRESSURE_STOPS.name,
+            TRIGGER_BACK_PRESSURE_STOPS.help,
+            self.trigger_back_pressure_stops.clone(),
+        );
+        r.register(
+            TRIGGER_IDLE_RESTARTS.name,
+            TRIGGER_IDLE_RESTARTS.help,
+            self.trigger_idle_restarts.clone(),
+        );
     }
 
     /// Sets the busy, quiet and held DAGs' counts (held ones count as busy or quiet too).
@@ -371,6 +451,31 @@ impl MasterMetrics {
                 })
                 .set(i64::try_from(count).unwrap_or(i64::MAX));
         }
+    }
+
+    /// Sets the triggers' gauge.
+    pub fn set_triggers(&self, counts: TriggerCounts) {
+        for (state, count) in [
+            ("running", counts.running),
+            ("waiting", counts.waiting),
+            ("stopped", counts.stopped),
+            ("failing", counts.failing),
+        ] {
+            self.triggers
+                .get_or_create(&StateLabels {
+                    state: state.to_owned(),
+                })
+                .set(i64::try_from(count).unwrap_or(i64::MAX));
+        }
+    }
+
+    /// Counts an event from a trigger: whether it started a run.
+    pub fn trigger_event(&self, new: bool) {
+        self.trigger_events
+            .get_or_create(&EventResultLabels {
+                result: if new { "new" } else { "repeat" }.to_owned(),
+            })
+            .inc();
     }
 
     /// Counts a quiet DAG woken for `reason`.

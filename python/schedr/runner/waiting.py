@@ -231,12 +231,45 @@ async def _waited(
     return value if ended else TimedOut()
 
 
+async def _poked_trigger(
+    function: Callable[..., object],
+    arguments: Mapping[str, object],
+    every: float,
+    after: str | None,
+    tell: Callable[[Event[Any]], Awaitable[None]],
+    poked: Callable[[str | None], None],
+) -> None:
+    """Calls a poke every ``every`` seconds, for as long as it is left running."""
+    loop = asyncio.get_running_loop()
+    while True:
+        called = loop.time()
+        error: str | None = None
+        found: object = ()
+        try:
+            call = cast("Coroutine[object, object, object]", function(after, **arguments))
+            ended, found = await _within(call, every)
+            if not ended:
+                raise PokeTooSlowError(  # as what it raises is, below
+                    f"a call took longer than `every` ({every:g} s): each call is limited to it, "
+                    "as calls never overlap. Make it faster, or poke less often"
+                )
+        except Exception as e:  # the author's: shown on its status, and the next call comes
+            error = f"{type(e).__name__}: {e}"
+        else:
+            for event in cast("Sequence[Event[Any]]", found):
+                await tell(event)
+                after = event.key
+        poked(error)
+        await asyncio.sleep(max(0.0, called + every - loop.time()))
+
+
 async def run_trigger(
     function: Callable[..., object],
     arguments: Mapping[str, object],
     task: Mapping[str, object],
     after: str | None,
     tell: Callable[[Event[Any]], Awaitable[None]],
+    poked: Callable[[str | None], None],
 ) -> None:
     """Calls a trigger's function, telling each event found; returns when a generator does.
 
@@ -246,28 +279,12 @@ async def run_trigger(
         task: Its task: called every ``every_ms``, if it has that.
         after: The last key acted on.
         tell: Tells an event and waits until it is safe: the next one's order is kept.
-
-    Raises:
-        PokeTooSlowError: If a call of a poke runs out its time.
+        poked: Told how each call of a poke ended: why it failed, if it did.
     """
     every = task.get("every_ms")
-    if not isinstance(every, int):
-        generator = cast("AsyncIterator[Event[Any]]", function(after, **arguments))
-        async for event in generator:
-            await tell(event)
+    if isinstance(every, int):
+        await _poked_trigger(function, arguments, every / 1000, after, tell, poked)
         return
-    seconds = every / 1000
-    loop = asyncio.get_running_loop()
-    while True:
-        called = loop.time()
-        call = cast("Coroutine[object, object, object]", function(after, **arguments))
-        ended, found = await _within(call, seconds)
-        if not ended:
-            raise PokeTooSlowError(
-                f"a call took longer than `every` ({seconds:g} s): each call is limited to it, as "
-                "calls never overlap. Make it faster, or poke less often"
-            )
-        for event in cast("Sequence[Event[Any]]", found):
-            await tell(event)
-            after = event.key
-        await asyncio.sleep(max(0.0, called + seconds - loop.time()))
+    generator = cast("AsyncIterator[Event[Any]]", function(after, **arguments))
+    async for event in generator:
+        await tell(event)

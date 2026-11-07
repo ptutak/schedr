@@ -2353,22 +2353,40 @@ with Dag("ingest", trigger=found(first=10)):
     );
 }
 
-/// M4.11b: a poke goes on from the last key it gave, and a failing trigger starts again from its
-/// bookmark after a wait.
+/// M4.11b: a poke that raises keeps its bookmark and goes on, a generator that returned stays
+/// stopped, and one that keeps blocking is switched off.
 #[test]
-fn a_poke_trigger_goes_on_from_its_last_key_and_a_failure_starts_it_again() {
-    const DAG: &str = r#"
+fn a_poke_goes_on_after_raising_and_a_generator_that_returned_stays_stopped() {
+    const DAGS: &str = r#"
+import asyncio
+import time
+from collections.abc import AsyncIterator
 from datetime import timedelta
 
 from schedr import Dag, Event, dag_ctx, task, trigger
 
 
+FAILED: set[str] = set()
+
+
 @trigger.poke(every=timedelta(milliseconds=100))
-async def found(after: str | None) -> list[Event[int]]:
+async def polled_found(after: str | None) -> list[Event[int]]:
     count = 0 if after is None else int(after)
-    if count == 2:
+    if count == 2 and not FAILED:
+        FAILED.add("yes")
         raise ValueError("no more for now")
-    return [Event(str(count + 1), count)]
+    return [Event(str(count + 1), count)] if count < 3 else []
+
+
+@trigger
+async def once_found(after: str | None) -> AsyncIterator[Event[int]]:
+    yield Event(f"after-{after}", 1)
+
+
+@trigger
+async def blocks(after: str | None) -> AsyncIterator[Event[int]]:
+    time.sleep(600)
+    yield Event("never", 1)
 
 
 @task
@@ -2376,30 +2394,53 @@ def seen(key: str) -> str:
     return key
 
 
-with Dag("polled", trigger=found()):
+with Dag("polled", trigger=polled_found()):
+    seen(dag_ctx.event.key)
+
+with Dag("once", trigger=once_found()):
+    seen(dag_ctx.event.key)
+
+with Dag("blocking", trigger=blocks()):
     seen(dag_ctx.event.key)
 "#;
+    let config = "[watchers]\nblock_limit = \"1s\"\nswitch_off_after = 2\n";
     let standalone = Standalone::start_configured(
-        &[("polled.py", DAG)],
+        &[("polled.py", DAGS)],
         None,
         &[],
-        "",
-        &[("SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF", "100ms")],
+        config,
+        // Quick after a failure, so what doesn't start again does so for another reason.
+        &[("SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF", "50ms")],
     );
-    standalone.wait("the DAG to be found", || {
-        standalone.dag_ids().contains(&"polled".to_owned())
+    standalone.wait("the DAGs to be found", || standalone.dag_ids().len() == 3);
+    // One host for the file: the one that blocks kills it for the others.
+    for dag in ["polled", "once"] {
+        let (code, _, err) = standalone.cli(&["dags", "unpause", dag]);
+        assert_eq!(code, 0, "{err}");
+    }
+    standalone.wait("a run for each key, past the raise", || {
+        standalone.runs("polled").len() == 3
     });
-    let (code, _, err) = standalone.cli(&["dags", "unpause", "polled"]);
-    assert_eq!(code, 0, "{err}");
-    standalone.wait("a run per key", || standalone.runs("polled").len() == 2);
-    standalone.wait("it to fail and start again", || {
-        standalone.log().contains("no more for now")
+    standalone.wait("the generator's event", || {
+        standalone.runs("once").len() == 1
     });
+    std::thread::sleep(std::time::Duration::from_secs(2));
     assert_eq!(
-        standalone.runs("polled").len(),
-        2,
-        "a raise creates nothing"
+        standalone.runs("once").len(),
+        1,
+        "started again it would say `after-after-None`"
     );
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "blocking"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("the blocking trigger to be switched off", || {
+        standalone.cli_json(&["sensors", "switched-off"])["sensors"]
+            .as_array()
+            .is_some_and(|off| off.iter().any(|s| s["sensor"] == "blocks"))
+    });
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert_eq!(standalone.runs("blocking").len(), 0);
+    let off = standalone.cli_json(&["sensors", "switched-off"]);
+    assert_eq!(off["sensors"][0]["sensor"], "blocks", "it stays off: {off}");
 }
 
 /// M4.11b: a trigger reads the secrets it declares, and what it reads doesn't reach an event.

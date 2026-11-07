@@ -1017,6 +1017,9 @@ pub struct Agent<E> {
     /// The triggers running here, on watcher slots: never attempts, so never journaled, and gone
     /// with the agent.
     triggers: BTreeMap<String, RunningTrigger>,
+    /// How triggers ended while the master was away: told on the next stream, on which they are
+    /// still reported as running, or the master would take them as simply gone.
+    triggers_ended: BTreeMap<String, pb::TriggerStopped>,
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
     running: BTreeMap<String, StopSender>,
     /// Those of them that are wait steps, on watcher slots: whether each is a poke.
@@ -1168,6 +1171,7 @@ impl<E: Executor> Agent<E> {
             watchers,
             running: BTreeMap::new(),
             triggers: BTreeMap::new(),
+            triggers_ended: BTreeMap::new(),
             wait_steps: BTreeMap::new(),
             cleaning: BTreeMap::new(),
             waiting: BTreeMap::new(),
@@ -1352,6 +1356,7 @@ impl<E: Executor> Agent<E> {
                 }
                 _ = heartbeat.tick() => {
                     let _ = to_master.send(self.heartbeat_message());
+                    self.send_poke_reports(to_master);
                 }
                 () = at(give_up_at) => {
                     self.heard = self.heard.max(*seen.borrow());
@@ -1412,7 +1417,12 @@ impl<E: Executor> Agent<E> {
             queues: self.settings.queues.clone(),
             slots: self.settings.slots,
             watcher_slots: self.settings.watcher_slots,
-            running_triggers: self.triggers.keys().cloned().collect(),
+            running_triggers: self
+                .triggers
+                .keys()
+                .chain(self.triggers_ended.keys())
+                .cloned()
+                .collect(),
             log_endpoint: self.settings.log_endpoint.clone(),
             roots,
             secret_storages: self.settings.secrets.names(),
@@ -2046,11 +2056,12 @@ impl<E: Executor> Agent<E> {
     }
 
     fn send_heartbeat(
-        &self,
+        &mut self,
         resends: &mut Resends,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
     ) -> Option<SessionEnd> {
         let _ = to_master.send(self.heartbeat_message());
+        self.send_poke_reports(to_master);
         let Some(due) = resends.due(self.unacked.keys()) else {
             return Some(SessionEnd::Lost(format!(
                 "a result is still unacknowledged after {MAX_RESENDS} sends; reconnecting, so \
@@ -2090,6 +2101,13 @@ impl<E: Executor> Agent<E> {
                 }
                 for event in self.unstored_events() {
                     let _ = to_master.send(event);
+                }
+                for stopped in std::mem::take(&mut self.triggers_ended).into_values() {
+                    let _ = to_master.send(wrap(worker_message::Message::TriggerStopped(stopped)));
+                }
+                // What went out on the old stream may not have got there.
+                for trigger in self.triggers.values_mut() {
+                    trigger.poke.unsent = trigger.poke.at.is_some();
                 }
                 for done in self.unsent_answers.drain(..) {
                     let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
@@ -2398,6 +2416,7 @@ impl<E: Executor> Agent<E> {
                     instance_id: assign.instance_id.clone(),
                     error_kind: kind.to_owned(),
                     message,
+                    ..pb::TriggerStopped::default()
                 },
             ))
         };
@@ -2440,17 +2459,7 @@ impl<E: Executor> Agent<E> {
             return;
         }
         let instance_id = assign.instance_id.clone();
-        let done = self.done_tx.clone();
-        let found = instance_id.clone();
-        let sink = crate::watchers::EventSink(Arc::new(move |event| {
-            let (stored, answer) = tokio::sync::oneshot::channel();
-            let _ = done.send(Done::Trigger(TriggerDone::Found {
-                instance_id: found.clone(),
-                event,
-                stored,
-            }));
-            answer
-        }));
+        let sink = self.trigger_sink(&instance_id);
         let start = schedr_model::runner::TriggerStart {
             after: assign.after.clone(),
         };
@@ -2477,6 +2486,10 @@ impl<E: Executor> Agent<E> {
                 stop,
                 next_seq: 0,
                 unstored: BTreeMap::new(),
+                poke: PokeReport {
+                    failures: assign.failures,
+                    ..PokeReport::default()
+                },
             },
         );
         let executor = self.executor.clone();
@@ -2511,6 +2524,31 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// Where a trigger's words go: to [`Self::trigger_done`].
+    fn trigger_sink(&self, instance_id: &str) -> crate::watchers::EventSink {
+        let done = self.done_tx.clone();
+        let found = instance_id.to_owned();
+        let poke_done = self.done_tx.clone();
+        let poked = instance_id.to_owned();
+        crate::watchers::EventSink {
+            found: Arc::new(move |event| {
+                let (stored, answer) = tokio::sync::oneshot::channel();
+                let _ = done.send(Done::Trigger(TriggerDone::Found {
+                    instance_id: found.clone(),
+                    event,
+                    stored,
+                }));
+                answer
+            }),
+            poked: Arc::new(move |error| {
+                let _ = poke_done.send(Done::Trigger(TriggerDone::Poked {
+                    instance_id: poked.clone(),
+                    error,
+                }));
+            }),
+        }
+    }
+
     /// What a trigger did reaches the master.
     fn trigger_done(
         &mut self,
@@ -2523,6 +2561,9 @@ impl<E: Executor> Agent<E> {
                 event,
                 stored,
             } => self.trigger_found(instance_id, event, stored, to_master),
+            TriggerDone::Poked { instance_id, error } => {
+                self.trigger_poked(&instance_id, error, to_master);
+            }
             TriggerDone::Ended {
                 instance_id,
                 finished,
@@ -2559,6 +2600,41 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// A poke's call ended: told at once when that changes things, with a heartbeat otherwise.
+    fn trigger_poked(
+        &mut self,
+        instance_id: &str,
+        error: Option<String>,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        let Some(trigger) = self.triggers.get_mut(instance_id) else {
+            return;
+        };
+        let changed = trigger.poke.error != error;
+        trigger.poke.failures = if error.is_some() {
+            trigger.poke.failures.saturating_add(1)
+        } else {
+            0
+        };
+        trigger.poke.error = error;
+        trigger.poke.at = Some(Timestamp::now());
+        trigger.poke.unsent = true;
+        if changed && let Some(to_master) = to_master {
+            let _ = to_master.send(poke_report(instance_id, trigger));
+            trigger.poke.unsent = false;
+        }
+    }
+
+    /// The pokes' reports not sent yet.
+    fn send_poke_reports(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        for (instance_id, trigger) in &mut self.triggers {
+            if trigger.poke.unsent {
+                let _ = to_master.send(poke_report(instance_id, trigger));
+                trigger.poke.unsent = false;
+            }
+        }
+    }
+
     /// A trigger ended: its slot and its code are free. A master that doesn't hear it learns
     /// from the next registration, which no longer lists it.
     fn trigger_ended(
@@ -2567,13 +2643,22 @@ impl<E: Executor> Agent<E> {
         finished: &pb::Finished,
         to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
     ) {
-        self.release_code(instance_id);
+        let code = self.release_code(instance_id);
         self.collect_code();
-        if let Some(trigger) = self.triggers.remove(instance_id)
-            && let Some(to_master) = to_master
-        {
-            let stopped = trigger_stopped(trigger.dag_id, instance_id.to_owned(), finished);
-            let _ = to_master.send(wrap(worker_message::Message::TriggerStopped(stopped)));
+        let Some(trigger) = self.triggers.remove(instance_id) else {
+            return;
+        };
+        let mut stopped = trigger_stopped(trigger.dag_id, instance_id.to_owned(), finished);
+        if let Some(code) = code {
+            stopped.code_hash = code;
+        }
+        match to_master {
+            Some(to_master) => {
+                let _ = to_master.send(wrap(worker_message::Message::TriggerStopped(stopped)));
+            }
+            None => {
+                self.triggers_ended.insert(instance_id.to_owned(), stopped);
+            }
         }
     }
 
@@ -3362,11 +3447,25 @@ enum TriggerDone {
         event: crate::watchers::FoundEvent,
         stored: tokio::sync::oneshot::Sender<()>,
     },
+    /// A poke's call ended; why it failed, if it did.
+    Poked {
+        instance_id: String,
+        error: Option<String>,
+    },
     /// It ended.
     Ended {
         instance_id: String,
         finished: Box<pb::Finished>,
     },
+}
+
+/// How a poke's calls have gone, for the master: at most once a heartbeat unless that changes.
+#[derive(Debug, Default)]
+struct PokeReport {
+    at: Option<Timestamp>,
+    error: Option<String>,
+    failures: u32,
+    unsent: bool,
 }
 
 /// A trigger running on this worker.
@@ -3377,6 +3476,17 @@ struct RunningTrigger {
     next_seq: u64,
     /// What it found that the master hasn't said it has, by its place.
     unstored: BTreeMap<u64, (pb::TriggerEvent, tokio::sync::oneshot::Sender<()>)>,
+    poke: PokeReport,
+}
+
+fn poke_report(instance_id: &str, trigger: &RunningTrigger) -> pb::WorkerMessage {
+    wrap(worker_message::Message::TriggerPoked(pb::TriggerPoked {
+        dag_id: trigger.dag_id.clone(),
+        instance_id: instance_id.to_owned(),
+        at: trigger.poke.at.map(proto_time),
+        error: trigger.poke.error.clone().unwrap_or_default(),
+        failures: trigger.poke.failures,
+    }))
 }
 
 fn proto_time(time: Timestamp) -> prost_types::Timestamp {
@@ -3414,6 +3524,8 @@ fn trigger_stopped(
         instance_id,
         error_kind,
         message,
+        struck: finished.struck,
+        code_hash: finished.code_hash.clone(),
     }
 }
 

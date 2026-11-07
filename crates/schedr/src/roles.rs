@@ -137,6 +137,8 @@ pub fn master_settings(config: &Config) -> Settings {
         lease_timeout: config.timings.lease_timeout,
         cancel_grace: config.master.cancel_grace,
         switch_off_after: config.watchers.switch_off_after,
+        max_queued_events: config.triggers.max_queued_events,
+        failing_after: config.triggers.failing_after,
         sensor_max_wait: config.sensors.default_max_wait,
         parse_job_timeout: config.master.parse_job_timeout,
         code_wait: config.master.code_wait,

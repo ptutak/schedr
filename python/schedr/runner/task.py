@@ -753,6 +753,7 @@ async def execute_trigger(
                 request["task"],
                 request["trigger"].get("after"),
                 lambda event: _tell_event(channel, event, hint, limit),
+                lambda error: channel.send({"type": "trigger_poked", "error": error}),
             )
     except CodecError as error:
         return failure(error, "event_refused", f"an event's data: {error.reason}")

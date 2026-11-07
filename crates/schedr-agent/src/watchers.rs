@@ -58,9 +58,14 @@ pub struct FoundEvent {
     pub at: Option<jiff::Timestamp>,
 }
 
-/// Takes what a trigger found; the answer comes once the master has it.
+/// Takes what a trigger says.
 #[derive(Clone)]
-pub struct EventSink(pub Arc<dyn Fn(FoundEvent) -> oneshot::Receiver<()> + Send + Sync>);
+pub struct EventSink {
+    /// What it found; the answer comes once the master has it.
+    pub found: Arc<dyn Fn(FoundEvent) -> oneshot::Receiver<()> + Send + Sync>,
+    /// How a poke's call ended: why it failed, if it did.
+    pub poked: Arc<dyn Fn(Option<String>) + Send + Sync>,
+}
 
 impl std::fmt::Debug for EventSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -70,7 +75,7 @@ impl std::fmt::Debug for EventSink {
 
 impl PartialEq for EventSink {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.found, &other.found)
     }
 }
 
@@ -939,6 +944,16 @@ impl Answers {
             log.write(*stream, text).await;
             return None;
         }
+        if let RunnerMessage::TriggerPoked { error } = message {
+            if let Some(events) = &self.events {
+                let error = match self.secrets.as_ref().map(|s| &s.mask) {
+                    Some(mask) if !mask.is_empty() => error.map(|why| mask.mask_text(&why)),
+                    _ => error,
+                };
+                (events.poked)(error);
+            }
+            return None;
+        }
         if let RunnerMessage::TriggerEvent { key, data, at } = message {
             let Some(events) = &self.events else {
                 return None;
@@ -948,7 +963,7 @@ impl Answers {
                 Some(mask) if !mask.is_empty() => (mask.mask_text(&key), mask.mask_json(&data)),
                 _ => (key, data),
             };
-            let stored = (events.0)(FoundEvent { key, data, at });
+            let stored = (events.found)(FoundEvent { key, data, at });
             let host = Arc::clone(host);
             self.pending.spawn(async move {
                 // Dropped: it stopped, and nothing waits for this any more.
@@ -1467,7 +1482,8 @@ pub async fn run_watcher(
         };
         moved_to = place.moved_to().or(moved_to);
         let (message, host_lost) = if message.is_none() && reason.is_none() {
-            match after_host_ended(&place, setup).await {
+            let trigger = place_is_trigger(&place);
+            match after_host_ended(&place, setup, trigger).await {
                 AfterHost::Fails(message) => (Some(message), None),
                 AfterHost::Lost(why) => (None, Some(why)),
                 AfterHost::StartsAgain => {
@@ -1519,12 +1535,16 @@ enum AfterHost {
     Lost(String),
 }
 
-async fn after_host_ended(place: &Place, setup: &WorkerSetup) -> AfterHost {
+async fn after_host_ended(place: &Place, setup: &WorkerSetup, trigger: bool) -> AfterHost {
     let host = place.host();
     let termination = ended_host(&host).await;
     match host.going() {
         (Some(blamed), _) if blamed.watcher == place.watcher.load(Ordering::SeqCst) => {
             AfterHost::Fails(blocked(setup, blamed.stack))
+        }
+        // The master knows its bookmark: from there, rather than from what it started with.
+        (Some(_), _) if trigger => {
+            AfterHost::Lost("its host was killed for another watcher on it".to_owned())
         }
         (Some(_), _) => AfterHost::StartsAgain,
         (None, why) => {
@@ -1535,6 +1555,15 @@ async fn after_host_ended(place: &Place, setup: &WorkerSetup) -> AfterHost {
             ))
         }
     }
+}
+
+fn place_is_trigger(place: &Place) -> bool {
+    place
+        .request
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .trigger
+        .is_some()
 }
 
 /// The end of a wait step that held its host's event loop.

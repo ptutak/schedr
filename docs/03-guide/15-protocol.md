@@ -46,21 +46,25 @@ ignored and the worker registers again. A non-leading master refuses a stream wi
 sequenceDiagram
     participant M as Master
     participant W as Worker
-    M->>W: AssignTrigger (instance, bookmark)
+    M->>W: AssignTrigger (instance, bookmark, failures)
     W->>W: Start trigger in watcher host
     W->>M: TriggerEvent (instance, sequence, key, data, time)
     M->>M: Store event and queue run once per key
     M-->>W: TriggerEventAck (instance, sequence)
     M->>W: AssignTask (run.event_json)
     opt Trigger stops
-        W->>M: TriggerStopped
+        W->>M: TriggerStopped (error, struck, code_hash)
     end
 ```
 
 The worker resends unacknowledged events on a new stream. The acknowledgement lets the
 trigger continue. `run.event_json` carries the event to each task of its run. The master
-sends `CancelTrigger` when the instance should stop; a failed trigger is assigned again
-after a backoff from its bookmark.
+sends `CancelTrigger` when the instance should stop; a failed trigger can be assigned again
+after a backoff from its bookmark. A poke reports its last call and consecutive failures in
+`TriggerPoked` when they change, otherwise with a heartbeat. `AssignTrigger.failures` carries
+the previous instance's count forward. `TriggerStopped.struck` reports that the trigger got
+its host killed, and `code_hash` identifies the code it ran. A stop while the stream is down
+is reported on the next stream, where the instance is still listed as running until reported.
 
 ## A normal run
 
@@ -459,7 +463,8 @@ identical effects.
 | `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT`](14-timings.md#fixed-timings) |
 | `Warnings` | Worker after registration and on change | Replace warnings | Yes | — |
 | `TriggerEvent` | Worker as a trigger finds an event; all unacknowledged again on a new stream | Store the event and queue its run, once per key | Yes | — |
-| `TriggerStopped` | Worker when a trigger ends | Free its slot; a failure starts it again after a wait | Yes | — |
+| `TriggerPoked` | Worker when poke status changes, otherwise with a heartbeat | Keep the call time, last error and consecutive failures | Yes | — |
+| `TriggerStopped` | Worker when a trigger ends, including on the next stream if disconnected | Free its slot; record `struck` and `code_hash`; a failure can start it again after a wait | Yes | — |
 | `ConnectionJobDone` | Worker after connection check or test | Store reports if job is still open | Late or already settled answer is dropped | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) plus job allowance |
 
 ### Master to worker on `Control`
@@ -472,7 +477,7 @@ identical effects.
 | `AssignTask` | Master after storing assignment | Validate and start attempt; `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
-| `AssignTrigger` | Master when a DAG's trigger should run and has no worker | Run it on a watcher slot from its bookmark, without an attempt | Yes | — |
+| `AssignTrigger` | Master when a DAG's trigger should run and has no worker | Run it on a watcher slot from its bookmark, with the previous consecutive `failures`, without an attempt | Yes | — |
 | `CancelTrigger` | Master when a trigger should stop: paused, moved, new code, or reported and not current | Stop it | Yes | — |
 | `TriggerEventAck` | Master when an event is stored, or is an old instance's | Let the trigger go on to the next one | Yes | — |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |

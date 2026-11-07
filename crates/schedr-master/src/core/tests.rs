@@ -2249,6 +2249,7 @@ fn ack_of(outgoing: &[Outgoing]) -> Option<u64> {
 async fn a_new_key_queues_a_run_and_a_repeat_only_moves_the_bookmark() {
     let (mut core, assign) = with_trigger().await;
     assert_eq!(assign.after, None);
+    assert_eq!(assign.failures, 0);
     assert_eq!(assign.dag_id, "sync");
     for (seq, key) in [(1, "a"), (2, "b"), (3, "a")] {
         let answer = core
@@ -2301,6 +2302,12 @@ async fn pausing_stops_a_trigger_and_it_comes_back_from_its_bookmark() {
         )),
         "{stopped:?}"
     );
+    let ended = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        ..pb::TriggerStopped::default()
+    });
+    core.handle("w1", ended, later(3)).await.unwrap();
     assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
     core.db.set_paused(&dag, false).await.unwrap();
     let again = assign_of(&core.tick(later(4)).await.unwrap()).unwrap();
@@ -2316,6 +2323,7 @@ async fn a_failed_trigger_starts_again_only_after_its_wait() {
         instance_id: assign.instance_id.clone(),
         error_kind: "trigger_failed".to_owned(),
         message: "ValueError: no".to_owned(),
+        ..pb::TriggerStopped::default()
     });
     core.handle("w1", stopped, later(2)).await.unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
@@ -2473,6 +2481,7 @@ async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
         instance_id: assign.instance_id.clone(),
         error_kind: "trigger_failed".to_owned(),
         message: "planted".to_owned(),
+        ..pb::TriggerStopped::default()
     });
     core.handle("w2", stopped, later(3)).await.unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
@@ -2487,6 +2496,7 @@ async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
         instance_id: assign.instance_id.clone(),
         error_kind: String::new(),
         message: String::new(),
+        ..pb::TriggerStopped::default()
     });
     core.handle("w2", stopped, later(3)).await.unwrap();
     assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 1);
@@ -2557,10 +2567,269 @@ async fn a_long_error_is_kept_short() {
         instance_id: assign.instance_id.clone(),
         error_kind: "trigger_failed".to_owned(),
         message: "x\0".repeat(1_000_000),
+        ..pb::TriggerStopped::default()
     });
     core.handle("w1", stopped, later(2)).await.unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     let error = stored.last_error.unwrap();
     assert_eq!(error.chars().count(), 4096);
     assert!(!error.contains('\0'));
+}
+
+fn stopped_with(assign: &pb::AssignTrigger, kind: &str, struck: bool) -> worker_message::Message {
+    worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        error_kind: kind.to_owned(),
+        struck,
+        code_hash: "h1".to_owned(),
+        ..pb::TriggerStopped::default()
+    })
+}
+
+#[tokio::test]
+async fn a_generator_that_returned_stays_stopped_until_new_code() {
+    let (mut core, assign) = with_trigger().await;
+    core.handle(
+        "w1",
+        stopped_with(&assign, "trigger_returned", false),
+        later(2),
+    )
+    .await
+    .unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.stopped_why.as_deref(), Some("returned"));
+    assert_eq!(assign_of(&core.tick(later(30)).await.unwrap()), None);
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query("UPDATE triggers SET stopped_on = 'older h0'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let again = assign_of(&core.tick(later(31)).await.unwrap());
+    assert!(again.is_some(), "a new version starts it");
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.stopped_why, None);
+}
+
+#[tokio::test]
+async fn too_many_queued_runs_stop_a_trigger_until_they_have_started() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let settings = Settings {
+        max_queued_events: 2,
+        ..Settings::default()
+    };
+    let mut core = MasterCore::new(db, settings);
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    core.upload(upload_of(&job.parse_job_id, &event_file()), ts(NOW))
+        .await
+        .unwrap();
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, false).await.unwrap();
+    let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
+    for (seq, key) in [(1, "a"), (2, "b")] {
+        core.handle("w1", found(&assign, seq, key), later(2))
+            .await
+            .unwrap();
+    }
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let pool = pool.clone();
+    // Held as they are, however the scheduler goes on.
+    sqlx::query("UPDATE runs SET state = 'queued'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut told = Vec::new();
+    core.trigger_pass(later(3), &mut told).await.unwrap();
+    assert!(matches!(
+        message(&told[0]),
+        master_message::Message::CancelTrigger(_)
+    ));
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.stopped_why.as_deref(), Some("back_pressure"));
+    assert_eq!(stored.instance_id, None);
+    sqlx::query("UPDATE runs SET state = 'running' WHERE rowid = (SELECT MIN(rowid) FROM runs)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut told = Vec::new();
+    core.trigger_pass(later(4), &mut told).await.unwrap();
+    assert_eq!(assign_of(&told), None, "not until the queue has drained");
+    sqlx::query("UPDATE runs SET state = 'running'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut told = Vec::new();
+    core.trigger_pass(later(5), &mut told).await.unwrap();
+    assert_eq!(assign_of(&told).unwrap().after.as_deref(), Some("b"));
+}
+
+#[tokio::test]
+async fn a_trigger_that_keeps_blocking_is_switched_off_until_new_code() {
+    let (mut core, assign) = with_trigger().await;
+    let mut given = assign;
+    for at in [2, 100, 200] {
+        core.handle(
+            "w1",
+            stopped_with(&given, "blocked_event_loop", true),
+            later(at),
+        )
+        .await
+        .unwrap();
+        let next = assign_of(&core.tick(later(at + 50)).await.unwrap());
+        if at == 200 {
+            assert_eq!(next, None, "three in a row: off");
+        } else {
+            given = next.unwrap();
+        }
+    }
+    let strikes = core.db.wait_step_strikes("sync", "found").await.unwrap();
+    assert!(strikes.unwrap().off_at.is_some());
+    core.db.clear_wait_step("sync", "found").await.unwrap();
+    assert!(assign_of(&core.tick(later(1000)).await.unwrap()).is_some());
+}
+
+#[tokio::test]
+async fn a_poke_report_is_kept_and_a_call_that_went_well_clears_it() {
+    let (mut core, assign) = with_trigger().await;
+    core.db
+        .strike_wait_step(("sync", "found"), 3, "h1", later(1))
+        .await
+        .unwrap();
+    let poked = |error: &str, failures| {
+        worker_message::Message::TriggerPoked(pb::TriggerPoked {
+            dag_id: assign.dag_id.clone(),
+            instance_id: assign.instance_id.clone(),
+            at: None,
+            error: error.to_owned(),
+            failures,
+        })
+    };
+    core.handle("w1", poked("ValueError: no", 2), later(2))
+        .await
+        .unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.failures, 2);
+    assert_eq!(stored.last_error.as_deref(), Some("ValueError: no"));
+    assert_eq!(stored.last_poked_at, Some(later(2)));
+    assert_eq!(
+        stored.instance_id.as_deref(),
+        Some(assign.instance_id.as_str()),
+        "it goes on"
+    );
+    core.handle("w1", poked("", 0), later(3)).await.unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.failures, 0);
+    assert_eq!(stored.last_error, None);
+    assert_eq!(
+        core.db.wait_step_strikes("sync", "found").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_generator_finding_nothing_for_its_idle_time_starts_again() {
+    let mut file = serde_json::to_value(event_file()).unwrap();
+    file["dags"][0]["trigger"]["restart_if_idle_ms"] = json!(60_000);
+    let file = serde_json::from_value(file).unwrap();
+    let mut core = with_dag_of(&file).await;
+    core.db
+        .set_paused(&DagId::new("sync").unwrap(), false)
+        .await
+        .unwrap();
+    let first = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
+    assert_eq!(assign_of(&core.tick(later(30)).await.unwrap()), None);
+    core.handle("w1", found(&first, 1, "a"), later(40))
+        .await
+        .unwrap();
+    assert_eq!(
+        assign_of(&core.tick(later(80)).await.unwrap()),
+        None,
+        "it found one"
+    );
+    let told = core.tick(later(120)).await.unwrap();
+    assert!(
+        told.iter()
+            .any(|o| matches!(message(o), master_message::Message::CancelTrigger(_)))
+    );
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.last_restart_at, Some(later(120)));
+    let again = assign_of(&told).expect("from its bookmark, at once");
+    assert_eq!(again.after.as_deref(), Some("a"));
+}
+
+#[tokio::test]
+async fn a_trigger_told_to_stop_keeps_its_slot_and_its_strike_counts() {
+    let (mut core, assign) = with_trigger().await;
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, true).await.unwrap();
+    core.tick(later(2)).await.unwrap();
+    assert_eq!(
+        core.dispatcher.worker("w1").unwrap().wait_steps.len(),
+        1,
+        "its worker counts it until it has ended"
+    );
+    let mut stopped = stopped_with(&assign, "", true);
+    let worker_message::Message::TriggerStopped(one) = &mut stopped else {
+        unreachable!()
+    };
+    one.code_hash = String::new();
+    core.handle("w1", stopped, later(3)).await.unwrap();
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
+    let strikes = core.db.wait_step_strikes("sync", "found").await.unwrap();
+    assert_eq!(strikes.unwrap().strikes, 1);
+}
+
+#[tokio::test]
+async fn events_past_the_queue_limit_stop_the_trigger_at_once() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let settings = Settings {
+        max_queued_events: 2,
+        ..Settings::default()
+    };
+    let mut core = MasterCore::new(db, settings);
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    core.upload(upload_of(&job.parse_job_id, &event_file()), ts(NOW))
+        .await
+        .unwrap();
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, false).await.unwrap();
+    let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
+    for (seq, key) in [(1, "a"), (2, "b")] {
+        let answer = core
+            .handle("w1", found(&assign, seq, key), later(2))
+            .await
+            .unwrap();
+        assert_eq!(ack_of(&answer), Some(seq));
+    }
+    let answer = core
+        .handle("w1", found(&assign, 3, "c"), later(2))
+        .await
+        .unwrap();
+    assert_eq!(ack_of(&answer), None);
+    assert!(matches!(
+        message(&answer[0]),
+        master_message::Message::CancelTrigger(_)
+    ));
+    assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 2);
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.bookmark.as_deref(), Some("b"));
+    assert_eq!(stored.stopped_why.as_deref(), Some("back_pressure"));
 }

@@ -34,7 +34,8 @@ the code. Roughly:
 - **master:** round durations (`schedr_master_tick_duration_seconds`), busy, quiet and held
   DAGs (`schedr_master_dags{state}`), quiet DAGs woken (`schedr_master_dag_wakes_total{reason}`),
   runs, tasks and workers by state, tasks waiting by reason, assignments, rejections,
-  attempts ended, parse jobs, commands and how long they waited for a decision;
+  attempts ended, parse jobs, trigger state and events, back-pressure stops and idle
+  restarts, commands and how long they waited for a decision;
 - **worker:** slots and slots used, attempts by status, how long a Python task took to start
   (`schedr_worker_task_start_seconds{method,phase}`), fork servers
   (`schedr_worker_fork_servers{interpreter,kind,state}`), Python tasks and parse jobs a fork
@@ -57,6 +58,13 @@ A held DAG is also counted as `busy` or `quiet`, so adding the three series coun
 the ID check found the DAG with something to do (a run running or queued, or one that round
 created). That is a missed wake, and the counter staying at zero is the healthy case. See
 [Busy and quiet DAGs](04-master.md#busy-and-quiet-dags).
+
+`schedr_master_triggers{state}` counts triggers of DAGs that want them running: `running`,
+`waiting`, `stopped` (back-pressure or a returned generator), or `failing` after
+`[triggers] failing_after` consecutive errors (default 5). `schedr_master_trigger_events_total{result}`
+counts new and repeated events. `schedr_master_trigger_back_pressure_stops_total` counts
+stops at the queued-event limit, and `schedr_master_trigger_idle_restarts_total` counts
+restarts after `restart_if_idle`.
 
 `schedr_master_runs_late_failed_total{dag_id,reason}` counts runs that ended `success`
 and later learned of a failure. The reason is `late_cleanup_failed` for now. Alert on an
