@@ -157,3 +157,13 @@ The master lease must be at least three query timeouts and shorter than the loop
 The drain termination period plus the report period must not exceed `[worker]
 termination_grace_period`. The connection test timeout must be at least 1 ms and within the
 API's maximum; an invalid value stops startup.
+
+## Fixed limits
+
+Two limits are set the same way, with the same warning: whole numbers above zero, in the
+environment only.
+
+| Variable | Default | What it does and what depends on it |
+|---|---|---|
+| `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_RECORDS` | 256 | The most wait step hosts, and the most warnings, the master keeps of one worker's report; the rest are dropped with a warning in its log. An honest worker sends a few. |
+| `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT` | 4096 | The most characters of each text in them (a host's code, a warning's message); longer ones are cut. |

@@ -412,6 +412,33 @@ pub struct Config {
     /// The fixed timings, as `SCHEDR_HIDDEN__*` left them.
     #[serde(skip)]
     pub timings: Timings,
+    /// The fixed limits, as `SCHEDR_HIDDEN__*` left them.
+    #[serde(skip)]
+    pub limits: HiddenLimits,
+}
+
+/// Fixed limits, like [`Timings`] not configuration: only `SCHEDR_HIDDEN__*` changes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiddenLimits {
+    /// The most records of one kind (wait step hosts, warnings) the master keeps of what a
+    /// worker reports (`MASTER__WORKER_REPORT_RECORDS`, B183): an honest agent sends a few.
+    pub worker_report_records: usize,
+    /// The most characters of each text in them the master keeps
+    /// (`MASTER__WORKER_REPORT_TEXT`).
+    pub worker_report_text: usize,
+    /// The `SCHEDR_HIDDEN__*` variables that changed one.
+    pub overridden: Vec<String>,
+}
+
+impl Default for HiddenLimits {
+    /// 256 records of each kind, 4096 characters of each text.
+    fn default() -> Self {
+        Self {
+            worker_report_records: 256,
+            worker_report_text: 4096,
+            overridden: Vec::new(),
+        }
+    }
 }
 
 /// The JSON Schema of the configuration file: every key with its doc comment, type and
@@ -972,6 +999,11 @@ pub struct WorkerSection {
     )]
     #[schemars(with = "Option<SizeText>")]
     pub log_max_size: Option<u64>,
+    /// The mode of the log files the worker creates (task, attempt, parse and watcher-host
+    /// logs), in octal: owner-only `"0600"` by default, as the journal and connection files. A
+    /// log shipper reading them under another uid needs them opened on purpose: `"0640"` for
+    /// one in the worker's group. At most `"0644"`, and the owner always reads and writes.
+    pub log_mode: String,
     /// Each task's memory budget; when not set, (the pod's limit − 10 %) ÷ slots.
     #[serde(
         deserialize_with = "deserialize_optional_size",
@@ -1038,7 +1070,7 @@ impl Default for WorkerSection {
     /// The host name, 2 slots, the `default` queue, the default data directory, 30 s of grace
     /// (Kubernetes' default) of which the last 5 s stop and report what still runs (3 s to
     /// SIGKILL, 2 s to report), the log endpoint on port 8081 of every interface, logs kept for
-    /// 30 days, the memory budget from the pod's limit, sampled every second, 30 s for a runner
+    /// 30 days and mode 0600, the memory budget from the pod's limit, sampled every second, 30 s for a runner
     /// to start, 5 minutes for a fork server to preload and for a cleanup's try, 30 minutes for
     /// a resource cleanup's try, a fork server's failing import retried for 20 minutes.
     fn default() -> Self {
@@ -1057,6 +1089,7 @@ impl Default for WorkerSection {
             log_address: None,
             log_retention: Duration::from_hours(24 * 30),
             log_max_size: None,
+            log_mode: "0600".to_owned(),
             memory_budget: None,
             memory_reserve: None,
             runner_start_timeout: Duration::from_secs(30),
@@ -1282,4 +1315,16 @@ const fn default_vault_connect_timeout() -> Duration {
 
 const fn default_cache_ttl() -> Duration {
     Duration::from_secs(60)
+}
+
+/// `[worker] log_mode` as a mode: octal, within 0644, with the owner's read and write; `None`
+/// for one that isn't.
+#[must_use]
+pub fn log_mode(text: &str) -> Option<u32> {
+    let digits = text.strip_prefix("0o").unwrap_or(text);
+    if digits.is_empty() || digits.len() > 4 {
+        return None;
+    }
+    let mode = u32::from_str_radix(digits, 8).ok()?;
+    (mode & !0o644 == 0 && mode & 0o600 == 0o600).then_some(mode)
 }

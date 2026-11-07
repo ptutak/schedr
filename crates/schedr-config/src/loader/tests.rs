@@ -784,9 +784,88 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .split('`')
         .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
         .collect();
-    assert_eq!(names.len(), 65, "{names:?}");
+    assert_eq!(names.len(), 67, "{names:?}");
     for name in names {
-        let timings = load(None, &env(&[(name, "1s")]), &[]).unwrap().timings;
-        assert_eq!(timings.overridden, [name]);
+        let loaded = load(None, &env(&[(name, "1s")]), &[]);
+        if HIDDEN_LIMITS.iter().any(|limit| name.ends_with(limit)) {
+            let limits = load(None, &env(&[(name, "1")]), &[]).unwrap().limits;
+            assert_eq!(limits.overridden, [name]);
+            assert!(loaded.is_err(), "a limit is a number, not a duration");
+        } else {
+            assert_eq!(loaded.unwrap().timings.overridden, [name]);
+        }
     }
+}
+
+#[rstest]
+#[case("0600", Some(0o600))]
+#[case("0640", Some(0o640))]
+#[case("644", Some(0o644))]
+#[case("0o640", Some(0o640))]
+#[case("0400", None)]
+#[case("0660", None)]
+#[case("0700", None)]
+#[case("0606", None)]
+#[case("rw", None)]
+#[case("", None)]
+#[case("00600", None)]
+fn a_log_mode_lets_the_owner_read_and_write_and_others_at_most_read(
+    #[case] text: &str,
+    #[case] mode: Option<u32>,
+) {
+    assert_eq!(crate::config::log_mode(text), mode);
+}
+
+#[test]
+fn a_log_mode_logs_cant_have_is_refused() {
+    assert_eq!(
+        load(
+            Some(file("[worker]\nlog_mode = \"0666\"\n")),
+            &env(&[]),
+            &[]
+        )
+        .unwrap_err(),
+        ConfigError::LogMode {
+            mode: "0666".to_owned()
+        }
+    );
+    let config = load(None, &env(&[]), &[]).unwrap();
+    assert_eq!(config.worker.log_mode, "0600");
+}
+
+#[test]
+fn hidden_limits_are_whole_numbers_above_zero() {
+    let loaded = load(
+        None,
+        &env(&[
+            ("SCHEDR_HIDDEN__MASTER__WORKER_REPORT_RECORDS", "8"),
+            ("SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT", "64"),
+        ]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            loaded.limits.worker_report_records,
+            loaded.limits.worker_report_text
+        ),
+        (8, 64)
+    );
+    assert_eq!(loaded.limits.overridden.len(), 2);
+    assert_eq!(loaded.timings.overridden, Vec::<String>::new());
+    let name = "SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT";
+    for bad in ["0", "-1", "many"] {
+        assert_eq!(
+            load(None, &env(&[(name, bad)]), &[]).unwrap_err(),
+            ConfigError::BadHiddenTiming {
+                name: name.to_owned(),
+                reason: format!("must be a whole number above zero, got `{bad}`"),
+            }
+        );
+    }
+    let defaults = load(None, &env(&[]), &[]).unwrap().limits;
+    assert_eq!(
+        (defaults.worker_report_records, defaults.worker_report_text),
+        (256, 4096)
+    );
 }

@@ -1711,7 +1711,11 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   sizes vary too much for a default) the oldest go first. A sweep runs at start and every
   hour. A log whose attempt is in the journal (running, or its result not yet acknowledged)
   is never deleted, though it counts towards the size limit (the limit is about the disk).
-  Parse logs (`parse-<root>.log`) follow the same rules. Listing gone workers for as long as
+  Parse logs (`parse-<root>.log`) follow the same rules. **Mode:** logs are created
+  **`[worker] log_mode`**, default **0600** like the journal and connection files (B182, the
+  user's, 2026-11-07: 0600 with a key; not chosen: 0640 fixed, which stops a shipper under an
+  unrelated uid silently, or 0600 fixed, with no way to open them up); a shipper in the worker's
+  group sets `"0640"`; at most `"0644"`, and the owner always reads and writes. Listing gone workers for as long as
   their logs are kept (Worker lifecycle) waits for retention on the master (M4).
 
 ### DAG code delivery

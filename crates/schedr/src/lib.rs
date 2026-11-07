@@ -123,6 +123,9 @@ where
     for name in &config.timings.overridden {
         tracing::warn!("{name} is set: an unsupported timing, at your own risk");
     }
+    for name in &config.limits.overridden {
+        tracing::warn!("{name} is set: an unsupported limit, at your own risk");
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

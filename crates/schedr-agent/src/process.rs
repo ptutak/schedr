@@ -138,15 +138,32 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
     })
 }
 
+/// The mode of the log files the worker creates (`[worker] log_mode`, B182): set once when the
+/// worker starts (one per process), owner-only until then.
+static LOG_MODE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0o600);
+
+/// Sets the mode new log files get (`[worker] log_mode`); the umask still applies.
+pub fn set_log_mode(mode: u32) {
+    LOG_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Options appending to a log, creating it with the worker's log mode.
+pub(crate) fn log_options() -> tokio::fs::OpenOptions {
+    let mut options = tokio::fs::OpenOptions::new();
+    options
+        .create(true)
+        .append(true)
+        .mode(LOG_MODE.load(std::sync::atomic::Ordering::Relaxed));
+    options
+}
+
 /// The task's log file, opened for appending, shared by its stdout and stderr collectors.
 ///
 /// # Errors
 ///
 /// Returns an I/O error if it can't be opened.
 pub(crate) async fn open_log(spec: &ProcessSpec) -> io::Result<SharedLog> {
-    let mut options = tokio::fs::OpenOptions::new();
-    options.create(true).append(true);
-    let log = open_regular(options, &spec.log_file).await?;
+    let log = open_regular(log_options(), &spec.log_file).await?;
     Ok(Arc::new(Mutex::new(log)))
 }
 

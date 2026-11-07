@@ -171,6 +171,10 @@ pub fn master_settings(config: &Config) -> Settings {
         max_message_size: usize::try_from(config.master.grpc_max_message_size)
             .unwrap_or(usize::MAX),
         max_instances: usize::try_from(config.mapping.max_instances).unwrap_or(usize::MAX),
+        worker_report: schedr_master::core::ReportLimits {
+            records: config.limits.worker_report_records,
+            text: config.limits.worker_report_text,
+        },
     }
 }
 
@@ -261,6 +265,10 @@ pub fn agent_settings(
         .or_else(|| env.get("HOSTNAME").cloned())
         .unwrap_or_else(|| "localhost".to_owned());
     let memory = checked_memory(config, default_reserve)?;
+    // The loader checked it; the logs this worker creates get it (B182).
+    if let Some(mode) = schedr_config::config::log_mode(&config.worker.log_mode) {
+        schedr_agent::process::set_log_mode(mode);
+    }
     Ok(AgentSettings {
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,

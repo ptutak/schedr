@@ -3919,9 +3919,7 @@ async fn append_log(path: &Path, text: &str) {
     if text.is_empty() {
         return;
     }
-    let mut options = tokio::fs::OpenOptions::new();
-    options.create(true).append(true);
-    match crate::process::open_regular(options, path).await {
+    match crate::process::open_regular(crate::process::log_options(), path).await {
         Ok(mut file) => {
             use tokio::io::AsyncWriteExt as _;
             let _ = file.write_all(text.as_bytes()).await;

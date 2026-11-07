@@ -82,3 +82,40 @@ async fn only_a_regular_file_is_opened_never_a_link_or_a_directory() {
         "both names are refused"
     );
 }
+
+/// The permission bits of a log `open_log` creates at `name` in `dir`.
+async fn created_mode(dir: &std::path::Path, name: &str) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    let spec = ProcessSpec {
+        program: "/bin/true".into(),
+        args: Vec::new(),
+        env: std::collections::BTreeMap::new(),
+        working_dir: dir.to_path_buf(),
+        log_file: dir.join(name),
+        max_output_size: 1024,
+        mask: Mask::default(),
+        start_timeout: crate::launch::RUNNER_START_TIMEOUT,
+        output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
+    };
+    drop(open_log(&spec).await.unwrap());
+    std::fs::metadata(dir.join(name))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+#[tokio::test]
+async fn a_new_log_is_its_owners_only_unless_the_worker_opens_it_up() {
+    // B182: under umask 0022 a log was 0644, readable by every uid on the node.
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_eq!(created_mode(dir.path(), "a.log").await, 0o600);
+    // Each test is a process of its own (nextest): the mode set here goes nowhere else.
+    set_log_mode(0o640);
+    assert_eq!(created_mode(dir.path(), "b.log").await & 0o640, 0o640);
+    assert_eq!(
+        created_mode(dir.path(), "b.log").await & 0o007,
+        0,
+        "nothing for others"
+    );
+}

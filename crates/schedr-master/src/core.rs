@@ -81,6 +81,9 @@ pub struct Settings {
     pub max_message_size: usize,
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub max_instances: usize,
+    /// The most records of one kind, and characters of each text, kept of what a worker
+    /// reports (wait step hosts, warnings; B183).
+    pub worker_report: ReportLimits,
 }
 
 /// How the master's loop and its parse jobs are paced.
@@ -146,7 +149,52 @@ impl Default for Settings {
             quiet: QuietSettings::default(),
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             max_instances: crate::execution::DEFAULT_MAX_INSTANCES,
+            worker_report: ReportLimits::default(),
         }
+    }
+}
+
+/// How much of what a worker reports for people (wait step hosts, warnings) the master keeps
+/// (B183): an honest agent sends a few short records; more are dropped, longer texts cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportLimits {
+    /// The most records of one kind.
+    pub records: usize,
+    /// The most characters of each text.
+    pub text: usize,
+}
+
+impl Default for ReportLimits {
+    /// 256 records, 4096 characters (`SCHEDR_HIDDEN__MASTER__WORKER_REPORT_*`).
+    fn default() -> Self {
+        Self {
+            records: 256,
+            text: 4096,
+        }
+    }
+}
+
+impl ReportLimits {
+    /// `text` cut to the limit, at a character.
+    fn cut(self, text: String) -> String {
+        match text.char_indices().nth(self.text) {
+            Some((end, _)) => text[..end].to_owned(),
+            None => text,
+        }
+    }
+
+    /// `records` within the limit, saying in the log when some were dropped.
+    fn take<T>(self, worker_id: &str, what: &str, mut records: Vec<T>) -> Vec<T> {
+        if records.len() > self.records {
+            tracing::warn!(
+                worker_id,
+                sent = records.len(),
+                kept = self.records,
+                "worker sent more {what} than the master keeps: the rest are dropped"
+            );
+            records.truncate(self.records);
+        }
+        records
     }
 }
 
@@ -762,10 +810,12 @@ impl MasterCore {
         if connection.watcher_hosts == hosts {
             return;
         }
-        let records: Vec<WatcherHostRecord> = hosts
-            .iter()
+        let limits = self.settings.worker_report;
+        let records: Vec<WatcherHostRecord> = limits
+            .take(worker_id, "wait step hosts", hosts.iter().collect())
+            .into_iter()
             .map(|host| WatcherHostRecord {
-                code: host.code.clone(),
+                code: limits.cut(host.code.clone()),
                 wait_steps: host.wait_steps,
                 threads: host.threads,
                 tied_threads: host.tied_threads.min(host.threads),
@@ -830,13 +880,14 @@ impl MasterCore {
             // For people, like the last heartbeat: a failed write is logged, not the message's
             // failure (the worker sends them again after its next registration).
             worker_message::Message::Warnings(reported) => {
-                let warnings: Vec<WorkerWarning> = reported
-                    .warnings
+                let limits = self.settings.worker_report;
+                let warnings: Vec<WorkerWarning> = limits
+                    .take(worker_id, "warnings", reported.warnings)
                     .into_iter()
                     .map(|w| WorkerWarning {
-                        kind: w.kind,
-                        interpreter: w.interpreter,
-                        message: w.message,
+                        kind: limits.cut(w.kind),
+                        interpreter: limits.cut(w.interpreter),
+                        message: limits.cut(w.message),
                     })
                     .collect();
                 if let Err(error) = self.db.set_worker_warnings(worker_id, &warnings).await {

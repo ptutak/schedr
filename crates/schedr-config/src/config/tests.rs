@@ -266,6 +266,7 @@ fn worker_and_tls_defaults() {
             log_address: None,
             log_retention: Duration::from_hours(720),
             log_max_size: None,
+            log_mode: "0600".to_owned(),
             memory_budget: None,
             memory_reserve: None,
             runner_start_timeout: Duration::from_secs(30),

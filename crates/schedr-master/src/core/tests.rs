@@ -3022,3 +3022,42 @@ async fn a_dag_started_by_runs_of_another_starts_once_even_when_the_events_are_g
     core.tick(later(5)).await.unwrap();
     assert_eq!(sync_runs(&core).await.len(), 2, "kept events or not");
 }
+
+#[tokio::test]
+async fn what_a_worker_reports_for_people_is_kept_within_limits() {
+    // B183: a worker that lies could store megabytes of hosts or warnings on each heartbeat.
+    let mut core = with_dag().await;
+    let host = pb::WatcherHost {
+        code: "é".repeat(5000),
+        wait_steps: 1,
+        threads: 1,
+        tied_threads: 0,
+        memory_bytes: 0,
+        hosts_lost: 0,
+    };
+    let beat = worker_message::Message::Heartbeat(pb::Heartbeat {
+        watcher_hosts: vec![host; 300],
+        ..pb::Heartbeat::default()
+    });
+    core.handle("w1", beat, later(1)).await.unwrap();
+    let warning = pb::WorkerWarning {
+        kind: "fork_server_disabled".to_owned(),
+        interpreter: "python".to_owned(),
+        message: "x".repeat(10_000),
+    };
+    let report = worker_message::Message::Warnings(pb::Warnings {
+        warnings: vec![warning; 300],
+    });
+    core.handle("w1", report, later(2)).await.unwrap();
+    let workers = core.db.workers().await.unwrap();
+    let w1 = workers.iter().find(|w| w.id == "w1").unwrap();
+    assert_eq!(w1.watcher_hosts.len(), 256);
+    assert_eq!(
+        w1.watcher_hosts[0].code.chars().count(),
+        4096,
+        "cut at a character"
+    );
+    assert_eq!(w1.warnings.len(), 256);
+    assert_eq!(w1.warnings[0].message.len(), 4096);
+    assert_eq!(w1.warnings[0].kind, "fork_server_disabled");
+}

@@ -9,7 +9,7 @@ use figment::{Figment, Metadata, Profile, Provider};
 
 use crate::config::{
     BUILTIN_PYTHON, BUILTIN_PYTHON_ORIGIN, Config, DEFAULT_DAG_INTERPRETER, HIDDEN_PREFIX,
-    Interpreter, Timings, url_has_password,
+    HiddenLimits, Interpreter, Timings, url_has_password,
 };
 use crate::roots::{RootError, resolve_roots};
 use crate::sources::{
@@ -33,7 +33,7 @@ pub enum ConfigError {
     /// key and where the value came from.
     #[error("{0}")]
     Invalid(String),
-    /// A `SCHEDR_HIDDEN__*` variable that isn't a timing, or not a duration.
+    /// A `SCHEDR_HIDDEN__*` variable that isn't a timing or a limit, or not a value of its kind.
     #[error("{name}: {reason}")]
     BadHiddenTiming {
         /// The variable.
@@ -94,6 +94,15 @@ pub enum ConfigError {
     /// `[mapping] max_instances` is zero.
     #[error("[mapping] max_instances must be at least 1")]
     NoInstances,
+    /// `[worker] log_mode` isn't a mode logs may have.
+    #[error(
+        "[worker] log_mode `{mode}` isn't a mode for logs: octal, the owner reading and writing, \
+         at most 0644 (e.g. \"0600\", \"0640\")"
+    )]
+    LogMode {
+        /// What was given.
+        mode: String,
+    },
     /// `[dags] parse_concurrency` is zero.
     #[error("[dags] parse_concurrency must be at least 1")]
     NoParseConcurrency,
@@ -150,6 +159,7 @@ pub fn load(
         .merge(override_provider(overrides));
     let mut config: Config = figment.extract()?;
     config.timings = hidden_timings(env)?;
+    config.limits = hidden_limits(env)?;
     let from_file = |key: &str| {
         figment
             .find_metadata(key)
@@ -185,6 +195,11 @@ pub fn load(
     if !(MIN_MESSAGE_SIZE..=MAX_MESSAGE_SIZE).contains(&config.master.grpc_max_message_size) {
         return Err(ConfigError::MessageSize {
             size: format_size(config.master.grpc_max_message_size),
+        });
+    }
+    if crate::config::log_mode(&worker.log_mode).is_none() {
+        return Err(ConfigError::LogMode {
+            mode: worker.log_mode.clone(),
         });
     }
     if config.dags.parse_concurrency == 0 {
@@ -290,6 +305,35 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
     }
 }
 
+/// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
+const HIDDEN_LIMITS: [&str; 2] = [
+    "MASTER__WORKER_REPORT_RECORDS",
+    "MASTER__WORKER_REPORT_TEXT",
+];
+
+/// The fixed limits, with what `SCHEDR_HIDDEN__*` variables set: whole numbers above zero.
+fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigError> {
+    let mut limits = HiddenLimits::default();
+    for (name, text) in env {
+        let limit = match name.strip_prefix(HIDDEN_PREFIX) {
+            Some("MASTER__WORKER_REPORT_RECORDS") => &mut limits.worker_report_records,
+            Some("MASTER__WORKER_REPORT_TEXT") => &mut limits.worker_report_text,
+            _ => continue,
+        };
+        *limit = text
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| ConfigError::BadHiddenTiming {
+                name: name.clone(),
+                reason: format!("must be a whole number above zero, got `{text}`"),
+            })?;
+        limits.overridden.push(name.clone());
+    }
+    Ok(limits)
+}
+
 /// The fixed timings, with what `SCHEDR_HIDDEN__*` variables set.
 fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError> {
     let mut timings = Timings::default();
@@ -297,6 +341,9 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
         let Some(key) = name.strip_prefix(HIDDEN_PREFIX) else {
             continue;
         };
+        if HIDDEN_LIMITS.contains(&key) {
+            continue;
+        }
         let timing = match key {
             "MASTER__TICK_INTERVAL" => &mut timings.tick_interval,
             "MASTER__HEARTBEAT_INTERVAL" => &mut timings.heartbeat_interval,
