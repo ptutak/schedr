@@ -2,8 +2,10 @@
 
 ``Cron`` fires at the times a cron expression describes, in a time zone (default UTC);
 ``Every`` fires at a fixed interval measured in real time; ``Once`` fires once, at a given
-moment. A DAG without a trigger (``trigger=None``) has manual runs only. Event triggers
-(``@trigger``) come with milestone M4. See PROJECT.md, Native API.
+moment. A DAG without a trigger (``trigger=None``) has manual runs only. The others share
+``Trigger`` too: a ``@trigger`` function called with its arguments (``schedr.event_triggers``)
+starts a run per event, ``RunOf`` (``schedr.run_of``) one per run of another DAG that succeeds.
+See PROJECT.md, Native API.
 """
 
 import dataclasses

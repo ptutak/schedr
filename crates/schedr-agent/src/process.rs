@@ -142,19 +142,52 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
 /// worker starts (one per process), owner-only until then.
 static LOG_MODE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0o600);
 
-/// Sets the mode new log files get (`[worker] log_mode`); the umask still applies.
+/// Sets the mode the worker's log files get (`[worker] log_mode`): set on each file as it is
+/// opened, so the umask doesn't change it.
 pub fn set_log_mode(mode: u32) {
     LOG_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Options appending to a log, creating it with the worker's log mode.
-pub(crate) fn log_options() -> tokio::fs::OpenOptions {
+/// Readies the worker's log directory for `mode` (B182), at its start: made if missing, its own
+/// mode the log mode's readers' (0700 for 0600, 0750 for 0640, 0755 for 0644), and every log
+/// already in it given `mode`, so those written before (an upgrade, a looser mode then) aren't
+/// left readable until retention deletes them. A link in it is left alone, never followed.
+///
+/// # Errors
+///
+/// The I/O error of making the directory or setting a mode.
+pub fn secure_log_dir(dir: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::create_dir_all(dir)?;
+    let readers = |bit: u32, both: u32| if mode & bit == 0 { 0 } else { both };
+    let dir_mode = 0o700 | readers(0o040, 0o050) | readers(0o004, 0o005);
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(dir_mode))?;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_file() && metadata.permissions().mode() & 0o7777 != mode {
+            std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(mode))?;
+        }
+    }
+    Ok(())
+}
+
+/// Opens a log at `path` for appending, as [`open_regular`] does, with the worker's log mode:
+/// set on the file itself, so neither the umask nor a mode from before (an upgrade, a mode
+/// tightened since) decides who reads it.
+///
+/// # Errors
+///
+/// The open's I/O error, or setting the mode's.
+pub(crate) async fn open_log_file(path: &Path) -> io::Result<tokio::fs::File> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = LOG_MODE.load(std::sync::atomic::Ordering::Relaxed);
     let mut options = tokio::fs::OpenOptions::new();
-    options
-        .create(true)
-        .append(true)
-        .mode(LOG_MODE.load(std::sync::atomic::Ordering::Relaxed));
-    options
+    options.create(true).append(true).mode(mode);
+    let file = open_regular(options, path).await?;
+    file.set_permissions(std::fs::Permissions::from_mode(mode))
+        .await?;
+    Ok(file)
 }
 
 /// The task's log file, opened for appending, shared by its stdout and stderr collectors.
@@ -163,7 +196,7 @@ pub(crate) fn log_options() -> tokio::fs::OpenOptions {
 ///
 /// Returns an I/O error if it can't be opened.
 pub(crate) async fn open_log(spec: &ProcessSpec) -> io::Result<SharedLog> {
-    let log = open_regular(log_options(), &spec.log_file).await?;
+    let log = open_log_file(&spec.log_file).await?;
     Ok(Arc::new(Mutex::new(log)))
 }
 

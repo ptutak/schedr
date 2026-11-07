@@ -24,7 +24,7 @@ from schedr._model import (
     validate_dag_id,
 )
 from schedr._serialization.describe import describe
-from schedr.event_triggers import EventTrigger
+from schedr.event_triggers import EventTrigger, TriggerFunction
 from schedr.outcomes import RunIf
 from schedr.runner.sources import IMPORTING
 from schedr.triggers import Cron, Every, Once, Trigger
@@ -110,8 +110,10 @@ class Dag:
 
     Args:
         dag_id: The DAG's ID (required, explicit).
-        trigger: What starts its runs: ``Cron``, ``Every`` or ``Once``; ``None`` for manual
-            runs only. ``catchup``, ``start`` and ``end`` are set on the trigger.
+        trigger: What starts its runs: ``Cron``, ``Every`` or ``Once``; a ``@trigger``
+            function called with its arguments (its events); ``RunOf`` (another DAG's runs);
+            ``None`` for manual runs only. ``catchup``, ``start`` and ``end`` are set on the
+            trigger.
         initial_since: ``since`` of the run on the DAG's first fire time (or of its first
             run without one). A date or a datetime without a time zone is read in the
             trigger's time zone (UTC for ``Every`` and no trigger).
@@ -147,11 +149,15 @@ class Dag:
     ) -> None:
         """Records the DAG's settings; tasks are added inside the ``with`` block."""
         self.dag_id = validate_dag_id(dag_id)
+        if isinstance(trigger, TriggerFunction):
+            raise TypeError(
+                f"trigger: @trigger `{trigger.task_id}` is to be called with its arguments: "
+                f"`trigger={trigger.task_id}(...)`"
+            )
         if trigger is not None and not isinstance(trigger, Trigger):
             raise TypeError(
-                "trigger must be Cron(...), Every(...), Once(...), a @trigger function called "
-                "with its arguments, or None, "
-                f"got {type(trigger).__name__}"
+                "trigger must be Cron(...), Every(...), Once(...), RunOf(...), a @trigger "
+                f"function called with its arguments, or None, got {type(trigger).__name__}"
             )
         if isinstance(tags, str):
             raise TypeError("tags must be a list of strings, not a string")

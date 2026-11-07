@@ -124,6 +124,39 @@ pub fn deserialize_duration<'de, D: Deserializer<'de>>(d: D) -> Result<Duration,
     d.deserialize_str(DurationVisitor)
 }
 
+/// A serde `deserialize_with` helper for a file mode in octal text (`"0640"`). A whole number is
+/// taken by its digits, as the environment gives `SCHEDR_CONFIG__WORKER__LOG_MODE=0640` as
+/// 640: those digits are read as octal too, and checked as the text would be.
+///
+/// # Errors
+///
+/// Fails for a value that is neither a string nor a whole number.
+pub fn deserialize_mode_text<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    struct ModeVisitor;
+
+    impl Visitor<'_> for ModeVisitor {
+        type Value = String;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a file mode in octal such as \"0640\"")
+        }
+
+        fn visit_str<E: de::Error>(self, s: &str) -> Result<String, E> {
+            Ok(s.to_owned())
+        }
+
+        fn visit_u64<E: de::Error>(self, n: u64) -> Result<String, E> {
+            Ok(format!("0{n}"))
+        }
+
+        fn visit_i64<E: de::Error>(self, n: i64) -> Result<String, E> {
+            Ok(format!("0{n}"))
+        }
+    }
+
+    d.deserialize_any(ModeVisitor)
+}
+
 /// A serde `deserialize_with` helper for size fields.
 ///
 /// # Errors

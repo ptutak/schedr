@@ -3427,10 +3427,11 @@ async fn a_wait_for_with_nothing_to_wait_for_times_out() {
 
 #[rstest::rstest]
 #[case::none_yet(&[], None)]
-#[case::one_running(&[("r1", "running")], None)]
-#[case::a_success(&[("r1", "failed"), ("r2", "success")], Some("ran r2"))]
-#[case::a_rerun_still_running(&[("r1", "failed"), ("r2", "running")], None)]
-#[case::all_ended_otherwise(&[("r1", "skipped"), ("r2", "failed")], Some("failed skipped r1"))]
+#[case::running(&[("r1", "running")], None)]
+#[case::queued(&[("r1", "queued")], None)]
+#[case::a_success(&[("r2", "success")], Some("ran r2"))]
+#[case::skipped(&[("r1", "skipped")], Some("failed skipped r1"))]
+#[case::missing_waits(&[("r1", "missing")], None)]
 fn what_a_wait_for_decides(#[case] found: &[(&str, &str)], #[case] decided: Option<&str>) {
     let found: Vec<OtherRun> = found
         .iter()
@@ -3440,7 +3441,7 @@ fn what_a_wait_for_decides(#[case] found: &[(&str, &str)], #[case] decided: Opti
             ended_at: None,
         })
         .collect();
-    let shown = decide(&found).map(|ended| match ended {
+    let shown = decide(found.first()).map(|ended| match ended {
         WaitEnd::Ran { run_id } => format!("ran {run_id}"),
         WaitEnd::Failed { state, run_id } => format!("failed {state} {run_id}"),
         WaitEnd::TimedOut => "timed out".to_owned(),
@@ -3600,5 +3601,58 @@ async fn a_lag_past_the_times_there_are_matches_nothing() {
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Queued
+    );
+}
+
+#[tokio::test]
+async fn only_the_newest_run_for_the_moment_decides() {
+    // The user's option C: a run started again for the moment replaces the older ones.
+    let (mut dispatcher, db, run_id) =
+        with_run(waiting_dag(&json!({"dag": "orders", "lag_ms": 0}), false)).await;
+    // The newer by `triggered_at` is made first, so the older one has the greater ID: an order
+    // by ID alone would pick the older success.
+    let again = orders_run(&db, ts(NOW), RunState::Running, ts(NOW)).await;
+    let older = orders_run(&db, ts(NOW), RunState::Success, ts(NOW)).await;
+    assert!(older > again);
+    let pool = match db.pool() {
+        schedr_db::Pool::Sqlite(pool) => pool.clone(),
+        schedr_db::Pool::Postgres(_) => unreachable!(),
+    };
+    let earlier = schedr_db::db_time(later(-60));
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE runs SET triggered_at = '{earlier}' WHERE id = '{older}'"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let set = |state: &str, ended: &str| {
+        format!("UPDATE runs SET state = '{state}', ended_at = {ended} WHERE id = '{again}'")
+    };
+    sqlx::query(sqlx::AssertSqlSafe(set("running", "NULL")))
+        .execute(&pool)
+        .await
+        .unwrap();
+    dispatcher
+        .step_into(later(1), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued,
+        "the older success doesn't count while the newer one runs"
+    );
+    let ended = format!("'{}'", schedr_db::db_time(later(2)));
+    sqlx::query(sqlx::AssertSqlSafe(set("failed", &ended)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    dispatcher
+        .step_into(later(3), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Failed,
+        "the newer one failed: not routed, the step fails"
     );
 }

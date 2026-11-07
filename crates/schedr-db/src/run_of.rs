@@ -27,7 +27,8 @@ pub enum Matching {
 }
 
 impl Database {
-    /// The runs of `dag` that `matching` picks, with their state, or `task`'s state in each.
+    /// The run of `dag` that `matching` picks (the newest planned for the moment, or the first to
+    /// end after it), with its state, or `task`'s state in it; none yet: empty.
     ///
     /// # Errors
     ///
@@ -38,14 +39,17 @@ impl Database {
         task: Option<&str>,
         matching: Matching,
     ) -> Result<Vec<OtherRun>, DbError> {
+        // Of the runs planned for the moment only the newest counts (the user's, option C): a
+        // run started again for it replaces the older ones, as Airflow's clear would.
         const RUNS_FOR: &str = "SELECT id{text}, state, {ts<}ended_at{>ts} FROM runs \
-            WHERE dag_id = $1 AND planned_for = $2{ts} ORDER BY triggered_at, id";
+            WHERE dag_id = $1 AND planned_for = $2{ts} ORDER BY triggered_at DESC, id DESC LIMIT 1";
         // A run whose tasks aren't made yet (queued) still counts: a rerun on its way.
         const TASKS_FOR: &str = "SELECT r.id{text}, COALESCE(t.state, CASE WHEN r.state IN \
             ('queued', 'running') THEN 'queued' ELSE 'missing' END), {ts<}t.ended_at{>ts} \
             FROM runs r LEFT JOIN task_instances t \
             ON t.run_id = r.id AND t.task_id = $3 AND t.map_index = -1 \
-            WHERE r.dag_id = $1 AND r.planned_for = $2{ts} ORDER BY r.triggered_at, r.id";
+            WHERE r.dag_id = $1 AND r.planned_for = $2{ts} \
+            ORDER BY r.triggered_at DESC, r.id DESC LIMIT 1";
         const RUN_ENDED: &str = "SELECT id{text}, state, {ts<}ended_at{>ts} FROM runs \
             WHERE dag_id = $1 AND ended_at >= $2{ts} ORDER BY ended_at, id LIMIT 1";
         const TASK_ENDED: &str = "SELECT r.id{text}, t.state, {ts<}t.ended_at{>ts} \

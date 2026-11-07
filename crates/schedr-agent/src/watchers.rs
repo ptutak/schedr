@@ -867,8 +867,7 @@ struct AttemptLog<'a> {
 
 impl<'a> AttemptLog<'a> {
     async fn open(spec: &'a ProcessSpec) -> std::io::Result<Self> {
-        let file =
-            crate::process::open_regular(crate::process::log_options(), &spec.log_file).await?;
+        let file = crate::process::open_log_file(&spec.log_file).await?;
         let stream = || spec.mask.0.as_deref().map(MaskSet::stream);
         Ok(Self {
             mask: &spec.mask,

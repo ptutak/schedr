@@ -3060,4 +3060,49 @@ async fn what_a_worker_reports_for_people_is_kept_within_limits() {
     assert_eq!(w1.warnings.len(), 256);
     assert_eq!(w1.warnings[0].message.len(), 4096);
     assert_eq!(w1.warnings[0].kind, "fork_server_disabled");
+    let cached = &core.connections["w1"].watcher_hosts;
+    assert_eq!(
+        (cached.len(), cached[0].code.chars().count()),
+        (256, 4096),
+        "nor kept whole in memory"
+    );
+}
+
+#[tokio::test]
+async fn a_registration_over_the_limits_is_refused_not_stored() {
+    // B183: what a worker registers with is kept and matched on, so it isn't cut but refused.
+    let mut core = core().await;
+    let long = "q".repeat(4097);
+    let cases = [
+        pb::Register {
+            schedr_version: long.clone(),
+            ..register("w1", "i1", vec![])
+        },
+        pb::Register {
+            queues: vec![long.clone()],
+            ..register("w1", "i1", vec![])
+        },
+        pb::Register {
+            queues: (0..257).map(|n| format!("q{n}")).collect(),
+            ..register("w1", "i1", vec![])
+        },
+        pb::Register {
+            log_endpoint: long.clone(),
+            ..register("w1", "i1", vec![])
+        },
+        pb::Register {
+            config_json: format!("\"{}\"", "c".repeat(256 * 4096)),
+            ..register("w1", "i1", vec![])
+        },
+    ];
+    for case in cases {
+        let refused = core.register(&case, ts(NOW)).await.unwrap_err();
+        assert!(matches!(refused, CoreError::Refused(_)), "{refused}");
+    }
+    assert_eq!(core.db.workers().await.unwrap(), []);
+    assert!(
+        core.register(&register("w1", "i1", vec![]), ts(NOW))
+            .await
+            .is_ok()
+    );
 }

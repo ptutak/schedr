@@ -596,6 +596,9 @@ Logs older than `[worker] log_retention` (30 days) are deleted, and beyond
 `[worker] log_max_size` the oldest go first. The sweep runs at start and every hour; a log
 whose attempt is still in the journal is never deleted. The worker creates its logs 0600,
 readable by its own user only, as the journal; a log shipper running as another user needs
-`[worker] log_mode` (`"0640"` for one in the worker's group, at most `"0644"`). The run page shows the end of one
+`[worker] log_mode` (`"0640"` for one in the worker's group, at most `"0644"`). The mode is set on
+each log as it is opened, whatever the umask; at its start the worker also gives it to the logs
+already in its log folder (written before an upgrade, or under a looser mode), and the folder the
+matching mode (0700, 0750 or 0755). The run page shows the end of one
 try's log, follows the rest while the try runs, and shows the reason when the log can't be
 read (see [The task panel](12-ui.md#the-task-panel)).

@@ -264,3 +264,15 @@ def test_task_context_gives_dag_ctx_event() -> None:
         assert dag_ctx.event.at == planned
     with task_context(), pytest.raises(RuntimeError, match="started by no event"):
         _ = dag_ctx.event.key
+
+
+def test_a_trigger_function_not_called_says_to_call_it() -> None:
+    @trigger
+    async def arrivals(after: str | None) -> AsyncIterator[Event[None]]:
+        """Finds nothing."""
+        del after
+        return
+        yield
+
+    with pytest.raises(TypeError, match=r"`trigger=arrivals\(\.\.\.\)`"):
+        Dag("late", trigger=arrivals)  # type: ignore[arg-type]

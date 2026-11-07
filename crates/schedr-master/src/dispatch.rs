@@ -962,7 +962,7 @@ impl Dispatcher {
                     run
                 })
                 .collect();
-            let ended = match decide(&found) {
+            let ended = match decide(found.first()) {
                 Some(ended) => ended,
                 None if now >= deadline => WaitEnd::TimedOut,
                 None => {
@@ -2990,25 +2990,19 @@ fn task_specific(error: &DispatchError) -> bool {
     db.is_data_fault()
 }
 
-/// What the runs found say: the first that succeeded; nothing while one hasn't ended (or none
-/// is there); else the first, which ended otherwise.
-fn decide(found: &[OtherRun]) -> Option<WaitEnd> {
-    if let Some(ran) = found.iter().find(|r| r.state == "success") {
-        return Some(WaitEnd::Ran {
-            run_id: ran.run_id.clone(),
-        });
+/// What the run found says (the newest planned for the moment, or the first to end): its ID
+/// when it succeeded, `Failed` when it ended otherwise, nothing while it hasn't ended or none
+/// is there.
+fn decide(found: Option<&OtherRun>) -> Option<WaitEnd> {
+    let run = found?;
+    match run.state.as_str() {
+        "success" => Some(WaitEnd::Ran {
+            run_id: run.run_id.clone(),
+        }),
+        "failed" | "upstream_failed" | "skipped" | "cancelled" => Some(WaitEnd::Failed {
+            state: run.state.clone(),
+            run_id: run.run_id.clone(),
+        }),
+        _ => None,
     }
-    let ended = |state: &str| {
-        matches!(
-            state,
-            "failed" | "upstream_failed" | "skipped" | "cancelled"
-        )
-    };
-    if found.is_empty() || found.iter().any(|r| !ended(&r.state)) {
-        return None;
-    }
-    found.first().map(|r| WaitEnd::Failed {
-        state: r.state.clone(),
-        run_id: r.run_id.clone(),
-    })
 }

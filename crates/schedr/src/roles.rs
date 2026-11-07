@@ -265,10 +265,6 @@ pub fn agent_settings(
         .or_else(|| env.get("HOSTNAME").cloned())
         .unwrap_or_else(|| "localhost".to_owned());
     let memory = checked_memory(config, default_reserve)?;
-    // The loader checked it; the logs this worker creates get it (B182).
-    if let Some(mode) = schedr_config::config::log_mode(&config.worker.log_mode) {
-        schedr_agent::process::set_log_mode(mode);
-    }
     Ok(AgentSettings {
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
@@ -377,6 +373,28 @@ pub fn memory_text(watch: &MemoryWatch) -> String {
         Some(budget) => format!("memory budget {} per task", show_size(budget)),
         None => "no memory limit found: task memory is measured, never limited".to_owned(),
     }
+}
+
+/// `[worker] log_mode` as a mode (the loader checked it).
+#[must_use]
+pub fn log_mode(config: &Config) -> u32 {
+    schedr_config::config::log_mode(&config.worker.log_mode).unwrap_or(0o600)
+}
+
+/// Readies the worker's logs for `mode` (`[worker] log_mode`, B182), as it starts: the logs it creates
+/// get it, and its log directory and the logs already in it are given it.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when the directory or a log's mode can't be set.
+pub fn secure_logs(mode: u32, log_dir: &Path) -> Result<(), AppError> {
+    schedr_agent::process::set_log_mode(mode);
+    schedr_agent::process::secure_log_dir(log_dir, mode).map_err(|e| {
+        AppError::BadArgument(format!(
+            "can't set the mode of the logs in {}: {e}",
+            log_dir.display()
+        ))
+    })
 }
 
 /// The worker's log retention, from the configuration.
@@ -1687,6 +1705,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
+    secure_logs(log_mode(&config), &agent.setup.log_dir)?;
     // Secrets go there as files: a folder another user made first is refused (decision 201).
     schedr_agent::connection_env::prepare(&agent.setup.connection_dir)
         .map_err(AppError::BadArgument)?;

@@ -869,3 +869,39 @@ fn hidden_limits_are_whole_numbers_above_zero() {
         (256, 4096)
     );
 }
+
+#[rstest]
+#[case("0600", "0600")]
+#[case("0640", "0640")]
+#[case("644", "0644")]
+#[case("0o640", "0o640")]
+fn a_log_mode_from_the_environment_is_read_as_octal_whatever_it_looks_like(
+    #[case] given: &str,
+    #[case] kept: &str,
+) {
+    // The environment gives `0640` as the number 640: its digits are the mode's.
+    let loaded = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__WORKER__LOG_MODE", given)]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(loaded.worker.log_mode, kept);
+    assert!(crate::config::log_mode(&loaded.worker.log_mode).is_some());
+}
+
+#[test]
+fn a_log_mode_number_that_isnt_a_mode_is_refused() {
+    let error = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__WORKER__LOG_MODE", "666")]),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ConfigError::LogMode {
+            mode: "0666".to_owned()
+        }
+    );
+}

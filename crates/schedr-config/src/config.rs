@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::roots::{PathList, Root};
 use crate::units::{
-    DurationText, MemoryReserve, SizeText, deserialize_duration, deserialize_optional_size,
-    deserialize_size, serialize_duration, serialize_optional_size, serialize_size,
+    DurationText, MemoryReserve, SizeText, deserialize_duration, deserialize_mode_text,
+    deserialize_optional_size, deserialize_size, serialize_duration, serialize_optional_size,
+    serialize_size,
 };
 
 #[cfg(test)]
@@ -1003,6 +1004,7 @@ pub struct WorkerSection {
     /// logs), in octal: owner-only `"0600"` by default, as the journal and connection files. A
     /// log shipper reading them under another uid needs them opened on purpose: `"0640"` for
     /// one in the worker's group. At most `"0644"`, and the owner always reads and writes.
+    #[serde(deserialize_with = "deserialize_mode_text")]
     pub log_mode: String,
     /// Each task's memory budget; when not set, (the pod's limit − 10 %) ÷ slots.
     #[serde(

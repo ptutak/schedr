@@ -23,12 +23,15 @@ planned for: `timedelta(0)` is the run for the same moment, so a rerun or a back
 | That run, or its task | The step |
 |---|---|
 | succeeded | its value, the run's ID: `build(loaded.on(str))` |
-| ended `failed`, `upstream_failed`, `skipped` or `cancelled`, with no run for that moment still going | `Failed`, with `.state` and `.run_id`, when the DAG takes `.on(Failed)`; otherwise the step fails and the run with it |
+| ended `failed`, `upstream_failed`, `skipped` or `cancelled` | `Failed`, with `.state` and `.run_id`, when the DAG takes `.on(Failed)`; otherwise the step fails and the run with it |
 | nothing matching ended within `max_wait` | `TimedOut`, as any [wait step](18-sensors.md); `max_wait` defaults to the master's `[sensors] default_max_wait` |
 
-When several runs are planned for the same moment, as after a rerun, one that succeeded is enough
-at once, even while a rerun still goes; with none succeeded, the step waits while one of them still
-runs, a rerun queued too.
+When several runs are planned for the same moment, only the newest counts: schedr has no clear,
+so redoing `orders` for 2026-11-01 (`schedr runs trigger orders --for ...`, or a backfill) starts
+a new run for that moment, and a `report` run waiting or rerun afterwards waits for that one,
+queued or running, and takes its result. An older run that succeeded no longer counts. A `report`
+run that already ended is not run again by it: rerun it by hand, or start `report` with
+`trigger=RunOf(...)`, which starts a run for each run of `orders` that succeeds.
 
 A failure upstream is never quietly skipped past: without `.on(Failed)`, the step fails and what
 follows it is `upstream_failed`. `TimedOut` stays an outcome, as for any wait step: nothing broke.

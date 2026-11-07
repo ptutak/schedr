@@ -51,6 +51,8 @@ pub struct Standalone {
     pub secret_storage: crate::secret_storage::SecretPlan,
     /// Where logs, the worker's journal and the SQLite database go.
     pub data_dir: PathBuf,
+    /// The mode of its worker's logs (`[worker] log_mode`, B182).
+    pub log_mode: u32,
     /// The database (`[database] url`, else SQLite in the data directory).
     pub database_url: String,
     /// The master's gRPC address.
@@ -154,6 +156,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         notifications_url: config.database.notifications_url.clone(),
         lease_period: config.timings.lease_period,
         retention: log_retention(config),
+        log_mode: crate::roles::log_mode(config),
         master: master_settings(config),
         tick: config.timings.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
@@ -231,6 +234,7 @@ pub async fn run(
     // After the lock: a second standalone on the data directory stops before touching it.
     schedr_agent::connection_env::prepare(&setup.agent.setup.connection_dir)
         .map_err(AppError::BadArgument)?;
+    crate::roles::secure_logs(setup.log_mode, &setup.agent.setup.log_dir)?;
     let ([grpc, http, logs, ops], addresses) = bind(&setup).await?;
     let auth = standalone_auth(&setup, addresses.http)?;
     listening(addresses);

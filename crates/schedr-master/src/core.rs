@@ -175,6 +175,40 @@ impl Default for ReportLimits {
 }
 
 impl ReportLimits {
+    /// Why a registration is over the limits, if it is (B183): what it says is kept and matched
+    /// on (its ID, queues), so it is refused rather than cut. Its configuration, shown only,
+    /// may be up to as many texts as records.
+    fn oversized(self, register: &pb::Register) -> Option<String> {
+        let long = |text: &str| text.chars().count() > self.text;
+        let texts = [
+            ("worker ID", register.worker_id.as_str()),
+            ("incarnation", &register.incarnation_id),
+            ("schedr version", &register.schedr_version),
+            ("log endpoint", &register.log_endpoint),
+            ("process ID", &register.process_id),
+        ];
+        if let Some((what, _)) = texts.iter().find(|(_, text)| long(text)) {
+            return Some(format!("its {what} is over {} characters", self.text));
+        }
+        for (what, list) in [
+            ("queues", &register.queues),
+            ("secret storages", &register.secret_storages),
+        ] {
+            if list.len() > self.records {
+                return Some(format!("it has over {} {what}", self.records));
+            }
+            if list.iter().any(|text| long(text)) {
+                return Some(format!(
+                    "one of its {what} is over {} characters",
+                    self.text
+                ));
+            }
+        }
+        let config_limit = self.text.saturating_mul(self.records);
+        (register.config_json.len() > config_limit)
+            .then(|| format!("its configuration is over {config_limit} bytes"))
+    }
+
     /// `text` cut to the limit, at a character.
     fn cut(self, text: String) -> String {
         match text.char_indices().nth(self.text) {
@@ -562,6 +596,9 @@ impl MasterCore {
                 "the worker sent no worker ID".to_owned(),
             ));
         }
+        if let Some(why) = self.settings.worker_report.oversized(register) {
+            return Err(CoreError::Refused(why));
+        }
         if self.is_live(worker_id) {
             return Err(CoreError::Refused(format!(
                 "worker `{worker_id}` already has a live stream"
@@ -807,15 +844,23 @@ impl MasterCore {
         let Some(connection) = self.connections.get_mut(worker_id) else {
             return;
         };
+        // Within the limits before anything keeps it: the database and this cache (B183).
+        let limits = self.settings.worker_report;
+        let hosts: Vec<pb::WatcherHost> = limits
+            .take(worker_id, "wait step hosts", hosts)
+            .into_iter()
+            .map(|host| pb::WatcherHost {
+                code: limits.cut(host.code),
+                ..host
+            })
+            .collect();
         if connection.watcher_hosts == hosts {
             return;
         }
-        let limits = self.settings.worker_report;
-        let records: Vec<WatcherHostRecord> = limits
-            .take(worker_id, "wait step hosts", hosts.iter().collect())
-            .into_iter()
+        let records: Vec<WatcherHostRecord> = hosts
+            .iter()
             .map(|host| WatcherHostRecord {
-                code: limits.cut(host.code.clone()),
+                code: host.code.clone(),
                 wait_steps: host.wait_steps,
                 threads: host.threads,
                 tied_threads: host.tied_threads.min(host.threads),

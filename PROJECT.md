@@ -1715,7 +1715,10 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   **`[worker] log_mode`**, default **0600** like the journal and connection files (B182, the
   user's, 2026-11-07: 0600 with a key; not chosen: 0640 fixed, which stops a shipper under an
   unrelated uid silently, or 0600 fixed, with no way to open them up); a shipper in the worker's
-  group sets `"0640"`; at most `"0644"`, and the owner always reads and writes. Listing gone workers for as long as
+  group sets `"0640"`; at most `"0644"`, and the owner always reads and writes. It is set on each log as it is opened (the
+  umask doesn't change it), and at the worker's start on its log folder (0700, 0750, 0755) and the logs already there.
+  A registration over the report limits (an ID, a version, a queue over 4096 characters, over 256 queues, a configuration
+  over 1 MiB) is refused, not cut: what it says is kept and matched on (B183, after Grok's review). Listing gone workers for as long as
   their logs are kept (Worker lifecycle) waits for retention on the master (M4).
 
 ### DAG code delivery
@@ -6896,7 +6899,12 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   part of an output, a mapped task, and `x >> node`, since every edge into it is something it chooses from.
 - **Waiting for another DAG's run: `RunOf`** (decision 353, the user's, 2026-11-07; to be built in M4.11d):
   `RunOf("orders", task="load", lag=timedelta(hours=6))` says which run, and of it which task (none: the whole run). With
-  `lag`, the run whose `planned_for` is this one's minus `lag`; without it, a wait step waits for the next run to end and a
+  `lag`, the run whose `planned_for` is this one's minus `lag`, and of several such only the newest (by `triggered_at`): its
+  result decides, a failed newer run gives `Failed` though an older one succeeded (the user's, 2026-11-07, option C: schedr has
+  no clear, so redoing `orders` for a day is a new run for that moment, and a `report` rerun afterwards must read it; not
+  chosen: A, any success at once, which let a rerun of `report` build on the run being redone; B, waiting while any of them
+  runs, then the newest success, which hid a failed redo; re-running `report` by itself when `orders` is redone is M4.12's
+  chained runs, or `trigger=RunOf(...)`); without it, a wait step waits for the next run to end and a
   trigger plans its run for now. It goes where something waits: the node `wait_for(RunOf(...), max_wait=...)`, which the
   master ends with no slot and no polling, passing the other run's ID, or `Failed` when it (or its task) didn't succeed
   (skipped and cancelled too), or `TimedOut`. `Failed` is an outcome only where the DAG routes it (an edge from the node on
@@ -6905,7 +6913,12 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   that reads the result, `@sensor(wait_for=RunOf(...))` and `@trigger(wait_for=RunOf(...))`, given a `RunResult[T]` (its run's
   ID, DAG, `planned_for`, state, end, and with `task=` its state, outcome and output as `T`). A sensor returning `NOT_YET`
   waits for the next matching run, until `max_wait`. Any DAG may wait for and read any other's runs, as anyone signed in sees
-  them (schedr has no permissions of its own). `trigger=RunOf(...)` starts a run only for a run (or its task) that succeeded, and only for those ending while its DAG is live: nothing is caught up after a pause. Each such run is an event keyed by the other run's ID, so it starts one run however often the master looks; its data is `{"run_id", "dag_id", "planned_for"}`, and queued ones count against `[triggers] max_queued_events`. A DAG can't be started by its own runs, nor with a negative `lag` (Claude's; a cycle across DAGs isn't caught, see M4.12's chained runs). Live means unpaused, present and not in conflict, with this trigger: the database sets `dags.live_since` in the same statement that pauses, removes, brings back or changes the DAG's trigger, so the two can't come apart. Each pass reads strictly after its cursor (end, run ID) on the `triggers` row, kept with the `RunOf` it was made for, so a deleted event row or an earlier trigger's state never starts a run again; a pass queues no more than `max_queued_events` leaves room for. A manual run brings an event as an event trigger's does: the UI's dialog asks for its key, `--event <key>` runs a stored one again. `lag` is at most 10 years either way, for `wait_for` too, so a planned moment plus it stays a time (Claude's, after the reviews). A `RunOf` naming a DAG or task not loaded says so in the waiting step's reason (parse warnings aren't stored); the step waits until `max_wait`, as that DAG may come from a folder that loads later. Built in two parts: d1 without code, d2 the functions. Not chosen: the latest
+  them (schedr has no permissions of its own). `trigger=RunOf(...)` starts a run only for a run (or its task) that succeeded, and only for those ending while its DAG is live: nothing is caught up after a pause. Each such run is an event keyed by the other run's ID, so it starts one run however often the master looks; its data is `{"run_id", "dag_id", "planned_for"}`, and queued ones count against `[triggers] max_queued_events`. A DAG can't be started by its own runs, nor with a negative `lag` (Claude's; a cycle across DAGs isn't caught, see M4.12's chained runs). Live means unpaused, present and not in conflict, with this trigger: the database sets `dags.live_since` in the same statement that pauses, removes, brings back or changes the DAG's trigger, so the two can't come apart. Each pass reads strictly after its cursor (end, run ID) on the `triggers` row, kept with the `RunOf` it was made for, so a deleted event row or an earlier trigger's state never starts a run again; a pass queues no more than `max_queued_events` leaves room for. A manual run brings an event as an event trigger's does: the UI's dialog asks for its key, `--event <key>` runs a stored one again. `lag` is at most 10 years either way, for `wait_for` too, so a planned moment plus it stays a time (Claude's, after the reviews). A `RunOf` naming a DAG or task not loaded says so in the waiting step's reason (parse warnings aren't stored); the step waits until `max_wait`, as that DAG may come from a folder that loads later. Built in two parts: d1 without code, d2 the functions. For d2 (the user's, 2026-11-07, l-o all A): the function runs on a
+  watcher slot, the master waiting without code and handing it each matching run's `RunResult` once that run ends; a trigger
+  function sees every run that ends (succeeded, failed, cancelled), the no-code form covering successes; it returns
+  `Event[T] | None`, the key the other run's ID unless it gives one; a raise fails a sensor's attempt (its retries) and is a
+  trigger failure (backoff, `failing_after`) that tries the same run again, the cursor not moving past it (not chosen: a task
+  slot per match; successes only; a `bool`; skipping a run whose function raised). Not chosen: the latest
   run, or the latest that succeeded (hard to follow over backfills and reruns); failing at once when no run exists yet;
   `offset=` (too broad; its sign would flip between the forms) and `planned_for_with_offset=` (long), for what is `lag`
   inside `RunOf`; `wait_for_run(...)` for the node; a skip counting as done (the function form sees the real state); a trigger for every run that ends, whatever its state; catching up runs that ended while paused; refusing an unknown DAG at load.
