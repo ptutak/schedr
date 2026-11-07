@@ -326,11 +326,11 @@ async fn a_manual_run_triggered_again_with_its_id_is_the_same_run() {
     let now = ts("2026-10-21T08:00:00Z");
     let id = "01a16884-4f28-7563-9d35-7d0555a017f1";
     let first = scheduler
-        .trigger_as(Some(id), &sync(), None, None, "anna", now)
+        .trigger_as(Some(id), &sync(), None, (None, None), "anna", now)
         .await
         .unwrap();
     let again = scheduler
-        .trigger_as(Some(id), &sync(), None, None, "anna", now)
+        .trigger_as(Some(id), &sync(), None, (None, None), "anna", now)
         .await
         .unwrap();
     assert_eq!((first.run_id.as_str(), again.run_id.as_str()), (id, id));

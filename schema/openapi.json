@@ -543,6 +543,53 @@
         ],
         "type": "object"
       },
+      "EventList": {
+        "description": "A trigger's events.",
+        "properties": {
+          "events": {
+            "description": "Newest received first.",
+            "items": {
+              "$ref": "#/components/schemas/EventView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "type": "object"
+      },
+      "EventView": {
+        "description": "An event a trigger found.",
+        "properties": {
+          "at": {
+            "description": "When it happened, if it said.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "description": "Its data, JSON of any kind."
+          },
+          "key": {
+            "description": "Its key.",
+            "type": "string"
+          },
+          "received_at": {
+            "description": "When the master got it.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "data",
+          "received_at"
+        ],
+        "type": "object"
+      },
       "HeldView": {
         "description": "Why a DAG is held: its file's import error. The error is the **file's**, so every DAG of\nthe file is held (decision 72.3).",
         "properties": {
@@ -1281,10 +1328,51 @@
         },
         "type": "object"
       },
+      "TriggerList": {
+        "description": "The triggers.",
+        "properties": {
+          "triggers": {
+            "description": "By DAG.",
+            "items": {
+              "$ref": "#/components/schemas/TriggerView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "triggers"
+        ],
+        "type": "object"
+      },
       "TriggerRequest": {
         "additionalProperties": false,
         "description": "A manual run to start.",
         "properties": {
+          "event": {
+            "description": "For a DAG a trigger starts: the key of an event it found, to run again.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_at": {
+            "description": "And when it happened; the run's moment otherwise.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_data": {
+            "description": "And its data, as JSON of any kind."
+          },
+          "event_key": {
+            "description": "Or an event given here: its key. It is never stored as an event.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "params": {
             "description": "Values for the run's parameters, as JSON (`{\"region\": \"us\"}`), over the DAG's\ndefaults; checked by the master against the DAG's schema (decision 133).",
             "type": [
@@ -1301,6 +1389,104 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "TriggerView": {
+        "description": "A DAG's trigger.",
+        "properties": {
+          "bookmark": {
+            "description": "The last key acted on: what it starts from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dag_id": {
+            "description": "Its DAG.",
+            "type": "string"
+          },
+          "failures": {
+            "description": "Its errors in a row.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_error": {
+            "description": "Its last error.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_event_at": {
+            "description": "When it last found something.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_poked_at": {
+            "description": "When a poke's call last ended.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_restart_at": {
+            "description": "When it was last started again for finding nothing for its `restart_if_idle`.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "not_before": {
+            "description": "Not started again before this moment.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "When this run of it started.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`running`, `waiting` (for a free watcher slot or to start again), `stopped` (see\n`stopped_why`), `switched_off` or `paused` (its DAG's, or outside its `start` and `end`).",
+            "type": "string"
+          },
+          "stopped_why": {
+            "description": "Why it isn't running although its DAG wants it: `back_pressure` or `returned`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trigger": {
+            "description": "Its function.",
+            "type": "string"
+          },
+          "worker": {
+            "description": "The worker running it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dag_id",
+          "trigger",
+          "state",
+          "failures"
+        ],
         "type": "object"
       },
       "UsageView": {
@@ -2120,6 +2306,229 @@
         "summary": "Switch a wait step back on, forgetting its strikes. Applied by the master; poll the command\nfor the decision.",
         "tags": [
           "sensors"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger": {
+      "get": {
+        "operationId": "dag_trigger",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A DAG's trigger: `404` for a DAG without one.",
+        "tags": [
+          "triggers"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger/events": {
+      "get": {
+        "operationId": "trigger_events",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many, 50 by default and 500 at most.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Those after the one last listed: its `received_at`.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "And its `key`, for those received at the same moment.",
+            "in": "query",
+            "name": "before_key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a DAG's trigger found, newest received first.",
+        "tags": [
+          "triggers"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger/restart": {
+      "post": {
+        "operationId": "restart_trigger",
+        "parameters": [
+          {
+            "description": "A key of the client's",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start a DAG's trigger again from its bookmark, whatever stopped it. Applied by the master;\npoll the command for the decision.",
+        "tags": [
+          "triggers"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger/switch-on": {
+      "post": {
+        "operationId": "switch_on_trigger",
+        "parameters": [
+          {
+            "description": "A key of the client's",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Switch a DAG's trigger back on, forgetting its strikes. Applied by the master; poll the\ncommand for the decision.",
+        "tags": [
+          "triggers"
         ]
       }
     },
@@ -2986,6 +3395,26 @@
         "summary": "The wait steps switched off for getting their host killed too many times in a row\n(decision 338).",
         "tags": [
           "sensors"
+        ]
+      }
+    },
+    "/api/v1/triggers": {
+      "get": {
+        "operationId": "list_triggers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every DAG's trigger.",
+        "tags": [
+          "triggers"
         ]
       }
     },

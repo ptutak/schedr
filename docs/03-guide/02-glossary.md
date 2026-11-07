@@ -28,6 +28,17 @@ The names used across the documentation, the API and the logs.
   hashes of other DAG roots and any used script roots. Workers with the same code report the
   same hash, so the master knows which workers have which code.
 
+**Trigger** (event trigger)
+: A watcher belonging to a DAG that finds events and starts runs for new keys. See
+  [Event triggers](../02-dags/19-triggers.md).
+
+**Event**
+: A trigger's finding, identified by a key within its DAG, with data and an optional time.
+  A new key starts an event run.
+
+**Bookmark**
+: The last event key a trigger acted on, passed back as `after` when it starts again.
+
 **Parse job**
 : The master's request to one worker to import every DAG file of a root at one content hash
   and send back the DAGs as data (DAG JSON). The master has no Python, so it never reads DAG

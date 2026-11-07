@@ -21,6 +21,7 @@ use schedr_agent::launch::ProcessParseRunner;
 use schedr_agent::parse::{ParseLimits, parse_files_with};
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::scan::scan;
+use schedr_api::views::TriggerRequest;
 use schedr_api::views::{AttemptList, LocationView, RunDetail, WorkerView};
 use schedr_config::{Config, Root};
 use schedr_db::Database;
@@ -189,6 +190,9 @@ pub async fn run_local(
             planned_for,
             params,
             params_json,
+            event_key,
+            event_data,
+            event_at,
             secrets,
             connections,
             task,
@@ -214,9 +218,25 @@ pub async fn run_local(
                 .transpose()
                 .map_err(AppError::BadArgument)?
                 .map(|t| t.at);
+            let event = event_key.clone().map(|key| (key, event_data.as_deref()));
+            let event = event
+                .map(|(key, data)| {
+                    let data =
+                        crate::user::given_event_data(data).map_err(AppError::BadArgument)?;
+                    Ok::<_, AppError>((key, data))
+                })
+                .transpose()?;
+            let event_at = event_at
+                .as_deref()
+                .map(crate::times::parse_for)
+                .transpose()
+                .map_err(AppError::BadArgument)?
+                .map(|t| t.at);
             let run = TestRun {
                 planned_for: at,
                 params,
+                event,
+                event_at,
                 secrets,
                 connections,
             };
@@ -897,6 +917,10 @@ fn write_text(
 struct TestRun {
     planned_for: Option<jiff::Timestamp>,
     params: Option<serde_json::Map<String, serde_json::Value>>,
+    /// `--event-key` and `--event-data`.
+    event: Option<(String, Option<Value>)>,
+    /// `--event-at`.
+    event_at: Option<jiff::Timestamp>,
     /// `--secret` values: in memory, standing for every storage the DAG reads.
     secrets: Vec<(schedr_model::SecretName, String)>,
     /// `--connection` values, by connection and parameter.
@@ -1183,10 +1207,18 @@ async fn drive(
         Duration::from_secs(60),
     );
     let location = wait_for_dag(&client, dag).await?;
+    let request = TriggerRequest {
+        planned_for: test.planned_for,
+        params: test.params.clone(),
+        event_key: test.event.as_ref().map(|(key, _)| key.clone()),
+        event_data: test.event.as_ref().and_then(|(_, data)| data.clone()),
+        event_at: test.event_at,
+        event: None,
+    };
     let command = client
         .wait(
             client
-                .send_command(|| client.trigger(dag, test.planned_for, test.params.as_ref()))
+                .send_command(|| client.trigger_with(dag, &request))
                 .await?,
         )
         .await?;

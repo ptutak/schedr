@@ -249,11 +249,13 @@ async fn actions_become_pending_commands_by_the_user() {
                 dag_id: sync.clone()
             },
             Command::TriggerRun {
+                event: None,
                 params: None,
                 dag_id: sync.clone(),
                 planned_for: Some(ts("2026-10-15T03:00:00Z"))
             },
             Command::TriggerRun {
+                event: None,
                 params: None,
                 dag_id: sync,
                 planned_for: None
@@ -1744,4 +1746,112 @@ fn a_mapped_tasks_cleanup_is_the_worst_of_its_instances() {
     assert_eq!(worst_cleanup(&tasks, &fetch).as_deref(), Some("failed"));
     assert_eq!(worst_cleanup(&tasks[..2], &fetch).as_deref(), Some("ok"));
     assert_eq!(worst_cleanup(&tasks[..1], &fetch), None);
+}
+
+#[tokio::test]
+async fn a_triggers_events_are_masked_as_outputs_are_and_paged() {
+    let (app, db, _) = api().await;
+    let active = db.active_dags().await.unwrap().remove(0);
+    let at = ts("2026-10-14T03:00:00Z");
+    let dag = active.dag.id.clone();
+    for (i, key) in ["a", "b"].iter().enumerate() {
+        let event = schedr_model::RunEvent {
+            key: (*key).to_owned(),
+            data: json!({"password": "hunter2", "n": i}),
+            at: None,
+        };
+        let params = json!({});
+        let new = schedr_db::runs::NewRun {
+            dag_id: &dag,
+            dag_version_id: &active.version_id,
+            kind: schedr_model::RunKind::Event,
+            state: schedr_model::RunState::Queued,
+            planned_for: at,
+            since: at,
+            triggered_at: at,
+            triggered_by: "trigger",
+            params: &params,
+            event: Some(&event),
+        };
+        let id = format!("01a00000-0000-7000-8000-00000000000{i}");
+        db.store_event(&id, &new, &event).await.unwrap();
+    }
+    let path = format!("/api/v1/dags/{dag}/trigger/events");
+    let (status, body) = get(&app, &format!("{path}?limit=1")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["events"][0]["key"], "a", "{body}");
+    assert_eq!(body["events"][0]["data"]["password"], "****", "{body}");
+    assert_eq!(body["events"][0]["data"]["n"], 0, "{body}");
+    let (_, rest) = get(
+        &app,
+        &format!("{path}?before=2026-10-14T03:00:00Z&before_key=a"),
+    )
+    .await;
+    assert_eq!(rest["events"][0]["key"], "b", "{rest}");
+    let (status, _) = get(&app, &format!("{path}?before_key=a")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = get(&app, &format!("/api/v1/dags/{dag}/trigger")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "it has no trigger");
+    let (status, list) = get(&app, "/api/v1/triggers").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["triggers"], json!([]));
+}
+
+#[tokio::test]
+async fn an_event_that_cant_be_stored_is_refused_before_it_becomes_a_command() {
+    let (app, _db, _) = api().await;
+    let long = "k".repeat(1025);
+    for (body, why) in [
+        (
+            json!({"event_at": "2026-10-14T03:00:00Z"}),
+            "event_at needs",
+        ),
+        (json!({"event_data": 1}), "event_data needs"),
+        (json!({"event": "a", "event_key": "b"}), "event is the key"),
+        (json!({"event": "a", "event_data": 1}), "event is the key"),
+        (json!({"event_key": "a", "event_data": "x\u{0}"}), "NUL"),
+        (json!({"event_key": ""}), "key"),
+        (json!({"event_key": long}), "key"),
+        (json!({"event_key": "a\nb"}), "control"),
+    ] {
+        let (status, answer) = send(
+            &app,
+            Method::POST,
+            "/api/v1/dags/sync/runs",
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {answer}");
+        let error = answer["error"].as_str().unwrap_or_default();
+        assert!(error.contains(why), "{body}: {answer}");
+    }
+    for body in [
+        json!({"event": "a"}),
+        json!({"event_key": "a", "event_data": {"n": 1}, "event_at": "2026-10-14T03:00:00Z"}),
+    ] {
+        let (status, answer) = send(
+            &app,
+            Method::POST,
+            "/api/v1/dags/sync/runs",
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}: {answer}");
+    }
+}
+
+#[tokio::test]
+async fn a_dag_without_a_trigger_has_nothing_to_switch_on() {
+    let (app, _db, _) = api().await;
+    let (status, _) = send(
+        &app,
+        Method::POST,
+        "/api/v1/dags/sync/trigger/switch-on",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Whether it has one is the master's to say, as for any command.
+    let (status, _) = send(&app, Method::POST, "/api/v1/dags/sync/trigger/restart", "").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
 }

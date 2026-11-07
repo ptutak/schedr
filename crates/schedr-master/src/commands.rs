@@ -11,6 +11,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use schedr_db::commands::PendingCommand;
 use schedr_db::{Database, DbError};
+use schedr_model::commands::AskedEvent;
 use schedr_model::commands::{
     CONNECTION_CHECK_TIMEOUT_MS, Command, CommandStatus, ConnectionJobResult, ConnectionsResult,
     JobState, MAX_CONNECTION_TEST_MS,
@@ -202,16 +203,82 @@ impl Commander {
         self.metrics.command_latency.observe(waited.max(0.0));
     }
 
+    /// The event a manual run asks for; why not as the error, for a key unknown or data that the
+    /// trigger's own events couldn't have.
+    async fn asked_event(
+        &self,
+        dag_id: &DagId,
+        asked: Option<&AskedEvent>,
+    ) -> Result<Result<Option<schedr_model::RunEvent>, String>, CommandError> {
+        let (key, data, at) = match asked {
+            None => return Ok(Ok(None)),
+            Some(AskedEvent::Stored { key }) => {
+                let found = self.db.stored_event(dag_id.as_str(), key).await?;
+                return Ok(found.map_or_else(
+                    || Err(format!("no event `{key}` of DAG `{dag_id}`")),
+                    |event| Ok(Some(event)),
+                ));
+            }
+            Some(AskedEvent::Given { key, data, at }) => (key, data, *at),
+        };
+        if let Err(why) = schedr_model::trigger::check_event_key(key) {
+            return Ok(Err(why));
+        }
+        let stored = self.db.stored_dag(dag_id).await?;
+        let limit =
+            stored
+                .and_then(|dag| dag.current)
+                .and_then(|current| match &current.dag.trigger {
+                    schedr_model::Trigger::Event { task, .. } => {
+                        Some(task.settings.max_output_size)
+                    }
+                    _ => None,
+                });
+        let size = serde_json::to_vec(data).map_or(0, |bytes| bytes.len());
+        if limit.is_some_and(|limit| u64::try_from(size).unwrap_or(u64::MAX) > limit) {
+            return Ok(Err(format!(
+                "the event's data is {size} bytes, over its trigger's `max_output_size`"
+            )));
+        }
+        Ok(Ok(Some(schedr_model::RunEvent {
+            key: key.clone(),
+            data: data.clone(),
+            at,
+        })))
+    }
+
+    /// Starts a DAG's trigger again; a DAG without one is refused.
+    async fn restart_trigger(&self, dag_id: &DagId) -> Result<Outcome, CommandError> {
+        let Some(dag) = self.db.stored_dag(dag_id).await? else {
+            return Ok(no_dag(dag_id));
+        };
+        let event = dag
+            .current
+            .is_some_and(|current| current.dag.trigger.is_event());
+        if !event {
+            return Ok(Outcome::Rejected(format!(
+                "DAG `{dag_id}` has no event trigger"
+            )));
+        }
+        self.db.restart_trigger(dag_id.as_str()).await?;
+        Ok(Outcome::Applied(json!({})))
+    }
+
     /// Forgets a wait step's strikes; anything else named is refused, as it would look done.
     async fn switch_on(&self, dag_id: &DagId, sensor: &TaskId) -> Result<Outcome, CommandError> {
         let Some(dag) = self.db.stored_dag(dag_id).await? else {
             return Ok(no_dag(dag_id));
         };
         let is_sensor = dag.current.is_some_and(|current| {
-            current
-                .dag
-                .task(sensor)
-                .is_some_and(|task| matches!(task.kind, schedr_model::TaskKind::Sensor { .. }))
+            let trigger = matches!(
+                &current.dag.trigger,
+                schedr_model::Trigger::Event { task, .. } if &task.id == sensor
+            );
+            trigger
+                || current
+                    .dag
+                    .task(sensor)
+                    .is_some_and(|task| matches!(task.kind, schedr_model::TaskKind::Sensor { .. }))
         });
         if !is_sensor {
             return Ok(Outcome::Rejected(format!(
@@ -249,11 +316,13 @@ impl Commander {
                 dag_id,
                 planned_for,
                 params,
+                event,
             } => {
-                let requested = (*planned_for, params.as_ref());
+                let requested = (*planned_for, params.as_ref(), event.as_ref());
                 self.trigger(pending, scheduler, dag_id, requested, now)
                     .await
             }
+            Command::RestartTrigger { dag_id } => self.restart_trigger(dag_id).await,
             Command::CancelRun { run_id } => {
                 let Some(run) = self.db.run_tasks(run_id).await? else {
                     return Ok(Outcome::Rejected(format!("no run `{run_id}`")));
@@ -543,21 +612,26 @@ impl Commander {
         pending: &PendingCommand,
         scheduler: &Scheduler,
         dag_id: &DagId,
-        (planned_for, params): (
+        (planned_for, params, asked): (
             Option<Timestamp>,
             Option<&serde_json::Map<String, serde_json::Value>>,
+            Option<&AskedEvent>,
         ),
         now: Timestamp,
     ) -> Result<Outcome, CommandError> {
         if pending.applying && self.db.run_tasks(&pending.id).await?.is_some() {
             return Ok(Outcome::Applied(json!({"run_id": pending.id})));
         }
+        let event = match self.asked_event(dag_id, asked).await? {
+            Ok(event) => event,
+            Err(why) => return Ok(Outcome::Rejected(why)),
+        };
         let created = scheduler
             .trigger_as(
                 Some(&pending.id),
                 dag_id,
                 planned_for,
-                params,
+                (params, event.as_ref()),
                 &pending.requested_by,
                 now,
             )

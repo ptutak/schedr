@@ -898,3 +898,99 @@ async fn a_trigger_whose_params_cant_be_read_keeps_its_key() {
         String::from_utf8_lossy(&bytes)
     );
 }
+
+fn applied(id: &str, kind: &str) -> (u16, Value) {
+    (
+        202,
+        command(id, kind, "applied", None, &json!({"run_id": "r9"})),
+    )
+}
+
+/// The bodies posted to `path`.
+fn sent_to(sent: &crate::tests::Sent, path: &str) -> Vec<Value> {
+    sent.lock()
+        .unwrap()
+        .iter()
+        .filter(|(to, _)| to == path)
+        .filter_map(|(_, body)| body.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_run_by_hand_sends_the_event_it_was_given_or_found() {
+    let mut etl = etl();
+    let runs = "/api/v1/dags/sync/runs";
+    etl.answers
+        .insert(runs.to_owned(), applied("c1", "trigger_run"));
+    let sent = etl.sent.clone();
+    let app = ui(vec![deployment("etl", etl)]);
+    let form = "event_key=by-hand&event_data=%7B%22n%22%3A1%7D&event_at=2026-10-14T03%3A00%3A00Z";
+    let (_, html) = post(&app, "/d/etl/dags/sync/trigger", form, &[SAME]).await;
+    assert_eq!(attrs(&html, ".command a", "href"), ["/d/etl/runs/r9"]);
+    let (_, html) = post(
+        &app,
+        "/d/etl/dags/sync/trigger/run-event?key=inbox%2F1",
+        "",
+        &[SAME],
+    )
+    .await;
+    assert_eq!(
+        texts(&html, ".command")[0],
+        "Run sync again for event inbox/1: applied: run r9."
+    );
+    let bodies = sent_to(&sent, runs);
+    assert_eq!(bodies[0]["event_key"], "by-hand", "{bodies:?}");
+    assert_eq!(bodies[0]["event_data"], json!({"n": 1}), "{bodies:?}");
+    assert_eq!(bodies[1]["event"], "inbox/1", "{bodies:?}");
+}
+
+#[tokio::test]
+async fn event_data_that_isnt_json_is_never_sent_and_the_key_is_kept() {
+    let etl = etl();
+    let sent = etl.sent.clone();
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = post(
+        &app,
+        "/d/etl/dags/sync/trigger",
+        "event_key=k&event_data=%7B",
+        &[SAME],
+    )
+    .await;
+    assert!(
+        texts(&html, ".command")[0].contains("the event's data isn't JSON"),
+        "{html}"
+    );
+    assert_eq!(
+        sent_to(&sent, "/api/v1/dags/sync/runs"),
+        Vec::<Value>::new()
+    );
+    // Not "definite": a retry after a lost answer keeps its idempotency key (a corrected form
+    // must not start a second run).
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/d/etl/dags/sync/trigger")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header(SAME.0, SAME.1)
+        .body(Body::from("event_key=k&event_data=%7B"))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.headers().get("schedr-command-answer"), None);
+}
+
+#[tokio::test]
+async fn a_trigger_is_restarted_from_its_panel() {
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger/restart".to_owned(),
+        (
+            202,
+            command("c1", "restart_trigger", "applied", None, &json!({})),
+        ),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = post(&app, "/d/etl/dags/sync/trigger/restart", "", &[SAME]).await;
+    assert_eq!(
+        texts(&html, ".command"),
+        ["Restart the trigger of sync: applied."]
+    );
+}

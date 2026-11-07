@@ -10,6 +10,28 @@ use crate::ids::{DagId, TaskId};
 #[cfg(test)]
 mod tests;
 
+/// The event a manual run of an event-triggered DAG brings. It is never stored as an event: a key
+/// given here would make the real event a repeat later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AskedEvent {
+    /// One the trigger found, by its key.
+    Stored {
+        /// Its key.
+        key: String,
+    },
+    /// One given here.
+    Given {
+        /// Its key.
+        key: String,
+        /// Its data.
+        data: serde_json::Value,
+        /// When it happened; the run's moment otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<Timestamp>,
+    },
+}
+
 /// An action asked for by a person.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -24,6 +46,14 @@ pub enum Command {
         /// Values for the run's parameters, as JSON, over the DAG's defaults (decision 138).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         params: Option<serde_json::Map<String, serde_json::Value>>,
+        /// The event it brings, for a DAG a trigger starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        event: Option<AskedEvent>,
+    },
+    /// Start a DAG's trigger again from its bookmark, whatever stopped it (`schedr triggers restart`).
+    RestartTrigger {
+        /// Its DAG.
+        dag_id: DagId,
     },
     /// Cancel a run (queued or running).
     CancelRun {
@@ -229,6 +259,7 @@ impl Command {
             Self::PauseDag { .. } => "pause_dag",
             Self::UnpauseDag { .. } => "unpause_dag",
             Self::SwitchOnSensor { .. } => "switch_on_sensor",
+            Self::RestartTrigger { .. } => "restart_trigger",
             Self::CancelTask { .. } => "cancel_task",
             Self::RetryTask { .. } => "retry_task",
             Self::DrainWorker { .. } => "drain_worker",

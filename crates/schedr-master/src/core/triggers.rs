@@ -7,7 +7,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::runs::ActiveDag;
 use schedr_db::triggers::{STOPPED_BACK_PRESSURE, STOPPED_RETURNED, TriggerRecord};
-use schedr_model::trigger::MAX_EVENT_KEY;
+use schedr_model::trigger::check_event_key;
 use schedr_model::{DagId, RunEvent, SensorMode, TaskKind, Trigger};
 use schedr_proto::pb::{self, master_message, worker_message};
 
@@ -640,12 +640,7 @@ fn holds(record: &TriggerRecord, worker_id: &str, instance: &str) -> bool {
 /// An event as a run takes it; why not, for what a worker sent that can't be one.
 fn event_of(event: &pb::TriggerEvent, dag: &ActiveDag) -> Result<RunEvent, String> {
     let key = &event.key;
-    if key.is_empty() || key.len() > MAX_EVENT_KEY || key.contains('\0') {
-        return Err(format!(
-            "event_refused: an event's key has 1 to {MAX_EVENT_KEY} bytes and no NUL, got {} bytes",
-            key.len()
-        ));
-    }
+    check_event_key(key).map_err(|why| format!("event_refused: {why}"))?;
     let Trigger::Event { task, .. } = &dag.dag.trigger else {
         return Err("event_refused: the DAG no longer has an event trigger".to_owned());
     };

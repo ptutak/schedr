@@ -17,6 +17,9 @@ fn client_args(json: bool) -> ClientArgs {
 
 fn test_command(changes: impl FnOnce(&mut DagsCommand)) -> DagsCommand {
     let mut command = DagsCommand::Test {
+        event_key: None,
+        event_data: None,
+        event_at: None,
         params_json: None,
         dag: "sync".to_owned(),
         planned_for: None,

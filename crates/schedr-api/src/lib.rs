@@ -40,6 +40,11 @@ pub use state::ApiState;
         routes::get_run_resource,
         routes::list_switched_off_sensors,
         routes::switch_on_sensor,
+        routes::list_triggers,
+        routes::dag_trigger,
+        routes::trigger_events,
+        routes::restart_trigger,
+        routes::switch_on_trigger,
         routes::list_runs,
         routes::trigger_run,
         routes::list_all_runs,
@@ -115,6 +120,25 @@ pub fn openapi_json() -> serde_json::Value {
     serde_json::to_value(ApiDoc::openapi()).expect("the OpenAPI description serializes")
 }
 
+/// The routes of `schedr triggers`.
+fn trigger_routes() -> Router<ApiState> {
+    Router::new()
+        .route("/api/v1/triggers", get(routes::list_triggers))
+        .route("/api/v1/dags/{dag_id}/trigger", get(routes::dag_trigger))
+        .route(
+            "/api/v1/dags/{dag_id}/trigger/events",
+            get(routes::trigger_events),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/trigger/restart",
+            post(routes::restart_trigger),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/trigger/switch-on",
+            post(routes::switch_on_trigger),
+        )
+}
+
 /// The API's routes over `state`.
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -147,6 +171,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/runs/{run_id}/resources/{resource}",
             get(routes::get_run_resource),
         )
+        .merge(trigger_routes())
         .route(
             "/api/v1/sensors/switched-off",
             get(routes::list_switched_off_sensors),

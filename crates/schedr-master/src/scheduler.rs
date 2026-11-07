@@ -50,8 +50,14 @@ pub enum SchedulerError {
         held: Held,
     },
     /// An event trigger starts its runs, and the run asked for brings no event.
-    #[error("DAG `{0}`: its runs start from events, so this one needs an event")]
+    #[error(
+        "DAG `{0}`: its runs start from events, so this one needs an event (`--event <key>` for one \
+         it found, or `--event-key` and `--event-data`)"
+    )]
     NeedsEvent(DagId),
+    /// A run brings an event, and no event trigger starts the DAG's runs.
+    #[error("DAG `{0}`: no event trigger starts its runs, so its tasks read no event")]
+    NoEventTrigger(DagId),
     /// A manual run's time isn't allowed.
     #[error(transparent)]
     ManualRun(#[from] ManualRunError),
@@ -273,7 +279,7 @@ impl Scheduler {
         user: &str,
         now: Timestamp,
     ) -> Result<CreatedRun, SchedulerError> {
-        self.trigger_as(None, dag_id, requested, None, user, now)
+        self.trigger_as(None, dag_id, requested, (None, None), user, now)
             .await
     }
 
@@ -290,7 +296,10 @@ impl Scheduler {
         run_id: Option<&str>,
         dag_id: &DagId,
         requested: Option<Timestamp>,
-        params: Option<&serde_json::Map<String, serde_json::Value>>,
+        (params, event): (
+            Option<&serde_json::Map<String, serde_json::Value>>,
+            Option<&schedr_model::RunEvent>,
+        ),
         user: &str,
         now: Timestamp,
     ) -> Result<CreatedRun, SchedulerError> {
@@ -307,8 +316,12 @@ impl Scheduler {
                 held,
             });
         }
-        if active.dag.trigger.is_event() {
-            return Err(SchedulerError::NeedsEvent(dag_id.clone()));
+        if active.dag.trigger.is_event() != event.is_some() {
+            return Err(if event.is_some() {
+                SchedulerError::NoEventTrigger(dag_id.clone())
+            } else {
+                SchedulerError::NeedsEvent(dag_id.clone())
+            });
         }
         let fire_times =
             FireTimes::new(&active.dag.trigger).map_err(|error| SchedulerError::FireTimes {
@@ -326,6 +339,7 @@ impl Scheduler {
         let params = run_params(&active, params)?;
         let mut new = new_run(&active, RunKind::Manual, times, now, user, &params);
         new.state = RunState::Queued;
+        new.event = event;
         self.wakes.wake(dag_id, WakeReason::RunQueued);
         // Only scheduled runs are unique per `planned_for`: a manual one is stored unless a
         // run with its given ID is there already, and then that one is it.

@@ -179,6 +179,7 @@ async fn a_worker_registers_parses_runs_a_task_and_is_acknowledged() {
 
     upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -664,6 +665,7 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
     // The worker runs an attempt…
     upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -768,6 +770,7 @@ async fn parsed_worker(
 
 fn trigger_sync() -> schedr_model::commands::Command {
     schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -1072,6 +1075,7 @@ async fn a_tasks_inputs_are_served_while_the_master_is_busy() {
     ));
     upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -1123,6 +1127,7 @@ async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
     ));
     upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -1177,6 +1182,7 @@ async fn a_workers_queued_messages_are_handled_in_one_turn_of_the_lock() {
     ));
     upload(&mut client, parse_result()).await.unwrap();
     let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,

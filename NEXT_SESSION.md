@@ -4,18 +4,26 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-07 night): M4.11b part 1 of 3 committed and pushed; the user is asleep, commits and pushes pre-accepted to the end of M4.11
+## State (2026-11-07): M4.11b done (three commits, pushed); M4.11c is next. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
 
-- **M4.11b part 1:** `@trigger`, `@trigger.poke`, `Event`, `dag_ctx.event`, tables `events` and `triggers`, event runs, the
-  master's placing and stopping (`crates/schedr-master/src/core/triggers.rs`), decision 348. Reviews: Codex 6 (5 fixed; the
-  switch-off belongs to part 2), Grok 4 (all fixed).
-- **M4.11b part 2, committed:** a poke's errors don't stop it, a returned generator stays stopped, `[triggers]
-  max_queued_events` and `failing_after`, `restart_if_idle`, switch-off as sensors, metrics (decision 349). Reviews: Codex 7 and
-  Grok 1 (the same as Codex's first), all fixed. For the user to know: notifications aren't built, so `TRIGGER_FAILING` has
-  nothing to go through; and their planned `Event` enum needs another name, `Event` is what a trigger yields.
-- **Next, part 3:** CLI, API, UI, `run_trigger`, `run_dag(event=)`, `--event`, retention, the example DAG (draft in the session's
-  scratchpad), and a page in `docs/02-dags`.
-  **Then M4.11c:** `first_of` (decision 347); `sensors_demo` drops its third sensor.
+- **M4.11b part 3:** `schedr triggers`, the trigger endpoints, manual runs with an event (`--event`, `--event-key`,
+  `--event-data`, `--event-at`), the DAG page's panel, `run_trigger`, `run_dag(event=)`, the example, `docs/02-dags/19-triggers.md`
+  (decision 350). Reviews: Codex 7, Grok 2, all fixed.
+- **M4.11b parts 1 and 2:** `@trigger`, `@trigger.poke`, events, event runs, the master's placing and stopping (348); poke errors,
+  stopped generators, `[triggers]`, `restart_if_idle`, switch-off, metrics (349). Reviews: Codex 6 and 7, Grok 4 and 1.
+- **The user kept:** a running trigger restarts when its root's code changes, even if the DAG's definition didn't (348).
+- **Next, M4.11c:** `first_of` (347), `at_least(n, ...)`, joining `@branch` paths, the box with one dashed line (351). `sensors_demo`
+  drops its third sensor. Design so far: `TaskKind::FirstOf` ended in `progress.rs` `settle`; the master copies the winner's
+  output and outcome to the node's own row, checked against `outputs_of` first; `.winner` is a new reference; `at_least`'s
+  value is a list in finishing order.
+- **Questions waiting for the user; number 2 blocks M4.11e, nothing before it:**
+  1. Settled by the user: M4.11d, e, f come before M4.12 (`PLAN.md`); a batched run reads `list[Event[T]]` (352).
+  2. One `event=` word for `@trigger` and `@sensor` in place of `signal`, with `key=` on the sensor? Several names on `@trigger`,
+     `dag_ctx.event.name`, repeats by `(dag_id, name, key)`, one name on `@sensor`?
+  3. Optional: a typed `data_as(Cls)` on `dag_ctx.event.data`, typed `Any` today, so the example needs a pyright ignore.
+- **For the user to know:** notifications aren't built, so `TRIGGER_FAILING` has nothing to go through, and their planned
+  `Event` enum needs another name. A masked event key in the list can make "Run again" fail for that key (rare, accepted).
+  `a_master_gone_silent_stops_a_task_whose_cleanup_may_move` failed once under load: watch whether it recurs.
 
 ## Earlier (2026-11-07): M4.11a4 done (two commits, part 2 pushed when green, as the user pre-accepted); M4.11b is next
 

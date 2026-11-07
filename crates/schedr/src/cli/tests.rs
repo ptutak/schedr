@@ -62,6 +62,10 @@ fn runs_trigger_takes_for_and_repeated_params() {
     assert_eq!(
         command,
         RunsCommand::Trigger {
+            event_key: None,
+            event_data: None,
+            event_at: None,
+            event: None,
             dag: "report".into(),
             planned_for: Some("2026-10-15T03:00".into()),
             params: vec!["region=us".into(), "full:=true".into()],

@@ -122,6 +122,8 @@ CREATE TABLE events (
     PRIMARY KEY (dag_id, key)
 );
 
+CREATE INDEX events_newest ON events (dag_id, received_at DESC, key);
+
 -- Each event-triggered DAG's trigger. Its bookmark outlives everything else: `after` when it starts.
 CREATE TABLE triggers (
     dag_id       TEXT PRIMARY KEY,
@@ -393,6 +395,22 @@ CREATE TRIGGER dags_inserted AFTER INSERT ON dags REFERENCING NEW TABLE AS chang
 CREATE TRIGGER dags_updated AFTER UPDATE ON dags REFERENCING NEW TABLE AS changed
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
 -- Whether a wait step is switched off shows on its DAG's page and on the list's banner.
+-- How a trigger goes, for its DAG's page: not each poke's time.
+CREATE FUNCTION schedr_trigger_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('schedr_changes', 'dag ' || NEW.dag_id);
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER triggers_inserted AFTER INSERT ON triggers
+    FOR EACH ROW EXECUTE FUNCTION schedr_trigger_changed();
+CREATE TRIGGER triggers_updated AFTER UPDATE ON triggers FOR EACH ROW
+    WHEN (OLD.instance_id IS DISTINCT FROM NEW.instance_id
+        OR OLD.stopped_why IS DISTINCT FROM NEW.stopped_why
+        OR OLD.bookmark IS DISTINCT FROM NEW.bookmark
+        OR OLD.last_error IS DISTINCT FROM NEW.last_error
+        OR OLD.failures IS DISTINCT FROM NEW.failures)
+    EXECUTE FUNCTION schedr_trigger_changed();
 CREATE TRIGGER wait_step_strikes_inserted AFTER INSERT ON wait_step_strikes REFERENCING NEW TABLE AS changed
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
 CREATE TRIGGER wait_step_strikes_updated AFTER UPDATE ON wait_step_strikes REFERENCING NEW TABLE AS changed

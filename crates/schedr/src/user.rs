@@ -10,13 +10,13 @@ use std::io::Write;
 use jiff::tz::TimeZone;
 use schedr_api::views::{
     AttemptView, CheckConnectionsRequest, CommandView, DagView, RunDetail, RunView, TaskView,
-    TestConnectionRequest, WorkerView,
+    TestConnectionRequest, TriggerRequest, TriggerView, WorkerView,
 };
 
 use crate::app::AppError;
 use crate::cli::{
     ConnectionsCommand, DagsCommand, LogsArgs, ResourcesCommand, RunsCommand, SensorsCommand,
-    TasksCommand, WorkersCommand,
+    TasksCommand, TriggersCommand, WorkersCommand,
 };
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short, trigger_text};
@@ -139,6 +139,153 @@ pub async fn run_sensors<T: Transport>(
             Ok(())
         }
     }
+}
+
+/// `schedr triggers ...`.
+///
+/// # Errors
+///
+/// [`AppError::Client`] as for [`run_dags`] (a rejection carries the master's reason).
+pub async fn run_triggers<T: Transport>(
+    command: &TriggersCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    match command {
+        TriggersCommand::List => {
+            let list = client.triggers().await?;
+            if output.json {
+                return print_json(out, &list);
+            }
+            write_table(
+                out,
+                &[
+                    "DAG",
+                    "TRIGGER",
+                    "STATE",
+                    "WORKER",
+                    "BOOKMARK",
+                    "FAILURES",
+                    "LAST ERROR",
+                ],
+                &list.triggers.iter().map(trigger_row).collect::<Vec<_>>(),
+            )?;
+        }
+        TriggersCommand::Show { dag } => {
+            let trigger = client.dag_trigger(dag).await?;
+            if output.json {
+                return print_json(out, &trigger);
+            }
+            write_table(
+                out,
+                &[
+                    "DAG",
+                    "TRIGGER",
+                    "STATE",
+                    "WORKER",
+                    "BOOKMARK",
+                    "FAILURES",
+                    "LAST ERROR",
+                ],
+                &[trigger_row(&trigger)],
+            )?;
+            for (what, at) in [
+                ("started", trigger.started_at),
+                ("last event", trigger.last_event_at),
+                ("last poked", trigger.last_poked_at),
+                ("last idle restart", trigger.last_restart_at),
+                ("not before", trigger.not_before),
+            ] {
+                if let Some(at) = at {
+                    writeln!(out, "{what}: {at}")?;
+                }
+            }
+            if let Some(why) = &trigger.stopped_why {
+                writeln!(out, "stopped: {}", one_line(why))?;
+            }
+        }
+        TriggersCommand::Events { dag, limit } => {
+            let list = client.trigger_events(dag, *limit).await?;
+            if output.json {
+                return print_json(out, &list);
+            }
+            let rows: Vec<Vec<String>> = list
+                .events
+                .iter()
+                .map(|event| {
+                    vec![
+                        one_line(&event.key),
+                        event.received_at.to_string(),
+                        event.data.to_string(),
+                    ]
+                })
+                .collect();
+            write_table(out, &["KEY", "RECEIVED", "DATA"], &rows)?;
+        }
+        TriggersCommand::Restart { dag } => {
+            let command = client
+                .wait(client.send_command(|| client.restart_trigger(dag)).await?)
+                .await?;
+            if output.json {
+                return print_json(out, &command);
+            }
+            writeln!(out, "restarting the trigger of {dag}")?;
+        }
+        TriggersCommand::SwitchOn { dag } => {
+            let command = client
+                .wait(
+                    client
+                        .send_command(|| client.switch_on_trigger(dag))
+                        .await?,
+                )
+                .await?;
+            if output.json {
+                return print_json(out, &command);
+            }
+            writeln!(out, "switched on the trigger of {dag}")?;
+        }
+    }
+    Ok(())
+}
+
+/// What a trigger said, on one line of a table and with nothing a terminal would act on.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+fn trigger_row(trigger: &TriggerView) -> Vec<String> {
+    let shown = |text: &Option<String>| text.as_deref().map_or_else(|| "-".to_owned(), one_line);
+    vec![
+        trigger.dag_id.clone(),
+        trigger.trigger.clone(),
+        trigger.state.clone(),
+        shown(&trigger.worker),
+        shown(&trigger.bookmark),
+        trigger.failures.to_string(),
+        shown(&trigger.last_error),
+    ]
+}
+
+/// `--event-data`: JSON, or `@file.json`.
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub(crate) fn given_event_data(given: Option<&str>) -> Result<Option<serde_json::Value>, String> {
+    let Some(given) = given else {
+        return Ok(None);
+    };
+    let text = match given.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("--event-data: can't read `{path}`: {e}"))?,
+        None => given.to_owned(),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("--event-data must be JSON: {e}"))
 }
 
 /// `schedr resources ...`.
@@ -417,13 +564,27 @@ pub async fn run_runs<T: Transport>(
             planned_for,
             params,
             params_json,
+            event,
+            event_key,
+            event_data,
+            event_at,
         } => {
             let params = given_params(params, params_json.as_deref())?;
+            let event_at = for_time(event_at.as_deref(), err)?;
             let at = for_time(planned_for.as_deref(), err)?;
+            let request = TriggerRequest {
+                planned_for: at,
+                params,
+                event: event.clone(),
+                event_key: event_key.clone(),
+                event_data: given_event_data(event_data.as_deref())
+                    .map_err(AppError::BadArgument)?,
+                event_at,
+            };
             let command = client
                 .wait(
                     client
-                        .send_command(|| client.trigger(dag, at, params.as_ref()))
+                        .send_command(|| client.trigger_with(dag, &request))
                         .await?,
                 )
                 .await?;

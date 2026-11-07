@@ -9,6 +9,8 @@ import pytest
 
 from schedr import Dag, Event, Every, dag_ctx, task, trigger
 from schedr.runner.waiting import run_trigger
+from schedr.testing import run_trigger as run_trigger_for_test
+from schedr.testing import task_context
 from schedr.triggers import Trigger
 
 
@@ -106,7 +108,7 @@ def _define(starts: Trigger, body: Callable[[], object]) -> None:
 
 def test_a_key_too_long_for_storing_is_refused() -> None:
     assert Event("k" * 1024).key
-    for key in ("k" * 1025, "a\0b", "ż" * 513):
+    for key in ("k" * 1025, "a\0b", "a\nb", "a\x1bb", "ż" * 513):
         with pytest.raises(TypeError, match="at most 1024 bytes"):
             Event(key)
 
@@ -225,3 +227,40 @@ def test_a_poke_with_nothing_to_say_tells_nothing() -> None:
         return [] if after is None else [Event(after, 0)]
 
     assert _poking(quiet) == ([], [None, None, None])
+
+
+def test_run_trigger_gives_a_trigger_s_first_events() -> None:
+    assert [e.key for e in run_trigger_for_test(yields(prefix="q"), after="b")] == ["qb"]
+    assert [e.key for e in run_trigger_for_test(yields, after=None)] == ["pNone"]
+    assert [e.key for e in run_trigger_for_test(pokes, after="a", take=2)] == ["ax", "axx"]
+
+
+def test_run_trigger_says_what_went_wrong() -> None:
+    @trigger.poke(every=timedelta(milliseconds=1))
+    async def fails(after: str | None) -> list[Event[int]]:
+        raise ValueError(str(after))
+
+    @trigger.poke(every=timedelta(milliseconds=1))
+    async def quiet(after: str | None) -> list[Event[int]]:
+        return [] if after is None else [Event(after, 1)]
+
+    with pytest.raises(RuntimeError, match="ValueError: None"):
+        run_trigger_for_test(fails)
+    with pytest.raises(TimeoutError):
+        run_trigger_for_test(quiet, timeout=timedelta(milliseconds=20))
+    with pytest.raises(ValueError, match="at least 1"):
+        run_trigger_for_test(quiet, take=0)
+
+
+def test_task_context_gives_dag_ctx_event() -> None:
+    at = datetime(2030, 1, 1, tzinfo=UTC)
+    with task_context(event=Event("k", {"n": 1}, at=at)):
+        assert dag_ctx.event.key == "k"
+        assert dag_ctx.event.data == {"n": 1}
+        assert dag_ctx.event.at == at
+    planned = datetime(2031, 1, 1, tzinfo=UTC)
+    with task_context(event=Event("k"), planned_for=planned):
+        assert dag_ctx.event.data is None
+        assert dag_ctx.event.at == planned
+    with task_context(), pytest.raises(RuntimeError, match="started by no event"):
+        _ = dag_ctx.event.key

@@ -343,6 +343,7 @@ async fn dag_ids(db: &Database) -> Vec<String> {
 
 async fn trigger(db: &Database, dag: &str) -> String {
     let command = Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new(dag).unwrap(),
         planned_for: None,

@@ -15,7 +15,7 @@ use axum::Form;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use schedr_api::views::CommandView;
+use schedr_api::views::{CommandView, TriggerRequest};
 use schedr_client::times::parse_for;
 use schedr_client::{Client, ClientError, TaskAction, Transport, WorkerAction, path_segment};
 use serde::Deserialize;
@@ -144,12 +144,29 @@ pub async fn trigger<T: Transport>(
     } else {
         match parse_for(text) {
             Ok(at) => Some(at.at),
-            Err(message) => return failed(what, &message),
+            Err(message) => return not_sent(what, &message),
         }
     };
     // Not sent, but not definite either: an earlier send under this action's key may have
     // been stored (its answer lost), and the browser must keep the key for the next try, or
     // that try would trigger a second run (B140).
+    let field = |name: &str| {
+        form.iter()
+            .find(|(k, _)| k == name)
+            .map_or("", |(_, v)| v.trim())
+    };
+    let event_key = Some(field("event_key"))
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned);
+    let event_data = match field("event_data") {
+        "" => None,
+        data => match serde_json::from_str(data) {
+            Ok(data) => Some(data),
+            Err(error) => {
+                return not_sent(what, &format!("the event's data isn't JSON: {error}"));
+            }
+        },
+    };
     let mut params = None;
     if form.iter().any(|(k, _)| k == "params")
         && let Some(at) = ui.deployments.iter().find(|d| d.name == deployment)
@@ -163,6 +180,14 @@ pub async fn trigger<T: Transport>(
             Err(message) => return not_sent(what, &message),
         };
     }
+    let request = TriggerRequest {
+        planned_for,
+        params,
+        event_key,
+        event_data,
+        event: None,
+        event_at: None,
+    };
     act(
         &ui,
         &headers,
@@ -170,8 +195,7 @@ pub async fn trigger<T: Transport>(
         what,
         Action::Trigger {
             dag_id: &dag_id,
-            planned_for,
-            params: params.as_ref(),
+            request: &request,
         },
     )
     .await
@@ -228,6 +252,52 @@ pub async fn task<T: Transport>(
         },
     )
     .await
+}
+
+/// `POST /d/<deployment>/dags/<dag>/trigger/restart`.
+pub async fn restart_trigger<T: Transport>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, dag_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    act(
+        &ui,
+        &headers,
+        &deployment,
+        format!("Restart the trigger of {dag_id}"),
+        Action::RestartTrigger { dag_id: &dag_id },
+    )
+    .await
+}
+
+/// `POST /d/<deployment>/dags/<dag>/trigger/run-event`: the form's `key`, of an event it found.
+pub async fn run_event<T: Transport>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, dag_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<RunEventQuery>,
+) -> Response {
+    let request = TriggerRequest {
+        event: Some(query.key.clone()),
+        ..TriggerRequest::default()
+    };
+    act(
+        &ui,
+        &headers,
+        &deployment,
+        format!("Run {dag_id} again for event {}", query.key),
+        Action::Trigger {
+            dag_id: &dag_id,
+            request: &request,
+        },
+    )
+    .await
+}
+
+/// Which event to run again.
+#[derive(Debug, Deserialize)]
+pub struct RunEventQuery {
+    key: String,
 }
 
 /// `POST /d/<deployment>/dags/<dag>/sensors/<sensor>/switch-on`.
@@ -385,8 +455,10 @@ enum Action<'a> {
     },
     Trigger {
         dag_id: &'a str,
-        planned_for: Option<jiff::Timestamp>,
-        params: Option<&'a serde_json::Map<String, serde_json::Value>>,
+        request: &'a TriggerRequest,
+    },
+    RestartTrigger {
+        dag_id: &'a str,
     },
     CancelRun {
         run_id: &'a str,
@@ -415,11 +487,8 @@ impl Action<'_> {
                 paused,
                 cancel_runs,
             } => client.set_paused(dag_id, paused, cancel_runs).await,
-            Self::Trigger {
-                dag_id,
-                planned_for,
-                params,
-            } => client.trigger(dag_id, planned_for, params).await,
+            Self::Trigger { dag_id, request } => client.trigger_with(dag_id, request).await,
+            Self::RestartTrigger { dag_id } => client.restart_trigger(dag_id).await,
             Self::CancelRun { run_id } => client.cancel(run_id).await,
             Self::Task {
                 run_id,

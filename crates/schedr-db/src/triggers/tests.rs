@@ -140,3 +140,44 @@ async fn only_the_run_of_a_trigger_it_names_is_ended() {
     assert_eq!(now.last_error.as_deref(), Some("boom"));
     assert_eq!(now.not_before, Some(later));
 }
+
+#[tokio::test]
+async fn events_are_listed_newest_first_a_page_at_a_time_ties_included() {
+    let (db, dag, version) = with_dag().await;
+    let at = ts("2026-10-14T03:00:00Z");
+    for (i, key) in ["a", "b", "c"].iter().enumerate() {
+        let event = RunEvent {
+            key: (*key).to_owned(),
+            data: json!(1),
+            at: None,
+        };
+        let params = serde_json::Value::Object(serde_json::Map::new());
+        let run = NewRun {
+            dag_id: &dag,
+            dag_version_id: &version,
+            kind: RunKind::Event,
+            state: RunState::Queued,
+            planned_for: at,
+            since: at,
+            triggered_at: at,
+            triggered_by: "trigger",
+            params: &params,
+            event: Some(&event),
+        };
+        let id = format!("01a00000-0000-7000-8000-00000000000{i}");
+        db.store_event(&id, &run, &event).await.unwrap();
+    }
+    let first = db.events(dag.as_str(), 2, None).await.unwrap();
+    let keys: Vec<&str> = first.iter().map(|e| e.event.key.as_str()).collect();
+    assert_eq!(keys, ["a", "b"]);
+    let rest = db
+        .events(dag.as_str(), 2, Some((first[1].received_at, "b")))
+        .await
+        .unwrap();
+    let keys: Vec<&str> = rest.iter().map(|e| e.event.key.as_str()).collect();
+    assert_eq!(keys, ["c"]);
+    let one = db.stored_event(dag.as_str(), "b").await.unwrap().unwrap();
+    assert_eq!(one.key, "b");
+    assert_eq!(db.stored_event(dag.as_str(), "z").await.unwrap(), None);
+    assert_eq!(db.queued_event_runs_of(dag.as_str()).await.unwrap(), 3);
+}

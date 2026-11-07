@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use schedr_db::commands::Submitted;
 use schedr_db::reads::RunFilter;
 use schedr_db::runs::Held;
-use schedr_model::commands::Command;
+use schedr_model::commands::{AskedEvent, Command};
 use schedr_model::logs::{MASK_CONTEXT, MAX_CHUNK, MIN_CHUNK};
 use schedr_model::{DagId, ResourceState, TaskId, TaskInstanceState, WorkerState};
 
@@ -29,11 +29,11 @@ use crate::logs::{LogFetchError, masked_lines};
 use crate::state::ApiState;
 use crate::views::{
     AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
-    DagList, DagView, DeploymentView, ErrorBody, ImportErrorList, ImportErrorView, InstanceQuery,
-    LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView, PauseRequest,
-    ProblemView, ResourceList, ResourceView, RunDetail, RunList, RunView, RunsQuery, SensorList,
-    SensorView, TaskView, TestConnectionRequest, TriggerRequest, WorkerList, WorkerNodeView,
-    WorkerView,
+    DagList, DagView, DeploymentView, ErrorBody, EventList, EventView, ImportErrorList,
+    ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery, MasterView, NodeView,
+    OutputView, ParamFieldView, PauseRequest, ProblemView, ResourceList, ResourceView, RunDetail,
+    RunList, RunView, RunsQuery, SensorList, SensorView, TaskView, TestConnectionRequest,
+    TriggerList, TriggerRequest, TriggerView, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -424,6 +424,7 @@ pub async fn trigger_run(
             "params: text containing NUL (\\u0000) can't be stored".to_owned(),
         ));
     }
+    let event = asked_event(&request)?;
     submit(
         &state,
         &user,
@@ -432,7 +433,243 @@ pub async fn trigger_run(
             dag_id,
             planned_for: request.planned_for,
             params: request.params,
+            event,
         },
+    )
+    .await
+}
+
+/// The event a manual run asks for; what can't be stored is refused here, as params are.
+fn asked_event(request: &TriggerRequest) -> Result<Option<AskedEvent>, ApiError> {
+    let bad = |why: &str| Err(ApiError::BadRequest(why.to_owned()));
+    if request.event_at.is_some() && request.event_key.is_none() {
+        return bad("event_at needs an event_key");
+    }
+    match (&request.event, &request.event_key, &request.event_data) {
+        (None, None, None) => Ok(None),
+        (Some(key), None, None) => Ok(Some(AskedEvent::Stored { key: key.clone() })),
+        (None, Some(key), data) => {
+            let data = data.clone().unwrap_or(serde_json::Value::Null);
+            if schedr_model::params::nul_at(&data).is_some() {
+                return bad("event_data: text containing NUL (\\u0000) can't be stored");
+            }
+            schedr_model::trigger::check_event_key(key).map_err(ApiError::BadRequest)?;
+            Ok(Some(AskedEvent::Given {
+                key: key.clone(),
+                data,
+                at: request.event_at,
+            }))
+        }
+        (None, None, Some(_)) => bad("event_data needs an event_key"),
+        (Some(_), _, _) => bad("event is the key of a stored event: give it or an event_key"),
+    }
+}
+
+/// A trigger's view from its stored row.
+fn trigger_view(
+    active: &schedr_db::runs::ActiveDag,
+    record: Option<&schedr_db::triggers::TriggerRecord>,
+    switched_off: bool,
+    now: Timestamp,
+) -> Option<TriggerView> {
+    let schedr_model::Trigger::Event {
+        task, start, end, ..
+    } = &active.dag.trigger
+    else {
+        return None;
+    };
+    let outside = start.is_some_and(|start| now < start) || end.is_some_and(|end| end < now);
+    let state = if active.paused || active.held.is_some() || outside {
+        "paused"
+    } else if switched_off {
+        "switched_off"
+    } else if record.is_some_and(|r| r.instance_id.is_some()) {
+        "running"
+    } else if record.is_some_and(|r| r.stopped_why.is_some()) {
+        "stopped"
+    } else {
+        "waiting"
+    };
+    let empty = schedr_db::triggers::TriggerRecord::default();
+    let record = record.unwrap_or(&empty);
+    Some(TriggerView {
+        dag_id: active.dag.id.to_string(),
+        trigger: task.id.to_string(),
+        state: state.to_owned(),
+        worker: record.worker_id.clone(),
+        // Masked when read, as an output is: what a run reads is the stored one.
+        bookmark: record
+            .bookmark
+            .as_deref()
+            .map(schedr_config::masked::mask_text),
+        stopped_why: record.stopped_why.clone(),
+        failures: record.failures,
+        last_error: record
+            .last_error
+            .as_deref()
+            .map(schedr_config::masked::mask_text),
+        not_before: record.not_before,
+        started_at: record.started_at,
+        last_event_at: record.last_event_at,
+        last_poked_at: record.last_poked_at,
+        last_restart_at: record.last_restart_at,
+    })
+}
+
+/// Every DAG's trigger.
+#[utoipa::path(get, path = "/api/v1/triggers", tag = "triggers",
+    responses((status = 200, body = TriggerList)))]
+pub async fn list_triggers(State(state): State<ApiState>) -> ApiResult<TriggerList> {
+    let records = state.db.triggers().await?;
+    let off = state.db.switched_off_wait_steps().await?;
+    let now = Timestamp::now();
+    let triggers = state
+        .db
+        .active_dags()
+        .await?
+        .iter()
+        .filter_map(|active| {
+            let dag = active.dag.id.as_str();
+            let function = match &active.dag.trigger {
+                schedr_model::Trigger::Event { task, .. } => task.id.as_str(),
+                _ => return None,
+            };
+            trigger_view(
+                active,
+                records.iter().find(|r| r.dag_id == dag),
+                off.iter().any(|s| s.dag_id == dag && s.task_id == function),
+                now,
+            )
+        })
+        .collect();
+    Ok(Json(TriggerList { triggers }))
+}
+
+/// A DAG's trigger: `404` for a DAG without one.
+#[utoipa::path(get, path = "/api/v1/dags/{dag_id}/trigger", tag = "triggers",
+    params(("dag_id" = String, Path, description = "The DAG's ID")),
+    responses((status = 200, body = TriggerView), (status = 404, body = ErrorBody)))]
+pub async fn dag_trigger(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+) -> ApiResult<TriggerView> {
+    let id = parse_dag_id(&dag_id)?;
+    let active = state.db.active_dags_of(&[&id]).await?;
+    let none = || ApiError::NotFound(format!("no DAG `{dag_id}` with an event trigger"));
+    let active = active.first().ok_or_else(none)?;
+    let function = match &active.dag.trigger {
+        schedr_model::Trigger::Event { task, .. } => task.id.as_str(),
+        _ => return Err(none()),
+    };
+    let off = state
+        .db
+        .wait_step_strikes(&dag_id, function)
+        .await?
+        .is_some_and(|strikes| strikes.off_at.is_some());
+    let record = state.db.trigger(&dag_id).await?;
+    let view = trigger_view(active, record.as_ref(), off, Timestamp::now()).ok_or_else(none)?;
+    Ok(Json(view))
+}
+
+/// How many events one call gives at most, by default and at most.
+const DEFAULT_EVENTS: u32 = 50;
+const MAX_EVENTS: u32 = 500;
+
+/// Which of a trigger's events.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct EventsQuery {
+    /// How many, 50 by default and 500 at most.
+    pub limit: Option<u32>,
+    /// Those after the one last listed: its `received_at`.
+    pub before: Option<Timestamp>,
+    /// And its `key`, for those received at the same moment.
+    pub before_key: Option<String>,
+}
+
+/// What a DAG's trigger found, newest received first.
+#[utoipa::path(get, path = "/api/v1/dags/{dag_id}/trigger/events", tag = "triggers",
+    params(("dag_id" = String, Path, description = "The DAG's ID"), EventsQuery),
+    responses((status = 200, body = EventList), (status = 400, body = ErrorBody)))]
+pub async fn trigger_events(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+    query: Result<Query<EventsQuery>, QueryRejection>,
+) -> ApiResult<EventList> {
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let limit = query.limit.unwrap_or(DEFAULT_EVENTS).min(MAX_EVENTS);
+    if query.before_key.is_some() && query.before.is_none() {
+        return Err(ApiError::BadRequest(
+            "`before_key` needs `before` (the event's `received_at`)".to_owned(),
+        ));
+    }
+    let after = query
+        .before
+        .map(|at| (at, query.before_key.as_deref().unwrap_or_default()));
+    let events = state
+        .db
+        .events(&dag_id, limit, after)
+        .await?
+        .into_iter()
+        .map(|mut stored| {
+            // Masked when read, as an output is: what a run reads is the stored one.
+            schedr_config::masked::mask_data(&mut stored.event.data);
+            EventView {
+                key: schedr_config::masked::mask_text(&stored.event.key),
+                data: stored.event.data,
+                at: stored.event.at,
+                received_at: stored.received_at,
+            }
+        })
+        .collect();
+    Ok(Json(EventList { events }))
+}
+
+/// Start a DAG's trigger again from its bookmark, whatever stopped it. Applied by the master;
+/// poll the command for the decision.
+#[utoipa::path(post, path = "/api/v1/dags/{dag_id}/trigger/restart", tag = "triggers",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn restart_trigger(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+) -> Accepted {
+    let dag_id = parse_dag_id(&dag_id)?;
+    submit(&state, &user, key, Command::RestartTrigger { dag_id }).await
+}
+
+/// Switch a DAG's trigger back on, forgetting its strikes. Applied by the master; poll the
+/// command for the decision.
+#[utoipa::path(post, path = "/api/v1/dags/{dag_id}/trigger/switch-on", tag = "triggers",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)))]
+pub async fn switch_on_trigger(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+) -> Accepted {
+    let id = parse_dag_id(&dag_id)?;
+    let active = state.db.active_dags_of(&[&id]).await?;
+    let sensor = active.first().and_then(|active| match &active.dag.trigger {
+        schedr_model::Trigger::Event { task, .. } => Some(task.id.clone()),
+        _ => None,
+    });
+    let Some(sensor) = sensor else {
+        return Err(ApiError::NotFound(format!(
+            "no DAG `{dag_id}` with an event trigger"
+        )));
+    };
+    submit(
+        &state,
+        &user,
+        key,
+        Command::SwitchOnSensor { dag_id: id, sensor },
     )
     .await
 }

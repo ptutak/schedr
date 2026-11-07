@@ -124,6 +124,7 @@ async fn with_dag_of(file: &ParsedFile) -> MasterCore {
 
 async fn trigger(core: &mut MasterCore) {
     let command = schedr_model::commands::Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,
@@ -2513,6 +2514,11 @@ async fn what_cant_be_an_event_fails_the_trigger_and_stores_nothing() {
         },
         pb::TriggerEvent {
             key: "a\0b".to_owned(),
+            data_json: b"1".to_vec(),
+            ..pb::TriggerEvent::default()
+        },
+        pb::TriggerEvent {
+            key: "a\nb".to_owned(),
             data_json: b"1".to_vec(),
             ..pb::TriggerEvent::default()
         },

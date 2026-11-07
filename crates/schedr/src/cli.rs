@@ -116,6 +116,15 @@ pub enum Command {
         #[command(subcommand)]
         command: SensorsCommand,
     },
+    /// Event triggers: see them, and start them again.
+    Triggers {
+        /// How to reach the server.
+        #[command(flatten)]
+        client: ClientArgs,
+        /// The sensor command.
+        #[command(subcommand)]
+        command: TriggersCommand,
+    },
     /// A run's resources.
     Resources {
         /// How to reach the server.
@@ -226,6 +235,10 @@ pub struct ClientArgs {
 
 /// `schedr dags ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "parsed once, at the start of a command"
+)]
 pub enum DagsCommand {
     /// List DAGs.
     List,
@@ -264,6 +277,15 @@ pub enum DagsCommand {
         /// A secret value for the run: `path#key=value`.
         #[arg(long = "secret", value_name = "SECRET")]
         secrets: Vec<String>,
+        /// For a DAG a trigger starts: the event's key.
+        #[arg(long, value_name = "KEY")]
+        event_key: Option<String>,
+        /// And its data: JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON", requires = "event_key")]
+        event_data: Option<String>,
+        /// And when it happened (as `--for`); the run's moment otherwise.
+        #[arg(long, value_name = "TIME", requires = "event_key")]
+        event_at: Option<String>,
         /// A connection's values for the run, given instead of its own: `name={"param":
         /// value}` (stored JSON); its function runs with them.
         #[arg(long = "connection", value_name = "CONNECTION")]
@@ -294,6 +316,18 @@ pub enum RunsCommand {
         /// All run parameters as one JSON object.
         #[arg(long = "params", value_name = "JSON", conflicts_with = "params")]
         params_json: Option<String>,
+        /// For a DAG a trigger starts: run again an event it found, by key.
+        #[arg(long, value_name = "KEY", conflicts_with_all = ["event_key", "event_data", "event_at"])]
+        event: Option<String>,
+        /// Or give an event: its key. It is never stored as an event.
+        #[arg(long, value_name = "KEY")]
+        event_key: Option<String>,
+        /// And its data: JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON", requires = "event_key")]
+        event_data: Option<String>,
+        /// And when it happened (as `--for`); the run's moment otherwise.
+        #[arg(long, value_name = "TIME", requires = "event_key")]
+        event_at: Option<String>,
     },
     /// List the runs of a DAG.
     List {
@@ -418,6 +452,36 @@ fn test_timeout(text: &str) -> Result<std::time::Duration, String> {
         return Err(format!("1 ms to {} s", most.as_secs()));
     }
     Ok(timeout)
+}
+
+/// `schedr triggers ...` (decision 340's reasons: they are not tasks).
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum TriggersCommand {
+    /// List every DAG's trigger.
+    List,
+    /// Show a DAG's trigger.
+    Show {
+        /// Its DAG.
+        dag: String,
+    },
+    /// List what a DAG's trigger found, newest first.
+    Events {
+        /// Its DAG.
+        dag: String,
+        /// How many at most.
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    /// Start a DAG's trigger again from its bookmark, whatever stopped it.
+    Restart {
+        /// Its DAG.
+        dag: String,
+    },
+    /// Switch a DAG's trigger back on, forgetting its strikes.
+    SwitchOn {
+        /// Its DAG.
+        dag: String,
+    },
 }
 
 /// `schedr sensors ...` (decision 338).
@@ -610,6 +674,7 @@ impl Command {
             | Self::Tasks { .. }
             | Self::Workers { .. }
             | Self::Sensors { .. }
+            | Self::Triggers { .. }
             | Self::Resources { .. }
             | Self::Connections { .. }
             | Self::DagCtx { .. }
@@ -633,6 +698,7 @@ impl Command {
             Self::Tasks { .. } => "tasks",
             Self::Workers { .. } => "workers",
             Self::Sensors { .. } => "sensors",
+            Self::Triggers { .. } => "triggers",
             Self::Resources { .. } => "resources",
             Self::Connections { .. } => "connections",
             Self::TaskCtx { .. } => "task-ctx",

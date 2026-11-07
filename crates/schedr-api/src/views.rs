@@ -593,6 +593,77 @@ pub struct TriggerRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
+    /// For a DAG a trigger starts: the key of an event it found, to run again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    /// Or an event given here: its key. It is never stored as an event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_key: Option<String>,
+    /// And its data, as JSON of any kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_data: Option<serde_json::Value>,
+    /// And when it happened; the run's moment otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_at: Option<Timestamp>,
+}
+
+/// A DAG's trigger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TriggerView {
+    /// Its DAG.
+    pub dag_id: String,
+    /// Its function.
+    pub trigger: String,
+    /// `running`, `waiting` (for a free watcher slot or to start again), `stopped` (see
+    /// `stopped_why`), `switched_off` or `paused` (its DAG's, or outside its `start` and `end`).
+    pub state: String,
+    /// The worker running it.
+    pub worker: Option<String>,
+    /// The last key acted on: what it starts from.
+    pub bookmark: Option<String>,
+    /// Why it isn't running although its DAG wants it: `back_pressure` or `returned`.
+    pub stopped_why: Option<String>,
+    /// Its errors in a row.
+    pub failures: u32,
+    /// Its last error.
+    pub last_error: Option<String>,
+    /// Not started again before this moment.
+    pub not_before: Option<Timestamp>,
+    /// When this run of it started.
+    pub started_at: Option<Timestamp>,
+    /// When it last found something.
+    pub last_event_at: Option<Timestamp>,
+    /// When a poke's call last ended.
+    pub last_poked_at: Option<Timestamp>,
+    /// When it was last started again for finding nothing for its `restart_if_idle`.
+    pub last_restart_at: Option<Timestamp>,
+}
+
+/// The triggers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TriggerList {
+    /// By DAG.
+    pub triggers: Vec<TriggerView>,
+}
+
+/// An event a trigger found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EventView {
+    /// Its key.
+    pub key: String,
+    /// Its data, JSON of any kind.
+    pub data: serde_json::Value,
+    /// When it happened, if it said.
+    pub at: Option<Timestamp>,
+    /// When the master got it.
+    pub received_at: Timestamp,
+}
+
+/// A trigger's events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EventList {
+    /// Newest received first.
+    pub events: Vec<EventView>,
 }
 
 /// Connections to check on a worker (`schedr connections check`).

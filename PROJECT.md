@@ -6836,13 +6836,13 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   go up one at a time, acknowledged only once stored, so order and back-pressure hold; the agent sends what
   wasn't acknowledged again on a new stream, and a repeat is only a bookmark move. The master starts a trigger
   from its bookmark while the DAG is unpaused, not held and within its `start`/`end`, and stops it when that ends,
-  on a new version, when the worker's code for the root changes and when the worker drains or is drained; a worker
+  on a new version, when the worker's code for the root changes (any change in the root, even if this DAG's definition stays the same, so a deploy restarts every trigger in its folder; the user kept this, 2026-11-07, as a poke moving to new code does) and when the worker drains or is drained; a worker
   whose lease ran out gives it up, and when it returns with it, it's told to stop. A running instance that the
   master doesn't count is told to stop, from heartbeats and registrations. What an old instance sends is
   acknowledged and not stored: the one that took over resumes from the bookmark. A failed trigger starts again
   after `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF` (5 s), doubling up to `..._MAX` (5 min). A manual run of
-  such a DAG brings an event (until `--event` comes, it's refused). The master takes an event only from the
-  worker holding that instance and only of the DAG's current version; a key has 1 to 1024 bytes and no NUL, its
+  such a DAG brings an event, or is refused (decision 350). The master takes an event only from the
+  worker holding that instance and only of the DAG's current version; a key has 1 to 1024 bytes and no control characters, its
   data at most the trigger's `max_output_size` (1 MiB by default), secrets masked by the agent as in an output:
   what breaks that fails the trigger with `event_refused`. Blocking triggers are stopped as sensors are
   (`[watchers] switch_off_after`, the user's). Not chosen: a table of attempts for triggers (nothing about a
@@ -6858,9 +6858,17 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   or a poke's call that went well, clears it. A trigger told to stop keeps its watcher slot on the master's count until
   its worker says it ended, as the worker counts it, and what it ended with still counts; one that ended while the
   master was away is told on the next stream, on which it is still listed as running. A new instance goes on from the
-  errors in a row the last one left. `[triggers] failing_after` makes it `failing` in `master_triggers`, on its
-  status (M4.11b part 3), and for `TRIGGER_FAILING` once notifications exist (none are built yet; their `Event` enum
+  errors in a row the last one left. `[triggers] failing_after` makes it `failing` in `master_triggers`, and for `TRIGGER_FAILING` once notifications exist (none are built yet; their `Event` enum
   will need another name, `Event` is what a trigger yields).
+- **Triggers have endpoints of their own** (decision 350, the user's for the endpoints, Claude's for their shape, 2026-11-07;
+  built in M4.11b): `GET /api/v1/triggers`, `GET /api/v1/dags/{dag}/trigger`, `GET .../trigger/events`, `POST
+  .../trigger/restart`, `POST .../trigger/switch-on`; `schedr triggers list|show|events|restart|switch-on`. A restart forgets
+  what it waited for and marks a running one as of no version, so the next pass stops it and starts another from the bookmark.
+  `sensors switch-on` takes a trigger's function too, as `sensors switched-off` lists it. A manual run brings `event` (a stored
+  key) or `event_key` and `event_data` (`--event`, `--event-key`, `--event-data`, `dags test` likewise), a `manual` run that
+  never writes to `events`. For tests, `run_trigger(new_files(...), after=None, take=3, timeout=)` in the process, and
+  `task_context(event=)`. `[retention] events` comes with M4.14. A DAG's page shows the trigger, pulsing while it runs, its
+  last 20 events with "Run again", and takes an event in its Trigger dialog. What these reads show is masked as an output is.
 - **`first_of`: acting on the first of several, in the graph** (decision 347, the user's, 2026-11-07; built
   in M4.11c): `first_of(a.on(str), b.on(str)) >> fast_report` is a node the master ends, as it does
   `empty`: no Python, no slot, no polling. It ends as soon as one edge is taken, with that value and the
@@ -6871,6 +6879,20 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   is `.on(...)`, and the lines would have to merge into one hidden node); `RunIf.ANY_SUCCEEDED` (decision
   345); asking the REST API from a wait step (a slot, polling, a token and an address for what the master
   knows); absorbing a loser's failure (a run never hides a failed task).
+- **Options are drawn as one group** (decision 351, the user's, 2026-11-07; built in M4.11c): the options of `first_of`
+  sit in one box in the graph, with one dashed line from the box to the node, since they are treated as a group and aren't
+  each a dependency with the usual guarantees. The winner is highlighted in the box and named on the node. Where one box
+  can't be drawn (a task is an option of two nodes, options at different depths, or in different task groups) each option
+  gets its own dashed line (Claude's, a layout detail).
+- **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; to be built in M4.11f):
+  `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
+  it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`
+  where the host gathers what the pokes return and sends one ordinary event when the window ends; the master, the
+  database, the CLI and "Run again" don't change. Claude's, to check when it is built: the key is the last item's, so `after` keeps its
+  meaning; the window starts at the first item and an empty one starts no run; a batch goes early near `max_output_size`;
+  `restart_if_idle` must be longer than `batch`; a restart finds the items again from the bookmark, which a poke that consumes
+  what it reads can't. A run reads `dag_ctx.event.data` as `list[Event[T]]`, what the pokes returned (the user's): the same objects, each
+  stored once. Not chosen: `list[T]` (the items' keys and times would be gone); `batch="50s"` (every other duration is a `timedelta`); `tuple[list[T], list[Event]]` (each item stored twice).
 - **A task starts after its upstream tasks end** (decision 345, the user's, 2026-11-07): no `run_if`
   starts one on the first of several. To act on the first, `first_of` (decision 347) is a node of its own,
   after which a task starts as usual. Not chosen: `RunIf.ANY_SUCCEEDED` (too many

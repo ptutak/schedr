@@ -616,3 +616,64 @@ async fn a_dag_page_shows_its_limits_and_which_are_reached() {
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
     assert_eq!(texts(&html, "ul.limits"), Vec::<String>::new());
 }
+
+/// `etl()` with DAG `sync` started by a trigger.
+fn etl_with_trigger() -> Scripted {
+    let mut etl = etl();
+    let mut sync = dag("sync", false);
+    sync["trigger"] = json!({"kind": "event", "task": {"id": "found"}});
+    etl.answers
+        .insert("/api/v1/dags/sync".to_owned(), (200, sync));
+    etl
+}
+
+#[tokio::test]
+async fn a_dag_page_shows_its_trigger_and_what_it_found() {
+    let mut etl = etl_with_trigger();
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger".to_owned(),
+        (
+            200,
+            json!({
+                "dag_id": "sync", "trigger": "found", "state": "running", "worker": "w1",
+                "bookmark": "inbox/1", "stopped_why": null, "failures": 2,
+                "last_error": "no route", "not_before": null,
+                "started_at": "2026-10-15T01:00:00Z", "last_event_at": null,
+                "last_poked_at": "2026-10-15T01:00:05Z", "last_restart_at": null
+            }),
+        ),
+    );
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger/events?limit=20".to_owned(),
+        (
+            200,
+            json!({"events": [{
+                "key": "inbox/1", "data": {"n": 1}, "at": null,
+                "received_at": "2026-10-15T01:00:06Z"
+            }]}),
+        ),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (status, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("no route (2 in a row)"), "{html}");
+    assert!(html.contains("Last poked"), "{html}");
+    assert!(html.contains("/d/etl/dags/sync/trigger/restart"), "{html}");
+    assert!(
+        html.contains("/d/etl/dags/sync/trigger/run-event?key=inbox%2F1"),
+        "{html}"
+    );
+    assert!(
+        !attrs(&html, ".state.running.waiting", "class").is_empty(),
+        "it pulses while it waits: {html}"
+    );
+}
+
+#[tokio::test]
+async fn a_trigger_that_cant_be_told_leaves_the_rest_of_the_page() {
+    let app = ui(vec![deployment("etl", etl_with_trigger())]);
+    let (status, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Its trigger can't be told now"), "{html}");
+    assert_eq!(texts(&html, "table.runs tbody td.mono"), ["r2", "r1"]);
+}

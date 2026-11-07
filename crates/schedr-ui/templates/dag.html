@@ -57,6 +57,40 @@
 {% if !switched_off_unavailable.is_empty() %}
 <div class="banner warning">Wait steps switched off can't be told now: {{ switched_off_unavailable }}</div>
 {% endif %}
+{% if let Some(trigger) = trigger %}
+<h2>Trigger</h2>
+{% if !trigger.unavailable.is_empty() %}
+<div class="banner warning">Its trigger can't be told now: {{ trigger.unavailable }}</div>
+{% endif %}
+{% if !trigger.state.is_empty() %}
+<div class="actions">
+  {% call confirm::action("Restart", "Restart the trigger of " ~ row.dag_id ~ "?", "It starts again from its bookmark, whatever stopped it.", trigger.restart, "", page.base) %}{% endcall %}
+</div>
+<dl class="facts">
+  <dt>State</dt><dd><span class="state {{ trigger.state }}{% if trigger.state == "running" %} waiting{% endif %}">{{ trigger.state }}</span> <span class="mono">{{ trigger.function }}</span></dd>
+  {% if !trigger.worker.is_empty() %}<dt>Worker</dt><dd class="mono">{{ trigger.worker }}</dd>{% endif %}
+  {% if !trigger.bookmark.is_empty() %}<dt>Bookmark</dt><dd class="mono">{{ trigger.bookmark }}</dd>{% endif %}
+  {% for moment in trigger.moments %}<dt>{{ moment.0 }}</dt><dd class="time">{{ moment.1 }}</dd>{% endfor %}
+  {% if !trigger.last_error.is_empty() %}<dt>Last error</dt><dd class="mono">{{ trigger.last_error }} ({{ trigger.failures }} in a row)</dd>{% endif %}
+</dl>
+{% if !trigger.events.is_empty() %}
+<h3>Events</h3>
+<table class="list">
+  <thead><tr><th>Key</th><th>Received</th><th>Data</th><th></th></tr></thead>
+  <tbody>
+  {% for event in trigger.events %}
+    <tr>
+      <td class="mono">{{ event.key }}</td>
+      <td class="time">{{ event.received }}</td>
+      <td class="mono">{{ event.data }}</td>
+      <td>{% call confirm::action("Run again", "Run " ~ row.dag_id ~ " again for this event?", "A manual run with this event.", event.action, "", page.base) %}{% endcall %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+{% endif %}
 <dl class="facts">
   <dt>Schedule</dt><dd class="mono">{{ row.schedule }}</dd>
   <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>

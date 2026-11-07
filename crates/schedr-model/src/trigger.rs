@@ -77,6 +77,21 @@ pub enum Trigger {
 /// `max_output_size`).
 pub const MAX_EVENT_KEY: usize = 1024;
 
+/// Whether a text can be an event's key.
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub fn check_event_key(key: &str) -> Result<(), String> {
+    if key.is_empty() || key.len() > MAX_EVENT_KEY || key.chars().any(char::is_control) {
+        return Err(format!(
+            "an event's key has 1 to {MAX_EVENT_KEY} bytes and no control characters, got {} bytes",
+            key.len()
+        ));
+    }
+    Ok(())
+}
+
 /// What a `@trigger` found, as stored and given to the run it starts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

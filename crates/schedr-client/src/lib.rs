@@ -11,9 +11,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use schedr_api::views::{
     AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
-    DagList, DagView, DeploymentView, ImportErrorList, LogChunk, OutputView, PauseRequest,
-    ResourceList, RunDetail, RunList, SensorList, TestConnectionRequest, TriggerRequest,
-    WorkerList,
+    DagList, DagView, DeploymentView, EventList, ImportErrorList, LogChunk, OutputView,
+    PauseRequest, ResourceList, RunDetail, RunList, SensorList, TestConnectionRequest, TriggerList,
+    TriggerRequest, TriggerView, WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -621,6 +621,72 @@ impl<T: Transport> Client<T> {
             .await
     }
 
+    /// `GET /api/v1/triggers`: every DAG's trigger.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn triggers(&self) -> Result<TriggerList, ClientError> {
+        self.call(Method::Get, "/api/v1/triggers".to_owned(), None)
+            .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/trigger`: a DAG's trigger.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn dag_trigger(&self, dag: &str) -> Result<TriggerView, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/trigger", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/trigger/events`: what it found, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn trigger_events(&self, dag: &str, limit: u32) -> Result<EventList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/trigger/events?limit={limit}", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/trigger/restart`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn restart_trigger(&self, dag: &str) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Post,
+            format!("/api/v1/dags/{}/trigger/restart", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/trigger/switch-on`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn switch_on_trigger(&self, dag: &str) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Post,
+            format!("/api/v1/dags/{}/trigger/switch-on", path(dag)),
+            None,
+        )
+        .await
+    }
+
     /// `GET /api/v1/sensors/switched-off`: the wait steps switched off.
     ///
     /// # Errors
@@ -1005,10 +1071,28 @@ impl<T: Transport> Client<T> {
         planned_for: Option<Timestamp>,
         params: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> Result<CommandView, ClientError> {
-        let body = to_body(&TriggerRequest {
-            planned_for,
-            params: params.cloned(),
-        })?;
+        self.trigger_with(
+            dag,
+            &TriggerRequest {
+                planned_for,
+                params: params.cloned(),
+                ..TriggerRequest::default()
+            },
+        )
+        .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/runs`: the command, for a run asked for in full.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn trigger_with(
+        &self,
+        dag: &str,
+        request: &TriggerRequest,
+    ) -> Result<CommandView, ClientError> {
+        let body = to_body(request)?;
         self.call(
             Method::Post,
             format!("/api/v1/dags/{}/runs", path(dag)),

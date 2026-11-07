@@ -79,6 +79,17 @@ async fn world_with_logs(
     master_down: bool,
     logs: Option<std::sync::Arc<dyn schedr_api::logs::LogSource>>,
 ) -> Client<InProcess> {
+    let cron = json!({"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw", "catchup": false});
+    world_of(master_down, logs, cron, &[]).await
+}
+
+/// DAG `sync` started by `trigger`, with `events` stored as a trigger would have.
+async fn world_of(
+    master_down: bool,
+    logs: Option<std::sync::Arc<dyn schedr_api::logs::LogSource>>,
+    trigger: serde_json::Value,
+    events: &[&str],
+) -> Client<InProcess> {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let parse_id = db
@@ -94,7 +105,7 @@ async fn world_with_logs(
         .unwrap();
     let dag: schedr_model::Dag = serde_json::from_value(json!({
         "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
-        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw", "catchup": false},
+        "trigger": trigger,
         "initial_since": null,
         "max_active_runs": 1,
         "tasks": [{
@@ -114,6 +125,7 @@ async fn world_with_logs(
         pause: false,
     };
     db.apply_dag_changes(&[change], ts(NOW)).await.unwrap();
+    store_events(&db, events).await;
     let mut state = ApiState::new(db.clone(), None);
     state.clock = fixed_now;
     if let Some(logs) = logs {
@@ -139,6 +151,60 @@ async fn world_with_logs(
         Duration::from_millis(1),
         Duration::from_millis(20),
     )
+}
+
+async fn store_events(db: &Database, keys: &[&str]) {
+    let Some(active) = db.active_dags().await.unwrap().into_iter().next() else {
+        return;
+    };
+    let params = json!({});
+    for (i, key) in keys.iter().enumerate() {
+        let event = schedr_model::RunEvent {
+            key: (*key).to_owned(),
+            data: json!({"n": i}),
+            at: None,
+        };
+        let new = schedr_db::runs::NewRun {
+            dag_id: &active.dag.id,
+            dag_version_id: &active.version_id,
+            kind: schedr_model::RunKind::Event,
+            state: schedr_model::RunState::Queued,
+            planned_for: ts(NOW),
+            since: ts(NOW),
+            triggered_at: ts(NOW),
+            triggered_by: "trigger",
+            params: &params,
+            event: Some(&event),
+        };
+        let run_id = format!("01a00000-0000-7000-8000-00000000000{i}");
+        db.store_event(&run_id, &new, &event).await.unwrap();
+    }
+}
+
+/// A DAG started by a trigger, its events already found.
+async fn trigger_world(events: &[&str]) -> Client<InProcess> {
+    let trigger = json!({
+        "kind": "event",
+        "task": {
+            "id": "found", "kind": "sensor", "mode": "loop", "arguments": {},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    world_of(false, None, trigger, events).await
+}
+
+async fn triggers(
+    client: &Client<InProcess>,
+    command: TriggersCommand,
+    output: &Output,
+) -> Result<String, AppError> {
+    let mut out = Vec::new();
+    run_triggers(&command, client, output, &mut out).await?;
+    Ok(String::from_utf8(out).unwrap())
 }
 
 fn text() -> Output {
@@ -178,6 +244,10 @@ async fn runs(
 
 fn trigger(planned_for: Option<&str>) -> RunsCommand {
     RunsCommand::Trigger {
+        event: None,
+        event_key: None,
+        event_data: None,
+        event_at: None,
         dag: "sync".to_owned(),
         planned_for: planned_for.map(str::to_owned),
         params: vec![],
@@ -313,6 +383,10 @@ async fn later_features_and_bad_arguments_are_errors() {
     let cases = [
         (
             RunsCommand::Trigger {
+                event: None,
+                event_key: None,
+                event_data: None,
+                event_at: None,
                 dag: "sync".to_owned(),
                 planned_for: None,
                 params: vec!["a".to_owned()],
@@ -322,6 +396,10 @@ async fn later_features_and_bad_arguments_are_errors() {
         ),
         (
             RunsCommand::Trigger {
+                event: None,
+                event_key: None,
+                event_data: None,
+                event_at: None,
                 dag: "sync".to_owned(),
                 planned_for: None,
                 params: vec!["a=1".to_owned()],
@@ -897,4 +975,160 @@ fn a_bad_param_isnt_echoed(#[case] fields: &[&str], #[case] message: &str) {
     let error = super::given_params(&fields, None).unwrap_err().to_string();
     assert!(!error.contains("hunter2"), "{error}");
     assert!(error.starts_with(message), "{error}");
+}
+
+#[test]
+fn what_a_trigger_said_stays_on_one_line_of_a_table() {
+    assert_eq!(one_line("a\nb\u{1b}]0;x\u{7}"), "a b ]0;x ");
+}
+
+#[tokio::test]
+async fn a_trigger_is_listed_and_shown_with_what_it_found() {
+    let client = trigger_world(&["a\nb", "second"]).await;
+    let dag = || "sync".to_owned();
+    let list = triggers(&client, TriggersCommand::List, &text())
+        .await
+        .unwrap();
+    assert!(list.contains("found"), "{list}");
+    assert!(list.contains("second"), "the bookmark: {list}");
+    let json_list: serde_json::Value = serde_json::from_str(
+        &triggers(&client, TriggersCommand::List, &json_output())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json_list["triggers"][0]["trigger"], "found");
+
+    let shown = triggers(&client, TriggersCommand::Show { dag: dag() }, &text())
+        .await
+        .unwrap();
+    assert!(shown.contains("last event: "), "{shown}");
+    let shown: serde_json::Value = serde_json::from_str(
+        &triggers(
+            &client,
+            TriggersCommand::Show { dag: dag() },
+            &json_output(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(shown["bookmark"], "second");
+
+    let events = TriggersCommand::Events {
+        dag: dag(),
+        limit: 10,
+    };
+    let table = triggers(&client, events, &text()).await.unwrap();
+    assert!(table.contains("a b"), "a key stays on its line: {table}");
+    assert!(table.contains(r#"{"n":1}"#), "{table}");
+    let events = TriggersCommand::Events {
+        dag: dag(),
+        limit: 1,
+    };
+    let page: serde_json::Value =
+        serde_json::from_str(&triggers(&client, events, &json_output()).await.unwrap()).unwrap();
+    assert_eq!(page["events"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_trigger_is_restarted_and_switched_on_through_the_master() {
+    let client = trigger_world(&[]).await;
+    let dag = || "sync".to_owned();
+    let said = triggers(&client, TriggersCommand::Restart { dag: dag() }, &text())
+        .await
+        .unwrap();
+    assert_eq!(said, "restarting the trigger of sync\n");
+    let said = triggers(&client, TriggersCommand::SwitchOn { dag: dag() }, &text())
+        .await
+        .unwrap();
+    assert_eq!(said, "switched on the trigger of sync\n");
+    for command in [
+        TriggersCommand::Restart { dag: dag() },
+        TriggersCommand::SwitchOn { dag: dag() },
+    ] {
+        let said: serde_json::Value =
+            serde_json::from_str(&triggers(&client, command, &json_output()).await.unwrap())
+                .unwrap();
+        assert_eq!(said["status"], "applied", "{said}");
+    }
+}
+
+#[tokio::test]
+async fn a_dag_without_a_trigger_says_so_for_each_trigger_command() {
+    let client = world(false).await;
+    let dag = || "sync".to_owned();
+    for command in [
+        TriggersCommand::Show { dag: dag() },
+        TriggersCommand::SwitchOn { dag: dag() },
+    ] {
+        let error = triggers(&client, command, &text()).await.unwrap_err();
+        assert!(error.to_string().contains("event trigger"), "{error}");
+    }
+    let error = triggers(&client, TriggersCommand::Restart { dag: dag() }, &text())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("has no event trigger"),
+        "{error}"
+    );
+    let list = triggers(&client, TriggersCommand::List, &text())
+        .await
+        .unwrap();
+    assert!(!list.contains("sync"), "{list}");
+}
+
+#[tokio::test]
+async fn a_manual_run_brings_a_given_or_a_stored_event() {
+    let client = trigger_world(&["seen"]).await;
+    let run = |event: Option<&str>, key: Option<&str>, data: Option<&str>| RunsCommand::Trigger {
+        event: event.map(str::to_owned),
+        event_key: key.map(str::to_owned),
+        event_data: data.map(str::to_owned),
+        event_at: None,
+        dag: "sync".to_owned(),
+        planned_for: None,
+        params: vec![],
+        params_json: None,
+    };
+    let (out, _) = runs(&client, run(Some("seen"), None, None), &text()).await;
+    assert!(out.starts_with("triggered run"), "{out}");
+    let (out, _) = runs(&client, run(None, Some("by-hand"), Some("7")), &text()).await;
+    assert!(out.starts_with("triggered run"), "{out}");
+
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let error = run_runs(
+        &run(Some("never-seen"), None, None),
+        &client,
+        &text(),
+        &mut out,
+        &mut err,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("no event `never-seen`"),
+        "{error}"
+    );
+    let error = run_runs(&trigger(None), &client, &text(), &mut out, &mut err)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("event"), "{error}");
+}
+
+#[test]
+fn event_data_is_json_or_a_file_of_it() {
+    assert_eq!(given_event_data(None), Ok(None));
+    assert_eq!(given_event_data(Some("[1]")), Ok(Some(json!([1]))));
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("event.json");
+    std::fs::write(&file, r#"{"a": 1}"#).unwrap();
+    assert_eq!(
+        given_event_data(Some(&format!("@{}", file.display()))),
+        Ok(Some(json!({"a": 1})))
+    );
+    let error = given_event_data(Some("@/no/such/file.json")).unwrap_err();
+    assert!(error.starts_with("--event-data: can't read"), "{error}");
+    let error = given_event_data(Some("{not json")).unwrap_err();
+    assert!(error.starts_with("--event-data must be JSON"), "{error}");
 }

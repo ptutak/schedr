@@ -2486,3 +2486,103 @@ with Dag("guarded", trigger=found()):
     assert!(logs.contains("seen data: has **** in it"), "{logs}");
     assert!(!logs.contains("hunter22-pw"), "{logs}");
 }
+
+/// M4.11b: a trigger's status and events, from the CLI and the API; a manual run brings an event,
+/// and writes none; a restart starts it from its bookmark; the DAG's page shows it.
+#[test]
+fn a_trigger_is_seen_restarted_and_run_again_by_hand() {
+    const DAG: &str = r#"
+import asyncio
+from collections.abc import AsyncIterator
+
+from schedr import Dag, Event, dag_ctx, task, trigger
+
+
+@trigger
+async def found(after: str | None) -> AsyncIterator[Event[int]]:
+    yield Event("after-" + str(after), 1)
+    await asyncio.sleep(3600)
+
+
+@task
+def seen(key: str, data: int) -> str:
+    print(f"seen {key} {data}")
+    return key
+
+
+with Dag("ingest", trigger=found()):
+    seen(dag_ctx.event.key, dag_ctx.event.data)
+"#;
+    let standalone = Standalone::start(&[("ingest.py", DAG)], None);
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"ingest".to_owned())
+    });
+    let shown = standalone.cli_json(&["triggers", "show", "ingest"]);
+    assert_eq!(shown["state"], "paused", "{shown}");
+    let (code, _, err) = standalone.cli(&["runs", "trigger", "ingest"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("needs an event"), "{err}");
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "ingest"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("its first event", || standalone.runs("ingest").len() == 1);
+    let list = standalone.cli_json(&["triggers", "list"]);
+    assert_eq!(list["triggers"][0]["trigger"], "found", "{list}");
+    assert_eq!(list["triggers"][0]["state"], "running", "{list}");
+    assert_eq!(list["triggers"][0]["bookmark"], "after-None", "{list}");
+    let events = standalone.cli_json(&["triggers", "events", "ingest"]);
+    assert_eq!(events["events"][0]["key"], "after-None", "{events}");
+    assert_eq!(events["events"][0]["data"], 1, "{events}");
+
+    // By hand: one stored, one given; neither is written as an event.
+    let (code, out, err) = standalone.cli(&["runs", "trigger", "ingest", "--event", "after-None"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = standalone.cli(&[
+        "runs",
+        "trigger",
+        "ingest",
+        "--event-key",
+        "by-hand",
+        "--event-data",
+        "7",
+    ]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, _, err) = standalone.cli(&["runs", "trigger", "ingest", "--event", "nothing"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("no event `nothing`"), "{err}");
+    standalone.wait("the manual runs", || {
+        let runs = standalone.runs("ingest");
+        runs.len() == 3 && runs.iter().all(|run| run["state"] == "success")
+    });
+    let logs_now = logs(standalone.dir.path());
+    assert!(logs_now.contains("seen by-hand 7"), "{logs_now}");
+    assert_eq!(
+        logs_now.matches("seen after-None 1").count(),
+        2,
+        "{logs_now}"
+    );
+    let events = standalone.cli_json(&["triggers", "events", "ingest"]);
+    assert_eq!(events["events"].as_array().unwrap().len(), 1, "{events}");
+
+    // Started again, from where it is.
+    let (code, _, err) = standalone.cli(&["triggers", "restart", "ingest"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("a run from its bookmark", || {
+        standalone.runs("ingest").len() == 4
+    });
+    let events = standalone.cli_json(&["triggers", "events", "ingest"]);
+    assert_eq!(events["events"][0]["key"], "after-after-None", "{events}");
+
+    let list = standalone.page("/").expect("the UI's DAG list");
+    let href = list
+        .split('"')
+        .find(|part| part.ends_with("/dags/ingest"))
+        .unwrap_or_else(|| panic!("no link to the DAG: {list}"))
+        .to_owned();
+    let page = standalone.page(&href).unwrap_or_default();
+    assert!(page.contains("@trigger found"), "{page}");
+    assert!(page.contains("after-after-None"), "{page}");
+    assert!(page.contains("Run again"), "{page}");
+    let (code, _, err) = standalone.cli(&["triggers", "restart", "nothing"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("nothing"), "{err}");
+}

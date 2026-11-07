@@ -9,6 +9,7 @@ whenever the trigger starts again.
 import dataclasses
 import inspect
 import typing
+import unicodedata
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -55,9 +56,10 @@ class Event[T = None]:
         """
         if not isinstance(self.key, str) or not self.key:
             raise TypeError(f"an event's key must be a non-empty string, got {self.key!r}")
-        if len(self.key.encode()) > MAX_KEY_BYTES or "\0" in self.key:
+        control = any(unicodedata.category(c) == "Cc" for c in self.key)
+        if len(self.key.encode()) > MAX_KEY_BYTES or control:
             raise TypeError(
-                f"an event's key has at most {MAX_KEY_BYTES} bytes and no NUL, got "
+                f"an event's key has at most {MAX_KEY_BYTES} bytes and no control characters, got "
                 f"{self.key[:40]!r}..."
             )
         if self.at is not None and self.at.tzinfo is None:
@@ -237,6 +239,16 @@ class TriggerFunction[**P, R]:
             raise TypeError(f"{where}: {e}") from e
         arguments = {name: value for name, value in bound.arguments.items() if name != AFTER}
         return EventTrigger(self, arguments)
+
+    @property
+    def every(self) -> timedelta | None:
+        """How often schedr calls it, for ``@trigger.poke``."""
+        return self._every
+
+    @property
+    def every_ms(self) -> int:
+        """``every`` in milliseconds; 0 for a generator."""
+        return 0 if self._every is None else round(self._every / timedelta(milliseconds=1))
 
     def data_type(self) -> TypeDesc:
         """The type of its events' data.

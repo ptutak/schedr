@@ -46,6 +46,11 @@ struct World {
 
 /// A database with DAG `sync` (paused, as new DAGs are) and worker `w1`.
 async fn world() -> World {
+    world_of(dag()).await
+}
+
+/// [`world`] with `dag` as DAG `sync`.
+async fn world_of(dag: Dag) -> World {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let parse_id = db
@@ -60,7 +65,7 @@ async fn world() -> World {
         .await
         .unwrap();
     let change = DagChange::Define {
-        dag: Box::new(dag()),
+        dag: Box::new(dag),
         parse_id,
         pause: false,
     };
@@ -166,6 +171,7 @@ async fn commands_about_unknown_dags_and_runs_are_rejected() {
         .await;
     world
         .ask(&Command::TriggerRun {
+            event: None,
             params: None,
             dag_id: ghost,
             planned_for: None,
@@ -188,6 +194,7 @@ async fn a_trigger_creates_a_manual_run_by_the_requesting_user() {
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            event: None,
             params: None,
             dag_id: sync(),
             planned_for: Some(ts("2026-10-15T03:00:00Z")),
@@ -217,6 +224,7 @@ async fn a_trigger_for_the_future_is_rejected() {
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            event: None,
             params: None,
             dag_id: sync(),
             planned_for: Some(ts("2026-10-22T00:00:00Z")),
@@ -238,6 +246,7 @@ async fn cancelling_a_running_run_stops_its_attempts_and_a_finished_one_is_rejec
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            event: None,
             params: None,
             dag_id: sync(),
             planned_for: None,
@@ -302,6 +311,7 @@ async fn pausing_with_cancel_cancels_the_runs_in_progress() {
     for _ in 0..2 {
         world
             .ask(&Command::TriggerRun {
+                event: None,
                 params: None,
                 dag_id: sync(),
                 planned_for: None,
@@ -371,6 +381,7 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
     let unknown_run = "0190a3e5-0000-7000-8000-000000000000".to_owned();
     world
         .ask(&Command::TriggerRun {
+            event: None,
             params: None,
             dag_id: sync(),
             planned_for: None,
@@ -472,6 +483,7 @@ async fn a_database_failure_leaves_a_task_command_pending() {
     let mut world = world().await;
     world
         .ask(&Command::TriggerRun {
+            event: None,
             params: None,
             dag_id: sync(),
             planned_for: None,
@@ -603,6 +615,7 @@ async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
     // applied; anything else wrong with it is still a rejection.
     let mut world = world().await;
     let trigger = Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: sync(),
         planned_for: None,
@@ -612,7 +625,7 @@ async fn a_repeated_command_is_applied_only_when_what_it_asks_for_holds() {
     // The first try made the run, then its round failed.
     world
         .scheduler
-        .trigger_as(Some(&id), &sync(), None, None, "anna", ts(NOW))
+        .trigger_as(Some(&id), &sync(), None, (None, None), "anna", ts(NOW))
         .await
         .unwrap();
     let missing = world
@@ -902,4 +915,104 @@ async fn connections_commands_no_worker_or_root_can_take_are_rejected() {
         ]
     );
     assert_eq!(applied.outgoing.len(), 0);
+}
+
+/// [`dag`] started by a trigger whose events hold at most 16 bytes.
+fn event_dag() -> Dag {
+    let mut dag = serde_json::to_value(dag()).unwrap();
+    dag["trigger"] = serde_json::json!({
+        "kind": "event",
+        "task": {
+            "id": "found", "kind": "sensor", "mode": "loop", "arguments": {},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 16
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    serde_json::from_value(dag).unwrap()
+}
+
+fn run_with(event: Option<AskedEvent>) -> Command {
+    Command::TriggerRun {
+        event,
+        params: None,
+        dag_id: sync(),
+        planned_for: None,
+    }
+}
+
+/// What the master says to `command`: applied or why not.
+async fn decided(world: &mut World, command: &Command) -> Result<(), String> {
+    world.ask(command).await;
+    let applied = world.apply().await;
+    let decided = &applied.decided[0];
+    match decided.status {
+        CommandStatus::Rejected => Err(decided.reason.clone().unwrap_or_default()),
+        _ => Ok(()),
+    }
+}
+
+#[tokio::test]
+async fn a_manual_run_of_a_dag_with_a_trigger_needs_an_event_it_could_have_found() {
+    let mut world = world_of(event_dag()).await;
+    let given = |key: &str, data: Json| {
+        Some(AskedEvent::Given {
+            key: key.to_owned(),
+            data,
+            at: Some(ts("2026-10-14T03:00:00Z")),
+        })
+    };
+    let why = decided(&mut world, &run_with(None)).await.unwrap_err();
+    assert!(why.contains("event"), "{why}");
+    let unknown = Some(AskedEvent::Stored {
+        key: "gone".to_owned(),
+    });
+    let why = decided(&mut world, &run_with(unknown)).await.unwrap_err();
+    assert_eq!(why, "no event `gone` of DAG `sync`");
+    let bad_key = given("a\nb", Json::Null);
+    let why = decided(&mut world, &run_with(bad_key)).await.unwrap_err();
+    assert!(why.contains("control"), "{why}");
+    let big = given("big", Json::String("x".repeat(64)));
+    let why = decided(&mut world, &run_with(big)).await.unwrap_err();
+    assert!(
+        why.contains("over its trigger's `max_output_size`"),
+        "{why}"
+    );
+    let fits = given("fits", Json::from(7));
+    assert_eq!(decided(&mut world, &run_with(fits)).await, Ok(()));
+}
+
+#[tokio::test]
+async fn a_dag_without_a_trigger_takes_no_event_and_has_no_trigger_to_restart() {
+    let mut world = world().await;
+    let event = Some(AskedEvent::Given {
+        key: "a".to_owned(),
+        data: Json::Null,
+        at: None,
+    });
+    let why = decided(&mut world, &run_with(event)).await.unwrap_err();
+    assert!(why.contains("no event trigger starts its runs"), "{why}");
+    let restart = Command::RestartTrigger { dag_id: sync() };
+    let why = decided(&mut world, &restart).await.unwrap_err();
+    assert_eq!(why, "DAG `sync` has no event trigger");
+    let gone = Command::RestartTrigger {
+        dag_id: DagId::new("gone").unwrap(),
+    };
+    assert!(decided(&mut world, &gone).await.is_err());
+}
+
+#[tokio::test]
+async fn a_trigger_restarts_and_its_function_can_be_switched_on() {
+    let mut world = world_of(event_dag()).await;
+    let restart = Command::RestartTrigger { dag_id: sync() };
+    assert_eq!(decided(&mut world, &restart).await, Ok(()));
+    let on = |sensor: &str| Command::SwitchOnSensor {
+        dag_id: sync(),
+        sensor: TaskId::new(sensor).unwrap(),
+    };
+    assert_eq!(decided(&mut world, &on("found")).await, Ok(()));
+    let why = decided(&mut world, &on("extract")).await.unwrap_err();
+    assert_eq!(why, "no wait step `extract` in DAG `sync`");
 }

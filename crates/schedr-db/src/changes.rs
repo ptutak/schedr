@@ -123,7 +123,7 @@ impl Database {
 
 /// The change triggers on Postgres, by table (`[database] change_notifications` turns them on
 /// and off: [`Database::set_change_notifications`]).
-const POSTGRES_TRIGGERS: [(&str, &str); 14] = [
+const POSTGRES_TRIGGERS: [(&str, &str); 16] = [
     ("runs", "runs_inserted"),
     ("runs", "runs_updated"),
     ("task_instances", "task_instances_inserted"),
@@ -135,6 +135,8 @@ const POSTGRES_TRIGGERS: [(&str, &str); 14] = [
     ("wait_step_strikes", "wait_step_strikes_inserted"),
     ("wait_step_strikes", "wait_step_strikes_updated"),
     ("wait_step_strikes", "wait_step_strikes_deleted"),
+    ("triggers", "triggers_inserted"),
+    ("triggers", "triggers_updated"),
     ("workers", "workers_inserted"),
     ("workers", "workers_updated"),
     ("workers", "workers_deleted"),

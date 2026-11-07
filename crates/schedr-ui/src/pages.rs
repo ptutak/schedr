@@ -53,6 +53,126 @@ struct DagsPage {
     switched_off: Vec<SwitchedOffRow>,
 }
 
+/// What a manual run of an event-triggered DAG asks for, in its dialog.
+const EVENT_FIELDS: &str = r#"<label class="field">Event key <input name="event_key" required size="28" autocomplete="off"></label>
+<label class="field">Event data (JSON) <textarea name="event_data" rows="3" cols="40" placeholder="null"></textarea></label>
+<p class="dim">Its tasks read this as <code>dag_ctx.event</code>. It isn't stored as an event, so the real one with this key still starts a run.</p>"#;
+
+/// How many events a DAG's page lists.
+const EVENTS_SHOWN: u32 = 20;
+
+/// A DAG's trigger, on its page.
+#[derive(Debug, Clone, Default)]
+struct TriggerPanel {
+    /// Why it can't be told now.
+    unavailable: String,
+    state: String,
+    function: String,
+    worker: String,
+    bookmark: String,
+    failures: u32,
+    last_error: String,
+    /// How long it has gone on, as people read it: label and moment.
+    moments: Vec<(&'static str, String)>,
+    /// Where it is started again.
+    restart: String,
+    events: Vec<EventRow>,
+}
+
+/// An event a trigger found, on its DAG's page.
+#[derive(Debug, Clone)]
+struct EventRow {
+    key: String,
+    received: String,
+    data: String,
+    /// Where a run of it is started.
+    action: String,
+}
+
+/// The wait steps of a DAG that are switched off; why that can't be told.
+async fn switched_off_in<T: Transport>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    dag_id: &str,
+) -> (Vec<SwitchedOffRow>, String) {
+    let (mut switched_off, why) = switched_off_of(
+        page,
+        deployment,
+        deployment.client.switched_off_sensors().await,
+    );
+    switched_off.retain(|sensor| sensor.dag_id == dag_id);
+    (switched_off, why)
+}
+
+/// Its trigger, for a DAG a trigger starts.
+async fn dag_trigger_panel<T: Transport>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    dag: &DagView,
+) -> Option<TriggerPanel> {
+    if dag.trigger.as_ref()?["kind"] != "event" {
+        return None;
+    }
+    Some(trigger_panel(page, deployment, &dag.dag_id).await)
+}
+
+async fn trigger_panel<T: Transport>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    dag_id: &str,
+) -> TriggerPanel {
+    let trigger = match deployment.client.dag_trigger(dag_id).await {
+        Ok(trigger) => trigger,
+        Err(error) => {
+            return TriggerPanel {
+                unavailable: error.to_string(),
+                ..TriggerPanel::default()
+            };
+        }
+    };
+    let actions = format!(
+        "{}/d/{}/dags/{}/trigger",
+        page.base,
+        path_segment(&deployment.name),
+        path_segment(dag_id)
+    );
+    let (events, unavailable) = match deployment.client.trigger_events(dag_id, EVENTS_SHOWN).await {
+        Ok(list) => (list.events, String::new()),
+        Err(error) => (Vec::new(), error.to_string()),
+    };
+    let events = events
+        .iter()
+        .map(|event| EventRow {
+            key: event.key.clone(),
+            received: page.time(&event.received_at),
+            data: event.data.to_string(),
+            action: format!("{actions}/run-event?key={}", path_segment(&event.key)),
+        })
+        .collect();
+    let moments = [
+        ("Started", trigger.started_at),
+        ("Last event", trigger.last_event_at),
+        ("Last poked", trigger.last_poked_at),
+        ("Last idle restart", trigger.last_restart_at),
+        ("Starts again from", trigger.not_before),
+    ]
+    .into_iter()
+    .filter_map(|(what, at)| at.map(|at| (what, page.time(&at))))
+    .collect();
+    TriggerPanel {
+        unavailable,
+        state: trigger.state,
+        function: trigger.trigger,
+        worker: trigger.worker.unwrap_or_default(),
+        bookmark: trigger.bookmark.unwrap_or_default(),
+        failures: trigger.failures,
+        last_error: trigger.last_error.unwrap_or_default(),
+        moments,
+        restart: format!("{actions}/restart"),
+        events,
+    }
+}
+
 /// A wait step switched off, as a banner or a DAG's page lists it.
 #[derive(Debug, Clone)]
 struct SwitchedOffRow {
@@ -128,6 +248,8 @@ struct DagPage {
     switched_off: Vec<SwitchedOffRow>,
     /// Why they can't be shown now (empty: they can).
     switched_off_unavailable: String,
+    /// Its trigger, for a DAG a trigger starts.
+    trigger: Option<TriggerPanel>,
 }
 
 /// A concurrency limit as the DAG page shows it.
@@ -303,13 +425,11 @@ pub async fn dag<T: Transport>(
         Err(ClientError::Server { status: 404, .. }) => (None, String::new()),
         Err(error) => (None, error.to_string()),
     };
-    let (mut switched_off, switched_off_unavailable) = switched_off_of(
-        &page,
-        deployment,
-        deployment.client.switched_off_sensors().await,
-    );
-    switched_off.retain(|sensor| sensor.dag_id == dag.dag_id);
+    let (switched_off, switched_off_unavailable) =
+        switched_off_in(&page, deployment, &dag.dag_id).await;
+    let trigger = dag_trigger_panel(&page, deployment, &dag).await;
     let params_html = match TriggerParams::of(&dag.params).render() {
+        Ok(html) if trigger.is_some() => format!("{html}{EVENT_FIELDS}"),
         Ok(html) => html,
         Err(error) => {
             return error_page(
@@ -329,6 +449,7 @@ pub async fn dag<T: Transport>(
             connections_unavailable,
             switched_off,
             switched_off_unavailable,
+            trigger,
             row: dag_row(&page, deployment, &dag),
             description: dag.description.clone().unwrap_or_default(),
             deployment: deployment.name.clone(),

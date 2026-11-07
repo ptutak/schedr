@@ -7,10 +7,12 @@ import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
 
+from schedr import Event
 from schedr._model import registry
 from schedr.testing import run_dag
 
@@ -31,6 +33,12 @@ SECRETS = {
     },
     "connections.py": {"etl/api#token": "s3cret-api-token"},
     "typed_connections.py": {},
+}
+
+
+# The event a docs DAG's run brings, when a trigger starts its runs.
+EVENTS: dict[str, Event[Any]] = {
+    "event_triggers.py": Event("a.csv", {"path": "/in/a.csv", "size": 3}, at=FOR),
 }
 
 
@@ -86,7 +94,12 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
     connections = {"schedr_api": {"base_url": run_api}} if path.name == "sensors.py" else None
     for dag in _load(path):
         result = run_dag(
-            path, dag.id, for_=FOR, secrets=SECRETS.get(path.name), connections=connections
+            path,
+            dag.id,
+            for_=FOR,
+            secrets=SECRETS.get(path.name),
+            connections=connections,
+            event=EVENTS.get(path.name),
         )
         assert result.state == "success", dag.id
         ended = [
@@ -103,6 +116,8 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
             )
             assert result.tasks["sees_either"].output == "sees_slow_task"
             assert result.tasks["fast_report"].output == "sees_slow_task ended first"
+        if path.name == "event_triggers.py":
+            assert result.tasks["load"].output == "a.csv: 3 bytes in /in/a.csv"
         if path.name == "async_tasks.py":
             # Ten pages, each the base URL's length and its number.
             assert result.tasks["fetch_all"].output == 10 * len("https://api.example.com") + 45

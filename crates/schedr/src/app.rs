@@ -214,11 +214,9 @@ pub async fn execute(
             let (api, output) = connect(client, env);
             crate::user::run_connections(command, &api, &output, out).await
         }
-        (Command::Workers { client, command }, None) => {
-            let (api, output) = connect(client, env);
-            run_workers(command, &api, &output, out).await
-        }
+        (Command::Workers { client, command }, None) => workers(command, client, env, out).await,
         (Command::Sensors { client, command }, None) => sensors(command, client, env, out).await,
+        (Command::Triggers { client, command }, None) => triggers(command, client, env, out).await,
         (Command::Resources { client, command }, None) => {
             resources(command, client, env, out).await
         }
@@ -343,6 +341,26 @@ async fn sensors(
 ) -> Result<(), AppError> {
     let (api, output) = connect(client, env);
     crate::user::run_sensors(command, &api, &output, out).await
+}
+
+async fn workers(
+    command: &crate::cli::WorkersCommand,
+    client: &crate::cli::ClientArgs,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let (api, output) = connect(client, env);
+    run_workers(command, &api, &output, out).await
+}
+
+async fn triggers(
+    command: &crate::cli::TriggersCommand,
+    client: &crate::cli::ClientArgs,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let (api, output) = connect(client, env);
+    crate::user::run_triggers(command, &api, &output, out).await
 }
 
 async fn resources(

@@ -122,6 +122,8 @@ CREATE TABLE events (
     PRIMARY KEY (dag_id, key)
 );
 
+CREATE INDEX events_newest ON events (dag_id, received_at DESC, key);
+
 -- Each event-triggered DAG's trigger. Its bookmark outlives everything else: `after` when it starts.
 CREATE TABLE triggers (
     dag_id       TEXT PRIMARY KEY,
@@ -399,6 +401,18 @@ BEGIN
     INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
 END;
 -- Whether a wait step is switched off shows on its DAG's page and on the list's banner.
+-- How a trigger goes, for its DAG's page: not each poke's time.
+CREATE TRIGGER triggers_inserted AFTER INSERT ON triggers WHEN (SELECT notify FROM changes_switch)
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
+CREATE TRIGGER triggers_updated AFTER UPDATE ON triggers WHEN (SELECT notify FROM changes_switch)
+    AND (OLD.instance_id IS NOT NEW.instance_id OR OLD.stopped_why IS NOT NEW.stopped_why
+        OR OLD.bookmark IS NOT NEW.bookmark OR OLD.last_error IS NOT NEW.last_error
+        OR OLD.failures IS NOT NEW.failures)
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
 CREATE TRIGGER wait_step_strikes_inserted AFTER INSERT ON wait_step_strikes WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);

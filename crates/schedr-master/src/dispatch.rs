@@ -2522,7 +2522,7 @@ impl Dispatcher {
         ready: &ReadyInstance,
         message: &mut pb::AssignTask,
     ) -> Result<(), DispatchError> {
-        if ready.run_kind != schedr_model::RunKind::Event {
+        if !ready.dag.trigger.is_event() {
             return Ok(());
         }
         if let (Some(run), Some(event)) =

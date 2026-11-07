@@ -479,6 +479,7 @@ async fn a_runs_graph_output_and_commands_are_read() {
     let trigger = db
         .insert_command(
             &Command::TriggerRun {
+                event: None,
                 params: None,
                 dag_id: sync(),
                 planned_for: None,
@@ -775,6 +776,7 @@ async fn commands_are_written_decided_and_read_back() {
     let id = db
         .insert_command(
             &Command::TriggerRun {
+                event: None,
                 params: None,
                 dag_id: sync(),
                 planned_for: Some(ts("2026-10-15T01:00:00Z")),
@@ -1134,6 +1136,7 @@ async fn a_holder_named_with_quotes_and_dollars_is_fenced_as_written() {
 async fn several_writes_in_one_transaction_commit_together_or_roll_back_on_postgres() {
     let db = fresh().await;
     let trigger = Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: sync(),
         planned_for: None,

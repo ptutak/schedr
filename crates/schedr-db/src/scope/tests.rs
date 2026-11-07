@@ -22,6 +22,7 @@ async fn file_db(dir: &tempfile::TempDir) -> Database {
 
 fn trigger() -> Command {
     Command::TriggerRun {
+        event: None,
         params: None,
         dag_id: DagId::new("sync").unwrap(),
         planned_for: None,

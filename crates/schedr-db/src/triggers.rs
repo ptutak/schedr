@@ -11,6 +11,28 @@ use crate::runs::NewRun;
 #[cfg(test)]
 mod tests;
 
+/// An event as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredEvent {
+    /// The event.
+    pub event: RunEvent,
+    /// When the master got it.
+    pub received_at: Timestamp,
+}
+
+type EventRow = (String, String, Option<String>, String);
+
+fn stored_event((key, data, at, received_at): EventRow) -> Result<StoredEvent, DbError> {
+    Ok(StoredEvent {
+        event: RunEvent {
+            key,
+            data: crate::query::from_json("events.data", &data)?,
+            at: optional_time("events.at", at)?,
+        },
+        received_at: crate::query::parse_time("events.received_at", &received_at)?,
+    })
+}
+
 /// A DAG's trigger.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TriggerRecord {
@@ -346,6 +368,71 @@ impl Database {
             sqlx::query_as(sql(backend, COUNT)).fetch_all(pool).await?
         });
         Ok(rows)
+    }
+
+    /// Asks for a trigger to start again, whatever stopped it: what it waited for is forgotten,
+    /// and one running looks as if of an older version, so the next pass stops it. `None` when it
+    /// never ran.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn restart_trigger(&self, dag_id: &str) -> Result<(), DbError> {
+        const SET: &str = "UPDATE triggers SET stopped_why = NULL, stopped_on = NULL, \
+            not_before = NULL, dag_version_id = NULL WHERE dag_id = $1";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(dag_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// An event of a DAG by its key, as stored.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn stored_event(&self, dag_id: &str, key: &str) -> Result<Option<RunEvent>, DbError> {
+        const ONE: &str = "SELECT key, data{text}, {ts<}at{>ts}, {ts<}received_at{>ts} FROM events \
+            WHERE dag_id = $1 AND key = $2";
+        let row: Option<EventRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, ONE))
+                .bind(dag_id)
+                .bind(key)
+                .fetch_optional(pool)
+                .await?
+        });
+        Ok(row.map(stored_event).transpose()?.map(|found| found.event))
+    }
+
+    /// A DAG's events, newest received first (then by key), to `limit`; those after the one at
+    /// `after`, its time and key.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn events(
+        &self,
+        dag_id: &str,
+        limit: u32,
+        after: Option<(Timestamp, &str)>,
+    ) -> Result<Vec<StoredEvent>, DbError> {
+        const ALL: &str = "SELECT key, data{text}, {ts<}at{>ts}, {ts<}received_at{>ts} FROM events \
+            WHERE dag_id = $1 AND ($2{ts} IS NULL OR received_at < $2{ts} \
+                OR (received_at = $2{ts} AND key > $3{text})) \
+            ORDER BY received_at DESC, key LIMIT $4";
+        let rows: Vec<EventRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, ALL))
+                .bind(dag_id)
+                .bind(after.map(|(at, _)| db_time(at)))
+                .bind(after.map(|(_, key)| key))
+                .bind(i64::from(limit))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(stored_event).collect()
     }
 
     /// A DAG's queued runs of kind `event`.

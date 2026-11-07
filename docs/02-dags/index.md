@@ -34,4 +34,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 16-resources
 17-plain-scripts
 18-sensors
+19-triggers
 ```

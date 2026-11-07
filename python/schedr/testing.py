@@ -8,6 +8,7 @@ Both take run parameters (``params=``) and secret values (``secrets=``); handles
 and ``replace=`` come with milestone M4.
 """
 
+import asyncio
 import contextlib
 import dataclasses
 import json
@@ -40,9 +41,11 @@ from schedr.context import (
     declared_secrets,
     running,
 )
+from schedr.event_triggers import Event, EventTrigger, TriggerFunction
 from schedr.outcomes import TIMED_OUT_NAME, TimedOut
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
+from schedr.runner.waiting import run_trigger as run_trigger_function
 from schedr.sensors import output_hint
 from schedr.types import Json, ProcessResult
 
@@ -96,6 +99,7 @@ def task_context(
     task_id: str = "test",
     try_number: int = 1,
     map_index: int | None = None,
+    event: Event[Any] | None = None,
 ) -> Iterator[TestRunValues]:
     """Gives ``dag_ctx`` values inside the block, as while the runner calls a task.
 
@@ -120,6 +124,7 @@ def task_context(
         task_id: ``task_ctx.task_id``.
         try_number: ``task_ctx.try_number``.
         map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
+        event: ``dag_ctx.event``: the event the run was started by.
 
     Yields:
         The values ``dag_ctx`` gives, and ``.handles``: what ``cleanup_handle`` registered.
@@ -137,7 +142,20 @@ def task_context(
         raise ValueError(f"since ({start}) must not be after planned_for ({planned})")
     stored, params_class = _given_params(params)
     values = TestRunValues(
-        dag_id, run_id or str(uuid.uuid7()), kind, planned, start, stored, params_class
+        dag_id,
+        run_id or str(uuid.uuid7()),
+        kind,
+        planned,
+        start,
+        stored,
+        params_class,
+        event=None
+        if event is None
+        else {
+            "key": event.key,
+            "data": encode_any(event.data),
+            "at": None if event.at is None else event.at.isoformat(),
+        },
     )
     opener = _doubles(connections) if connections is not None else None
 
@@ -521,12 +539,69 @@ def schedr_binary() -> str:
     )
 
 
+def run_trigger(
+    trigger: TriggerFunction[..., Any] | EventTrigger,
+    *,
+    after: str | None = None,
+    take: int = 1,
+    timeout: timedelta = timedelta(seconds=30),
+) -> list[Event[Any]]:
+    """Runs a trigger in this process until it has found ``take`` events, and gives them.
+
+    For unit tests of a trigger's function: ``run_trigger(new_files(prefix="in/"), take=3)``. Run
+    it inside ``task_context`` to give it secrets and connections.
+
+    Args:
+        trigger: The trigger with its arguments, or its function when it takes none.
+        after: What it starts from: the last key acted on.
+        take: How many events to wait for.
+        timeout: How long to wait for them.
+
+    Returns:
+        The events it found, in order, fewer than ``take`` only when a generator returned.
+
+    Raises:
+        TimeoutError: If they don't come in time.
+        ValueError: For a ``take`` below 1.
+        RuntimeError: If a poke's call failed.
+    """
+    if take < 1:
+        raise ValueError(f"take must be at least 1, got {take}")
+    called = trigger if isinstance(trigger, EventTrigger) else trigger()
+    found: list[Event[Any]] = []
+
+    class _EnoughError(Exception):
+        pass
+
+    async def tell(event: Event[Any]) -> None:
+        found.append(event)
+        if len(found) >= take:
+            raise _EnoughError
+
+    def poked(error: str | None) -> None:
+        if error is not None:
+            raise RuntimeError(f"a call of the poke failed: {error}")
+
+    task = {} if called.function.every is None else {"every_ms": called.function.every_ms}
+
+    async def run() -> None:
+        async with asyncio.timeout(timeout.total_seconds()):
+            await run_trigger_function(
+                called.function.fn, called.arguments, task, after, tell, poked
+            )
+
+    with contextlib.suppress(_EnoughError):
+        asyncio.run(run())
+    return found
+
+
 def run_dag(
     path: str | os.PathLike[str],
     dag_id: str,
     *,
     for_: datetime | None = None,
     params: object = None,
+    event: Event[Any] | None = None,
     secrets: Mapping[str, str] | None = None,
     connections: Mapping[str, Mapping[str, object]] | None = None,
     step: bool = False,
@@ -543,6 +618,8 @@ def run_dag(
         for_: The run's ``planned_for`` (aware); now by default.
         params: Values for the run's parameters: an instance of the DAG's params class, or a
             mapping of field names to JSON values (``{"region": "us"}``), over its defaults.
+        event: For a DAG a trigger starts, the event the run brings; its data encoded as the
+            trigger's would be.
         secrets: Secret values, by ``"path#key"``, for every storage (``--secret``); masked
             in the logs and outputs as usual.
         connections: Values for connections, by name, each its parameters' values
@@ -571,6 +648,10 @@ def run_dag(
     command = [schedr_binary(), "dags", "test", dag_id, "--path", str(root), "--json"]
     if for_ is not None:
         command += ["--for", _aware(for_, "for_").isoformat()]
+    if event is not None:
+        command += ["--event-key", event.key, "--event-data", json.dumps(encode_any(event.data))]
+        if event.at is not None:
+            command += ["--event-at", event.at.isoformat()]
     if params is not None:
         command += ["--params", json.dumps(_params_json(params))]
     for name, value in (secrets or {}).items():
