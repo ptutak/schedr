@@ -52,6 +52,7 @@ from schedr._model import (
     TypeDesc,
     UnionType,
     Value,
+    WaitForKind,
     validate_task_id,
 )
 from schedr._serialization import (
@@ -629,12 +630,12 @@ class DagBuilder:
         if resolved.uses:
             self.uses[task_id] = resolved.uses
         settings = resolved.settings()
-        if isinstance(kind, SensorKind):
+        if isinstance(kind, SensorKind | WaitForKind):
             # `timeout` is a limit on a task's work; it waits `max_wait`, then ends `TimedOut`.
             settings = replace(settings, timeout_ms=None)
             if resolved.max_wait is not None:
                 if resolved.max_wait <= timedelta(0):
-                    raise TypeError(f"@sensor `{task_id}`: `max_wait` must be more than zero")
+                    raise TypeError(f"`{task_id}`: `max_wait` must be more than zero")
                 waits = round(resolved.max_wait / timedelta(milliseconds=1))
                 kind = replace(kind, max_wait_ms=waits)
         self.tasks[task_id] = Task(

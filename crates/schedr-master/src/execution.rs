@@ -17,6 +17,31 @@ use schedr_model::{
 
 use serde_json::json;
 
+/// `wait_for`'s outcome for a run, or task, it waited for that didn't succeed.
+pub const FAILED: &str = "Failed";
+
+/// A wait step's outcome when its time ran out.
+const TIMED_OUT: &str = "TimedOut";
+
+/// How a `wait_for` step ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitEnd {
+    /// The run, or its task, succeeded.
+    Ran {
+        /// That run's ID.
+        run_id: String,
+    },
+    /// It ended otherwise.
+    Failed {
+        /// How: `failed`, `upstream_failed`, `skipped`, `cancelled`.
+        state: String,
+        /// That run's ID.
+        run_id: String,
+    },
+    /// Its `max_wait` ran out first.
+    TimedOut,
+}
+
 /// Why a `first_of` failed whose output didn't fit, as an attempt's error kind says it.
 const OUTPUT_TOO_LARGE: &str = "output_too_large";
 
@@ -619,6 +644,63 @@ impl Execution {
         let mut failed = update(task_id, map_index, TaskInstanceState::Failed);
         failed.reason = Some(reason);
         self.advance(run_id, &run, vec![failed], now).await
+    }
+
+    /// Ends a `wait_for` step (decision 353): with the other run's ID; `Failed` where the DAG
+    /// routes it, or else the step fails (the user's B); `TimedOut`. Nothing if it isn't
+    /// `queued` any more. Returns the run's result, if it finished now, and the instances to stop.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or a database failure.
+    pub async fn wait_ended(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        ended: WaitEnd,
+        now: Timestamp,
+    ) -> Result<(Option<RunState>, Vec<(TaskId, i32)>), ExecutionError> {
+        let run = self.run(run_id).await?;
+        let instance = run
+            .instances
+            .iter()
+            .find(|i| &i.task_id == task_id && i.map_index == -1);
+        let Some(instance) = instance.filter(|i| i.state == TaskInstanceState::Queued) else {
+            return Ok((None, Vec::new()));
+        };
+        if run.state.is_final() {
+            return Ok((None, Vec::new()));
+        }
+        let routed = |outcome: &str| {
+            run.dag
+                .edges
+                .iter()
+                .any(|e| &e.from == task_id && e.on.iter().any(|on| on == outcome))
+        };
+        let (outcome, value) = match ended {
+            WaitEnd::Ran { run_id } => (SUCCESS.to_owned(), json!(run_id)),
+            WaitEnd::Failed {
+                state,
+                run_id: other,
+            } => {
+                if !routed(FAILED) {
+                    let mut failed = update(task_id, -1, TaskInstanceState::Failed);
+                    failed.reason = Some(format!(
+                        "the run `{other}` it waits for ended `{state}`, and nothing here takes \
+                         `.on(Failed)`"
+                    ));
+                    return self.advance(run_id, &run, vec![failed], now).await;
+                }
+                (FAILED.to_owned(), json!({"state": state, "run_id": other}))
+            }
+            WaitEnd::TimedOut => (TIMED_OUT.to_owned(), json!({})),
+        };
+        self.db.store_output(&instance.id, &outcome, &value).await?;
+        let ended = InstanceUpdate {
+            outcome: Some(outcome),
+            ..update(task_id, -1, TaskInstanceState::Success)
+        };
+        self.advance(run_id, &run, vec![ended], now).await
     }
 
     /// Moves a run forward after a task's state was changed directly (an assignment of a

@@ -6890,6 +6890,21 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   whole output), with one value also its winner's outcome, so references, the runner and the UI read it as any output and
   there is no new kind of reference; what it keeps is at most the sum of its options' `max_output_size`, or it fails `output_too_large` (the user's, 2026-11-07, option B: values each allowed always fit, still bounded; not chosen: the node's own 1 MiB, which failed two 600 KB values each within their limit; storing only the winners' IDs and reading the values when needed, a new way to resolve a reference; a `max_output_size=` on the node). Refused: fewer than two different tasks, a
   part of an output, a mapped task, and `x >> node`, since every edge into it is something it chooses from.
+- **Waiting for another DAG's run: `RunOf`** (decision 353, the user's, 2026-11-07; to be built in M4.11d):
+  `RunOf("orders", task="load", lag=timedelta(hours=6))` says which run, and of it which task (none: the whole run). With
+  `lag`, the run whose `planned_for` is this one's minus `lag`; without it, a wait step waits for the next run to end and a
+  trigger plans its run for now. It goes where something waits: the node `wait_for(RunOf(...), max_wait=...)`, which the
+  master ends with no slot and no polling, passing the other run's ID, or `Failed` when it (or its task) didn't succeed
+  (skipped and cancelled too), or `TimedOut`. `Failed` is an outcome only where the DAG routes it (an edge from the node on
+  `Failed`); otherwise the node fails and the run goes red (the user's, 2026-11-07, option B; not chosen: always an outcome, which
+  left a run green with what followed skipped; always a failure, with no `.on(Failed)`). `TimedOut` stays an outcome, as for any wait step; `trigger=RunOf(...)`, a run per run of the other DAG that ends; and, for code
+  that reads the result, `@sensor(wait_for=RunOf(...))` and `@trigger(wait_for=RunOf(...))`, given a `RunResult[T]` (its run's
+  ID, DAG, `planned_for`, state, end, and with `task=` its state, outcome and output as `T`). A sensor returning `NOT_YET`
+  waits for the next matching run, until `max_wait`. Any DAG may wait for and read any other's runs, as anyone signed in sees
+  them (schedr has no permissions of its own). `trigger=RunOf(...)` starts a run only for a run (or its task) that succeeded, and only for those ending while its DAG is live: nothing is caught up after a pause. A `RunOf` naming a DAG or task not loaded is a warning when the file loads; the step waits until `max_wait`, as that DAG may come from a folder that loads later. Built in two parts: d1 without code, d2 the functions. Not chosen: the latest
+  run, or the latest that succeeded (hard to follow over backfills and reruns); failing at once when no run exists yet;
+  `offset=` (too broad; its sign would flip between the forms) and `planned_for_with_offset=` (long), for what is `lag`
+  inside `RunOf`; `wait_for_run(...)` for the node; a skip counting as done (the function form sees the real state); a trigger for every run that ends, whatever its state; catching up runs that ended while paused; refusing an unknown DAG at load.
 - **Options are drawn as one group** (decision 351, the user's, 2026-11-07; built in M4.11c): the options of `first_of`
   sit in one box in the graph, with one dashed line from the box to the node, since they are treated as a group and aren't
   each a dependency with the usual guarantees. The winner is highlighted in the box and named on the node. Where one box

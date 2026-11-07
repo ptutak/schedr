@@ -614,6 +614,39 @@
         }
       ]
     },
+    "RunOf": {
+      "additionalProperties": false,
+      "description": "Which run of another DAG a step waits for, and of it which task (decision 353).",
+      "properties": {
+        "dag": {
+          "$ref": "#/$defs/DagId",
+          "description": "The DAG."
+        },
+        "lag_ms": {
+          "description": "With it, the run whose `planned_for` is the waiting run's minus this many milliseconds;\nwithout it, the next run to end after the step starts.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its task; `None`: the whole run."
+        }
+      },
+      "required": [
+        "dag"
+      ],
+      "type": "object"
+    },
     "SchedrVersion": {
       "description": "A schedr version as `major.minor`.",
       "pattern": "^[0-9]+\\.[0-9]+$",
@@ -795,6 +828,33 @@
           },
           "required": [
             "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`wait_for(RunOf(...))` (decision 353): waits for a run of another DAG, or one of its\ntasks, ended by the master with no process and no slot. Its value is that run's ID; it\nends `Failed` when the run (or task) ended otherwise, and `TimedOut` after `max_wait`.",
+          "properties": {
+            "kind": {
+              "const": "wait_for",
+              "type": "string"
+            },
+            "max_wait_ms": {
+              "description": "How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "run_of": {
+              "$ref": "#/$defs/RunOf",
+              "description": "Which run."
+            }
+          },
+          "required": [
+            "kind",
+            "run_of"
           ],
           "type": "object"
         },

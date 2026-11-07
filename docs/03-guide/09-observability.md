@@ -98,7 +98,7 @@ taking requests), `fork_failed` (it refused the fork) or `shim_died` (the shim e
 job the first server forks does not add to the counter. A server a task skips with
 `preload` false does not add to the counter either: the task did not ask it.
 
-For wait steps, watch `schedr_worker_watcher_hosts_lost_total{code}` for repeated host
+For sensors, watch `schedr_worker_watcher_hosts_lost_total{code}` for repeated host
 crashes, memory kills or hosts that stop answering, by code set. Each loss uses a retry for
 the wait steps on that host. `schedr_worker_watcher_blocked_kills_total` counts hosts killed
 for a blocked loop, a stuck thread or an ignored cancellation, and

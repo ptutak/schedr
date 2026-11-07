@@ -193,6 +193,22 @@ class TimedOut(Data, frozen=True):
     """
 
 
+class Failed(Data, frozen=True):
+    """How ``wait_for`` ends when the run it waits for, or its task, ended otherwise than a success.
+
+    ``wait_for(...).on(Failed) >> notify()`` handles it. Without such a route the step fails, and
+    its run with it (decision 353): a failure upstream is never quietly skipped past.
+
+    Attributes:
+        state: How that run or task ended: ``failed``, ``upstream_failed``, ``skipped``,
+            ``cancelled``.
+        run_id: That run's ID.
+    """
+
+    state: str
+    run_id: str
+
+
 class Waited[T](Protocol):
     """What type checkers read a wait step's call as: its value ``T``, or ``TimedOut``.
 
@@ -235,6 +251,9 @@ SUCCESS_NAME: Final = "SUCCESS"
 TIMED_OUT_NAME: Final = "TimedOut"
 """The name of the ``TimedOut`` outcome."""
 
+FAILED_NAME: Final = "Failed"
+"""The name of ``wait_for``'s ``Failed`` outcome."""
+
 FIRST_OF_VALUE: Final = "$value"
 """Where a ``first_of`` keeps its winner's output: a name no field of a class can have, so the
 runner knows it is that output whole, its outcome the winner's."""
@@ -269,6 +288,7 @@ class OutcomeSpec:
             (there is no enum to route on: ``outcomes=`` gives one).
         timed_out: A wait step without an outcome union: ``SUCCESS``, or ``TimedOut``.
         value: Such a wait step's type, which ``.on(...)`` names ``SUCCESS`` by.
+        failed: ``wait_for``'s: it may also end ``Failed``.
     """
 
     names: tuple[str, ...]
@@ -278,6 +298,7 @@ class OutcomeSpec:
     codes: tuple[tuple[str, int], ...] = ()
     timed_out: bool = False
     value: object = None
+    failed: bool = False
 
     @property
     def is_union(self) -> bool:
@@ -525,12 +546,14 @@ def names_for(spec: OutcomeSpec, kinds: Sequence[Any], where: str) -> tuple[str,
             names.append(_member_name(member))
         elif spec.timed_out and kind is TimedOut:
             names.append(TIMED_OUT_NAME)
+        elif spec.failed and kind is Failed:
+            names.append(FAILED_NAME)
         elif spec.timed_out and _stands_for(kind) == _stands_for(spec.value):
             names.append(SUCCESS_NAME)
         elif spec.timed_out and not isinstance(kind, Outcome):
             raise TypeError(
                 f"{where}.on({_label(kind)}): a wait step ends with its value, "
-                f"`{_label(spec.value)}`, or `TimedOut`"
+                f"`{_label(spec.value)}`, or `TimedOut`{' or `Failed`' if spec.failed else ''}"
             )
         elif isinstance(kind, Outcome) and type(kind) is spec.enum and kind.name in spec.names:
             names.append(kind.name)

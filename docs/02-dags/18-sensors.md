@@ -2,7 +2,9 @@
 
 A wait step waits for one thing belonging to a run, then ends with its value or the
 `TimedOut` outcome. Declare an `async def` with `@sensor` when you write the waiting
-yourself, or with `@sensor.poke(every=...)` when schedr should call it repeatedly.
+yourself, or with `@sensor.poke(every=...)` when schedr should call it repeatedly. To wait
+for another DAG's run or task, use [`wait_for(RunOf(...))`](21-wait-for.md), which can
+also produce `Failed`.
 
 ```{literalinclude} ../../examples/docs/sensors.py
 :language: python
@@ -37,10 +39,12 @@ downstream task has another upstream task, `run_if` decides what happens when an
 not taken, as described in [Routing by outcome](08-outcomes.md). A timeout leaves the run
 `success` whether or not a task takes it. Use `.on(TimedOut)` to do something about it.
 
-A task waits for all its upstream tasks to end. To act on the first of several, as
+A task normally waits for its upstream edges to be decided before it runs. To act on the first of several, as
 `fast_report` does above, use [`first_of`](20-first-of.md).
 
 ## Running and deploying wait steps
+
+This section describes sensors. The master ends `wait_for(RunOf(...))` without a watcher.
 
 Wait steps using the same interpreter and code copies run as coroutines in one long-lived
 process, the watcher host. It stops when its last wait step ends. A DAG file's top level is

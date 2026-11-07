@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-from schedr import Event
+from schedr import Event, TimedOut
 from schedr._model import registry
 from schedr.testing import run_dag
 
@@ -130,6 +130,11 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
             assert result.tasks["choose"].output == ["as_pdf"]
             assert result.tasks["as_html"].state == "skipped"
             assert result.tasks["publish"].output == "published report.pdf"
+        if path.name == "wait_for.py" and dag.id == "report":
+            assert result.tasks["wait_for_load"].outcome == "TimedOut"
+            assert isinstance(result.tasks["wait_for_load"].output, TimedOut)
+            assert result.tasks["late"].output == "no orders in time"
+            assert result.tasks["build"].state == "skipped"
         if path.name == "event_triggers.py":
             assert result.tasks["load"].output == "a.csv: 3 bytes in /in/a.csv"
         if path.name == "async_tasks.py":

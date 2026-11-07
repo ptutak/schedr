@@ -32,6 +32,7 @@ from schedr._model.tasks import (
     TaskCleanup,
     TaskKind,
     TaskSettings,
+    WaitForKind,
 )
 from schedr._model.timestamps import format_timestamp, parse_moment
 from schedr._model.trigger import (
@@ -140,6 +141,7 @@ __all__ = [
     "TypedDictType",
     "UnionType",
     "Value",
+    "WaitForKind",
     "format_timestamp",
     "parse_moment",
     "validate_dag_id",

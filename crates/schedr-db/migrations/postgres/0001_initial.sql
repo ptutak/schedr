@@ -202,6 +202,8 @@ CREATE TABLE runs (
 -- A master that crashes after creating a scheduled run can't create it twice.
 CREATE UNIQUE INDEX runs_scheduled_once ON runs (dag_id, planned_for) WHERE kind = 'scheduled';
 CREATE INDEX runs_by_dag ON runs (dag_id, planned_for);
+-- A `wait_for` of a run: the first to end after it started (decision 353).
+CREATE INDEX runs_ended ON runs (dag_id, ended_at) WHERE ended_at IS NOT NULL;
 CREATE INDEX runs_unfinished ON runs (state) WHERE state IN ('queued', 'running');
 -- The runs list over every DAG, newest triggered first (the UI's runs page).
 CREATE INDEX runs_by_trigger ON runs (triggered_at, id);
@@ -232,6 +234,9 @@ CREATE TABLE task_instances (
     -- How its cleanups ended: the last, unless one failed, which stays (it fails the run).
     cleanup_result TEXT CHECK (cleanup_result IN ('ok', 'failed', 'worker_lost', 'not_needed')),
     updated_at    TIMESTAMPTZ NOT NULL,
+    -- When it reached a final state (a later cleanup report changes `updated_at`, not this): what a
+    -- `wait_for` of it matches (decision 353).
+    ended_at      TIMESTAMPTZ,
     UNIQUE (run_id, task_id, map_index)
 );
 
@@ -240,6 +245,8 @@ CREATE INDEX task_instances_ready ON task_instances (ready_at) WHERE state = 'qu
 CREATE INDEX task_instances_retry_due ON task_instances (ready_at) WHERE state = 'up_for_retry';
 -- Users of a resource waiting for a worker past `unschedulable_timeout` (decision 273).
 CREATE INDEX task_instances_unschedulable ON task_instances (updated_at) WHERE state = 'unschedulable';
+-- A `wait_for` of a task: the first to end after it started (decision 353).
+CREATE INDEX task_instances_ended ON task_instances (task_id, ended_at) WHERE ended_at IS NOT NULL;
 
 CREATE TABLE attempts (
     id                UUID PRIMARY KEY,

@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from schedr._model import CommandKind, PythonKind, SecretRef, SensorKind, registry
+from schedr._model import CommandKind, PythonKind, SecretRef, SensorKind, WaitForKind, registry
 from schedr._model.values import covers
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
@@ -42,7 +42,7 @@ from schedr.context import (
     running,
 )
 from schedr.event_triggers import Event, EventTrigger, TriggerFunction
-from schedr.outcomes import TIMED_OUT_NAME, TimedOut
+from schedr.outcomes import FAILED_NAME, TIMED_OUT_NAME, Failed, TimedOut
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
 from schedr.runner.waiting import run_trigger as run_trigger_function
@@ -473,21 +473,31 @@ class _OutputTypes:
             return decode_any(data)
         entry = self._load(self._location)
         kind = next((t.kind for t in entry.model.tasks if t.id == task_id), None)
+        annotation = self._annotation(entry, task_id, kind, outcome)
+        # A `CommandResource`'s setup and a branch: their value as JSON reads them.
+        return decode_any(data) if annotation is None else decode(data, annotation)
+
+    @staticmethod
+    def _annotation(
+        entry: registry.DefinedDag, task_id: str, kind: object, outcome: str | None
+    ) -> object:
+        if isinstance(kind, WaitForKind):
+            named = {TIMED_OUT_NAME: TimedOut, FAILED_NAME: Failed}
+            return named.get(outcome or "", str)
         if isinstance(kind, SensorKind):
-            hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
             if outcome == TIMED_OUT_NAME:
-                return decode(data, TimedOut)
-            return decode(data, member_named(output_hint(hints.get("return", Any)), outcome))
+                return TimedOut
+            hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
+            return member_named(output_hint(hints.get("return", Any)), outcome)
         # A branch's output is the IDs it chose: its annotation is the handles it returned.
         if isinstance(kind, PythonKind) and not kind.branch:
             hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
-            return decode(data, member_named(hints.get("return", Any), outcome))
+            return member_named(hints.get("return", Any), outcome)
         if isinstance(kind, CommandKind) and (
             kind.resource is None or kind.resource.cleanup_of is not None
         ):
-            return decode(data, ProcessResult)
-        # A `CommandResource`'s setup: its value as JSON reads it (its class isn't recorded).
-        return decode_any(data)
+            return ProcessResult
+        return None
 
     def _load(self, location: Mapping[str, str]) -> registry.DefinedDag:
         if self._entry is not None:

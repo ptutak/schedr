@@ -54,6 +54,11 @@ The names used across the documentation, the API and the logs.
   `cleaning_up` (its process ended and its cleanup runs; it still holds the slot), `up_for_retry`, `success`, `failed`, `cancelled`, `skipped`,
   `upstream_failed`. An `unschedulable` resource user has not ended and holds its [resource cleanup](../02-dags/16-resources.md) until it ends. On success it has an **outcome**.
 
+**Wait step**
+: A step that waits for a value or times out. A [sensor](../02-dags/18-sensors.md) runs
+  on a watcher; [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) waits for another
+  DAG's run or task and is ended by the master.
+
 **Outcome**
 : Which kind of success a finished task had. A name (`SUCCESS`, `Rows`, `CHANGED`).
   Stored with the attempt's output. Shown on the run graph when it is something other

@@ -26,6 +26,7 @@ from schedr.outcomes import (
     Data,
     DefaultOutcome,
     Done,
+    Failed,
     Outcome,
     RunIf,
     TimedOut,
@@ -33,6 +34,7 @@ from schedr.outcomes import (
     Waited,
 )
 from schedr.resources import CommandResource, Resource, ScriptResource, resource
+from schedr.run_of import RunOf, wait_for
 from schedr.sensors import NOT_YET, NotYet, SensorFunction, sensor
 from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
@@ -62,6 +64,7 @@ __all__ = [
     "Event",
     "EventTrigger",
     "Every",
+    "Failed",
     "Group",
     "KiB",
     "Mapped",
@@ -72,6 +75,7 @@ __all__ = [
     "Output",
     "Resource",
     "RunIf",
+    "RunOf",
     "ScriptOperator",
     "ScriptResource",
     "SecretError",
@@ -101,5 +105,6 @@ __all__ = [
     "task_ctx",
     "text",
     "trigger",
+    "wait_for",
 ]
 __version__ = version("schedr")

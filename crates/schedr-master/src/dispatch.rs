@@ -29,13 +29,15 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use prost::Message as _;
 use schedr_db::attempts::{AttemptEnd, CleanupEnd, ReadyInstance, StoredAttempt};
+use schedr_db::run_of::{Matching, OtherRun};
 use schedr_db::{Database, DbError};
+use schedr_model::TaskKind;
 use schedr_model::connection::Registry;
 use schedr_model::ctx::MAX_CTX_MESSAGE_SIZE;
 use schedr_model::runner::{
     CleanupHandle, DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND,
 };
-use schedr_model::task::{CleanupRun, TaskCleanup};
+use schedr_model::task::{CleanupRun, RunOf, TaskCleanup};
 use schedr_model::{
     AttemptStatus, CleanupResult, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
 };
@@ -46,7 +48,7 @@ use schedr_proto::convert::{
 use schedr_proto::pb;
 
 use crate::core::Arrivals;
-use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry};
+use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry, WaitEnd};
 use crate::limits::Active;
 use crate::mapping::{self, InputsError};
 use crate::metrics::{MasterMetrics, ReasonLabels};
@@ -815,13 +817,18 @@ impl Dispatcher {
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
-        let ready: Vec<ReadyInstance> = self
+        let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = self
             .db
             .ready_instances(now)
             .await?
             .into_iter()
             .filter(|r| !self.set_aside.contains_key(&r.instance_id))
-            .collect();
+            .partition(|r| {
+                r.dag
+                    .task(&r.task_id)
+                    .is_some_and(|t| matches!(t.kind, TaskKind::WaitFor { .. }))
+            });
+        self.wait_for_runs(now, &waits).await?;
         // Nothing ready (an idle round): no transaction, nothing to keep.
         if ready.is_empty() {
             self.metrics.set_waiting(&[]);
@@ -903,6 +910,101 @@ impl Dispatcher {
             .await?;
         }
         Ok(())
+    }
+
+    /// The `wait_for` steps queued (decision 353): no worker takes them; each round each is
+    /// ended once the run it waits for (or its task) has, or its `max_wait` ran out, and
+    /// otherwise says what it waits for.
+    async fn wait_for_runs(
+        &mut self,
+        now: Timestamp,
+        waits: &[ReadyInstance],
+    ) -> Result<(), DispatchError> {
+        let mut reasons = Vec::new();
+        for waiting in waits {
+            let Some(TaskKind::WaitFor {
+                run_of,
+                max_wait_ms,
+            }) = waiting.dag.task(&waiting.task_id).map(|t| &t.kind)
+            else {
+                continue;
+            };
+            let Some(since) = self.db.ready_since(&waiting.instance_id).await? else {
+                continue;
+            };
+            // A lag past the times there are matches no run: the step waits out its time.
+            let matching = match run_of.lag_ms {
+                Some(lag) => waiting
+                    .planned_for
+                    .checked_sub(SignedDuration::from_millis(lag))
+                    .ok()
+                    .map(Matching::PlannedFor),
+                None => Some(Matching::EndedAfter(since)),
+            };
+            let task = run_of.task.as_ref().map(TaskId::as_str);
+            let found = match matching {
+                Some(matching) => self.db.runs_of(run_of.dag.as_str(), task, matching).await?,
+                None => Vec::new(),
+            };
+            let max_wait = max_wait_ms.map_or(self.sensor_max_wait, Duration::from_millis);
+            let deadline = SignedDuration::try_from(max_wait)
+                .ok()
+                .and_then(|wait| since.checked_add(wait).ok())
+                .unwrap_or(Timestamp::MAX);
+            // What ended after its time ran out doesn't count, though seen only now (a round
+            // late, a master restarting).
+            let found: Vec<OtherRun> = found
+                .into_iter()
+                .map(|mut run| {
+                    if run.ended_at.is_some_and(|at| at > deadline) {
+                        "running".clone_into(&mut run.state);
+                    }
+                    run
+                })
+                .collect();
+            let ended = match decide(&found) {
+                Some(ended) => ended,
+                None if now >= deadline => WaitEnd::TimedOut,
+                None => {
+                    let reason = self.wait_reason(run_of).await?;
+                    if waiting.queued_reason.as_deref() != Some(reason.as_str()) {
+                        reasons.push((waiting.instance_id.clone(), reason));
+                    }
+                    continue;
+                }
+            };
+            self.whole(async |me| {
+                let (_, stops) = me
+                    .execution
+                    .wait_ended(&waiting.run_id, &waiting.task_id, ended, now)
+                    .await?;
+                me.stop(&waiting.run_id, &stops).await
+            })
+            .await?;
+        }
+        if !reasons.is_empty() {
+            self.db.set_queued_reasons(&reasons, now).await?;
+        }
+        Ok(())
+    }
+
+    /// What a `wait_for` step says it waits for; that its DAG isn't loaded, if it isn't (it may
+    /// come from a folder that loads later, decision 353).
+    async fn wait_reason(&self, run_of: &RunOf) -> Result<String, DispatchError> {
+        let what = match &run_of.task {
+            Some(task) => format!("task `{task}` of a run of `{}`", run_of.dag),
+            None => format!("a run of `{}`", run_of.dag),
+        };
+        let loaded = self
+            .db
+            .stored_dag(&run_of.dag)
+            .await?
+            .is_some_and(|d| d.current.is_some());
+        Ok(if loaded {
+            format!("waiting for {what}")
+        } else {
+            format!("waiting for {what}; no DAG `{}` is loaded", run_of.dag)
+        })
     }
 
     /// Reads what the concurrency limits need: the open attempts, once (the master's first
@@ -2886,4 +2988,27 @@ fn task_specific(error: &DispatchError) -> bool {
         DispatchError::Execution(_) | DispatchError::BadMessage { .. } => return true,
     };
     db.is_data_fault()
+}
+
+/// What the runs found say: the first that succeeded; nothing while one hasn't ended (or none
+/// is there); else the first, which ended otherwise.
+fn decide(found: &[OtherRun]) -> Option<WaitEnd> {
+    if let Some(ran) = found.iter().find(|r| r.state == "success") {
+        return Some(WaitEnd::Ran {
+            run_id: ran.run_id.clone(),
+        });
+    }
+    let ended = |state: &str| {
+        matches!(
+            state,
+            "failed" | "upstream_failed" | "skipped" | "cancelled"
+        )
+    };
+    if found.is_empty() || found.iter().any(|r| !ended(&r.state)) {
+        return None;
+    }
+    found.first().map(|r| WaitEnd::Failed {
+        state: r.state.clone(),
+        run_id: r.run_id.clone(),
+    })
 }

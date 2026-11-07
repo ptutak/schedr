@@ -16,6 +16,7 @@ pub mod lease;
 pub mod nodes;
 mod query;
 pub mod reads;
+pub mod run_of;
 pub mod runs;
 mod scope;
 pub mod secrets;

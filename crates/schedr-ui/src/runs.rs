@@ -767,27 +767,38 @@ const TIMED_OUT: &str = "TimedOut";
 
 /// A DAG's wait steps, for how they look.
 #[derive(Debug, Default)]
-struct WaitSteps(BTreeSet<String>);
+struct WaitSteps {
+    /// The wait steps.
+    all: BTreeSet<String>,
+    /// Those the master ends, which wait `queued` (`wait_for`).
+    queued_waits: BTreeSet<String>,
+}
 
 impl WaitSteps {
     fn of(dag: &serde_json::Value) -> Self {
-        Self(
+        let of_kind = |kinds: &[&str]| -> BTreeSet<String> {
             dag["tasks"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter(|task| task["kind"] == "sensor")
+                .filter(|task| kinds.iter().any(|kind| task["kind"] == *kind))
                 .filter_map(|task| task["id"].as_str().map(str::to_owned))
-                .collect(),
-        )
+                .collect()
+        };
+        Self {
+            all: of_kind(&["sensor", "wait_for"]),
+            queued_waits: of_kind(&["wait_for"]),
+        }
     }
 
-    /// How a task's state looks (its CSS classes). A wait step at work pulses. One whose time
+    /// How a task's state looks (its CSS classes). A wait step at work pulses (`wait_for` waits
+    /// queued, as no worker takes it). One whose time
     /// ran out looks skipped, as nothing broke and what it waited for didn't come; it says
     /// `TimedOut` all the same, as it did run.
     fn look(&self, task: &TaskView) -> String {
-        let wait_step = self.0.contains(&task.task_id);
-        if wait_step && task.state == "running" {
+        let wait_step = self.all.contains(&task.task_id);
+        let waits_queued = self.queued_waits.contains(&task.task_id) && task.state == "queued";
+        if (wait_step && task.state == "running") || waits_queued {
             "running waiting".to_owned()
         } else if wait_step && task.state == "success" && task.outcome.as_deref() == Some(TIMED_OUT)
         {

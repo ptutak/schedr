@@ -1,5 +1,6 @@
 use pretty_assertions::assert_eq;
 use schedr_db::dags::{DagChange, NewParse};
+use schedr_db::instances::InstanceUpdate;
 use schedr_db::runs::NewRun;
 use schedr_model::{Dag, DagId, RunKind, RunState};
 use serde_json::{Value as Json, json};
@@ -3210,4 +3211,394 @@ async fn out_of_time_while_waiting_to_run_again_it_times_out_with_no_worker_free
     let instances = db.run_instances(&run_id).await.unwrap();
     assert_eq!(instances[0].state, TaskInstanceState::Success);
     assert_eq!(instances[0].outcome.as_deref(), Some("TimedOut"));
+}
+
+/// DAG `sync`: `wait` (a `wait_for` with `run_of`), then `after` on its value and, if
+/// `routed`, `notify` on `Failed`.
+fn waiting_dag(run_of: &Json, routed: bool) -> Dag {
+    let mut wait = task("wait", &json!({}), 0);
+    wait["kind"] = json!("wait_for");
+    wait.as_object_mut().unwrap().remove("arguments");
+    wait["run_of"] = run_of.clone();
+    wait["max_wait_ms"] = json!(60_000);
+    let mut tasks = vec![wait, task("after", &json!({}), 0)];
+    let mut edges =
+        vec![json!({"from": "wait", "to": "after", "kind": "order", "on": ["SUCCESS"]})];
+    if routed {
+        tasks.push(task("notify", &json!({}), 0));
+        edges.push(json!({"from": "wait", "to": "notify", "kind": "order", "on": ["Failed"]}));
+    }
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": tasks, "edges": edges
+    }))
+    .unwrap()
+}
+
+/// A run of DAG `orders` (one task, `load`) planned for `planned_for`, ended `state` at `ended`.
+async fn orders_run(
+    db: &Database,
+    planned_for: Timestamp,
+    state: RunState,
+    ended: Timestamp,
+) -> String {
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "shop",
+            content_hash: "h2",
+            schedr_version: "0.1.0",
+            worker_id: "w1",
+            parsed_at: ts(NOW),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    let orders: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "orders", "location": {"root": "shop", "path": "orders.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 5,
+        "tasks": [task("load", &json!({}), 0)], "edges": []
+    }))
+    .unwrap();
+    let change = DagChange::Define {
+        dag: Box::new(orders),
+        parse_id,
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], ts(NOW)).await.unwrap();
+    let orders = DagId::new("orders").unwrap();
+    let version = db
+        .stored_dag(&orders)
+        .await
+        .unwrap()
+        .unwrap()
+        .current
+        .unwrap()
+        .version_id;
+    let run_id = db
+        .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
+            event: None,
+            dag_id: &orders,
+            dag_version_id: &version,
+            kind: RunKind::Manual,
+            state: RunState::Running,
+            planned_for,
+            since: planned_for,
+            triggered_at: ts(NOW),
+            triggered_by: "anna",
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    db.finish_run(&run_id, state, ended).await.unwrap();
+    run_id
+}
+
+async fn output_of(db: &Database, run_id: &str, task: &str) -> Json {
+    let wanted = id(task);
+    db.outputs_of(run_id, &[&wanted])
+        .await
+        .unwrap()
+        .remove(&wanted)
+        .unwrap_or(Json::Null)
+}
+
+#[tokio::test]
+async fn a_wait_for_ends_with_the_run_it_waits_for_and_says_what_it_waits_for_meanwhile() {
+    let (mut dispatcher, db, run_id) =
+        with_run(waiting_dag(&json!({"dag": "orders", "lag_ms": 0}), false)).await;
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("wait"))
+        .unwrap();
+    assert_eq!(
+        db.ready_instances(later(1))
+            .await
+            .unwrap()
+            .iter()
+            .find(|r| r.instance_id == wait.id)
+            .and_then(|r| r.queued_reason.clone()),
+        Some("waiting for a run of `orders`; no DAG `orders` is loaded".to_owned())
+    );
+    // Another day's run doesn't count; the one planned for the same moment does.
+    orders_run(&db, ts("2026-10-20T08:00:00Z"), RunState::Success, later(1)).await;
+    dispatcher
+        .step_into(later(2), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    let theirs = orders_run(&db, ts(NOW), RunState::Success, later(3)).await;
+    dispatcher
+        .step_into(later(4), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
+    assert_eq!(output_of(&db, &run_id, "wait").await, json!(theirs));
+    assert_ne!(
+        state_of(&db, &run_id, "after").await.0,
+        TaskInstanceState::Scheduled
+    );
+}
+
+#[tokio::test]
+async fn a_failure_waited_for_fails_the_step_unless_the_dag_takes_it() {
+    for routed in [false, true] {
+        let (mut dispatcher, db, run_id) =
+            with_run(waiting_dag(&json!({"dag": "orders"}), routed)).await;
+        dispatcher
+            .step_into(ts(NOW), &mut Vec::new())
+            .await
+            .unwrap();
+        let theirs = orders_run(&db, ts(NOW), RunState::Failed, later(1)).await;
+        dispatcher
+            .step_into(later(2), &mut Vec::new())
+            .await
+            .unwrap();
+        let (state, _) = state_of(&db, &run_id, "wait").await;
+        if routed {
+            assert_eq!(state, TaskInstanceState::Success);
+            assert_eq!(
+                output_of(&db, &run_id, "wait").await,
+                json!({"state": "failed", "run_id": theirs})
+            );
+            assert_eq!(
+                state_of(&db, &run_id, "after").await.0,
+                TaskInstanceState::Skipped
+            );
+        } else {
+            assert_eq!(state, TaskInstanceState::Failed, "the run goes red");
+            assert_eq!(
+                state_of(&db, &run_id, "after").await.0,
+                TaskInstanceState::UpstreamFailed
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_wait_for_with_nothing_to_wait_for_times_out() {
+    let (mut dispatcher, db, run_id) = with_run(waiting_dag(
+        &json!({"dag": "orders", "task": "load"}),
+        false,
+    ))
+    .await;
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    dispatcher
+        .step_into(later(59), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    dispatcher
+        .step_into(later(61), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "after").await.0,
+        TaskInstanceState::Skipped
+    );
+}
+
+#[rstest::rstest]
+#[case::none_yet(&[], None)]
+#[case::one_running(&[("r1", "running")], None)]
+#[case::a_success(&[("r1", "failed"), ("r2", "success")], Some("ran r2"))]
+#[case::a_rerun_still_running(&[("r1", "failed"), ("r2", "running")], None)]
+#[case::all_ended_otherwise(&[("r1", "skipped"), ("r2", "failed")], Some("failed skipped r1"))]
+fn what_a_wait_for_decides(#[case] found: &[(&str, &str)], #[case] decided: Option<&str>) {
+    let found: Vec<OtherRun> = found
+        .iter()
+        .map(|(run_id, state)| OtherRun {
+            run_id: (*run_id).to_owned(),
+            state: (*state).to_owned(),
+            ended_at: None,
+        })
+        .collect();
+    let shown = decide(&found).map(|ended| match ended {
+        WaitEnd::Ran { run_id } => format!("ran {run_id}"),
+        WaitEnd::Failed { state, run_id } => format!("failed {state} {run_id}"),
+        WaitEnd::TimedOut => "timed out".to_owned(),
+    });
+    assert_eq!(shown.as_deref(), decided);
+}
+
+#[tokio::test]
+async fn what_ended_after_its_time_ran_out_doesnt_count_though_seen_late() {
+    for lag in [
+        json!({"dag": "orders"}),
+        json!({"dag": "orders", "lag_ms": 0}),
+    ] {
+        let (mut dispatcher, db, run_id) = with_run(waiting_dag(&lag, false)).await;
+        dispatcher
+            .step_into(ts(NOW), &mut Vec::new())
+            .await
+            .unwrap();
+        orders_run(&db, ts(NOW), RunState::Success, later(61)).await;
+        dispatcher
+            .step_into(later(62), &mut Vec::new())
+            .await
+            .unwrap();
+        let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+        let wait = run
+            .instances
+            .iter()
+            .find(|i| i.task_id == id("wait"))
+            .unwrap();
+        assert_eq!(
+            (wait.state, wait.outcome.as_deref()),
+            (TaskInstanceState::Success, Some("TimedOut")),
+            "{lag}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_task_waited_for_counts_once_it_ends_not_when_its_cleanup_reports() {
+    let (mut dispatcher, db, run_id) = with_run(waiting_dag(
+        &json!({"dag": "orders", "task": "load"}),
+        false,
+    ))
+    .await;
+    // `orders` ran before the wait started: its `load` ended then.
+    let theirs = orders_run(&db, ts(NOW), RunState::Running, ts(NOW)).await;
+    let load = TaskId::new("load").unwrap();
+    db.create_instances(
+        &theirs,
+        &[(load.clone(), -1, TaskInstanceState::Scheduled)],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let ended = InstanceUpdate {
+        task_id: load.clone(),
+        map_index: -1,
+        state: TaskInstanceState::Success,
+        ready_at: None,
+        outcome: Some("SUCCESS".to_owned()),
+        used_retry: false,
+        reason: None,
+        map_sizes: None,
+    };
+    db.update_instances(&theirs, &[ended], ts("2026-10-21T07:59:00Z"))
+        .await
+        .unwrap();
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    let instance = db.run_tasks(&theirs).await.unwrap().unwrap().instances[0]
+        .id
+        .clone();
+    db.set_cleanup_result(&instance, schedr_model::CleanupResult::Ok, later(1))
+        .await
+        .unwrap();
+    dispatcher
+        .step_into(later(2), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+#[tokio::test]
+async fn a_rerun_on_its_way_is_waited_for() {
+    let (mut dispatcher, db, run_id) = with_run(waiting_dag(
+        &json!({"dag": "orders", "task": "load", "lag_ms": 0}),
+        false,
+    ))
+    .await;
+    let failed = orders_run(&db, ts(NOW), RunState::Running, ts(NOW)).await;
+    let load = TaskId::new("load").unwrap();
+    db.create_instances(
+        &failed,
+        &[(load.clone(), -1, TaskInstanceState::Scheduled)],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let ended = InstanceUpdate {
+        task_id: load,
+        map_index: -1,
+        state: TaskInstanceState::Failed,
+        ready_at: None,
+        outcome: None,
+        used_retry: false,
+        reason: None,
+        map_sizes: None,
+    };
+    db.update_instances(&failed, &[ended], ts(NOW))
+        .await
+        .unwrap();
+    db.finish_run(&failed, RunState::Failed, ts(NOW))
+        .await
+        .unwrap();
+    // A rerun for the same moment, queued: its tasks aren't made yet.
+    let rerun = orders_run(&db, ts(NOW), RunState::Running, ts(NOW)).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE runs SET state = 'queued', ended_at = NULL WHERE id = '{rerun}'"
+    )))
+    .execute(match db.pool() {
+        schedr_db::Pool::Sqlite(pool) => pool,
+        schedr_db::Pool::Postgres(_) => unreachable!(),
+    })
+    .await
+    .unwrap();
+    dispatcher
+        .step_into(later(1), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+#[tokio::test]
+async fn a_lag_past_the_times_there_are_matches_nothing() {
+    let (mut dispatcher, db, run_id) = with_run(waiting_dag(
+        &json!({"dag": "orders", "lag_ms": 9_000_000_000_000_000_i64}),
+        false,
+    ))
+    .await;
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    orders_run(&db, ts(NOW), RunState::Success, later(1)).await;
+    dispatcher
+        .step_into(later(2), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
 }

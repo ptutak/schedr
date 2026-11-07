@@ -319,6 +319,47 @@ class CommandKind:
 
 
 @dataclass(frozen=True, slots=True)
+class WaitForKind:
+    """``wait_for(RunOf(...))``: waits for a run of another DAG, ended by the master (decision 353).
+
+    Attributes:
+        dag: The DAG.
+        task: Its task; ``None``: the whole run.
+        lag_ms: The run planned this long before the waiting run's; ``None``: the next to end.
+        max_wait_ms: How long it waits; ``None``: the master's ``[sensors] default_max_wait``.
+    """
+
+    dag: str
+    task: str | None = None
+    lag_ms: int | None = None
+    max_wait_ms: int | None = None
+
+    def references(self) -> list[Reference]:
+        """It has no references.
+
+        Returns:
+            An empty list.
+        """
+        return []
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind as DAG JSON.
+
+        Returns:
+            ``{"kind": "wait_for", "run_of": {"dag": ...}}``, with what is set.
+        """
+        run_of: dict[str, Any] = {"dag": self.dag}
+        if self.task is not None:
+            run_of["task"] = self.task
+        if self.lag_ms is not None:
+            run_of["lag_ms"] = self.lag_ms
+        result: dict[str, Any] = {"kind": "wait_for", "run_of": run_of}
+        if self.max_wait_ms is not None:
+            result["max_wait_ms"] = self.max_wait_ms
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class FirstOfKind:
     """``first_of`` and ``at_least``: ended by the master, no process (decision 347)."""
 
@@ -448,7 +489,9 @@ class ScriptKind:
         return result
 
 
-type TaskKind = PythonKind | SensorKind | CommandKind | ScriptKind | EmptyKind | FirstOfKind
+type TaskKind = (
+    PythonKind | SensorKind | CommandKind | ScriptKind | EmptyKind | FirstOfKind | WaitForKind
+)
 """Any task kind."""
 
 

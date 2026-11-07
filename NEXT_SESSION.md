@@ -16,15 +16,19 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   `at_least(n, ...)` a list in the order they ended; the master keeps `{"$value", "winner"}`, under the node's
   the sum of its options' `max_output_size` (option B, the user's); nothing is ordered before a node; the run page boxes the options with one dashed line (351). Reviews:
   Codex 4 and Grok 3 (one the same), all fixed.
-- **Next, M4.11d `wait_for_run`, then M4.11e and M4.11f** (`PLAN.md`). M4.11d needs answers 1-5 below first.
+- **M4.11d1 part 1, committed:** `RunOf`, the step `wait_for(RunOf(...))` the master ends from the dispatcher's round (queued,
+  no worker; value the run's ID, `Failed` routed or a failed step (option B), `TimedOut`), `task_instances.ended_at`, indexes
+  `runs_ended` and `task_instances_ended`, `Failed` in Python. Reviews: Codex 6, Grok 6 (4 the same), all fixed but Grok's
+  first (a success is enough while a rerun goes: kept, docs say so).
+- **Next, M4.11d1 part 2:** `trigger=RunOf(...)`: a run per succeeded run (or task) ending while the DAG is live, through
+  `event_run` (key the other run's ID), live-since on the `triggers` row, reset on pause; `RunOf` becomes a `Trigger` in
+  Python; `add_event` for these DAGs too. Then d2, the function forms with `RunResult[T]`.
 - **Questions waiting for the user; number 2 blocks M4.11e, nothing before it:**
   1. Settled by the user: M4.11d, e, f come before M4.12 (`PLAN.md`); a batched run reads `list[Event[T]]` (352).
-  2. Asked on 2026-11-07, Claude's picks in brackets. M4.11d: (1) which run of the other DAG [same `planned_for`, or an
-     `offset=`]; (2) none yet [wait until `max_wait`]; (3) it failed [a `Failed` outcome to route with `.on`]; (4) a run or a
-     task [both, `task=`]; (5) form [`wait_for_run("orders", task="load", max_wait=...)`, a node the master ends]. M4.11e:
-     (6) one `event=` word for `@trigger` and `@sensor`, no `signal`; (7) a sensor's `key=` matches, every matching waiting run
-     wakes; (8) an event before the step starts is stored and matched if newer than the run's start; (9) several names on a
-     `@trigger`, `dag_ctx.event.name`, repeats by `(dag, name, key)`; (10) an `events:post` permission, per name; (11) kept by
+  2. M4.11e, asked 2026-11-07, Claude's picks: (6) one `event=` word, or `wait_for=EventNamed(...)` like `RunOf`, for `@trigger`
+     and `@sensor`, no `signal`; (7) a sensor's `key=` matches, every matching waiting run wakes; (8) an event before the step
+     starts is stored and matched if newer than the run's start; (9) several names on a `@trigger`, `dag_ctx.event.name`,
+     repeats by `(dag, name, key)`; (10) posting needs what triggering a run needs (no permissions of schedr's own); (11) kept by
      `[retention] events` (M4.14), with a size limit per event.
   3. Optional: a typed `data_as(Cls)` on `dag_ctx.event.data`, typed `Any` today, so the example needs a pyright ignore.
 - **For the user to know:** notifications aren't built, so `TRIGGER_FAILING` has nothing to go through, and their planned
@@ -716,4 +720,4 @@ the morning, listed below.
 
 Resume this session with:
 
-claude --resume 7a3fe1e5-0fb5-48ce-a52a-5f177878911e
+claude --resume e45442ad-3ec7-4bce-9d45-b6191e505a11

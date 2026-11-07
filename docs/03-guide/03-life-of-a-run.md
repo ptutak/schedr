@@ -131,9 +131,11 @@ worker drops before it has ended is killed, as a spawned one is. A forked task w
 can't be read is not killed on resident set size, because that size includes the pages it
 shares with the fork server.
 
-A [wait step](../02-dags/18-sensors.md) instead runs in a shared watcher host and holds a
+A [sensor](../02-dags/18-sensors.md) instead runs in a shared watcher host and holds a
 watcher slot. Its memory, cancellation and deployment behavior are
 described in [The watcher host](05-workers.md#the-watcher-host).
+For [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md), the master waits and ends the
+step without a worker or slot.
 
 ## 6. The result comes back
 
@@ -180,6 +182,7 @@ rule; [Routing by outcome](../02-dags/08-outcomes.md) is how a DAG declares it.
 
 For [first_of and at_least](../02-dags/20-first-of.md), the master instead ends the node
 as soon as enough options succeed. It needs no worker or slot. The other options keep running.
+Use these nodes to act before all incoming options have ended.
 
 When every task instance has a final state, the run gets its result: `failed` if a task
 failed after its last retry, `cancelled` if a user cancelled it and nothing failed,

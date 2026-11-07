@@ -331,7 +331,9 @@ impl Database {
                     "UPDATE task_instances AS t SET state = v.column3, ready_at = v.column4, \
                      outcome = v.column5, retries_used = t.retries_used + v.column6, \
                      reason = COALESCE(v.column7, t.reason), \
-                     map_sizes = COALESCE(v.column8, t.map_sizes), updated_at = $1{{ts}} \
+                     map_sizes = COALESCE(v.column8, t.map_sizes), updated_at = $1{{ts}}, \
+                     ended_at = CASE WHEN v.column3 IN ('success', 'failed', 'upstream_failed', \
+                         'skipped', 'cancelled') THEN $1{{ts}} END \
                      FROM (VALUES {}) AS v \
                      WHERE t.run_id = $2{{uuid}} AND t.task_id = v.column1 \
                      AND t.map_index = v.column2",

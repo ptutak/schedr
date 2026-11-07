@@ -185,6 +185,8 @@ An empty task the rule marks ready is completed by the master (`success`, outcom
 `SUCCESS`); no worker is assigned. The master also ends
 [`first_of` and `at_least`](../02-dags/20-first-of.md) itself when enough options succeed,
 without waiting for the others. They need no worker or slot.
+It also ends [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) when the other run or
+task ends, or the wait times out. While waiting, the step is `queued` with a reason.
 
 ## Between rounds: messages from workers
 

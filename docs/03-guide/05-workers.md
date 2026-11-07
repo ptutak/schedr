@@ -78,7 +78,7 @@ DAG code can read them during parsing, and parse tracebacks are not masked.
 
 ## Running a task
 
-Wait steps share a watcher host and have different process and cancellation behavior; see
+Sensors share a watcher host and have different process and cancellation behavior; see
 [The watcher host](#the-watcher-host).
 
 For [built-in connections](../02-dags/14-connections.md#built-in-types), install the client
@@ -147,7 +147,7 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
 
 ### The watcher host
 
-Wait steps for one interpreter and set of root copies run as coroutines in a spawned,
+Sensors for one interpreter and set of root copies run as coroutines in a spawned,
 long-lived host. A new code set uses another host; each stops when its last wait step ends.
 They take watcher slots (`[watchers] slots`, 500 by default), not task slots; with none free a wait
 step stays `queued` and says why. A draining worker hands its pokes to other workers at once, using
@@ -157,6 +157,8 @@ uses the worker's log directory as its working directory and the allowed environ
 Blocking the event loop holds up the host's other wait steps.
 Wait steps on a host share memory and can read each other's secrets; separate teams that
 must be isolated with separate queues and workers.
+[`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) is ended by the master and does not
+use a watcher host or slot.
 
 A poke can move between calls to new code after the new host imports it and builds its call.
 It keeps its deadline and uses no retry. If preparation fails, it stays on the old code and

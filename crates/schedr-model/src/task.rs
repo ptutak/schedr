@@ -172,6 +172,21 @@ pub enum SensorMode {
     Poke,
 }
 
+/// Which run of another DAG a step waits for, and of it which task (decision 353).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunOf {
+    /// The DAG.
+    pub dag: crate::DagId,
+    /// Its task; `None`: the whole run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskId>,
+    /// With it, the run whose `planned_for` is the waiting run's minus this many milliseconds;
+    /// without it, the next run to end after the step starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_ms: Option<i64>,
+}
+
 /// The kind of a task and what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -208,6 +223,16 @@ pub enum TaskKind {
         /// `at_least`'s count; `None`: `first_of`, ending with one edge.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at_least: Option<u32>,
+    },
+    /// `wait_for(RunOf(...))` (decision 353): waits for a run of another DAG, or one of its
+    /// tasks, ended by the master with no process and no slot. Its value is that run's ID; it
+    /// ends `Failed` when the run (or task) ended otherwise, and `TimedOut` after `max_wait`.
+    WaitFor {
+        /// Which run.
+        run_of: RunOf,
+        /// How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_wait_ms: Option<u64>,
     },
     /// An inline command, run by the agent.
     Command {
@@ -454,7 +479,7 @@ impl Task {
                 .chain(env.values())
                 .flat_map(Template::references)
                 .collect(),
-            TaskKind::Empty | TaskKind::FirstOf { .. } => Vec::new(),
+            TaskKind::Empty | TaskKind::FirstOf { .. } | TaskKind::WaitFor { .. } => Vec::new(),
         }
     }
 }

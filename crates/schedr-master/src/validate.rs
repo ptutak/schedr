@@ -200,6 +200,9 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         (TaskKind::FirstOf { .. }, _) => {
             Some(format!("task `{id}`: first_of has nothing to clean up"))
         }
+        (TaskKind::WaitFor { .. }, _) => {
+            Some(format!("task `{id}`: wait_for has nothing to clean up"))
+        }
         (TaskKind::Script { .. }, _) => {
             Some(format!("task `{id}`: a script's cleanup is a script"))
         }
@@ -346,6 +349,16 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
                 problems.push(format!(
                     "task `{id}`: a wait step's `max_wait` must be above zero"
                 ));
+            }
+        }
+        TaskKind::WaitFor { max_wait_ms, .. } => {
+            if *max_wait_ms == Some(0) {
+                problems.push(format!(
+                    "task `{id}`: wait_for's `max_wait` must be above zero"
+                ));
+            }
+            if mapping::is_mapped(task) {
+                problems.push(format!("task `{id}`: wait_for can't be mapped"));
             }
         }
         TaskKind::Empty | TaskKind::FirstOf { .. } => {}
@@ -960,7 +973,9 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
         .iter()
         .filter_map(|task| {
             let streams = match task.kind {
-                TaskKind::Empty | TaskKind::FirstOf { .. } => return None,
+                TaskKind::Empty | TaskKind::FirstOf { .. } | TaskKind::WaitFor { .. } => {
+                    return None;
+                }
                 TaskKind::Command { .. } | TaskKind::Script { .. } => 2,
                 TaskKind::Python { .. } | TaskKind::Sensor { .. } => 1,
             };
