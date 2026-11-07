@@ -171,6 +171,7 @@ async fn the_dag() -> Dag {
 fn request(dir: &Path, dag: &Dag, task: &str, inputs: serde_json::Value) -> TaskRequest {
     let planned_for = "2026-10-21T08:00:00Z".parse().unwrap();
     TaskRequest {
+        trigger: None,
         dag_file: DagFile {
             root: "etl".to_owned(),
             root_dir: dir.to_string_lossy().into_owned(),
@@ -190,6 +191,7 @@ fn request(dir: &Path, dag: &Dag, task: &str, inputs: serde_json::Value) -> Task
         inputs: serde_json::from_value(inputs).unwrap(),
         outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
+            event: None,
             params: serde_json::json!({}),
             dag_id: "sync".to_owned(),
             run_id: "r1".to_owned(),

@@ -167,3 +167,12 @@ fn a_triggers_window_is_shown_in_utc_with_the_local_offset() {
         "@daily, 2026-01-01 00:00Z.."
     );
 }
+
+#[test]
+fn an_event_trigger_is_named_by_its_function() {
+    let trigger = json!({"kind": "event", "task": {"id": "new_files"}});
+    assert_eq!(
+        trigger_text(&trigger, &jiff::tz::TimeZone::UTC),
+        "@trigger new_files"
+    );
+}

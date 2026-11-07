@@ -337,6 +337,8 @@ pub struct PythonTask {
     pub secrets: Option<Arc<AttemptSecrets>>,
     /// The attempt's cleanup handles; none outside an attempt.
     pub handles: Option<Arc<AttemptHandles>>,
+    /// Where a trigger's events go; none for anything else.
+    pub events: Option<crate::watchers::EventSink>,
 }
 
 impl From<TaskRequest> for PythonTask {
@@ -345,6 +347,7 @@ impl From<TaskRequest> for PythonTask {
             request,
             secrets: None,
             handles: None,
+            events: None,
         }
     }
 }
@@ -428,6 +431,7 @@ pub async fn run_python(
         request,
         secrets,
         handles,
+        events: _,
     } = task.into();
     let started = Instant::now();
     // The remaining timeout includes the runner's start (B56, B160).

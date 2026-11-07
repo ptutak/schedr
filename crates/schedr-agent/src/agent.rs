@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
 use schedr_model::TaskKind;
 use schedr_model::beat::Beat;
 use schedr_model::connection::Registry;
@@ -782,16 +783,19 @@ impl ProcessExecutor {
         };
         let resource =
             AttemptResource::of(&spec.task, &spec.inputs, Arc::clone(&secrets.mask)).map(Arc::new);
+        let python_task = |request| PythonTask {
+            request,
+            secrets: Some(Arc::clone(secrets)),
+            handles: Some(Arc::clone(handles)),
+            events: None,
+        };
         let ran = match plan {
             // In a process shared with other wait steps: no budget of its own (the host's).
             Plan::Python { process, request }
                 if matches!(request.task.kind, schedr_model::TaskKind::Sensor { .. }) =>
             {
-                let task = PythonTask {
-                    request: *request,
-                    secrets: Some(Arc::clone(secrets)),
-                    handles: Some(Arc::clone(handles)),
-                };
+                let mut task = python_task(*request);
+                task.events = spec.trigger.as_ref().map(|(_, sink)| sink.clone());
                 crate::watchers::run_watcher(
                     &self.watchers,
                     &self.setup,
@@ -811,11 +815,7 @@ impl ProcessExecutor {
             }
             Plan::Python { process, request } => {
                 let forks = self.forks.as_ref();
-                let task = PythonTask {
-                    request: *request,
-                    secrets: Some(Arc::clone(secrets)),
-                    handles: Some(Arc::clone(handles)),
-                };
+                let task = python_task(*request);
                 run_python(&process, task, limits, stop, forks, &mut hold, spawned).await
             }
             Plan::Command(process) => {
@@ -974,6 +974,7 @@ enum Done {
         handle: CleanupHandle,
     },
     Attempt(pb::Finished),
+    Trigger(TriggerDone),
     Parse {
         job_id: String,
         root: pb::RootHash,
@@ -1013,6 +1014,9 @@ pub struct Agent<E> {
     incarnation: String,
     journal: Journal,
     watchers: BTreeMap<String, RootWatcher>,
+    /// The triggers running here, on watcher slots: never attempts, so never journaled, and gone
+    /// with the agent.
+    triggers: BTreeMap<String, RunningTrigger>,
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
     running: BTreeMap<String, StopSender>,
     /// Those of them that are wait steps, on watcher slots: whether each is a poke.
@@ -1163,6 +1167,7 @@ impl<E: Executor> Agent<E> {
             journal,
             watchers,
             running: BTreeMap::new(),
+            triggers: BTreeMap::new(),
             wait_steps: BTreeMap::new(),
             cleaning: BTreeMap::new(),
             waiting: BTreeMap::new(),
@@ -1381,6 +1386,7 @@ impl<E: Executor> Agent<E> {
             .count();
         self.running
             .len()
+            .saturating_add(self.triggers.len())
             .saturating_sub(self.waiting.len().saturating_add(held))
     }
 
@@ -1406,6 +1412,7 @@ impl<E: Executor> Agent<E> {
             queues: self.settings.queues.clone(),
             slots: self.settings.slots,
             watcher_slots: self.settings.watcher_slots,
+            running_triggers: self.triggers.keys().cloned().collect(),
             log_endpoint: self.settings.log_endpoint.clone(),
             roots,
             secret_storages: self.settings.secrets.names(),
@@ -1484,6 +1491,10 @@ impl<E: Executor> Agent<E> {
     fn stop_cut_off(&mut self) {
         self.cut_off = true;
         self.hold_cleanups();
+        // Its bookmark is the master's: one elsewhere takes over from there.
+        for trigger in self.triggers.values() {
+            let _ = trigger.stop.send(StopReason::CutOff);
+        }
         for id in self.gates.keys() {
             if !self.cleaning.contains_key(id)
                 && let Some(stop) = self.running.get(id)
@@ -1544,6 +1555,10 @@ impl<E: Executor> Agent<E> {
         };
         let now = Instant::now();
         let step = drain.step(now, running, self.unacked.len(), connected);
+        // As a poke, they run on elsewhere, losing nothing.
+        for trigger in self.triggers.values() {
+            let _ = trigger.stop.send(StopReason::Interrupted);
+        }
         // Each early enough for one try of its cleanup; one in its cleanup isn't stopped. Also
         // those already being stopped (cancelled, timed out): their SIGKILL comes no later than
         // the drain's (B9).
@@ -2025,6 +2040,7 @@ impl<E: Executor> Agent<E> {
             free_slots: self.free_slots(),
             free_watcher_slots: self.free_watcher_slots(),
             running_attempt_ids: self.running(),
+            running_triggers: self.triggers.keys().cloned().collect(),
             watcher_hosts: self.executor.watcher_hosts(),
         }))
     }
@@ -2072,6 +2088,9 @@ impl<E: Executor> Agent<E> {
                 for decision in registered.decisions {
                     self.decide(&decision, to_master).await;
                 }
+                for event in self.unstored_events() {
+                    let _ = to_master.send(event);
+                }
                 for done in self.unsent_answers.drain(..) {
                     let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
                 }
@@ -2086,6 +2105,21 @@ impl<E: Executor> Agent<E> {
             // Heard: that is all it says.
             master_message::Message::HeartbeatAck(_) => {}
             master_message::Message::ConnectionJob(job) => self.connection_job(job),
+            master_message::Message::AssignTrigger(assign) => {
+                self.start_trigger(&assign, to_master);
+            }
+            master_message::Message::CancelTrigger(cancel) => {
+                if let Some(trigger) = self.triggers.get(&cancel.instance_id) {
+                    let _ = trigger.stop.send(StopReason::Cancelled);
+                }
+            }
+            master_message::Message::TriggerEventAck(ack) => {
+                if let Some(trigger) = self.triggers.get_mut(&ack.instance_id)
+                    && let Some((_, stored)) = trigger.unstored.remove(&ack.seq)
+                {
+                    let _ = stored.send(());
+                }
+            }
             master_message::Message::CancelAttempt(cancel) => {
                 // It stays running (its slot taken) until its process has ended and reported;
                 // a repeated cancel changes nothing.
@@ -2348,6 +2382,207 @@ impl<E: Executor> Agent<E> {
                 self.launch(spec, plan, stopped);
             }
         }
+    }
+
+    /// Starts a DAG's trigger here: as a wait step's attempt would run, but no attempt, so nothing
+    /// of it is journaled and the master keeps no result of it.
+    fn start_trigger(
+        &mut self,
+        assign: &pb::AssignTrigger,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
+        let stopped = |kind: &str, message: String| {
+            wrap(worker_message::Message::TriggerStopped(
+                pb::TriggerStopped {
+                    dag_id: assign.dag_id.clone(),
+                    instance_id: assign.instance_id.clone(),
+                    error_kind: kind.to_owned(),
+                    message,
+                },
+            ))
+        };
+        if let Some((_, detail)) = self.cannot_take(true) {
+            let _ = to_master.send(stopped("not_placed", detail.to_owned()));
+            return;
+        }
+        if self.triggers.contains_key(&assign.instance_id) {
+            return;
+        }
+        let now = proto_time(Timestamp::now());
+        let task_assign = pb::AssignTask {
+            attempt_id: assign.instance_id.clone(),
+            map_index: -1,
+            try_number: 1,
+            run: Some(pb::RunInfo {
+                run_id: assign.instance_id.clone(),
+                kind: "event".to_owned(),
+                planned_for: Some(now),
+                since: Some(now),
+                dag_id: assign.dag_id.clone(),
+                ..pb::RunInfo::default()
+            }),
+            task_json: assign.task_json.clone(),
+            dag_file: assign.dag_file.clone(),
+            expected_code_hash: assign.expected_code_hash.clone(),
+            cancel_grace_ms: assign.cancel_grace_ms,
+            connections_json: assign.connections_json.clone(),
+            ..pb::AssignTask::default()
+        };
+        let mut spec = match AttemptSpec::from_assign(&task_assign, None) {
+            Ok(spec) => spec,
+            Err(error) => {
+                let _ = to_master.send(stopped("not_placed", error.to_string()));
+                return;
+            }
+        };
+        if let Some(detail) = self.code_mismatch(&task_assign) {
+            let _ = to_master.send(stopped("not_placed", detail));
+            return;
+        }
+        let instance_id = assign.instance_id.clone();
+        let done = self.done_tx.clone();
+        let found = instance_id.clone();
+        let sink = crate::watchers::EventSink(Arc::new(move |event| {
+            let (stored, answer) = tokio::sync::oneshot::channel();
+            let _ = done.send(Done::Trigger(TriggerDone::Found {
+                instance_id: found.clone(),
+                event,
+                stored,
+            }));
+            answer
+        }));
+        let start = schedr_model::runner::TriggerStart {
+            after: assign.after.clone(),
+        };
+        spec.trigger = Some((start, sink));
+        spec.stand_in_secrets();
+        spec.stand_in_secrets();
+        let plan = match self.plan(&mut spec, &task_assign) {
+            Ok(plan) => plan,
+            Err(NotRun::Rejected { detail, .. }) => {
+                let _ = to_master.send(stopped("not_placed", detail));
+                return;
+            }
+            Err(NotRun::Failed { kind, message }) => {
+                let _ = to_master.send(stopped(&kind, message));
+                return;
+            }
+        };
+        self.remember_code(&task_assign, &spec);
+        let (stop, stops) = Stops::new();
+        self.triggers.insert(
+            instance_id.clone(),
+            RunningTrigger {
+                dag_id: assign.dag_id.clone(),
+                stop,
+                next_seq: 0,
+                unstored: BTreeMap::new(),
+            },
+        );
+        let executor = self.executor.clone();
+        let ended = self.done_tx.clone();
+        tokio::spawn(async move {
+            let spawned: Spawned = Arc::new(|_, _| {});
+            let finished = executor
+                .run(spec, plan, stops, spawned, Box::new(|_| {}))
+                .await;
+            let _ = ended.send(Done::Trigger(TriggerDone::Ended {
+                instance_id,
+                finished: Box::new(finished),
+            }));
+        });
+    }
+
+    /// Keeps a result in the journal until the master has it.
+    async fn record_finished(&mut self, finished: &pb::Finished) {
+        if let Err(error) = self
+            .record(
+                &finished.attempt_id,
+                JournalRecord::Finished(finished.clone()),
+            )
+            .await
+        {
+            tracing::warn!(
+                attempt_id = finished.attempt_id.as_str(),
+                %error,
+                "can't record the result; it is lost if the agent restarts before the \
+                 master acknowledges it"
+            );
+        }
+    }
+
+    /// What a trigger did reaches the master.
+    fn trigger_done(
+        &mut self,
+        done: TriggerDone,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        match done {
+            TriggerDone::Found {
+                instance_id,
+                event,
+                stored,
+            } => self.trigger_found(instance_id, event, stored, to_master),
+            TriggerDone::Ended {
+                instance_id,
+                finished,
+            } => self.trigger_ended(&instance_id, &finished, to_master),
+        }
+    }
+
+    /// A trigger found something: on to the master; what it hasn't said it has is sent again
+    /// on a new stream.
+    fn trigger_found(
+        &mut self,
+        instance_id: String,
+        event: crate::watchers::FoundEvent,
+        stored: tokio::sync::oneshot::Sender<()>,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        let Some(trigger) = self.triggers.get_mut(&instance_id) else {
+            return;
+        };
+        trigger.next_seq += 1;
+        let message = pb::TriggerEvent {
+            dag_id: trigger.dag_id.clone(),
+            instance_id,
+            seq: trigger.next_seq,
+            key: event.key,
+            data_json: serde_json::to_vec(&event.data).unwrap_or_default(),
+            at: event.at.map(proto_time),
+        };
+        trigger
+            .unstored
+            .insert(trigger.next_seq, (message.clone(), stored));
+        if let Some(to_master) = to_master {
+            let _ = to_master.send(wrap(worker_message::Message::TriggerEvent(message)));
+        }
+    }
+
+    /// A trigger ended: its slot and its code are free. A master that doesn't hear it learns
+    /// from the next registration, which no longer lists it.
+    fn trigger_ended(
+        &mut self,
+        instance_id: &str,
+        finished: &pb::Finished,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        self.release_code(instance_id);
+        self.collect_code();
+        if let Some(trigger) = self.triggers.remove(instance_id)
+            && let Some(to_master) = to_master
+        {
+            let stopped = trigger_stopped(trigger.dag_id, instance_id.to_owned(), finished);
+            let _ = to_master.send(wrap(worker_message::Message::TriggerStopped(stopped)));
+        }
+    }
+
+    /// What it found that the master hasn't said it has: a new session sends it again.
+    fn unstored_events(&self) -> impl Iterator<Item = pb::WorkerMessage> {
+        self.triggers
+            .values()
+            .flat_map(|trigger| trigger.unstored.values())
+            .map(|(event, _)| wrap(worker_message::Message::TriggerEvent(event.clone())))
     }
 
     /// Runs the cleanup of an attempt whose worker was lost (decision 243). Its task's result
@@ -2901,20 +3136,7 @@ impl<E: Executor> Agent<E> {
                     with_code_hash(&mut finished, hash);
                     self.collect_code();
                 }
-                if let Err(error) = self
-                    .record(
-                        &finished.attempt_id,
-                        JournalRecord::Finished(finished.clone()),
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        attempt_id = finished.attempt_id.as_str(),
-                        %error,
-                        "can't record the result; it is lost if the agent restarts before the \
-                         master acknowledges it"
-                    );
-                }
+                self.record_finished(&finished).await;
                 self.ended_running(&finished.attempt_id);
                 self.cleaning.remove(&finished.attempt_id);
                 self.cleanup_room.remove(&finished.attempt_id);
@@ -2926,6 +3148,7 @@ impl<E: Executor> Agent<E> {
                     let _ = to_master.send(wrap(worker_message::Message::Finished(finished)));
                 }
             }
+            Done::Trigger(done) => self.trigger_done(done, link.map(|(to, _)| to)),
             Done::Parse {
                 job_id,
                 root,
@@ -3108,6 +3331,7 @@ impl<E: Executor> Agent<E> {
         self.settings
             .watcher_slots
             .saturating_sub(u32::try_from(self.wait_steps.len()).unwrap_or(u32::MAX))
+            .saturating_sub(u32::try_from(self.triggers.len()).unwrap_or(u32::MAX))
     }
 
     fn note_wait_step(&mut self, spec: &AttemptSpec) {
@@ -3127,6 +3351,69 @@ impl<E: Executor> Agent<E> {
     /// The attempts running on task slots.
     fn tasks_running(&self) -> usize {
         self.running.len().saturating_sub(self.wait_steps.len())
+    }
+}
+
+/// What a trigger did.
+enum TriggerDone {
+    /// It found something: on to the master, `stored` told once it has it.
+    Found {
+        instance_id: String,
+        event: crate::watchers::FoundEvent,
+        stored: tokio::sync::oneshot::Sender<()>,
+    },
+    /// It ended.
+    Ended {
+        instance_id: String,
+        finished: Box<pb::Finished>,
+    },
+}
+
+/// A trigger running on this worker.
+#[derive(Debug)]
+struct RunningTrigger {
+    dag_id: String,
+    stop: StopSender,
+    next_seq: u64,
+    /// What it found that the master hasn't said it has, by its place.
+    unstored: BTreeMap<u64, (pb::TriggerEvent, tokio::sync::oneshot::Sender<()>)>,
+}
+
+fn proto_time(time: Timestamp) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: time.as_second(),
+        nanos: time.subsec_nanosecond(),
+    }
+}
+
+/// How a trigger ended, as the master hears it: asked to stop, it is no error.
+fn trigger_stopped(
+    dag_id: String,
+    instance_id: String,
+    finished: &pb::Finished,
+) -> pb::TriggerStopped {
+    let asked = finished.status == pb::AttemptStatus::Cancelled as i32
+        || finished.status == pb::AttemptStatus::Interrupted as i32;
+    let (error_kind, message) = if asked {
+        (String::new(), String::new())
+    } else {
+        let summary: Option<schedr_model::runner::ErrorSummary> =
+            serde_json::from_slice(&finished.error_summary_json).ok();
+        let kind = if finished.error_kind.is_empty() {
+            "trigger_failed".to_owned()
+        } else {
+            finished.error_kind.clone()
+        };
+        (
+            kind,
+            summary.map_or_else(String::new, |s| format!("{}: {}", s.exception, s.message)),
+        )
+    };
+    pb::TriggerStopped {
+        dag_id,
+        instance_id,
+        error_kind,
+        message,
     }
 }
 

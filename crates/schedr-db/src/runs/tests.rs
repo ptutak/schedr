@@ -57,6 +57,7 @@ fn run<'a>(
 ) -> NewRun<'a> {
     NewRun {
         params: &crate::runs::NO_PARAMS,
+        event: None,
         dag_id,
         dag_version_id: version,
         kind,

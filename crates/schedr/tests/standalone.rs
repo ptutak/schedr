@@ -2277,3 +2277,171 @@ fn walk_for(dir: &Path, name: &str) -> Option<PathBuf> {
     }
     None
 }
+
+/// M4.11b: a trigger runs while its DAG is unpaused, each new key starts one run with its event, a
+/// repeat none, and it starts again from the last key acted on.
+#[test]
+fn a_trigger_starts_a_run_per_new_key_and_goes_on_from_its_bookmark() {
+    const DAG: &str = r#"
+import asyncio
+from collections.abc import AsyncIterator
+
+from schedr import Dag, Event, dag_ctx, task, trigger
+
+
+@trigger
+async def found(after: str | None, first: int) -> AsyncIterator[Event[int]]:
+    if after is None:
+        yield Event("a", first)
+        yield Event("b", first + 1)
+        yield Event("a", 99)
+    else:
+        yield Event(f"after-{after}", first + 2)
+    await asyncio.sleep(3600)
+
+
+@task
+def seen(key: str, data: int) -> str:
+    print(f"seen {key} {data}")
+    return key
+
+
+with Dag("ingest", trigger=found(first=10)):
+    seen(dag_ctx.event.key, dag_ctx.event.data)
+"#;
+    let standalone = Standalone::start(&[("ingest.py", DAG)], None);
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"ingest".to_owned())
+    });
+    assert_eq!(
+        standalone.runs("ingest").len(),
+        0,
+        "paused, it isn't running"
+    );
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "ingest"]);
+    assert_eq!(code, 0, "{err}");
+    let succeeded = |count: usize| {
+        standalone.runs("ingest").len() == count
+            && standalone
+                .runs("ingest")
+                .iter()
+                .all(|run| run["state"] == "success")
+    };
+    standalone.wait("a run per new key", || succeeded(2));
+    let hosts = || {
+        let workers = standalone.cli_json(&["workers", "list"]);
+        workers["workers"][0]["watcher_hosts"]
+            .as_array()
+            .map_or(0, Vec::len)
+    };
+    standalone.wait("it to take a watcher host", || hosts() == 1);
+    let (code, _, err) = standalone.cli(&["dags", "pause", "ingest"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("it to stop", || hosts() == 0);
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "ingest"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("a run from its bookmark", || succeeded(3));
+    let runs = standalone.runs("ingest");
+    assert!(runs.iter().all(|run| run["kind"] == "event"), "{runs:?}");
+    let logs = logs(standalone.dir.path());
+    assert!(logs.contains("seen a 10"), "{logs}");
+    assert!(logs.contains("seen b 11"), "{logs}");
+    assert!(logs.contains("seen after-a 12"), "{logs}");
+    assert!(
+        !logs.contains("seen a 99"),
+        "a repeat starts nothing: {logs}"
+    );
+}
+
+/// M4.11b: a poke goes on from the last key it gave, and a failing trigger starts again from its
+/// bookmark after a wait.
+#[test]
+fn a_poke_trigger_goes_on_from_its_last_key_and_a_failure_starts_it_again() {
+    const DAG: &str = r#"
+from datetime import timedelta
+
+from schedr import Dag, Event, dag_ctx, task, trigger
+
+
+@trigger.poke(every=timedelta(milliseconds=100))
+async def found(after: str | None) -> list[Event[int]]:
+    count = 0 if after is None else int(after)
+    if count == 2:
+        raise ValueError("no more for now")
+    return [Event(str(count + 1), count)]
+
+
+@task
+def seen(key: str) -> str:
+    return key
+
+
+with Dag("polled", trigger=found()):
+    seen(dag_ctx.event.key)
+"#;
+    let standalone = Standalone::start_configured(
+        &[("polled.py", DAG)],
+        None,
+        &[],
+        "",
+        &[("SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF", "100ms")],
+    );
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"polled".to_owned())
+    });
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "polled"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("a run per key", || standalone.runs("polled").len() == 2);
+    standalone.wait("it to fail and start again", || {
+        standalone.log().contains("no more for now")
+    });
+    assert_eq!(
+        standalone.runs("polled").len(),
+        2,
+        "a raise creates nothing"
+    );
+}
+
+/// M4.11b: a trigger reads the secrets it declares, and what it reads doesn't reach an event.
+#[test]
+fn a_trigger_reads_its_secrets_and_an_event_keeps_none() {
+    const DAG: &str = r#"
+import asyncio
+from collections.abc import AsyncIterator
+
+from schedr import Dag, Event, dag_ctx, task, task_ctx, trigger
+
+
+@trigger(secrets=["etl/db#password"])
+async def found(after: str | None) -> AsyncIterator[Event[str]]:
+    yield Event("one", f"has {task_ctx.secret('etl/db', 'password')} in it")
+    await asyncio.sleep(3600)
+
+
+@task
+def seen(data: str) -> str:
+    print(f"seen data: {data}")
+    return data
+
+
+with Dag("guarded", trigger=found()):
+    seen(dag_ctx.event.data)
+"#;
+    let standalone = Standalone::start(&[("guarded.py", DAG)], None);
+    let (code, out, err) = standalone.secrets(None, &["set", "etl/db", "password=hunter22-pw"]);
+    assert_eq!(code, 0, "{out}{err}");
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"guarded".to_owned())
+    });
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "guarded"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("its run", || {
+        standalone
+            .runs("guarded")
+            .first()
+            .is_some_and(|run| run["state"] == "success")
+    });
+    let logs = logs(standalone.dir.path());
+    assert!(logs.contains("seen data: has **** in it"), "{logs}");
+    assert!(!logs.contains("hunter22-pw"), "{logs}");
+}

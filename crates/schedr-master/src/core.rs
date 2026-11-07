@@ -32,6 +32,8 @@ use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey}
 use crate::quiet::{QuietSettings, Wakes};
 use crate::scheduler::{Scheduler, SchedulerError};
 
+mod triggers;
+
 #[cfg(test)]
 mod tests;
 
@@ -80,6 +82,10 @@ pub struct Settings {
 /// How the master's loop and its parse jobs are paced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MasterTimings {
+    /// The wait before a failed trigger starts again; it doubles with each failure in a row.
+    pub trigger_restart_backoff: Duration,
+    /// The most it waits.
+    pub trigger_restart_backoff_max: Duration,
     /// At most one extra round every this long (`round_gap`).
     pub round_gap: Duration,
     /// How long until failed notifications are tried again (`notification_retry`).
@@ -107,6 +113,8 @@ impl Default for MasterTimings {
             parse_retry_first: crate::parse_jobs::FIRST_RETRY_DELAY,
             parse_retry_max: crate::parse_jobs::MAX_RETRY_DELAY,
             accept_retry: Duration::from_millis(100),
+            trigger_restart_backoff: Duration::from_secs(5),
+            trigger_restart_backoff_max: Duration::from_mins(5),
         }
     }
 }
@@ -500,7 +508,18 @@ impl MasterCore {
                 "worker `{worker_id}` already has a live stream"
             )));
         }
-        let accepted = self.accept(register, now).await;
+        let accepted = match self.accept(register, now).await {
+            Ok((registered, mut outgoing)) => {
+                let triggers = self
+                    .triggers_on_register(worker_id, &register.running_triggers, now)
+                    .await;
+                triggers.map(|triggers| {
+                    outgoing.extend(triggers);
+                    (registered, outgoing)
+                })
+            }
+            Err(error) => Err(error),
+        };
         if accepted.is_err()
             && let Some(connection) = self.connections.get_mut(worker_id)
         {
@@ -789,7 +808,14 @@ impl MasterCore {
             }
             worker_message::Message::Heartbeat(beat) => {
                 self.heard_of_hosts(worker_id, beat.watcher_hosts).await;
-                Vec::new()
+                self.triggers_reported(worker_id, &beat.running_triggers)
+                    .await?
+            }
+            worker_message::Message::TriggerEvent(event) => {
+                self.trigger_event(worker_id, event, now).await?
+            }
+            worker_message::Message::TriggerStopped(stopped) => {
+                self.trigger_stopped(worker_id, stopped, now).await?
             }
             // For people, like the last heartbeat: a failed write is logged, not the message's
             // failure (the worker sends them again after its next registration).
@@ -1093,6 +1119,7 @@ impl MasterCore {
         }
         commands?;
         self.scheduler.pass(now).await?;
+        self.trigger_pass(now, outgoing).await?;
         self.dispatcher.step_into(now, outgoing).await?;
         let expired = self.discovery.jobs_mut().expire(now);
         outgoing.extend(expired.into_iter().map(assign_parse));

@@ -98,6 +98,7 @@ class RunValues:
         since: The start of the run's window.
         params: The run's parameters, as stored (decision 138).
         params_class: The class the DAG declared them with; ``None``: it takes none.
+        event: The event that started it, as stored; ``None`` for other runs.
         from_script: Read by a plain script (``schedr.script``), which doesn't know the
             declared class: a field is decoded by its stored form, and ``dag_ctx.params(Cls)``
             decodes into ``Cls`` strictly without comparing it with the declaration.
@@ -111,6 +112,7 @@ class RunValues:
     params: Mapping[str, Any] = field(default_factory=dict)
     params_class: type | None = None
     from_script: bool = False
+    event: Mapping[str, Any] | None = None
 
 
 class SecretError(Exception):
@@ -317,8 +319,50 @@ class RunContext:
         return _current(DagCtxField.SINCE, lambda v: v.since)
 
 
+class EventContext:
+    """``dag_ctx.event``: the event that started the run, in an event-triggered DAG.
+
+    As ``dag_ctx.run``, each field is a reference in the DAG body and a value in a running task.
+    """
+
+    @property
+    def key(self) -> str:
+        """Its key."""
+        return typing.cast("str", _current(DagCtxField.EVENT_KEY, lambda v: _event_of(v)["key"]))
+
+    @property
+    def data(self) -> Any:
+        """Its data, read by the type of the parameter it is passed to."""
+        return _current(DagCtxField.EVENT_DATA, lambda v: decode_any(_event_of(v)["data"]))
+
+    @property
+    def at(self) -> datetime:
+        """When it happened; if it didn't say, when schedr received it."""
+        return _current(
+            DagCtxField.EVENT_AT,
+            lambda v: (
+                datetime.fromisoformat(at)
+                if (at := _event_of(v).get("at")) is not None
+                else v.planned_for
+            ),
+        )
+
+
+def _event_of(values: RunValues) -> Mapping[str, Any]:
+    if values.event is None:
+        raise RuntimeError(
+            f"`dag_ctx.event`: this run is `{values.kind}`, started by no event of a trigger"
+        )
+    return values.event
+
+
 class DagContext:
     """``dag_ctx``: the current run's context."""
+
+    @property
+    def event(self) -> EventContext:
+        """The event that started the run, in an event-triggered DAG."""
+        return EventContext()
 
     @property
     def run(self) -> RunContext:

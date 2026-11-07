@@ -35,6 +35,7 @@ fn root(hash: &str) -> pb::RootHash {
 
 fn register(worker: &str, incarnation: &str, journal: Vec<pb::JournalEntry>) -> pb::Register {
     pb::Register {
+        running_triggers: Vec::new(),
         watcher_slots: 500,
         worker_id: worker.to_owned(),
         incarnation_id: incarnation.to_owned(),
@@ -2189,4 +2190,377 @@ async fn a_poke_that_missed_its_workers_drain_is_moved_when_it_comes_back() {
         (moved.attempt_id.as_str(), moved.interrupted),
         (attempt.as_str(), true)
     );
+}
+
+/// [`dag_file`], started by a trigger.
+fn event_file() -> ParsedFile {
+    let mut file = serde_json::to_value(dag_file()).unwrap();
+    file["dags"][0]["trigger"] = json!({
+        "kind": "event",
+        "task": {
+            "id": "found", "kind": "sensor", "mode": "loop", "arguments": {},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    serde_json::from_value(file).unwrap()
+}
+
+/// With a DAG started by a trigger, unpaused, and its trigger given to `w1`.
+async fn with_trigger() -> (MasterCore, pb::AssignTrigger) {
+    let mut core = with_dag_of(&event_file()).await;
+    core.db
+        .set_paused(&DagId::new("sync").unwrap(), false)
+        .await
+        .unwrap();
+    let assigned = assign_of(&core.tick(later(1)).await.unwrap());
+    (core, assigned.expect("the trigger is given to a worker"))
+}
+
+fn assign_of(outgoing: &[Outgoing]) -> Option<pb::AssignTrigger> {
+    outgoing.iter().find_map(|o| match message(o) {
+        master_message::Message::AssignTrigger(assign) => Some(assign.clone()),
+        _ => None,
+    })
+}
+
+fn found(assign: &pb::AssignTrigger, seq: u64, key: &str) -> worker_message::Message {
+    worker_message::Message::TriggerEvent(pb::TriggerEvent {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        seq,
+        key: key.to_owned(),
+        data_json: b"1".to_vec(),
+        at: None,
+    })
+}
+
+fn ack_of(outgoing: &[Outgoing]) -> Option<u64> {
+    outgoing.iter().find_map(|o| match message(o) {
+        master_message::Message::TriggerEventAck(ack) => Some(ack.seq),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn a_new_key_queues_a_run_and_a_repeat_only_moves_the_bookmark() {
+    let (mut core, assign) = with_trigger().await;
+    assert_eq!(assign.after, None);
+    assert_eq!(assign.dag_id, "sync");
+    for (seq, key) in [(1, "a"), (2, "b"), (3, "a")] {
+        let answer = core
+            .handle("w1", found(&assign, seq, key), later(2))
+            .await
+            .unwrap();
+        assert_eq!(ack_of(&answer), Some(seq), "acknowledged once stored");
+    }
+    let runs = core
+        .db
+        .queued_runs(&DagId::new("sync").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.bookmark.as_deref(), Some("a"));
+}
+
+#[tokio::test]
+async fn what_an_old_instance_found_is_acknowledged_and_not_stored() {
+    let (mut core, mut assign) = with_trigger().await;
+    assign.instance_id = "someone-else".to_owned();
+    let answer = core
+        .handle("w1", found(&assign, 1, "a"), later(2))
+        .await
+        .unwrap();
+    assert_eq!(ack_of(&answer), Some(1));
+    let runs = core
+        .db
+        .queued_runs(&DagId::new("sync").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 0);
+}
+
+#[tokio::test]
+async fn pausing_stops_a_trigger_and_it_comes_back_from_its_bookmark() {
+    let (mut core, assign) = with_trigger().await;
+    core.handle("w1", found(&assign, 1, "a"), later(2))
+        .await
+        .unwrap();
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, true).await.unwrap();
+    let stopped = core.tick(later(3)).await.unwrap();
+    assert!(
+        stopped.iter().any(|o| matches!(
+            message(o),
+            master_message::Message::CancelTrigger(cancel)
+                if cancel.instance_id == assign.instance_id
+        )),
+        "{stopped:?}"
+    );
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
+    core.db.set_paused(&dag, false).await.unwrap();
+    let again = assign_of(&core.tick(later(4)).await.unwrap()).unwrap();
+    assert_ne!(again.instance_id, assign.instance_id);
+    assert_eq!(again.after.as_deref(), Some("a"));
+}
+
+#[tokio::test]
+async fn a_failed_trigger_starts_again_only_after_its_wait() {
+    let (mut core, assign) = with_trigger().await;
+    let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        error_kind: "trigger_failed".to_owned(),
+        message: "ValueError: no".to_owned(),
+    });
+    core.handle("w1", stopped, later(2)).await.unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.failures, 1);
+    assert_eq!(
+        stored.last_error.as_deref(),
+        Some("trigger_failed: ValueError: no")
+    );
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
+    assert_eq!(assign_of(&core.tick(later(3)).await.unwrap()), None);
+    assert!(assign_of(&core.tick(later(8)).await.unwrap()).is_some());
+}
+
+#[tokio::test]
+async fn a_lost_worker_gives_up_its_trigger_and_one_it_reports_late_is_stopped() {
+    let (mut core, assign) = with_trigger().await;
+    core.register(&register("w2", "i2", vec![]), later(2))
+        .await
+        .unwrap();
+    // `w1` comes back with nothing: what it had has ended.
+    core.disconnected("w1", later(3)).await.unwrap();
+    core.register(&register("w1", "i1", vec![]), later(3))
+        .await
+        .unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.instance_id, None);
+    // A trigger the master doesn't count as running there.
+    let beat = worker_message::Message::Heartbeat(pb::Heartbeat {
+        running_triggers: vec![assign.instance_id.clone()],
+        ..pb::Heartbeat::default()
+    });
+    let told = core.handle("w1", beat, later(4)).await.unwrap();
+    assert!(
+        told.iter().any(|o| matches!(
+            message(o),
+            master_message::Message::CancelTrigger(cancel)
+                if cancel.instance_id == assign.instance_id
+        )),
+        "{told:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_coming_back_with_its_trigger_keeps_it() {
+    let (mut core, assign) = with_trigger().await;
+    core.disconnected("w1", later(2)).await.unwrap();
+    let mut back = register("w1", "i1", vec![]);
+    back.running_triggers = vec![assign.instance_id.clone()];
+    core.register(&back, later(3)).await.unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(
+        stored.instance_id.as_deref(),
+        Some(assign.instance_id.as_str())
+    );
+    assert_eq!(assign_of(&core.tick(later(4)).await.unwrap()), None);
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 1);
+}
+
+#[tokio::test]
+async fn a_manual_run_of_an_event_dag_is_refused_without_an_event() {
+    let (core, _) = with_trigger().await;
+    let refused = core
+        .scheduler
+        .trigger(&DagId::new("sync").unwrap(), None, "anna", later(2))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("needs an event"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_trigger_given_nowhere_keeps_no_slot() {
+    let mut core = with_dag_of(&event_file()).await;
+    core.db
+        .set_paused(&DagId::new("sync").unwrap(), false)
+        .await
+        .unwrap();
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_triggers BEFORE INSERT ON triggers \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(core.tick(later(1)).await.is_err());
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
+}
+
+#[tokio::test]
+async fn what_a_trigger_of_an_older_version_found_starts_nothing() {
+    let (mut core, assign) = with_trigger().await;
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query("UPDATE triggers SET dag_version_id = 'older'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let answer = core
+        .handle("w1", found(&assign, 1, "a"), later(2))
+        .await
+        .unwrap();
+    assert_eq!(ack_of(&answer), Some(1));
+    let dag = DagId::new("sync").unwrap();
+    assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 0);
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.bookmark, None);
+}
+
+#[tokio::test]
+async fn new_code_or_a_withdrawn_root_stops_a_trigger_also_under_a_new_master() {
+    let (core, assign) = with_trigger().await;
+    let db = core.db.clone();
+    // A new master, over the same data; the worker returns with its trigger, at other code.
+    let mut restarted = MasterCore::new(db, Settings::default());
+    restarted.restore(later(1)).await.unwrap();
+    let mut back = register("w1", "i1", vec![]);
+    back.roots = vec![root("h2")];
+    back.running_triggers = vec![assign.instance_id.clone()];
+    restarted.register(&back, later(2)).await.unwrap();
+    let told = restarted.tick(later(3)).await.unwrap();
+    assert!(
+        told.iter().any(|o| matches!(
+            message(o),
+            master_message::Message::CancelTrigger(cancel)
+                if cancel.instance_id == assign.instance_id
+        )),
+        "{told:?}"
+    );
+    core.db
+        .trigger("sync")
+        .await
+        .unwrap()
+        .filter(|r| r.instance_id.is_none())
+        .expect("ended");
+}
+
+#[tokio::test]
+async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
+    let (mut core, assign) = with_trigger().await;
+    core.register(&register("w2", "i2", vec![]), later(2))
+        .await
+        .unwrap();
+    let answer = core
+        .handle("w2", found(&assign, 1, "planted"), later(3))
+        .await
+        .unwrap();
+    assert_eq!(ack_of(&answer), Some(1));
+    let dag = DagId::new("sync").unwrap();
+    assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 0);
+    let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        error_kind: "trigger_failed".to_owned(),
+        message: "planted".to_owned(),
+    });
+    core.handle("w2", stopped, later(3)).await.unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(
+        stored.instance_id.as_deref(),
+        Some(assign.instance_id.as_str())
+    );
+    assert_eq!(stored.last_error, None);
+    // Nor does one free a slot that is someone else's.
+    let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: "not-a-trigger".to_owned(),
+        instance_id: assign.instance_id.clone(),
+        error_kind: String::new(),
+        message: String::new(),
+    });
+    core.handle("w2", stopped, later(3)).await.unwrap();
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 1);
+}
+
+#[tokio::test]
+async fn what_cant_be_an_event_fails_the_trigger_and_stores_nothing() {
+    let dag = DagId::new("sync").unwrap();
+    for bad in [
+        pb::TriggerEvent {
+            key: "k".repeat(schedr_model::trigger::MAX_EVENT_KEY + 1),
+            data_json: b"1".to_vec(),
+            ..pb::TriggerEvent::default()
+        },
+        pb::TriggerEvent {
+            key: "a\0b".to_owned(),
+            data_json: b"1".to_vec(),
+            ..pb::TriggerEvent::default()
+        },
+        pb::TriggerEvent {
+            key: String::new(),
+            data_json: b"1".to_vec(),
+            ..pb::TriggerEvent::default()
+        },
+        pb::TriggerEvent {
+            key: "k".to_owned(),
+            data_json: vec![b'1'; 2_000_000],
+            ..pb::TriggerEvent::default()
+        },
+        pb::TriggerEvent {
+            key: "k".to_owned(),
+            data_json: b"{not json".to_vec(),
+            ..pb::TriggerEvent::default()
+        },
+    ] {
+        let (mut core, assign) = with_trigger().await;
+        let event = pb::TriggerEvent {
+            dag_id: assign.dag_id.clone(),
+            instance_id: assign.instance_id.clone(),
+            seq: 1,
+            ..bad
+        };
+        let answer = core
+            .handle("w1", worker_message::Message::TriggerEvent(event), later(2))
+            .await
+            .unwrap();
+        assert_eq!(ack_of(&answer), None);
+        assert!(matches!(
+            message(&answer[0]),
+            master_message::Message::CancelTrigger(_)
+        ));
+        assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 0);
+        let stored = core.db.trigger("sync").await.unwrap().unwrap();
+        assert_eq!(stored.instance_id, None);
+        assert!(
+            stored.last_error.unwrap().starts_with("event_refused"),
+            "said why"
+        );
+        assert_eq!(stored.bookmark, None);
+    }
+}
+
+#[tokio::test]
+async fn a_long_error_is_kept_short() {
+    let (mut core, assign) = with_trigger().await;
+    let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        error_kind: "trigger_failed".to_owned(),
+        message: "x\0".repeat(1_000_000),
+    });
+    core.handle("w1", stopped, later(2)).await.unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    let error = stored.last_error.unwrap();
+    assert_eq!(error.chars().count(), 4096);
+    assert!(!error.contains('\0'));
 }

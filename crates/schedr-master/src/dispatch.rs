@@ -1183,6 +1183,7 @@ impl Dispatcher {
             try_number,
             (inputs, outcomes, params),
         );
+        self.add_event(ready, &mut message).await?;
         self.keep_deadline(ready, task, &mut message, now).await?;
         outgoing.push(Outgoing {
             worker_id,
@@ -2016,6 +2017,7 @@ impl Dispatcher {
             ready.try_number,
             (inputs, outcomes, params),
         );
+        self.add_event(ready, &mut message).await?;
         message.cleanup_only = Some(pb::CleanupOnly {
             handle_json: handles.into_iter().map(String::into_bytes).collect(),
         });
@@ -2433,6 +2435,90 @@ impl Dispatcher {
         )
     }
 
+    /// The worker to run a DAG's trigger: as a wait step's, on a watcher slot, which it takes.
+    /// Gives the assignment and the code it was picked for; `None` when no worker has a free one,
+    /// or the root's current code isn't known yet (a parse on its way after a restart).
+    pub fn place_trigger(
+        &mut self,
+        active: &schedr_db::runs::ActiveDag,
+        instance: &str,
+        after: Option<String>,
+        now: Timestamp,
+    ) -> Option<(Outgoing, String)> {
+        let dag = &active.dag;
+        let schedr_model::Trigger::Event { task, .. } = &dag.trigger else {
+            return None;
+        };
+        let needs = Needs {
+            wait_step: true,
+            ..self.needs(dag, &task.settings.queue, "")
+        };
+        let root = &dag.location.root;
+        self.current_code.get(root)?;
+        let worker_id = self.workers.pick(needs, &BTreeSet::new())?.to_owned();
+        let code = self.workers.get(&worker_id)?.roots.get(root)?.clone();
+        let message = pb::AssignTrigger {
+            instance_id: instance.to_owned(),
+            dag_id: dag.id.to_string(),
+            task_json: serde_json::to_vec(&as_sent(task)).unwrap_or_default(),
+            dag_file: Some(pb::DagFileRef {
+                root: root.clone(),
+                path: dag.location.path.clone(),
+            }),
+            expected_code_hash: code.clone(),
+            after,
+            cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),
+            connections_json: match self.registry(root) {
+                Some(registry) if !task.connections.is_empty() => {
+                    serde_json::to_vec(&registry.only(&task.connections)).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            },
+        };
+        self.workers
+            .reserve_wait_step(&worker_id, instance, false, now);
+        let outgoing = Outgoing {
+            worker_id,
+            message: pb::MasterMessage {
+                message: Some(pb::master_message::Message::AssignTrigger(message)),
+            },
+        };
+        Some((outgoing, code))
+    }
+
+    /// A worker: what the trigger pass asks of the one running a trigger.
+    #[must_use]
+    pub fn worker(&self, id: &str) -> Option<&crate::workers::Worker> {
+        self.workers.get(id)
+    }
+
+    /// A trigger keeps its watcher slot on the worker that came back with it.
+    pub fn trigger_kept(&mut self, worker: &str, instance: &str, now: Timestamp) {
+        self.workers.reserve_wait_step(worker, instance, false, now);
+    }
+
+    /// A trigger gave up its watcher slot.
+    pub fn trigger_released(&mut self, instance: &str) {
+        self.workers.release(instance);
+    }
+
+    /// What a run started by an event gets of it: nothing for any other run.
+    async fn add_event(
+        &self,
+        ready: &ReadyInstance,
+        message: &mut pb::AssignTask,
+    ) -> Result<(), DispatchError> {
+        if ready.run_kind != schedr_model::RunKind::Event {
+            return Ok(());
+        }
+        if let (Some(run), Some(event)) =
+            (&mut message.run, self.db.run_event(&ready.run_id).await?)
+        {
+            run.event_json = serde_json::to_vec(&event).unwrap_or_default();
+        }
+        Ok(())
+    }
+
     fn assign_message(
         &self,
         ready: &ReadyInstance,
@@ -2455,6 +2541,7 @@ impl Dispatcher {
                 planned_for: Some(proto_time(ready.planned_for)),
                 since: Some(proto_time(ready.since)),
                 dag_id: ready.dag.id.to_string(),
+                event_json: Vec::new(),
             }),
             task_json: task
                 .and_then(|t| serde_json::to_vec(&as_sent(t)).ok())
@@ -2499,6 +2586,12 @@ impl Dispatcher {
 
 /// `task` as an assignment carries it: without what it maps over (B119: a literal list sent with
 /// each instance, its square in all); the instance's element comes in its inputs (`$expand`).
+/// A protocol timestamp as a time, if it is one.
+#[must_use]
+pub(crate) fn time_of(time: &prost_types::Timestamp) -> Option<Timestamp> {
+    Timestamp::new(time.seconds, time.nanos).ok()
+}
+
 fn as_sent(task: &schedr_model::Task) -> schedr_model::Task {
     schedr_model::Task {
         id: task.id.clone(),

@@ -20,7 +20,7 @@ use schedr_model::runner::{
 use schedr_model::task::{SensorMode, TaskKind};
 use schedr_proto::pb;
 use tokio::io::AsyncWriteExt as _;
-use tokio::sync::{Mutex, Notify, mpsc, watch};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
 
 use crate::attempt::{Ran, WorkerSetup};
 use crate::channel::{read_message, write_message};
@@ -46,6 +46,33 @@ const KILLED: i32 = 9;
 
 #[cfg(test)]
 mod tests;
+
+/// What a trigger found, on its way to the master.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundEvent {
+    /// Its key.
+    pub key: String,
+    /// Its data, encoded as an output is.
+    pub data: serde_json::Value,
+    /// When it happened, if it said.
+    pub at: Option<jiff::Timestamp>,
+}
+
+/// Takes what a trigger found; the answer comes once the master has it.
+#[derive(Clone)]
+pub struct EventSink(pub Arc<dyn Fn(FoundEvent) -> oneshot::Receiver<()> + Send + Sync>);
+
+impl std::fmt::Debug for EventSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EventSink")
+    }
+}
+
+impl PartialEq for EventSink {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 /// The hosts of a worker, by code set (cheap to clone; clones share them).
 #[derive(Debug, Clone, Default)]
@@ -882,10 +909,24 @@ impl<'a> AttemptLog<'a> {
 struct Answers {
     secrets: Option<Arc<AttemptSecrets>>,
     handles: Option<Arc<AttemptHandles>>,
+    events: Option<EventSink>,
     pending: tokio::task::JoinSet<()>,
 }
 
 impl Answers {
+    fn new(
+        secrets: Option<Arc<AttemptSecrets>>,
+        handles: Option<Arc<AttemptHandles>>,
+        events: Option<EventSink>,
+    ) -> Self {
+        Self {
+            secrets,
+            handles,
+            events,
+            pending: tokio::task::JoinSet::new(),
+        }
+    }
+
     /// Takes what a watcher sent; gives back what isn't for it, which is the caller's.
     async fn serve(
         &mut self,
@@ -896,6 +937,28 @@ impl Answers {
     ) -> Option<RunnerMessage> {
         if let RunnerMessage::WatcherLog { stream, text } = &message {
             log.write(*stream, text).await;
+            return None;
+        }
+        if let RunnerMessage::TriggerEvent { key, data, at } = message {
+            let Some(events) = &self.events else {
+                return None;
+            };
+            // What a run reads of it, and people see, as they would of an output.
+            let (key, data) = match self.secrets.as_ref().map(|s| &s.mask) {
+                Some(mask) if !mask.is_empty() => (mask.mask_text(&key), mask.mask_json(&data)),
+                _ => (key, data),
+            };
+            let stored = (events.0)(FoundEvent { key, data, at });
+            let host = Arc::clone(host);
+            self.pending.spawn(async move {
+                // Dropped: it stopped, and nothing waits for this any more.
+                if stored.await.is_ok() {
+                    let _ = host.outbox.send(AgentMessage::ToWatcher {
+                        watcher,
+                        message: Box::new(AgentMessage::EventStored),
+                    });
+                }
+            });
             return None;
         }
         if !matches!(
@@ -1348,6 +1411,7 @@ pub async fn run_watcher(
         mut request,
         secrets,
         handles,
+        events,
     } = task;
     let started = Instant::now();
     let deadline = limits
@@ -1396,11 +1460,7 @@ pub async fn run_watcher(
         let starts = again.then_some(started);
         let place = Place::started(&entered, &request, starts);
         let (message, reason, killed) = {
-            let answers = Answers {
-                secrets: secrets.clone(),
-                handles: handles.clone(),
-                pending: tokio::task::JoinSet::new(),
-            };
+            let answers = Answers::new(secrets.clone(), handles.clone(), events.clone());
             let talking = conversation(entered, poke, &place, answers, &mut log);
             let talking = Box::pin(talking);
             until_ended(talking, &mut stop, deadline, &place, limits).await
@@ -1550,6 +1610,10 @@ fn poke_of<'a>(
     started: Instant,
     (mask, grace): (&Mask, Duration),
 ) -> Option<Poke<'a>> {
+    // New code starts a trigger again from its bookmark, as the master tells it.
+    if request.trigger.is_some() {
+        return None;
+    }
     let TaskKind::Sensor {
         mode: SensorMode::Poke,
         max_wait_ms,

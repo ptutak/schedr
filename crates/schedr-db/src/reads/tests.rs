@@ -69,6 +69,7 @@ async fn add_run(db: &Database, version: &str, planned_for: &str, state: RunStat
     let dag_id = sync();
     db.insert_run(&NewRun {
         params: &crate::runs::NO_PARAMS,
+        event: None,
         dag_id: &dag_id,
         dag_version_id: version,
         kind: RunKind::Manual,
@@ -162,6 +163,7 @@ async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
     let other = db
         .insert_run(&NewRun {
             params: &crate::runs::NO_PARAMS,
+            event: None,
             dag_id: &DagId::new("other").unwrap(),
             dag_version_id: &other_version,
             kind: RunKind::Manual,
@@ -218,6 +220,7 @@ async fn runs_triggered_together_are_paged_by_id_none_skipped() {
     ] {
         let run = NewRun {
             params: &crate::runs::NO_PARAMS,
+            event: None,
             dag_id: &sync(),
             dag_version_id: &version,
             kind: RunKind::Scheduled,

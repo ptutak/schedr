@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, TextIO
 from schedr.runner.coroutines import loop_factory
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError
-from schedr.runner.task import execute_watcher, failure
+from schedr.runner.task import execute_trigger, execute_watcher, failure
 from schedr.runner.waiting import StepEndedError, refuse_a_process
 
 if TYPE_CHECKING:
@@ -373,9 +373,12 @@ class _Host:
         if moved_in:
             own.go = loop.create_future()
             going = lambda: own.go  # noqa: E731
-        step = loop.create_task(
-            execute_watcher(request, own, self.imported, own.moving, going), context=context
+        running = (
+            execute_trigger(request, own, self.imported)
+            if request.get("trigger") is not None
+            else execute_watcher(request, own, self.imported, own.moving, going)
         )
+        step = loop.create_task(running, context=context)
         self._watchers[watcher] = (own, step)
         # Not what is cancelled: a step cancelled before its first turn never runs a line of its
         # own, and its end has to be told all the same.

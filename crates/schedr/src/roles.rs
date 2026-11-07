@@ -151,6 +151,8 @@ pub fn master_settings(config: &Config) -> Settings {
             parse_retry_first: config.timings.parse_retry_first,
             parse_retry_max: config.timings.parse_retry_max,
             accept_retry: config.timings.accept_retry,
+            trigger_restart_backoff: config.timings.trigger_restart_backoff,
+            trigger_restart_backoff_max: config.timings.trigger_restart_backoff_max,
         },
         read_back: schedr_master::dispatch::ReadBack {
             window: config.timings.read_back_window,

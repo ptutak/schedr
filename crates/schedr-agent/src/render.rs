@@ -101,6 +101,20 @@ impl RenderContext {
             secrets: BTreeMap::new(),
         }
     }
+
+    /// With the event that started the run, for those of its tasks that read `dag_ctx.event`.
+    #[must_use]
+    pub fn with_event(mut self, event: &schedr_model::RunEvent, planned_for: &str) -> Self {
+        let at = event
+            .at
+            .map_or_else(|| planned_for.to_owned(), |at| at.to_string());
+        self.dag_ctx.insert(DagCtxField::EventKey, json!(event.key));
+        self.dag_ctx
+            .insert(DagCtxField::EventData, event.data.clone());
+        self.dag_ctx
+            .insert(DagCtxField::EventAt, json!({"$datetime": at}));
+        self
+    }
 }
 
 /// A reference as written in the DAG file, for messages (`extract.rows[0]`).
@@ -110,6 +124,16 @@ pub fn reference_label(reference: &Reference) -> String {
         Reference::DagCtx {
             field: DagCtxField::DagId,
         } => "dag_ctx.dag_id".to_owned(),
+        Reference::DagCtx {
+            field: field @ (DagCtxField::EventKey | DagCtxField::EventData | DagCtxField::EventAt),
+        } => {
+            let name = serde_json::to_value(field).unwrap_or_default();
+            let name = name
+                .as_str()
+                .unwrap_or_default()
+                .trim_start_matches("event_");
+            format!("dag_ctx.event.{name}")
+        }
         Reference::DagCtx { field } => {
             let name = serde_json::to_value(field).unwrap_or_default();
             let name = name.as_str().unwrap_or_default().trim_start_matches("run_");

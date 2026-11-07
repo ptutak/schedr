@@ -361,6 +361,8 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
             "UI__RELAY_RETRY_MAX" => &mut timings.ui_relay_retry_max,
             "STANDALONE__WORKER_STOP_AFTER_FAILURE" => &mut timings.worker_stop_after_failure,
             "TLS__ACCEPT_RETRY" => &mut timings.accept_retry,
+            "MASTER__TRIGGER_RESTART_BACKOFF" => &mut timings.trigger_restart_backoff,
+            "MASTER__TRIGGER_RESTART_BACKOFF_MAX" => &mut timings.trigger_restart_backoff_max,
             _ => {
                 return Err(ConfigError::BadHiddenTiming {
                     name: name.clone(),

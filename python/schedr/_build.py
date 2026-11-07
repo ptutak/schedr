@@ -406,6 +406,8 @@ class DagBuilder:
         self.tasks: dict[str, Task] = {}
         self.edges: list[Edge] = []
         self.functions: dict[str, Callable[..., Any]] = {}
+        # The type of its events' data, with an event trigger.
+        self.event_data: TypeDesc | None = None
         self.cleanups: dict[str, Callable[..., Any]] = {}
         # Resources by their setup task, and what each task's `uses=` names: both settled once
         # the DAG is complete, for a cleanup or a setup may come after its users.
@@ -1609,7 +1611,19 @@ _DAG_CTX_TYPES: dict[DagCtxField, TypeDesc] = {
     DagCtxField.PLANNED_FOR: ScalarType("datetime"),
     DagCtxField.SINCE: ScalarType("datetime"),
     DagCtxField.DAG_ID: ScalarType("str"),
+    DagCtxField.EVENT_KEY: ScalarType("str"),
+    DagCtxField.EVENT_AT: ScalarType("datetime"),
 }
+
+
+def _dag_ctx_type(builder: DagBuilder, field: DagCtxField, where: str) -> TypeDesc:
+    if field is not DagCtxField.EVENT_DATA:
+        return _DAG_CTX_TYPES[field]
+    if builder.event_data is None:
+        raise ValueError(
+            f"{where}: `dag_ctx.event` is known only where an event trigger starts the runs"
+        )
+    return builder.event_data
 
 
 def may_have_field(desc: TypeDesc, name: str) -> bool:
@@ -1691,7 +1705,7 @@ def reference_type(builder: DagBuilder | None, reference: Reference, where: str)
             "takes secrets and plain values (a run's values go to the task's own arguments)"
         )
     if isinstance(reference, DagCtxRef):
-        return _DAG_CTX_TYPES[reference.field]
+        return _dag_ctx_type(builder, reference.field, where)
     if isinstance(reference, ParamRef):
         return params_type(builder, reference.path, where)
     if reference.task not in builder.tasks:

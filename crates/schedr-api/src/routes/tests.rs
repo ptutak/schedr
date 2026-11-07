@@ -117,6 +117,7 @@ async fn api_of(
     let run_id = db
         .insert_run(&NewRun {
             params: &schedr_db::runs::NO_PARAMS,
+            event: None,
             dag_id: &dag_id,
             dag_version_id: &version,
             kind: RunKind::Manual,

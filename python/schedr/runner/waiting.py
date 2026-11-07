@@ -6,14 +6,16 @@ import asyncio
 import contextlib
 import sys
 from contextvars import ContextVar
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from schedr.outcomes import TimedOut
 from schedr.sensors import NOT_YET
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
     from types import FrameType
+
+    from schedr.event_triggers import Event
 
 
 class ProcessInWaitStepError(RuntimeError):
@@ -227,3 +229,45 @@ async def _waited(
         return await _poked(lambda: function(**arguments), every / 1000, deadline, moving)
     ended, value = await _within(function(**arguments), seconds)
     return value if ended else TimedOut()
+
+
+async def run_trigger(
+    function: Callable[..., object],
+    arguments: Mapping[str, object],
+    task: Mapping[str, object],
+    after: str | None,
+    tell: Callable[[Event[Any]], Awaitable[None]],
+) -> None:
+    """Calls a trigger's function, telling each event found; returns when a generator does.
+
+    Args:
+        function: The function.
+        arguments: Its arguments, without ``after``.
+        task: Its task: called every ``every_ms``, if it has that.
+        after: The last key acted on.
+        tell: Tells an event and waits until it is safe: the next one's order is kept.
+
+    Raises:
+        PokeTooSlowError: If a call of a poke runs out its time.
+    """
+    every = task.get("every_ms")
+    if not isinstance(every, int):
+        generator = cast("AsyncIterator[Event[Any]]", function(after, **arguments))
+        async for event in generator:
+            await tell(event)
+        return
+    seconds = every / 1000
+    loop = asyncio.get_running_loop()
+    while True:
+        called = loop.time()
+        call = cast("Coroutine[object, object, object]", function(after, **arguments))
+        ended, found = await _within(call, seconds)
+        if not ended:
+            raise PokeTooSlowError(
+                f"a call took longer than `every` ({seconds:g} s): each call is limited to it, as "
+                "calls never overlap. Make it faster, or poke less often"
+            )
+        for event in cast("Sequence[Event[Any]]", found):
+            await tell(event)
+            after = event.key
+        await asyncio.sleep(max(0.0, called + seconds - loop.time()))

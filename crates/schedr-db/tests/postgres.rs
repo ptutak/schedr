@@ -146,6 +146,7 @@ fn run<'a>(version: &'a str, kind: RunKind, state: RunState, planned_for: &str) 
     static SYNC: std::sync::OnceLock<DagId> = std::sync::OnceLock::new();
     NewRun {
         params: &schedr_db::runs::NO_PARAMS,
+        event: None,
         dag_id: SYNC.get_or_init(sync),
         dag_version_id: version,
         kind,
@@ -1824,4 +1825,58 @@ async fn a_cleanups_end_and_result_are_stored() {
         stored(db, run_id, instance_id).await,
         Some(CleanupResult::Failed)
     );
+}
+
+#[tokio::test]
+async fn a_trigger_s_events_and_bookmark_are_stored() {
+    let (db, version) = with_dag().await;
+    db.trigger_assigned(
+        "sync",
+        "01a00000-0000-7000-8000-000000000001",
+        "w1",
+        &version,
+        "h1",
+    )
+    .await
+    .unwrap();
+    let event = schedr_model::RunEvent {
+        key: "a".to_owned(),
+        data: serde_json::json!({"n": 1}),
+        at: Some(ts(NOW)),
+    };
+    let mut first = run(&version, RunKind::Event, RunState::Queued, NOW);
+    first.event = Some(&event);
+    let id = "01a00000-0000-7000-8000-000000000002";
+    assert_eq!(
+        db.store_event(id, &first, &event).await.unwrap().as_deref(),
+        Some(id)
+    );
+    assert_eq!(db.run_event(id).await.unwrap(), Some(event.clone()));
+    let again = "01a00000-0000-7000-8000-000000000003";
+    assert_eq!(db.store_event(again, &first, &event).await.unwrap(), None);
+    let record = db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(record.bookmark.as_deref(), Some("a"));
+    assert_eq!(record.last_planned_for, Some(ts(NOW)));
+    assert_eq!(record.dag_version_id.as_deref(), Some(version.as_str()));
+    assert!(
+        !db.trigger_ended("sync", "01a00000-0000-7000-8000-000000000009", None, None)
+            .await
+            .unwrap(),
+        "another run of it isn't this one"
+    );
+    assert!(
+        db.trigger_ended(
+            "sync",
+            "01a00000-0000-7000-8000-000000000001",
+            Some("failed"),
+            Some(ts(NOW))
+        )
+        .await
+        .unwrap()
+    );
+    let ended = db.triggers().await.unwrap().remove(0);
+    assert_eq!(ended.instance_id, None);
+    assert_eq!(ended.failures, 1);
+    assert_eq!(ended.not_before, Some(ts(NOW)));
+    assert_eq!(ended.bookmark.as_deref(), Some("a"));
 }

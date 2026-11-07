@@ -11,6 +11,7 @@ use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::task::{CleanupRun, Task};
+use schedr_model::value::DagCtxField;
 use schedr_model::{
     CommandLine, Dag, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl,
     SensorMode, TaskId, TaskKind, Template, TemplatePart, TypeDesc, Value,
@@ -82,6 +83,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     param_problems(dag, &mut problems);
     shell_problems(dag, &mut problems);
     secret_problems(dag, &mut problems);
+    event_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
     resource_problems(dag, &seen, &mut problems);
@@ -94,6 +96,64 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
         ));
     }
     problems
+}
+
+/// A trigger is a sensor with literal arguments, named unlike the DAG's tasks; only where one
+/// starts the runs is there an event to read.
+fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
+    let schedr_model::Trigger::Event {
+        task,
+        restart_if_idle_ms,
+        ..
+    } = &dag.trigger
+    else {
+        for task in &dag.tasks {
+            let reads = task.references().into_iter().any(|reference| {
+                matches!(
+                    reference,
+                    Reference::DagCtx {
+                        field: DagCtxField::EventKey
+                            | DagCtxField::EventData
+                            | DagCtxField::EventAt
+                    }
+                )
+            });
+            if reads {
+                problems.push(format!(
+                    "task `{}` uses dag_ctx.event, but no event trigger starts the DAG's runs",
+                    task.id
+                ));
+            }
+        }
+        return;
+    };
+    let id = &task.id;
+    if !matches!(task.kind, TaskKind::Sensor { .. }) {
+        problems.push(format!("trigger `{id}`: its function must be a sensor's"));
+    }
+    if !task.references().is_empty() {
+        problems.push(format!(
+            "trigger `{id}`: its arguments must be literals, as no run exists yet"
+        ));
+    }
+    if dag.tasks.iter().any(|other| &other.id == id) {
+        problems.push(format!("trigger `{id}` has the name of a task of the DAG"));
+    }
+    if *restart_if_idle_ms == Some(0) {
+        problems.push(format!(
+            "trigger `{id}`: restart_if_idle must be more than zero"
+        ));
+    }
+    for declared in &task.secrets {
+        if let Err(error) = declared.check() {
+            problems.push(format!("trigger `{id}`: secrets=: {error}"));
+        }
+    }
+    for name in &task.connections {
+        if let Err(error) = TaskId::new(name) {
+            problems.push(format!("trigger `{id}`: connections=: `{name}`: {error}"));
+        }
+    }
 }
 
 /// A shell command takes no placeholders (decision 99): a value in shell source can run as

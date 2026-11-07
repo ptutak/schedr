@@ -22,6 +22,7 @@ from schedr._model import (
     registry,
     validate_dag_id,
 )
+from schedr.event_triggers import EventTrigger
 from schedr.outcomes import RunIf
 from schedr.runner.sources import IMPORTING
 from schedr.triggers import Cron, Every, Once, Trigger
@@ -146,7 +147,8 @@ class Dag:
         self.dag_id = validate_dag_id(dag_id)
         if trigger is not None and not isinstance(trigger, Trigger):
             raise TypeError(
-                "trigger must be Cron(...), Every(...), Once(...) or None, "
+                "trigger must be Cron(...), Every(...), Once(...), a @trigger function called "
+                "with its arguments, or None, "
                 f"got {type(trigger).__name__}"
             )
         if isinstance(tags, str):
@@ -185,6 +187,8 @@ class Dag:
         """
         self._locate_in_module()
         self._builder = _build.DagBuilder(self.dag_id, self.defaults.options())
+        if isinstance(self.trigger, EventTrigger):
+            self._builder.event_data = self.trigger.function.data_type()
         if self._params is not None:
             self._builder.params_class = self.params
             self._builder.params_type = self._params.type_desc
@@ -239,6 +243,7 @@ class Dag:
             raise ValueError(f"DAG `{self.dag_id}` has a dependency cycle: {' -> '.join(cycle)}")
         builder.check_nones()
         self._check_since(builder)
+        self._check_event(builder)
         self.model = DagModel(
             id=self.dag_id,
             location=self._location,
@@ -258,8 +263,33 @@ class Dag:
             self.model, builder.functions, self._filename, self.params, builder.cleanups
         )
 
+    def _check_event(self, builder: _build.DagBuilder) -> None:
+        """Checks what an event trigger asks of the DAG.
+
+        A task reads ``dag_ctx.event`` only where events start the runs; a trigger's function
+        has its place among them, so its name can't be a task's.
+
+        Raises:
+            ValueError: For a task using it elsewhere, or named as the trigger's function.
+        """
+        if isinstance(self.trigger, EventTrigger):
+            name = self.trigger.function.task_id
+            if name in builder.tasks:
+                raise ValueError(
+                    f"DAG `{self.dag_id}`: task `{name}` has the name of its trigger's function"
+                )
+            builder.functions[name] = self.trigger.function.fn
+            return
+        fields = {DagCtxField.EVENT_KEY, DagCtxField.EVENT_DATA, DagCtxField.EVENT_AT}
+        for task in builder.tasks.values():
+            if {DagCtxRef(field) for field in fields} & set(task.references()):
+                raise ValueError(
+                    f"DAG `{self.dag_id}`: task `{task.id}` uses dag_ctx.event, but no event "
+                    "trigger starts its runs"
+                )
+
     def _check_since(self, builder: _build.DagBuilder) -> None:
-        if self.initial_since is not None or isinstance(self.trigger, Cron | Every):
+        if self.initial_since is not None or isinstance(self.trigger, Cron | Every | EventTrigger):
             return
         since = DagCtxRef(DagCtxField.SINCE)
         for task in builder.tasks.values():

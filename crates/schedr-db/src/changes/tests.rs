@@ -67,6 +67,7 @@ async fn with_dag() -> (Database, String) {
 async fn add_run(db: &Database, version: &str, planned_for: &str) -> String {
     db.insert_run(&NewRun {
         params: &crate::runs::NO_PARAMS,
+        event: None,
         dag_id: &sync(),
         dag_version_id: version,
         kind: RunKind::Manual,

@@ -47,7 +47,7 @@ class Trigger:
         if not cls.__module__.startswith("schedr."):
             raise TypeError(
                 f"custom trigger classes are not supported (`{cls.__name__}`): use Cron, "
-                "Every or Once (event triggers come with milestone M4)"
+                "Every, Once, or a function decorated with @trigger"
             )
         super().__init_subclass__(**kwargs)
 

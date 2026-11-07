@@ -68,6 +68,33 @@ impl Executor for Fake {
             spawned(NO_PROCESS, false);
             std::future::pending::<()>().await;
         }
+        // A trigger says what it found, from what it was told, and ends as its name says.
+        if let Some((start, sink)) = &spec.trigger {
+            let after = start.after.clone().unwrap_or_default();
+            drop((sink.0)(crate::watchers::FoundEvent {
+                key: format!("after-{after}"),
+                data: json!(1),
+                at: Some(jiff::Timestamp::UNIX_EPOCH),
+            }));
+            let (status, kind) = if spec.task.id.as_str() == "breaks" {
+                (pb::AttemptStatus::Failed, "trigger_failed")
+            } else {
+                let reason = stop.next_reason().await;
+                self.stops.lock().unwrap().push(reason);
+                (pb::AttemptStatus::Cancelled, "")
+            };
+            return pb::Finished {
+                attempt_id: spec.attempt_id,
+                status: status.into(),
+                error_kind: kind.to_owned(),
+                error_summary_json: if kind.is_empty() {
+                    Vec::new()
+                } else {
+                    br#"{"exception": "ValueError", "message": "no", "traceback": ""}"#.to_vec()
+                },
+                ..pb::Finished::default()
+            };
+        }
         // A task named `forked` stands for one forked from a fork server.
         spawned(NO_PROCESS, spec.task.id.as_str() == "forked");
         let status = if spec.task.id.as_str() == "wait" {
@@ -540,6 +567,7 @@ fn assign(
         map_index: -1,
         try_number: 1,
         run: Some(pb::RunInfo {
+            event_json: Vec::new(),
             params_json: Vec::new(),
             run_id: "r1".to_owned(),
             kind: "manual".to_owned(),
@@ -774,6 +802,8 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
         .filter_map(|m| match m.message.as_ref()? {
             worker_message::Message::Register(_) => Some("register"),
             worker_message::Message::Heartbeat(_) | worker_message::Message::Warnings(_) => None,
+            worker_message::Message::TriggerEvent(_) => Some("trigger event"),
+            worker_message::Message::TriggerStopped(_) => Some("trigger stopped"),
             worker_message::Message::CodeVersionChanged(_) => Some("code"),
             worker_message::Message::Started(_) => Some("started"),
             worker_message::Message::TaskEnded(_) => Some("task ended"),
@@ -2031,6 +2061,7 @@ fn command_needing_secret(
         map_index: -1,
         try_number: 1,
         run: Some(pb::RunInfo {
+            event_json: Vec::new(),
             params_json: Vec::new(),
             run_id: "r1".to_owned(),
             kind: "manual".to_owned(),
@@ -2270,6 +2301,7 @@ async fn command_with_connection(
         map_index: -1,
         try_number: 1,
         run: Some(pb::RunInfo {
+            event_json: Vec::new(),
             params_json: Vec::new(),
             run_id: "r1".to_owned(),
             kind: "manual".to_owned(),
@@ -2568,6 +2600,7 @@ fn attempt_with_timed_cleanup(
         map_index: -1,
         try_number: 1,
         run: Some(pb::RunInfo {
+            event_json: Vec::new(),
             params_json: Vec::new(),
             run_id: "r1".to_owned(),
             kind: "manual".to_owned(),
@@ -3595,5 +3628,134 @@ fn the_reconnect_backoff_stays_under_half_the_masters_lease() {
     // Jitter only shortens a wait.
     for seed in [0, u32::MAX / 2, u32::MAX] {
         assert!(jittered(Duration::from_secs(2), seed) <= Duration::from_secs(2));
+    }
+}
+
+fn assign_trigger(instance: &str, task_id: &str) -> pb::MasterMessage {
+    let mut task = task_json(&json!({"kind": "sensor", "mode": "loop", "arguments": {}}));
+    task["id"] = json!(task_id);
+    to_worker(master_message::Message::AssignTrigger(pb::AssignTrigger {
+        instance_id: instance.to_owned(),
+        dag_id: "sync".to_owned(),
+        task_json: serde_json::to_vec(&task).unwrap(),
+        dag_file: Some(pb::DagFileRef {
+            root: "etl".to_owned(),
+            path: "sync.py".to_owned(),
+        }),
+        after: Some("b".to_owned()),
+        cancel_grace_ms: 1000,
+        ..pb::AssignTrigger::default()
+    }))
+}
+
+fn registered_fast() -> pb::MasterMessage {
+    to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
+        max_message_size: 0,
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![],
+    }))
+}
+
+fn trigger_events(seen: &[pb::WorkerMessage]) -> Vec<&pb::TriggerEvent> {
+    seen.iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::TriggerEvent(event)) => Some(event),
+            _ => None,
+        })
+        .collect()
+}
+
+fn trigger_stops(seen: &[pb::WorkerMessage]) -> Vec<&pb::TriggerStopped> {
+    seen.iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::TriggerStopped(stopped)) => Some(stopped),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_trigger_tells_what_it_found_and_a_stop_ends_it_without_an_error() {
+    let script = vec![
+        registered_fast(),
+        assign_trigger("t1", "found"),
+        assign_trigger("t1", "found"),
+        to_worker(master_message::Message::TriggerEventAck(
+            pb::TriggerEventAck {
+                instance_id: "t1".to_owned(),
+                seq: 99,
+            },
+        )),
+        to_worker(master_message::Message::CancelTrigger(pb::CancelTrigger {
+            instance_id: "t1".to_owned(),
+        })),
+    ];
+    let done = |m: &[pb::WorkerMessage]| !trigger_stops(m).is_empty();
+    let (seen, _) = against_script(2, Start::With(vec![]), script, done).await;
+    let events = trigger_events(&seen);
+    assert_eq!(events.len(), 1, "once, however many times it was given");
+    assert_eq!(events[0].dag_id, "sync");
+    assert_eq!(events[0].instance_id, "t1");
+    assert_eq!(events[0].seq, 1);
+    assert_eq!(events[0].key, "after-b");
+    assert_eq!(events[0].data_json, b"1");
+    assert_eq!(events[0].at.as_ref().map(|at| at.seconds), Some(0));
+    let stopped = trigger_stops(&seen);
+    assert_eq!(stopped[0].instance_id, "t1");
+    assert_eq!(stopped[0].error_kind, "");
+}
+
+#[tokio::test]
+async fn a_failed_trigger_says_why_and_is_gone_from_the_heartbeat() {
+    let script = vec![registered_fast(), assign_trigger("t1", "breaks")];
+    let done = |m: &[pb::WorkerMessage]| !trigger_stops(m).is_empty() && heartbeats(m) >= 3;
+    let (seen, _) = against_script(2, Start::With(vec![]), script, done).await;
+    let stopped = trigger_stops(&seen);
+    assert_eq!(stopped[0].error_kind, "trigger_failed");
+    assert_eq!(stopped[0].message, "ValueError: no");
+    let last_beat = seen
+        .iter()
+        .rev()
+        .find_map(|m| match &m.message {
+            Some(worker_message::Message::Heartbeat(beat)) => Some(beat),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last_beat.running_triggers, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_trigger_that_cant_start_here_is_told_as_stopped() {
+    let mut bad_json = assign_trigger("t1", "found");
+    let Some(master_message::Message::AssignTrigger(assign)) = &mut bad_json.message else {
+        unreachable!()
+    };
+    assign.task_json = b"{".to_vec();
+    let mut gone_file = assign_trigger("t2", "found");
+    let Some(master_message::Message::AssignTrigger(assign)) = &mut gone_file.message else {
+        unreachable!()
+    };
+    assign.dag_file = Some(pb::DagFileRef {
+        root: "etl".to_owned(),
+        path: "gone.py".to_owned(),
+    });
+    let mut other_code = assign_trigger("t3", "found");
+    let Some(master_message::Message::AssignTrigger(assign)) = &mut other_code.message else {
+        unreachable!()
+    };
+    assign.expected_code_hash = "sha256:other".to_owned();
+    let script = vec![registered_fast(), bad_json, gone_file, other_code];
+    let done = |m: &[pb::WorkerMessage]| trigger_stops(m).len() >= 3;
+    let (seen, _) = against_script(2, Start::With(vec![]), script, done).await;
+    let stopped = trigger_stops(&seen);
+    for (one, instance) in stopped.iter().zip(["t1", "t2", "t3"]) {
+        assert_eq!(one.instance_id, instance);
+        assert_eq!(one.error_kind, "not_placed", "{}", one.message);
+        assert_ne!(one.message, "");
     }
 }

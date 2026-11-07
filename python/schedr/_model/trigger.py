@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from schedr._model.tasks import Task
 from schedr._model.timestamps import format_optional_timestamp, format_timestamp
 
 
@@ -116,5 +117,39 @@ class OnceTrigger:
         return {"kind": "once", "at": format_timestamp(self.at)}
 
 
-type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger
+@dataclass(frozen=True, slots=True)
+class EventTrigger:
+    """A ``@trigger`` function: its events start runs.
+
+    Attributes:
+        task: Its function, as a task of kind ``sensor`` that isn't in the graph.
+        restart_if_idle_ms: Started again from its bookmark when no event came for this long.
+        start: It runs from this moment on (aware).
+        end: It stops at this moment (aware).
+    """
+
+    task: Task
+    restart_if_idle_ms: int | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        """The trigger as DAG JSON.
+
+        Returns:
+            ``{"kind": "event", "task": {...}, "start": ..., "end": ...}``, and
+            ``restart_if_idle_ms`` when it is set.
+        """
+        result: dict[str, Any] = {
+            "kind": "event",
+            "task": self.task.to_json(),
+            "start": format_optional_timestamp(self.start),
+            "end": format_optional_timestamp(self.end),
+        }
+        if self.restart_if_idle_ms is not None:
+            result["restart_if_idle_ms"] = self.restart_if_idle_ms
+        return result
+
+
+type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger | EventTrigger
 """Any trigger."""

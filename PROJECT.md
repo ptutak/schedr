@@ -6828,9 +6828,38 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   task on the default (each cleanup task outside the chart, whose grace is 600 s, warned); a default of
   25 s (slow cleanups would time out, on Kubernetes too); a default grace of 600 s (a plain stop could
   wait 10 minutes).
+- **A trigger is a hidden sensor without an attempt** (decision 348, Claude's for the user's "same as sensors",
+  2026-11-07; built in M4.11b): the DAG JSON carries the trigger's function as a task of kind `sensor`, in the
+  trigger and not among the DAG's tasks, so it isn't in the graph, gets no attempt and no row in a run. A worker
+  runs it on a watcher slot in the watcher host of its code, with the secrets, connections, logs, masking, blame
+  and restarts a sensor has; `secrets=` and `connections=` are declared as on `@sensor` (the user's). Its events
+  go up one at a time, acknowledged only once stored, so order and back-pressure hold; the agent sends what
+  wasn't acknowledged again on a new stream, and a repeat is only a bookmark move. The master starts a trigger
+  from its bookmark while the DAG is unpaused, not held and within its `start`/`end`, and stops it when that ends,
+  on a new version, when the worker's code for the root changes and when the worker drains or is drained; a worker
+  whose lease ran out gives it up, and when it returns with it, it's told to stop. A running instance that the
+  master doesn't count is told to stop, from heartbeats and registrations. What an old instance sends is
+  acknowledged and not stored: the one that took over resumes from the bookmark. A failed trigger starts again
+  after `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF` (5 s), doubling up to `..._MAX` (5 min). A manual run of
+  such a DAG brings an event (until `--event` comes, it's refused). The master takes an event only from the
+  worker holding that instance and only of the DAG's current version; a key has 1 to 1024 bytes and no NUL, its
+  data at most the trigger's `max_output_size` (1 MiB by default), secrets masked by the agent as in an output:
+  what breaks that fails the trigger with `event_refused`. Blocking triggers are stopped as sensors are
+  (`[watchers] switch_off_after`, the user's). Not chosen: a table of attempts for triggers (nothing about a
+  trigger's life is a try of anything), and a process of their own (a trigger is a wait step: decision 334).
+- **`first_of`: acting on the first of several, in the graph** (decision 347, the user's, 2026-11-07; built
+  in M4.11c): `first_of(a.on(str), b.on(str)) >> fast_report` is a node the master ends, as it does
+  `empty`: no Python, no slot, no polling. It ends as soon as one edge is taken, with that value and the
+  winner's name; skipped when every edge ends up not taken; `upstream_failed` when an edge failed and none
+  can still succeed. Nothing is cancelled: the losers run on as any task, and one failing fails the run
+  when the run ends, which isn't a late success (the run hadn't ended), while the node and what follows
+  it stay as they ended. Not chosen: `.sensed_on(...)` on each task (the user's first idea: on one task it
+  is `.on(...)`, and the lines would have to merge into one hidden node); `RunIf.ANY_SUCCEEDED` (decision
+  345); asking the REST API from a wait step (a slot, polling, a token and an address for what the master
+  knows); absorbing a loser's failure (a run never hides a failed task).
 - **A task starts after its upstream tasks end** (decision 345, the user's, 2026-11-07): no `run_if`
-  starts one on the first of several. To act on the first, a wait step watches the others and ends
-  when one does; `examples/docs/sensors.py` shows it. Not chosen: `RunIf.ANY_SUCCEEDED` (too many
+  starts one on the first of several. To act on the first, `first_of` (decision 347) is a node of its own,
+  after which a task starts as usual. Not chosen: `RunIf.ANY_SUCCEEDED` (too many
   caveats for a simple API: inputs that depend on timing, `None` for "not finished" as well as "not
   taken", order edges that no longer order, no mapping, and an arrow in the graph that no longer means
   "after").

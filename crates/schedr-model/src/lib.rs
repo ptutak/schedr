@@ -34,7 +34,7 @@ pub use task::{
     CommandLine, DEFAULT_OUTCOME, Expand, Mapped, OutcomeDecl, ResourceRole, RunIf, SensorMode,
     Task, TaskKind, TaskSettings, default_outcomes,
 };
-pub use trigger::Trigger;
+pub use trigger::{RunEvent, Trigger};
 pub use types::{Field, TypeDesc};
 pub use value::{
     DagCtxField, Encoding, PathElem, Reference, Template, TemplatePart, TemplateRef, Value,

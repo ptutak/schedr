@@ -57,6 +57,8 @@ migration connection timing, which has no query timeout to tie it to.
 | Variable | Default | What it does and what depends on it |
 |---|---|---|
 | `SCHEDR_HIDDEN__MASTER__TICK_INTERVAL` | 1 s | Runs the master's scheduler, commands and dispatch loop; rounds and their work depend on it. |
+| `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF` | 5 s | First wait before restarting a failed event trigger; it doubles up to the maximum. |
+| `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF_MAX` | 5 min | Longest wait before restarting a failed event trigger. |
 | `SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL` | 10 s | How often workers send heartbeats, set by the master and sent to workers; worker liveness depends on messages arriving. |
 | `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` | 60 s | A worker silent this long is lost; its attempts are ended. An unstarted assignment is taken back after this time; a worker also ends a stream silent this long. |
 | `SCHEDR_HIDDEN__MASTER__SCRIPT_ROOT_GRACE` | 5 min | Time without a report from any alive worker before a script root is omitted from the uses sent to workers, counted from master startup too. |

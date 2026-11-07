@@ -138,6 +138,17 @@
               "$ref": "#/$defs/Task",
               "description": "The task as stored in DAG JSON (its arguments and settings)."
             },
+            "trigger": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TriggerStart"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set for a trigger: `task` is its function, which yields events until it is stopped."
+            },
             "type": {
               "const": "task",
               "type": "string"
@@ -344,6 +355,20 @@
             "type",
             "watcher",
             "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The master has what a trigger found: on to the next.",
+          "properties": {
+            "type": {
+              "const": "event_stored",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },
@@ -952,6 +977,21 @@
           "const": "dag_id",
           "description": "`dag_ctx.dag_id`.",
           "type": "string"
+        },
+        {
+          "const": "event_key",
+          "description": "`dag_ctx.event.key`.",
+          "type": "string"
+        },
+        {
+          "const": "event_data",
+          "description": "`dag_ctx.event.data`.",
+          "type": "string"
+        },
+        {
+          "const": "event_at",
+          "description": "`dag_ctx.event.at`.",
+          "type": "string"
         }
       ]
     },
@@ -1537,6 +1577,33 @@
         }
       ]
     },
+    "RunEvent": {
+      "additionalProperties": false,
+      "description": "What a `@trigger` found, as stored and given to the run it starts.",
+      "properties": {
+        "at": {
+          "default": null,
+          "description": "When it happened, if it said; the run is planned for this moment.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "description": "Its data, as stored JSON."
+        },
+        "key": {
+          "description": "Its key, unique in its DAG.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "data"
+      ],
+      "type": "object"
+    },
     "RunIf": {
       "description": "A task's trigger rule: what its upstream edges must have done for it to run (see\nPROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.",
       "oneOf": [
@@ -1559,6 +1626,17 @@
         "dag_id": {
           "description": "The DAG's ID.",
           "type": "string"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The event that started it, for a run of an event-triggered DAG."
         },
         "kind": {
           "$ref": "#/$defs/RunKind",
@@ -1916,6 +1994,37 @@
           "required": [
             "type",
             "stack"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What a trigger found (inside a [`Self::WatcherMessage`]); it goes on when told\n[`AgentMessage::EventStored`].",
+          "properties": {
+            "at": {
+              "description": "When it happened, if it said.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "description": "Its data, encoded as an output is."
+            },
+            "key": {
+              "description": "Its key, unique in its DAG.",
+              "type": "string"
+            },
+            "type": {
+              "const": "trigger_event",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "data"
           ],
           "type": "object"
         },
@@ -2823,6 +2932,17 @@
         "task": {
           "$ref": "#/$defs/Task",
           "description": "The task as stored in DAG JSON (its arguments and settings)."
+        },
+        "trigger": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TriggerStart"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set for a trigger: `task` is its function, which yields events until it is stopped."
         }
       },
       "required": [
@@ -3229,8 +3349,68 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `@trigger` function, which runs in a worker's watcher host and yields events: each new\none starts a run.",
+          "properties": {
+            "end": {
+              "default": null,
+              "description": "It stops at this moment.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "restart_if_idle_ms": {
+              "description": "Started again from its bookmark when no event came for this long; `None`: never.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "start": {
+              "default": null,
+              "description": "It runs from this moment on.",
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "task": {
+              "$ref": "#/$defs/Task",
+              "description": "Its function as a task of kind `sensor`: its literal arguments, whether it is called\nevery so often, its queue, its secrets and connections. It isn't in the graph."
+            }
+          },
+          "required": [
+            "kind",
+            "task"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "TriggerStart": {
+      "additionalProperties": false,
+      "description": "How a trigger starts.",
+      "properties": {
+        "after": {
+          "description": "The last key acted on: what its function gets as `after`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "TypeDesc": {
       "description": "The type of a value that can be stored as a task output.",

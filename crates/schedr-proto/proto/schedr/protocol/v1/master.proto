@@ -43,7 +43,30 @@ message WorkerMessage {
     ConnectionJobDone connection_job_done = 10;
     TaskEnded task_ended = 11;
     HandlesAdded handles_added = 12;
+    TriggerEvent trigger_event = 13;
+    TriggerStopped trigger_stopped = 14;
   }
+}
+
+// What a trigger found: the master stores it, starts a run for a new key, and acknowledges.
+// Sent again until acknowledged: repeated keys are dropped.
+message TriggerEvent {
+  string dag_id = 6;
+  string instance_id = 1;
+  // Counts this instance's events, for the acknowledgement.
+  uint64 seq = 2;
+  string key = 3;
+  bytes data_json = 4;
+  optional google.protobuf.Timestamp at = 5;
+}
+
+// A trigger ended on this worker: it raised, its generator returned, or it was stopped.
+message TriggerStopped {
+  string dag_id = 4;
+  string instance_id = 1;
+  // "" when it was asked to stop.
+  string error_kind = 2;
+  string message = 3;
 }
 
 enum RootKind {
@@ -95,9 +118,13 @@ message Register {
   string config_json = 12;
   // Its slots for wait steps, apart from `slots` (`[watchers] slots`).
   uint32 watcher_slots = 13;
+  // Its triggers still running, from before this session, by instance.
+  repeated string running_triggers = 14;
 }
 
 message Heartbeat {
+  // Its triggers running, by instance: one the master doesn't know of any more is stopped.
+  repeated string running_triggers = 5;
   uint32 free_slots = 1;
   repeated string running_attempt_ids = 2;
   uint32 free_watcher_slots = 3;
@@ -285,7 +312,34 @@ message MasterMessage {
     ConnectionJob connection_job = 6;
     HeartbeatAck heartbeat_ack = 7;
     ScriptUses script_uses = 8;
+    AssignTrigger assign_trigger = 9;
+    CancelTrigger cancel_trigger = 10;
+    TriggerEventAck trigger_event_ack = 11;
   }
+}
+
+// Run a DAG's trigger: `instance_id` names this run of it, and everything it sends.
+message AssignTrigger {
+  string instance_id = 1;
+  string dag_id = 2;
+  // Its function, as a schedr-model task.
+  bytes task_json = 3;
+  DagFileRef dag_file = 4;
+  string expected_code_hash = 5;
+  // The last key acted on, given back as `after`.
+  optional string after = 6;
+  uint64 cancel_grace_ms = 7;
+  // The connections of its root, as on `AssignTask`.
+  bytes connections_json = 8;
+}
+
+message CancelTrigger {
+  string instance_id = 1;
+}
+
+message TriggerEventAck {
+  string instance_id = 1;
+  uint64 seq = 2;
 }
 
 // Sent as a heartbeat arrives, while this master leads: how a worker tells a silent network from
@@ -352,6 +406,8 @@ message RunInfo {
   string dag_id = 5;
   // The run's parameters as stored JSON (decision 138); empty when the DAG takes none.
   bytes params_json = 6;
+  // The event that started it, as schedr-model `RunEvent` JSON; empty for other runs.
+  bytes event_json = 7;
 }
 
 message DagFileRef {

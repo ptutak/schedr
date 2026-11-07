@@ -70,6 +70,8 @@ pub struct NewRun<'a> {
     pub triggered_by: &'a str,
     /// Its parameters, as stored JSON (decision 138); `{}` for a DAG that takes none.
     pub params: &'a serde_json::Value,
+    /// The event that started it.
+    pub event: Option<&'a schedr_model::RunEvent>,
 }
 
 /// The parameters of a run of a DAG that takes none.
@@ -232,9 +234,9 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const INSERT: &str = "INSERT INTO runs \
             (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
-             triggered_by, started_at, params) \
+             triggered_by, started_at, params, event) \
             VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}, \
-             $11{json}) ON CONFLICT DO NOTHING";
+             $11{json}, $12{json}) ON CONFLICT DO NOTHING";
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
         let inserted = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, INSERT))
@@ -249,6 +251,7 @@ impl Database {
                 .bind(run.triggered_by)
                 .bind(started_at)
                 .bind(run.params.to_string())
+                .bind(run.event.map(crate::query::to_json))
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()

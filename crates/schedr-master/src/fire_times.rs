@@ -79,7 +79,8 @@ impl FireTimes {
     /// zero interval.
     pub fn new(trigger: &Trigger) -> Result<Self, FireTimesError> {
         match trigger {
-            Trigger::None => Ok(Self::None),
+            // Events start its runs: it has no fire times.
+            Trigger::None | Trigger::Event { .. } => Ok(Self::None),
             Trigger::Once { at } => Ok(Self::Once(*at)),
             Trigger::Every {
                 interval_ms, start, ..

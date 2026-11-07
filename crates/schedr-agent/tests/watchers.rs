@@ -430,6 +430,7 @@ impl Worker {
     fn request(&self, task: &str, sys_path: &[&Path]) -> TaskRequest {
         let planned_for = "2026-10-21T08:00:00Z".parse().unwrap();
         TaskRequest {
+            trigger: None,
             dag_file: DagFile {
                 root: "etl".to_owned(),
                 root_dir: self.root.display().to_string(),
@@ -446,6 +447,7 @@ impl Worker {
             inputs: BTreeMap::new(),
             outcomes: BTreeMap::new(),
             run: RunInfo {
+                event: None,
                 params: json!({}),
                 dag_id: "sync".to_owned(),
                 run_id: "r1".to_owned(),
@@ -1027,6 +1029,7 @@ async fn a_cancel_during_a_slow_secret_read_leaves_the_others_alone() {
     .await
     .unwrap();
     let task = schedr_agent::launch::PythonTask {
+        events: None,
         request,
         secrets: Some(std::sync::Arc::new(secrets)),
         handles: None,

@@ -179,8 +179,13 @@ impl Registry {
     /// each: `task `load`: connections=: <why>`.
     #[must_use]
     pub fn problems(&self, dag: &crate::Dag) -> Vec<String> {
+        let trigger = match &dag.trigger {
+            crate::Trigger::Event { task, .. } => Some(task.as_ref()),
+            _ => None,
+        };
         dag.tasks
             .iter()
+            .chain(trigger)
             .flat_map(|task| {
                 task.connections.iter().filter_map(move |name| {
                     self.get(name)

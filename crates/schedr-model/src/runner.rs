@@ -304,6 +304,18 @@ pub enum RunnerMessage {
         /// Where the loop's thread is.
         stack: String,
     },
+    /// What a trigger found (inside a [`Self::WatcherMessage`]); it goes on when told
+    /// [`AgentMessage::EventStored`].
+    TriggerEvent {
+        /// Its key, unique in its DAG.
+        key: String,
+        /// Its data, encoded as an output is.
+        #[schemars(with = "serde_json::Value")]
+        data: serde_json::Value,
+        /// When it happened, if it said.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<jiff::Timestamp>,
+    },
     /// A watcher host is there, its event loop held or not, and how it is doing.
     HostAlive {
         /// Its process's threads.
@@ -452,6 +464,9 @@ pub struct RunInfo {
     #[serde(default = "no_params")]
     #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub params: serde_json::Value,
+    /// The event that started it, for a run of an event-triggered DAG.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<crate::trigger::RunEvent>,
 }
 
 /// A run of a DAG without parameters.
@@ -491,6 +506,17 @@ pub struct TaskRequest {
     /// these handles, in registration order, instead of the task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleanup: Option<Vec<CleanupHandle>>,
+    /// Set for a trigger: `task` is its function, which yields events until it is stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TriggerStart>,
+}
+
+/// How a trigger starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TriggerStart {
+    /// The last key acted on: what its function gets as `after`.
+    pub after: Option<String>,
 }
 
 /// A handle registered by an attempt: what its cleanup needs that only existed in it.
@@ -608,6 +634,8 @@ pub enum AgentMessage {
         /// What a task's runner would get.
         message: Box<AgentMessage>,
     },
+    /// The master has what a trigger found: on to the next.
+    EventStored,
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
     /// The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.

@@ -142,6 +142,7 @@ fn the_message_size_cap_is_64_mib() {
 
 fn request() -> TaskRequest {
     TaskRequest {
+        trigger: None,
         dag_file: DagFile {
             root: "etl".into(),
             root_dir: "/git/dags/etl".into(),
@@ -159,6 +160,7 @@ fn request() -> TaskRequest {
         inputs: [("extract".to_owned(), json!([1, 2]))].into(),
         outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
+            event: None,
             params: serde_json::json!({}),
             dag_id: "sync".into(),
             run_id: "0192c4e1".into(),

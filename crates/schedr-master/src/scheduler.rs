@@ -49,6 +49,9 @@ pub enum SchedulerError {
         /// Why.
         held: Held,
     },
+    /// An event trigger starts its runs, and the run asked for brings no event.
+    #[error("DAG `{0}`: its runs start from events, so this one needs an event")]
+    NeedsEvent(DagId),
     /// A manual run's time isn't allowed.
     #[error(transparent)]
     ManualRun(#[from] ManualRunError),
@@ -304,6 +307,9 @@ impl Scheduler {
                 held,
             });
         }
+        if active.dag.trigger.is_event() {
+            return Err(SchedulerError::NeedsEvent(dag_id.clone()));
+        }
         let fire_times =
             FireTimes::new(&active.dag.trigger).map_err(|error| SchedulerError::FireTimes {
                 dag_id: dag_id.clone(),
@@ -329,6 +335,37 @@ impl Scheduler {
         let queued = self.db.queued_runs(dag_id).await?;
         self.start_queued(&queued, &plan, running, now).await?;
         Ok(created(&active, run_id, RunKind::Manual, times))
+    }
+
+    /// Stores what a DAG's trigger found: a key not seen before queues a run, as a manual one
+    /// (`since` is the previous event's `planned_for`), a repeat moves the bookmark only. Gives
+    /// the run's ID, `None` for a repeat.
+    ///
+    /// # Errors
+    ///
+    /// [`SchedulerError::Params`] for parameters refused, and what storing it fails with.
+    pub async fn event_run(
+        &self,
+        active: &ActiveDag,
+        event: &schedr_model::RunEvent,
+        since: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<Option<String>, SchedulerError> {
+        let planned_for = event.at.unwrap_or(now);
+        let times = RunTimes {
+            planned_for,
+            since: since.unwrap_or(planned_for),
+        };
+        let params = run_params(active, None)?;
+        let mut new = new_run(active, RunKind::Event, times, now, EVENT_USER, &params);
+        new.state = RunState::Queued;
+        new.event = Some(event);
+        let run_id = uuid::Uuid::now_v7().to_string();
+        let stored = self.db.store_event(&run_id, &new, event).await?;
+        if stored.is_some() {
+            self.wakes.wake(&active.dag.id, WakeReason::RunQueued);
+        }
+        Ok(stored)
     }
 
     /// Starts the DAG's `queued` runs that fit next to its `running` ones.
@@ -370,6 +407,9 @@ fn run_params(
     })
 }
 
+/// Who an event's run was started by.
+const EVENT_USER: &str = "trigger";
+
 fn new_run<'a>(
     active: &'a ActiveDag,
     kind: RunKind,
@@ -388,5 +428,6 @@ fn new_run<'a>(
         triggered_at: now,
         triggered_by: by,
         params,
+        event: None,
     }
 }

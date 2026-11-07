@@ -21,6 +21,7 @@ mod scope;
 pub mod secrets;
 pub mod status;
 pub mod strikes;
+pub mod triggers;
 pub mod workers;
 
 pub use backend::{Backend, UnsupportedUrl, redact_password};

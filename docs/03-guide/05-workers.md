@@ -181,6 +181,69 @@ Step output, a thread's it started included, goes to its attempt log; output fro
 from a thread outliving its step, goes to the host's own log, masked using the secrets of every
 wait step the host has held.
 
+### Event triggers
+
+An event trigger starts runs from events instead of fire times. Define an async generator
+that takes `after` first and yields `Event` values, then pass its call to `Dag`:
+
+```python
+from collections.abc import AsyncIterator
+from schedr import Dag, Event, dag_ctx, task, trigger
+
+@trigger
+async def new_files(after: str | None, prefix: str) -> AsyncIterator[Event[str]]:
+    async for obj in watch_bucket(prefix, start_after=after):
+        yield Event(key=obj.name, data=obj.name, at=obj.modified)
+
+@task
+def load(name: str) -> None:
+    print(name)
+
+with Dag("ingest", trigger=new_files(prefix="s3://in/")):
+    load(dag_ctx.event.data)
+```
+
+Here `watch_bucket` represents your async client. `Event(key, data, at)` carries a key,
+typed data and an optional time-zone-aware `at`. When the time is unknown, omit `at`.
+The trigger's other arguments must be literals; schedr supplies `after`.
+
+For polling, use an async function returning events in order, oldest first:
+
+```python
+from datetime import timedelta
+
+@trigger.poke(every=timedelta(minutes=1))
+async def new_files(after: str | None, prefix: str) -> list[Event[str]]:
+    return [Event(key=obj.name, data=obj.name) for obj in await list_after(prefix, after)]
+```
+
+An empty list means no events. Calls do not overlap and each must finish within `every`.
+Both decorators accept `secrets=` and `connections=` as on a task. The trigger runs in a
+watcher host and shares its event loop and memory with other watchers.
+
+Each new key creates one run; a repeated key creates none. Delivery is at least once, so
+choose a stable key and use `after` to resume from the last key acted on, or from the
+beginning when it is `None`. schedr keeps that key as the trigger's bookmark. An event run
+has kind `event`; its `dag_ctx.event.key`, `.data` and `.at` carry the event. Its
+`planned_for` is `at`, or the time schedr received it when `at` is absent; `since` is the
+previous event's `planned_for`. Event runs queue like manual runs when the DAG is full.
+Plain manual runs of an event-triggered DAG are refused for now.
+
+Use `new_files(...).override(queue=..., restart_if_idle=..., start=..., end=...)` to select
+the worker queue, restart after a period without events, or limit when the trigger runs.
+`restart_if_idle` takes a positive `timedelta`; it is off by default. `start` and `end`
+bound the trigger's activity, with naive times read in UTC.
+
+Pausing the DAG stops its trigger; unpausing starts it from the bookmark. A new DAG version
+or code, a worker drain, or a lost worker also moves or restarts it from the bookmark. A
+failure restarts it after 5 seconds, doubling the wait up to 5 minutes. A generator that
+returns or a poke that raises counts as a failure.
+
+Keys must be 1 to 1024 UTF-8 bytes and contain no NUL. Event data is limited by
+`max_output_size` (1 MiB by default). Secrets are masked in events, subject to the same masking rules as task
+output. `event_refused` means the master could not accept an event, for example because its
+key or data is invalid or too large; the trigger stops and restarts from its bookmark.
+
 ### Commands' connection files
 
 By default the worker writes these files under

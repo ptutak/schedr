@@ -17,6 +17,7 @@ from schedr.connections import (
 )
 from schedr.context import SecretError, acleanup_handle, cleanup_handle, dag_ctx, task_ctx
 from schedr.dag import Dag, StepDefaults
+from schedr.event_triggers import Event, EventTrigger, TriggerFunction, trigger
 from schedr.groups import Group, group
 from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
 from schedr.outcomes import (
@@ -57,6 +58,8 @@ __all__ = [
     "DefaultOutcome",
     "Done",
     "EmptyOperator",
+    "Event",
+    "EventTrigger",
     "Every",
     "Group",
     "KiB",
@@ -77,6 +80,7 @@ __all__ = [
     "Task",
     "TimedOut",
     "Trigger",
+    "TriggerFunction",
     "TypingHint",
     "Waited",
     "acleanup_handle",
@@ -93,5 +97,6 @@ __all__ = [
     "task",
     "task_ctx",
     "text",
+    "trigger",
 ]
 __version__ = version("schedr")

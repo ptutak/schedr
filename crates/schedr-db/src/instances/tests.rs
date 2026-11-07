@@ -63,6 +63,7 @@ async fn with_run(state: RunState) -> (Database, String) {
     let run_id = db
         .insert_run(&NewRun {
             params: &crate::runs::NO_PARAMS,
+            event: None,
             dag_id: &dag_id,
             dag_version_id: &version_id,
             kind: RunKind::Manual,

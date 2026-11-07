@@ -4,7 +4,17 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-07): M4.11a4 done (two commits, part 2 pushed when green, as the user pre-accepted); M4.11b is next
+## State (2026-11-07 night): M4.11b part 1 of 3 committed and pushed; the user is asleep, commits and pushes pre-accepted to the end of M4.11
+
+- **M4.11b part 1:** `@trigger`, `@trigger.poke`, `Event`, `dag_ctx.event`, tables `events` and `triggers`, event runs, the
+  master's placing and stopping (`crates/schedr-master/src/core/triggers.rs`), decision 348. Reviews: Codex 6 (5 fixed; the
+  switch-off belongs to part 2), Grok 4 (all fixed).
+- **Next, part 2:** restarts, `[triggers] max_queued_events`, `failing_after`, a poke's raise not stopping it, a returned generator
+  staying stopped, switch-off as sensors (`struck` on `TriggerStopped`), `restart_if_idle`, metrics. **Part 3:** CLI, API, UI,
+  `run_trigger`, `run_dag(event=)`, `--event`, retention, `TRIGGER_FAILING`, the example DAG (draft in the session's scratchpad).
+  **Then M4.11c:** `first_of` (decision 347); `sensors_demo` drops its third sensor.
+
+## Earlier (2026-11-07): M4.11a4 done (two commits, part 2 pushed when green, as the user pre-accepted); M4.11b is next
 
 - **M4.11a4 part 2:** a host's threads tied and untied, loop lag, `to_thread` stops on `host_alive`; memory sampled by the
   agent; `worker_watcher_*` metrics, hosts lost per code set (342); hosts on the heartbeat, in `workers.watcher_hosts`, on
@@ -688,4 +698,5 @@ the morning, listed below.
   StatefulSet); `scripts/smoke-wheel.sh`: the wheel's smoke test.
 
 Resume this session with:
+
 claude --resume 7a3fe1e5-0fb5-48ce-a52a-5f177878911e

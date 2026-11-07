@@ -196,6 +196,10 @@ pub struct Timings {
     /// How long a listener waits after a failed accept (too many open files), instead of
     /// spinning.
     pub accept_retry: Duration,
+    /// The wait before a failed trigger starts again; it doubles with each failure in a row.
+    pub trigger_restart_backoff: Duration,
+    /// The most it waits.
+    pub trigger_restart_backoff_max: Duration,
     /// The `SCHEDR_HIDDEN__*` variables set, each warned about when starting.
     pub overridden: Vec<String>,
 }
@@ -267,6 +271,8 @@ impl Default for Timings {
             ui_relay_retry_max: Duration::from_secs(30),
             worker_stop_after_failure: Duration::from_secs(10),
             accept_retry: Duration::from_millis(100),
+            trigger_restart_backoff: Duration::from_secs(5),
+            trigger_restart_backoff_max: Duration::from_mins(5),
             overridden: Vec::new(),
         }
     }

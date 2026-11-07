@@ -18,6 +18,9 @@ class DagCtxField(StrEnum):
     PLANNED_FOR = "planned_for"
     SINCE = "since"
     DAG_ID = "dag_id"
+    EVENT_KEY = "event_key"
+    EVENT_DATA = "event_data"
+    EVENT_AT = "event_at"
 
 
 @dataclass(frozen=True, slots=True)

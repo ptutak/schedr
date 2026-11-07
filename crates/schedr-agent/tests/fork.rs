@@ -192,6 +192,7 @@ async fn the_dag(dir: &Path) -> Dag {
 fn request(dir: &Path, dag: &Dag, task: &str) -> TaskRequest {
     let planned_for = "2026-10-21T08:00:00Z".parse().unwrap();
     TaskRequest {
+        trigger: None,
         dag_file: DagFile {
             root: "etl".to_owned(),
             root_dir: dir.to_string_lossy().into_owned(),
@@ -207,6 +208,7 @@ fn request(dir: &Path, dag: &Dag, task: &str) -> TaskRequest {
         inputs: BTreeMap::new(),
         outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
+            event: None,
             params: serde_json::json!({}),
             dag_id: "sync".to_owned(),
             run_id: "r1".to_owned(),
@@ -924,6 +926,7 @@ async fn a_forked_task_registers_handles_and_its_forked_cleanup_gets_them() {
         Arc::new(MaskSet::new(4)),
     ));
     let task = PythonTask {
+        events: None,
         request: request.clone(),
         secrets: None,
         handles: Some(Arc::clone(&handles)),

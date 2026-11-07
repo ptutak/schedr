@@ -166,6 +166,11 @@ pub struct AttemptSpec {
     pub handle_sink: Option<crate::handles::HandleSink>,
     /// Passed between the task's end and its cleanup, with `cleanup_anywhere` (decision 253).
     pub cleanup_gate: Option<CleanupGate>,
+    /// Set for a trigger: what it starts from, and where its events go.
+    pub trigger: Option<(
+        schedr_model::runner::TriggerStart,
+        crate::watchers::EventSink,
+    )>,
 }
 
 /// Why an assignment can't be read.
@@ -226,6 +231,14 @@ impl AttemptSpec {
                     serde_json::from_slice(&run.params_json)
                         .map_err(|e| invalid("run params", &e))?
                 },
+                event: if run.event_json.is_empty() {
+                    None
+                } else {
+                    Some(
+                        serde_json::from_slice(&run.event_json)
+                            .map_err(|e| invalid("run event", &e))?,
+                    )
+                },
             },
             inputs,
             outcomes: assign
@@ -258,6 +271,7 @@ impl AttemptSpec {
             journal: None,
             handle_sink: None,
             cleanup_gate: None,
+            trigger: None,
         })
     }
 
@@ -598,6 +612,7 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
                         })
                         .collect(),
                     connection_test: spec.connection_test.clone(),
+                    trigger: spec.trigger.as_ref().map(|(start, _)| start.clone()),
                     cleanup: spec.cleanup_handles.clone(),
                 }),
             })
@@ -827,7 +842,10 @@ fn render_context(spec: &AttemptSpec) -> RenderContext {
     ctx.outcomes.clone_from(&spec.outcomes);
     ctx.params.clone_from(&spec.run.params);
     ctx.secrets.clone_from(&spec.secrets);
-    ctx
+    match &spec.run.event {
+        Some(event) => ctx.with_event(event, &spec.run.planned_for.to_string()),
+        None => ctx,
+    }
 }
 
 /// A task's `env`, rendered.

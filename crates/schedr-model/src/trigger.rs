@@ -54,6 +54,41 @@ pub enum Trigger {
         /// The fire time.
         at: Timestamp,
     },
+    /// A `@trigger` function, which runs in a worker's watcher host and yields events: each new
+    /// one starts a run.
+    Event {
+        /// Its function as a task of kind `sensor`: its literal arguments, whether it is called
+        /// every so often, its queue, its secrets and connections. It isn't in the graph.
+        task: Box<crate::task::Task>,
+        /// Started again from its bookmark when no event came for this long; `None`: never.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        restart_if_idle_ms: Option<u64>,
+        /// It runs from this moment on.
+        #[serde(default)]
+        start: Option<Timestamp>,
+        /// It stops at this moment.
+        #[serde(default)]
+        end: Option<Timestamp>,
+    },
+}
+
+/// The longest key an event may have, in bytes: it is stored with every event and sent back as a
+/// trigger's `after`. Python says it first ([`RunEvent`]'s data is limited by the trigger's
+/// `max_output_size`).
+pub const MAX_EVENT_KEY: usize = 1024;
+
+/// What a `@trigger` found, as stored and given to the run it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunEvent {
+    /// Its key, unique in its DAG.
+    pub key: String,
+    /// Its data, as stored JSON.
+    #[schemars(with = "serde_json::Value")]
+    pub data: serde_json::Value,
+    /// When it happened, if it said; the run is planned for this moment.
+    #[serde(default)]
+    pub at: Option<Timestamp>,
 }
 
 impl Trigger {
@@ -63,13 +98,19 @@ impl Trigger {
         matches!(self, Self::None)
     }
 
+    /// Whether events start its runs: it has no fire times.
+    #[must_use]
+    pub const fn is_event(&self) -> bool {
+        matches!(self, Self::Event { .. })
+    }
+
     /// Whether missed fire times get runs in order; `false` for triggers without `catchup`
     /// (a single fire time has nothing to catch up on).
     #[must_use]
     pub const fn catchup(&self) -> bool {
         match self {
             Self::Cron { catchup, .. } | Self::Every { catchup, .. } => *catchup,
-            Self::None | Self::Once { .. } => false,
+            Self::None | Self::Once { .. } | Self::Event { .. } => false,
         }
     }
 
@@ -78,7 +119,9 @@ impl Trigger {
     #[must_use]
     pub const fn start(&self) -> Option<Timestamp> {
         match self {
-            Self::Cron { start, .. } | Self::Every { start, .. } => *start,
+            Self::Cron { start, .. } | Self::Every { start, .. } | Self::Event { start, .. } => {
+                *start
+            }
             Self::None | Self::Once { .. } => None,
         }
     }
@@ -87,7 +130,7 @@ impl Trigger {
     #[must_use]
     pub const fn end(&self) -> Option<Timestamp> {
         match self {
-            Self::Cron { end, .. } | Self::Every { end, .. } => *end,
+            Self::Cron { end, .. } | Self::Every { end, .. } | Self::Event { end, .. } => *end,
             Self::None | Self::Once { .. } => None,
         }
     }

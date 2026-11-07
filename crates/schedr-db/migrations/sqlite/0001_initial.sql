@@ -111,6 +111,36 @@ CREATE TABLE dags (
     conflict           TEXT
 );
 
+-- What triggers found (M4.11b): one row per key, as a key seen before starts no run. Old ones go
+-- with `[retention] events`.
+CREATE TABLE events (
+    dag_id       TEXT NOT NULL,
+    key          TEXT NOT NULL,
+    data         TEXT NOT NULL,
+    at           TEXT,
+    received_at  TEXT NOT NULL,
+    PRIMARY KEY (dag_id, key)
+);
+
+-- Each event-triggered DAG's trigger. Its bookmark outlives everything else: `after` when it starts.
+CREATE TABLE triggers (
+    dag_id       TEXT PRIMARY KEY,
+    -- Set while a worker is running it.
+    instance_id  TEXT,
+    worker_id    TEXT,
+    -- The DAG version it runs: new code starts it again.
+    dag_version_id TEXT,
+    -- The hash of the root it runs from: other code starts it again.
+    code_hash    TEXT,
+    bookmark     TEXT,
+    -- `planned_for` of the last event's run: the next one's `since`.
+    last_planned_for TEXT,
+    last_error   TEXT,
+    failures     INTEGER NOT NULL DEFAULT 0,
+    -- Not started again before this moment.
+    not_before   TEXT
+);
+
 -- A wait step that got its host killed (decision 338): gone at its next success.
 CREATE TABLE wait_step_strikes (
     dag_id       TEXT NOT NULL,
@@ -153,6 +183,9 @@ CREATE TABLE runs (
     late_failure   TEXT,
     result_reason  TEXT,
     -- Set when a user asked to cancel the run: nothing new starts, failures aren't retried.
+    -- The event that started it, for a run of an event-triggered DAG: its own copy, as events
+    -- are deleted by retention.
+    event        TEXT,
     cancel_requested_at TEXT
 );
 

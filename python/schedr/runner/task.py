@@ -7,6 +7,7 @@ summary. It doesn't enforce timeouts or watch memory: the agent does (see PROJEC
 Rust/Python integration).
 """
 
+import asyncio
 import contextlib
 import dataclasses
 import functools
@@ -48,6 +49,7 @@ from schedr.context import (
     handle_classes,
     running,
 )
+from schedr.event_triggers import Event, event_data_hint
 from schedr.outcomes import TIMED_OUT_NAME, TimedOut, from_return_type, outcome_enum
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
 from schedr.runner.protocol import Asking, Channel
@@ -115,6 +117,13 @@ def resolve(
             "planned_for": {"$datetime": run["planned_for"]},
             "since": {"$datetime": run["since"]},
         }
+        event = run.get("event")
+        if event is not None:
+            values["event_key"] = event["key"]
+            values["event_data"] = event["data"]
+            values["event_at"] = {"$datetime": event.get("at") or run["planned_for"]}
+        if field not in values:
+            raise TaskInputError("`dag_ctx.event`: this run wasn't started by an event")
         return values[field]
     task = reference["task"]
     if reference["kind"] == "outcome":
@@ -515,6 +524,7 @@ def run_values(run: Mapping[str, Any], params_class: type | None = None) -> RunV
         since=datetime.fromisoformat(run["since"]),
         params=run.get("params", {}),
         params_class=params_class,
+        event=run.get("event"),
     )
 
 
@@ -706,6 +716,66 @@ def _begin(
         task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
     )
     return _Begun(function, arguments, hints, run_values(run, params_class), own, downstream)
+
+
+async def execute_trigger(
+    request: Mapping[str, Any], channel: Asking, entries: EntriesOf
+) -> dict[str, Any]:
+    """Runs a trigger in the watcher host's loop, until it is stopped or it fails.
+
+    Args:
+        request: The task, as for :func:`execute`, with what it starts from in ``trigger``.
+        channel: The watcher's channel to the agent.
+        entries: Gives a DAG file's DAGs.
+
+    Returns:
+        ``task_failed``: a trigger only ends with an error, or by being cancelled.
+    """
+    begun = _begin(
+        request,
+        lambda: channel.send({"type": "task_imported"}),
+        secret_reader(channel),
+        channel,
+        entries,
+    )
+    if isinstance(begun, dict):
+        return begun
+    # Slow to import; most tasks aren't triggers.
+    from schedr.runner.waiting import run_trigger  # noqa: PLC0415
+
+    hint = event_data_hint(begun.hints.get("return"), f"@trigger `{request['task']['id']}`")
+    limit: int = request["task"]["settings"]["max_output_size"]
+    try:
+        with running(begun.values, begun.own):
+            await run_trigger(
+                begun.function,
+                begun.arguments,
+                request["task"],
+                request["trigger"].get("after"),
+                lambda event: _tell_event(channel, event, hint, limit),
+            )
+    except CodecError as error:
+        return failure(error, "event_refused", f"an event's data: {error.reason}")
+    except Exception as error:  # an author's error is the trigger's status
+        return _raised(error)
+    return failure(
+        RuntimeError("its generator returned: a trigger must keep yielding"), "trigger_returned"
+    )
+
+
+async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: int) -> None:
+    """Tells the agent what a trigger found, and waits until the master has it.
+
+    Raises:
+        CodecError: For data that can't be stored, or is over ``limit`` bytes.
+    """
+    data = encode(event.data, hint)
+    check_size(data, limit)
+    message = {"type": "trigger_event", "key": event.key, "data": data}
+    if event.at is not None:
+        message["at"] = event.at.isoformat()
+    # In a thread: the master may take long, and the others on this loop go on.
+    await asyncio.to_thread(channel.ask, message)
 
 
 def _raised(error: BaseException) -> dict[str, Any]:

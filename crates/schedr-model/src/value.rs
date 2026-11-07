@@ -43,6 +43,12 @@ pub enum DagCtxField {
     Since,
     /// `dag_ctx.dag_id`.
     DagId,
+    /// `dag_ctx.event.key`.
+    EventKey,
+    /// `dag_ctx.event.data`.
+    EventData,
+    /// `dag_ctx.event.at`.
+    EventAt,
 }
 
 /// A reference to data known only at run time.

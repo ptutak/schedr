@@ -10,12 +10,12 @@ distinguish a reconnect from a restart. Times and their settings are in
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    W->>M: Control: Register (identity, roots, journal, slots)
+    W->>M: Control: Register (identity, roots, journal, slots, running_triggers)
     alt Compatible version and no live stream for this ID
         M-->>W: Registered (timings, journal decisions, size limit)
         W->>M: Warnings (current complete list)
         loop Heartbeat interval: 10 s default
-            W->>M: Heartbeat (free slots, running attempts)
+            W->>M: Heartbeat (free slots, running attempts, running_triggers)
             M-->>W: HeartbeatAck (while leading)
         end
         Note over W,M: Worker lease: 60 s default without any message; master marks worker lost
@@ -25,6 +25,8 @@ sequenceDiagram
 ```
 
 Each `JournalEntry.handles` in `Register` counts the handles in that attempt's worker journal.
+`running_triggers` in `Register` and `Heartbeat` lists trigger instance IDs so the master
+can reconcile them with its assignments.
 A `JournalDecision` can answer `CLEAN_REST` (`ATTEMPT_DECISION_CLEAN_REST`) with
 `cleanup_from`, the first handle index to clean. The worker stops a still-running task,
 cleans from that index and sends `Finished` with `CleanupResult.rest` set. That result is
@@ -37,6 +39,28 @@ whatever it runs, and ignores messages arriving past that limit. On its first st
 `Registered` at least as old as the lease it states is
 ignored and the worker registers again. A non-leading master refuses a stream with
 `UNAVAILABLE` ("not leading"), including a `Register` held at its lock as it paused.
+
+## An event trigger
+
+```{mermaid}
+sequenceDiagram
+    participant M as Master
+    participant W as Worker
+    M->>W: AssignTrigger (instance, bookmark)
+    W->>W: Start trigger in watcher host
+    W->>M: TriggerEvent (instance, sequence, key, data, time)
+    M->>M: Store event and queue run once per key
+    M-->>W: TriggerEventAck (instance, sequence)
+    M->>W: AssignTask (run.event_json)
+    opt Trigger stops
+        W->>M: TriggerStopped
+    end
+```
+
+The worker resends unacknowledged events on a new stream. The acknowledgement lets the
+trigger continue. `run.event_json` carries the event to each task of its run. The master
+sends `CancelTrigger` when the instance should stop; a failed trigger is assigned again
+after a backoff from its bookmark.
 
 ## A normal run
 
@@ -423,8 +447,8 @@ identical effects.
 
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
-| `Register` | Worker on every connection | Validate, reconcile journal and reply | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
-| `Heartbeat` | Worker periodically | Renew lease on arrival | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
+| `Register` | Worker on every connection | Validate, reconcile journal and `running_triggers`, and reply | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
+| `Heartbeat` | Worker periodically | Renew lease on arrival and reconcile `running_triggers` | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
 | `CodeVersionChanged` | Worker after root settles or withdraws it | Record hash and possibly plan parse; an empty hash withdraws the root | Yes, same hash | [`[dags] settle_time`](14-timings.md#public-timing-keys) |
 | `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | [assignment expiry](14-timings.md#fixed-timings) |
 | `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | [assignment expiry](14-timings.md#fixed-timings) |
@@ -434,6 +458,8 @@ identical effects.
 | `Draining` | Worker on shutdown | Stop assignments, mark draining | Yes | [`[worker] termination_grace_period`](14-timings.md#public-timing-keys) |
 | `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT`](14-timings.md#fixed-timings) |
 | `Warnings` | Worker after registration and on change | Replace warnings | Yes | — |
+| `TriggerEvent` | Worker as a trigger finds an event; all unacknowledged again on a new stream | Store the event and queue its run, once per key | Yes | — |
+| `TriggerStopped` | Worker when a trigger ends | Free its slot; a failure starts it again after a wait | Yes | — |
 | `ConnectionJobDone` | Worker after connection check or test | Store reports if job is still open | Late or already settled answer is dropped | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) plus job allowance |
 
 ### Master to worker on `Control`
@@ -443,9 +469,12 @@ identical effects.
 | `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `Registered` | Master after `Register` | Apply timing, journal decisions and `script_uses` (`RootUses` per DAG root); ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `ScriptUses` | Master when the script roots sent for DAG roots change | Replace the uses (`RootUses` per DAG root); fold the used script roots' hashes into each DAG root's reported hash, withdrawing a DAG root that uses a script root this worker lacks (decisions 301, 303, 304) | Yes, it replaces; an omitted root uses none | — |
-| `AssignTask` | Master after storing assignment | Validate and start attempt; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `AssignTask` | Master after storing assignment | Validate and start attempt; `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
+| `AssignTrigger` | Master when a DAG's trigger should run and has no worker | Run it on a watcher slot from its bookmark, without an attempt | Yes | — |
+| `CancelTrigger` | Master when a trigger should stop: paused, moved, new code, or reported and not current | Stop it | Yes | — |
+| `TriggerEventAck` | Master when an event is stored, or is an old instance's | Let the trigger go on to the next one | Yes | — |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |
 | `ConnectionJob` | Master for a check or test | Run one job, return reports | Do not rely on repeated execution being harmless for a test | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) |
 
