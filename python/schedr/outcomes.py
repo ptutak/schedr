@@ -235,6 +235,10 @@ SUCCESS_NAME: Final = "SUCCESS"
 TIMED_OUT_NAME: Final = "TimedOut"
 """The name of the ``TimedOut`` outcome."""
 
+FIRST_OF_VALUE: Final = "$value"
+"""Where a ``first_of`` keeps its winner's output: a name no field of a class can have, so the
+runner knows it is that output whole, its outcome the winner's."""
+
 
 class RunIf(StrEnum):
     """When a task runs, from its upstream edges (its trigger rule).

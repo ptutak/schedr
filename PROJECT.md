@@ -6879,6 +6879,17 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   is `.on(...)`, and the lines would have to merge into one hidden node); `RunIf.ANY_SUCCEEDED` (decision
   345); asking the REST API from a wait step (a slot, polling, a token and an address for what the master
   knows); absorbing a loser's failure (a run never hides a failed task).
+  In the DAG body `report(first_of(a.on(str), b.on(str)))` passes the value on, and `value, winner = first_of(...,
+  with_winner=True)` gives the winner's ID too, both typed exactly (the user's, 2026-11-07, option D; not chosen: `.value`
+  and `.winner` on a node object, which a task's parameter wouldn't take as the value; `winner_of(node)`, which type checkers
+  can't hold to a node; always a pair, which makes the common case write `_`; a parameter typed `Winner` filled in by itself,
+  hidden wiring). `at_least(n, a, b, c)` (the user's, built on the same count) waits for `n` and gives the list of values, with
+  `with_winner=True` also the list of IDs, in the order the tasks ended. A skipped task doesn't win, so this also joins the
+  paths of a `@branch`. The master keeps
+  `{"$value": ..., "winner": ...}` as the node's output (`$value`, a name no field has, tells the runner it is the winner's
+  whole output), with one value also its winner's outcome, so references, the runner and the UI read it as any output and
+  there is no new kind of reference; what it keeps is at most the sum of its options' `max_output_size`, or it fails `output_too_large` (the user's, 2026-11-07, option B: values each allowed always fit, still bounded; not chosen: the node's own 1 MiB, which failed two 600 KB values each within their limit; storing only the winners' IDs and reading the values when needed, a new way to resolve a reference; a `max_output_size=` on the node). Refused: fewer than two different tasks, a
+  part of an output, a mapped task, and `x >> node`, since every edge into it is something it chooses from.
 - **Options are drawn as one group** (decision 351, the user's, 2026-11-07; built in M4.11c): the options of `first_of`
   sit in one box in the graph, with one dashed line from the box to the node, since they are treated as a group and aren't
   each a dependency with the usual guarantees. The winner is highlighted in the box and named on the node. Where one box

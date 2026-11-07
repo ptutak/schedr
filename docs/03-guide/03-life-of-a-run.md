@@ -132,7 +132,7 @@ can't be read is not killed on resident set size, because that size includes the
 shares with the fork server.
 
 A [wait step](../02-dags/18-sensors.md) instead runs in a shared watcher host and holds a
-task slot. Its host has no memory budget yet; its cancellation and deployment behavior are
+watcher slot. Its memory, cancellation and deployment behavior are
 described in [The watcher host](05-workers.md#the-watcher-host).
 
 ## 6. The result comes back
@@ -177,6 +177,9 @@ didn't choose that target, or a skipped upstream task) counts as skipped;
 `RunIf.ALL_SUCCEEDED` skips. A failure on any edge makes the task `upstream_failed` as
 soon as that failure is known. [The master](04-master.md#when-a-task-is-ready) is the
 rule; [Routing by outcome](../02-dags/08-outcomes.md) is how a DAG declares it.
+
+For [first_of and at_least](../02-dags/20-first-of.md), the master instead ends the node
+as soon as enough options succeed. It needs no worker or slot. The other options keep running.
 
 When every task instance has a final state, the run gets its result: `failed` if a task
 failed after its last retry, `cancelled` if a user cancelled it and nothing failed,

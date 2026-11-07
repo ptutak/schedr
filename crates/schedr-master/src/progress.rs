@@ -72,6 +72,35 @@ pub enum Readiness {
     Cancel,
 }
 
+/// What the states of a `first_of`'s edges decide, `need` of them having to be taken (decision
+/// 347): ready as soon as they are; waiting while they still can be; otherwise what stopped them.
+#[must_use]
+pub fn first_of_readiness(edges: &[TaskInstanceState], need: usize) -> Readiness {
+    use TaskInstanceState as S;
+    let taken = edges.iter().filter(|s| **s == S::Success).count();
+    if taken >= need {
+        return Readiness::Ready;
+    }
+    if taken + edges.iter().filter(|s| !s.is_final()).count() >= need {
+        return Readiness::Wait;
+    }
+    if edges
+        .iter()
+        .any(|s| matches!(s, S::Failed | S::UpstreamFailed))
+    {
+        return Readiness::UpstreamFailed;
+    }
+    if edges.contains(&S::Cancelled) {
+        return Readiness::Cancel;
+    }
+    Readiness::Skip
+}
+
+/// How many edges a `first_of` needs taken.
+pub(crate) fn need_of(at_least: Option<u32>) -> usize {
+    at_least.map_or(1, |n| usize::try_from(n).unwrap_or(usize::MAX))
+}
+
 /// The trigger rule `rule` over the states of a task's edges (an edge not taken counts as
 /// skipped).
 #[must_use]
@@ -257,6 +286,8 @@ pub struct RunProgress<'a> {
     reasons: BTreeMap<TaskId, String>,
     /// Whether settling a mapped task moved one of its instances (a step of [`Self::settle`]).
     instance_moved: bool,
+    /// The `first_of` tasks that ended now, with the upstream tasks that can have ended them.
+    winners: BTreeMap<TaskId, Vec<TaskId>>,
 }
 
 impl<'a> RunProgress<'a> {
@@ -282,6 +313,7 @@ impl<'a> RunProgress<'a> {
             cancelling: false,
             reasons: BTreeMap::new(),
             instance_moved: false,
+            winners: BTreeMap::new(),
         }
     }
 
@@ -501,6 +533,12 @@ impl<'a> RunProgress<'a> {
         }
     }
 
+    /// The DAG it follows.
+    #[must_use]
+    pub const fn dag(&self) -> &'a Dag {
+        self.dag
+    }
+
     /// Every task's state.
     #[must_use]
     pub const fn states(&self) -> &BTreeMap<TaskId, TaskInstanceState> {
@@ -516,8 +554,9 @@ impl<'a> RunProgress<'a> {
     /// `queued` (empty tasks `success`, completed by the master), others `skipped`,
     /// `upstream_failed` or `cancelled`; mapped tasks ready to expand are listed for
     /// [`Self::take_expansions`], and expanded ones move their instances on; repeated until
-    /// nothing changes. Returns the tasks (as a whole) whose state changed, with their new
-    /// state, in the order they changed.
+    /// nothing changes, or until a `first_of` ends ([`Self::take_winners`]: its output is
+    /// made before what follows it moves). Returns the tasks (as a whole) whose state changed,
+    /// with their new state, in the order they changed.
     pub fn settle(&mut self) -> Vec<(TaskId, TaskInstanceState)> {
         let mut changes: Vec<(TaskId, TaskInstanceState)> = Vec::new();
         let dag = self.dag;
@@ -542,8 +581,22 @@ impl<'a> RunProgress<'a> {
                     .edges_into(&task.id)
                     .flat_map(|edge| self.edge_states(edge))
                     .collect();
-                let next = match self.gate(task, readiness(&edges, task.settings.run_if)) {
+                let rule = match task.kind {
+                    TaskKind::FirstOf { at_least } => first_of_readiness(&edges, need_of(at_least)),
+                    _ => readiness(&edges, task.settings.run_if),
+                };
+                let next = match self.gate(task, rule) {
                     Readiness::Wait => continue,
+                    Readiness::Ready if matches!(task.kind, TaskKind::FirstOf { .. }) => {
+                        // One at a time, before anything after it moves: its output is made
+                        // from its winners' and may not fit ([`Self::fail_first_of`]).
+                        self.record_winners(task);
+                        self.states
+                            .insert(task.id.clone(), TaskInstanceState::Success);
+                        changes.retain(|(id, _)| id != &task.id);
+                        changes.push((task.id.clone(), TaskInstanceState::Success));
+                        return changes;
+                    }
                     Readiness::Ready if task.kind == TaskKind::Empty => {
                         if self.dag.resource_of_cleanup(&task.id).is_some() {
                             self.reasons
@@ -565,6 +618,31 @@ impl<'a> RunProgress<'a> {
                 return changes;
             }
         }
+    }
+
+    /// The upstream tasks a `first_of` that is ready can have ended with: those taken, in the
+    /// order of its edges. Which of them did is told by when they ended ([`Self::take_winners`]).
+    fn record_winners(&mut self, task: &Task) {
+        let candidates: Vec<TaskId> = self
+            .dag
+            .edges_into(&task.id)
+            .filter(|edge| edge.kind != EdgeKind::Requirement)
+            .filter(|edge| self.edge_state(edge) == TaskInstanceState::Success)
+            .map(|edge| edge.from.clone())
+            .collect();
+        self.winners.insert(task.id.clone(), candidates);
+    }
+
+    /// A `first_of` whose output can't be kept fails, with why.
+    pub fn fail_first_of(&mut self, task: &TaskId, reason: String) {
+        self.states.insert(task.clone(), TaskInstanceState::Failed);
+        self.outcomes.remove(task);
+        self.reasons.insert(task.clone(), reason);
+    }
+
+    /// The `first_of` tasks ended since this was last asked, each with what can have ended it.
+    pub fn take_winners(&mut self) -> BTreeMap<TaskId, Vec<TaskId>> {
+        std::mem::take(&mut self.winners)
     }
 
     /// Cancels the run: every task (and instance) that hasn't started becomes `cancelled`.

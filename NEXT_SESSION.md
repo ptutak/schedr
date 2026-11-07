@@ -12,14 +12,20 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 - **M4.11b parts 1 and 2:** `@trigger`, `@trigger.poke`, events, event runs, the master's placing and stopping (348); poke errors,
   stopped generators, `[triggers]`, `restart_if_idle`, switch-off, metrics (349). Reviews: Codex 6 and 7, Grok 4 and 1.
 - **The user kept:** a running trigger restarts when its root's code changes, even if the DAG's definition didn't (348).
-- **Next, M4.11c:** `first_of` (347), `at_least(n, ...)`, joining `@branch` paths, the box with one dashed line (351). `sensors_demo`
-  drops its third sensor. Design so far: `TaskKind::FirstOf` ended in `progress.rs` `settle`; the master copies the winner's
-  output and outcome to the node's own row, checked against `outputs_of` first; `.winner` is a new reference; `at_least`'s
-  value is a list in finishing order.
+- **M4.11c, committed:** `first_of(a, b)` passes the value, `with_winner=True` gives `(value, winner)` (option D, the user's);
+  `at_least(n, ...)` a list in the order they ended; the master keeps `{"$value", "winner"}`, under the node's
+  the sum of its options' `max_output_size` (option B, the user's); nothing is ordered before a node; the run page boxes the options with one dashed line (351). Reviews:
+  Codex 4 and Grok 3 (one the same), all fixed.
+- **Next, M4.11d `wait_for_run`, then M4.11e and M4.11f** (`PLAN.md`). M4.11d needs answers 1-5 below first.
 - **Questions waiting for the user; number 2 blocks M4.11e, nothing before it:**
   1. Settled by the user: M4.11d, e, f come before M4.12 (`PLAN.md`); a batched run reads `list[Event[T]]` (352).
-  2. One `event=` word for `@trigger` and `@sensor` in place of `signal`, with `key=` on the sensor? Several names on `@trigger`,
-     `dag_ctx.event.name`, repeats by `(dag_id, name, key)`, one name on `@sensor`?
+  2. Asked on 2026-11-07, Claude's picks in brackets. M4.11d: (1) which run of the other DAG [same `planned_for`, or an
+     `offset=`]; (2) none yet [wait until `max_wait`]; (3) it failed [a `Failed` outcome to route with `.on`]; (4) a run or a
+     task [both, `task=`]; (5) form [`wait_for_run("orders", task="load", max_wait=...)`, a node the master ends]. M4.11e:
+     (6) one `event=` word for `@trigger` and `@sensor`, no `signal`; (7) a sensor's `key=` matches, every matching waiting run
+     wakes; (8) an event before the step starts is stored and matched if newer than the run's start; (9) several names on a
+     `@trigger`, `dag_ctx.event.name`, repeats by `(dag, name, key)`; (10) an `events:post` permission, per name; (11) kept by
+     `[retention] events` (M4.14), with a size limit per event.
   3. Optional: a typed `data_as(Cls)` on `dag_ctx.event.data`, typed `Any` today, so the example needs a pyright ignore.
 - **For the user to know:** notifications aren't built, so `TRIGGER_FAILING` has nothing to go through, and their planned
   `Event` enum needs another name. A masked event key in the list can make "Run again" fail for that key (rare, accepted).

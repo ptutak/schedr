@@ -514,7 +514,7 @@ fn group_path(groups: &[GroupSpec], innermost: Option<usize>) -> Vec<usize> {
 
 /// Each node's layer: one below its lowest upstream node. Nodes on a cycle (never in a valid
 /// DAG) go below everything else.
-fn layers(count: usize, edges: &[(usize, usize)]) -> Vec<usize> {
+pub(crate) fn layers(count: usize, edges: &[(usize, usize)]) -> Vec<usize> {
     let mut upstream = vec![0_usize; count];
     let mut downstream = vec![Vec::new(); count];
     for &(from, to) in edges

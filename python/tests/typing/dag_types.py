@@ -25,10 +25,12 @@ from schedr import (
     Outcome,
     Task,
     TimedOut,
+    at_least,
     branch,
     chain,
     connection,
     dag_ctx,
+    first_of,
     group,
     on,
     secrets,
@@ -477,6 +479,19 @@ with Dag("sensors_typed"):
     waited.on(TimedOut) >> takes_text("late")
     chain(waited.on(int, TimedOut), takes_text("always"))
     takes_text(poked("a").on(str))
+
+    # `first_of` is the tasks' value; with its winner, a pair; `at_least` a list.
+    earliest = first_of(waited.on(int), poked("b").on(str))
+    takes_either(earliest)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    takes_number(first_of(waited.on(int), waits_for("c").on(int)))
+    value, winner = first_of(waited.on(int), waits_for("d").on(int), with_winner=True)
+    takes_number(value)
+    takes_text(winner)
+    many: list[int] = at_least(2, waited.on(int), waits_for("e").on(int), waits_for("f").on(int))
+    quorum, quorum_by = at_least(1, waited.on(int), waits_for("g").on(int), with_winner=True)
+    takes_number(quorum[0])  # a reference's index, read when the task runs
+    takes_text(quorum_by[0])
+    del many
 
 
 async def sensors_in_a_test() -> None:

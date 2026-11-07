@@ -592,6 +592,39 @@ impl Database {
         Ok(())
     }
 
+    /// Stores the output of a task that isn't mapped, by its ID in the run (a task the master
+    /// ended itself: no attempt knows its instance).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn store_task_output(
+        &self,
+        run_id: &str,
+        task_id: &TaskId,
+        outcome: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), DbError> {
+        const OUTPUT: &str = "INSERT INTO outputs (task_instance_id, outcome, value, size_bytes) \
+            SELECT id, $3, $4{json}, $5 FROM task_instances \
+            WHERE run_id = $1{uuid} AND task_id = $2 AND map_index = -1 \
+            ON CONFLICT (task_instance_id) DO UPDATE \
+            SET outcome = excluded.outcome, value = excluded.value, size_bytes = excluded.size_bytes";
+        let text = to_json(value);
+        let size = i64::try_from(text.len()).unwrap_or(i64::MAX);
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, OUTPUT))
+                .bind(run_id)
+                .bind(task_id.as_str())
+                .bind(outcome)
+                .bind(&text)
+                .bind(size)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
     /// A task instance's output and outcome, if stored.
     ///
     /// # Errors

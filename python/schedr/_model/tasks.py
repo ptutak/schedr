@@ -319,6 +319,32 @@ class CommandKind:
 
 
 @dataclass(frozen=True, slots=True)
+class FirstOfKind:
+    """``first_of`` and ``at_least``: ended by the master, no process (decision 347)."""
+
+    at_least: int | None = None
+
+    def references(self) -> list[Reference]:
+        """It has no references: its edges say what it chooses from.
+
+        Returns:
+            An empty list.
+        """
+        return []
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind as DAG JSON.
+
+        Returns:
+            ``{"kind": "first_of"}``, with ``at_least`` if it has a count.
+        """
+        result: dict[str, Any] = {"kind": "first_of"}
+        if self.at_least is not None:
+            result["at_least"] = self.at_least
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class EmptyKind:
     """An ``EmptyOperator``: completed by the master, no process."""
 
@@ -422,7 +448,7 @@ class ScriptKind:
         return result
 
 
-type TaskKind = PythonKind | SensorKind | CommandKind | ScriptKind | EmptyKind
+type TaskKind = PythonKind | SensorKind | CommandKind | ScriptKind | EmptyKind | FirstOfKind
 """Any task kind."""
 
 

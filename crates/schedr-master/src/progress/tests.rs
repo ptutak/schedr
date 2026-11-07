@@ -901,3 +901,25 @@ fn a_run_cancelled_with_only_a_cleanup_left_ends_cancelled() {
     run.set(&id("cluster.cleanup"), S::Success);
     assert_eq!(run.result(), Some(RunState::Cancelled));
 }
+
+#[rstest]
+#[case::one_is_enough(&[S::Success, S::Running], 1, Readiness::Ready)]
+#[case::the_other_is_still_running(&[S::Skipped, S::Running], 1, Readiness::Wait)]
+#[case::a_failure_with_one_left(&[S::Failed, S::Running], 1, Readiness::Wait)]
+#[case::a_success_beats_a_failure(&[S::Failed, S::Success], 1, Readiness::Ready)]
+#[case::none_left_one_failed(&[S::Failed, S::Skipped], 1, Readiness::UpstreamFailed)]
+#[case::none_left_upstream_failed(&[S::UpstreamFailed, S::Skipped], 1, Readiness::UpstreamFailed)]
+#[case::none_left_one_cancelled(&[S::Cancelled, S::Skipped], 1, Readiness::Cancel)]
+#[case::a_failure_outweighs_a_cancel(&[S::Cancelled, S::Failed], 1, Readiness::UpstreamFailed)]
+#[case::all_skipped(&[S::Skipped, S::Skipped], 1, Readiness::Skip)]
+#[case::two_needed_one_there(&[S::Success, S::Running, S::Running], 2, Readiness::Wait)]
+#[case::two_needed_two_there(&[S::Success, S::Success, S::Running], 2, Readiness::Ready)]
+#[case::two_needed_one_can_only(&[S::Success, S::Failed, S::Skipped], 2, Readiness::UpstreamFailed)]
+#[case::decided_before_the_last_ends(&[S::Failed, S::Failed, S::Running], 2, Readiness::UpstreamFailed)]
+fn what_a_first_of_waits_for(
+    #[case] edges: &[TaskInstanceState],
+    #[case] need: usize,
+    #[case] decided: Readiness,
+) {
+    assert_eq!(first_of_readiness(edges, need), decided);
+}

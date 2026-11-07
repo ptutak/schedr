@@ -2650,6 +2650,28 @@
           "type": "object"
         },
         {
+          "description": "`first_of` / `at_least` (decision 347): ended by the master, no process and no slot, as\nsoon as enough of its upstream edges are taken. Its output is `{\"$value\": ..., \"winner\":\n...}`: the winner's output and ID, or for `at_least` lists of them in the order they ended.",
+          "properties": {
+            "at_least": {
+              "description": "`at_least`'s count; `None`: `first_of`, ending with one edge.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "first_of",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An inline command, run by the agent.",
           "properties": {
             "command": {

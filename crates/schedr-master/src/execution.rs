@@ -15,6 +15,11 @@ use schedr_model::{
     TaskKind,
 };
 
+use serde_json::json;
+
+/// Why a `first_of` failed whose output didn't fit, as an attempt's error kind says it.
+const OUTPUT_TOO_LARGE: &str = "output_too_large";
+
 use crate::mapping::{self, Dim};
 use crate::metrics::MasterMetrics;
 use crate::progress::{AfterAttempt, Expansion, Instances, RunProgress, Snapshot, after_attempt};
@@ -686,8 +691,12 @@ impl Execution {
     ) -> Result<(), ExecutionError> {
         loop {
             progress.settle();
+            let chose = self.store_first_of_outputs(run_id, progress).await?;
             let ready = progress.take_expansions();
             if ready.is_empty() {
+                if chose {
+                    continue;
+                }
                 return Ok(());
             }
             for task_id in ready {
@@ -798,6 +807,82 @@ impl Execution {
         Box::pin(self.db.atomically(writes)).await
     }
 
+    /// Stores what each `first_of` that ended now keeps, `{"$value": ..., "winner": ...}`, with
+    /// the first of what can have ended it in the order they ended. At once, as a mapped task
+    /// after it expands over it (a crash here stores it again: nothing has read it).
+    /// Returns whether one ended. One whose values are over what its options may give together
+    /// (the sum of their `max_output_size`) fails instead.
+    async fn store_first_of_outputs(
+        &self,
+        run_id: &str,
+        progress: &mut RunProgress<'_>,
+    ) -> Result<bool, ExecutionError> {
+        let ended = progress.take_winners();
+        let chose = !ended.is_empty();
+        for (task_id, mut winners) in ended {
+            let Some(task) = progress.dag().task(&task_id) else {
+                continue;
+            };
+            // What each option may give, together (the user's, 2026-11-07): never smaller than
+            // what they were each allowed, still bounded.
+            let limit = progress
+                .dag()
+                .edges_into(&task_id)
+                .filter(|edge| edge.kind != schedr_model::EdgeKind::Requirement)
+                .filter_map(|edge| progress.dag().task(&edge.from))
+                .map(|option| option.settings.max_output_size)
+                .fold(0_u64, u64::saturating_add);
+            let at_least = match &task.kind {
+                TaskKind::FirstOf { at_least } => *at_least,
+                _ => None,
+            };
+            let names: Vec<&TaskId> = winners.iter().collect();
+            let order = self.db.ended_in_order(run_id, &names).await?;
+            winners
+                .sort_by_key(|winner| order.iter().position(|e| e == winner).unwrap_or(usize::MAX));
+            winners.truncate(crate::progress::need_of(at_least));
+            let names: Vec<&TaskId> = winners.iter().collect();
+            let outputs = self.db.outputs_of(run_id, &names).await?;
+            let value = |winner: &TaskId| {
+                outputs
+                    .get(winner)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            };
+            let (output, outcome) = if at_least.is_some() {
+                let values: Vec<_> = winners.iter().map(value).collect();
+                (
+                    json!({"$value": values, "winner": winners}),
+                    SUCCESS.to_owned(),
+                )
+            } else {
+                let winner = winners.first();
+                let outcome = winner.and_then(|w| progress.outcome(w)).unwrap_or(SUCCESS);
+                (
+                    json!({
+                        "$value": winner.map_or(serde_json::Value::Null, value),
+                        "winner": winner.map(TaskId::as_str),
+                    }),
+                    outcome.to_owned(),
+                )
+            };
+            let size = serde_json::to_vec(&output["$value"]).map_or(0, |bytes| bytes.len());
+            if u64::try_from(size).unwrap_or(u64::MAX) > limit {
+                let reason = format!(
+                    "{OUTPUT_TOO_LARGE}: what it chose is {size} bytes, over the {limit} its \
+                     options may give together"
+                );
+                progress.fail_first_of(&task_id, reason);
+                continue;
+            }
+            self.db
+                .store_task_output(run_id, &task_id, &outcome, &output)
+                .await?;
+            progress.set_outcome(&task_id, &outcome);
+        }
+        Ok(chose)
+    }
+
     async fn write_changes(
         &self,
         run_id: &str,
@@ -825,6 +910,9 @@ impl Execution {
                 next.ready_at = Some(now);
             }
             if map_index == -1 {
+                if is_first_of(progress.dag(), &task_id) && state == TaskInstanceState::Success {
+                    next.outcome = progress.outcome(&task_id).map(str::to_owned);
+                }
                 next.reason = progress.reason(&task_id).map(str::to_owned);
                 next.map_sizes = progress.instances(&task_id).map(|i| i.sizes.clone());
             }
@@ -890,6 +978,11 @@ impl Execution {
 
 /// A run's progress as stored: its tasks (the `-1` rows) and the instances of the mapped
 /// tasks that expanded.
+fn is_first_of(dag: &Dag, task: &TaskId) -> bool {
+    dag.task(task)
+        .is_some_and(|task| matches!(task.kind, TaskKind::FirstOf { .. }))
+}
+
 fn progress_of(run: &RunTasks) -> RunProgress<'_> {
     let mut instances: BTreeMap<TaskId, Instances> = BTreeMap::new();
     for row in run.instances.iter().filter(|i| i.map_index >= 0) {

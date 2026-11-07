@@ -373,6 +373,10 @@ pub struct RunQuery {
 /// A task node of the graph.
 #[derive(Debug, Clone)]
 pub struct Node {
+    /// Whether the master ends it with the first of several tasks (`first_of`, `at_least`).
+    pub first_of: bool,
+    /// Whether it is what ended such a node.
+    pub won: bool,
     /// The box's left edge.
     pub left: f64,
     /// The box's top edge.
@@ -491,6 +495,8 @@ pub struct GroupFrame {
     pub label: String,
     /// Its ID, for the tooltip.
     pub group_id: String,
+    /// Whether it holds what a `first_of` chooses from, not a group of the DAG.
+    pub options: bool,
 }
 
 /// A task's row in the run's table.
@@ -895,8 +901,123 @@ async fn run_graph<T: Transport>(
     run_href: &str,
     query: &RunQuery,
 ) -> Graph {
-    let chosen = chosen_by_branches(deployment, run_id, dag, tasks).await;
+    let mut chosen = chosen_by_branches(deployment, run_id, dag, tasks).await;
+    chosen.extend(first_of_winners(deployment, run_id, dag, tasks).await);
     graph_of(dag, tasks, &chosen, run_href, query.task.as_deref())
+}
+
+/// The tasks of a DAG's `first_of` nodes (`first_of`, `at_least`).
+fn first_of_nodes(dag: &serde_json::Value) -> impl Iterator<Item = &str> {
+    dag["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["kind"].as_str() == Some("first_of"))
+        .filter_map(|t| t["id"].as_str())
+}
+
+/// Who won each `first_of` that succeeded, from its stored output; one that can't be read is
+/// left out, its options drawn with no winner.
+async fn first_of_winners<T: Transport>(
+    deployment: &Deployment<T>,
+    run_id: &str,
+    dag: &serde_json::Value,
+    tasks: &[TaskView],
+) -> BTreeMap<String, Vec<String>> {
+    let nodes: Vec<String> = first_of_nodes(dag)
+        .filter(|id| {
+            tasks
+                .iter()
+                .any(|t| t.task_id == *id && t.state == "success")
+        })
+        .map(str::to_owned)
+        .collect();
+    futures_util::stream::iter(nodes)
+        .map(|id| async move {
+            let output = deployment.client.output(run_id, &id).await.ok()?;
+            let winner = &output.value["winner"];
+            let winners = match winner.as_str() {
+                Some(one) => vec![one.to_owned()],
+                None => winner
+                    .as_array()?
+                    .iter()
+                    .filter_map(|w| w.as_str().map(str::to_owned))
+                    .collect(),
+            };
+            Some((id, winners))
+        })
+        .buffer_unordered(BRANCH_READS)
+        .filter_map(std::future::ready)
+        .collect()
+        .await
+}
+
+/// A box around the options of a `first_of`.
+struct OptionsBox {
+    /// The node they lead to.
+    node: usize,
+    /// Its label.
+    label: String,
+    /// The options.
+    options: Vec<usize>,
+}
+
+/// Which `first_of` nodes have their options in one box (decision 351): not a task that is an
+/// option of two nodes, options at different depths, in different groups or among the
+/// resources. Those keep a dashed line each.
+fn options_boxes(
+    dag: &serde_json::Value,
+    ids: &[String],
+    pairs: &[(usize, usize)],
+    node_group: &[Option<usize>],
+    sides: &[(usize, usize)],
+) -> Vec<OptionsBox> {
+    let index = |id: &str| ids.iter().position(|i| i == id);
+    let layer = graph::layers(ids.len(), pairs);
+    let aside = |n: usize| {
+        sides
+            .iter()
+            .any(|(setup, cleanup)| *setup == n || *cleanup == n)
+    };
+    let wanted: Vec<OptionsBox> = dag["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["kind"].as_str() == Some("first_of"))
+        .filter_map(|t| {
+            let node = index(t["id"].as_str()?)?;
+            let options: Vec<usize> = pairs
+                .iter()
+                .filter(|(_, to)| *to == node)
+                .map(|(from, _)| *from)
+                .filter(|from| !aside(*from))
+                .collect();
+            let label = t["at_least"]
+                .as_u64()
+                .map_or_else(|| "first of".to_owned(), |n| format!("at least {n} of"));
+            Some(OptionsBox {
+                node,
+                label,
+                options,
+            })
+        })
+        .collect();
+    let in_one = |b: &OptionsBox| {
+        let first = b.options.first().copied();
+        first.is_some_and(|first| {
+            b.options
+                .iter()
+                .all(|o| layer[*o] == layer[first] && node_group.get(*o) == node_group.get(first))
+        }) && wanted.iter().all(|other| {
+            other.node == b.node || !other.options.iter().any(|o| b.options.contains(o))
+        })
+    };
+    let keep: Vec<bool> = wanted.iter().map(in_one).collect();
+    wanted
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(b, keep)| keep.then_some(b))
+        .collect()
 }
 
 /// What each `@branch` task that succeeded chose (its stored output, the IDs of its targets;
@@ -965,9 +1086,13 @@ fn graph_of(
     let mut edges = joined_edges(dag, index);
     resource_edges(&mut edges, &resources);
     let pairs: Vec<(usize, usize)> = edges.iter().map(|(f, t, _, _)| (*f, *t)).collect();
-    let (group_ids, specs, node_group) = groups_of(dag, &ids);
+    let (mut group_ids, mut specs, mut node_group) = groups_of(dag, &ids);
     // The resources beside the tasks, in a section of their own (the user, 2026-11-05).
     let sides: Vec<(usize, usize)> = resources.iter().map(|r| (r.setup, r.cleanup)).collect();
+    let declared_groups = group_ids.len();
+    let boxes = options_boxes(dag, &ids, &pairs, &node_group, &sides);
+    add_options_groups(&boxes, &mut group_ids, &mut specs, &mut node_group);
+    let is_first_of = |id: &str| first_of_nodes(dag).any(|node| node == id);
     let layout = graph::layout_sided(ids.len(), &pairs, &specs, &node_group, &sides);
     let nodes = ids
         .iter()
@@ -990,14 +1115,20 @@ fn graph_of(
                 resource,
                 task_id: id.clone(),
                 label,
+                first_of: is_first_of(id),
+                won: first_of_nodes(dag)
+                    .any(|node| chosen.get(node).is_some_and(|won| won.contains(id))),
                 counts: task
                     .and_then(|t| t.instances)
                     .map(|n| counts(id, n, tasks))
                     .unwrap_or_default(),
                 state: task.map_or_else(|| "none".to_owned(), |t| t.state.clone()),
                 look: task.map_or_else(|| "none".to_owned(), |t| wait_steps.look(t)),
-                outcome: task
-                    .and_then(|t| t.outcome.clone())
+                outcome: chosen
+                    .get(id)
+                    .filter(|_| is_first_of(id))
+                    .map(|won| won.join(", "))
+                    .or_else(|| task.and_then(|t| t.outcome.clone()))
                     .filter(|o| o != "SUCCESS")
                     .map(|o| fitted(&o, 24))
                     .unwrap_or_default(),
@@ -1007,7 +1138,73 @@ fn graph_of(
             }
         })
         .collect();
-    let lines = layout
+    let lines = edge_lines(&layout, &edges, tasks, chosen, &ids, dag);
+    let grouping = (
+        group_ids.as_slice(),
+        specs.as_slice(),
+        node_group.as_slice(),
+    );
+    let lines = resource_lines(&resources, &ids, &edges, &layout, grouping, lines);
+    let mut groups = group_frames(&layout.boxes, &group_ids);
+    let lines = one_line_per_box(lines, &boxes, &layout.boxes, declared_groups, &ids);
+    mark_options_frames(&mut groups, &layout.boxes, &boxes, declared_groups, &ids);
+    Graph {
+        width: layout.width,
+        height: layout.height,
+        node_width: NODE_WIDTH,
+        node_height: NODE_HEIGHT,
+        nodes,
+        edges: lines,
+        groups,
+        rails: rails_of(&resources, &ids, &layout.nodes),
+        resources: layout.side.map(|b| (b.left, b.top, b.width, b.height)),
+    }
+}
+
+/// Each options box as a group of the layout, inside the group its tasks are in.
+fn add_options_groups(
+    boxes: &[OptionsBox],
+    group_ids: &mut Vec<String>,
+    specs: &mut Vec<graph::GroupSpec>,
+    node_group: &mut [Option<usize>],
+) {
+    for options in boxes {
+        let parent = options.options.first().and_then(|o| node_group[*o]);
+        specs.push(graph::GroupSpec { parent });
+        for option in &options.options {
+            node_group[*option] = Some(group_ids.len());
+        }
+        group_ids.push(options.label.clone());
+    }
+}
+
+/// Which of the frames are options boxes, and what they say.
+fn mark_options_frames(
+    frames: &mut [GroupFrame],
+    placed: &[graph::GroupBox],
+    boxes: &[OptionsBox],
+    declared_groups: usize,
+    ids: &[String],
+) {
+    for (frame, group) in frames.iter_mut().zip(placed) {
+        if let Some(options) = group.group.checked_sub(declared_groups) {
+            frame.options = true;
+            frame.group_id = format!("what {} chooses from", ids[boxes[options].node]);
+            frame.label.clone_from(&boxes[options].label);
+        }
+    }
+}
+
+/// A line per route; into a `first_of`, it is an option's.
+fn edge_lines(
+    layout: &graph::Layout,
+    edges: &[Joined],
+    tasks: &[TaskView],
+    chosen: &BTreeMap<String, Vec<String>>,
+    ids: &[String],
+    dag: &serde_json::Value,
+) -> Vec<EdgeLine> {
+    layout
         .routes
         .iter()
         .map(|route| {
@@ -1020,7 +1217,11 @@ fn graph_of(
                 from: ids[*from].clone(),
                 to: ids[*to].clone(),
                 path: path_of(&route.points),
-                kind: kind.clone(),
+                kind: if first_of_nodes(dag).any(|node| node == ids[*to]) {
+                    "option".to_owned()
+                } else {
+                    kind.clone()
+                },
                 on: on
                     .as_ref()
                     .map(|on| fitted(&on.join(" | "), 28))
@@ -1031,25 +1232,61 @@ fn graph_of(
                 resource: String::new(),
             }
         })
-        .collect();
-    let grouping = (
-        group_ids.as_slice(),
-        specs.as_slice(),
-        node_group.as_slice(),
-    );
-    let lines = resource_lines(&resources, &ids, &edges, &layout, grouping, lines);
-    let groups = group_frames(&layout.boxes, &group_ids);
-    Graph {
-        width: layout.width,
-        height: layout.height,
-        node_width: NODE_WIDTH,
-        node_height: NODE_HEIGHT,
-        nodes,
-        edges: lines,
-        groups,
-        rails: rails_of(&resources, &ids, &layout.nodes),
-        resources: layout.side.map(|b| (b.left, b.top, b.width, b.height)),
+        .collect()
+}
+
+/// Each options box's lines replaced by one dashed line from the box to its node (decision 351).
+fn one_line_per_box(
+    lines: Vec<EdgeLine>,
+    boxes: &[OptionsBox],
+    placed: &[graph::GroupBox],
+    declared_groups: usize,
+    ids: &[String],
+) -> Vec<EdgeLine> {
+    let mut kept = Vec::with_capacity(lines.len());
+    let mut joined: Vec<(usize, (f64, f64))> = Vec::new();
+    for line in lines {
+        let its_box = boxes
+            .iter()
+            .position(|b| ids[b.node] == line.to && b.options.iter().any(|o| ids[*o] == line.from));
+        match its_box {
+            Some(at) => {
+                if !joined.iter().any(|(b, _)| *b == at) {
+                    let end = end_of(&line.path).unwrap_or_default();
+                    joined.push((at, end));
+                }
+            }
+            None => kept.push(line),
+        }
     }
+    for (at, end) in joined {
+        let frame = placed
+            .iter()
+            .find(|b| b.group.checked_sub(declared_groups) == Some(at));
+        let Some(frame) = frame else { continue };
+        let start = (frame.left + frame.width / 2.0, frame.top + frame.height);
+        kept.push(EdgeLine {
+            from: String::new(),
+            to: ids[boxes[at].node].clone(),
+            path: path_of(&[start, end]),
+            kind: "option".to_owned(),
+            on: String::new(),
+            label_x: 0.0,
+            label_y: 0.0,
+            not_taken: false,
+            resource: String::new(),
+        });
+    }
+    kept
+}
+
+/// The last point of an SVG path from [`path_of`].
+fn end_of(path: &str) -> Option<(f64, f64)> {
+    let last = path
+        .rsplit([' ', 'C', 'M', 'L'])
+        .find(|part| !part.is_empty())?;
+    let (x, y) = last.split_once(',')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
 }
 
 /// The dots of the resources the task at `at` uses, along its box's top right corner.
@@ -1231,6 +1468,7 @@ fn group_frames(boxes: &[graph::GroupBox], group_ids: &[String]) -> Vec<GroupFra
                 height: b.height,
                 label: fitted(id.rsplit('.').next().unwrap_or(id), 28),
                 group_id: id.clone(),
+                options: false,
             }
         })
         .collect()

@@ -38,7 +38,7 @@ not taken, as described in [Routing by outcome](08-outcomes.md). A timeout leave
 `success` whether or not a task takes it. Use `.on(TimedOut)` to do something about it.
 
 A task waits for all its upstream tasks to end. To act on the first of several, as
-`fast_report` does above, add a wait step that watches them and ends when one does.
+`fast_report` does above, use [`first_of`](20-first-of.md).
 
 ## Running and deploying wait steps
 

@@ -1077,3 +1077,66 @@ fn a_wait_step_has_no_cleanup() {
     let found = problems(&json!({"tasks": [task], "edges": []})).join("\n");
     assert!(found.contains("a wait step has no cleanup"), "{found}");
 }
+
+fn first_of_dag(at_least: Option<u32>, options: &[&str]) -> Json {
+    let mut node = task("first", &json!({}));
+    node["kind"] = json!("first_of");
+    node.as_object_mut().unwrap().remove("arguments");
+    if let Some(n) = at_least {
+        node["at_least"] = json!(n);
+    }
+    let edges: Vec<Json> = options.iter().map(|o| edge(o, "first", "data")).collect();
+    json!({
+        "tasks": [task("a", &json!({})), task("b", &json!({})), node],
+        "edges": edges
+    })
+}
+
+#[rstest::rstest]
+#[case::two(None, &["a", "b"], "")]
+#[case::both_needed(Some(2), &["a", "b"], "")]
+#[case::just_one(None, &["a"], "at least two different")]
+#[case::the_same_twice(None, &["a", "a"], "at least two different")]
+#[case::zero(Some(0), &["a", "b"], "can't be reached")]
+#[case::too_many(Some(3), &["a", "b"], "can't be reached")]
+fn what_a_first_of_needs(
+    #[case] at_least: Option<u32>,
+    #[case] options: &[&str],
+    #[case] wrong: &str,
+) {
+    let found = problems(&first_of_dag(at_least, options)).join("\n");
+    if wrong.is_empty() {
+        assert_eq!(found, "");
+    } else {
+        assert!(found.contains(wrong), "{found}");
+    }
+}
+
+#[test]
+fn a_first_of_has_no_cleanup() {
+    let mut dag = first_of_dag(None, &["a", "b"]);
+    dag["tasks"][2]["cleanup"] = json!({"run": "python", "retries": 0, "retry_delay_ms": 0});
+    let found = problems(&dag).join("\n");
+    assert!(
+        found.contains("first_of has nothing to clean up"),
+        "{found}"
+    );
+}
+
+#[test]
+fn nothing_is_ordered_before_a_first_of() {
+    let mut dag = first_of_dag(None, &["a", "b"]);
+    dag["tasks"]
+        .as_array_mut()
+        .unwrap()
+        .push(task("gate", &json!({})));
+    dag["edges"]
+        .as_array_mut()
+        .unwrap()
+        .push(edge("gate", "first", "order"));
+    let found = problems(&dag).join("\n");
+    assert!(
+        found.contains("nothing can be ordered before first_of"),
+        "{found}"
+    );
+}

@@ -1423,3 +1423,143 @@ async fn a_data_edge_to_what_follows_stays_and_an_unused_resources_link_is_dashe
         "{drawn:?}"
     );
 }
+
+/// A run of a DAG where `a` and `b` lead to a `first_of` that `b` won, `after` following it.
+fn first_of_run(tasks: &Value, edges: &Value) -> Scripted {
+    scripted(&[
+        (
+            "/api/v1/runs/r2",
+            200,
+            json!({
+                "run": run_at("r2", "sync", "running", 2),
+                "tasks": [
+                    task("a", "running", None, None),
+                    task("b", "success", Some("SUCCESS"), None),
+                    task("first", "success", Some("SUCCESS"), None),
+                    task("after", "queued", None, None),
+                ],
+                "code_hashes": ["sha256:a"],
+                "params": {}
+            }),
+        ),
+        (
+            "/api/v1/runs/r2/dag",
+            200,
+            json!({"id": "sync", "tasks": tasks, "edges": edges}),
+        ),
+        ("/api/v1/runs/r2/commands", 200, json!({"commands": []})),
+        (
+            "/api/v1/runs/r2/tasks/first/output",
+            200,
+            json!({"outcome": "SUCCESS", "value": {"$value": 1, "winner": "b"}}),
+        ),
+    ])
+}
+
+fn first_of_edges() -> Value {
+    json!([
+        {"from": "a", "to": "first", "kind": "data"},
+        {"from": "b", "to": "first", "kind": "data"},
+        {"from": "first", "to": "after", "kind": "data"}
+    ])
+}
+
+#[tokio::test]
+async fn what_a_first_of_chooses_from_is_one_box_with_one_dashed_line() {
+    let tasks = json!([
+        {"id": "a"}, {"id": "b"}, {"id": "first", "kind": "first_of"}, {"id": "after"}
+    ]);
+    let app = ui(vec![deployment(
+        "etl",
+        first_of_run(&tasks, &first_of_edges()),
+    )]);
+    let (status, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        attrs(&html, "svg.dag rect.group-box", "class"),
+        ["group-box options"]
+    );
+    assert_eq!(texts(&html, "svg.dag text.group-label"), ["first of"]);
+    assert_eq!(
+        attrs(&html, "svg.dag path.edge", "class"),
+        ["edge data", "edge option"],
+        "one line out of the box"
+    );
+    assert_eq!(
+        attrs(&html, "svg.dag a.node.won", "data-task"),
+        ["b"],
+        "the winner is outlined"
+    );
+    assert_eq!(
+        attrs(&html, "svg.dag a.node.first-of", "data-task"),
+        ["first"]
+    );
+    assert!(
+        texts(&html, "svg.dag a.node.first-of text.sub")[0].contains('b'),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn at_least_says_its_count_on_its_box() {
+    let tasks = json!([
+        {"id": "a"}, {"id": "b"}, {"id": "first", "kind": "first_of", "at_least": 2}, {"id": "after"}
+    ]);
+    let app = ui(vec![deployment(
+        "etl",
+        first_of_run(&tasks, &first_of_edges()),
+    )]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(texts(&html, "svg.dag text.group-label"), ["at least 2 of"]);
+}
+
+#[tokio::test]
+async fn options_at_different_depths_keep_a_dashed_line_each() {
+    let tasks = json!([
+        {"id": "a"}, {"id": "b"}, {"id": "first", "kind": "first_of"}, {"id": "after"}
+    ]);
+    let edges = json!([
+        {"from": "a", "to": "b", "kind": "order"},
+        {"from": "a", "to": "first", "kind": "data"},
+        {"from": "b", "to": "first", "kind": "data"},
+        {"from": "first", "to": "after", "kind": "data"}
+    ]);
+    let app = ui(vec![deployment("etl", first_of_run(&tasks, &edges))]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(
+        attrs(&html, "svg.dag rect.group-box", "class"),
+        Vec::<String>::new()
+    );
+    let classes = attrs(&html, "svg.dag path.edge", "class");
+    assert_eq!(
+        classes.iter().filter(|c| *c == "edge option").count(),
+        2,
+        "{classes:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_task_given_to_two_nodes_keeps_a_dashed_line_to_each() {
+    let tasks = json!([
+        {"id": "a"}, {"id": "b"}, {"id": "first", "kind": "first_of"},
+        {"id": "after", "kind": "first_of"}
+    ]);
+    let edges = json!([
+        {"from": "a", "to": "first", "kind": "data"},
+        {"from": "b", "to": "first", "kind": "data"},
+        {"from": "a", "to": "after", "kind": "data"},
+        {"from": "b", "to": "after", "kind": "data"}
+    ]);
+    let app = ui(vec![deployment("etl", first_of_run(&tasks, &edges))]);
+    let (_, html) = get(&app, "/d/etl/runs/r2", &[]).await;
+    assert_eq!(
+        attrs(&html, "svg.dag rect.group-box", "class"),
+        Vec::<String>::new()
+    );
+    let classes = attrs(&html, "svg.dag path.edge", "class");
+    assert_eq!(
+        classes.iter().filter(|c| *c == "edge option").count(),
+        4,
+        "{classes:?}"
+    );
+}

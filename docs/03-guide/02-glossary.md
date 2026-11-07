@@ -63,6 +63,11 @@ The names used across the documentation, the API and the logs.
 : An edge from a `@branch` task to one of its direct downstream tasks. Taken when the
   branch chose that target; otherwise it counts as skipped, like any edge not taken.
 
+**first_of** and **at_least**
+: Nodes the master ends when one, or a given number, of their options have succeeded.
+  They pass the chosen values on and can also give their task IDs. See
+  [Acting on the first of several](../02-dags/20-first-of.md).
+
 **run_if** (trigger rule)
 : When a task runs, from the states of its incoming edges. `RunIf.NONE_FAILED` (the
   default): runs when every edge that wasn't skipped succeeded and at least one did;

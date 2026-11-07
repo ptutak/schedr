@@ -201,6 +201,14 @@ pub enum TaskKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_wait_ms: Option<u64>,
     },
+    /// `first_of` / `at_least` (decision 347): ended by the master, no process and no slot, as
+    /// soon as enough of its upstream edges are taken. Its output is `{"$value": ..., "winner":
+    /// ...}`: the winner's output and ID, or for `at_least` lists of them in the order they ended.
+    FirstOf {
+        /// `at_least`'s count; `None`: `first_of`, ending with one edge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at_least: Option<u32>,
+    },
     /// An inline command, run by the agent.
     Command {
         /// The command line.
@@ -446,7 +454,7 @@ impl Task {
                 .chain(env.values())
                 .flat_map(Template::references)
                 .collect(),
-            TaskKind::Empty => Vec::new(),
+            TaskKind::Empty | TaskKind::FirstOf { .. } => Vec::new(),
         }
     }
 }

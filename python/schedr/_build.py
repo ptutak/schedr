@@ -24,6 +24,7 @@ from schedr._model import (
     Edge,
     EdgeKind,
     Expand,
+    FirstOfKind,
     IdError,
     ListType,
     ListValue,
@@ -802,6 +803,11 @@ class DagBuilder:
                 raise ValueError(f"task `{end}` is not part of DAG `{self.dag_id}`")
         if from_ == to:
             raise ValueError(f"task `{to}` can't depend on itself")
+        if kind is EdgeKind.ORDER and isinstance(self.tasks[to].kind, FirstOfKind):
+            raise TypeError(
+                f"`{from_}` can't be ordered before `{to}`: what it waits for are the tasks it was "
+                "given, so order those, and keep it out of a group something is ordered before"
+            )
         task = self.tasks[from_]
         if isinstance(task.kind, PythonKind) and task.kind.branch and not plain:
             # Every edge out of a branch is taken only when it chose its target.

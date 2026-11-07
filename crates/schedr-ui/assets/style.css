@@ -200,6 +200,12 @@ svg.dag .group-box { fill: var(--neutral-bg); fill-opacity: 0.45; stroke: var(--
 svg.dag text.group-label { fill: var(--dim); font: 600 11px system-ui, sans-serif; letter-spacing: 0.02em; }
 svg.dag .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
 svg.dag .edge.order { stroke-dasharray: 5 4; }
+/* What a first_of chooses from (decision 351): one box, one dashed line, not each a dependency. */
+svg.dag .edge.option { stroke: var(--ok); stroke-dasharray: 8 4; }
+.edge-key.option { border-top: 2px dashed var(--ok); }
+svg.dag .group-box.options { stroke: var(--ok); fill-opacity: 0.2; stroke-dasharray: 8 4; }
+svg.dag .node.first-of .box { rx: 22px; }
+svg.dag .node.won .box { stroke: var(--ok); stroke-width: 3; }
 /* A resource's requirement (uses=, decision 262): dotted, in the resources' colour; the link to a
    cleanup nothing waits for (blocking=False, decision 272) dashed. */
 svg.dag .edge.requirement { stroke: var(--resource); stroke-dasharray: 1.5 3; stroke-linecap: round; }

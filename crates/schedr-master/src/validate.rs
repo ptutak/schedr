@@ -18,6 +18,7 @@ use schedr_model::{
 };
 
 use crate::fire_times::FireTimes;
+use crate::mapping;
 
 #[cfg(test)]
 mod tests;
@@ -86,6 +87,7 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
     event_problems(dag, &mut problems);
     edge_problems(dag, &seen, &mut problems);
     reference_problems(dag, &seen, &mut problems);
+    first_of_problems(dag, &mut problems);
     resource_problems(dag, &seen, &mut problems);
     role_problems(dag, &mut problems);
     if let Some(cycle) = cycle(dag, &seen) {
@@ -195,6 +197,9 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         (TaskKind::Empty, _) => Some(format!(
             "task `{id}`: an empty task has nothing to clean up"
         )),
+        (TaskKind::FirstOf { .. }, _) => {
+            Some(format!("task `{id}`: first_of has nothing to clean up"))
+        }
         (TaskKind::Script { .. }, _) => {
             Some(format!("task `{id}`: a script's cleanup is a script"))
         }
@@ -343,7 +348,7 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
                 ));
             }
         }
-        TaskKind::Empty => {}
+        TaskKind::Empty | TaskKind::FirstOf { .. } => {}
     }
     in_text
 }
@@ -763,6 +768,52 @@ fn role_problems(dag: &Dag, problems: &mut Vec<String>) {
     }
 }
 
+/// What a `first_of` or `at_least` needs (decision 347): options to choose from, each a whole
+/// task's one value, and a count they can reach.
+fn first_of_problems(dag: &Dag, problems: &mut Vec<String>) {
+    for task in &dag.tasks {
+        let TaskKind::FirstOf { at_least } = task.kind else {
+            continue;
+        };
+        let id = &task.id;
+        let options: Vec<&TaskId> = dag
+            .edges_into(id)
+            .filter(|e| e.kind != EdgeKind::Requirement)
+            .map(|e| &e.from)
+            .collect();
+        if dag.edges_into(id).any(|e| e.kind == EdgeKind::Order) {
+            problems.push(format!(
+                "task `{id}`: nothing can be ordered before first_of: what it waits for are the \
+                 tasks it was given"
+            ));
+        }
+        let distinct: BTreeSet<&TaskId> = options.iter().copied().collect();
+        if distinct.len() < 2 || distinct.len() != options.len() {
+            problems.push(format!(
+                "task `{id}`: first_of needs at least two different tasks to choose from"
+            ));
+        }
+        for option in &distinct {
+            if dag.task(option).is_some_and(mapping::is_mapped) {
+                problems.push(format!(
+                    "task `{id}`: `{option}` is mapped, so it has no one value to choose"
+                ));
+            }
+        }
+        if at_least
+            .is_some_and(|n| n == 0 || usize::try_from(n).unwrap_or(usize::MAX) > options.len())
+        {
+            problems.push(format!(
+                "task `{id}`: at_least can't be reached with {} tasks to choose from",
+                options.len()
+            ));
+        }
+        if mapping::is_mapped(task) {
+            problems.push(format!("task `{id}`: first_of can't be mapped"));
+        }
+    }
+}
+
 fn reference_problems(dag: &Dag, tasks: &BTreeSet<&TaskId>, problems: &mut Vec<String>) {
     for task in &dag.tasks {
         let mut reported = BTreeSet::new();
@@ -909,7 +960,7 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
         .iter()
         .filter_map(|task| {
             let streams = match task.kind {
-                TaskKind::Empty => return None,
+                TaskKind::Empty | TaskKind::FirstOf { .. } => return None,
                 TaskKind::Command { .. } | TaskKind::Script { .. } => 2,
                 TaskKind::Python { .. } | TaskKind::Sensor { .. } => 1,
             };

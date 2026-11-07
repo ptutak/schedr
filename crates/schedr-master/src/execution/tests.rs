@@ -1274,3 +1274,352 @@ async fn a_failed_cleanup_stays_after_a_retry_whose_cleanup_worked() {
         Some(CleanupResult::Failed)
     );
 }
+
+/// `a` and `b` (the second with `Rows` and `Other` outcomes taken only on `Rows`) lead to `first`,
+/// which `after` follows; `count` is `at_least`'s.
+fn first_of_dag(count: Option<u32>) -> Dag {
+    let mut node = task("first", "first_of", 0);
+    if let Some(n) = count {
+        node["at_least"] = json!(n);
+    }
+    dag(
+        &json!([
+            task("a", "python", 0),
+            task("b", "python", 0),
+            task("c", "python", 0),
+            node,
+            task("after", "python", 0)
+        ]),
+        &json!([
+            {"from": "a", "to": "first", "kind": "data", "on": ["Rows"]},
+            {"from": "b", "to": "first", "kind": "data"},
+            {"from": "c", "to": "first", "kind": "data"},
+            {"from": "first", "to": "after", "kind": "data"}
+        ]),
+    )
+}
+
+fn succeeded_with(output: Json, outcome: &str) -> AttemptResult {
+    AttemptResult {
+        output: Some(output),
+        outcome: Some(outcome.to_owned()),
+        ..ended(AttemptStatus::Success)
+    }
+}
+
+async fn state_of(db: &Database, run_id: &str, task: &str) -> S {
+    states(db, run_id)
+        .await
+        .into_iter()
+        .find(|(id, _)| id == task)
+        .unwrap()
+        .1
+}
+
+async fn first_output(db: &Database, run_id: &str) -> Json {
+    let wanted = id("first");
+    db.outputs_of(run_id, &[&wanted])
+        .await
+        .unwrap()
+        .remove(&wanted)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_first_of_ends_with_the_first_task_taken_and_the_others_run_on() {
+    let (execution, db, run_id) = with_run(first_of_dag(None), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c"] {
+        start(&db, &run_id, name).await;
+    }
+    // On an outcome its edge isn't taken on: it doesn't count.
+    let other = succeeded_with(json!("other"), "Other");
+    execution
+        .attempt_finished(&run_id, &id("a"), -1, &other, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Scheduled);
+
+    let won = succeeded_with(json!("b's"), "Rows");
+    execution
+        .attempt_finished(&run_id, &id("b"), -1, &won, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Success);
+    assert_eq!(state_of(&db, &run_id, "after").await, S::Queued);
+    assert_eq!(
+        first_output(&db, &run_id).await,
+        json!({"$value": "b's", "winner": "b"})
+    );
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let node = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("first"))
+        .unwrap();
+    assert_eq!(
+        node.outcome.as_deref(),
+        Some("Rows"),
+        "it reads as its winner did"
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "c").await,
+        S::Running,
+        "nothing is cancelled"
+    );
+
+    // A loser failing later fails the run, not the node or what followed it.
+    start(&db, &run_id, "after").await;
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("after"),
+            -1,
+            &ended(AttemptStatus::Success),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(run_state(&db, &run_id).await, RunState::Running);
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("c"),
+            -1,
+            &ended(AttemptStatus::Failed),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Success);
+    assert_eq!(state_of(&db, &run_id, "after").await, S::Success);
+    assert_eq!(run_state(&db, &run_id).await, RunState::Failed);
+}
+
+#[tokio::test]
+async fn at_least_ends_with_its_count_in_the_order_they_ended() {
+    let (execution, db, run_id) = with_run(first_of_dag(Some(2)), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c"] {
+        start(&db, &run_id, name).await;
+    }
+    let result = |value: &str| succeeded_with(json!(value), "SUCCESS");
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("c"),
+            -1,
+            &result("c's"),
+            ts("2026-10-21T08:00:01Z"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Scheduled);
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("b"),
+            -1,
+            &result("b's"),
+            ts("2026-10-21T08:00:02Z"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Success);
+    assert_eq!(
+        first_output(&db, &run_id).await,
+        json!({"$value": ["c's", "b's"], "winner": ["c", "b"]})
+    );
+}
+
+#[tokio::test]
+async fn a_first_of_none_can_make_ends_as_what_stopped_them() {
+    let (execution, db, run_id) = with_run(first_of_dag(None), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c"] {
+        start(&db, &run_id, name).await;
+    }
+    let failed = ended(AttemptStatus::Failed);
+    for name in ["a", "b"] {
+        execution
+            .attempt_finished(&run_id, &id(name), -1, &failed, ts(NOW))
+            .await
+            .unwrap();
+        assert_eq!(
+            state_of(&db, &run_id, "first").await,
+            S::Scheduled,
+            "c still can"
+        );
+    }
+    execution
+        .attempt_finished(&run_id, &id("c"), -1, &failed, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(state_of(&db, &run_id, "first").await, S::UpstreamFailed);
+    assert_eq!(state_of(&db, &run_id, "after").await, S::UpstreamFailed);
+}
+
+#[tokio::test]
+async fn a_first_of_held_back_chooses_by_when_they_ended_not_by_its_edges() {
+    let mut edges = serde_json::to_value(first_of_dag(None).edges).unwrap();
+    edges[0].as_object_mut().unwrap().remove("on");
+    edges
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from": "gate", "to": "first", "kind": "requirement"}));
+    let mut tasks = serde_json::to_value(first_of_dag(None).tasks).unwrap();
+    tasks
+        .as_array_mut()
+        .unwrap()
+        .push(task("gate", "python", 0));
+    let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c", "gate"] {
+        start(&db, &run_id, name).await;
+    }
+    for (name, at) in [
+        ("c", "2026-10-21T08:00:01Z"),
+        ("b", "2026-10-21T08:00:02Z"),
+        ("a", "2026-10-21T08:00:03Z"),
+    ] {
+        let result = succeeded_with(json!(name), "SUCCESS");
+        execution
+            .attempt_finished(&run_id, &id(name), -1, &result, ts(at))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        state_of(&db, &run_id, "first").await,
+        S::Scheduled,
+        "held back"
+    );
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("gate"),
+            -1,
+            &ended(AttemptStatus::Success),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first_output(&db, &run_id).await,
+        json!({"$value": "c", "winner": "c"})
+    );
+}
+
+#[tokio::test]
+async fn a_mapped_task_expands_over_what_a_first_of_chose() {
+    let mut tasks = serde_json::to_value(first_of_dag(None).tasks).unwrap();
+    let mut each = task("each", "python", 0);
+    each["expand"] = json!({"product": [{"name": "n", "value": {"ref": {
+        "kind": "output", "task": "first", "path": ["$value"]
+    }}}]});
+    tasks.as_array_mut().unwrap().push(each);
+    let mut edges = serde_json::to_value(first_of_dag(None).edges).unwrap();
+    edges
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from": "first", "to": "each", "kind": "data"}));
+    let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "b").await;
+    let result = succeeded_with(json!([1, 2, 3]), "SUCCESS");
+    execution
+        .attempt_finished(&run_id, &id("b"), -1, &result, ts(NOW))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let instances = run
+        .instances
+        .iter()
+        .filter(|i| i.task_id == id("each") && i.map_index >= 0)
+        .count();
+    assert_eq!(instances, 3);
+}
+
+#[tokio::test]
+async fn a_first_of_of_a_first_of_keeps_the_inner_ones_value() {
+    let tasks = json!([
+        task("a", "python", 0),
+        task("b", "python", 0),
+        task("c", "python", 0),
+        task("inner", "first_of", 0),
+        task("outer", "first_of", 0)
+    ]);
+    let edges = json!([
+        {"from": "a", "to": "inner", "kind": "data"},
+        {"from": "b", "to": "inner", "kind": "data"},
+        {"from": "inner", "to": "outer", "kind": "data"},
+        {"from": "c", "to": "outer", "kind": "data"}
+    ]);
+    let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "a").await;
+    let result = succeeded_with(json!("a's"), "SUCCESS");
+    execution
+        .attempt_finished(&run_id, &id("a"), -1, &result, ts(NOW))
+        .await
+        .unwrap();
+    let outer = id("outer");
+    let stored = db.outputs_of(&run_id, &[&outer]).await.unwrap();
+    assert_eq!(
+        stored[&outer],
+        json!({"$value": {"$value": "a's", "winner": "a"}, "winner": "inner"})
+    );
+}
+
+#[tokio::test]
+async fn a_first_of_whose_choice_is_over_what_its_options_may_give_fails() {
+    let mut tasks = serde_json::to_value(first_of_dag(Some(2)).tasks).unwrap();
+    for option in 0..3 {
+        tasks[option]["settings"]["max_output_size"] = json!(16);
+    }
+    let edges = serde_json::to_value(first_of_dag(Some(2)).edges).unwrap();
+    let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["b", "c"] {
+        start(&db, &run_id, name).await;
+        let result = succeeded_with(json!("x".repeat(30)), "SUCCESS");
+        execution
+            .attempt_finished(&run_id, &id(name), -1, &result, ts(NOW))
+            .await
+            .unwrap();
+    }
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Failed);
+    assert_eq!(state_of(&db, &run_id, "after").await, S::UpstreamFailed);
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let node = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("first"))
+        .unwrap();
+    assert!(
+        node.reason
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("output_too_large"),
+        "{node:?}"
+    );
+    let first = id("first");
+    assert!(db.outputs_of(&run_id, &[&first]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_first_of_keeps_what_its_options_were_each_allowed_whatever_its_own_limit() {
+    let mut tasks = serde_json::to_value(first_of_dag(Some(2)).tasks).unwrap();
+    tasks[3]["settings"]["max_output_size"] = json!(32);
+    let edges = serde_json::to_value(first_of_dag(Some(2)).edges).unwrap();
+    let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["b", "c"] {
+        start(&db, &run_id, name).await;
+        let result = succeeded_with(json!("x".repeat(30)), "SUCCESS");
+        execution
+            .attempt_finished(&run_id, &id(name), -1, &result, ts(NOW))
+            .await
+            .unwrap();
+    }
+    assert_eq!(state_of(&db, &run_id, "first").await, S::Success);
+}

@@ -1106,6 +1106,43 @@ impl Database {
         Ok(outputs)
     }
 
+    /// `tasks` of a run whose success is stored, in the order they ended (one succeeding now
+    /// isn't among them yet: it ended last).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored ID doesn't read.
+    pub async fn ended_in_order(
+        &self,
+        run_id: &str,
+        tasks: &[&TaskId],
+    ) -> Result<Vec<TaskId>, DbError> {
+        let mut ended: Vec<TaskId> = Vec::new();
+        // Small: the tasks one `first_of` chooses from. One query, ordered by the database (a
+        // time as text would follow Postgres's `DateStyle`).
+        let wanted: Vec<String> = (2..tasks.len() + 2).map(|n| format!("${n}")).collect();
+        let text = format!(
+            "SELECT task_id FROM task_instances \
+             WHERE run_id = $1{{uuid}} AND map_index = -1 AND state = 'success' \
+             AND task_id IN ({}) ORDER BY updated_at, task_id",
+            wanted.join(", ")
+        );
+        if tasks.is_empty() {
+            return Ok(ended);
+        }
+        let rows: Vec<(String,)> = on_pool!(self, |pool, backend| {
+            let mut query = sqlx::query_as(sql_text(backend, &text)).bind(run_id);
+            for task in tasks {
+                query = query.bind(task.as_str());
+            }
+            query.fetch_all(pool).await?
+        });
+        for (task_id,) in rows {
+            ended.push(task_id_of(task_id)?);
+        }
+        Ok(ended)
+    }
+
     /// A mapped task's instances in a run, in `map_index` order: each one's state, and its
     /// outcome and output once it succeeded (what a mapped task's whole output and its lanes
     /// are made of, decisions 70 and 77).

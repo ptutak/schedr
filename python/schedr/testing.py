@@ -478,7 +478,8 @@ class _OutputTypes:
             if outcome == TIMED_OUT_NAME:
                 return decode(data, TimedOut)
             return decode(data, member_named(output_hint(hints.get("return", Any)), outcome))
-        if isinstance(kind, PythonKind):
+        # A branch's output is the IDs it chose: its annotation is the handles it returned.
+        if isinstance(kind, PythonKind) and not kind.branch:
             hints = type_hints(entry.functions[task_id], f"task `{task_id}`")
             return decode(data, member_named(hints.get("return", Any), outcome))
         if isinstance(kind, CommandKind) and (

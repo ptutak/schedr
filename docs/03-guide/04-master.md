@@ -182,7 +182,9 @@ skipped, once no other edge can still fail. The first failure wins without waiti
 the rest. [Routing by outcome](../02-dags/08-outcomes.md) is how a DAG sets the rule.
 
 An empty task the rule marks ready is completed by the master (`success`, outcome
-`SUCCESS`); no worker is assigned.
+`SUCCESS`); no worker is assigned. The master also ends
+[`first_of` and `at_least`](../02-dags/20-first-of.md) itself when enough options succeed,
+without waiting for the others. They need no worker or slot.
 
 ## Between rounds: messages from workers
 

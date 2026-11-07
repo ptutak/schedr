@@ -114,8 +114,22 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
             assert result.tasks["full_report"].output == (
                 "sees_slow_task: Task slow_task success; sees_absent_task: timed out"
             )
-            assert result.tasks["sees_either"].output == "sees_slow_task"
-            assert result.tasks["fast_report"].output == "sees_slow_task ended first"
+            assert result.tasks["first_of"].output == {
+                "$value": "Task slow_task success",
+                "winner": "sees_slow_task",
+            }
+            assert result.tasks["fast_report"].output == (
+                "sees_slow_task came first: Task slow_task success"
+            )
+        if path.name == "first_of.py":
+            assert result.tasks["price"].output in {
+                "cached prices from from_cache",
+                "fresh prices from from_service",
+            }
+            assert result.tasks["accepted"].output.startswith("2 regions: ")
+            assert result.tasks["choose"].output == ["as_pdf"]
+            assert result.tasks["as_html"].state == "skipped"
+            assert result.tasks["publish"].output == "published report.pdf"
         if path.name == "event_triggers.py":
             assert result.tasks["load"].output == "a.csv: 3 bytes in /in/a.csv"
         if path.name == "async_tasks.py":

@@ -643,6 +643,10 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             reason: pb::RejectReason::InvalidSpecification,
             detail: "empty tasks are completed by the master".to_owned(),
         }),
+        TaskKind::FirstOf { .. } => Err(NotRun::Rejected {
+            reason: pb::RejectReason::InvalidSpecification,
+            detail: "first_of is completed by the master".to_owned(),
+        }),
         TaskKind::Script { .. } => plan_script(spec, setup, root_dir, &vars),
     }
 }

@@ -50,7 +50,13 @@ from schedr.context import (
     running,
 )
 from schedr.event_triggers import Event, event_data_hint
-from schedr.outcomes import TIMED_OUT_NAME, TimedOut, from_return_type, outcome_enum
+from schedr.outcomes import (
+    FIRST_OF_VALUE,
+    TIMED_OUT_NAME,
+    TimedOut,
+    from_return_type,
+    outcome_enum,
+)
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
 from schedr.runner.protocol import Asking, Channel
 from schedr.sensors import output_hint
@@ -422,10 +428,12 @@ def _narrowed(
     """The member of a union annotation the upstream's outcome names, else the annotation.
 
     A plain JSON object can fit several dataclasses of an outcome union: the stored outcome
-    says which one it is (only a whole output: a path reaches into one member already).
+    says which one it is (only a whole output: a path reaches into one member already; a
+    ``first_of``'s value is its winner's whole output, with the winner's outcome).
     """
     outcome = (outcomes or {}).get(reference.get("task", ""))
-    if reference.get("kind") != "output" or reference.get("path"):
+    path = list(reference.get("path") or ())
+    if reference.get("kind") != "output" or (path and path != [FIRST_OF_VALUE]):
         return annotation
     return member_named(annotation, outcome)
 
