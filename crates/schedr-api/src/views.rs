@@ -771,6 +771,31 @@ pub struct WorkerView {
     /// kept while it is disconnected; none from an older agent's registration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_id: Option<String>,
+    /// Its slots for wait steps.
+    #[serde(default)]
+    pub watcher_slots: u32,
+    /// The processes running its wait steps, as its last heartbeat said (decision 343), and
+    /// code sets whose hosts were lost.
+    #[serde(default)]
+    pub watcher_hosts: Vec<WatcherHostView>,
+}
+
+/// A process running a worker's wait steps, or a code set whose hosts were lost.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct WatcherHostView {
+    /// The code it runs: its folders' names, the copies' hashes.
+    pub code: String,
+    /// The wait steps on it (none: no host runs this code now).
+    pub wait_steps: u32,
+    /// Its process's threads, the wait steps' among them.
+    pub threads: u32,
+    /// Those a wait step is tied to: running its `to_thread` calls, or started by it. The rest
+    /// of the process, a library's pools among them, can't be told apart.
+    pub tied_threads: u32,
+    /// The memory it uses.
+    pub memory_bytes: u64,
+    /// Hosts of this code lost since the agent started: crashes and memory kills.
+    pub hosts_lost: u64,
 }
 
 /// Something wrong with a worker.
@@ -810,6 +835,19 @@ impl From<&WorkerRecord> for WorkerView {
                 })
                 .collect(),
             master_id: None,
+            watcher_slots: worker.watcher_slots,
+            watcher_hosts: worker
+                .watcher_hosts
+                .iter()
+                .map(|host| WatcherHostView {
+                    code: host.code.clone(),
+                    wait_steps: host.wait_steps,
+                    threads: host.threads,
+                    tied_threads: host.tied_threads,
+                    memory_bytes: host.memory_bytes,
+                    hosts_lost: host.hosts_lost,
+                })
+                .collect(),
         }
     }
 }

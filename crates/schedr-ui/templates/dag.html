@@ -36,6 +36,27 @@
   <ul>{% for at in conflicts %}<li class="mono">{{ at }}</li>{% endfor %}</ul>
 </div>
 {% endif %}
+{% if !switched_off.is_empty() %}
+<div class="banner warning">
+  These wait steps got their hosts killed too many times in a row, so they fail at once until switched on, or until their code changes:
+  <table class="list">
+    <thead><tr><th>Wait step</th><th>Strikes</th><th>Switched off</th><th></th></tr></thead>
+    <tbody>
+    {% for sensor in switched_off %}
+      <tr>
+        <td class="mono">{{ sensor.sensor }}</td>
+        <td>{{ sensor.strikes }}</td>
+        <td class="time">{{ sensor.at }}</td>
+        <td>{% call confirm::action("Switch on", sensor.title(), "It runs again, with its strikes forgotten. If it holds its host up again, it is switched off again after as many strikes.", sensor.action, "", page.base) %}{% endcall %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% if !switched_off_unavailable.is_empty() %}
+<div class="banner warning">Wait steps switched off can't be told now: {{ switched_off_unavailable }}</div>
+{% endif %}
 <dl class="facts">
   <dt>Schedule</dt><dd class="mono">{{ row.schedule }}</dd>
   <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>

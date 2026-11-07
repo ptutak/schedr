@@ -17,6 +17,7 @@ async fn register(db: &Database, id: &str) -> Result<(), DbError> {
         schedr_version: "0.1.0",
         queues: &[],
         slots: 1,
+        watcher_slots: 0,
         log_endpoint: "",
     };
     db.register_worker(&registration, "2026-10-30T12:00:00Z".parse().unwrap())

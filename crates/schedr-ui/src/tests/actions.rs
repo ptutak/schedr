@@ -447,12 +447,163 @@ async fn the_workers_page_shows_each_with_its_warnings_and_drain_or_resume() {
     );
     assert_eq!(events_followed(&html), "/events?kinds=workers");
     // A warning row spans the table (one deployment: no Deployment column).
-    assert_eq!(texts(&html, "table.workers thead th").len(), 8);
-    assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["7"]);
+    assert_eq!(texts(&html, "table.workers thead th").len(), 9);
+    assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["8"]);
     // The dialogs wait out the live reloads.
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),
         ["live:change[!schedrDialogOpen()]"]
+    );
+}
+
+#[tokio::test]
+async fn the_workers_page_shows_a_workers_hosts_and_wait_steps_apart_from_its_tasks() {
+    let hosts = json!([
+        {"code": "0123456789abcdef,fedcba9876543210", "wait_steps": 2, "threads": 31,
+         "tied_threads": 1, "memory_bytes": 157_286_400_u64, "hosts_lost": 3},
+        {"code": "aaaaaaaabbbbbbbb", "wait_steps": 0, "threads": 0, "tied_threads": 0,
+         "memory_bytes": 0, "hosts_lost": 1},
+    ]);
+    let mut active = worker("w1", "active", false, &json!([]));
+    active["running"] = json!(3);
+    active["watcher_slots"] = json!(100);
+    active["watcher_hosts"] = hosts.clone();
+    let mut gone = worker("w2", "lost", false, &json!([]));
+    gone["running"] = json!(0);
+    gone["watcher_slots"] = json!(100);
+    gone["watcher_hosts"] = hosts;
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/workers".to_owned(),
+        (200, json!({"workers": [active, gone]})),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/workers", &[]).await;
+    let cells = texts(&html, "table.workers tbody tr:first-child td");
+    assert!(cells.contains(&"1 / 4".to_owned()), "{cells:?}");
+    assert!(cells.contains(&"2 / 100".to_owned()), "{cells:?}");
+    let mut huge = worker("w1", "active", false, &json!([]));
+    huge["watcher_hosts"] = json!([
+        {"code": "a", "wait_steps": u32::MAX, "threads": 1, "tied_threads": 0,
+         "memory_bytes": 0, "hosts_lost": 0},
+        {"code": "b", "wait_steps": 1, "threads": 1, "tied_threads": 0,
+         "memory_bytes": 0, "hosts_lost": 0},
+    ]);
+    let mut other = super::etl();
+    other.answers.insert(
+        "/api/v1/workers".to_owned(),
+        (200, json!({"workers": [huge]})),
+    );
+    let (status, _) = get(&ui(vec![deployment("etl", other)]), "/workers", &[]).await;
+    assert_eq!(status, StatusCode::OK, "counts past the limit stay at it");
+    assert!(
+        texts(&html, "table.workers td").contains(&"0 / 100".to_owned()),
+        "a worker that is gone runs none, whatever it said last"
+    );
+    let rows: Vec<String> = texts(&html, "tr.host-row td[colspan]")
+        .iter()
+        .map(|row| row.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            "Code 89abcdef, 76543210: 2 wait steps, threads 1 tied and 30 untied, 150.0 MiB, \
+             3 hosts lost",
+            "Code bbbbbbbb: no host now, 1 hosts lost",
+        ],
+        "what a worker that is gone said isn't shown"
+    );
+    assert_eq!(
+        attrs(&html, "tr.host-row span.mono", "title")[0],
+        "0123456789abcdef,fedcba9876543210"
+    );
+}
+
+fn switched_off() -> Value {
+    json!({"sensors": [
+        {"dag_id": "sync", "sensor": "wait_for_file", "strikes": 3,
+         "switched_off_at": "2026-10-15T01:00:00Z"},
+        {"dag_id": "other", "sensor": "wait_more", "strikes": 4,
+         "switched_off_at": "2026-10-15T01:00:00Z"},
+    ]})
+}
+
+#[tokio::test]
+async fn a_dag_page_lists_its_switched_off_sensors_to_switch_on() {
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/sensors/switched-off".to_owned(),
+        (200, switched_off()),
+    );
+    etl.answers.insert(
+        "/api/v1/dags/sync/sensors/wait_for_file/switch-on".to_owned(),
+        (
+            202,
+            command("c1", "switch_on_sensor", "applied", None, &json!({})),
+        ),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (status, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        texts(&html, "#live .banner table td.mono"),
+        ["wait_for_file"],
+        "only its own"
+    );
+    assert_eq!(
+        attrs(&html, "#live .banner dialog form", "hx-post"),
+        ["/d/etl/dags/sync/sensors/wait_for_file/switch-on"]
+    );
+    let (status, html) = post(
+        &app,
+        "/d/etl/dags/sync/sensors/wait_for_file/switch-on",
+        "",
+        &[SAME],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        texts(&html, ".command"),
+        ["Switch on wait_for_file of sync: applied."]
+    );
+}
+
+#[tokio::test]
+async fn the_dags_list_says_how_many_sensors_are_switched_off() {
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/sensors/switched-off".to_owned(),
+        (200, switched_off()),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/", &[]).await;
+    let banner = texts(&html, "#live .banner.warning").join(" ");
+    assert!(banner.contains("2 wait steps switched off"), "{banner}");
+    assert_eq!(
+        attrs(&html, "#live .banner.warning a", "href"),
+        ["/d/etl/dags/sync", "/d/etl/dags/other"]
+    );
+    // None off, and an older webserver without the list: no banner.
+    let app = ui(vec![deployment("etl", super::etl())]);
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(texts(&html, "#live .banner.warning"), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn sensors_that_cant_be_told_are_said_to_be_unknown() {
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/sensors/switched-off".to_owned(),
+        (500, json!({"error": "down"})),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (status, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(status, StatusCode::OK, "the rest of the page still shows");
+    assert!(
+        texts(&html, ".banner.warning")
+            .iter()
+            .any(|text| text.contains("can't be told now")),
+        "{html}"
     );
 }
 

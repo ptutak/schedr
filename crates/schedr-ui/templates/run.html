@@ -50,7 +50,7 @@
       {% for node in graph.nodes %}
       <a class="node{% if node.selected %} selected{% endif %}" href="{{ node.href }}" hx-get="{{ node.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ node.href }}" data-task="{{ node.task_id }}"{% if !node.resource.is_empty() %} data-resource="{{ node.resource }}"{% endif %}>
         <title>{{ node.task_id }} · {{ node.state }}{% if !node.resource.is_empty() %} · resource {{ node.resource }}{% endif %}</title>
-        {% if node.cap.is_empty() %}<rect class="box {{ node.state }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>{% else %}<path class="box cap {{ node.state }}" d="{{ node.cap }}"></path><line class="cap-band" x1="{{ node.band.0 }}" x2="{{ node.band.1 }}" y1="{{ node.band.2 }}" y2="{{ node.band.2 }}"></line>{% endif %}
+        {% if node.cap.is_empty() %}<rect class="box {{ node.look }}" x="{{ node.left }}" y="{{ node.top }}" width="{{ graph.node_width }}" height="{{ graph.node_height }}" rx="8"></rect>{% else %}<path class="box cap {{ node.look }}" d="{{ node.cap }}"></path><line class="cap-band" x1="{{ node.band.0 }}" x2="{{ node.band.1 }}" y1="{{ node.band.2 }}" y2="{{ node.band.2 }}"></line>{% endif %}
         {% for dot in node.uses %}<circle class="uses-dot" cx="{{ dot.x }}" cy="{{ dot.y }}" r="3.5" data-resource="{{ dot.resource }}"><title>uses resource {{ dot.resource }}</title></circle>{% endfor %}
         <text class="name" x="{{ node.left + 12.0 }}" y="{{ node.top + 18.0 }}">{{ node.label }}</text>
         <text class="sub" x="{{ node.left + 12.0 }}" y="{{ node.top + 34.0 }}">{% if node.counts.is_empty() %}{{ node.state }}{% else %}{{ node.counts }}{% endif %}{% if !node.outcome.is_empty() %} · {{ node.outcome }}{% endif %}</text>
@@ -102,7 +102,7 @@ document.addEventListener("DOMContentLoaded", function () { schedrRails(null); }
   {% for task in tasks %}
     <tr>
       <td class="mono"><a href="{{ task.href }}" hx-get="{{ task.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ task.href }}">{{ task.label }}</a></td>
-      <td><span class="state {{ task.state }}">{{ task.status }}</span></td>
+      <td><span class="state {{ task.look }}">{{ task.status }}</span></td>
       <td>{{ task.tries }}</td>
       <td class="dim">{{ task.reason }}</td>
       <td class="time">{{ task.updated_at }}</td>

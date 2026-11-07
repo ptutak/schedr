@@ -581,7 +581,11 @@ async fn the_ui_signs_people_in_and_passes_their_name_on() {
     let basic = "Basic YW5uYTpzZWNyZXQ=";
     let (status, _) = get(&app, "/", &[("authorization", basic)]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(*recording.users.lock().unwrap(), [Some("anna".to_owned())]);
+    // Its DAGs, and its wait steps switched off.
+    assert_eq!(
+        *recording.users.lock().unwrap(),
+        [Some("anna".to_owned()), Some("anna".to_owned())]
+    );
 }
 
 #[tokio::test]

@@ -13,7 +13,7 @@
 {% else %}
 <table class="list workers">
   <thead>
-    <tr><th>Worker</th>{% if several %}<th>Deployment</th>{% endif %}<th>State</th><th>Master</th><th>Queues</th><th>Running</th><th>Version</th><th>Last seen</th><th></th></tr>
+    <tr><th>Worker</th>{% if several %}<th>Deployment</th>{% endif %}<th>State</th><th>Master</th><th>Queues</th><th>Running</th><th>Wait steps</th><th>Version</th><th>Last seen</th><th></th></tr>
   </thead>
   <tbody>
   {% for worker in rows %}
@@ -24,6 +24,7 @@
       <td class="mono">{% if worker.master.is_empty() %}<span class="dim">-</span>{% else %}<a href="{{ worker.master_href }}"{% if !worker.master_now %} class="stale" title="The master it was registered with last"{% endif %}>{{ worker.master }}</a>{% endif %}</td>
       <td>{{ worker.queues }}</td>
       <td>{{ worker.load }}</td>
+      <td>{{ worker.wait_steps }}</td>
       <td class="mono">{{ worker.version }}</td>
       <td class="time">{{ worker.last_seen }}</td>
       <td>{% if worker.actionable %}
@@ -35,8 +36,16 @@
       {% endif %}</td>
     </tr>
     {% if !worker.warnings.is_empty() %}
-    <tr class="error-row"><td></td><td colspan="{% if several %}8{% else %}7{% endif %}">{% for warning in worker.warnings %}<div class="warning-text">{{ warning }}</div>{% endfor %}</td></tr>
+    <tr class="error-row"><td></td><td colspan="{% if several %}9{% else %}8{% endif %}">{% for warning in worker.warnings %}<div class="warning-text">{{ warning }}</div>{% endfor %}</td></tr>
     {% endif %}
+    {% for host in worker.hosts %}
+    <tr class="host-row"><td></td><td colspan="{% if several %}9{% else %}8{% endif %}" class="dim">
+      Code <span class="mono" title="{{ host.code_full }}">{{ host.code }}</span>:
+      {% if host.running %}{{ host.wait_steps }} wait steps,
+      threads {{ host.tied }} tied and {{ host.untied }} untied, {{ host.memory }}{% else %}no host now{% endif %}{% if host.lost > 0 %},
+      <span class="warning-text">{{ host.lost }} hosts lost</span>{% endif %}
+    </td></tr>
+    {% endfor %}
   {% endfor %}
   </tbody>
 </table>

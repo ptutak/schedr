@@ -153,6 +153,13 @@ dl.facts dd { margin: 0; }
 /* Cancelled and skipped: grey, but marked (an outline), unlike a state that says nothing. */
 .state.cancelled, .state.skipped, .state.interrupted { color: var(--text); box-shadow: inset 0 0 0 1px var(--dim); }
 
+/* A wait step at work pulses. */
+@keyframes waiting { 50% { opacity: 0.45; } }
+.state.running.waiting, svg.dag .box.running.waiting { animation: waiting 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .state.running.waiting, svg.dag .box.running.waiting { animation: none; }
+}
+
 .banner {
   border-radius: 8px;
   padding: 10px 14px;

@@ -1921,15 +1921,43 @@
         },
         {
           "additionalProperties": false,
-          "description": "A watcher host is there, its event loop held or not.",
+          "description": "A watcher host is there, its event loop held or not, and how it is doing.",
           "properties": {
+            "loop_lag_ms": {
+              "description": "How long its event loop last took to get to a call, in milliseconds.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "thread_stops": {
+              "description": "`to_thread` calls it stopped so far, each of which may have left shared state half\nupdated.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "threads": {
+              "description": "Its process's threads.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tied_threads": {
+              "description": "Those a wait step is tied to: running its `to_thread` calls, or started by it.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
             "type": {
               "const": "host_alive",
               "type": "string"
             }
           },
           "required": [
-            "type"
+            "type",
+            "threads",
+            "tied_threads",
+            "thread_stops",
+            "loop_lag_ms"
           ],
           "type": "object"
         },

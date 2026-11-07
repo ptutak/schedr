@@ -24,6 +24,7 @@ fn registration<'a>(
         schedr_version: "0.1.0",
         queues,
         slots: 4,
+        watcher_slots: 2,
         log_endpoint: "",
     }
 }
@@ -56,8 +57,52 @@ async fn a_registration_is_recorded_and_listed() {
             running: 0,
             drained: false,
             warnings: vec![],
+            watcher_slots: 2,
+            watcher_hosts: vec![],
         }]
     );
+}
+
+#[tokio::test]
+async fn a_workers_hosts_are_replaced_by_each_heartbeat_and_forgotten_at_registration() {
+    let db = migrated().await;
+    let queues = vec!["default".to_owned()];
+    let worker = registration("w1", "0190a0a0-0000-7000-8000-000000000001", &queues);
+    db.register_worker(&worker, ts("2026-10-22T08:00:00Z"))
+        .await
+        .unwrap();
+    let host = WatcherHostRecord {
+        code: "abc".to_owned(),
+        wait_steps: 2,
+        threads: 31,
+        tied_threads: 1,
+        memory_bytes: 1 << 40,
+        hosts_lost: 3,
+    };
+    db.set_worker_hosts("w1", std::slice::from_ref(&host))
+        .await
+        .unwrap();
+    assert_eq!(db.workers().await.unwrap()[0].watcher_hosts, [host]);
+    db.set_worker_hosts("w1", &[]).await.unwrap();
+    assert_eq!(db.workers().await.unwrap()[0].watcher_hosts, []);
+    db.set_worker_hosts(
+        "w1",
+        &[WatcherHostRecord {
+            code: "abc".to_owned(),
+            wait_steps: 0,
+            threads: 0,
+            tied_threads: 0,
+            memory_bytes: 0,
+            hosts_lost: 1,
+        }],
+    )
+    .await
+    .unwrap();
+    // A new agent says what it has; what the old one said is gone with it.
+    db.register_worker(&worker, ts("2026-10-22T09:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(db.workers().await.unwrap()[0].watcher_hosts, []);
 }
 
 #[tokio::test]

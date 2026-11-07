@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -26,6 +26,13 @@ from schedr.runner.waiting import (
     waited,
 )
 from schedr.sensors import NOT_YET
+
+
+def _next_of_a_step(agent: Channel) -> dict[str, Any]:
+    """What the host next says of a step: a step's end also says how the host is."""
+    while (said := agent.receive())["type"] == "host_alive":
+        pass
+    return said
 
 
 def _host() -> tuple[watchers._Host, Channel]:
@@ -60,7 +67,7 @@ def test_text_that_isnt_utf_8_and_huge_text_get_through() -> None:
 
     def read() -> None:
         for _ in range(3):
-            received.append(agent.receive()["message"]["text"])
+            received.append(_next_of_a_step(agent)["message"]["text"])
 
     reading = threading.Thread(target=read)
     reading.start()
@@ -81,7 +88,7 @@ def test_an_answer_goes_to_who_asked_and_one_for_a_watcher_gone_is_dropped() -> 
     answers: list[dict[str, str]] = []
     asking = threading.Thread(target=lambda: answers.append(own.ask({"type": "secret_get"})))
     asking.start()
-    assert agent.receive()["message"] == {"type": "secret_get"}
+    assert _next_of_a_step(agent)["message"] == {"type": "secret_get"}
     host.answer(9, {"type": "secret", "value": "not for it"})
     host.answer(3, {"type": "secret", "value": "its own"})
     asking.join()
@@ -128,7 +135,7 @@ def test_a_cancelled_watcher_says_so_and_cancelling_one_ended_is_harmless(
         host.cancel(5)
 
     asyncio.run(main())
-    assert agent.receive()["message"] == {"type": "watcher_cancelled"}
+    assert _next_of_a_step(agent)["message"] == {"type": "watcher_cancelled"}
 
 
 def test_a_watcher_cancelled_before_its_first_turn_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,7 +156,7 @@ def test_a_watcher_cancelled_before_its_first_turn_says_so(monkeypatch: pytest.M
     asyncio.run(main())
     assert ran == []
     assert host._watchers == {}
-    assert agent.receive()["message"] == {"type": "watcher_cancelled"}
+    assert _next_of_a_step(agent)["message"] == {"type": "watcher_cancelled"}
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
@@ -187,7 +194,7 @@ def test_what_a_watcher_left_running_ends_before_its_end_is_told(
 
     asyncio.run(main())
     assert events == ["False", "child ended", "told"]
-    assert agent.receive()["message"]["type"] == (
+    assert _next_of_a_step(agent)["message"]["type"] == (
         "watcher_cancelled" if cancelled else "task_succeeded"
     )
 
@@ -196,14 +203,14 @@ def test_an_error_naming_a_file_that_isnt_utf_8_still_gets_through() -> None:
     host, agent = _host()
     own = watchers.WatcherChannel(host, 5)
     own.send({"type": "task_failed", "error": {"message": "missing \udc80"}})
-    assert agent.receive()["message"]["error"]["message"] == "missing ?"
+    assert _next_of_a_step(agent)["message"]["error"]["message"] == "missing ?"
 
 
 def test_a_result_too_large_to_send_is_a_failure_not_silence() -> None:
     host, agent = _host()
     own = watchers.WatcherChannel(host, 5)
     watchers._tell(own, {"type": "task_failed", "x": "y" * (watchers.MAX_MESSAGE_SIZE + 1)})
-    message = agent.receive()["message"]
+    message = _next_of_a_step(agent)["message"]
     assert message["type"] == "task_failed"
     assert message["kind"] == "output_too_large"
 
@@ -585,7 +592,15 @@ def test_a_call_stopped_waiting_for_its_turn_to_ask_never_asks() -> None:
 
 
 def _watched(steps: Callable[[], Coroutine[Any, Any, None]], limit: float) -> list[dict[str, Any]]:
-    """What the watchdog says while `steps` run on the loop."""
+    """What the watchdog says while `steps` run on the loop, other than that it is there."""
+    said = _said_by_watchdog(steps, limit)
+    return [message for message in said if message["type"] != "host_alive"]
+
+
+def _said_by_watchdog(
+    steps: Callable[[], Coroutine[Any, Any, None]], limit: float
+) -> list[dict[str, Any]]:
+    """All the watchdog says while `steps` run on the loop."""
     host, agent = _host()
     said: list[dict[str, Any]] = []
 
@@ -605,7 +620,128 @@ def _watched(steps: Callable[[], Coroutine[Any, Any, None]], limit: float) -> li
         await asyncio.sleep(0.05)
 
     asyncio.run(main())
-    return [message for message in said if message["type"] != "host_alive"]
+    return said
+
+
+def test_the_watchdog_says_how_the_host_is_doing() -> None:
+    async def steps() -> None:
+        await asyncio.sleep(0.2)
+
+    alive = [m for m in _said_by_watchdog(steps, 0.4) if m["type"] == "host_alive"]
+    assert alive
+    assert alive[-1]["threads"] >= threading.active_count() - 1
+    assert alive[-1]["tied_threads"] == 0
+    assert alive[-1]["thread_stops"] >= 0
+    assert alive[-1]["loop_lag_ms"] >= 0
+
+
+def test_a_loop_held_up_short_of_the_limit_is_told_at_its_longest() -> None:
+    async def steps() -> None:
+        await asyncio.sleep(0.05)
+        time.sleep(0.6)
+        await asyncio.sleep(0.6)
+
+    alive = [m for m in _said_by_watchdog(steps, 2.0) if m["type"] == "host_alive"]
+    assert max(m["loop_lag_ms"] for m in alive) >= 100
+
+
+def test_a_steps_end_says_how_the_host_is_before_its_result() -> None:
+    host, agent = _host()
+    own = watchers.WatcherChannel(host, 1)
+    host._watchers[1] = (own, cast("asyncio.Task[Any]", object()))
+
+    async def main() -> None:
+        async def step() -> dict[str, Any]:
+            return {"type": "task_succeeded", "output": {}, "outcome": "SUCCESS"}
+
+        await host._end(1, own, asyncio.create_task(step()), 1.0)
+
+    asyncio.run(main())
+    assert agent.receive()["type"] == "host_alive"
+    assert agent.receive()["type"] == "watcher_message"
+
+
+def test_a_thread_being_started_stays_its_steps() -> None:
+    host, _agent = _host()
+    own = watchers.WatcherChannel(host, 1)
+    start = threading.Thread.start
+    watchers._watch_threads()
+    token = watchers._WATCHER.set(own)
+    pending = threading.Thread(target=lambda: None)
+    own.threads.append(pending)  # Started by another thread, not yet there.
+    try:
+        thread = threading.Thread(target=lambda: None)
+        thread.start()
+        thread.join()
+        assert pending in own.threads
+    finally:
+        watchers._WATCHER.reset(token)
+        threading.Thread.start = start  # type: ignore[method-assign]  # what the test replaced
+
+
+def test_a_steps_threads_are_told_from_the_rest_of_the_process() -> None:
+    host, _agent = _host()
+    own = watchers.WatcherChannel(host, 1)
+    host._watchers[1] = (own, cast("asyncio.Task[Any]", object()))
+    release = threading.Event()
+    in_the_call = threading.Event()
+
+    def waits() -> None:
+        in_the_call.set()
+        release.wait()
+
+    call: watchers._ThreadCall[None] = watchers._ThreadCall()
+    own.calls.add(call)
+    running = threading.Thread(target=call.run, args=(waits,))
+    started = threading.Thread(target=release.wait)
+    own.threads.append(started)
+    untied = threading.Thread(target=release.wait)
+    finished = threading.Thread(target=lambda: None)
+    own.threads.append(finished)
+    for thread in (running, started, untied, finished):
+        thread.start()
+    finished.join()
+    in_the_call.wait(5)
+    try:
+        threads, tied = watchers._threads_of(host)
+        assert tied == 2, "the call's and the one it started; not the one ended"
+        assert threads >= 4
+    finally:
+        release.set()
+        for thread in (running, started, untied):
+            thread.join()
+    assert call.running_in() is None or not running.is_alive()
+
+
+def test_a_stopped_to_thread_call_is_counted() -> None:
+    ended: list[str] = []
+
+    async def main() -> None:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.to_thread(_spin, ended), 0.05)
+        while not ended:
+            await asyncio.sleep(0.005)
+
+    before = watchers._thread_stops_so_far
+    asyncio.run(_with_watcher_threads(main))
+    assert watchers._thread_stops_so_far == before + 1
+
+
+def test_a_step_starting_threads_for_days_keeps_only_those_alive() -> None:
+    host, _agent = _host()
+    own = watchers.WatcherChannel(host, 1)
+    start = threading.Thread.start
+    watchers._watch_threads()
+    token = watchers._WATCHER.set(own)
+    try:
+        for _ in range(5):
+            thread = threading.Thread(target=lambda: None)
+            thread.start()
+            thread.join()
+        assert len(own.threads) == 1
+    finally:
+        watchers._WATCHER.reset(token)
+        threading.Thread.start = start  # type: ignore[method-assign]  # what the test replaced
 
 
 def test_many_taking_turns_past_the_limit_blame_no_one() -> None:

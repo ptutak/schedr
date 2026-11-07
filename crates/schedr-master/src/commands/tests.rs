@@ -519,6 +519,7 @@ async fn a_worker_is_drained_and_resumed_and_unknown_ones_are_rejected() {
                 schedr_version: "0.1.0",
                 queues: &[],
                 slots: 2,
+                watcher_slots: 0,
                 log_endpoint: "",
             },
             ts(NOW),

@@ -106,6 +106,10 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         .route("/import-errors/notice", get(imports::notice::<T>))
         .route("/time", get(actions::time))
         .route(
+            "/d/{deployment}/dags/{dag}/sensors/{sensor}/switch-on",
+            post(actions::switch_on::<T>),
+        )
+        .route(
             "/d/{deployment}/dags/{dag}/pause",
             post(actions::pause::<T>),
         )

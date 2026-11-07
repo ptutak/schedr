@@ -101,6 +101,21 @@ message Heartbeat {
   uint32 free_slots = 1;
   repeated string running_attempt_ids = 2;
   uint32 free_watcher_slots = 3;
+  repeated WatcherHost watcher_hosts = 4;
+}
+
+// A process running a worker's wait steps, or a code set whose hosts were lost: for people.
+message WatcherHost {
+  // The code it runs: its folders' names, the copies' hashes.
+  string code = 1;
+  uint32 wait_steps = 2;
+  // Its process's threads, the wait steps' among them.
+  uint32 threads = 3;
+  // Those a wait step is tied to: running its `to_thread` calls, or started by it.
+  uint32 tied_threads = 4;
+  uint64 memory_bytes = 5;
+  // Hosts of this code lost since the agent started: crashes and memory kills.
+  uint64 hosts_lost = 6;
 }
 
 // A root's content hash changed (after the settle time).

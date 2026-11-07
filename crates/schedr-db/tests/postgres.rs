@@ -1697,6 +1697,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
             schedr_version: "0.1.0",
             queues: &queues,
             slots: 2,
+            watcher_slots: 0,
             log_endpoint: "",
         },
         ts(NOW),

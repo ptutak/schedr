@@ -578,6 +578,7 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
             schedr_version: "0.1.0",
             queues: &queues,
             slots: 4,
+            watcher_slots: 0,
             log_endpoint: "",
         },
         ts("2026-10-22T08:00:00Z"),
@@ -596,6 +597,7 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
     assert_eq!(
         body["workers"][0],
         json!({
+            "watcher_slots": 0, "watcher_hosts": [],
             "worker_id": "w1", "state": "lost",
             "incarnation_id": "0190a0a0-0000-7000-8000-000000000001",
             "queues": ["large"], "slots": 4, "running": 0, "schedr_version": "0.1.0",
@@ -620,6 +622,7 @@ async fn deployment_workers(db: &schedr_db::Database) -> serde_json::Value {
                 schedr_version: "0.1.0",
                 queues: &queues,
                 slots: 2,
+                watcher_slots: 0,
                 log_endpoint: "",
             },
             ts(NOW),
@@ -805,6 +808,7 @@ async fn with_log(endpoint: &str) -> (axum::Router, Database, String, String, Ar
             schedr_version: "0.1.0",
             queues: &queues,
             slots: 2,
+            watcher_slots: 0,
             log_endpoint: endpoint,
         },
         ts(NOW),

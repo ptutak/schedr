@@ -1382,6 +1382,54 @@
         ],
         "type": "object"
       },
+      "WatcherHostView": {
+        "description": "A process running a worker's wait steps, or a code set whose hosts were lost.",
+        "properties": {
+          "code": {
+            "description": "The code it runs: its folders' names, the copies' hashes.",
+            "type": "string"
+          },
+          "hosts_lost": {
+            "description": "Hosts of this code lost since the agent started: crashes and memory kills.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "description": "The memory it uses.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threads": {
+            "description": "Its process's threads, the wait steps' among them.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tied_threads": {
+            "description": "Those a wait step is tied to: running its `to_thread` calls, or started by it. The rest\nof the process, a library's pools among them, can't be told apart.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wait_steps": {
+            "description": "The wait steps on it (none: no host runs this code now).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "wait_steps",
+          "threads",
+          "tied_threads",
+          "memory_bytes",
+          "hosts_lost"
+        ],
+        "type": "object"
+      },
       "WorkerList": {
         "description": "The workers.",
         "properties": {
@@ -1533,6 +1581,19 @@
               "$ref": "#/components/schemas/WarningView"
             },
             "type": "array"
+          },
+          "watcher_hosts": {
+            "description": "The processes running its wait steps, as its last heartbeat said (decision 343), and\ncode sets whose hosts were lost.",
+            "items": {
+              "$ref": "#/components/schemas/WatcherHostView"
+            },
+            "type": "array"
+          },
+          "watcher_slots": {
+            "description": "Its slots for wait steps.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           },
           "worker_id": {
             "description": "Its ID.",

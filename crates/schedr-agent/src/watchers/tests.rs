@@ -5,7 +5,7 @@ use super::*;
 fn logged() -> RunnerMessage {
     RunnerMessage::WatcherMessage {
         watcher: 1,
-        message: Box::new(RunnerMessage::HostAlive),
+        message: Box::new(RunnerMessage::TaskImported),
     }
 }
 
@@ -24,6 +24,7 @@ async fn a_route_full_for_as_long_as_silence_is_allowed_ends_the_host() {
         Arc::clone(&stop),
         Arc::clone(&going),
         (Duration::from_millis(50), 1, Arc::new(MaskSet::new(0))),
+        (Arc::default(), WatcherMetrics::default()),
     ));
     for _ in 0..2 {
         write_message(&mut theirs, &logged()).await.unwrap();
@@ -52,6 +53,7 @@ async fn what_a_host_sent_is_read_after_it_said_who_blocked_it() {
         Arc::new(Notify::new()),
         Arc::clone(&going),
         (Duration::from_secs(30), 1, Arc::new(MaskSet::new(0))),
+        (Arc::default(), WatcherMetrics::default()),
     ));
     let blocked = RunnerMessage::LoopBlocked {
         watcher: Some(1),
@@ -61,7 +63,7 @@ async fn what_a_host_sent_is_read_after_it_said_who_blocked_it() {
     write_message(&mut theirs, &logged()).await.unwrap();
     drop(theirs);
     reading.await.unwrap();
-    assert_eq!(messages.recv().await, Some(RunnerMessage::HostAlive));
+    assert_eq!(messages.recv().await, Some(RunnerMessage::TaskImported));
     assert_eq!(going.lock().unwrap().blamed.as_ref().unwrap().watcher, 1);
 }
 
@@ -80,6 +82,7 @@ async fn going_after(said: RunnerMessage) -> Going {
         Arc::new(Notify::new()),
         Arc::clone(&going),
         (Duration::from_secs(30), 1, mask),
+        (Arc::default(), WatcherMetrics::default()),
     ));
     write_message(&mut theirs, &said).await.unwrap();
     drop(theirs);
@@ -119,4 +122,66 @@ async fn a_stack_is_masked_with_what_every_wait_step_on_the_host_read() {
         assert!(!text.contains("hunter22-pw"), "{text}");
         assert!(text.contains("****"), "{text}");
     }
+}
+
+#[test]
+fn what_a_host_says_of_itself_is_kept_and_counted_once() {
+    let stats = StdMutex::new(HostStats::default());
+    let metrics = WatcherMetrics::default();
+    HostStats::heard(&stats, &metrics, (10, 2, 3, 500));
+    HostStats::heard(&stats, &metrics, (12, 40, 3, 1));
+    assert_eq!(metrics.thread_stops.get(), 3, "a total, counted once");
+    let now = *stats.lock().unwrap();
+    assert_eq!(now.threads, 12);
+    assert_eq!(now.tied_threads, 12, "no more than it has");
+    // A total going down (it is the host's word) takes nothing back, nor counts again.
+    HostStats::heard(&stats, &metrics, (12, 1, 1, 1));
+    HostStats::heard(&stats, &metrics, (12, 1, 3, 1));
+    assert_eq!(metrics.thread_stops.get(), 3);
+}
+
+#[test]
+fn a_hosts_code_is_its_folders_names() {
+    let code = code_of(&["/copies/etl/abc".to_owned(), "/copies/lib/def".to_owned()]);
+    assert_eq!(code, "abc,def");
+}
+
+#[test]
+fn lost_hosts_are_told_until_their_code_is_old_and_counted_by_it_for_good() {
+    let hosts = WatcherHosts::default();
+    let steady = "/copies/lib/steady".to_owned();
+    let old = vec!["/copies/etl/old".to_owned(), steady.clone()];
+    let new = vec!["/copies/etl/new".to_owned(), steady];
+    let copies = |etl: &str| {
+        Copies::from([
+            ("etl".to_owned(), PathBuf::from(etl)),
+            ("lib".to_owned(), PathBuf::from("/copies/lib/steady")),
+        ])
+    };
+    hosts.code_changed(&copies("/copies/etl/old"));
+    hosts.host_lost(&old);
+    hosts.host_lost(&old);
+    hosts.host_lost(&new);
+    hosts.looked_at(&[], &[]);
+    let told: Vec<(String, u32, u64)> = hosts
+        .reports()
+        .iter()
+        .map(|r| (r.code.clone(), r.wait_steps, r.hosts_lost))
+        .collect();
+    assert_eq!(
+        told,
+        [
+            ("new,steady".to_owned(), 0, 1),
+            ("old,steady".to_owned(), 0, 2)
+        ]
+    );
+    // One root new is enough, the other unchanged.
+    hosts.code_changed(&copies("/copies/etl/new"));
+    hosts.looked_at(&[], &[]);
+    assert_eq!(hosts.reports().len(), 1);
+    assert_eq!(hosts.reports()[0].code, "new,steady");
+    let old_code = crate::metrics::CodeLabels {
+        code: "old,steady".to_owned(),
+    };
+    assert_eq!(hosts.metrics.hosts_lost.get_or_create(&old_code).get(), 2);
 }

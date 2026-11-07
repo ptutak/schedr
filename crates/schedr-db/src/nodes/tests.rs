@@ -123,6 +123,7 @@ async fn a_workers_node_is_recorded_after_its_registration() {
                 schedr_version: "0.1.0",
                 queues: &queues,
                 slots: 2,
+                watcher_slots: 0,
                 log_endpoint: "",
             },
             ts("2026-11-01T08:00:00Z"),

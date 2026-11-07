@@ -6,7 +6,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use schedr_api::views::{DagView, LocationView};
+use schedr_api::views::{DagView, LocationView, SensorView};
 use schedr_client::times::trigger_text;
 use schedr_client::{ClientError, Transport, path_segment};
 
@@ -49,6 +49,54 @@ struct DagsPage {
     unavailable: Vec<String>,
     /// Whether there is more than one deployment (then a column names it).
     several: bool,
+    /// Its wait steps switched off, of all deployments.
+    switched_off: Vec<SwitchedOffRow>,
+}
+
+/// A wait step switched off, as a banner or a DAG's page lists it.
+#[derive(Debug, Clone)]
+struct SwitchedOffRow {
+    deployment: String,
+    dag_id: String,
+    /// Its DAG's page.
+    dag_href: String,
+    sensor: String,
+    strikes: u32,
+    /// When, as people read it.
+    at: String,
+    /// Where it is switched on.
+    action: String,
+}
+
+impl SwitchedOffRow {
+    fn of<T>(page: &Page, deployment: &Deployment<T>, sensor: &SensorView) -> Self {
+        let dag_href = format!(
+            "{}/d/{}/dags/{}",
+            page.base,
+            path_segment(&deployment.name),
+            path_segment(&sensor.dag_id)
+        );
+        Self {
+            deployment: deployment.name.clone(),
+            dag_id: sensor.dag_id.clone(),
+            action: format!(
+                "{dag_href}/sensors/{}/switch-on",
+                path_segment(&sensor.sensor)
+            ),
+            dag_href,
+            sensor: sensor.sensor.clone(),
+            strikes: sensor.strikes,
+            at: sensor
+                .switched_off_at
+                .parse()
+                .map_or_else(|_| sensor.switched_off_at.clone(), |at| page.time(&at)),
+        }
+    }
+
+    /// The switch-on dialog's title.
+    fn title(&self) -> String {
+        format!("Switch on {} of {}?", self.sensor, self.dag_id)
+    }
 }
 
 /// One DAG and its recent runs.
@@ -76,6 +124,10 @@ struct DagPage {
     connections: Option<crate::connections::Group>,
     /// Why they can't be shown now (empty: they can).
     connections_unavailable: String,
+    /// Its wait steps switched off (decision 338).
+    switched_off: Vec<SwitchedOffRow>,
+    /// Why they can't be shown now (empty: they can).
+    switched_off_unavailable: String,
 }
 
 /// A concurrency limit as the DAG page shows it.
@@ -133,18 +185,33 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
     for index in 0..ui.deployments.len() {
         let ui = Arc::clone(&ui);
         asked.spawn(schedr_client::for_same_user(async move {
-            (index, ui.deployments[index].client.dags().await)
+            let client = &ui.deployments[index].client;
+            let dags = client.dags().await;
+            // One that doesn't answer is said once.
+            let sensors = match &dags {
+                Ok(_) => Some(client.switched_off_sensors().await),
+                Err(_) => None,
+            };
+            (index, dags, sensors)
         }));
     }
     let mut answers: Vec<_> = asked.join_all().await;
-    answers.sort_by_key(|(index, _)| *index);
+    answers.sort_by_key(|(index, _, _)| *index);
     let mut rows = Vec::new();
     let mut unavailable = Vec::new();
-    for (index, answer) in answers {
+    let mut switched_off = Vec::new();
+    for (index, answer, sensors) in answers {
         let deployment = &ui.deployments[index];
         match answer {
             Ok(list) => rows.extend(list.dags.iter().map(|d| dag_row(&page, deployment, d))),
             Err(error) => unavailable.push(format!("{}: {error}", deployment.name)),
+        }
+        if let Some(sensors) = sensors {
+            let (sensors, why) = switched_off_of(&page, deployment, sensors);
+            switched_off.extend(sensors);
+            if !why.is_empty() {
+                unavailable.push(format!("{}: {why}", deployment.name));
+            }
         }
     }
     rows.sort_by(|a, b| (&a.dag_id, &a.deployment).cmp(&(&b.dag_id, &b.deployment)));
@@ -155,9 +222,30 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
             rows,
             unavailable,
             several,
+            switched_off,
         },
         StatusCode::OK,
     )
+}
+
+/// The wait steps a deployment has switched off, and why they can't be told, if so; a webserver
+/// without the list (404) has none to show.
+fn switched_off_of<T>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    answer: Result<schedr_api::views::SensorList, ClientError>,
+) -> (Vec<SwitchedOffRow>, String) {
+    match answer {
+        Ok(list) => (
+            list.sensors
+                .iter()
+                .map(|sensor| SwitchedOffRow::of(page, deployment, sensor))
+                .collect(),
+            String::new(),
+        ),
+        Err(ClientError::Server { status: 404, .. }) => (Vec::new(), String::new()),
+        Err(error) => (Vec::new(), error.to_string()),
+    }
 }
 
 /// `GET /d/<deployment>/dags/<dag>`.
@@ -215,6 +303,12 @@ pub async fn dag<T: Transport>(
         Err(ClientError::Server { status: 404, .. }) => (None, String::new()),
         Err(error) => (None, error.to_string()),
     };
+    let (mut switched_off, switched_off_unavailable) = switched_off_of(
+        &page,
+        deployment,
+        deployment.client.switched_off_sensors().await,
+    );
+    switched_off.retain(|sensor| sensor.dag_id == dag.dag_id);
     let params_html = match TriggerParams::of(&dag.params).render() {
         Ok(html) => html,
         Err(error) => {
@@ -233,6 +327,8 @@ pub async fn dag<T: Transport>(
             warnings: dag.warnings.clone(),
             connections,
             connections_unavailable,
+            switched_off,
+            switched_off_unavailable,
             row: dag_row(&page, deployment, &dag),
             description: dag.description.clone().unwrap_or_default(),
             deployment: deployment.name.clone(),

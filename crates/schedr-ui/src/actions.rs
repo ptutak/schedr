@@ -230,6 +230,25 @@ pub async fn task<T: Transport>(
     .await
 }
 
+/// `POST /d/<deployment>/dags/<dag>/sensors/<sensor>/switch-on`.
+pub async fn switch_on<T: Transport>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, dag_id, sensor)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    act(
+        &ui,
+        &headers,
+        &deployment,
+        format!("Switch on {sensor} of {dag_id}"),
+        Action::SwitchOn {
+            dag_id: &dag_id,
+            sensor: &sensor,
+        },
+    )
+    .await
+}
+
 /// `POST /d/<deployment>/workers/<worker>/drain` or `.../resume`.
 pub async fn worker<T: Transport>(
     State(ui): State<Arc<Ui<T>>>,
@@ -381,6 +400,10 @@ enum Action<'a> {
         worker_id: &'a str,
         action: WorkerAction,
     },
+    SwitchOn {
+        dag_id: &'a str,
+        sensor: &'a str,
+    },
 }
 
 impl Action<'_> {
@@ -404,6 +427,7 @@ impl Action<'_> {
                 action,
             } => client.task_action(run_id, task, action).await,
             Self::Worker { worker_id, action } => client.worker_action(worker_id, action).await,
+            Self::SwitchOn { dag_id, sensor } => client.switch_on_sensor(dag_id, sensor).await,
         }
     }
 }

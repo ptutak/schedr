@@ -7,6 +7,12 @@
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}</div>
 {% endfor %}
+{% if !switched_off.is_empty() %}
+<div class="banner warning">
+  {{ switched_off.len() }} wait step{% if switched_off.len() != 1 %}s{% endif %} switched off for getting their hosts killed; each fails at once until it is switched on or its code changes:
+  {% for sensor in switched_off %}<a href="{{ sensor.dag_href }}" class="mono">{% if several %}{{ sensor.deployment }}: {% endif %}{{ sensor.dag_id }}.{{ sensor.sensor }}</a>{% if !loop.last %}, {% endif %}{% endfor %}
+</div>
+{% endif %}
 {% if rows.is_empty() %}
 <p class="empty">No DAGs.</p>
 {% else %}

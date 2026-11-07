@@ -8,7 +8,7 @@ use askama::Template;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use schedr_api::views::WorkerView;
+use schedr_api::views::{WatcherHostView, WorkerView};
 use schedr_client::{Transport, path_segment};
 
 use crate::page::Page;
@@ -46,6 +46,73 @@ pub struct WorkerRow {
     pub master_href: String,
     /// Whether that is the master it is connected to now (else it is the last one, greyed).
     pub master_now: bool,
+    /// Wait steps running, of its slots for them: `1 / 100`.
+    pub wait_steps: String,
+    /// The processes running its wait steps (none for a worker that is gone).
+    pub hosts: Vec<HostRow>,
+}
+
+/// A process running a worker's wait steps, or a code whose hosts were lost.
+#[derive(Debug, Clone)]
+pub struct HostRow {
+    /// The code it runs, each folder's name shortened.
+    pub code: String,
+    /// The code in full.
+    pub code_full: String,
+    /// Whether a host runs this code now: else only its lost hosts are told.
+    pub running: bool,
+    /// The wait steps on it.
+    pub wait_steps: u32,
+    /// Threads running a wait step's `to_thread` calls, or started by it.
+    pub tied: u32,
+    /// The rest of the process's.
+    pub untied: u32,
+    /// The memory it uses, as people read it.
+    pub memory: String,
+    /// Hosts of this code lost since the agent started.
+    pub lost: u64,
+}
+
+impl HostRow {
+    fn of(host: &WatcherHostView) -> Self {
+        let code: Vec<&str> = host
+            .code
+            .split(',')
+            .map(crate::deployments::short)
+            .collect();
+        Self {
+            code: code.join(", "),
+            code_full: host.code.clone(),
+            running: host.threads > 0 || host.wait_steps > 0,
+            wait_steps: host.wait_steps,
+            tied: host.tied_threads,
+            untied: host.threads.saturating_sub(host.tied_threads),
+            memory: show_size(host.memory_bytes),
+            lost: host.hosts_lost,
+        }
+    }
+}
+
+/// `bytes` as people read them.
+fn show_size(bytes: u64) -> String {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a size shown to one decimal place"
+    )]
+    let mut value = bytes as f64;
+    let mut unit = "B";
+    for next in ["KiB", "MiB", "GiB", "TiB"] {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = next;
+    }
+    if unit == "B" {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {unit}")
+    }
 }
 
 impl WorkerRow {
@@ -134,13 +201,29 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
 
 fn row<T>(page: &Page, deployment: &Deployment<T>, worker: &WorkerView) -> WorkerRow {
     let verb = if worker.drained { "resume" } else { "drain" };
+    // A disconnected worker's wait steps run on; a gone one's ended, whatever it said last.
+    let hosts: &[WatcherHostView] = if matches!(worker.state.as_str(), "offline" | "lost") {
+        &[]
+    } else {
+        &worker.watcher_hosts
+    };
+    let wait_steps = hosts
+        .iter()
+        .fold(0_u32, |sum, host| sum.saturating_add(host.wait_steps));
     WorkerRow {
         deployment: deployment.name.clone(),
         worker_id: worker.worker_id.clone(),
         state: worker.state.clone(),
         drained: worker.drained,
         queues: worker.queues.join(", "),
-        load: format!("{} / {}", worker.running, worker.slots),
+        // Wait steps are attempts, but use their own slots.
+        load: format!(
+            "{} / {}",
+            worker.running.saturating_sub(wait_steps),
+            worker.slots
+        ),
+        wait_steps: format!("{wait_steps} / {}", worker.watcher_slots),
+        hosts: hosts.iter().map(HostRow::of).collect(),
         version: worker.schedr_version.clone(),
         last_seen: page.time(&worker.last_heartbeat_at),
         warnings: worker

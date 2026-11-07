@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use schedr_db::workers::{WorkerRegistration, WorkerWarning};
+use schedr_db::workers::{WatcherHostRecord, WorkerRegistration, WorkerWarning};
 use schedr_db::{Database, DbError};
 use schedr_model::commands::{
     CONNECTION_ANSWER_MARGIN_MS, ConnectionJobResult, ConnectionReport, ConnectionsResult, JobState,
@@ -226,6 +226,8 @@ struct Connection {
     /// The secret storages it has configured (`Register`): a DAG it parses that names another
     /// is refused. None until it registers with this master (restored from the database).
     secret_storages: Option<BTreeSet<String>>,
+    /// What its wait step hosts looked like when last written to the registry.
+    watcher_hosts: Vec<pb::WatcherHost>,
 }
 
 /// What has arrived from workers before the master handled it (cheap to clone; clones share
@@ -455,6 +457,7 @@ impl MasterCore {
                     persisted: now,
                     live: false,
                     secret_storages: None,
+                    watcher_hosts: Vec::new(),
                 },
             );
             restored += 1;
@@ -596,6 +599,7 @@ impl MasterCore {
                 persisted: now,
                 live: true,
                 secret_storages: Some(register.secret_storages.iter().cloned().collect()),
+                watcher_hosts: Vec::new(),
             },
         );
         let protocol = register
@@ -618,6 +622,7 @@ impl MasterCore {
                     schedr_version: &register.schedr_version,
                     queues: &queues,
                     slots: register.slots,
+                    watcher_slots: register.watcher_slots,
                     log_endpoint: &register.log_endpoint,
                 },
                 now,
@@ -701,6 +706,51 @@ impl MasterCore {
         Ok(())
     }
 
+    /// Any message is a sign of life.
+    async fn heard_from(&mut self, worker_id: &str, now: Timestamp) {
+        let heartbeat = SignedDuration::try_from(self.settings.heartbeat_interval)
+            .unwrap_or(SignedDuration::MAX);
+        if let Some(connection) = self.connections.get_mut(worker_id) {
+            connection.last_seen = now;
+            if now.duration_since(connection.persisted) >= heartbeat {
+                connection.persisted = now;
+                // A sign of life in the registry is for people: a failed write mustn't cost
+                // the message it came with (the next interval writes it again).
+                if let Err(error) = self.db.worker_seen(worker_id, now).await {
+                    tracing::warn!(worker_id, %error, "worker's last heartbeat not recorded");
+                }
+            }
+        }
+    }
+
+    /// For people, like the last heartbeat: a failed write is logged, not the message's failure
+    /// (the next heartbeat that differs from what was written writes it).
+    async fn heard_of_hosts(&mut self, worker_id: &str, hosts: Vec<pb::WatcherHost>) {
+        let Some(connection) = self.connections.get_mut(worker_id) else {
+            return;
+        };
+        if connection.watcher_hosts == hosts {
+            return;
+        }
+        let records: Vec<WatcherHostRecord> = hosts
+            .iter()
+            .map(|host| WatcherHostRecord {
+                code: host.code.clone(),
+                wait_steps: host.wait_steps,
+                threads: host.threads,
+                tied_threads: host.tied_threads.min(host.threads),
+                memory_bytes: host.memory_bytes,
+                hosts_lost: host.hosts_lost,
+            })
+            .collect();
+        match self.db.set_worker_hosts(worker_id, &records).await {
+            Ok(()) => connection.watcher_hosts = hosts,
+            Err(error) => {
+                tracing::warn!(worker_id, %error, "worker's wait step hosts not recorded");
+            }
+        }
+    }
+
     /// Handles an attempt registered.
     async fn handles_added(
         &mut self,
@@ -729,19 +779,7 @@ impl MasterCore {
         message: worker_message::Message,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
-        let heartbeat = SignedDuration::try_from(self.settings.heartbeat_interval)
-            .unwrap_or(SignedDuration::MAX);
-        if let Some(connection) = self.connections.get_mut(worker_id) {
-            connection.last_seen = now;
-            if now.duration_since(connection.persisted) >= heartbeat {
-                connection.persisted = now;
-                // A sign of life in the registry is for people: a failed write mustn't cost
-                // the message it came with (the next interval writes it again).
-                if let Err(error) = self.db.worker_seen(worker_id, now).await {
-                    tracing::warn!(worker_id, %error, "worker's last heartbeat not recorded");
-                }
-            }
-        }
+        self.heard_from(worker_id, now).await;
         Ok(match message {
             worker_message::Message::Register(_) => {
                 return Err(CoreError::BadMessage {
@@ -749,7 +787,10 @@ impl MasterCore {
                     reason: "`Register` is only the first message".to_owned(),
                 });
             }
-            worker_message::Message::Heartbeat(_) => Vec::new(),
+            worker_message::Message::Heartbeat(beat) => {
+                self.heard_of_hosts(worker_id, beat.watcher_hosts).await;
+                Vec::new()
+            }
             // For people, like the last heartbeat: a failed write is logged, not the message's
             // failure (the worker sends them again after its next registration).
             worker_message::Message::Warnings(reported) => {

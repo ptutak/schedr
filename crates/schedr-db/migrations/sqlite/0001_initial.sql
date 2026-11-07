@@ -23,6 +23,11 @@ CREATE TABLE workers (
     drained           INTEGER NOT NULL DEFAULT 0 CHECK (drained IN (0, 1)),
     -- What is wrong with it now ([{kind, interpreter, message}]), replaced by each report.
     warnings          TEXT NOT NULL DEFAULT '[]',
+    -- Its slots for wait steps, and the processes running them
+    -- ([{code, wait_steps, threads, tied_threads, memory_bytes, hosts_lost}]), as its last
+    -- heartbeat said.
+    watcher_slots     INTEGER NOT NULL DEFAULT 0 CHECK (watcher_slots >= 0),
+    watcher_hosts     TEXT NOT NULL DEFAULT '[]',
     -- The Deployments page (decision 122): the master it registered with last, the process it
     -- runs in (standalone: the master's too), and its effective configuration, masked by the
     -- worker before it was sent.
@@ -351,6 +356,19 @@ END;
 CREATE TRIGGER dags_updated AFTER UPDATE ON dags WHEN (SELECT notify FROM changes_switch)
 BEGIN
     INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
+-- Whether a wait step is switched off shows on its DAG's page and on the list's banner.
+CREATE TRIGGER wait_step_strikes_inserted AFTER INSERT ON wait_step_strikes WHEN (SELECT notify FROM changes_switch)
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
+CREATE TRIGGER wait_step_strikes_updated AFTER UPDATE ON wait_step_strikes WHEN (SELECT notify FROM changes_switch)
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || NEW.dag_id);
+END;
+CREATE TRIGGER wait_step_strikes_deleted AFTER DELETE ON wait_step_strikes WHEN (SELECT notify FROM changes_switch)
+BEGIN
+    INSERT INTO changes (change) VALUES ('dag ' || OLD.dag_id);
 END;
 CREATE TRIGGER workers_inserted AFTER INSERT ON workers WHEN (SELECT notify FROM changes_switch)
 BEGIN

@@ -31,6 +31,8 @@ pub struct WorkerRegistration<'a> {
     pub queues: &'a [String],
     /// Its task slots.
     pub slots: u32,
+    /// Its slots for wait steps.
+    pub watcher_slots: u32,
     /// Where its log endpoint listens (empty until it has one).
     pub log_endpoint: &'a str,
 }
@@ -66,6 +68,27 @@ pub struct WorkerRecord {
     pub drained: bool,
     /// What is wrong with it now, as it last reported.
     pub warnings: Vec<WorkerWarning>,
+    /// Its slots for wait steps.
+    pub watcher_slots: u32,
+    /// The processes running its wait steps, as its last heartbeat said.
+    pub watcher_hosts: Vec<WatcherHostRecord>,
+}
+
+/// A process running a worker's wait steps, or a code set whose hosts were lost.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WatcherHostRecord {
+    /// The code it runs: its folders' names, the copies' hashes.
+    pub code: String,
+    /// The wait steps on it.
+    pub wait_steps: u32,
+    /// Its process's threads, the wait steps' among them.
+    pub threads: u32,
+    /// Those a wait step is tied to: running its `to_thread` calls, or started by it.
+    pub tied_threads: u32,
+    /// The memory it uses.
+    pub memory_bytes: u64,
+    /// Hosts of this code lost since the agent started: crashes and memory kills.
+    pub hosts_lost: u64,
 }
 
 /// Something wrong with a worker, as it reports it (e.g. a disabled fork server).
@@ -94,6 +117,8 @@ type WorkerRow = (
     i64,
     bool,
     String,
+    i32,
+    String,
 );
 
 impl Database {
@@ -109,14 +134,16 @@ impl Database {
     ) -> Result<(), DbError> {
         const UPSERT: &str = "INSERT INTO workers (worker_id, incarnation_id, state, \
             protocol_version, schedr_version, queues, slots, log_endpoint, registered_at, \
-            last_heartbeat_at, offline_at) \
-            VALUES ($1, $2{uuid}, 'active', $3, $4, $5{json}, $6, $7, $8{ts}, $8{ts}, NULL) \
+            last_heartbeat_at, offline_at, watcher_slots, watcher_hosts) \
+            VALUES ($1, $2{uuid}, 'active', $3, $4, $5{json}, $6, $7, $8{ts}, $8{ts}, NULL, $9, \
+            $10{json}) \
             ON CONFLICT (worker_id) DO UPDATE SET incarnation_id = excluded.incarnation_id, \
             state = 'active', protocol_version = excluded.protocol_version, \
             schedr_version = excluded.schedr_version, queues = excluded.queues, \
             slots = excluded.slots, log_endpoint = excluded.log_endpoint, \
             registered_at = excluded.registered_at, \
-            last_heartbeat_at = excluded.last_heartbeat_at, offline_at = NULL";
+            last_heartbeat_at = excluded.last_heartbeat_at, offline_at = NULL, \
+            watcher_slots = excluded.watcher_slots, watcher_hosts = excluded.watcher_hosts";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, UPSERT))
                 .bind(worker.id)
@@ -127,6 +154,8 @@ impl Database {
                 .bind(i32::try_from(worker.slots).unwrap_or(i32::MAX))
                 .bind(worker.log_endpoint)
                 .bind(db_time(now))
+                .bind(i32::try_from(worker.watcher_slots).unwrap_or(i32::MAX))
+                .bind("[]")
                 .execute(&mut *tx)
                 .await?;
         });
@@ -164,6 +193,27 @@ impl Database {
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
                 .bind(to_json(&warnings))
+                .bind(worker_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// Replaces what a worker's hosts look like with what its heartbeat said now.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_worker_hosts(
+        &self,
+        worker_id: &str,
+        hosts: &[WatcherHostRecord],
+    ) -> Result<(), DbError> {
+        const SET: &str = "UPDATE workers SET watcher_hosts = $1{json} WHERE worker_id = $2";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(to_json(&hosts))
                 .bind(worker_id)
                 .execute(&mut *tx)
                 .await?;
@@ -290,7 +340,8 @@ impl Database {
             w.protocol_version, w.schedr_version, w.queues{text}, w.slots, w.log_endpoint, \
             {ts<}w.registered_at{>ts}, {ts<}w.last_heartbeat_at{>ts}, {ts<}w.offline_at{>ts}, \
             (SELECT COUNT(*) FROM attempts a WHERE a.worker_id = w.worker_id \
-             AND a.status IS NULL), w.drained, w.warnings{text} \
+             AND a.status IS NULL), w.drained, w.warnings{text}, w.watcher_slots, \
+            w.watcher_hosts{text} \
             FROM workers w ORDER BY w.worker_id";
         let rows: Vec<WorkerRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WORKERS))
@@ -317,6 +368,8 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         running,
         drained,
         warnings,
+        watcher_slots,
+        watcher_hosts,
     ) = row;
     Ok(WorkerRecord {
         id,
@@ -333,5 +386,7 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         running: u32::try_from(running).unwrap_or(0),
         drained,
         warnings: from_json("workers.warnings", &warnings)?,
+        watcher_slots: u32::try_from(watcher_slots).unwrap_or(0),
+        watcher_hosts: from_json("workers.watcher_hosts", &watcher_hosts)?,
     })
 }

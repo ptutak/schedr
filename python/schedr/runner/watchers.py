@@ -24,6 +24,7 @@ import contextvars
 import ctypes
 import functools
 import io
+import itertools
 import os
 import queue
 import signal
@@ -61,6 +62,16 @@ _WAKE: dict[str, Any] = {}
 _running = threading.local()
 """``call``: the :class:`_ThreadCall` this thread is running, if any."""
 
+_thread_stops = itertools.count(1)
+"""Each next one is how many ``to_thread`` calls were stopped so far, this one among them."""
+_thread_stops_so_far = 0
+
+
+def _thread_stopped() -> None:
+    """Counts a ``to_thread`` call stopped: it may have left shared state half updated."""
+    global _thread_stops_so_far  # noqa: PLW0603  # the process's own count, for its watchdog
+    _thread_stops_so_far = next(_thread_stops)
+
 
 def _raise_in(thread: int, error: type[BaseException] | None) -> None:
     """Raises in a running thread at its next Python line; ``None`` takes back one not raised."""
@@ -85,6 +96,10 @@ class _ThreadCall[T](concurrent.futures.Future[T]):
         self._holding = False
         self._answers: queue.SimpleQueue[dict[str, Any]] | None = None
         self._queued: concurrent.futures.Future[T] | None = None
+
+    def running_in(self) -> int | None:
+        """The thread running it now, if one is."""
+        return None if self.done() else self._thread
 
     def queued(self, future: concurrent.futures.Future[T]) -> None:
         self._queued = future
@@ -127,6 +142,7 @@ class _ThreadCall[T](concurrent.futures.Future[T]):
                     self._answers.put(_WAKE)
             elif self._thread is not None and not self._raised:
                 self._raised = True
+                _thread_stopped()
                 _raise_in(self._thread, StepEndedError)
         return False
 
@@ -146,6 +162,7 @@ class _ThreadCall[T](concurrent.futures.Future[T]):
             stop = self._stop_asked and not self._raised
             self._raised = self._raised or stop
         if stop:
+            _thread_stopped()
             raise StepEndedError
 
     def release(self) -> None:
@@ -308,10 +325,26 @@ class _Host:
         self._ending: set[asyncio.Task[None]] = set()
         self._entries: dict[tuple[str, str, str], list[registry.DefinedDag]] = {}
         self.importing = 0
+        self.loop_lag = 0.0
+        """The longest its event loop took to get to a call, since it last said how it is."""
 
     def send(self, message: dict[str, Any]) -> None:
         with self._sending:
             self._channel.send(message)
+
+    def say_how_it_is(self) -> None:
+        """Says it is there, and how it is doing."""
+        threads, tied = _threads_of(self)
+        lag, self.loop_lag = self.loop_lag, 0.0
+        self.send(
+            {
+                "type": "host_alive",
+                "threads": threads,
+                "tied_threads": tied,
+                "thread_stops": _thread_stops_so_far,
+                "loop_lag_ms": round(lag * 1000),
+            }
+        )
 
     def imported(self, root: str, root_dir: Path, path: str) -> list[registry.DefinedDag]:
         """A DAG file's DAGs, imported once: on failure, again by the next attempt."""
@@ -376,6 +409,9 @@ class _Host:
                 }
             )
         del self._watchers[watcher]
+        # Before its result: a host left with no wait steps is stopped, and what its threads'
+        # ends were wouldn't be heard otherwise.
+        self.say_how_it_is()
         _tell(own, result)
         own.ended = True
         if not stopped:
@@ -519,10 +555,42 @@ def _watch_threads() -> None:
     def started(thread: threading.Thread) -> None:
         own = _WATCHER.get()
         if own is not None and not thread.name.startswith(_POOL_THREADS):
+            # A step starting threads for days keeps only those alive.
+            # One still being started isn't alive yet.
+            own.threads = [t for t in own.threads if t.ident is None or t.is_alive()]
             own.threads.append(thread)
         start(thread)
 
     threading.Thread.start = started  # type: ignore[method-assign, assignment]  # the one way to see them all
+
+
+def _threads_of(host: _Host) -> tuple[int, int]:
+    """How many threads the process has, and how many of them wait steps are tied to.
+
+    Tied: those running a step's ``to_thread`` calls, and Python threads a step started. All
+    the rest (a library's pools, the host's own) can't be told apart, so they aren't.
+
+    Args:
+        host: The host.
+
+    Returns:
+        All of them, and the tied ones.
+    """
+    try:
+        threads = len(os.listdir("/proc/self/task"))
+    except OSError:  # Not Linux.
+        threads = threading.active_count()
+    tied: set[int] = set()
+    for own, _step in tuple(host._watchers.values()):
+        tied.update(
+            running for call in tuple(own.calls) if (running := call.running_in()) is not None
+        )
+        tied.update(
+            thread.ident
+            for thread in tuple(own.threads)
+            if thread.ident is not None and thread.is_alive()
+        )
+    return threads, len(tied)
 
 
 def _watch_the_loop(
@@ -545,14 +613,18 @@ def _watch_the_loop(
     holding: object = None
     holding_since = turned
 
-    def turn() -> None:
+    def turn(asked: float) -> None:
         nonlocal turned
         turned = time.monotonic()
+        host.loop_lag = max(host.loop_lag, turned - asked)
 
     while True:
         time.sleep(min(_CHECK_EVERY, block_limit / 4))
-        loop.call_soon_threadsafe(turn)
-        host.send({"type": "host_alive"})
+        try:
+            loop.call_soon_threadsafe(turn, time.monotonic())
+        except RuntimeError:  # Its loop has closed: there is nothing left to watch.
+            return
+        host.say_how_it_is()
         now = time.monotonic()
         running = asyncio.current_task(loop)
         # Many taking their turns can hold up a turn of the loop: only one on its own is to blame.

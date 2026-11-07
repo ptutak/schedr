@@ -113,6 +113,27 @@ async fn sqlite_changes_are_read_from_now_on_each_once() {
 }
 
 #[tokio::test]
+async fn a_wait_step_switched_off_or_on_changes_its_dag() {
+    let (db, _version) = with_dag().await;
+    let mut changes = db.changes(POLL_INTERVAL).await.unwrap().unwrap();
+    let dag = sync();
+    db.strike_wait_step((dag.as_str(), "waits"), 1, "h1", ts("2026-10-14T03:00:00Z"))
+        .await
+        .unwrap();
+    assert!(changes.next().await.unwrap().contains(&Change::Dag {
+        dag_id: dag.clone()
+    }));
+    assert!(db.clear_wait_step(dag.as_str(), "waits").await.unwrap());
+    assert!(
+        changes
+            .next()
+            .await
+            .unwrap()
+            .contains(&Change::Dag { dag_id: dag })
+    );
+}
+
+#[tokio::test]
 async fn rows_pruned_unread_are_reported_missed() {
     let (db, _) = with_dag().await;
     let mut changes = db.changes(POLL_INTERVAL).await.unwrap().unwrap();

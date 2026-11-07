@@ -212,6 +212,11 @@ pub trait Executor: Clone + Send + Sync + 'static {
         Vec::new()
     }
 
+    /// The wait step hosts as last looked at, for the heartbeat: it can't wait.
+    fn watcher_hosts(&self) -> Vec<pb::WatcherHost> {
+        Vec::new()
+    }
+
     /// Parses `files` of the root `root` in `dir`, with the other roots' copies `code`.
     fn parse(
         &self,
@@ -317,6 +322,10 @@ impl Executor for ProcessExecutor {
 
     fn code_in_use(&self) -> Vec<String> {
         self.watchers.code_in_use()
+    }
+
+    fn watcher_hosts(&self) -> Vec<pb::WatcherHost> {
+        self.watchers.reports()
     }
 
     fn warnings(&self) -> watch::Receiver<Vec<pb::WorkerWarning>> {
@@ -1191,6 +1200,10 @@ impl<E: Executor> Agent<E> {
     #[must_use]
     pub fn with_metrics(mut self, metrics: AgentMetrics) -> Self {
         metrics.slots.set(i64::from(self.settings.slots));
+        metrics
+            .watchers
+            .slots
+            .set(i64::from(self.settings.watcher_slots));
         self.metrics = metrics;
         self
     }
@@ -1210,6 +1223,10 @@ impl<E: Executor> Agent<E> {
         self.metrics
             .slots_used
             .set(i64::try_from(self.tasks_running()).unwrap_or(i64::MAX));
+        self.metrics
+            .watchers
+            .slots_used
+            .set(i64::try_from(self.wait_steps.len()).unwrap_or(i64::MAX));
         self.metrics.journal_records.set(running + unacked);
     }
 
@@ -2008,6 +2025,7 @@ impl<E: Executor> Agent<E> {
             free_slots: self.free_slots(),
             free_watcher_slots: self.free_watcher_slots(),
             running_attempt_ids: self.running(),
+            watcher_hosts: self.executor.watcher_hosts(),
         }))
     }
 

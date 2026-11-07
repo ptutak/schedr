@@ -304,8 +304,18 @@ pub enum RunnerMessage {
         /// Where the loop's thread is.
         stack: String,
     },
-    /// A watcher host is there, its event loop held or not.
-    HostAlive,
+    /// A watcher host is there, its event loop held or not, and how it is doing.
+    HostAlive {
+        /// Its process's threads.
+        threads: u32,
+        /// Those a wait step is tied to: running its `to_thread` calls, or started by it.
+        tied_threads: u32,
+        /// `to_thread` calls it stopped so far, each of which may have left shared state half
+        /// updated.
+        thread_stops: u64,
+        /// How long its event loop last took to get to a call, in milliseconds.
+        loop_lag_ms: u64,
+    },
     /// A thread of this watcher didn't stop in its grace time: its host ends after its result
     /// (inside a [`Self::WatcherMessage`]).
     WatcherStuck,

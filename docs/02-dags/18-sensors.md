@@ -34,7 +34,8 @@ The call reads as `Waited[str]`: it can produce a value or `TimedOut`.
 
 A failed wait step is not a timeout: downstream tasks end `upstream_failed`. When a
 downstream task has another upstream task, `run_if` decides what happens when an edge is
-not taken, as described in [Routing by outcome](08-outcomes.md).
+not taken, as described in [Routing by outcome](08-outcomes.md). A timeout leaves the run
+`success` whether or not a task takes it. Use `.on(TimedOut)` to do something about it.
 
 ## Running and deploying wait steps
 
@@ -108,7 +109,9 @@ After `[watchers] switch_off_after` host kills in a row (default 3), a wait step
 off: new attempts fail `switched_off` without reaching a host. A success resets the count.
 New code gives it one chance: another strike switches it off again until a success. List these
 steps with `schedr sensors switched-off` and switch one on with
-`schedr sensors switch-on <dag> <sensor>`.
+`schedr sensors switch-on <dag> <sensor>`. The DAG page lists its switched-off wait steps
+and has a **Switch on** button; the DAGs list shows a banner with their count and links to
+their DAGs.
 
 ## Limits for now
 

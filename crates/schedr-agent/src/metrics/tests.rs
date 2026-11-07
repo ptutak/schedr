@@ -46,10 +46,21 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
             reason: "disabled".to_owned(),
         })
         .inc();
+    metrics.watchers.set_threads(1, 30);
+    metrics
+        .watchers
+        .hosts_lost
+        .get_or_create(&CodeLabels {
+            code: "abc".to_owned(),
+        })
+        .inc();
     let mut out = String::new();
     encode(&mut out, &registry).unwrap();
     for name in [
+        "schedr_worker_watcher_threads{kind=\"untied\"} 30",
+        "schedr_worker_watcher_hosts_lost_total{code=\"abc\"} 1",
         "schedr_worker_slots 4",
+        "schedr_worker_watcher_slots 0",
         "schedr_worker_slots_used 0",
         "schedr_worker_attempts_total{status=\"oom_killed\"} 1",
         "schedr_worker_watchdog_kills_total 1",

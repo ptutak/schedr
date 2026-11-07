@@ -18,6 +18,7 @@ use schedr_model::runner::{
     WatchersRequest,
 };
 use schedr_model::task::{SensorMode, TaskKind};
+use schedr_proto::pb;
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{Mutex, Notify, mpsc, watch};
 
@@ -28,6 +29,7 @@ use crate::launch::{
     LaunchError, PythonTask, connection_answer, secret_answer, start_runner, unless_stopped,
 };
 use crate::mask::{Mask, MaskSet, MaskStream};
+use crate::metrics::{CodeLabels, WatcherMetrics};
 use crate::process::{OsProcess, ProcessSpec};
 use crate::secrets::AttemptSecrets;
 use crate::status::{StopReason, Termination};
@@ -54,8 +56,54 @@ pub struct WatcherHosts {
     code_sets: Arc<StdMutex<BTreeSet<Vec<String>>>>,
     /// The copy of each DAG root the worker runs now.
     code: Arc<StdMutex<Option<watch::Sender<Copies>>>>,
-    /// Whether their memory is being watched.
-    watching_memory: Arc<AtomicBool>,
+    /// Whether they are being looked at (their memory, and what the heartbeat tells).
+    watching: Arc<AtomicBool>,
+    metrics: WatcherMetrics,
+    /// Hosts lost, by code set, since the agent started (the code sets still current).
+    lost: Arc<StdMutex<BTreeMap<Vec<String>, u64>>>,
+    /// As last looked at, for the heartbeat, which can't wait.
+    reports: Arc<StdMutex<Vec<pb::WatcherHost>>>,
+}
+
+/// What a host last said of itself.
+#[derive(Debug, Default, Clone, Copy)]
+struct HostStats {
+    threads: u32,
+    tied_threads: u32,
+    thread_stops: u64,
+}
+
+impl HostStats {
+    fn heard(
+        stats: &StdMutex<Self>,
+        metrics: &WatcherMetrics,
+        (threads, tied_threads, thread_stops, loop_lag_ms): (u32, u32, u64, u64),
+    ) {
+        let mut stats = stats.lock().unwrap_or_else(PoisonError::into_inner);
+        metrics
+            .thread_stops
+            .inc_by(thread_stops.saturating_sub(stats.thread_stops));
+        *stats = Self {
+            threads,
+            // It is the host's word, and the count is of two moments.
+            tied_threads: tied_threads.min(threads),
+            thread_stops: thread_stops.max(stats.thread_stops),
+        };
+        #[allow(clippy::cast_precision_loss)] // A delay in milliseconds.
+        metrics.loop_lag.observe(loop_lag_ms as f64 / 1000.0);
+    }
+}
+
+/// The code a host runs: its folders' names, the copies' hashes.
+fn code_of(sys_path: &[String]) -> String {
+    let names: Vec<String> = sys_path
+        .iter()
+        .filter_map(|dir| {
+            let name = std::path::Path::new(dir).file_name()?;
+            Some(name.to_string_lossy().into_owned())
+        })
+        .collect();
+    names.join(",")
 }
 
 /// The wait step a host is killed for: the others on it start again.
@@ -99,11 +147,16 @@ struct Host {
     /// of a thread or C code can't be told apart, and may come after its watcher ended).
     mask: Arc<MaskSet>,
     going: Arc<StdMutex<Going>>,
+    stats: Arc<StdMutex<HostStats>>,
 }
 
 impl Host {
     /// Starts one, ready for its watchers.
-    async fn start(setup: &WorkerSetup, sys_path: &[String]) -> Result<Self, LaunchError> {
+    async fn start(
+        setup: &WorkerSetup,
+        sys_path: &[String],
+        hosts: &WatcherHosts,
+    ) -> Result<Self, LaunchError> {
         // Each value was accepted by the attempt's own set, under its `min_mask_length`.
         let mask = Arc::new(MaskSet::new(0));
         let spec = host_spec(setup, sys_path, Mask(Some(Arc::clone(&mask))));
@@ -126,6 +179,7 @@ impl Host {
             }
         });
         let going = Arc::new(StdMutex::new(Going::default()));
+        let stats = Arc::new(StdMutex::new(HostStats::default()));
         // Its watchdog says it is there; twice the limit, so that it can say whom to blame first.
         let silence = setup
             .timeouts
@@ -138,6 +192,7 @@ impl Host {
             Arc::clone(&stop),
             Arc::clone(&going),
             (silence, pid, Arc::clone(&mask)),
+            (Arc::clone(&stats), hosts.metrics.clone()),
         ));
         let (ended_sender, ended) = watch::channel(None);
         let watch_over = HostEnd {
@@ -146,6 +201,8 @@ impl Host {
             ended: ended_sender,
             drain: spec.output_drain,
             going: Arc::clone(&going),
+            sys_path: sys_path.to_vec(),
+            hosts: hosts.clone(),
         };
         tokio::spawn(watch_over.run(runner.process, reading, writing));
         Ok(Self {
@@ -156,6 +213,7 @@ impl Host {
             ended,
             mask,
             going,
+            stats,
         })
     }
 
@@ -217,6 +275,7 @@ async fn read_host(
     stop: Arc<Notify>,
     going: Arc<StdMutex<Going>>,
     (silence, pid, mask): (Duration, i32, Arc<MaskSet>),
+    (stats, metrics): (Arc<StdMutex<HostStats>>, WatcherMetrics),
 ) {
     loop {
         let read = read_message::<_, RunnerMessage>(&mut reader);
@@ -255,7 +314,16 @@ async fn read_host(
                     return;
                 }
             }
-            Ok(RunnerMessage::HostAlive) => {}
+            Ok(RunnerMessage::HostAlive {
+                threads,
+                tied_threads,
+                thread_stops,
+                loop_lag_ms,
+            }) => HostStats::heard(
+                &stats,
+                &metrics,
+                (threads, tied_threads, thread_stops, loop_lag_ms),
+            ),
             Ok(RunnerMessage::LoopBlocked { watcher, stack }) => {
                 tracing::warn!(pid, ?watcher, "a watcher blocked its host's loop");
                 // What every wait step on it read is in this process, and may be in its stack.
@@ -318,9 +386,32 @@ struct HostEnd {
     ended: watch::Sender<Option<Termination>>,
     drain: Duration,
     going: Arc<StdMutex<Going>>,
+    sys_path: Vec<String>,
+    hosts: WatcherHosts,
 }
 
 impl HostEnd {
+    /// Counts how it ended: for one wait step, or with those on it and none to blame. One
+    /// without any was stopped for that.
+    fn count(&self) {
+        let blamed = self
+            .going
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .blamed
+            .is_some();
+        let on_it = !self
+            .routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        if blamed {
+            self.hosts.metrics.blocked_kills.inc();
+        } else if on_it {
+            self.hosts.host_lost(&self.sys_path);
+        }
+    }
+
     async fn run(
         self,
         mut process: OsProcess,
@@ -351,6 +442,7 @@ impl HostEnd {
             reading.abort();
         }
         writing.abort();
+        self.count();
         let _ = self
             .ended
             .send(Some(termination.unwrap_or(Termination::Unknown)));
@@ -408,6 +500,15 @@ struct Entered {
 }
 
 impl WatcherHosts {
+    /// The hosts of a worker, counted in `metrics`.
+    #[must_use]
+    pub fn with_metrics(metrics: WatcherMetrics) -> Self {
+        Self {
+            metrics,
+            ..Self::default()
+        }
+    }
+
     /// A place in the code set's host, started if it has none.
     async fn enter(
         &self,
@@ -415,7 +516,7 @@ impl WatcherHosts {
         sys_path: &[String],
         grace: Duration,
     ) -> Result<Entered, LaunchError> {
-        self.watch_memory(setup);
+        self.watch_hosts(setup);
         let mut hosts = self.hosts.lock().await;
         let running = hosts.get(sys_path).filter(|host| host.alive()).cloned();
         let host = if let Some(host) = running {
@@ -423,7 +524,7 @@ impl WatcherHosts {
         } else {
             // Held from before it starts: nothing removes its copies under it.
             self.code_set(sys_path, true);
-            let host = match Host::start(setup, sys_path).await {
+            let host = match Host::start(setup, sys_path, self).await {
                 Ok(host) => Arc::new(host),
                 Err(error) => {
                     self.code_set(sys_path, false);
@@ -449,10 +550,11 @@ impl WatcherHosts {
         })
     }
 
-    /// From the first wait step on, keeps all hosts together under `[watchers] memory_budget`.
-    /// Past it the largest is killed: no wait step can be blamed, as memory isn't told apart.
-    fn watch_memory(&self, setup: &WorkerSetup) {
-        if self.watching_memory.swap(true, Ordering::SeqCst) {
+    /// From the first wait step on, looks at the hosts: what the heartbeat tells and the metrics
+    /// come from here, and all of them together are kept under `[watchers] memory_budget`. Past
+    /// it the largest is killed: no wait step can be blamed, as memory isn't told apart.
+    fn watch_hosts(&self, setup: &WorkerSetup) {
+        if self.watching.swap(true, Ordering::SeqCst) {
             return;
         }
         let hosts = self.clone();
@@ -463,9 +565,16 @@ impl WatcherHosts {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
-                let running: Vec<Arc<Host>> = hosts.hosts.lock().await.values().cloned().collect();
+                let running: Vec<(Vec<String>, Arc<Host>)> = hosts
+                    .hosts
+                    .lock()
+                    .await
+                    .iter()
+                    .filter(|(_, host)| host.alive())
+                    .map(|(code, host)| (code.clone(), Arc::clone(host)))
+                    .collect();
                 let root = watch.proc_root.clone();
-                let pids: Vec<i32> = running.iter().map(|host| host.pid).collect();
+                let pids: Vec<i32> = running.iter().map(|(_, host)| host.pid).collect();
                 let Ok(sizes) = tokio::task::spawn_blocking(move || {
                     pids.iter()
                         .map(|pid| crate::memory::group_memory(&root, *pid, true).unwrap_or(0))
@@ -475,12 +584,13 @@ impl WatcherHosts {
                 else {
                     continue;
                 };
+                hosts.looked_at(&running, &sizes);
                 let used: u64 = sizes.iter().sum();
                 let largest = sizes.iter().enumerate().max_by_key(|(_, size)| **size);
                 if used > budget
                     && let Some((index, _)) = largest
                 {
-                    let host = &running[index];
+                    let host = &running[index].1;
                     tracing::warn!(pid = host.pid, used, budget, "killing a watcher host");
                     set_why(
                         &host.going,
@@ -495,6 +605,73 @@ impl WatcherHosts {
                 }
             }
         });
+    }
+
+    /// Keeps what the hosts look like now, for the heartbeat and the metrics; code sets that
+    /// lost hosts stay after them, as what kills their hosts may kill them again.
+    fn looked_at(&self, running: &[(Vec<String>, Arc<Host>)], sizes: &[u64]) {
+        let mut lost = self
+            .lost
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let (mut tied, mut untied) = (0_u64, 0_u64);
+        let mut reports = Vec::new();
+        for ((code, host), memory) in running.iter().zip(sizes) {
+            let stats = *host.stats.lock().unwrap_or_else(PoisonError::into_inner);
+            tied += u64::from(stats.tied_threads);
+            untied += u64::from(stats.threads - stats.tied_threads);
+            let wait_steps = host
+                .routes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .len();
+            reports.push(pb::WatcherHost {
+                code: code_of(code),
+                wait_steps: u32::try_from(wait_steps).unwrap_or(u32::MAX),
+                threads: stats.threads,
+                tied_threads: stats.tied_threads,
+                memory_bytes: *memory,
+                hosts_lost: lost.remove(code).unwrap_or(0),
+            });
+        }
+        reports.extend(lost.iter().map(|(code, count)| pb::WatcherHost {
+            code: code_of(code),
+            hosts_lost: *count,
+            ..pb::WatcherHost::default()
+        }));
+        self.metrics.set_threads(tied, untied);
+        self.metrics
+            .hosts
+            .set(i64::try_from(running.len()).unwrap_or(i64::MAX));
+        self.metrics
+            .memory
+            .set(i64::try_from(sizes.iter().sum::<u64>()).unwrap_or(i64::MAX));
+        *self.reports.lock().unwrap_or_else(PoisonError::into_inner) = reports;
+    }
+
+    /// The hosts as last looked at, for the heartbeat.
+    #[must_use]
+    pub fn reports(&self) -> Vec<pb::WatcherHost> {
+        self.reports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn host_lost(&self, sys_path: &[String]) {
+        self.metrics
+            .hosts_lost
+            .get_or_create(&CodeLabels {
+                code: code_of(sys_path),
+            })
+            .inc();
+        *self
+            .lost
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(sys_path.to_vec())
+            .or_default() += 1;
     }
 
     /// Takes a watcher out; a host left without any stops.
@@ -556,6 +733,19 @@ impl WatcherHosts {
         self.code_channel().send_if_modified(|now| {
             let changed = now != copies;
             if changed {
+                // Code no longer current has its lost hosts told by the metric from here on.
+                let old: Vec<&PathBuf> = now
+                    .values()
+                    .filter(|copy| !copies.values().any(|current| current == *copy))
+                    .collect();
+                self.lost
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .retain(|code, _| {
+                        !code
+                            .iter()
+                            .any(|dir| old.iter().any(|copy| copy.as_os_str() == dir.as_str()))
+                    });
                 now.clone_from(copies);
             }
             changed
@@ -1223,6 +1413,7 @@ pub async fn run_watcher(
                 AfterHost::StartsAgain => {
                     // Not its doing: its time runs on, and it uses no retry.
                     log.note(STARTS_AGAIN).await;
+                    hosts.metrics.restarts.inc();
                     request = place
                         .request
                         .into_inner()

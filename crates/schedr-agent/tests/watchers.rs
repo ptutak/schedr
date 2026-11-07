@@ -12,6 +12,7 @@ use pretty_assertions::assert_eq;
 use schedr_agent::attempt::{Ran, WorkerSetup, WorkerTimeouts};
 use schedr_agent::channel::write_message;
 use schedr_agent::launch::{ProcessParseRunner, RUNNER_START_TIMEOUT, start_runner};
+use schedr_agent::metrics::{CodeLabels, WatcherMetrics};
 use schedr_agent::parse::parse_files;
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::status::{StopReason, Termination};
@@ -64,6 +65,7 @@ async def beta() -> int:
 @sensor
 async def forever() -> int:
     try:
+        Path(os.environ["IMPORTS"]).with_name("forever_started").write_text("yes")
         await asyncio.sleep(600)
     finally:
         Path(os.environ["IMPORTS"]).with_name("cleaned").write_text("yes")
@@ -367,6 +369,13 @@ impl Worker {
         }
     }
 
+    /// `forever` is running.
+    async fn forever_started(&self) {
+        while !self.dir.path().join("forever_started").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// `waits_for_release` has made its first call.
     async fn peer_started(&self) {
         let starts = self.dir.path().join("waits_starts");
@@ -565,7 +574,7 @@ async fn a_cancel_ends_only_its_watcher_and_runs_its_finally() {
     let (cancel, stops) = Stops::new();
     let forever = worker.run("forever", stops, mask_none());
     let alpha = async {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        worker.forever_started().await;
         cancel.send(StopReason::Cancelled).unwrap();
         worker.run("alpha", no_stop(), mask_none()).await
     };
@@ -1125,6 +1134,8 @@ async fn a_thread_has_its_own_steps_grace_not_that_of_who_started_the_host() {
 async fn a_blocked_loop_fails_who_blocked_it_and_the_others_start_again() {
     let mut worker = Worker::new().await;
     worker.setup.timeouts.watcher_block_limit = Duration::from_millis(800);
+    let metrics = WatcherMetrics::default();
+    worker.hosts = WatcherHosts::with_metrics(metrics.clone());
     let peer = worker.run("waits_for_release", no_stop(), mask_none());
     let blocking = async {
         worker.peer_started().await;
@@ -1133,6 +1144,8 @@ async fn a_blocked_loop_fails_who_blocked_it_and_the_others_start_again() {
         ran
     };
     let (peer, blocker) = tokio::join!(peer, blocking);
+    assert_eq!(metrics.blocked_kills.get(), 1);
+    assert_eq!(metrics.restarts.get(), 1);
     let Some(RunnerMessage::TaskFailed { error, kind }) = &blocker.runner_result else {
         panic!("{:?}", blocker.runner_result);
     };
@@ -1152,6 +1165,66 @@ async fn a_host_that_stops_answering_is_killed_and_its_wait_steps_are_lost() {
     assert_eq!(ran.runner_result, None);
     let why = ran.host_lost.unwrap();
     assert!(why.contains("didn't answer"), "{why}");
+}
+
+#[tokio::test]
+async fn a_host_is_told_as_it_is_and_one_lost_is_counted_by_its_code() {
+    let mut worker = Worker::new().await;
+    worker.setup.memory.interval = Duration::from_millis(50);
+    let metrics = WatcherMetrics::default();
+    worker.hosts = WatcherHosts::with_metrics(metrics.clone());
+    assert_eq!(worker.hosts.reports(), []);
+    let peer = worker.run("waits_for_release", no_stop(), mask_none());
+    let told = async {
+        worker.peer_started().await;
+        let report = loop {
+            let reports = worker.hosts.reports();
+            if let Some(report) = reports.first().filter(|r| r.threads > 0) {
+                break report.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        std::fs::write(worker.dir.path().join("release"), "").unwrap();
+        report
+    };
+    let (ran, report) = tokio::join!(peer, told);
+    assert!(matches!(
+        ran.runner_result,
+        Some(RunnerMessage::TaskSucceeded { .. })
+    ));
+    assert_eq!(report.wait_steps, 1);
+    assert_eq!(report.tied_threads, 0, "{report:?}");
+    assert!(report.memory_bytes > 0, "{report:?}");
+    assert_eq!(report.hosts_lost, 0);
+    assert_eq!(metrics.hosts.get(), 1);
+    assert!(metrics.memory.get() > 0);
+    assert_eq!(
+        metrics.blocked_kills.get(),
+        0,
+        "a host stopped empty isn't killed"
+    );
+
+    // A host left with no wait steps counts for nothing; a crash counts for its code.
+    let crashed = worker.run("crashes", no_stop(), mask_none()).await;
+    assert!(crashed.host_lost.is_some());
+    // A look begun before the crash may still count its host: the next one doesn't.
+    let code = loop {
+        let reports = worker.hosts.reports();
+        let gone = metrics.hosts.get() == 0;
+        if let Some(report) = reports.iter().find(|r| gone && r.hosts_lost > 0) {
+            assert_eq!(report.hosts_lost, 1);
+            assert_eq!(report.threads, 0, "{report:?}");
+            assert_eq!(reports.len(), 1, "a host that died isn't one running");
+            break report.code.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        metrics.hosts_lost.get_or_create(&CodeLabels { code }).get(),
+        1
+    );
+    assert_eq!(metrics.hosts.get(), 0);
+    assert_eq!(metrics.restarts.get(), 0);
 }
 
 #[tokio::test]

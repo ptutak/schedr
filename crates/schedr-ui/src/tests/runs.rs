@@ -333,6 +333,81 @@ async fn a_run_shows_its_graph_tasks_and_commands() {
 }
 
 #[tokio::test]
+async fn a_wait_step_pulses_at_work_and_a_timeout_looks_skipped() {
+    let tasks = [
+        task("working", "running", None, None),
+        task("heard", "success", Some("TimedOut"), None),
+        task("unheard", "success", Some("TimedOut"), None),
+        task("broken", "failed", None, None),
+        task("plain", "running", None, None),
+        task("returned_it", "success", Some("TimedOut"), None),
+        task("found", "success", Some("SUCCESS"), None),
+        task("alert", "scheduled", None, None),
+    ];
+    let sensor = |id: &str| json!({"id": id, "kind": "sensor"});
+    let answers = scripted(&[
+        (
+            "/api/v1/runs/r1",
+            200,
+            json!({
+                "run": run_at("r1", "sync", "running", 2),
+                "tasks": tasks, "code_hashes": [],
+            }),
+        ),
+        (
+            "/api/v1/runs/r1/dag",
+            200,
+            json!({
+                "id": "sync",
+                "tasks": [
+                    sensor("working"), sensor("heard"), sensor("unheard"), sensor("broken"), sensor("found"),
+                    {"id": "plain", "kind": "python"}, {"id": "returned_it", "kind": "python"},
+                    {"id": "alert", "kind": "python"},
+                ],
+                "edges": [
+                    {"from": "heard", "to": "alert", "kind": "order", "on": ["TimedOut"]},
+                    {"from": "unheard", "to": "alert", "kind": "order", "on": ["SUCCESS"]},
+                ],
+            }),
+        ),
+    ]);
+    let mut answers = answers;
+    answers.answers.insert(
+        "/api/v1/runs/r1/commands".to_owned(),
+        (200, json!({"commands": []})),
+    );
+    let app = ui(vec![deployment("etl", answers)]);
+    let (status, html) = get(&app, "/d/etl/runs/r1", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        attrs(&html, "table.tasks tbody .state", "class"),
+        [
+            "state running waiting",
+            "state skipped waited-out",
+            "state skipped waited-out",
+            "state failed",
+            "state running",
+            "state success",
+            "state success",
+            "state scheduled",
+        ]
+    );
+    assert_eq!(
+        attrs(&html, "svg.dag rect.box.waiting", "class"),
+        ["box running waiting"]
+    );
+    // Whether a task takes the timeout or not: not taking it is the author's to choose.
+    assert_eq!(
+        attrs(&html, "svg.dag rect.box.waited-out", "class").len(),
+        2
+    );
+    assert!(
+        texts(&html, "table.tasks tbody .state").contains(&"success · TimedOut".to_owned()),
+        "it says what happened, whatever it looks like"
+    );
+}
+
+#[tokio::test]
 async fn a_tasks_panel_shows_its_attempts_with_their_errors() {
     let app = ui(vec![deployment("etl", scripted(&failed_run()))]);
     // As htmx asks for it: the fragment alone.

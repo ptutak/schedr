@@ -39,7 +39,7 @@ the code. Roughly:
   (`schedr_worker_task_start_seconds{method,phase}`), fork servers
   (`schedr_worker_fork_servers{interpreter,kind,state}`), Python tasks and parse jobs a fork
   server didn't fork (`schedr_worker_fork_fallbacks_total{interpreter,reason}`), watchdog
-  kills, journal records, log disk usage;
+  kills, watcher hosts and wait steps, journal records, log disk usage;
 - **webserver:** requests by route and status, log proxy errors by kind;
 - **web UI:** none of its own;
 - **every role:** process memory, CPU, open files, start time (absent without `/proc`, so on
@@ -90,11 +90,22 @@ taking requests), `fork_failed` (it refused the fork) or `shim_died` (the shim e
 job the first server forks does not add to the counter. A server a task skips with
 `preload` false does not add to the counter either: the task did not ask it.
 
+For wait steps, watch `schedr_worker_watcher_hosts_lost_total{code}` for repeated host
+crashes, memory kills or hosts that stop answering, by code set. Each loss uses a retry for
+the wait steps on that host. `schedr_worker_watcher_blocked_kills_total` counts hosts killed
+for a blocked loop, a stuck thread or an ignored cancellation, and
+`schedr_worker_watcher_thread_stops_total` counts `to_thread` calls stopped at their step's
+end; a stop can leave shared state half updated. The
+`schedr_worker_watcher_loop_lag_seconds` histogram shows how long a host's event loop took to
+get to a call, including delays short of the block limit. Slots, hosts, tied and untied
+threads, memory and restarted wait steps are also measured. See
+[The watcher host](05-workers.md#the-watcher-host).
+
 Counters and histograms are updated where things happen. The gauges that need the database
 (runs, tasks and workers by state) are refreshed by the master's loop every 15 s, with one
 read-only query. **A scrape reads only memory**: never the database, never the master's lock.
-Labels are bounded (states, kinds, reasons, `dag_id`, the interpreter's name, and `method`
-/ `phase` on the start histogram), never a run, task or attempt ID.
+Labels include states, kinds, reasons, `dag_id`, code sets, the interpreter's name, and
+`method` / `phase` on the start histogram, never a run, task or attempt ID.
 
 ## schedr's own logs
 

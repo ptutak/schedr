@@ -4,7 +4,7 @@
 //! on the graph (decisions 262, 272).
 
 use futures_util::StreamExt as _;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use jiff::Timestamp;
 use schedr_api::views::{
     AllRunsQuery, AttemptView, CleanupView, CommandView, ResourceView, RunView, TaskView,
 };
-use schedr_client::{ClientError, Transport, path_segment};
+use schedr_client::{Client, ClientError, Transport, path_segment};
 use serde::Deserialize;
 
 use crate::graph::{self, NODE_HEIGHT, NODE_WIDTH};
@@ -383,6 +383,8 @@ pub struct Node {
     pub label: String,
     /// Its state (`none` before the run created it).
     pub state: String,
+    /// How its state looks (its CSS classes).
+    pub look: String,
     /// Its outcome when it says something (not `SUCCESS`).
     pub outcome: String,
     /// A mapped task: how far its instances are (`2/3 done · 1 failed`).
@@ -500,8 +502,8 @@ pub struct TaskRow {
     pub href: String,
     /// Its panel alone (htmx).
     pub panel: String,
-    /// Its state.
-    pub state: String,
+    /// How its state looks (its CSS classes).
+    pub look: String,
     /// `state · outcome`, the outcome only when it says something.
     pub status: String,
     /// Attempts made.
@@ -662,7 +664,7 @@ pub async fn run<T: Transport>(
         }
         None => String::new(),
     };
-    let (whole, tasks) = task_rows(&page, &run_href, &detail.tasks);
+    let (whole, tasks) = task_rows(&page, &run_href, &detail.tasks, &WaitSteps::of(&dag));
     let graph = run_graph(deployment, &run_id, &dag, &detail.tasks, &run_href, &query).await;
     let at = format!("{}/d/{}", page.base, path_segment(&deployment.name));
     render(
@@ -754,6 +756,42 @@ fn summary(state: &str, tasks: &[TaskView]) -> String {
     }
 }
 
+/// The outcome of a wait step whose time ran out.
+const TIMED_OUT: &str = "TimedOut";
+
+/// A DAG's wait steps, for how they look.
+#[derive(Debug, Default)]
+struct WaitSteps(BTreeSet<String>);
+
+impl WaitSteps {
+    fn of(dag: &serde_json::Value) -> Self {
+        Self(
+            dag["tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|task| task["kind"] == "sensor")
+                .filter_map(|task| task["id"].as_str().map(str::to_owned))
+                .collect(),
+        )
+    }
+
+    /// How a task's state looks (its CSS classes). A wait step at work pulses. One whose time
+    /// ran out looks skipped, as nothing broke and what it waited for didn't come; it says
+    /// `TimedOut` all the same, as it did run.
+    fn look(&self, task: &TaskView) -> String {
+        let wait_step = self.0.contains(&task.task_id);
+        if wait_step && task.state == "running" {
+            "running waiting".to_owned()
+        } else if wait_step && task.state == "success" && task.outcome.as_deref() == Some(TIMED_OUT)
+        {
+            "skipped waited-out".to_owned()
+        } else {
+            task.state.clone()
+        }
+    }
+}
+
 /// `state · outcome · cleanup`, each part only when it says something: `SUCCESS` doesn't, nor
 /// a cleanup that went well or wasn't needed.
 fn status(task: &TaskView) -> String {
@@ -779,17 +817,25 @@ fn cleanup_said(result: Option<&str>) -> Option<&'static str> {
 
 /// The run's tasks as a whole, and their rows; a mapped task's instances are in its panel
 /// (decision 83).
-fn task_rows(page: &Page, run_href: &str, tasks: &[TaskView]) -> (Vec<TaskView>, Vec<TaskRow>) {
+fn task_rows(
+    page: &Page,
+    run_href: &str,
+    tasks: &[TaskView],
+    wait_steps: &WaitSteps,
+) -> (Vec<TaskView>, Vec<TaskRow>) {
     let whole: Vec<TaskView> = tasks
         .iter()
         .filter(|t| t.map_index == -1)
         .cloned()
         .collect();
-    let rows = whole.iter().map(|t| task_row(page, run_href, t)).collect();
+    let rows = whole
+        .iter()
+        .map(|t| task_row(page, run_href, t, wait_steps))
+        .collect();
     (whole, rows)
 }
 
-fn task_row(page: &Page, run_href: &str, task: &TaskView) -> TaskRow {
+fn task_row(page: &Page, run_href: &str, task: &TaskView, wait_steps: &WaitSteps) -> TaskRow {
     let id = path_segment(&task.task_id);
     TaskRow {
         label: task.instances.map_or_else(
@@ -798,7 +844,7 @@ fn task_row(page: &Page, run_href: &str, task: &TaskView) -> TaskRow {
         ),
         href: format!("{run_href}?task={id}"),
         panel: format!("{run_href}/tasks/{id}"),
-        state: task.state.clone(),
+        look: wait_steps.look(task),
         status: status(task),
         tries: task.try_number,
         reason: task.reason.clone().unwrap_or_default(),
@@ -913,6 +959,7 @@ fn graph_of(
                 .collect()
         })
         .unwrap_or_default();
+    let wait_steps = WaitSteps::of(dag);
     let index = |id: &str| ids.iter().position(|i| i == id);
     let resources = resources_of(dag, index);
     let mut edges = joined_edges(dag, index);
@@ -948,6 +995,7 @@ fn graph_of(
                     .map(|n| counts(id, n, tasks))
                     .unwrap_or_default(),
                 state: task.map_or_else(|| "none".to_owned(), |t| t.state.clone()),
+                look: task.map_or_else(|| "none".to_owned(), |t| wait_steps.look(t)),
                 outcome: task
                     .and_then(|t| t.outcome.clone())
                     .filter(|o| o != "SUCCESS")
@@ -1844,6 +1892,15 @@ impl Failure {
     }
 }
 
+/// How a task's state looks; without its DAG (a webserver that can't say) as any task's does.
+async fn looks_in_panel<T: Transport>(client: &Client<T>, run_id: &str, task: &TaskView) -> String {
+    client
+        .run_dag(run_id)
+        .await
+        .map_or_else(|_| WaitSteps::default(), |dag| WaitSteps::of(&dag))
+        .look(task)
+}
+
 /// The panel's HTML for `task_id`, or why it can't be shown.
 async fn task_panel<T: Transport>(
     page: &Page,
@@ -1929,7 +1986,7 @@ async fn task_panel<T: Transport>(
         task_id: map_index.map_or_else(|| task_id.to_owned(), |i| format!("{task_id}[{i}]")),
         node: task_id.to_owned(),
         status: status(task),
-        state: task.state.clone(),
+        state: looks_in_panel(client, run_id, task).await,
         close: run_href.to_owned(),
         base: page.base.clone(),
         action_query: map_index.map_or_else(String::new, |i| format!("?map_index={i}")),

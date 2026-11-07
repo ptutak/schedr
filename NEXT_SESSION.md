@@ -4,16 +4,20 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-06): M4.11a4 part 1 committed (slots, kept deadline, drain); part 2 (metrics, UI) is next; the user pre-accepted pushing each part when green
+## State (2026-11-07): M4.11a4 done (two commits, part 2 pushed when green, as the user pre-accepted); M4.11b is next
 
+- **M4.11a4 part 2:** a host's threads tied and untied, loop lag, `to_thread` stops on `host_alive`; memory sampled by the
+  agent; `worker_watcher_*` metrics, hosts lost per code set (342); hosts on the heartbeat, in `workers.watcher_hosts`, on
+  `GET /api/v1/workers` and the Workers page (343); switched-off sensors on the DAG page with a switch-on, a banner on the DAGs
+  list; a wait step pulses at work, one timed out looks skipped and says `TimedOut`, its run stays green (344). Reviews: Codex 8,
+  all real; Grok 3, one logged as B183, one rejected as within the trust domain.
 - **M4.11a3, committed:** the block watchdog
   (`loop_blocked`, `blocked_event_loop`, never retried), blame (a held loop, a stuck thread, an ignored cancel), the others
   starting again on a new host keeping their time and using no retry, `lost` with `watcher_host_lost` for a crash, a memory
   kill or a silent host, `[watchers] block_limit`, `memory_budget`, `switch_off_after`; decision 338 (strikes in
   `wait_step_strikes`, `schedr sensors switched-off`, `sensors switch-on`), 339 (a thread left running warns in the log), 340
   (`schedr resources list`, `GET /runs/{run}/resources[/{resource}]`), 341, 342 (crashes and memory kills visible, not switched off). Reviews: Codex twice (5 and 6), Grok security (3): all fixed or decided.
-- **M4.11a4, next:** slots, kept deadline, drain, metrics (kills, `to_thread` stops that land), UI with each host's threads, tied
-  and untied, and switched-off sensors (339). Then M4.11b, where triggers get their own endpoints like sensors.
+- **M4.11b, next:** triggers, with their own endpoints like sensors; they take the wait step's looks (344).
 - **Open offers with no answer:** `Path` as an output type; a Grok security pass on M4.10's connection code.
 
 ## Earlier (2026-11-06): M4.11L committed

@@ -6813,6 +6813,14 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   untied the rest of the process. The DAG page lists its switched-off sensors with a switch-on
   button, and a banner on the DAGs list says how many are off. Not chosen: worker totals only (which
   code set has them can't be seen); a page of their own for either.
+- **How a wait step looks in a run** (decision 344, the user's, 2026-11-07): at work it pulses (not
+  for people who ask their browser for less motion); failed, it is red as any task is. One whose
+  time ran out looks like a skipped task, grey, and says `TimedOut`, as it did run. Its run stays
+  `success`, green, whether or not a task takes the timeout: `.on(File)` alone may be just what the
+  author wants, and one who wants something done about a timeout writes `.on(TimedOut)`. Not chosen:
+  red (a declared outcome, and `.on(TimedOut)` routes on it); green (what it waited for didn't come);
+  yellow when no task takes it, on the wait step or on the run (it would call an author's plan
+  suspicious); failing such a run.
 - **Blame is what a host says** (Grok's review): a wait step with the will to can reach the shared
   socket and name a neighbour, which then gets its strikes or an ended attempt. That is within "a worker
   is one trust domain": they share a process and can read each other's memory anyway. Blame for an

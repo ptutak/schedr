@@ -1,0 +1,15 @@
+title = "What a worker reports is stored with no limit on its size"
+severity = "medium"
+probability = "rare"
+kind = "security"
+summary = "`heard_of_hosts` and the warnings message store what a worker sends as it is, up to gRPC's message limit, and `db.workers()` reads every row for the API and the Workers page."
+found = 2026-11-07
+suspected = false
+details = '''
+- **Found:** 2026-11-07, Grok's security review of M4.11a4 part 2: a `code` of 100,000 characters was
+  stored and read back. Only a worker that lies does this: an honest agent sends small records.
+- **Scenario:** something holding a worker's identity sends several megabytes of hosts or warnings on
+  each heartbeat; each read of the workers grows with them.
+- **Fix when taken:** a limit on how many records and how long a string the master stores, for
+  warnings and hosts both; the limit is a key or `SCHEDR_HIDDEN__*`.
+'''

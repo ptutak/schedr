@@ -377,6 +377,47 @@ async fn a_tick_applies_commands_and_assigns_the_task_which_then_runs_to_the_end
 }
 
 #[tokio::test]
+async fn what_a_worker_says_of_its_hosts_is_kept_for_people() {
+    let mut core = with_dag().await;
+    let host = pb::WatcherHost {
+        code: "abc".to_owned(),
+        wait_steps: 2,
+        threads: 31,
+        tied_threads: 1,
+        memory_bytes: 1024,
+        hosts_lost: 3,
+    };
+    let beat = |hosts: Vec<pb::WatcherHost>| {
+        worker_message::Message::Heartbeat(pb::Heartbeat {
+            watcher_hosts: hosts,
+            ..pb::Heartbeat::default()
+        })
+    };
+    core.handle("w1", beat(vec![host.clone()]), later(1))
+        .await
+        .unwrap();
+    let stored = core.db.workers().await.unwrap();
+    assert_eq!(stored[0].watcher_hosts.len(), 1);
+    assert_eq!(stored[0].watcher_hosts[0].code, "abc");
+    assert_eq!(stored[0].watcher_hosts[0].wait_steps, 2);
+    assert_eq!(stored[0].watcher_hosts[0].threads, 31);
+    assert_eq!(stored[0].watcher_hosts[0].tied_threads, 1);
+    assert_eq!(stored[0].watcher_hosts[0].memory_bytes, 1024);
+    assert_eq!(stored[0].watcher_hosts[0].hosts_lost, 3);
+    let tied_past_its_threads = pb::WatcherHost {
+        tied_threads: 99,
+        ..host.clone()
+    };
+    core.handle("w1", beat(vec![tied_past_its_threads]), later(2))
+        .await
+        .unwrap();
+    let stored = core.db.workers().await.unwrap();
+    assert_eq!(stored[0].watcher_hosts[0].tied_threads, 31);
+    core.handle("w1", beat(Vec::new()), later(3)).await.unwrap();
+    assert_eq!(core.db.workers().await.unwrap()[0].watcher_hosts, []);
+}
+
+#[tokio::test]
 async fn rejections_heartbeats_and_draining_are_handled() {
     let mut core = with_dag().await;
     trigger(&mut core).await;

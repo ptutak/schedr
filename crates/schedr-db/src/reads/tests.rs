@@ -471,6 +471,7 @@ async fn states_are_counted_for_the_masters_gauges() {
             schedr_version: "0.1.0",
             queues: &[],
             slots: 2,
+            watcher_slots: 0,
             log_endpoint: "",
         },
         now,
