@@ -17,7 +17,8 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 - **B189 (fixed, the user's choice):** a trigger no longer refuses a key holding a secret: stored masked, its log says
   so once (`EventRefused` removed). Not a hash of the real key: a database reader could recover a short secret.
 - **Decision 355** (`delay`/`until`) was missing from PROJECT.md; written now.
-- **Open:** B185, B187. Next is the user's call (M4B, or Codex's F12-F14 scan after M4).
+- **Open:** B185, B187. **Next: M4.12** (`TriggerDagOperator` and backfill), then M4.13-M4.15 to finish M4;
+  M4B and Codex's F12-F14 scan come after M4.
 
 ## State (2026-11-08, afternoon): M4.11e, f and g committed; M4.11h (`schedr.api`, B2) next, the last of M4.11
 
