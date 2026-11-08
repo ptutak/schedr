@@ -8,5 +8,6 @@ schedr keeps no user database, user management UI, admin role or sessions. Peopl
 organisation’s identity provider; Basic auth retains its users file for labs and single machines. A
 separate LDAP mode checking Basic credentials by directory bind is planned for M6.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D39"
+step = "n/a"
 checked = 2026-11-08

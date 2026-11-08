@@ -8,7 +8,8 @@ The DAG page lists its declared connections, their names, types, tasks using the
 results. Check all renders on a worker and checks secret availability without contacting
 services. Each row's Test opens the connection and runs its check, making a real login.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D207"
 step = "M4.7e"
+also = ["ui-cli"]
 code = ["crates/schedr-ui/src/connections.rs", "crates/schedr-ui/src/pages.rs"]
 checked = 2026-11-08

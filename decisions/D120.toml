@@ -9,7 +9,8 @@ instance ends with a selected outcome. Downstream run_if combines these with its
 NONE_FAILED permits any matching instance, ALL_SUCCEEDED requires every instance to match. An empty
 mapping takes the edge.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D120"
 step = "M4.3e"
+also = ["python-api"]
 code = ["crates/schedr-master/src/progress.rs"]
 checked = 2026-11-08

@@ -7,7 +7,8 @@ summary = '''
 The DAG page shows each configured concurrency limit and its current count.
 The counts come from the master and appear beside the waiting reasons.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D96"
 step = "M4.4"
+also = ["assignment"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-ui/src/pages.rs"]
 checked = 2026-11-08

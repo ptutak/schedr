@@ -7,6 +7,8 @@ summary = '''
 The agent reads CPU time and major faults from the spawned process’s zombie.
 Peak RSS and context switches are null; unreadable usage is null.
 '''
-history = "PROJECT.md: How Python tasks are started"
+history = "PROJECT.md#D18"
+step = "M2.5.4b"
+also = ["observability"]
 code = ["crates/schedr-agent/src/process.rs", "crates/schedr-agent/src/usage.rs"]
 checked = 2026-11-08

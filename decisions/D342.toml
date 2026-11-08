@@ -7,7 +7,8 @@ summary = '''
 Crashes and memory kills blame no wait step and switch none off; each lost attempt uses a retry.
 The error names the host’s wait steps and a metric counts losses per code set.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D342"
 step = "M4.11a3"
+also = ["observability"]
 code = ["crates/schedr-agent/src/watchers.rs"]
 checked = 2026-11-08

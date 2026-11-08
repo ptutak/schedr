@@ -7,5 +7,7 @@ summary = '''
 The UI has a Waiting for you list, badge and task-panel answer form; the CLI provides `schedr runs answer`.
 A `WAITING_FOR_ANSWER` notification is sent through configured channels, with email linking to the task.
 '''
-history = "PROJECT.md: Human in the loop (M6)"
+history = "PROJECT.md#D288"
+step = "M6"
+also = ["ui-cli"]
 checked = 2026-11-08

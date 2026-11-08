@@ -1,0 +1,16 @@
+title = "after M4B"
+order = 75
+done_when = '''
+1.0.0 is released once M4B is done; from then on the schema and the protocol change only additively.
+'''
+notes = '''
+Decided by the user (2026-10-29): **schedr 1.0.0 is released once M4B is done** (the milestone after M4; named M4.5 when decided). Until then,
+`0001_initial.sql` (Postgres and SQLite) and the protocol (`PROTOCOL_VERSION` 0.1) are edited
+in place. From 1.0.0 on, a schema change is a new migration, and the protocol changes only
+additively within a major version (a new major for anything else); DAG JSON, the REST API
+and the configuration keep what they accept.
+
+Between them (the user, 2026-11-02): **most probably no release before 1.0.0**; 0.1.0 was
+mainly to reserve the name on PyPI. Possibly **0.2.0 at the end of M4**. How long M4B takes
+is hard to tell: batching a turn's messages in one transaction needs much testing.
+'''

@@ -7,7 +7,8 @@ summary = '''
 Airflow Param comes with the Airflow compatibility work.
 M4.5 accepts a dataclass or a Pydantic model for parameters.
 '''
-history = "PROJECT.md: Run parameters and the DAG context"
-step = "M4.5a"
+history = "PROJECT.md#D136"
+step = "M5"
+also = ["task-context"]
 code = ["python/schedr/_params.py"]
 checked = 2026-11-08

@@ -7,5 +7,6 @@ summary = '''
 The run graph places layers down the page.
 Task names have the full width available.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D30"
+step = "M3.2b"
 checked = 2026-11-08

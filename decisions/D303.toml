@@ -9,7 +9,8 @@ it, and warns. The master omits script roots unreported by live workers after th
 configured five-minute grace, also observed from master startup; references remain import
 errors.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D303"
 step = "M4.9b"
+also = ["code-delivery", "workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/config.rs"]
 checked = 2026-11-08

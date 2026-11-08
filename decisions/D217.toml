@@ -7,7 +7,8 @@ summary = '''
 `cleanup_retries` and `cleanup_retry_delay` are available on tasks and in `StepDefaults`.
 Their defaults are three retries and 30 seconds between retries.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8"
+history = "PROJECT.md#D217"
+step = "M4.8a"
+also = ["python-api"]
 code = ["crates/schedr-model/src/task.rs"]
 checked = 2026-11-08

@@ -7,6 +7,7 @@ summary = '''
 A failed, cancelled or skipped target gives `Failed`, including its state.
 The DAG can route it with `.on(Failed)`; otherwise the operator task fails.
 '''
-history = "PROJECT.md: Dependencies between DAGs"
+history = "PROJECT.md#D359"
 step = "M4.12a"
+also = ["outcomes"]
 checked = 2026-11-08

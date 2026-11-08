@@ -7,5 +7,7 @@ summary = '''
 A dependency on an empty group or a group whose tasks form a cycle is a parse error.
 The error is reported at the end of the DAG block and names the dependency's location.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D97"
+step = "M4.3c"
+also = ["testing-dags"]
 checked = 2026-11-08

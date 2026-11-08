@@ -9,7 +9,8 @@ declared cleanup script cannot change, and cleanup_* without a declared cleanup 
 cleanup_script options override declaration settings, then cleanup defaults: three tries, 30 seconds and
 the setup’s queue.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D313"
 step = "M4.9c"
+also = ["cleanup"]
 code = ["python/schedr/resources.py"]
 checked = 2026-11-08

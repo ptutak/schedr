@@ -7,7 +7,8 @@ summary = '''
 The database layer replaces NUL with U+FFFD in every string and key of JSON it writes.
 JSON without NUL is written unchanged.
 '''
-history = "PROJECT.md: Output serialization"
+history = "PROJECT.md#D114"
 step = "M4.3e"
+also = ["serialization"]
 code = ["crates/schedr-db/src/query.rs"]
 checked = 2026-11-08

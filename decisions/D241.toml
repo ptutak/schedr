@@ -8,6 +8,6 @@ The production gauge-refresh limit is half of `loop_stall_timeout`.
 Migration-connection timings remain fixed, without `query_timeout`; client,
 `task-ctx` and CLI timings also remain constants.
 '''
-history = "PROJECT.md: Timings: public keys and hidden ones"
+history = "PROJECT.md#D241"
 step = "M4.8u"
 checked = 2026-11-08

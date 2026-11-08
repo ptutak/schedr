@@ -7,6 +7,7 @@ summary = '''
 `schedr.api` sends allowed task and trigger requests through the agent to the master’s API.
 Outside a task it uses HTTP; local DAG tests use their standalone master and database.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D356"
 step = "M4.11h"
+also = ["triggers", "ui-cli"]
 checked = 2026-11-08

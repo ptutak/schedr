@@ -7,7 +7,8 @@ summary = '''
 Images include the built Sphinx site under `/usr/share/schedr/docs`.
 The UI and standalone serve it at `/docs` when the configured directory exists.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D28"
 step = "M3.1"
+also = ["development"]
 code = ["crates/schedr-ui/src/docs.rs", "scripts/docs-dist.sh"]
 checked = 2026-11-08

@@ -7,6 +7,7 @@ summary = '''
 A file defining connection values larger than 1 MiB fails to import.
 The SDK and the master both enforce the limit.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D181"
 step = "M4.7a"
+also = ["code-delivery"]
 checked = 2026-11-08

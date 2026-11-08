@@ -7,5 +7,7 @@ summary = '''
 A Python Playwright suite checks the theme, zone cookie, htmx swap and live updates.
 `make test-ui` and a CI job run it outside `make check`.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D27"
+step = "M3.2b"
+also = ["ui-cli"]
 checked = 2026-11-08

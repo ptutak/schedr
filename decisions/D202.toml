@@ -8,6 +8,6 @@ Compose runs every connection type's server, standalones without their own UI, a
 demo builds and runs the images. The base image supplies client tools and Python libraries; the demo adds only
 start scripts. Until a release includes connections, the first run builds the base image using Rust and uv.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D202"
 step = "M4.7d"
 checked = 2026-11-08

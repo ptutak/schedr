@@ -7,6 +7,6 @@ summary = '''
 M4.7b1 builds the five typed connections, Python clients, checks and extras.
 M4.7b2 builds command variables and files, including JSON and custom connections.
 '''
-history = "PROJECT.md: Connections"
-step = "M4.7b1"
+history = "PROJECT.md#D186"
+step = "n/a"
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 A resource is a distinct graph item with setup and cleanup parts.
 Both parts always exist.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D259"
 step = "M4.8c1"
 code = ["crates/schedr-model/src/dag.rs", "python/schedr/_model/dag.py", "python/schedr/operators.py"]
 checked = 2026-11-08

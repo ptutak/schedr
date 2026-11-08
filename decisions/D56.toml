@@ -8,7 +8,7 @@ summary = '''
 the whole DAG is written. Dependencies on empty or cyclic groups fail parsing when the DAG block
 ends, naming where the dependency was written.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D56"
 step = "M4.2b"
 code = ["crates/schedr-model/src/dag.rs", "python/schedr/_build.py"]
 checked = 2026-11-08

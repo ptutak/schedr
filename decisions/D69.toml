@@ -7,7 +7,7 @@ summary = '''
 Fixed arguments remain in `arguments`, while `expand` describes the values that vary.
 `product` is an ordered list of named values and `kwargs` contains a list of dictionaries.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D69"
 step = "M4.3a"
 code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/validate.rs", "crates/schedr-model/src/task.rs"]
 checked = 2026-11-08

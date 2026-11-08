@@ -71,19 +71,32 @@ step touches their code or the user schedules them.
 | 16 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 17 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
 | 18 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 19 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 20 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 21 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 22 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 23 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 24 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 25 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 26 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 27 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 28 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 29 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 30 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 31 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 19 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 20 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 21 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 22 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 23 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 24 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 25 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 26 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 27 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 28 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 29 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 30 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 31 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 32 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B191: a worker's Finished that failed to store still wakes the master's loop
+
+- **Rating:** severity **low**, probability **rare**, correctness (score 1): Decision 42 wakes the loop for a Finished once recorded; the stream reader notifies for any Finished in the turn, also one whose handling failed, so a failed store costs an extra round (rate-limited by ROUND_GAP).
+- **Found:** Codex's step round of the docs restructuring (D42/D43 against the code); checked by
+  Claude in `crates/schedr-master/src/service.rs`: `finished |= matches!(message, Finished(_))` is
+  set before `self.handle(...)`, and `self.finished.notify_one()` runs after the loop whatever the
+  handling's result (a data fault drops the message; another error ends the stream).
+- **Effect:** one extra scheduler round, at least `ROUND_GAP` after the last; nothing is dispatched
+  wrongly, since the round reads the stored state.
+- **Fix proposed:** set `finished` only when `handle` returned `Ok` for a `Finished`; a unit test
+  with a refused `Finished` and no wake.
 
 ## B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised
 

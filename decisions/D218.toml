@@ -7,6 +7,7 @@ summary = '''
 A cleanup gets the connections and secrets its task declared.
 A command's connection variables and files stay until the cleanup ends.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8"
+history = "PROJECT.md#D218"
+step = "M4.8a"
+also = ["connections", "secrets"]
 checked = 2026-11-08

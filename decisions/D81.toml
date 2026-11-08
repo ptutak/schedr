@@ -7,7 +7,7 @@ summary = '''
 Without `?map_index`, the API returns the gathered list, with `None` for skipped instances.
 With an index it returns that instance’s output and outcome.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D81"
 step = "M4.3c"
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs"]
 checked = 2026-11-08

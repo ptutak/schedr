@@ -9,7 +9,8 @@ move dropped. Its journaled `Finished` receives `Continue` so the result is sent
 first move that worker’s task result counts; on later moves the previously kept task result
 remains.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D282"
 step = "M4.8z"
+also = ["workers"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs", "crates/schedr-master/src/dispatch.rs"]
 checked = 2026-11-08

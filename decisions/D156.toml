@@ -7,7 +7,8 @@ summary = '''
 Until 1.0.0, the initial schema and protocol are edited in place.
 Upgrading from 0.1 to 0.2 requires a fresh database; release notes and README say so.
 '''
-history = "PROJECT.md: Packaging and releases"
-step = "R0.1"
+history = "PROJECT.md#D156"
+step = "n/a"
+also = ["deployment", "state", "protocol"]
 code = ["scripts/release.py"]
 checked = 2026-11-08

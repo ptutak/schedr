@@ -7,6 +7,8 @@ summary = '''
 A mapped task’s output is stored per instance.
 A downstream list is assembled on read in map-index order, with `None` for skipped instances.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D77"
+step = "M4.3b"
+also = ["serialization", "state"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/mapping.rs"]
 checked = 2026-11-08

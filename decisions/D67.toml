@@ -7,7 +7,8 @@ summary = '''
 An Import errors page sits beside DAGs, Runs and Workers and merges deployments.
 A navigation count and DAG-list notice load after the page.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D67"
 step = "M4.2c"
+also = ["code-delivery"]
 code = ["crates/schedr-ui/src/imports.rs"]
 checked = 2026-11-08

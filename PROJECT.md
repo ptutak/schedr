@@ -1,10 +1,7 @@
 # schedr: Project Decisions
 
-The history of schedr's design: how it got here, and why. Up to decision 366 (2026-11-08) it is
-organized by topic, each decision with its reasons and "Not chosen" in its section; from then on
-the **Journal** at the end holds dated entries, appended, never rewritten (decision 367). What
-holds **now** is in `design/<topic>.md`; every decision has a file `decisions/D<n>.toml`, indexed
-in `DECISIONS.md`, whose `history` says where its text is here. Start a session from `STATUS.md`.
+This file records what has been decided about schedr. Open questions are listed at the end
+and move up into the decided sections once settled.
 
 ## Goal
 
@@ -177,7 +174,7 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
   pooler and version passes; Postgres plans each query again (small, simple queries).
 - **Commands: polling is the guarantee** (every round, 1 s); `LISTEN` stays a speed-up that
   may do nothing behind transaction pooling.
-- **A finished task wakes a round** (decisions 42B and 43A, the user's, 2026-10-28): a
+- <a id="D42"></a><a id="D43"></a>**A finished task wakes a round** (decisions 42B and 43A, the user's, 2026-10-28): a
   worker's `Finished`, once recorded, wakes the master's loop (a `Notify`: a burst of them is
   one wake), which runs a round at once, so its downstream tasks are dispatched instead of up
   to `[master] tick_interval` later on each step of a chain; at least 50 ms after the last
@@ -373,7 +370,7 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
       `Finished`, `CodeVersionChanged`; heartbeats write at most once): stored whole or not
       at all, one lease check and one commit per message instead of one per write. Before, a
       failure partway left part stored (B7's rules then repaired it).
-    - **T1b (planned, M4B): a turn of messages is one transaction** (decision 54, the
+    - <a id="D54"></a>**T1b (planned, M4B): a turn of messages is one transaction** (decision 54, the
       user's, 2026-10-28): a worker's messages handled in one turn of the core lock share one
       transaction, each behind a `SAVEPOINT` with its memory snapshot (a failed message is
       rolled back to its savepoint and its memory restored; the others stay), one commit for
@@ -585,7 +582,7 @@ authentication until M3 (a ClusterIP Service behind Istio or an authenticating p
     by measurement); two separate engines (the per-DAG logic twice, drifting apart). It
     doesn't help a few busy DAGs with many short tasks (scenario 13): that is the cost of the
     master's writes (see the transaction grouping).
-  - **Scaling past one master: a federated web UI over several deployments** (the user's
+  - <a id="D21"></a>**Scaling past one master: a federated web UI over several deployments** (the user's
     idea, decided 2026-10-24, milestone M3; **federated from the start**, the user's decision
     the same day: the UI is built for a list of deployments, one being the common case, not
     added later in the milestone). Each deployment is what exists
@@ -1120,7 +1117,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     …/commands/{id}` for the master's decision and its result (e.g. the new run's ID). The
     API itself only checks the request's form (IDs, body); everything else is the master's
     decision, so there is one place for the rules.
-  - **A command is stored once per key** (decision 126, the user's, 2026-11-01, B140): an
+  - <a id="D126"></a>**A command is stored once per key** (decision 126, the user's, 2026-11-01, B140): an
     action may carry an `Idempotency-Key` header (1-128 visible ASCII characters); the
     webserver stores one command per key and person, and the same request sent again gets
     the command stored the first time (`422` for the key with another command). The CLI
@@ -1130,7 +1127,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     the UI then says the command **may have arrived**, never "not sent". Not chosen: only
     telling "not sent" from "unknown" in the UI (a hurried second click still starts two
     runs); the wording now and the key later.
-  - **A DAG ID is never `.` or `..`** (decision 127, the user's, 2026-11-01, B139): such an
+  - <a id="D127"></a>**A DAG ID is never `.` or `..`** (decision 127, the user's, 2026-11-01, B139): such an
     ID is a URL path segment the client's and browsers' URL parsing removes (`%2E` too, by
     the URL standard), so the API couldn't be asked about that DAG. Refused where every DAG
     ID is checked; a file defining one gets an import error saying why. Not chosen: an escape
@@ -1165,7 +1162,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     (`--user`, `SCHEDR_USER` / `SCHEDR_PASSWORD`). From inside the namespace no credentials
     are needed (with `auth.mode = "none"`). `schedr login` (fetching a token through OIDC's
     device flow): possibly later.
-- **Frontend: server-rendered HTML with htmx** (confirmed 2026-10-27, decision 26A: Rust, in
+- <a id="D26"></a>**Frontend: server-rendered HTML with htmx** (confirmed 2026-10-27, decision 26A: Rust, in
   the `schedr ui` role of the same binary; not chosen: Python, e.g. FastAPI or Flask with
   Jinja2: a second runtime and image, the API's types duplicated, template errors at run
   time). Pages are HTML rendered from
@@ -1175,7 +1172,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   - **No JavaScript build:** no Node.js / npm, nothing new in CI. htmx and a small pan/zoom
     helper for the graph are vendored single files; all assets are **embedded in the `schedr`
     binary**, so `schedr ui` (and standalone) serves everything itself.
-  - The **DAG graph** is drawn as **SVG on the server** with **a layered layout of our own**
+  - <a id="D22"></a>The **DAG graph** is drawn as **SVG on the server** with **a layered layout of our own**
     (decision 22A, 2026-10-27: Sugiyama: layering, crossing reduction, x-placement; DAG graphs
     here are small and layered, and edge kinds and folded nodes need control; not chosen: a
     layout crate such as `layout-rs`); logs are converted from ANSI colours to HTML on the
@@ -1186,16 +1183,16 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     **Two themes, light and dark**, as CSS variables defined once for each, switched by a
     toggle in a corner and remembered in the browser; before a choice, the system's
     preference.
-  - **The live log tail** (decision 23A, 2026-10-27): the server reads the worker's range
+  - <a id="D23"></a>**The live log tail** (decision 23A, 2026-10-27): the server reads the worker's range
     endpoint (`from`) for the new bytes; no new worker endpoint. Since decision 175 the
     browser asks for each part (about once a second while the attempt runs) instead of the
     server sending them over SSE. Not chosen: a streaming mode on the worker's
     endpoint (a long-lived mTLS stream per viewer to each worker).
-  - **No sessions of our own** (decision 24A, 2026-10-27): `basic` uses the browser's Basic
+  - <a id="D24"></a>**No sessions of our own** (decision 24A, 2026-10-27): `basic` uses the browser's Basic
     auth, `proxy_header` the proxy's session; every action from the UI (a POST) must carry a
     matching `Origin` / `Sec-Fetch-Site`, others are refused (CSRF). Not chosen: cookie
     sessions with a login page and CSRF tokens.
-  - **The documentation inside the UI** (decision 28A, 2026-10-27): the image's build makes
+  - <a id="D28"></a><a id="D29"></a>**The documentation inside the UI** (decision 28A, 2026-10-27): the image's build makes
     the Sphinx site (the guide, DAG pages, design and generated reference; not the Rust API
     reference nor `_sources`) into `/usr/share/schedr/docs`; `schedr ui` (and standalone's UI)
     serves it at `/docs` when that directory exists (`[ui] docs_dir`, also to turn it off),
@@ -1209,26 +1206,26 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     locally.
   - **Decided ahead for M3.2b-M3.6** (the user, 2026-10-28, all at once so the steps could
     run without stopping):
-    - **The run graph flows top to bottom** (30A): layers down the page, task names at full
+    - <a id="D30"></a>**The run graph flows top to bottom** (30A): layers down the page, task names at full
       width. Not chosen: left to right (Airflow's; names squeezed, long chains scroll
       sideways).
-    - **A task's details open in a panel beside the graph** (31A), loaded with htmx; the same
+    - <a id="D31"></a>**A task's details open in a panel beside the graph** (31A), loaded with htmx; the same
       panel is a URL of its own (`…/runs/<run>?task=<id>`, the whole page with it open), so
       links and reloads work. Not chosen: a page per task (the graph lost meanwhile).
-    - **One merged runs list over every deployment** (32A), with a Deployment column when
+    - <a id="D32"></a>**One merged runs list over every deployment** (32A), with a Deployment column when
       there are several; one cursor (`triggered_at` and run ID) pages them all, as they share
       that order; filters apply to each. Not chosen: a list per deployment.
-    - **A task's output: the last 64 KiB** of the pretty-printed value, marked as cut, and a
+    - <a id="D33"></a>**A task's output: the last 64 KiB** of the pretty-printed value, marked as cut, and a
       download of the whole (33, the user's: the tail is the more valuable part). Not
       chosen: the whole output on the page; the first 64 KiB.
-    - **Live events say only what changed** (34A): "run R of DAG D", "DAG D", "workers"; the
+    - <a id="D34"></a>**Live events say only what changed** (34A): "run R of DAG D", "DAG D", "workers"; the
       UI re-renders that part from the API. The master `NOTIFY`s on Postgres; on SQLite
       (standalone) the webserver polls about once a second. Not chosen: events carrying the
       new state (a second format beside the API's views).
-    - **Actions are confirmed in a small dialog of our own** (35A, an HTML `<dialog>`) saying
+    - <a id="D35"></a>**Actions are confirmed in a small dialog of our own** (35A, an HTML `<dialog>`) saying
       what will happen; the result shows inline: pending, then applied or rejected with the
       master's reason. Not chosen: the browser's `confirm()`.
-    - **The UI proves itself to webservers as master and workers do, by `[tls] mode`** (36,
+    - <a id="D36"></a>**The UI proves itself to webservers as master and workers do, by `[tls] mode`** (36,
       the user's): in `app` mode by **mTLS on a second webserver port** serving the whole API,
       for `schedr ui` only (its certificate's name checked, as `worker_name` is); in `mesh`
       mode by a **shared token** on the public port (one per deployment in `[ui]
@@ -1236,7 +1233,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
       trusted; the public port is unchanged for the CLI, ingress and standalone. Not chosen:
       the API port itself HTTPS with optional client certificates (changes how everything
       reaches it); trusting the network.
-    - **The chart deploys `schedr ui` by default** (37A, distributed mode): one replica and a
+    - <a id="D37"></a>**The chart deploys `schedr ui` by default** (37A, distributed mode): one replica and a
       Service on 8082, its deployment `default` the release's own webserver; no Ingress, as
       for the webserver. Not chosen: off by default.
   - **Smaller choices made building M3.2** (Claude's, 2026-10-28; to revisit if wrong):
@@ -1272,7 +1269,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     is shown. Not chosen: the
     master sending the changes itself (every write path would have to); a `changes` table
     on Postgres too (writes in the master's hot path).
-  - **175. One live stream per browser** (the user's, 2026-11-03, on B31 and B32: a browser
+  - <a id="D175"></a>**175. One live stream per browser** (the user's, 2026-11-03, on B31 and B32: a browser
     opens at most six HTTP/1.1 connections to a host, and each live page held one, so a
     click or a page's reload waited in the browser's queue, 7-10 s in Codex's reproduction).
     A **SharedWorker** (`assets/live.js`), started by the browser's first live page of the
@@ -1307,7 +1304,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     with `Sec-Fetch-Site: same-origin` (or `none`), or without it an `Origin` whose host is
     the request's (`X-Forwarded-Host` behind a proxy); anything else is 403. Commands are
     recorded as `anonymous` until M3.5 passes the user's name on.
-  - **Live updates on by default, with a switch** (decision 38A', the user's, 2026-10-28,
+  - <a id="D38"></a>**Live updates on by default, with a switch** (decision 38A', the user's, 2026-10-28,
     after measuring): stress scenarios 15 (Postgres) and 15b (SQLite through standalone) run
     scenario 1's and 9's loads four times, the change triggers off, on, on, off: with them
     on, the rounds' mean 1.02 and 0.94 times, the tasks a second 0.97 and 0.98 times those
@@ -1356,7 +1353,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     too (its sign-in page uses them). `schedr ui` loads certificates only when a deployment
     is reached over mTLS (`https://`), as `app` is the default mode; its client is rebuilt
     when the files rotate.
-  - **Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
+  - <a id="D27"></a>**Testing** (2026-10-27): pages and fragments rendered from fixed view data and checked
     through an HTML parser (elements and classes, not whole-page snapshots); the UI's router in
     process over the client's in-process transport and a real API; the graph layout by
     property tests over generated DAGs (no overlaps, edges downward, deterministic, crossings
@@ -1364,7 +1361,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     from M3.3); **a small Playwright suite in Python** (decision 27A: the theme toggle and its
     memory, the zone cookie, an htmx swap, a live update), run by `make test-ui` and its own CI
     job, kept out of `make check` (the browser download). Not chosen: no browser tests.
-  - **Views for M4's features** (resources, cleanup, outcomes, mapped tasks; decision 25B,
+  - <a id="D25"></a>**Views for M4's features** (resources, cleanup, outcomes, mapped tasks; decision 25B,
     2026-10-27): built in M3 as shells, the tabs and panels there with nothing to show until
     M4 fills them. Not chosen: adding them with M4.
   - The webserver serves HTML fragments besides the JSON API used by the CLI; both use the same
@@ -1410,10 +1407,10 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   master (leader and standbys) and each worker is a rectangle in a distributed deployment;
   in standalone one rectangle, the process, holds a node for its master and one per worker.
   The database and the webserver aren't drawn. Clicking a node shows its own configuration.
-  - **Its name** (decision 121, the user's: A): Deployments, the word the UI and `[ui]
+  - <a id="D121"></a>**Its name** (decision 121, the user's: A): Deployments, the word the UI and `[ui]
     deployments` already use. Not chosen: B Clusters (two words for one thing, or a rename
     everywhere).
-  - **A deployment's configuration** (decision 122, the user's: A): every node's own,
+  - <a id="D122"></a>**A deployment's configuration** (decision 122, the user's: A): every node's own,
     effective configuration (secrets are never in it: they come only from environment
     variables). A master writes its own to the database, a worker sends its own in
     `Register` (protocol 0.1, edited in place before 1.0.0), and the webserver serves its
@@ -1430,11 +1427,11 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
       they are not the secret. Every configuration field is covered by a test that fills
       each string with a secret-looking value and finds none of them in the output, so a
       field added later can't leak by being forgotten.
-  - **Standby masters are recorded** (decision 123, the user's: A): a `masters` table, each
+  - <a id="D123"></a>**Standby masters are recorded** (decision 123, the user's: A): a `masters` table, each
     running master (leader or standby) heartbeating its row with its role and
     configuration; one not heard from ages out, as a worker does. Not chosen: B the leader
     only (the lease holder; standbys unseen).
-  - **When** (decision 124, the user's: A): M4.4b, after M4.4, before 1.0.0 (the schema and
+  - <a id="D124"></a>**When** (decision 124, the user's: A): M4.4b, after M4.4, before 1.0.0 (the schema and
     protocol still edited in place). Not chosen: before M4.4; at the end of M4.
   - Claude's: the page and the configuration endpoints are reads, under the same access as
     the other reads; the graph's node states update live, as the Workers page does.
@@ -1459,14 +1456,14 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     in the database), so the user knows which deployment and master a Drain targets.
   - **The navigation** (the user's, 2026-10-31): DAGs, Runs, **Deployments**, **Config**,
     Workers, Import errors.
-  - **The Config page** (decision 125, the user's, 2026-10-31: A): `/config`, the UI's own
+  - <a id="D125"></a>**The Config page** (decision 125, the user's, 2026-10-31: A): `/config`, the UI's own
     side: its effective configuration masked as a node's is (122), its schedr version beside
     each webserver's (a mismatch marked), each connection's state (reachable, latency, how
     the UI proves itself: none, token or mTLS, the last error), and who is signed in (as
     `[ui.auth]` sees it, and as passed on to the webservers). In standalone, the process's
     configuration. Not chosen: B a "This UI" section on the Deployments list; C the
     configuration and version only.
-  - **One graph for everything** (decision 128, the user's, 2026-11-01, reviewing M4.4b):
+  - <a id="D128"></a>**One graph for everything** (decision 128, the user's, 2026-11-01, reviewing M4.4b):
     `/deployments` is one graph: one block for the UI (its configuration, version, who is
     signed in, each connection's state: the Config page's content, so the Config page and
     its navigation entry go), linked by HTTP to each deployment's webserver, and in
@@ -1482,7 +1479,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     the Config page kept as a side page (it didn't read as part of the deployments); no
     worker-to-master link. Supersedes 125's page (its content kept) and the navigation:
     DAGs, Runs, Deployments, Workers, Import errors.
-  - **A node's problems on the graph** (decision 129, the user's, 2026-11-01): a node with a
+  - <a id="D129"></a>**A node's problems on the graph** (decision 129, the user's, 2026-11-01): a node with a
     warning is yellow, with an error red, and its panel lists them. The UI: a webserver it
     can't reach (error), a webserver of another version (warning). A webserver: unreachable
     (error). A worker: lost or offline (error; offline changed by 130), its stored warnings and the import errors of
@@ -1495,14 +1492,14 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     stored a parse is recorded with it (`parse_files.master_id`). The page stays a page
     of its own, in the navigation (the user's: what people look for most); the graph only
     marks a worker with import errors and links to the page.
-  - **An offline worker has no problem** (decision 130, the user's, 2026-11-01): grey and
+  - <a id="D130"></a>**An offline worker has no problem** (decision 130, the user's, 2026-11-01): grey and
     dashed, not red. Offline is a clean deregistration (a restart, a scale-down), and worker
     rows are never deleted: with pod-named workers each restart would leave another red box
     for good, and a real error would be lost among them. Its stale warnings and import
     errors don't colour it either. Lost stays an error, disconnected a warning. Not chosen:
     hiding gone workers after a while (they stay on the graph and the Workers page); red as
     129 had it.
-  - **A task's log and output are masked when shown** (decision 131, the user's "go on" on
+  - <a id="D131"></a>**A task's log and output are masked when shown** (decision 131, the user's "go on" on
     option A, 2026-11-01; details Claude's): the webserver masks them by their text, as error
     texts are (an address's password, a value after `password=`), so the API shows them
     masked too; downstream tasks get an output as returned. An output's field is also
@@ -1551,7 +1548,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
   - **Not built** (possibly later, for deployments that need them): `jwt` (schedr validating
     OIDC tokens itself), roles mapped from groups, per-DAG permissions (Airflow's
     `access_control` is already kept as metadata), schedr-issued API tokens.
-  - **No users of our own: ruled out deliberately** (decision 39, the user's, 2026-10-28).
+  - <a id="D39"></a>**No users of our own: ruled out deliberately** (decision 39, the user's, 2026-10-28).
     schedr keeps no user database and manages no users: no Users page, no admin role, no
     passwords set in the UI, no first-admin bootstrap, no sessions of its own (24A stands).
     People are managed where the organisation already manages them, its identity provider
@@ -1571,7 +1568,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     open, if a deployment without Istio/Keycloak needs more: the chart putting oauth2-proxy
     in front of the UI for any OIDC provider
     (`proxy_header` behind it), or schedr speaking OIDC itself (`jwt` above).
-  - **How `schedr ui` proves itself follows `[tls] mode`, as the master's and workers' links
+  - <a id="D40"></a>**How `schedr ui` proves itself follows `[tls] mode`, as the master's and workers' links
     do** (decision 40A, the user's, 2026-10-28): in `app` mode, mTLS on the webserver's UI
     port (36); in `mesh` mode with Istio's AuthorizationPolicy, the same port in plain HTTP,
     trusting the mesh (`[webserver] ui_port_in_mesh = true`, refused in `app` mode, a warning
@@ -1584,7 +1581,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     deployments) would rotate it at each sync. Not chosen: keeping the token with Argo's
     `ignoreDifferences` on its Secret (B: configuration outside the chart), the token from
     Vault (C).
-  - **The UI signs people in as the API does, or the API is `none`** (decision 41A, the
+  - <a id="D41"></a>**The UI signs people in as the API does, or the API is `none`** (decision 41A, the
     user's, 2026-10-28): of `webserver.auth` × `ui.auth`, only the same mode for both, or any
     UI mode with the API's `none` (the API kept internal, people through the UI). Refused:
     an open UI before a guarded API (anyone acts through the UI), and two identity sources
@@ -1617,7 +1614,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
 #### Import errors (M4.2c)
 
 Asked by the user (2026-10-29): a place in the UI for the DAG files that failed to import.
-- **What is shown** (decision 66, the user's: A): the files of each root's **current** parse
+- <a id="D66"></a><a id="D93"></a>**What is shown** (decision 66, the user's: A): the files of each root's **current** parse
   that failed (their DAGs keep their last good version, listed but **held**: no runs until the
   file is fixed, decision 72; a timeout or a runner that died holds nothing and is parsed
   again, 72.2; see DAG code delivery), with the root, the hash, when and by which worker
@@ -1628,11 +1625,11 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   current parse to `current_parses` when it decides it (from what alive workers report), so
   the API (`GET /api/v1/import-errors`) shows exactly what is in effect without deciding
   again. Not chosen: B the history of earlier parses too (more API and UI).
-- **Where** (decision 67, the user's: A): a page of its own, "Import errors", beside DAGs,
+- <a id="D67"></a>**Where** (decision 67, the user's: A): a page of its own, "Import errors", beside DAGs,
   Runs and Workers, merged across deployments; a count in the navigation and a notice on the
   DAG list, both loaded after the page (htmx), so no page waits for them. Not chosen: B a tab
   on the DAG list.
-- **Errors only** (decision 68, the user's: A): parse warnings (a `TypingHint`) stay a `dags
+- <a id="D68"></a>**Errors only** (decision 68, the user's: A): parse warnings (a `TypingHint`) stay a `dags
   check` matter (57.4); nothing more is uploaded. Not chosen: B uploading and storing them.
 
 ### Task logs
@@ -1743,7 +1740,7 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   found when that module's own file is parsed, not taken as the importing file's (B110).
   Parsing imports the file, so its top-level code runs on every parse; helper modules with
   heavy import-time work should be ignored or refactored. This will be documented.
-- **305. Only files that mention `schedr` are parsed (A, the user's, 2026-11-05):** a `.py`
+- <a id="D305"></a>**305. Only files that mention `schedr` are parsed (A, the user's, 2026-11-05):** a `.py`
   file whose text doesn't contain `schedr` is shipped and hashed with its root but never
   loaded by the parser, as Airflow's safe mode does: a library in a root (or linked into it)
   isn't run on every parse, and a module of a package with a relative import (`from .util
@@ -1778,7 +1775,7 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
   error shown; it doesn't remove them. This covers a broken push and a DAG that doesn't parse
   with a new major version of schedr alike. A DAG defined in another file in the meantime
   counts as a second place (a conflict) until the broken file is fixed or removed.
-- **A DAG whose file fails to import is held** (decision 72, the user's, 2026-10-29: B):
+- <a id="D72"></a>**A DAG whose file fails to import is held** (decision 72, the user's, 2026-10-29: B):
   its tasks would run the current code, where the file doesn't import, so every run would
   fail. While the file has an import error in its root's **current** parse:
   - **no run is created:** nothing is stored, and its fire times count as missed (as when
@@ -1851,37 +1848,37 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
 **326-333. How DAG files load** (the user's, 2026-11-06, from Codex's investigation of B172: 118 scenarios through the
 CLI and real workers; `tests` keeps them):
 
-- **326. Ordinary imports, a process per file:** `team/sync.py` is `team.sync`, in a process of its own for each
+- <a id="D326"></a>**326. Ordinary imports, a process per file:** `team/sync.py` is `team.sync`, in a process of its own for each
   file parsed; a task's process imports it the same way. Relative imports, `__init__.py`, cycles and `sys.modules` work
   as in Python, and parsing tests the program a task runs. A file's top level runs once per process: parsing can repeat
   a helper's. A dot in a file or folder name has no import name, and is refused. Not chosen: private names with
   `__package__` set (double loads, stdlib siblings); a private package per root (two copies of one module); one process
   per root with its definitions kept (it checked two DAGs that then failed as tasks, and one file's helper state shaped
   another's DAG).
-- **327. A root's version covers what is on its `sys.path`:** the content hashes of the other DAG roots fold into a DAG
+- <a id="D327"></a>**327. A root's version covers what is on its `sys.path`:** the content hashes of the other DAG roots fold into a DAG
   root's reported hash, so editing a library in another root reparses its users (B173). Conservative: any edit reparses
   the others; workers serving a root must agree on the roots. One root alone keeps its plain hash. Not chosen: declared
   import sets (configuration and dependency rules that don't exist); only the root's own files on `sys.path`.
-- **328. Names that can't be told apart fail what uses them:** a top-level name in two roots, or also a library's
+- <a id="D328"></a>**328. Names that can't be told apart fail what uses them:** a top-level name in two roots, or also a library's
   (the standard library's, an installed one, a preloaded one). Only that file and the root's files importing it fail, with
   why (checked at compile time, inside functions too, so the start method can't matter); other files and tasks go on, and a
   library importing that name always gets the library. Not chosen: failing the whole root (the user took it, then a side
   note showed a stray `queue.py` would stop every DAG and task of a deployment); Python's first match (the wrong code,
   silently, by start method: B174, B175).
-- **329. A DAG belongs to the module running its `with` block:** a helper's function can build it (B170); a module
+- <a id="D329"></a>**329. A DAG belongs to the module running its `with` block:** a helper's function can build it (B170); a module
   imported by another still owns its own (B110). Decision 305 stays: the file must mention `schedr`. Not chosen: an
   explicit ownership API for factories.
-- **330. `.schedrignore` is about what is shipped:** `dags check` reads the same filtered copy as `dags test` and workers,
+- <a id="D330"></a>**330. `.schedrignore` is about what is shipped:** `dags check` reads the same filtered copy as `dags test` and workers,
   so it can't pass what they can't import (B179). Not chosen: a separate discovery-only list.
-- **331. Naming a file or folder inside a configured root keeps that root:** so `schedr dags check team/sync.py` imports
+- <a id="D331"></a>**331. Naming a file or folder inside a configured root keeps that root:** so `schedr dags check team/sync.py` imports
   `team.sync`, with the other roots importable; a named file a worker doesn't get is an error.
-- **332. `[dags] parse_concurrency`, default 4:** how many files are parsed at once, spawned or forked alike, capped at the
+- <a id="D332"></a>**332. `[dags] parse_concurrency`, default 4:** how many files are parsed at once, spawned or forked alike, capped at the
   cores the agent may use; `1` is one at a time. `dags check` uses it, and forks when the interpreter has a fork server
   ("parse as the task runs"). Measured (stress scenario 22, 12 cores, 1000 files importing `pydantic`): spawn 585 s one at a
   time, 143 s four at once; fork 42 s and 14 s; peak memory about 60 MiB more spawned, 20 MiB forked. Parsing isn't counted
   in task slots and each process has its own memory budget, so on a tight pod: `parse_concurrency = 1` or a preload list.
   Name clashes are looked at per name imported, cached, so a process's start doesn't grow with the root.
-- **333. `[worker] pass_env` reaches parsing and the fork server too** (the user's, 2026-11-06, from Grok's review): spawned tasks
+- <a id="D333"></a>**333. `[worker] pass_env` reaches parsing and the fork server too** (the user's, 2026-11-06, from Grok's review): spawned tasks
   had a `PYTHONPATH` of `pass_env` on `sys.path`, while a parse and a forked task hadn't, and imported something else. A parse
   and a fork server now get all of `pass_env`, as a task does, so a library needing such a variable at import works in both. Not
   chosen: only `PYTHONPATH`. DAG authors could already read these from a task; now also at parse, so secrets don't belong in
@@ -2011,45 +2008,45 @@ anywhere = false                   # native cleanup_anywhere
 - **To use a script in a DAG, it must be declared** in a `schedr.toml` inside
   `SCHEDR_SCRIPT_PATH`, typically **without a schedule**. There is no way to run an undeclared
   script file.
-- **292. M4.9 in three steps (the user: A, 2026-11-05):** M4.9a script roots, reading and
+- <a id="D292"></a>**292. M4.9 in three steps (the user: A, 2026-11-05):** M4.9a script roots, reading and
   checking `schedr.toml`, standalone jobs, `schedr dags check` for TOML; M4.9b the `script`
   task kind on the worker (interpreters, rejections 3-5, the `SCHEDR_*` variables) and
   `ScriptOperator`; M4.9c `params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource` and
   `cleanup_script`. Each reviewed and documented on its own. Not chosen: one step.
-- **293. One reader of `schedr.toml`, in the agent (A):** Rust checks every key and builds a
+- <a id="D293"></a>**293. One reader of `schedr.toml`, in the agent (A):** Rust checks every key and builds a
   standalone job's one-task DAG, so a worker running scripts needs no `schedr` in Python. A DAG
   file's `ScriptOperator` asks the agent over the runner's socket and gets the checked
   declaration back; Python never reads TOML. Not chosen: a second reader in Python
   (`tomllib`) for `ScriptOperator` (two readers drifting apart).
-- **294. A changed declaration re-parses its DAGs (A):** the keys the master schedules with
+- <a id="D294"></a>**294. A changed declaration re-parses its DAGs (A):** the keys the master schedules with
   (`queue`, `retries`, `retry_delay`, `timeout`, `outcomes`, a cleanup) come from the
   declaration at the DAG's parse; a change to a script root re-parses the DAGs whose
   `ScriptOperator`s refer into it (the master knows the references), so every key follows the
   TOML. The worker runs the script at the script root's hash the master expects
   (`CODE_MISMATCH` as for DAG roots). Not chosen: the master's keys frozen until the DAG's own
   file changes (a raised `retries` not applied).
-- **295. A script root a parsing worker lacks is an import error (A):** "script root `etl`
+- <a id="D295"></a>**295. A script root a parsing worker lacks is an import error (A):** "script root `etl`
   isn't on this worker", naming it; workers that parse need every script root their DAGs use.
   Not chosen: accepted with a warning and checked at run time (the master's keys unknown until
   then).
-- **296. An unscheduled declaration is a script for DAGs only (B, the user's):** see
+- <a id="D296"></a>**296. An unscheduled declaration is a script for DAGs only (B, the user's):** see
   "`schedule` is optional" above. Not chosen: a `manual = true` key making it a one-task DAG
   for manual runs (one more combination to define, with `schedule` too); every declaration a
   DAG, every key accepted (a declaration made for `ScriptOperator` listed as a DAG, keys that
   do nothing accepted).
-- **298. `notify` is an import error until notifications exist (A, the user's, 2026-11-05):**
+- <a id="D298"></a>**298. `notify` is an import error until notifications exist (A, the user's, 2026-11-05):**
   "`notify` isn't available yet", naming the job; schedr has no server channels yet. Not
   chosen: its shape checked and the key ignored with a warning (a key doing nothing); dropped
   from the design (brought back with notifications).
-- **299. A script root and a DAG root can't share a name (A, 2026-11-05):** a startup error
+- <a id="D299"></a>**299. A script root and a DAG root can't share a name (A, 2026-11-05):** a startup error
   naming both paths, as for two DAG roots; `[scripts.roots]` renames one. A name means one
   directory in logs, the UI and references. Not chosen: names by kind (`etl` both a DAG and a
   script root, every mention saying which).
-- **300. A standalone job's task is named after the job (A, 2026-11-05):** the DAG
+- <a id="D300"></a>**300. A standalone job's task is named after the job (A, 2026-11-05):** the DAG
   `etl:team_a/schedr.toml#report_daily` has one task, `report_daily`; a job name is letters,
   digits, `_` and `-` (anything else an import error naming it), so it is a task ID too. Not
   chosen: a fixed task ID `run` for every job (the same name on every job's page).
-- **301. A script root's change reaches the DAGs through their root's hash (A, 2026-11-05):**
+- <a id="D301"></a>**301. A script root's change reaches the DAGs through their root's hash (A, 2026-11-05):**
   the agent reports a DAG root's hash with the hashes of the script roots its last parse used
   folded in, so a change to one of them is a new hash: the DAG root is parsed again (decision
   294) and its tasks go to workers with both roots at the parsed code (`CODE_MISMATCH` as
@@ -2057,11 +2054,11 @@ anywhere = false                   # native cleanup_anywhere
   parsed once more after its first parse. Not chosen: every script root folded into every DAG
   root (any script change re-parsing every DAG root); the master re-parsing the same hash
   (discovery keyed on (root, hash) reworked, with a migration).
-- **302. `ScriptOperator`'s overrides (A, 2026-11-05):** `args=` replaces the declared list;
+- <a id="D302"></a>**302. `ScriptOperator`'s overrides (A, 2026-11-05):** `args=` replaces the declared list;
   `env=` is merged per variable, the operator's winning; `secrets=` adds to the declared ones.
   Not chosen: every override replacing the declared value whole (an `env=` dropping the TOML's
   other variables).
-- **303. A worker lacking a script root a DAG root uses doesn't report that DAG root (A,
+- <a id="D303"></a>**303. A worker lacking a script root a DAG root uses doesn't report that DAG root (A,
   2026-11-05):** it can't fold the same hash (301), so it leaves the root out: it neither parses
   it (as 295 requires) nor runs any of its tasks, and warns naming the missing script root. Not
   chosen: reporting a hash without it and rejecting only the script tasks (its different hash
@@ -2076,42 +2073,42 @@ anywhere = false                   # native cleanup_anywhere
   dropping it meanwhile. Not chosen: live workers only (a restart briefly replacing a good
   parse with import errors); any root ever reported, stored (a removed root withdrawing DAG
   roots until someone clears it).
-- **304. The master tells workers which script roots each DAG root uses (A, 2026-11-05):** a
+- <a id="D304"></a>**304. The master tells workers which script roots each DAG root uses (A, 2026-11-05):** a
   parsed file records the script roots its `ScriptOperator`s asked for; the master sends each
   root's set, from its current parse, to every worker at registration and when it changes, so
   every worker folds the same ones. Each stored file keeps its script roots (`parse_files`,
   in place before 1.0), so a restarted master sends the same; a file whose import failed for a
   missing script root (295) records it too. Not chosen: each worker learning from its own parses (a worker that never
   parsed the root, or just restarted, reporting the plain hash: workers disagreeing).
-- **306. A `ScriptOperator`'s reference is checked by a parse only (A, the user's,
+- <a id="D306"></a>**306. A `ScriptOperator`'s reference is checked by a parse only (A, the user's,
   2026-11-05):** outside a parse (plain pytest, `schedr.testing`, a task's runner importing its
   DAG file) the operator only records its reference: no agent to ask, and a task's import must
   not fail on it. `schedr dags check` looks references up in the configured script roots
   (`SCHEDR_SCRIPT_PATH`), so a typo is caught before deployment. Not chosen: `schedr.testing`
   checking references itself (an idea for later); a `DagHint` outside a parse (noise in every
   test and task import).
-- **310. `[jobs.<name>.params]`: every TOML value with a clear type (A, the user's,
+- <a id="D310"></a>**310. `[jobs.<name>.params]`: every TOML value with a clear type (A, the user's,
   2026-11-05):** a string, an integer, a float, a boolean, a date, a date-time (without an offset,
   in the job's `timezone`, as `start` is), a list of one such type, a nested table as an object.
   An empty or mixed list, an empty table, or a time without a date is an import error naming
   the key: its type can't be told. A trigger replaces a nested table whole. Names are letters,
   digits and `_`, so `dag_ctx.params.x` reads them. Not chosen: scalars only (jobs taking less
   than DAGs do).
-- **311. A declaration's outcomes apply; routing on them needs an enum (A, the user's,
+- <a id="D311"></a>**311. A declaration's outcomes apply; routing on them needs an enum (A, the user's,
   2026-11-05):** `[jobs.<name>.outcomes]` names exit codes, as an `Outcome` enum does, so a
   `ScriptOperator` without `outcomes=` still succeeds on them. `.on(...)` and `.outcome` take
   enum members, and the TOML has none: `outcomes=Check` gives one and replaces the declared ones;
   without it only `DefaultOutcome.SUCCESS` can be routed on, if declared, and `.on` of anything
   else or `.outcome` is a parse error saying so. Not chosen: `.on("NO_DATA")` (no type checking,
   two forms of one thing).
-- **312. A resource refuses a declaration that contradicts it (A, the user's, 2026-11-05):**
+- <a id="D312"></a>**312. A resource refuses a declaration that contradicts it (A, the user's, 2026-11-05):**
   a resource's setup and cleanup succeed only on exit 0, so `ScriptResource` and `cleanup_script`
   naming a declaration with `[outcomes]` is an import error; so is `cleanup_script` naming one with
   `[cleanup]` (a cleanup of a cleanup). A `ScriptResource` setup keeps `[cleanup]`, as
   `CommandResource(cleanup=)` does: its own, for a setup failing halfway. A script for both uses
   is declared twice. Not chosen: ignoring those keys (a script exiting 3 fails though its file
   calls that a success).
-- **313. Settings of a declared cleanup and a `cleanup_script` (A, the user's, 2026-11-05):**
+- <a id="D313"></a>**313. Settings of a declared cleanup and a `cleanup_script` (A, the user's, 2026-11-05):**
   a `ScriptOperator` or `ScriptResource` may change a declared `[cleanup]`'s settings
   (`cleanup_timeout`, `cleanup_retries`, `cleanup_retry_delay`, `cleanup_anywhere`), the operator
   winning over the declaration, the declaration over the DAG's defaults, as `retries` does; its
@@ -2119,7 +2116,7 @@ anywhere = false                   # native cleanup_anywhere
   A `cleanup_script`'s options win over the declaration's settings, which win over a cleanup's
   defaults (3 tries, 30 s, the setup's queue). Not chosen: no overrides (`StepDefaults`' cleanup
   settings would need a rule of their own).
-- **314. A worker that couldn't run a task's cleanup script rejects the task (2026-11-05):** the
+- <a id="D314"></a>**314. A worker that couldn't run a task's cleanup script rejects the task (2026-11-05):** the
   cleanup's interpreter or script missing there is rejection 3 or 5, as for the task's own, so the
   task isn't run where its cleanup would fail, and a moved cleanup goes on to a worker that can.
   A cleanup script runs with its task's environment and working directory
@@ -2222,12 +2219,12 @@ SchedrScriptOperator(
     `$XDG_DATA_HOME/schedr`, else `~/.local/share/schedr`.
   - **The worker's identity and capacity:** `[worker] id` (else the host name), `slots` (2),
     `queues` (none: `default`), `pass_env`; `[dags] parse_file_timeout` (60 s) per file.
-- **The largest message from a worker:** `[grpc] max_message_size`, 64 MiB by
+- <a id="D58"></a>**The largest message from a worker:** `[grpc] max_message_size`, 64 MiB by
   default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30), announced
   to each worker in `Registered` (`max_message_size`). Not chosen for 58: B a fixed 64 MiB
   (nothing to raise for a very large root); C the upload split per DAG (a protocol change,
   and `Finished` still needs a limit).
-  - **A parse upload is a stream, a file a message** (decision 62, the user's, 2026-10-29;
+  - <a id="D62"></a>**A parse upload is a stream, a file a message** (decision 62, the user's, 2026-10-29;
     fixes B35): `UploadParseResult(stream ParseResultPart)`, the header first, then each
     file, so only one file's size counts, not the root's. A single file past the limit is
     uploaded as its import error (`ParseResultTooLarge`, naming the setting), so it shows
@@ -2235,7 +2232,7 @@ SchedrScriptOperator(
     in a task of its own, so the worker's heartbeats go on meanwhile (B34). Not chosen:
     reporting a refused upload as an import error of every file (the root's DAGs all broken
     until the setting is raised).
-  - **A result that can't reach the master** (decision 61, the user's, 2026-10-29; fixes
+  - <a id="D61"></a>**A result that can't reach the master** (decision 61, the user's, 2026-10-29; fixes
     B33): a message past the limit on the worker's stream ends the whole stream, so two
     checks keep results under it. When a DAG loads, a task whose `max_output_size` can't fit
     (a command's two streams counted, 64 KiB left for the rest) is refused, naming the task
@@ -2264,7 +2261,7 @@ SchedrScriptOperator(
 
 - Defaults: **heartbeat every 10 s**; a worker with **no heartbeat for 60 s is considered
   lost**; **2 slots** per worker.
-- **Cancellation** (UI and CLI): SIGTERM to the task's whole process group, then SIGKILL after
+- <a id="D100"></a>**Cancellation** (UI and CLI): SIGTERM to the task's whole process group, then SIGKILL after
   a configurable timeout. The attempt ends as **cancelled** (not failed) and is **not retried**.
   A whole run (`schedr runs cancel`) or one task (`schedr tasks cancel`, see Task
   assignment).
@@ -2297,7 +2294,7 @@ SchedrScriptOperator(
     per-pod issuance, e.g. the cert-manager CSI driver); checking only that the CA signed it
     (any schedr certificate could pose as the master); checking that a worker's certificate
     names its worker ID (worth it only against a compromised worker posing as another).
-  - **Workers are trusted, and so is the DAG code on them** (decision 101, the user's,
+  - <a id="D101"></a>**Workers are trusted, and so is the DAG code on them** (decision 101, the user's,
     2026-10-30: A, on Codex's review of B46). Tasks run as the agent's own user in its pod, so
     a task can read its worker's key and act as that worker; a worker can also register under
     another worker's ID once that one's stream is gone, and report its attempts. The checks
@@ -2335,14 +2332,14 @@ SchedrScriptOperator(
   on an old stream (its transport open after its lease was lost) are dropped, and its end
   doesn't disconnect the worker (B44). A stream of a worker taken for lost is ended at its next
   message, which changes nothing: the worker registers again.
-- **A message the master fails to handle ends the worker's stream** (decision 108, the
+- <a id="D108"></a>**A message the master fails to handle ends the worker's stream** (decision 108, the
   user's, 2026-10-31: A; B101), a database error for instance: its effects are undone, and
   some messages aren't sent again on the same stream (a code report, sent once per hash).
   The worker registers again, reporting its roots and its journal afresh; messages queued
   behind it are dropped, and the worker sends again what it still needs acknowledged.
   Not chosen: B the master retrying the failed message itself (a queue of failed messages
   per worker, kept across rounds, its order against newer messages to decide).
-- **Only the database's own trouble ends the stream** (decision 115, the user's, 2026-10-31:
+- <a id="D115"></a>**Only the database's own trouble ends the stream** (decision 115, the user's, 2026-10-31:
   A; B106). An error of the database itself (unreachable, a time limit, a deadlock, a lock,
   a busy SQLite) may pass when the message comes again, so the stream ends as above. A
   message the database refuses for its data (a constraint, a trigger, data that won't read:
@@ -2546,7 +2543,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   once. Not chosen: interrupting at once on the first SIGTERM (every deploy would kill tasks
   that would finish in seconds); a 600 s default (a pod without the setting is killed at
   30 s mid-drain: attempts lost, retries used).
-- **Maintenance drain** (`schedr workers drain <w>`, `POST /api/v1/workers/{id}/drain`; M2.6):
+- <a id="D109"></a>**Maintenance drain** (`schedr workers drain <w>`, `POST /api/v1/workers/{id}/drain`; M2.6):
   a command; the worker gets no new tasks or parse jobs, its running tasks **finish
   normally** (no deadline), and it stays connected and idle (RUNNING shows when it reaches 0)
   until **`schedr workers resume <w>`**. It is stored in the registry (`drained`) and so
@@ -2670,7 +2667,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   with `runner_failed` (retried). A command's `ProcessResult` is its output on success and its
   error summary on failure. Python tasks run in their root's directory, commands in their DAG
   file's directory; each attempt's log is `<log_dir>/<attempt_id>.log`.
-- **A task's timeout counts from its launch** (decision 116, the user's, 2026-10-31: B; B56):
+- <a id="D116"></a>**A task's timeout counts from its launch** (decision 116, the user's, 2026-10-31: B; B56):
   a Python task's runner start (up to 30 s for its hello) is part of the attempt, so its
   `timeout` runs from when the worker starts launching it, and a task never runs past launch
   plus timeout (more robust, the user). A cancel or the timeout arriving before the hello stops
@@ -2680,7 +2677,7 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
   and sending the request (a runner that reads nothing). Not chosen: A the timeout
   starting at the hello, as before (start-up bounded by the 30 s hello limit only; a tight
   timeout wouldn't fail for slow imports on a busy worker).
-- **The timeout covers the whole attempt, secret and connection reads included** (decision
+- <a id="D213"></a>**The timeout covers the whole attempt, secret and connection reads included** (decision
   213, the user's, 2026-11-04; B160; extends decision 116): the process gets only what is
   left of `timeout` after the worker reads the attempt's secrets and connections. A 500 ms
   read and an 800 ms command with a 1 s timeout end `timed_out`; with a long enough timeout
@@ -2893,7 +2890,7 @@ OpenShift's restricted security policy doesn't grant.
 - **Peak memory:** the highest sample goes in `Finished.peak_memory_bytes`, is stored with
   the attempt (0, not measured, as none) and shown in the API's attempts
   (`peak_memory_bytes`).
-- **`setrlimit` waits for M4,** with per-task budgets in the native API: no DAG can opt in
+- <a id="D50"></a>**`setrlimit` waits for M4,** with per-task budgets in the native API: no DAG can opt in
   before. Setting it in the child needs `pre_exec`, which is `unsafe` (forbidden here), and
   `prlimit` from the parent leaves the process unlimited for a moment, so (decision 50A, the
   user's, 2026-10-28) **a limited task is started through `schedr` itself**: an internal
@@ -3131,7 +3128,7 @@ permission to create pods.
     pipes** as stdout / stderr (as spawn's pipes: log collection and the kept tail are
     unchanged; decided 2026-10-27, replacing log file descriptors) and a **status socket**.
     The fork server answers `forked` or `fork_failed` (with the reason; tasks then fall back).
-    - **A shim per task** (decision 13A): the fork server forks a shim, the shim forks the
+    - <a id="D13"></a>**A shim per task** (decision 13A): the fork server forks a shim, the shim forks the
       task. Both call `setpgid(task, task)` (as shells do); the shim's own call comes before
       it reports `process_started` (the PID), so the group exists by then on the status socket; the agent records the
       PID only then (before it, the group would still be the fork server's, and a kill or the
@@ -3143,7 +3140,7 @@ permission to create pods.
       a subreaper (a task's leftover processes aren't collected, as with spawn). The fork
       server reaps its shims (a `SIGCHLD` handler; it never ignores `SIGCHLD`, which would
       lose its children's statuses).
-    - **The shim only observes** (decision 14A, 2026-10-27): with `process_exited` it reports
+    - <a id="D14"></a>**The shim only observes** (decision 14A, 2026-10-27): with `process_exited` it reports
       whether the process dumped core and **what it used** (`ProcessUsage`, the parent's
       `rusage`, with the children it reaped: user and system CPU, peak RSS, major faults,
       voluntary and involuntary context switches), for the Attempts tab and the attempts API
@@ -3158,7 +3155,7 @@ permission to create pods.
       status is reported regardless. The shim never kills, watches memory or handles logs:
       those stay with the agent. Not chosen: also reporting the processes a task left running
       (14B).
-    - **Usage of spawned processes** (decision 18A, 2026-10-27): the workspace forbids
+    - <a id="D18"></a>**Usage of spawned processes** (decision 18A, 2026-10-27): the workspace forbids
       `unsafe` and no safe crate returns a child's `rusage`, so the agent reads the zombie's
       `/proc/<pid>/stat` and `status` before reaping it (`waitid` with `WNOWAIT` on the
       blocking pool, one parked thread per running spawned process: `AsyncFd` on a `pidfd`
@@ -3200,7 +3197,7 @@ permission to create pods.
     worker warning, and tasks **fall back** (to the bare one, then to spawn): a task never
     fails because of the fork server's setup. **Linux only:** on macOS `fork_server = true` is
     ignored with a warning (fork is unsafe there), like the memory watchdog.
-  - **State after fork:** the child is set up as a spawned interpreter would be from the
+  - <a id="D15"></a>**State after fork:** the child is set up as a spawned interpreter would be from the
     task's environment: `random` reseeded (Python's own at-fork handler), the time zone
     (`time.tzset()`), `LC_CTYPE` from the environment and the other locale categories `C`,
     `tempfile`'s cached directory cleared (`TMPDIR`), `sys.stdin` / `stdout` / `stderr` the
@@ -3231,7 +3228,7 @@ permission to create pods.
     and meanwhile tasks fall back as above. It reports its `schedr` version like any runner; a
     mismatch disables it. It can't go stale (libraries change only with the image, which
     restarts the pod).
-  - **A disabled fork server** (decisions 19A and 20A, 2026-10-27): one whose **preloaded
+  - <a id="D19"></a><a id="D20"></a>**A disabled fork server** (decisions 19A and 20A, 2026-10-27): one whose **preloaded
     library fails to import** is retried with the same backoff for
     **`[worker] fork_server_import_retry`** (default `20m`, from the first failure; `0s`: never),
     for what isn't ready when the pod starts (a sidecar's network, a mount); a failure still
@@ -3321,7 +3318,7 @@ included it.)
 
 **How M4.5b builds it** (decisions 143-148, the user's, 2026-11-01):
 
-- **143. The caller sends its own end.** A `command` task inherits one end of a datagram
+- <a id="D143"></a>**143. The caller sends its own end.** A `command` task inherits one end of a datagram
   socket pair (`SCHEDR_CTX_FD`, a descriptor number), and so does every process it starts.
   Each call makes a fresh stream socket pair, sends one end to the agent over the datagram
   socket (`SCM_RIGHTS`, one datagram) and talks on its own end: the length-prefixed JSON of
@@ -3333,21 +3330,21 @@ included it.)
   datagram not carrying exactly one Unix stream socket is dropped and its descriptors
   closed); a call after that is told the task has ended. Linux and macOS. Not chosen: the
   agent sending ends on request (callers racing for answers on the shared socket).
-- **144. Scope: `dag-ctx` only.** `schedr dag-ctx params get [--field F]` and `schedr dag-ctx
+- <a id="D144"></a>**144. Scope: `dag-ctx` only.** `schedr dag-ctx params get [--field F]` and `schedr dag-ctx
   run get [--field F]` (`dag_id`, `id`, `kind`, `planned_for`, `since`); `params get` prints
   the JSON form `--params` takes (dates as text, a duration as ISO 8601, a tuple as a list).
   `task-ctx` comes later on the same channel.
-- **145. `schedr.script` decodes, as in a task:** `from schedr.script import dag_ctx` loads the
+- <a id="D145"></a>**145. `schedr.script` decodes, as in a task:** `from schedr.script import dag_ctx` loads the
   run's context from the channel the first time it is read (one connection, two requests); a
   date is a `date`, a duration a `timedelta`, a tuple a tuple. A script doesn't know the
   declared class: `dag_ctx.params.x` is the field decoded by its stored form (an object is a
   `dict`), and `dag_ctx.params(Cls)` decodes strictly into `Cls`. Inside a Python task the
   task's own values are used.
-- **146. Command tasks only.** A `command` task and every process it starts get the channel; a
+- <a id="D146"></a>**146. Command tasks only.** A `command` task and every process it starts get the channel; a
   Python task's processes don't (a Python task has `dag_ctx` itself), so `schedr dag-ctx` there
   fails with "must be run inside a schedr task". A process whose parent closed the descriptor
   (Python's `subprocess` does, unless given `pass_fds`) is told so, with the number to pass.
-- **147. The one `unsafe` block is in a crate of its own, `schedr-fd`** (the user's,
+- <a id="D147"></a>**147. The one `unsafe` block is in a crate of its own, `schedr-fd`** (the user's,
   2026-11-01): Rust can only refer to an inherited descriptor known by number with `unsafe`
   code (`BorrowedFd::borrow_raw`), and the workspace forbids it. `schedr-fd` (its lints:
   the workspace's, with `unsafe_code` denied instead of forbidden, and allowed by an `#[expect]`
@@ -3360,7 +3357,7 @@ included it.)
   same (the same `unsafe`, outside our review); a socket file in a private directory (any
   process of the user could connect, needs a peer check); `schedr dag-ctx` delegating to
   Python (a Python environment in every command task).
-- **148. A caller is accepted by the protocol it speaks, not its schedr version** (the
+- <a id="D148"></a>**148. A caller is accepted by the protocol it speaks, not its schedr version** (the
   user's, 2026-11-01, after a review note): `hello { protocol, schedr_version }`; the agent
   accepts protocol 1 from any schedr, and refuses another naming both versions. A command
   task's `schedr` (another on `PATH`) or a script's own environment (a pinned schedr) can
@@ -3513,7 +3510,7 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   conflict is resolved.
 - When the conflict is resolved, the DAG becomes runnable again on its own (its paused or
   unpaused setting is unchanged).
-- **A conflict resolved while the file left fails to import stays a conflict** until that
+- <a id="D107"></a>**A conflict resolved while the file left fails to import stays a conflict** until that
   file imports, when the version stored is the removed file's (decision 107, the user's,
   2026-10-31: A; B95). Otherwise the removed file's code would run again, under a DAG its
   file no longer defines, and the import error would hold nothing (holds follow the stored
@@ -3531,10 +3528,10 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
 
 ### Code versions and change detection
 
-- **Tasks run on the latest code** the worker has: the copy of the hash it reported last,
+- <a id="D102"></a>**Tasks run on the latest code** the worker has: the copy of the hash it reported last,
   taken when the task starts (decision 102). schedr keeps no other old code versions; a copy
   goes once nothing running uses it.
-- **Only the newest code runs** (M2.5). Workers may report different hashes of a root while
+- <a id="D113"></a>**Only the newest code runs** (M2.5). Workers may report different hashes of a root while
   git-sync catches up. The root's **current** hash is the newest one an alive worker
   (registered, not lost or deregistered) reports, newest meaning the hash workers **switched
   to most recently** (table `root_hashes`, so a master restart decides the same; a switch's
@@ -3616,7 +3613,7 @@ A DAG ID must be defined in exactly one place. When it isn't, the DAG is in **co
   reads the whole root, and the code can still change after the check); hard links instead of
   a copy (an edit in place shows through); for bytecode, hash-checked `.pyc` files (Python
   decides the check when it writes one, so a timestamp `.pyc` already there is still trusted).
-- **A root imports only from itself** (decision 103, the user's, 2026-10-31: B; B90). Every
+- <a id="D103"></a>**A root imports only from itself** (decision 103, the user's, 2026-10-31: B; B90). Every
   DAG root is on `sys.path`, the parsed or run root at its copy and the others at their
   configured paths, so a module of another root is imported from that root's live checkout:
   not the code hashed, not recorded with the attempt, and not reparsing this root when it
@@ -4180,7 +4177,7 @@ list) and likewise has no Python.
     Airflow code, a manual change in every DAG, awkward with computed IDs); on-demand reads only
     in the Airflow layer (breaks the principle in Thin translating classes).
 - **Built in M4.6** (planned with the user, 2026-11-02; sub-steps in PLAN.md):
-  - **167. Outputs are masked when stored:** the agent replaces each secret value in an
+  - <a id="D167"></a>**167. Outputs are masked when stored:** the agent replaces each secret value in an
     attempt's output (and its error summary) before it leaves the worker, so no secret
     reaches the database and a downstream task receives `****`; a task that needs the secret
     declares it itself. Not chosen: outputs stored as they are (only logs masked; the master
@@ -4190,12 +4187,12 @@ list) and likewise has no Python.
     task's log naming the secret (never the value) and how many times it was replaced, and the
     guide asks for long, unique secret values (a side agent's point, 2026-11-02; Claude's
     addition).
-  - **168. A secret read on demand that fails** (under a `SecretPrefix`): `schedr task-ctx
+  - <a id="D168"></a>**168. A secret read on demand that fails** (under a `SecretPrefix`): `schedr task-ctx
     secret get` exits non-zero and `task_ctx.secret()` raises; the agent remembers the
     failure, and if the attempt then fails its error kind is the secret's (so the retry rules
     above apply). A task that handles the error and succeeds stays succeeded. Not chosen:
     ending the attempt at once, whatever the task does with the error.
-  - **169. `schedr secrets new-key`** prints a new `SCHEDR_SECRET_KEY` (32 random bytes,
+  - <a id="D169"></a>**169. `schedr secrets new-key`** prints a new `SCHEDR_SECRET_KEY` (32 random bytes,
     base64). Rotation (re-encrypting under a new key) not now. Not chosen: only documenting
     `openssl rand -base64 32`.
   - **Claude's choices** (small, the user told): a masked value is written `****`, as in the
@@ -4208,23 +4205,23 @@ list) and likewise has no Python.
     against the real Vault; the chart takes `SCHEDR_SECRET_KEY` only from an existing Secret
     (as for TLS: no generated Secrets). TOML's forms come with M4.9, Airflow's Variables and
     Connections with their own steps.
-  - **170. `schedr secrets export --to DIR`** writes one file per secret, `DIR/<path>.json`
+  - <a id="D170"></a>**170. `schedr secrets export --to DIR`** writes one file per secret, `DIR/<path>.json`
     (its keys and values, mode 0600), refusing a `DIR` that isn't empty; each loads as it is,
     `vault kv put secret/<path> @DIR/<path>.json`. Nothing is printed to the terminal. Not
     chosen: one JSON object on stdout (values through the terminal or a pipe, and a loop per
     path to load them); both forms (more to test and document).
-  - **171. A Vault value that isn't a string** (KV v2 holds any JSON) is read as its JSON
+  - <a id="D171"></a>**171. A Vault value that isn't a string** (KV v2 holds any JSON) is read as its JSON
     text: `5432` is `"5432"`, `true` is `"true"`, `["a", "b"]` is `'["a","b"]'`, as `vault kv
     get -field=` prints it; masked as that text. Not chosen: refusing it (a secret another
     tool wrote with numbers couldn't be used); typed values in Python tasks and text elsewhere
     (two behaviours to document and mask).
-  - **172. Several storages without `default`** are refused at startup ("set [secret_storage]
+  - <a id="D172"></a>**172. Several storages without `default`** are refused at startup ("set [secret_storage]
     default"); with one configured it is the default, with none standalone's `db` is. Which
     storage `secrets['...']` means is said once there is a choice: adding a second storage
     never moves unnamed secrets elsewhere. Not chosen: standalone falling back to `db` (a
     second Vault would quietly switch them to the table); always naming the default, even for
     a single Vault (more configuration for the common case).
-  - **173. A task can log in to Vault as its worker** (the user's, 2026-11-03: accepted, on
+  - <a id="D173"></a>**173. A task can log in to Vault as its worker** (the user's, 2026-11-03: accepted, on
     Codex's security review of M4.6d). Tasks run as the agent's user, so they can read the
     projected service-account token Vault's login uses, and read whatever the worker's Vault
     role allows without declaring it. It reaches no more than a DAG could declare (any path
@@ -4235,7 +4232,7 @@ list) and likewise has no Python.
     UI: the federated `schedr ui` over a list of deployments (M3.6). Not chosen: worker groups in
     one release, each with its own service account and role (a chart feature, later if
     wanted); tasks under another uid (a root start, against OpenShift's random uids).
-  - **176. A secret is typed as its value** (the user's, 2026-11-03, on B155: a placeholder
+  - <a id="D176"></a>**176. A secret is typed as its value** (the user's, 2026-11-03, on B155: a placeholder
     passed to a typed Python task failed `mypy --strict`). As an output is typed as what it
     carries, indexing follows the data's shape, a path then a key: `secrets['etl/db']` is the
     whole secret, typed `dict[str, str]`; `secrets['etl/db']['password']` one key, `str`;
@@ -4252,11 +4249,11 @@ list) and likewise has no Python.
     casting (every typed DAG casts); `secrets.get(...)` for a whole secret (`get` reads as
     `dict.get`, a value or a default); one `[...]` for both forms (`'etl/db'` and
     `'etl/db#password'` are both `str`, so one return type).
-  - **177. `schedr.text(t"...")`** marks a t-string passed to a Python task where a `str` is
+  - <a id="D177"></a>**177. `schedr.text(t"...")`** marks a t-string passed to a Python task where a `str` is
     taken, typed `str` (a t-string is a `Template`, which no plain typing turns into a `str`,
     and basedpyright has no plugins). Not chosen: building the text inside the task (awkward
     for one-off strings); casting.
-  - **178. `secrets=` keeps both forms:** a plain string (`"etl/api#token"`, `"etl/api"`)
+  - <a id="D178"></a>**178. `secrets=` keeps both forms:** a plain string (`"etl/api#token"`, `"etl/api"`)
     and a placeholder (`secrets['etl/api']['token']`, `secrets['etl/api']`).
   - **Claude's choices in M4.6b** (after the reviews by Grok and Codex; the user told):
     - **Masked forms** besides the value and its JSON form: JSON with every non-ASCII
@@ -4418,7 +4415,7 @@ def count() -> int:
   templates; `task_context(connections={"mongodb_default": fake})` and
   `run_dag(..., connections=...)` swap a connection for a test double.
 
-**Confirmed** (decision 53, the user's, 2026-10-28), from what was proposed with it:
+<a id="D53"></a>**Confirmed** (decision 53, the user's, 2026-10-28), from what was proposed with it:
 - **Declaring:** `@task(connections=[mongodb_default])` (the function or its name; the
   operators too); **required since decision 179**: a task opens only what it declares, each
   rendered before it starts.
@@ -4470,7 +4467,7 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
   only what it declares); `run_dag(connections={name: {param: value}})`, `dags test
   --connection name=JSON`: the real function runs with those values, its own never rendered.
 - **Decisions:**
-  - **179. A task declares the connections it opens** (the user's, 2026-11-03, on a side
+  - <a id="D179"></a>**179. A task declares the connections it opens** (the user's, 2026-11-03, on a side
     agent's note): `connections=` on `@task` and the operators, required; the agent serves
     only declared ones and renders them before the start. Why: opening by name inside the
     function is a read at run time, as `task_ctx.secret` is, which `secrets=` guards; without
@@ -4479,12 +4476,12 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     its code runs, and fails `schedr dags check`. Not chosen: optional declaring (decision
     53's, as first built); optional but logged per attempt; refusing the DAG when it loads
     (one file failing to import would refuse every DAG using its connections).
-  - **180. A connection's values are secrets and plain values** (the user's, 2026-11-03):
+  - <a id="D180"></a>**180. A connection's values are secrets and plain values** (the user's, 2026-11-03):
     `@connection(...)` runs when its module loads, outside any DAG, where `dag_ctx` gives
     nothing; a run's values go to the task's own arguments, or the function reads `dag_ctx`
     while it runs in the task. Not chosen: `dag_ctx` references filled from the run opening
     it (a special case of `dag_ctx` outside a DAG; it can be added later).
-  - **181. A connection's values take at most 1 MiB** (the user's, 2026-11-03, on Grok's
+  - <a id="D181"></a>**181. A connection's values take at most 1 MiB** (the user's, 2026-11-03, on Grok's
     security review): the file defining a bigger one fails to import, in the SDK and again
     in the master's validation (a DAG file can change the SDK it imports). Why: they travel
     with each assignment of a task opening it, within the worker's 4 MiB gRPC message
@@ -4492,7 +4489,7 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     the task is offered again every start timeout, never starting. A connection's values are
     a few short strings; bigger data goes to the task. Not chosen: failing the attempt (a new
     error kind, found only when a run comes); leaving it (only the declared ones go now).
-  - **182. A file the master refused keeps its connections** (the user's, 2026-11-03, on a
+  - <a id="D182"></a>**182. A file the master refused keeps its connections** (the user's, 2026-11-03, on a
     side agent's note): one that imported but whose DAG is invalid (`max_active_runs: 0`)
     still defines its connections for the root; one that failed to import defines none (the
     master clears what it reported). Why: one bad DAG in a shared connections file would
@@ -4522,26 +4519,26 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
   of its own so a check taking another type than the client is refused), so
   `connections=[billing_api]` type-checks. Tested against real servers: HTTP served by the test, Postgres, MySQL 8.4,
   Mongo 8.0 and an OpenSSH server in containers.
-  - **183. A typed connection's name is its first argument** (the user's, 2026-11-03):
+  - <a id="D183"></a>**183. A typed connection's name is its first argument** (the user's, 2026-11-03):
     `billing_api = HTTP("billing_api", base_url=...)`, as operators take their task ID.
     Explicit, and it works in loops and under aliases. Not chosen: the module variable's
     name found by the parser (no clear name for one bound twice or made in a function);
     `name=` as a keyword.
-  - **184. A command gets a connection both ways** (the user's, 2026-11-03): a dict
+  - <a id="D184"></a>**184. A command gets a connection both ways** (the user's, 2026-11-03): a dict
     `CommandOperator(connections={"API": billing_api})` gives `API_*` variables at the start,
     the files written by the agent (mode 0600, in the attempt's folder, removed when it
     ends); the list form stays for a script choosing at run time, and `schedr task-ctx
     connection NAME --env P` then writes the type's files too and prints their paths. Not
     chosen: the dict form only at the start (the CLI values only); the CLI only.
-  - **185. The clients are tested against real servers** (the user's, 2026-11-03): HTTP
+  - <a id="D185"></a>**185. The clients are tested against real servers** (the user's, 2026-11-03): HTTP
     against a local server, Postgres in the tests' container, MySQL, Mongo and an OpenSSH
     server as podman containers in the integration tests (service containers in CI, pinned
     by digest). Not chosen: real only where cheap (an in-process SSH server, Mongo and MySQL
     unconnected); unit tests with mocked libraries.
-  - **186. M4.7b in two commits** (the user's, 2026-11-03): M4.7b1 the five types, their
+  - <a id="D186"></a>**186. M4.7b in two commits** (the user's, 2026-11-03): M4.7b1 the five types, their
     Python clients, `check()` and the extras; M4.7b2 what commands get (variables, files,
     `<PREFIX>_JSON`, a custom connection in the dict form).
-  - **187. SQL verifies TLS unless told not to** (the user's, 2026-11-03, on Codex's review
+  - <a id="D187"></a>**187. SQL verifies TLS unless told not to** (the user's, 2026-11-03, on Codex's review
     finding that PyMySQL ignored the URL's query: a MySQL connection never checked the
     server's certificate). One vocabulary for both databases, libpq's `sslmode` in the URL
     (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`), mapped to
@@ -4551,7 +4548,7 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     with no `sslmode`, is `verify-full`, as HTTP verifies and SSH needs `known_hosts`; a
     server without TLS needs `?sslmode=disable`, written in the definition. Not chosen:
     `prefer`, the drivers' own (TLS when offered, unchecked); `require` (TLS, unchecked).
-  - **188. A typed connection's credentials: apart, or encoded in its URL** (the user's,
+  - <a id="D188"></a>**188. A typed connection's credentials: apart, or encoded in its URL** (the user's,
     2026-11-03, on Grok's security review: a secret filled into `t"postgresql://etl:{...}@db/etl"`
     unencoded could change the host or turn TLS off, and an `@` in a password broke the URL,
     libpq splitting at the first, Python at the last). Both: `SQL` and `Mongo` take `user` and
@@ -4564,34 +4561,34 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     the password inside the URL); the separate values only (a t-string URL still open to a
     value's structure); comparing the rendered URL's structure to the template's at open (an
     `@` in a password refused, not fixed).
-  - **189. Mongo verifies TLS by default** (the user's, 2026-11-03, on Grok's review: pymongo
+  - <a id="D189"></a>**189. Mongo verifies TLS by default** (the user's, 2026-11-03, on Grok's review: pymongo
     uses TLS only when the URI says `tls=true`). As SQL (decision 187): TLS with the
     certificate and name checked unless the URI says `tls=false` (or `ssl=false`); the URI's
     own TLS options as written; `ca_cert` (PEM text) for a private CA, else the system's. Not
     chosen: pymongo's default, plaintext unless written.
-  - **190. What a command gets of a connection's secrets: files and variables** (the user's,
+  - <a id="D190"></a>**190. What a command gets of a connection's secrets: files and variables** (the user's,
     2026-11-03): a secret goes into the file its tool reads (curl's `-K` config, the SSH key,
     Postgres's `.pgpass`, a MySQL option file) and into a prefixed variable for scripts
     (`API_TOKEN`, `DB_PASSWORD`), masked in the log; a URL variable never holds a password,
     which is moved out to the file, so `psql "$DB_URL"` puts none on a command line. Not
     chosen: files only (no secret in a variable; less convenient for scripts); the sketch's
     table as it stood (`_URL` with its password).
-  - **191. Commands get the Python clients' TLS defaults** (the user's, 2026-11-03): SQL's
+  - <a id="D191"></a>**191. Commands get the Python clients' TLS defaults** (the user's, 2026-11-03): SQL's
     `_URL` carries `sslmode=verify-full` and `sslrootcert` (the system's, or the `ca_cert`
     file) unless written otherwise; MySQL's option file `ssl-mode=VERIFY_IDENTITY`; Mongo's
     `_URI` `tls=true`; curl's config `--cacert` when a CA is given; SSH's config
     `StrictHostKeyChecking yes` with only its `known_hosts`. Not chosen: values as written,
     each tool's own defaults (psql `prefer`, mongosh plaintext).
-  - **192. Prefixed variables only** (the user's, 2026-11-03): `<PREFIX>_...`, never the tools'
+  - <a id="D192"></a>**192. Prefixed variables only** (the user's, 2026-11-03): `<PREFIX>_...`, never the tools'
     own names (`PGHOST`, `MYSQL_PWD`); the docs show the mapping
     (`PGPASSFILE="$DB_PGPASSFILE" psql "$DB_URL"`). Two of a type in a task never clash. Not
     chosen: the tools' names opt-in per entry, or automatic with one connection of a type.
-  - **193. `connections check` and `test` run on any worker, or `--worker`** (the user's,
+  - <a id="D193"></a>**193. `connections check` and `test` run on any worker, or `--worker`** (the user's,
     2026-11-03; M4.7c): the master picks a connected worker having the connection's root at
     its current code, as for a task; `--worker NAME` picks one. `check` without a name covers
     every connection of a root. Not chosen: every worker having the root (slower, more load);
     `--worker` required.
-  - **194. Mongo commands: a database tools' file, mongosh through the variables** (the
+  - <a id="D194"></a>**194. Mongo commands: a database tools' file, mongosh through the variables** (the
     user's, 2026-11-03): mongosh reads no password from a file, so a command gets
     `<PREFIX>_TOOLS_CONFIG`, a 0600 YAML file with the `uri` (the user, no password) and the
     `password`, for `mongodump --config` (and mongorestore, mongoexport, mongoimport); the
@@ -4599,7 +4596,7 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     (`--eval 'db.auth(process.env.DB_USER, process.env.DB_PASSWORD)'`). `<PREFIX>_URI` names no
     user: mongosh would prompt for its password, hanging the task. Not chosen: a docs note
     only; a `_URI_WITH_PASSWORD` variable (against decision 190).
-  - **195. One MySQL option file for MySQL's and MariaDB's clients** (the user's,
+  - <a id="D195"></a>**195. One MySQL option file for MySQL's and MariaDB's clients** (the user's,
     2026-11-03): MariaDB's client refuses MySQL's `ssl-mode` ("unknown variable"), so
     `[client]` holds the login and MySQL's TLS as `loose-ssl-mode` (MySQL's client honours it;
     MariaDB's skips it with one warning line), and `[client-mariadb]`, which only MariaDB's
@@ -4609,25 +4606,25 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     against the system's CAs with every client, a self-made certificate needing
     `?sslmode=require`. Not chosen: two files (the author must know the worker's client); a
     dialect per URL scheme (wrong when client and server differ).
-  - **196. MariaDB supported** (the user's, 2026-11-03): `SQL` takes `mariadb://` as
+  - <a id="D196"></a>**196. MariaDB supported** (the user's, 2026-11-03): `SQL` takes `mariadb://` as
     `mysql://`, through PyMySQL; a MariaDB 11.8 server in `make test-integration` and CI
     (logins, TLS modes, a command through the option file with both vendors' clients); the
     docs say MariaDB 11.4+'s self-made certificate can't pass `verify-*` (a real certificate,
     or `?sslmode=require`). Not chosen: PyNaCl in `schedr[mysql]` for the `ed25519` login (a
     dependency, for an opt-in plugin); tests only.
-  - **197. A Postgres URL names its `.pgpass` file** (the user's, 2026-11-03; Claude's
+  - <a id="D197"></a>**197. A Postgres URL names its `.pgpass` file** (the user's, 2026-11-03; Claude's
     proposal, from the end-to-end test): psql reads only an unprefixed `PGPASSFILE`, so
     `<PREFIX>_URL` carries `passfile=<the file's path>` (never the password) and
     `psql "$DB_URL"` logs in as written. Not chosen: a bare URL, mapped by hand
     (`PGPASSFILE="$DB_PGPASSFILE"`).
-  - **198. `connections test` of a connection without a check opens it** (the user's,
+  - <a id="D198"></a>**198. `connections test` of a connection without a check opens it** (the user's,
     2026-11-03; M4.7c): `with name():` entered and left, an exception failing the test; a
     `Generic` renders its values. Not chosen: refusing; the values only.
-  - **199. A connection test takes no task slot** (the user's, 2026-11-03; M4.7c): it runs
+  - <a id="D199"></a>**199. A connection test takes no task slot** (the user's, 2026-11-03; M4.7c): it runs
     beside the tasks, one at a time per worker. Not chosen: a slot like a task.
-  - **200. A connection test is stopped after 60 s** (the user's, 2026-11-03; M4.7c),
+  - <a id="D200"></a>**200. A connection test is stopped after 60 s** (the user's, 2026-11-03; M4.7c),
     `--timeout` to change it. Not chosen: the connection's own `timeout` only; a fixed 30 s.
-  - **201. Commands' connection files in memory** (the user's, 2026-11-03, on a side agent's
+  - <a id="D201"></a>**201. Commands' connection files in memory** (the user's, 2026-11-03, on a side agent's
     note): they hold passwords and keys in plain text, so they go under `/dev/shm` (a tmpfs;
     in containers too), `/dev/shm/schedr-<uid>/<a hash of the data directory>/<worker>/`,
     never on a disk, gone at a reboot or a pod's restart, still swept at start; `[worker]
@@ -4639,48 +4636,48 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     memory files the command inherits (`/proc/self/fd/N`; `task-ctx --env` can't pass them to
     a running process, and tools closing inherited files would break); the data directory,
     with the docs recommending a memory-backed volume.
-  - **202. A connections demo, all in compose** (the user's, 2026-11-03; M4.7d): a compose
+  - <a id="D202"></a>**202. A connections demo, all in compose** (the user's, 2026-11-03; M4.7d): a compose
     file runs the servers of every connection type (Postgres, MySQL, MariaDB, Mongo, SSH,
     HTTP), schedr standalones without a UI and one `schedr ui` over them, as `make
     standalone-separate-ui` does locally; a demo image FROM the base image adds the client
     tools and the connection extras; `make demo` builds the images and runs `podman-compose
     up`, so anyone runs it without Rust or uv. Not chosen: only the servers in compose,
     schedr from a local build; both, by compose profile.
-  - **203. The demo shows two deployments, dev and prod** (the user's, 2026-11-03): the same
+  - <a id="D203"></a>**203. The demo shows two deployments, dev and prod** (the user's, 2026-11-03): the same
     DAG folder, each standalone's own secrets pointing at other databases and users, under
     one `schedr ui`: M4.7's acceptance (the same DAG reads a connection's values from two
     environments' storages). Not chosen: one standalone.
-  - **204. The demo's HTTP server is go-httpbin, pinned** (the user's, 2026-11-03): its
+  - <a id="D204"></a>**204. The demo's HTTP server is go-httpbin, pinned** (the user's, 2026-11-03): its
     `/bearer` checks the token, `/headers` echoes what was sent. Not chosen: a server of our
     own.
-  - **205. The demo lands after M4.7c** (the user's, 2026-11-03), its own commit, showing
+  - <a id="D205"></a>**205. The demo lands after M4.7c** (the user's, 2026-11-03), its own commit, showing
     `schedr connections check` and `test` too. Not chosen: before M4.7c; in M4.7b2.
-  - **206. A Mongo user logs in where Mongo's own clients log in** (the user's, 2026-11-03,
+  - <a id="D206"></a>**206. A Mongo user logs in where Mongo's own clients log in** (the user's, 2026-11-03,
     found running the demo): the URI's `authSource`, else the database in its path, else
     `admin`, in Python and in the tools' files alike; `database=` is only the database the
     task gets, and `Mongo`'s docstring says so. Not chosen: `database=` as the login
     database when the URI names none (friendlier for a user made in the app's database, but
     unlike every Mongo client, and it would break users made in `admin`).
-  - **207. Connections in the UI: Check and Test buttons** (the user's, 2026-11-04; M4.7e):
+  - <a id="D207"></a>**207. Connections in the UI: Check and Test buttons** (the user's, 2026-11-04; M4.7e):
     a DAG page gets a Connections section, a row per connection its tasks declare (Python
     tasks' and `CommandOperator(connections=)`'s): name, type, the tasks using it, the last
     result; **Check all** on top (renders them on a worker: secrets there or not, nothing
     contacted) and **Test** on each row (opens it and runs its check: a real login). Not
     chosen: Check only (no side effects, but a wrong password or a firewall goes unseen);
     Test only (one login per connection to learn what a check says at once).
-  - **208. The DAG page's Check is the root's check, its rows shown** (the user's,
+  - <a id="D208"></a>**208. The DAG page's Check is the root's check, its rows shown** (the user's,
     2026-11-04): `POST /api/v1/connections/check` as it is, the page showing the DAG's
     connections of the answer. Not chosen: a `names` filter in the API (an API change for
     rows a page can pick).
-  - **209. Results live on the page** (the user's, 2026-11-04): a row says "running" when
+  - <a id="D209"></a>**209. Results live on the page** (the user's, 2026-11-04): a row says "running" when
     pressed and is filled in when the worker answers (the command polled, as the UI's other
     actions are), kept until the page is left. Not chosen: results stored and shown on later
     visits (a history of checks to keep).
-  - **210. Anyone signed in may press Test, after a confirm dialog** (the user's,
+  - <a id="D210"></a>**210. Anyone signed in may press Test, after a confirm dialog** (the user's,
     2026-11-04): as with the CLI and the API (no roles yet); the dialog names the connection
     and says it logs in to the real system with this deployment's secrets. Not chosen:
     waiting for roles.
-  - **211. A Connections page, now** (the user's, 2026-11-04): `/connections`, in the
+  - <a id="D211"></a>**211. A Connections page, now** (the user's, 2026-11-04): `/connections`, in the
     navigation beside Workers and Import errors, over every deployment the UI shows, as
     those pages are: grouped by deployment, a heading per root (`dev · dags`) with its own
     Check all, a row per connection (name, type, file, the DAGs and tasks declaring it, the
@@ -4689,7 +4686,7 @@ lines for `eval`; `--json` prints the rendered arguments as an object.
     connections in its current code, name, type, file and who declares them, no values. Not
     chosen: later, after the DAG section; a section of each deployment's page (about its
     nodes, so harder to find); the DAG section only.
-  - **212. Every connection type works in the base image** (the user's, 2026-11-04, in
+  - <a id="D212"></a>**212. Every connection type works in the base image** (the user's, 2026-11-04, in
     M4.7e: "we have http, mongo and paramiko by default, but no postgres/mysql"): its
     libraries gain `psycopg[binary]` and `pymysql[rsa]` (with httpx, pymongo and paramiko,
     every type's client), and `schedr[connections]` installs them all outside it; it also
@@ -4892,7 +4889,7 @@ def version() -> str:
 
   Network devices go through `SSH`. Exact names are settled when built; the table is the
   shape.
-- **Sync and async, and `check()`** (decision 53, the user's, 2026-10-28): one connection
+- <a id="D317"></a><a id="D318"></a>**Sync and async, and `check()`** (decision 53, the user's, 2026-10-28): one connection
   definition gives the sync client with `with` and the async one with `async with`, where
   the type has both. `Mongo`: pymongo for both (`MongoClient`, and `AsyncMongoClient`, in
   pymongo since 4.10, replacing the deprecated motor). `HTTP`: httpx for both
@@ -4938,7 +4935,7 @@ def version() -> str:
   onto it, and its docs say so once. Not chosen: `@service` (clashes with Kubernetes
   Services); `@endpoint` (odd for a database or an SSH host).
 
-**174. M4.7's open questions** (the user's, 2026-11-03; the options were Claude's):
+<a id="D174"></a>**174. M4.7's open questions** (the user's, 2026-11-03; the options were Claude's):
 - **Client libraries as optional extras:** `schedr[http]` (httpx), `schedr[mongo]`
   (pymongo), `schedr[ssh]` (paramiko), `schedr[postgres]` (psycopg 3), `schedr[mysql]`
   (PyMySQL), as `schedr[pydantic]`; imported on use, the error naming the extra when it is
@@ -5111,7 +5108,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
 - **Data flow defines dependencies.** Calling a task inside a DAG returns an **output
   reference**; passing it to another task (as an argument, or inside a t-string) creates the
   dependency. `>>` remains for **order-only** dependencies (no data passed).
-- **Typing of calls: type checkers read a call as its value** (decision 57, the user's,
+- <a id="D57"></a>**Typing of calls: type checkers read a call as its value** (decision 57, the user's,
   2026-10-29; A + bases). At run time a call in a DAG body gives an `Output` (a reference);
   for type checkers a `@task` returning `T` gives **`T`**, so it passes to a task taking `T`
   and its fields are typed, in mypy `--strict` and pyright / basedpyright alike, without a
@@ -5292,7 +5289,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     dedicated worker group with a fixed number of slots) cover it. Possibly later: named
     limits in the server configuration, referenced by tasks.
   - How the master applies them: see Task assignment.
-  - **Decided for M4.4** (decisions 87-92 and 95-96, the user's, 2026-10-30: all as recommended):
+  - <a id="D87"></a><a id="D88"></a><a id="D89"></a><a id="D90"></a><a id="D91"></a><a id="D92"></a><a id="D95"></a>**Decided for M4.4** (decisions 87-92 and 95-96, the user's, 2026-10-30: all as recommended):
     - **87, which version's limits** (A): `max_active_per_run` from each run's own DAG
       version; the limits across runs (`max_active_tasks`, `max_active`) from the DAG's
       **current** version, since a limit across runs has one value at a time. Not chosen: B
@@ -5320,7 +5317,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     - **95, changing a limit without a code change** (the user, 2026-10-30: not now): no
       override through the API or CLI (like Airflow's editable pools); with limits shared
       across DAGs, a proposal for M6 (PLAN.md).
-    - **96, limits on the DAG page** (the user, 2026-10-30: yes): each limit set with its
+    - <a id="D96"></a>**96, limits on the DAG page** (the user, 2026-10-30: yes): each limit set with its
       current count ("`max_active_per_run` 10, 7 running"), from the master's counts (88A),
       beside 91's waiting reasons.
     - **Settled by precedent:** a limit below 1 is a parse-time error (`None`: no limit);
@@ -5342,7 +5339,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   incremental(size.on(Small))
   ```
 
-  **`@branch`** chooses **any subset** of its direct downstream tasks. The function returns
+  <a id="D55"></a>**`@branch`** chooses **any subset** of its direct downstream tasks. The function returns
   **task handles** (one or a list), not task ID strings, so typos are caught at parse time. In
   the model the branch's output is the list of task IDs, and each of its outgoing edges is a
   **selection edge**, taken when the branch chose its target. A target not chosen counts that
@@ -5364,7 +5361,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
   targets(cfg) >> [to_s3, to_gcs, to_local]
   ```
 
-- **Task groups: `with group("name"):`.** A group organises tasks while the DAG is written;
+- <a id="D64"></a>**Task groups: `with group("name"):`.** A group organises tasks while the DAG is written;
   it isn't something that runs. At parse time it is flattened: its tasks become ordinary tasks
   with prefixed IDs (`name.task_id`; nested groups `outer.inner.task_id`) and ordinary edges,
   plus group metadata for the UI (members, name, parent). The master schedules ordinary tasks
@@ -5381,7 +5378,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     tasks' default; the group never waits nor is skipped, its tasks are), not a sub-DAG (no
     runs, not triggered), and not mappable (mapped groups not supported, in both APIs; see
     Airflow compatibility: Branching, task groups and mapping).
-  - **A dependency on a group goes through its roots and leaves** (decision 56A, the
+  - <a id="D56"></a><a id="D97"></a>**A dependency on a group goes through its roots and leaves** (decision 56A, the
     user's, 2026-10-29): `x >> group` links `x` to the group's **roots** (its tasks with no
     upstream inside the group), `group >> y` links the group's **leaves** (no downstream
     inside it) to `y`, as Airflow's `TaskGroup` does. Roots and leaves are computed once the
@@ -5404,7 +5401,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     it may not repeat in its parent nor be a task's ID; the same `@task` function in two
     groups needs no `.override()`; a group whose block raised (the error caught in the DAG
     file) is closed all the same.
-  - **A dependency on a group that ends with a `@branch`** (decision 94, the user's,
+  - <a id="D94"></a>**A dependency on a group that ends with a `@branch`** (decision 94, the user's,
     2026-10-30: B): `route >> then` joins the **set** of the group's last tasks to the tasks
     after it with plain order edges, a `@branch` among them included: it counts as having
     run, whatever it chose, and each task after it applies its own `run_if` over that set
@@ -5422,7 +5419,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     M5's `prefix_group_id=False` can be represented. Not chosen: B membership from the ID's
     prefix (nothing to store, but `prefix_group_id=False` can't be said, and a group holding
     only nested groups has no record).
-  - **On the run graph** (decision 65, the user's, 2026-10-29: A): clustered boxes. Each layer
+  - <a id="D65"></a>**On the run graph** (decision 65, the user's, 2026-10-29: A): clustered boxes. Each layer
     is ordered group by group (sibling groups in one fixed order in every layer, so boxes
     never swap sides; tasks outside groups fall between them by barycenter), a long edge's
     points belong to the innermost group both its ends share, and after the x fit everything
@@ -5442,7 +5439,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     `run_dag` per instance. `@task` functions only for now (operators' `.partial()` /
     `.expand()`, which M5's `BashOperator` needs, later). For type checkers `.expand(...)`
     returns `list[R]`.
-  - **DAG JSON** (decision 69, the user's, 2026-10-29: A): the fixed arguments stay in
+  - <a id="D69"></a>**DAG JSON** (decision 69, the user's, 2026-10-29: A): the fixed arguments stay in
     `arguments` (`.partial`), and an `expand` field says what varies: `{"product": [{"name":
     name, "value": value}, ...]}` (`.expand`; each value a literal list or a reference to a
     list, in the order written) or `{"kwargs": value}` (`.expand_kwargs`, a list of dicts). Not chosen: B marking mapped arguments inside
@@ -5456,21 +5453,21 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     task some of whose instances may be skipped (it maps over a narrowed mapped output, or
     over such a task) has `None` for them: the receiving type must allow it. Not under
     `run_if=RunIf.ALL_SUCCEEDED`: there a skipped instance skips the whole task (B116).
-  - **Mapping over a mapped output** (decision 70, the user's, 2026-10-29: A): the downstream
+  - <a id="D70"></a>**Mapping over a mapped output** (decision 70, the user's, 2026-10-29: A): the downstream
     task's instances are created once every upstream instance has finished, then `check[i]`
     gets `process[i]`'s output. Not chosen: B starting `check[i]` as soon as `process[i]`
     ends (a pipeline: faster, but instance pairs to track and the count known only at the end).
-  - **In the REST API** (decision 71, the user's, 2026-10-29: A): one row per instance in a
+  - <a id="D71"></a>**In the REST API** (decision 71, the user's, 2026-10-29: A): one row per instance in a
     run's tasks (`map_index`, -1 for an unmapped task), per-instance URLs with
     `?map_index=N`. Not chosen: B nesting instances under their task (a new URL family).
   - `[mapping] max_instances` (1024, at least 1) in the server's configuration.
-  - **The order of the instances** (decision 79, the user's, 2026-10-30: A): over several
+  - <a id="D79"></a>**The order of the instances** (decision 79, the user's, 2026-10-30: A): over several
     lists, the first argument **written** varies slowest (`.expand(region=[...],
     day=[...])`: all of the first region's days, then the next region's), as in Airflow; it
     is the gather's order. So `product` is an ordered list in DAG JSON. Not chosen: B the
     parameters' names in alphabetical order (no format change, but renaming a parameter
     would reorder `map_index`).
-  - **Lanes: mapping over a mapped output** (decision 70 revised, the user's, 2026-10-30: B):
+  - <a id="D119"></a>**Lanes: mapping over a mapped output** (decision 70 revised, the user's, 2026-10-30: B):
     `check.expand(n=sizes)` over the mapped `size` creates `check`'s instances as soon as
     `size` has expanded (its count is known then), and `check[i]` waits only for `size[i]`:
     each lane moves on its own, and the barrier is the first task taking the whole list (a
@@ -5488,7 +5485,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     was skipped), as a lane does. The whole mapped task's own outcome only says its
     instances ended, so it never decides an `.on(...)`. Not chosen: B refusing `.on(...)` at
     load when the output is used again (a form the API accepts, and the guide promised).
-  - **`.on(...)` on an order edge from a mapped task** (decision 120, the user's,
+  - <a id="D120"></a>**`.on(...)` on an order edge from a mapped task** (decision 120, the user's,
     2026-10-31; B132): `results.on(Rows) >> report()` counts as one edge per instance, each
     taken when that instance ended with one of the outcomes, and `report`'s own `run_if`
     decides over them with its other edges: `NONE_FAILED` (the default) runs it when any
@@ -5497,14 +5494,14 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     task with an empty list succeeds. Before, `Rows` was compared with the whole task's own
     outcome and `report` was always skipped. Not chosen: always every instance; always any;
     refusing it at load as for arguments.
-  - **How a mapped task is stored** (decision 74, the user's: A): every task keeps its
+  - <a id="D74"></a>**How a mapped task is stored** (decision 74, the user's: A): every task keeps its
     `map_index = -1` row. For an unmapped task it is the one runnable instance; for a mapped
     task it is the task **as a whole** (what edges, trigger rules and the run's result look
     at), never sent to a worker, with no attempts or output: `scheduled` until its upstream
     is ready, `running` once expanded, then its state from its instances. Expansion adds the
     instances `0..N-1`, which run, retry and are cancelled each on its own. Not chosen: B no
     row for the whole task (every rule would aggregate instances).
-  - **Its state from its instances** (decision 75, the user's): **a failure fails the step at
+  - <a id="D75"></a>**Its state from its instances** (decision 75, the user's): **a failure fails the step at
     once** (75a: B): when an instance fails after its last retry (or its lane's upstream
     did), the task's other instances are cancelled, running ones stopped (their results
     ignored); the task is `failed` (`upstream_failed` when only lanes failed), its
@@ -5517,7 +5514,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     Missing` doesn't), and expected failures are outcomes, not exceptions (see the mapping
     guide's example). Not chosen: 75a A letting the other instances finish (Airflow's);
     75b C always success with `[None, ...]`.
-  - **An instance's element** (decision 76, the user's: A): the master resolves each
+  - <a id="D76"></a>**An instance's element** (decision 76, the user's: A): the master resolves each
     instance's mapped values and sends them with its inputs under `$expand` (with the
     element's outcome under `$expand_outcomes` for one from a mapped upstream, so a union
     decodes to the right member); the runner passes them as the mapped parameters. The task
@@ -5525,11 +5522,11 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     instance would carry all of it: inputs growing with the square of its length, B83): only
     what the task's other arguments reference is. Not chosen: B a task JSON per instance (inline in
     `AssignTask`, so a large element could exceed the message limit).
-  - **A mapped task's whole output** (decision 77, the user's: A): stored per instance only;
+  - <a id="D77"></a>**A mapped task's whole output** (decision 77, the user's: A): stored per instance only;
     a downstream task's list is built when read, in `map_index` order, `None` for a skipped
     instance. Not chosen: B storing the list on the `-1` row too (twice the storage, and the
     list could exceed limits its instances met).
-  - **Around it, per instance (M4.3c)** (decisions 80-86, the user's, 2026-10-30: all A):
+  - <a id="D80"></a><a id="D81"></a><a id="D82"></a><a id="D83"></a><a id="D84"></a><a id="D85"></a><a id="D86"></a>**Around it, per instance (M4.3c)** (decisions 80-86, the user's, 2026-10-30: all A):
     - **80, the run's tasks in the API:** the `-1` row is listed too, as the task as a whole
       (`map_index: -1`, `instances: N`, `null` for an unmapped task, and `reason` when it
       failed without an attempt), then its instances `0..N-1`. Not chosen: B instances only.
@@ -5552,7 +5549,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     - **86, the CLI:** `--map-index N` on `tasks logs / attempts / output / cancel / retry`;
       `runs show` and `dags test` list instances as `fetch[0]`, `fetch[1]`, ... after the
       task's own row. Not chosen: B `fetch[1]` as the task argument.
-  - **Why a task failed with no attempt** (decision 78, the user's: A): a nullable `reason`
+  - <a id="D78"></a>**Why a task failed with no attempt** (decision 78, the user's: A): a nullable `reason`
     on `task_instances` (more instances than `max_instances`; a mapped list that is `null`
     or not a list when it expands). Not chosen: B reusing `queued_reason`.
   - **Settled by Grok's M4.3 review (2026-10-30), within decisions 75a, 76 and 82:**
@@ -5566,7 +5563,7 @@ User code can never change scheduling behaviour (skips, branching, retries) from
     master too, which also refuses a mapped `@branch`); an expansion is stored in one
     transaction; `.on(...)` naming every outcome of a task is an unconditioned edge (no
     `None` to allow).
-  - **An element written with a t-string or `dag_ctx` is built per instance** (decision 118,
+  - <a id="D118"></a>**An element written with a t-string or `dag_ctx` is built per instance** (decision 118,
     the user's, 2026-10-31: A; B81): `region.expand(name=[t"eu-{year}", "us"])`,
     `.expand(of=[dag_ctx.run.kind, "other"])`, and an entry of an `.expand_kwargs()` dict
     alike. The master doesn't render such an element (it renders nothing user-written): it
@@ -5898,11 +5895,11 @@ its summary.
 
 **How M4.5 builds it** (decisions 132-138, the user's, 2026-11-01: 1A 2A+E 3A 4A 5A 6A):
 
-- **132. Order:** M4.5a params (declaration, the master's check, stored with the run,
+- <a id="D132"></a>**132. Order:** M4.5a params (declaration, the master's check, stored with the run,
   `runs trigger -p` / `--params`, `dags test -p`, references, `dag_ctx.params(Cls)`, the run's
   summary); M4.5b the agent channel (`schedr dag-ctx`, `schedr.script`); M4.5c the UI's trigger
   form. Not chosen: the channel first.
-- **133. The master checks values with the `jsonschema` crate** (default features off: it never
+- <a id="D133"></a>**133. The master checks values with the `jsonschema` crate** (default features off: it never
   fetches a remote `$ref`; formats validated), **plus a check of every schema when the master
   validates the DAG**: only the keywords and formats that crate checks (and annotations such as
   `title`, `description`, `default`, `examples`, `discriminator`), only local `$ref`s; anything
@@ -5911,18 +5908,18 @@ its summary.
   chosen: a checker of our own (Pydantic constraints refused); `boon` (no release since
   2025-01); a worker validating with the real class (user code before the run exists, a
   trigger waiting for a worker).
-- **134. Shown masked:** a run's params are shown (API, UI, `runs show`) masked like a task's
+- <a id="D134"></a>**134. Shown masked:** a run's params are shown (API, UI, `runs show`) masked like a task's
   output (decision 131: texts, and fields named by secret words); tasks get the real values.
   Not chosen: shown as given.
-- **135. At most 64 KiB** of a run's params as JSON, defaults included, refused at trigger time
+- <a id="D135"></a>**135. At most 64 KiB** of a run's params as JSON, defaults included, refused at trigger time
   with the reason (and a DAG whose defaults are over it, at parse time): they travel in every
   task's assignment. Not chosen: 1 MiB; no limit.
-- **136. Airflow `Param`** comes with the Airflow-compatibility work; M4.5 takes a dataclass or a
+- <a id="D136"></a>**136. Airflow `Param`** comes with the Airflow-compatibility work; M4.5 takes a dataclass or a
   Pydantic model only.
-- **137. A queued run keeps its values**, validated against the version it was created on, and
+- <a id="D137"></a>**137. A queued run keeps its values**, validated against the version it was created on, and
   is never checked again (a field dropped in a later version still reaches that run's tasks).
   Not chosen: re-validated when the run starts.
-- **138. How values are kept** (Claude's, from 133): the DAG JSON's `params` holds the class's
+- <a id="D138"></a>**138. How values are kept** (Claude's, from 133): the DAG JSON's `params` holds the class's
   type descriptor, a standard JSON Schema of it (a dataclass's written by schedr: dates as
   `format: date` / `date-time`, a `timedelta` as ISO 8601 duration text (the master checks it
   as it stores it), a tuple as
@@ -5935,16 +5932,16 @@ its summary.
 
 **After the reviews** (decisions 139-142, 2026-11-01; 139-141 Claude's, accepted by the user):
 
-- **139. A duration may be given in weeks** (`P1W` = 7 days, a fixed length); years and months
+- <a id="D139"></a>**139. A duration may be given in weeks** (`P1W` = 7 days, a fixed length); years and months
   are still refused. Not chosen: weeks refused.
-- **140. A whole number written with a fraction** (`-p count:=1.0`) fits an `int` field, stored
+- <a id="D140"></a>**140. A whole number written with a fraction** (`-p count:=1.0`) fits an `int` field, stored
   as `1`: JSON Schema's `integer` takes it, so refusing it after that check was inconsistent.
   Not chosen: refused.
-- **141. The master checks `format: duration` itself, as ISO 8601** (fractions of a second
+- <a id="D141"></a>**141. The master checks `format: duration` itself, as ISO 8601** (fractions of a second
   included: `PT1H0.5S`, as Pydantic writes a `timedelta`); the `jsonschema` crate's own is RFC
   3339's, without fractions, and refused such a model's defaults. Not chosen: dropping
   `format: duration` from models' schemas (the master would check no model duration).
-- **142. Masking covers values given at trigger time, not text written in DAG code** (the
+- <a id="D142"></a>**142. Masking covers values given at trigger time, not text written in DAG code** (the
   user's, 2026-11-01, after Codex's third review): a value given when a run is triggered is
   never shown in clear (refusals, run views, the run's DAG, errors, logs), and a run's stored
   params and its defaults are shown masked; text written in the DAG's code (a default, a
@@ -5968,21 +5965,21 @@ are dumped without Pydantic's warnings (which quote the value). Not chosen: mask
 
 **The UI's trigger form** (decisions 149-152, the user's, 2026-11-02, M4.5c):
 
-- **149. The webserver describes the form; the UI doesn't read JSON Schema.** A single DAG's
+- <a id="D149"></a>**149. The webserver describes the form; the UI doesn't read JSON Schema.** A single DAG's
   view (`GET /api/v1/dags/{dag_id}`) gets `params`: the form's fields, built by the webserver
   from the DAG's schema and defaults, each with its name, kind, whether it is required, its
   default (withheld under a secret name, decision 150) and a `Literal`'s choices. Not chosen:
   the raw JSON Schema for the UI to interpret (a second schema reader, and defaults under
   secret names reaching the browser unless masked separately); the UI reading the DAG JSON
   (couples the UI to its format).
-- **150. A field named by a secret word is an empty password input** ("leave empty for the
+- <a id="D150"></a>**150. A field named by a secret word is an empty password input** ("leave empty for the
   default"): its default never reaches the browser; left empty, the master fills the default
   in. Not chosen: pre-filled with `****` meaning "keep the default" (a real `****` can't be
   given); the default in clear as DAG code (decision 142 would allow it, but the form is not
   where code is shown).
-- **151. An optional field (`date | None`) has a "none" checkbox** beside its input. Not chosen:
+- <a id="D151"></a>**151. An optional field (`date | None`) has a "none" checkbox** beside its input. Not chosen:
   an empty input meaning `None` (ambiguous for `str | None`, where an empty string is a value).
-- **152. A field that isn't a simple value** (a nested dataclass or model, a list, a dict) is a
+- <a id="D152"></a>**152. A field that isn't a simple value** (a nested dataclass or model, a list, a dict) is a
   JSON text box pre-filled with its default as JSON (the form `--params` takes); the master
   checks it. Not chosen: nested sub-forms (much more UI for little gain); leaving such fields
   out of the form (the CLI or API only).
@@ -5990,7 +5987,7 @@ are dumped without Pydantic's warnings (which quote the value). Not chosen: mask
 The form sends only the fields changed; the master fills in the defaults and checks the
 values as for any trigger, and a refusal shows the master's reason in the dialog (Claude's).
 
-- **159. A page whose fields or defaults changed since it loaded is refused** ("reload it and
+- <a id="D159"></a>**159. A page whose fields or defaults changed since it loaded is refused** ("reload it and
   trigger again", not sent; the user, 2026-11-02). The page carries a fingerprint of the
   fields it showed (names, kinds, `null`, secrecy, whether required, choices and the
   defaults); the trigger compares it with the DAG's current fields. A box left showing a
@@ -6138,11 +6135,11 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
        runs: point 3).
      - **Parameters:** the `-p` / `--params` values apply to every run, validated once before
        anything is created.
-     - **API, progress and UI** (decision 363, the user's, 2026-11-08): `POST /api/v1/dags/{id}/backfills` answers
+     - <a id="D363"></a>**API, progress and UI** (decision 363, the user's, 2026-11-08): `POST /api/v1/dags/{id}/backfills` answers
        the backfill's ID and how many runs it created and skipped; `GET /api/v1/backfills/{id}` gives its runs' counts
        by state; `schedr runs backfill --dry-run` counts without creating; the UI has a "Backfill" form on the DAG
        page and shows "backfill 3/31". Not chosen: the UI later.
-     - **Order** (decision 364): oldest first only. Not chosen: `--newest-first` (Airflow's `--run-backwards`).
+     - <a id="D364"></a>**Order** (decision 364): oldest first only. Not chosen: `--newest-first` (Airflow's `--run-backwards`).
 3. **Overlap:** manual and backfill runs **count towards `max_active_runs`**. They are
    **never dropped**: at the limit a run is created and **waits**, unlike a scheduled fire time,
    which is treated as missed (a missed fire time recurs with the schedule and `catchup`
@@ -6237,7 +6234,7 @@ TriggerDagOperator(
 - Not chosen: leaving it out (merging DAGs, or triggering from task code: no link, no waiting,
   failures don't propagate); waiting on another DAG's run (not covered yet: see Sensors and
   triggers).
-- **Updated for M4.12** (decisions 357-366, the user's, 2026-11-08, all as recommended), after `RunOf` (decision 353)
+- <a id="D357"></a><a id="D358"></a><a id="D359"></a><a id="D360"></a><a id="D361"></a><a id="D362"></a><a id="D365"></a>**Updated for M4.12** (decisions 357-366, the user's, 2026-11-08, all as recommended), after `RunOf` (decision 353)
   gave waiting nodes outcomes:
   - **Built in two parts** (357): M4.12a the operator, M4.12b backfill.
   - **Its value** (358, option A'): the target run's ID, as the `RunOf` node gives, with `wait=True` or not; the
@@ -6499,7 +6496,7 @@ Rules:
   inside the attempt. Waiting **for something to happen** (a file, an event) is a sensor or a
   trigger (see Sensors and triggers), which run in the worker's watcher host, not in a task
   process holding a task slot.
-- **Help from the agent and runner:** SIGTERM cancels the main coroutine (a handler in the
+- <a id="D315"></a>**Help from the agent and runner:** SIGTERM cancels the main coroutine (a handler in the
   runner) so `finally` / `async with` blocks run within the grace time, then SIGKILL as today;
   the process then ends by that signal, as a sync task's does, whatever the coroutine did with
   the cancellation; async variants of the in-task calls (decision 315) over the same agent
@@ -6509,7 +6506,7 @@ Rules:
   acleanup_handle(...)`. The sync calls still work in async code, blocking its loop while they
   wait. Not chosen: the same name returning something both a `str` and awaitable (type checkers
   can't describe it without `Any`); sync calls only, wrapped by the author in `asyncio.to_thread`.
-- **`uvloop` whenever it is installed** (decision 316, the user's, 2026-11-06): an optional
+- <a id="D316"></a>**`uvloop` whenever it is installed** (decision 316, the user's, 2026-11-06): an optional
   speed-up. Async tasks and the watcher host run on `uvloop` whenever the interpreter can import
   it, however it got there: schedr looks for the module, not for the extra. `schedr[uvloop]` is
   only a convenient way to install it. Without it they use `asyncio`'s own loop, so `schedr` keeps
@@ -6523,7 +6520,7 @@ Rules:
   opened with `async with`; its `@name.check` may be `async def`, and `connections test` runs it
   in a loop. Typed connections give both clients from one definition (decisions 53, 317 and 318), their
   check running with the sync one. A sync connection works in an async task, blocking its loop.
-- **Calling an async task in a test** (decision 319, the user's, 2026-11-06): `await task.fn(...)`,
+- <a id="D49"></a><a id="D319"></a>**Calling an async task in a test** (decision 319, the user's, 2026-11-06): `await task.fn(...)`,
   typed as the coroutine it is, with what the task declares in force. A plain call also gives the
   coroutine (decision 49), but reads to a type checker as what the task returns, as a DAG's
   `load(extract())` must check, so `await task()` is flagged. `.fn` gives what the function returns
@@ -6589,7 +6586,7 @@ with Dag("sync_orders", trigger=DAILY):
   with `mode: loop | poke`): arguments and references, data flow, `>>`, retries, queues and run
   results work as for any task. It only runs differently: in the watcher host, on a **watcher
   slot**, not a task slot.
-- **Poke:** the function always returns something, the value or the `NOT_YET` marker (so a
+- <a id="D322"></a>**Poke:** the function always returns something, the value or the `NOT_YET` marker (so a
   legitimate `None` is never "not yet"); the output type is the return annotation without
   `NotYet`. schedr calls it every `every`, each call limited to `every` (calls never overlap);
   a call that raises is a failure with the usual retries (a flaky source is the user's to catch
@@ -6600,13 +6597,13 @@ with Dag("sync_orders", trigger=DAILY):
   (decision 322, the user's, 2026-11-06): a poke that is always too slow shows at once. Not
   chosen: counting it as `NOT_YET` (it looks like a normal wait until `TimedOut`); a separate
   `call_timeout=` (one more option to explain).
-- **`max_wait`:** a wait step that hasn't finished within its `max_wait` (or `[sensors]
+- <a id="D321"></a>**`max_wait`:** a wait step that hasn't finished within its `max_wait` (or `[sensors]
   default_timeout`, 24 h) ends with the **`TimedOut` outcome**, not a failure: waiting in vain
   is an expected problem (see Outcomes, failures and joins). **The clock starts at the instance's first start**
   and is kept across retries and moves (decision 321, the user's, 2026-11-06): `max_wait=6h` means the
   run waits at most about 6 h, whatever happens to workers. Not chosen: per attempt, as a task's
   (`max_wait=6h` with 3 retries could wait 24 h).
-- **What downstream tasks see** (decision 324, the user's, 2026-11-06): a call reads as `Waited[T]`,
+- <a id="D324"></a>**What downstream tasks see** (decision 324, the user's, 2026-11-06): a call reads as `Waited[T]`,
   its value or `TimedOut` (schedr's, never written in the function's return type), so the timeout
   shows where the value is used. `load(file)` with `path: str` is refused at parse and by type
   checkers; `load(file.on(str))` runs on the value and is skipped on a timeout;
@@ -6620,7 +6617,7 @@ with Dag("sync_orders", trigger=DAILY):
   but `wait >> process` silently runs after a timeout); a call reading as `T` with plain edges
   only on a value (shorter, but the timeout is invisible in the code). Named `TimedOut` (the user's):
   not `SensorTimeout` (reads wrong on approvals), nor `NoEvent` (an event is what a trigger yields).
-- **Options:** `@task`'s, except `cleanup=` and its settings (a parse error saying to use `finally`;
+- <a id="D323"></a>**Options:** `@task`'s, except `cleanup=` and its settings (a parse error saying to use `finally`;
   decision 323, the user's, 2026-11-06: waiting rarely leaves anything behind, and it can come
   later without breaking anyone; not chosen: a cleanup process on a task slot, tying the two kinds of
   slot together), and `preload`/`fresh_process`, which don't apply.
@@ -6628,7 +6625,7 @@ with Dag("sync_orders", trigger=DAILY):
 - **Not mapped for now** (Claude's call, 2026-11-06, for the user to look at): `.expand()` on a wait
   step is an error, as each instance could end its own way and `TimedOut` has no element-wise
   routing yet. The list a mapped task gets can come from one, or be mapped over one's value.
-- **`max_wait`, and `StepDefaults`** (decision 325, the user's, 2026-11-06): a wait step's limit has its
+- <a id="D325"></a>**`max_wait`, and `StepDefaults`** (decision 325, the user's, 2026-11-06): a wait step's limit has its
   own name, as `timeout` means "fail if the work runs too long" on a task and "stop waiting, not a
   failure" here; `timeout=` on a wait step, and `max_wait=` on a task, are errors. `TaskDefaults` is
   renamed `StepDefaults`, for a DAG's or group's steps, tasks and wait steps: `retries`, `queue` and
@@ -6727,7 +6724,7 @@ max_queued_events = 1000    # queued event runs per DAG before its trigger is st
 failing_after = 5           # consecutive errors before TRIGGER_FAILING
 ```
 
-- **One per code set** (decision 320, the user's, 2026-11-06; the design first said one per
+- <a id="D320"></a>**One per code set** (decision 320, the user's, 2026-11-06; the design first said one per
   worker, importing a DAG file under a name with its hash, which left helper modules cached once
   in `sys.modules` and one `sys.path` for all, so new DAG code could silently run with old helpers,
   and two roots with one package name would collide): one host per interpreter and set of root
@@ -6769,7 +6766,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   `logging` are routed per watcher; lines go over the socket to the agent, which masks secrets
   and writes the watcher's log file as for any attempt. Output from threads or C code goes to the host's own
   log.
-- **Built in M4.11a2 (decision 334, Claude's calls, for the user to look at):** a host is
+- <a id="D334"></a>**Built in M4.11a2 (decision 334, Claude's calls, for the user to look at):** a host is
   stopped as soon as its last watcher ends, so a lone wait step pays for a process start, and no
   timing or key is needed for an idle host. A host is always spawned, never forked: it lives for
   hours beside the fork server's other children. A DAG file is imported once per host, so its
@@ -6777,7 +6774,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   folder is the worker's log folder and its environment the allow-list plus `pass_env`, as they
   can't be a run's: a wait step reads run values from `dag_ctx` and `task_ctx`, never
   `SCHEDR_*` variables, and uses absolute paths. Until M4.11a4: a wait step holds a task slot.
-- **Built in M4.11a3 (decision 341, Claude's calls):** whoever gets a host killed is blamed: a loop held
+- <a id="D341"></a>**Built in M4.11a3 (decision 341, Claude's calls):** whoever gets a host killed is blamed: a loop held
   past `block_limit` (`loop_blocked`), a thread stuck past its grace (`watcher_stuck`), a cancel not
   taken in its grace. The others on it start again on a new host in the same attempt, their `max_wait`
   and `timeout` running on and no retry used; a poke that moved starts on what it moved to. While a DAG
@@ -6788,7 +6785,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   can't run either) is killed with nobody to blame, as for a crash or a memory kill: all on it end
   `lost`, error kind `watcher_host_lost`, each using a retry. `[watchers] memory_budget` kills the
   largest host when all together are over.
-- **A poke moves to new code, and a move can't fail it** (decision 335, the user's, 2026-11-06): a
+- <a id="D335"></a>**A poke moves to new code, and a move can't fail it** (decision 335, the user's, 2026-11-06): a
   `@sensor.poke` finishes its current call and makes its next one on the new code, using no retry and
   keeping its deadline, if it can start there: the new host imports the file, finds the task under its
   ID and builds the call from the run's stored arguments. If not (the task renamed or removed, an
@@ -6801,7 +6798,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   the check (a rename would fail a healthy run); restarting `@sensor` too (see decision 320).
 - **What a host's own log masks:** every value of every watcher it has had, for its whole life
   (what C code prints, or a thread outliving its step, can't be told apart, and may come later).
-- **`asyncio.to_thread` belongs to its wait step and has its time** (decision 337, the user's,
+- <a id="D337"></a>**`asyncio.to_thread` belongs to its wait step and has its time** (decision 337, the user's,
   2026-11-06): the loop's default executor (`_WatcherThreads`) runs each call in the context of who
   made it, so its log, secrets and refusals are its step's, and tracks it. A call cancelled, or still
   running when its step ends, has `StepEndedError` (a `BaseException`) raised in its thread with
@@ -6814,7 +6811,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   holds a pool thread and overlaps a retry, again each time). **The known risk:** the error lands on
   any Python line, also inside a library's own update, and the other watchers share that library; the
   docs say so, and a host isn't restarted after such a stop.
-- **A wait step or trigger that keeps blocking is switched off** (decision 338, the user's,
+- <a id="D338"></a>**A wait step or trigger that keeps blocking is switched off** (decision 338, the user's,
   2026-11-06; built in M4.11a3): the master counts strikes per DAG and task (a blocked loop, a stuck
   thread, an ignored cancel). After `[watchers] switch_off_after` in a row (default 3), new attempts
   fail at once with error kind `switched_off` and never reach a host. A success resets the count. New
@@ -6828,9 +6825,9 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   Not chosen: running an offender in a host of its own (a process per offender and more placement
   code; the others are hit a few times instead of once); a host of its own and never off (it keeps
   using up its time and retries).
-- **Sensors and resources have endpoints of their own** (decision 340, the user's, 2026-11-06), not
+- <a id="D340"></a>**Sensors and resources have endpoints of their own** (decision 340, the user's, 2026-11-06), not
   `tasks`: resources are only inside a run's detail so far. Built with the switch-off in M4.11a3.
-- **Repeated crashes and memory kills are made visible, not stopped** (decision 342, the user's,
+- <a id="D342"></a>**Repeated crashes and memory kills are made visible, not stopped** (decision 342, the user's,
   2026-11-06): no wait step can be blamed, so none is switched off; each `lost` uses a retry, which
   bounds a run. A lost attempt's error names the wait steps that were on its host, and a metric (M4.11a4)
   counts these ends per code set. Not chosen: separating them into a process each after a loss, to find
@@ -6841,13 +6838,13 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   retry gets is what is left when it is assigned, and its clock starts when its call does, so its
   delivery and import come on top: "about" `max_wait`, as decision 321 says. Attempts without a
   recorded start don't count: there are no old ones, as this is a preview.
-- **What M4.11a4 shows** (decision 343, the user's, 2026-11-06): the Workers page has each worker's
+- <a id="D343"></a>**What M4.11a4 shows** (decision 343, the user's, 2026-11-06): the Workers page has each worker's
   hosts (code hash, wait steps, threads tied and untied, memory, hosts lost), sent with its heartbeat,
   and the same as metrics; tied is running `to_thread` calls and Python threads a step started,
   untied the rest of the process. The DAG page lists its switched-off sensors with a switch-on
   button, and a banner on the DAGs list says how many are off. Not chosen: worker totals only (which
   code set has them can't be seen); a page of their own for either.
-- **How a wait step looks in a run** (decision 344, the user's, 2026-11-07): at work it pulses (not
+- <a id="D344"></a>**How a wait step looks in a run** (decision 344, the user's, 2026-11-07): at work it pulses (not
   for people who ask their browser for less motion); failed, it is red as any task is. One whose
   time ran out looks like a skipped task, grey, and says `TimedOut`, as it did run. Its run stays
   `success`, green, whether or not a task takes the timeout: `.on(File)` alone may be just what the
@@ -6855,14 +6852,14 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   red (a declared outcome, and `.on(TimedOut)` routes on it); green (what it waited for didn't come);
   yellow when no task takes it, on the wait step or on the run (it would call an author's plan
   suspicious); failing such a run.
-- **A cleanup that doesn't fit in a drain** (decision 346, the user's, 2026-11-07): the agent doesn't stop
+- <a id="D346"></a>**A cleanup that doesn't fit in a drain** (decision 346, the user's, 2026-11-07): the agent doesn't stop
   a running cleanup at the drain's deadline; only what ends the worker then (a pod's kill, a service
   manager) can lose it. So `[worker] cleanup_timeout` not fitting `termination_grace_period` is said once,
   at the worker's start, and a task's own `cleanup_timeout` once per task. Not chosen: a warning for each
   task on the default (each cleanup task outside the chart, whose grace is 600 s, warned); a default of
   25 s (slow cleanups would time out, on Kubernetes too); a default grace of 600 s (a plain stop could
   wait 10 minutes).
-- **A trigger is a hidden sensor without an attempt** (decision 348, Claude's for the user's "same as sensors",
+- <a id="D348"></a><a id="D350"></a>**A trigger is a hidden sensor without an attempt** (decision 348, Claude's for the user's "same as sensors",
   2026-11-07; built in M4.11b): the DAG JSON carries the trigger's function as a task of kind `sensor`, in the
   trigger and not among the DAG's tasks, so it isn't in the graph, gets no attempt and no row in a run. A worker
   runs it on a watcher slot in the watcher host of its code, with the secrets, connections, logs, masking, blame
@@ -6881,7 +6878,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   what breaks that fails the trigger with `event_refused`. Blocking triggers are stopped as sensors are
   (`[watchers] switch_off_after`, the user's). Not chosen: a table of attempts for triggers (nothing about a
   trigger's life is a try of anything), and a process of their own (a trigger is a wait step: decision 334).
-- **How a trigger goes on, and when it doesn't** (decision 349, Claude's within what this section says, 2026-11-07;
+- <a id="D349"></a>**How a trigger goes on, and when it doesn't** (decision 349, Claude's within what this section says, 2026-11-07;
   built in M4.11b): a poke's raise, or a call past `every`, tells the worker, which keeps the failures in a row and the
   last error and tells the master when that changes, otherwise with a heartbeat (so a poke every 100 ms is no write
   every 100 ms); its bookmark stays and the next call comes. A generator's return is `trigger_returned`, stopped until
@@ -6903,7 +6900,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   never writes to `events`. For tests, `run_trigger(new_files(...), after=None, take=3, timeout=)` in the process, and
   `task_context(event=)`. `[retention] events` comes with M4.14. A DAG's page shows the trigger, pulsing while it runs, its
   last 20 events with "Run again", and takes an event in its Trigger dialog. What these reads show is masked as an output is.
-- **`first_of`: acting on the first of several, in the graph** (decision 347, the user's, 2026-11-07; built
+- <a id="D345"></a><a id="D347"></a>**`first_of`: acting on the first of several, in the graph** (decision 347, the user's, 2026-11-07; built
   in M4.11c): `first_of(a.on(str), b.on(str)) >> fast_report` is a node the master ends, as it does
   `empty`: no Python, no slot, no polling. It ends as soon as one edge is taken, with that value and the
   winner's name; skipped when every edge ends up not taken; `upstream_failed` when an edge failed and none
@@ -6924,7 +6921,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   whole output), with one value also its winner's outcome, so references, the runner and the UI read it as any output and
   there is no new kind of reference; what it keeps is at most the sum of its options' `max_output_size`, or it fails `output_too_large` (the user's, 2026-11-07, option B: values each allowed always fit, still bounded; not chosen: the node's own 1 MiB, which failed two 600 KB values each within their limit; storing only the winners' IDs and reading the values when needed, a new way to resolve a reference; a `max_output_size=` on the node). Refused: fewer than two different tasks, a
   part of an output, a mapped task, and `x >> node`, since every edge into it is something it chooses from.
-- **Waiting for another DAG's run: `RunOf`** (decision 353, the user's, 2026-11-07; to be built in M4.11d):
+- <a id="D353"></a>**Waiting for another DAG's run: `RunOf`** (decision 353, the user's, 2026-11-07; to be built in M4.11d):
   `RunOf("orders", task="load", lag=timedelta(hours=6))` says which run, and of it which task (none: the whole run). With
   `lag`, the run whose `planned_for` is this one's minus `lag`, and of several such only the newest (by `triggered_at`): its
   result decides, a failed newer run gives `Failed` though an older one succeeded (the user's, 2026-11-07, option C: schedr has
@@ -6991,12 +6988,12 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   Not chosen either:
   `offset=` (too broad; its sign would flip between the forms) and `planned_for_with_offset=` (long), for what is `lag`
   inside `RunOf`; `wait_for_run(...)` for the node; a skip counting as done (the function form sees the real state); a trigger for every run that ends, whatever its state; catching up runs that ended while paused; refusing an unknown DAG at load.
-- **Options are drawn as one group** (decision 351, the user's, 2026-11-07; built in M4.11c): the options of `first_of`
+- <a id="D351"></a>**Options are drawn as one group** (decision 351, the user's, 2026-11-07; built in M4.11c): the options of `first_of`
   sit in one box in the graph, with one dashed line from the box to the node, since they are treated as a group and aren't
   each a dependency with the usual guarantees. The winner is highlighted in the box and named on the node. Where one box
   can't be drawn (a task is an option of two nodes, options at different depths, or in different task groups) each option
   gets its own dashed line (Claude's, a layout detail).
-- **Named events through the API: `EventNamed`** (decision 354, the user's, 2026-11-08; built in M4.11e, part 1 the trigger and the node): an
+- <a id="D354"></a>**Named events through the API: `EventNamed`** (decision 354, the user's, 2026-11-08; built in M4.11e, part 1 the trigger and the node): an
   outside system posts `POST /api/v1/events {name, key, data, at}` (or `schedr events post`), and the four forms of
   `RunOf` take it: `trigger=EventNamed("order-created")` (a run per event), the node `wait_for(EventNamed("approved",
   key=...))`, and `@sensor(wait_for=EventNamed(...))` / `@trigger(wait_for=EventNamed(...))` with the `Event` as the
@@ -7055,7 +7052,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   option A): its run's window is empty (`since` = `planned_for`), so no data is handled twice; a loader by window reads
   `dag_ctx.event` for it. Not chosen: no run, the status saying why (its data never handled); its window from the event
   dated just before it (overlapping windows, data handled twice).
-- **`delay` and `until`: plain wait steps in Python** (decision 355, the user's, 2026-11-08; built in M4.11g): two
+- <a id="D355"></a>**`delay` and `until`: plain wait steps in Python** (decision 355, the user's, 2026-11-08; built in M4.11g): two
   `@sensor`s schedr ships in `schedr.sensors`, no new step kind: `delay(timedelta(minutes=10))` waits that long from its
   first try's start, `until(timedelta(hours=2))` until the run's `planned_for` plus that (a `datetime` with a time zone:
   that moment); one past ends at once. A step tried again (its worker lost) waits only what is left: the master sends a wait
@@ -7072,7 +7069,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   worker under a master without `first_started` (the upgrade order is master first). Kept for later: `by_deadline(a, b, at=...)` and
   `first_of(..., cancel_rest=True)`; `approval(...)` goes to M6 (human in the loop); `none_of` dropped (a plain branch
   does it). (Restored 2026-11-08: M4.11f's commit had removed it with the code, B190.)
-- **Tasks call schedr's REST API through their agent: `schedr.api`** (decision 356, the user's, 2026-11-08: 1A 2A 3A 4A
+- <a id="D356"></a><a id="D366"></a>**Tasks call schedr's REST API through their agent: `schedr.api`** (decision 356, the user's, 2026-11-08: 1A 2A 3A 4A
   5A and B2; built in M4.11h): one `Client`, two transports. Inside a running task or trigger (and a command task's
   script, and `schedr task-ctx api` / `schedr task-ctx events post|list`) it needs no settings: the request goes to
   the agent, which sends it to the master on the Control stream (`ApiCall`, answered `ApiAnswer`), and the master runs
@@ -7092,7 +7089,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   task's or trigger's (a connection's test). Not chosen: a URL and token
   given to each task (secrets to hand out, and a route to the webserver from every worker); serving only events
   through dedicated messages (each new route a protocol change).
-- **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; built in M4.11f):
+- <a id="D352"></a>**Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; built in M4.11f):
   `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
   it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`
   where the host gathers what the pokes return and sends one ordinary event when the window ends; the master, the
@@ -7126,7 +7123,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   is one trust domain": they share a process and can read each other's memory anyway. Blame for an
   ID not on the host blames no one (all `lost`), and a stack passes the host's mask, which has
   every value read on it.
-- **Libraries' own threads are watched, not refused** (decision 339, the user's, 2026-11-06; built in
+- <a id="D339"></a>**Libraries' own threads are watched, not refused** (decision 339, the user's, 2026-11-06; built in
   M4.11a3 and its UI in M4.11a4): polars 2.1 in `to_thread` left the loop free (8 ms at worst) and its
   pool is one per process, about 30 native threads idle after a query, so no list of libraries is
   refused and a thread alone is no strike: only a step that doesn't end is. A Python thread started
@@ -7141,7 +7138,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   agent's memory.
 - **A moved poke's recorded code:** its attempt reports the hash it moved to, the code its value
   came from; its log says it moved.
-- **A wait step can't start a process or a thread** (decision 336, the user's, 2026-11-06): it shares a
+- <a id="D336"></a>**A wait step can't start a process or a thread** (decision 336, the user's, 2026-11-06): it shares a
   process and group with others, so nothing could stop what it left running when it ends, and a retry
   could overlap it. **When its DAG is defined** (`schedr._wait_rules`), so `dags check` says so: its
   compiled code is read for `subprocess`, `os.system`, `os.fork`, `os.spawn*`, `os.exec*`, `pty`,
@@ -7252,7 +7249,7 @@ with Dag("release"):
     ok.on(Rejected) >> notify_team(build)
 ```
 
-- **283. The master holds it (the user: A, 2026-11-05):** `approve(...)` and `ask(...)` are
+- <a id="D283"></a>**283. The master holds it (the user: A, 2026-11-05):** `approve(...)` and `ask(...)` are
   declared in Python and become a task of kind `ask` in DAG JSON (the question, the answer's
   schema, approvers, timeout); no Python runs for the step. A wait step like a sensor (a task in
   the graph, its answer its output as data, `timeout` and `TimedOut`), but the master holds it:
@@ -7261,23 +7258,23 @@ with Dag("release"):
   (a ticket approved in an issue tracker): sensors cover that already. Not chosen: a `@sensor`
   for it (it would poll schedr's own API, holding a watcher slot for days, each author writing
   the loop); both mechanisms.
-- **284. What can be asked (A):** the answer's type is the step's output: `approve` a yes or no;
+- <a id="D284"></a>**284. What can be asked (A):** the answer's type is the step's output: `approve` a yes or no;
   `ask(answer=...)` a `Literal` or `Enum` (a choice) or a dataclass or pydantic model (a form,
   drawn as the params form is). The master checks an answer against the schema. Not chosen:
   approvals only.
-- **285. A "no" (A):** a rejected approval ends with the `Rejected` outcome, not a failure:
+- <a id="D285"></a>**285. A "no" (A):** a rejected approval ends with the `Rejected` outcome, not a failure:
   `.on(Rejected)` branches on it, plain `>>` downstream tasks are skipped, as with `TimedOut`.
   Not chosen: a failure.
-- **286. Who answers (A):** whoever may trigger the DAG, by default; `approvers=[...]` (users or
+- <a id="D286"></a>**286. Who answers (A):** whoever may trigger the DAG, by default; `approvers=[...]` (users or
   groups, checked against the signed-in user; LDAP groups in M6) narrows it; `four_eyes=True`
   keeps whoever triggered the run from answering. Not chosen: no narrowing.
-- **287. Timeout (A):** `timeout=`, else `[ask] default_timeout` (7 days), ending with the
+- <a id="D287"></a>**287. Timeout (A):** `timeout=`, else `[ask] default_timeout` (7 days), ending with the
   `TimedOut` outcome. Not chosen: the sensors' 24 h default.
-- **288. Notice (A, the user: an email with a link to the UI):** a "Waiting for you" list in the
+- <a id="D288"></a>**288. Notice (A, the user: an email with a link to the UI):** a "Waiting for you" list in the
   UI with a badge, the answer form in the task panel, `schedr runs answer <run> <task>`, and a
   `WAITING_FOR_ANSWER` notification (M4.13's channels) whose email links to the task in the UI.
   Not chosen: the UI and the CLI only.
-- **289. Record (A):** each answer in the command log (who, when, what, an optional comment),
+- <a id="D289"></a>**289. Record (A):** each answer in the command log (who, when, what, an optional comment),
   shown in the task panel; an answer is final.
 
 ### Cleanup and resources
@@ -7314,7 +7311,7 @@ compatibility (Cleanup and resources).
 
 #### Per-task cleanup
 
-**How it runs** (decision 16A, 2026-10-27): always in a **fresh process after the task's**,
+<a id="D16"></a>**How it runs** (decision 16A, 2026-10-27): always in a **fresh process after the task's**,
 however the task ended (returned, raised or killed), through the fork server like the task
 (runner `cleanup` mode; the preloaded or bare server by the task's own `preload`, spawn as the
 fallback): about 8 ms to start instead of about a second spawned, which matters as downstream
@@ -7622,60 +7619,60 @@ with Dag("etl", trigger=DAILY):
 
 #### Decided for M4.8
 
-Decisions 214-230 (the user's, 2026-11-04; the options were Claude's). 215 and 227 were dropped
+<a id="D215"></a><a id="D227"></a>Decisions 214-230 (the user's, 2026-11-04; the options were Claude's). 215 and 227 were dropped
 when laid out: each sub-step commits on the user's word anyway, and `ctx.handles` above only
 records (a test calls the cleanup itself).
 
-- **214. Five sub-steps:** M4.8a cleanups on the same worker; M4.8b surviving failures (agent
+- <a id="D214"></a>**214. Five sub-steps:** M4.8a cleanups on the same worker; M4.8b surviving failures (agent
   restart, lost worker, `cleanup_anywhere`, drain); M4.8c Python resources; M4.8d command and
   script resources; M4.8e the UI and test doubles. Not chosen: two steps (diffs too large to
   review well).
-- **216. An attempt whose process never started has no cleanup** (rejected, a missing secret, a
+- <a id="D216"></a>**216. An attempt whose process never started has no cleanup** (rejected, a missing secret, a
   timeout during the reads): cleanup result `not needed`. Not chosen: running it anyway (nothing
   to clean, and it would fail on the same missing secret).
-- **217. Cleanups retry 3 times, 30 s apart, by default:** `cleanup_retries`,
+- <a id="D217"></a>**217. Cleanups retry 3 times, 30 s apart, by default:** `cleanup_retries`,
   `cleanup_retry_delay`, on the task and in `StepDefaults`. A stuck cleanup can hold its slot
   about 21 minutes. Not chosen: 0 (one network blip fails a run).
-- **218. A cleanup gets the connections its task declared,** as it gets its `secrets`: a
+- <a id="D218"></a>**218. A cleanup gets the connections its task declared,** as it gets its `secrets`: a
   command's variables and files stay until the cleanup ends. Not chosen: none (cancelling remote
   work, the main use, needs them); `cleanup_connections=` (usually a copy of the task's list).
-- **219. A cancel doesn't stop a running cleanup:** it ends by itself or at `cleanup_timeout`.
+- <a id="D219"></a>**219. A cancel doesn't stop a running cleanup:** it ends by itself or at `cleanup_timeout`.
   Not chosen: killing it (leaves behind what it was cleaning).
-- **220. A lost worker without `cleanup_anywhere` fails the run even with no handle
+- <a id="D220"></a>**220. A lost worker without `cleanup_anywhere` fails the run even with no handle
   registered:** the master can't know what the attempt did, and a cleanup may work from its
   inputs alone. The failure's message points to `cleanup_anywhere`. Not chosen: `not needed`
   without handles (a real leak would give a green run).
-- **221. A `cleanup_anywhere` cleanup with no worker to take it waits,** shown `unschedulable`;
+- <a id="D221"></a>**221. A `cleanup_anywhere` cleanup with no worker to take it waits,** shown `unschedulable`;
   the task's retry waits too. Not chosen: giving up after `cleanup_timeout` (a short outage
   would fail a cleanup that could have run).
-- **222. Handles are masked as outputs are** (decision 167), before the journal and the master:
+- <a id="D222"></a>**222. Handles are masked as outputs are** (decision 167), before the journal and the master:
   no secret on the worker's disk or in the database, the same list on any worker, a warning in
   the log. A cleanup needing a secret declares it. A resource's value is an output, so the same
   holds. Not chosen: real in the journal, masked for the master (a secret on disk, and
   `cleanup_anywhere` gets different data); refusing at registration (a common value like
   `admin` would kill a healthy task).
-- **223. A setup called twice in a DAG is a parse error.** Not chosen: an instance per call
+- <a id="D223"></a>**223. A setup called twice in a DAG is a parse error.** Not chosen: an instance per call
   (every reference would need an instance name).
-- **224. `.expand` on a setup is a parse error.** Not chosen: a resource per instance (users,
+- <a id="D224"></a>**224. `.expand` on a setup is a parse error.** Not chosen: a resource per instance (users,
   "done" and the UI all per index).
-- **225. A resource's cleanup goes ahead of waiting tasks** and isn't held by DAG limits; it
+- <a id="D225"></a>**225. A resource's cleanup goes ahead of waiting tasks** and isn't held by DAG limits; it
   needs a worker slot. Not chosen: oldest-ready order (a paid cluster runs on behind queued
   work).
-- **226. A resource's cleanup inherits its setup's `secrets` and `connections` and may add its
+- <a id="D226"></a>**226. A resource's cleanup inherits its setup's `secrets` and `connections` and may add its
   own** (`@cluster.cleanup( secrets=[...])`; a static `Resource("tmp")` has only its own);
   `queue` defaults to the setup's. A forgotten declaration would surface only when the cleanup
   runs and leak what it should delete. Not chosen: only its own (that risk); only inherited
   (nothing for a resource without setup code).
-- **228. Handles take at most 1 MiB in total per attempt;** going over fails the attempt, naming
+- <a id="D228"></a>**228. Handles take at most 1 MiB in total per attempt;** going over fails the attempt, naming
   the limit. They travel in an assignment with `cleanup_anywhere`, within the worker's 4 MiB
   message (as decision 181). Not chosen: 64 KiB each and 1000 per attempt, sent in chunks (more
   code and larger rows for a rare case).
-- **229. The task's result is reported when its process ends, the cleanup's in `Finished`:**
+- <a id="D229"></a>**229. The task's result is reported when its process ends, the cleanup's in `Finished`:**
   the master learns `cleaning_up` from it, and a worker lost during the cleanup leaves the task
   `success` with `didn't run: worker lost`, not run again. Replaces "one `Finished` carries
   both". Not chosen: a bare `CleanupStarted` with the result in `Finished` (a finished task
   would run twice).
-- **230. No flag to skip waiting for a per-task cleanup;** a slow cleanup that needn't hold
+- <a id="D230"></a>**230. No flag to skip waiting for a per-task cleanup;** a slow cleanup that needn't hold
   anything up is a resource's. It can be added later without breaking anything. Not chosen:
   `cleanup_wait=False` for downstream tasks (`cleaning_up` would stop meaning "downstream
   waits", and a failed cleanup would be reported after downstream acted).
@@ -7688,81 +7685,81 @@ missing copy being a failed cleanup; each mapped instance has its own cleanup.
 
 Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b:
 
-- **242. `cleanup add` doesn't wait for the master:** it returns once the handle is journaled and
+- <a id="D242"></a>**242. `cleanup add` doesn't wait for the master:** it returns once the handle is journaled and
   sent, and it is sent again on reconnect. A pod lost in that gap loses the handle for
   `cleanup_anywhere`. Not chosen: waiting for an acknowledgement (a master outage would stall
   tasks).
-- **243. A cleanup on another worker is the same attempt, moved:** its row goes to the new
+- <a id="D243"></a>**243. A cleanup on another worker is the same attempt, moved:** its row goes to the new
   worker, so limits and slots stay right; the old worker's name stays in the log and the error
   summary. Not chosen: a separate row or table (new slot, limit and ownership handling).
-- **244. A cleanup with no worker keeps its instance `cleaning_up`,** with the reason "no worker
+- <a id="D244"></a>**244. A cleanup with no worker keeps its instance `cleaning_up`,** with the reason "no worker
   for the cleanup", shown as `unschedulable` (how decision 221 is shown). Not chosen: a real
   `unschedulable` state (it would be requeued as a new try).
-- **245. On another worker a cleanup runs that worker's current code,** like any assignment; a
+- <a id="D245"></a>**245. On another worker a cleanup runs that worker's current code,** like any assignment; a
   cleanup function gone from it is a failed cleanup. Not chosen: only the original hash (it could
   wait forever after a deploy).
-- **246. A moved cleanup uses the task's queue, ahead of waiting tasks, not held by limits** (as
+- <a id="D246"></a>**246. A moved cleanup uses the task's queue, ahead of waiting tasks, not held by limits** (as
   decision 225). Not chosen: normal order (a leak waits behind queued work).
-- **247. Each move of a cleanup counts as a try:** after `retries + 1` it ends `worker_lost`. Not
+- <a id="D247"></a>**247. Each move of a cleanup counts as a try:** after `retries + 1` it ends `worker_lost`. Not
   chosen: no limit (a cleanup running out of memory would take down pod after pod).
-- **248. A cleanup from the journal starts only on the master's `Continue`,** the answer to
+- <a id="D248"></a>**248. A cleanup from the journal starts only on the master's `Continue`,** the answer to
   `Register`, so it never runs alongside a moved one; a master outage delays it. Not chosen: at
   once, reporting later (it could run twice).
-- **249. A cleanup outlasting the grace period runs until the pod is killed:** a lost worker;
+- <a id="D249"></a>**249. A cleanup outlasting the grace period runs until the pod is killed:** a lost worker;
   outside Kubernetes the agent waits for it. Not chosen: killing it at the end of the grace period
   (leaves behind what it was cleaning, as decision 219).
-- **250. "`cleanup_timeout` doesn't fit" is logged at assignment, once per task,** not at startup
+- <a id="D250"></a>**250. "`cleanup_timeout` doesn't fit" is logged at assignment, once per task,** not at startup
   as first written: the agent doesn't know its tasks then. Not chosen: at startup for the server
   default (with the 30 s default grace it would fire on nearly every start).
-- **251. M4.8b is two commits:** M4.8b the journal, restarts, the result kept, `worker_lost` and
+- <a id="D251"></a>**251. M4.8b is two commits:** M4.8b the journal, restarts, the result kept, `worker_lost` and
   the drain; M4.8b2 handles to the master and `cleanup_anywhere`. Not chosen: one commit.
-- **252. A worker cut off from the master stops its tasks with `cleanup_anywhere`, and only
+- <a id="D252"></a>**252. A worker cut off from the master stops its tasks with `cleanup_anywhere`, and only
   those:** at the worker lease with no word from the master. Their cleanup could otherwise run
   elsewhere during the task. Not chosen: every task (a long master or database outage would kill
   all running work); docs only (the risk stays, on every author).
-- **253. The cleanup of a task stopped so waits for the master's answer:** `Continue` runs it,
+- <a id="D253"></a>**253. The cleanup of a task stopped so waits for the master's answer:** `Continue` runs it,
   `Kill` drops it, as after a restart (decision 248): it runs once, here or on the other worker.
   Not chosen: at once (it could run on both).
-- **254. A task with `cleanup_anywhere` ending by itself with no master waits the same way.**
+- <a id="D254"></a>**254. A task with `cleanup_anywhere` ending by itself with no master waits the same way.**
   Not chosen: its cleanup at once, as other tasks'.
-- **255. A cleanup under way when the master goes is left running,** and may overlap a moved one:
+- <a id="D255"></a>**255. A cleanup under way when the master goes is left running,** and may overlap a moved one:
   the docs say so. Not chosen: stopped at the same deadline (half a cleanup is often worse).
-- **256. The worker stops the task at the lease; the master moves the cleanup 40 s later:** the
+- <a id="D256"></a>**256. The worker stops the task at the lease; the master moves the cleanup 40 s later:** the
   cancel grace (30 s by default) and `SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT` (10 s), so raising
   the grace can't outrun it. Stored with the attempt, so a failover keeps it. Not chosen: a public
   key.
-- **257. A task stopped so is `lost`, using a retry,** as after a restart. Not chosen: a status of
+- <a id="D257"></a>**257. A task stopped so is `lost`, using a retry,** as after a restart. Not chosen: a status of
   its own.
-- **258. The master answers each `Heartbeat` with `HeartbeatAck`,** as it arrives, not behind its
+- <a id="D258"></a>**258. The master answers each `Heartbeat` with `HeartbeatAck`,** as it arrives, not behind its
   lock, and not while paused. Heartbeats went one way: a silent network cut showed nowhere. Not
   chosen: HTTP/2 keepalive (under Istio the sidecar answers the ping, so a real cut goes unseen).
-- **259. A resource is not a task with a cleanup: it is one thing of two parts, setup and
+- <a id="D259"></a>**259. A resource is not a task with a cleanup: it is one thing of two parts, setup and
   cleanup, and both always exist.** A task is a set of instructions and may have no cleanup at all,
   which then runs out of sight; a resource is by definition a setup and its undoing. So the model
   has resources of their own, each with its two parts, not a task with a flag. Not chosen: a task
   kind with an optional cleanup.
-- **260. A resource without `@<resource>.cleanup` has an empty cleanup,** there in the graph and the run like
+- <a id="D260"></a>**260. A resource without `@<resource>.cleanup` has an empty cleanup,** there in the graph and the run like
   any other, finished by the master with a line in its log, no process and no worker. Two cleanups
   stay a parse error. Replaces "exactly one cleanup per resource". Not chosen: refusing it at parse
   (the author would write an empty function to say the same).
-- **261. The cleanup is a visible task instance** of kind `resource_cleanup`, ID `<resource>.cleanup`:
+- <a id="D261"></a>**261. The cleanup is a visible task instance** of kind `resource_cleanup`, ID `<resource>.cleanup`:
   it reuses attempts, retries, logs, dispatch and the lost-worker path, and shows in the API, the
   CLI and the graph. A `resource_instances` table holds the resource's state. Not chosen: hidden from
   task lists; an attempt and dispatch path of its own (most of the dispatcher again).
-- **262. In the graph a resource is two caps joined by a rail:** the setup above its users with a
+- <a id="D262"></a>**262. In the graph a resource is two caps joined by a rail:** the setup above its users with a
   rounded top, the cleanup below with a rounded bottom, one colour, the name on both; the rail a line
   in the side gutter, on hover or selection at first. Requirement edges reach the cleanup only from
   the last users. In lists, one row in two parts. The word stays "cleanup". Not chosen: one box (the
   edges would leave it and come back; no place for it in the layers); bands around the users.
-- **263. A cleanup failed after its last retry fails the run and stays `cleanup_failed`,** shown
+- <a id="D263"></a>**263. A cleanup failed after its last retry fails the run and stays `cleanup_failed`,** shown
   clearly; a command to retry it comes later. Not chosen: `schedr resources retry` now (reopens a
   finished run).
-- **264. A paused DAG's resource cleanups still run:** pausing stops new work, not the freeing of
+- <a id="D264"></a>**264. A paused DAG's resource cleanups still run:** pausing stops new work, not the freeing of
   what exists (as decision 225). Not chosen: waiting for unpause.
-- **265. M4.8c is two commits:** M4.8c1 the Python API, model and parse rules; M4.8c2 the master's
+- <a id="D265"></a>**265. M4.8c is two commits:** M4.8c1 the Python API, model and parse rules; M4.8c2 the master's
   state, the cleanup and the run result. A resource with no users gets a parse warning, its cleanup
   running right after its setup.
-- **266. What follows a group waits for the cleanups in it:** `g >> after` waits for the cleanup of
+- <a id="D266"></a>**266. What follows a group waits for the cleanups in it:** `g >> after` waits for the cleanup of
   each resource set up in `g`, by an order edge from the cleanup, unless `after` or anything after
   it uses that resource: then it keeps the resource alive, and waiting would be a circle. A failed
   cleanup stops `after` like any failed upstream task (`upstream_failed`). `@res.cleanup(
@@ -7775,37 +7772,37 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   cleanup, so a hand-made DAG can't hang a run. `in_background=`, `detached=`, `wait=` were the
   other names.
 
-- **267. A resource has one cleanup, wherever it is imported:** like a connection, a resource is
+- <a id="D267"></a>**267. A resource has one cleanup, wherever it is imported:** like a connection, a resource is
   shared by the DAGs that import it, and its cleanup is attached to it, not to a DAG. A different
   cleanup is a different resource.
 
-- **268. The cleanup is a method of its resource:** `@cluster.cleanup`, bare or with options
+- <a id="D268"></a>**268. The cleanup is a method of its resource:** `@cluster.cleanup`, bare or with options
   (`@cluster.cleanup(blocking=False)`), on a setup, an override of it and `Resource(name)`. It says
   what decision 267 says, matches the task ID `cluster.cleanup` and needs no import. Not chosen:
   `@cleanup(cluster)`, a function of its own, kept nowhere as an alias.
 
-- **269. Generators for one process, two functions across tasks:** a connection stays a generator
+- <a id="D269"></a>**269. Generators for one process, two functions across tasks:** a connection stays a generator
   (open and close in one `with`, sharing their locals, `try/finally` for free); a resource stays a
   setup and a cleanup, because they are separate tasks, in separate processes, maybe hours apart.
   Not chosen: a generator `@resource` (it would hold a process for the whole run and lose the
   cleanup with the worker, or run the code after `yield` with its locals gone); `@conn.close` to
   match resources (state forced through a return value, for nothing).
 
-- **270. A run keeps its `max_active_runs` slot until its cleanups end,** with `blocking=False` too:
+- <a id="D270"></a>**270. A run keeps its `max_active_runs` slot until its cleanups end,** with `blocking=False` too:
   a run isn't finished before its resources are gone, so a new run can't collide with a teardown.
   Not chosen: freeing the slot when the last task ends (runs overlapping on one resource).
 
-- **271. Command and script cleanups are methods too:** `cluster.cleanup_command([...])` and
+- <a id="D271"></a>**271. Command and script cleanups are methods too:** `cluster.cleanup_command([...])` and
   `cluster.cleanup_script(job=...)`, with `blocking=`, as decision 268. Not chosen:
   `CommandCleanup(cluster, ...)` and `ScriptCleanup(...)` as first designed (two styles for one
   thing).
 
-- **272. The graph shows what a cleanup holds back:** with `blocking=True` the tasks after a group
+- <a id="D272"></a>**272. The graph shows what a cleanup holds back:** with `blocking=True` the tasks after a group
   are drawn from the cleanup's cap, the wait they really have; the edges from the users to them say
   nothing more and aren't drawn. With `blocking=False` they are drawn from the tasks and groups they
   were attached to, and the cleanup's own link is dashed.
 
-- **273. A cleanup waits for an `unschedulable` user, up to `unschedulable_timeout`:** such a user
+- <a id="D273"></a>**273. A cleanup waits for an `unschedulable` user, up to `unschedulable_timeout`:** such a user
   isn't done, and comes back by itself when a worker registers or resumes, so deleting the resource
   under it would lose the run. `@cluster.cleanup(unschedulable_timeout=timedelta(hours=1))` bounds
   the wait: then the user is `failed`, with the reason "no worker within 1 h", what follows it is
@@ -7816,23 +7813,23 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   work never happened); a flag beside a timeout (they could contradict each other);
   `no_worker_timeout`, `unschedulable_wait`, `give_up_after`, `wait_for_users`.
 
-- **274. A cleanup keeps its own kind** (`python`, `empty`, later `command` or `script`); its role
+- <a id="D274"></a>**274. A cleanup keeps its own kind** (`python`, `empty`, later `command` or `script`); its role
   comes from `Dag.resources` and is shown as "cleanup of `cluster`". Amends 261. Not chosen: a kind
   `resource_cleanup` (it would hide what runs).
-- **275. A resource's state is derived from its two tasks,** not stored: `waiting for users` (setup
+- <a id="D275"></a>**275. A resource's state is derived from its two tasks,** not stored: `waiting for users` (setup
   succeeded, cleanup not started), `cleaning_up` (queued, running or up for retry), `cleaned`,
   `cleanup_failed`, `not needed` (setup failed, skipped or cancelled). Amends 261. Not chosen: a
   `resource_instances` table (a copy that can drift, a second write each time).
-- **276. An empty cleanup's line goes in the task's reason,** shown where a log would be: logs live
+- <a id="D276"></a>**276. An empty cleanup's line goes in the task's reason,** shown where a log would be: logs live
   on workers, and it has no attempt. Amends 260. Not chosen: a master-side log store.
-- **277. Cancelling keeps cleanups:** a cancelled run still runs the cleanup of every resource set up
+- <a id="D277"></a>**277. Cancelling keeps cleanups:** a cancelled run still runs the cleanup of every resource set up
   (retries included), and ends `cancelled`, or `failed` if a cleanup fails; `schedr tasks cancel`
   refuses a resource's cleanup (amended by 279: it stops one). As 264. Not chosen: cancel as for
   any task (a resource left behind).
   Claude's small calls with it: a cleanup ignores `max_active_tasks`, `max_active` and
   `max_active_per_run` (`StepDefaults` would hand it limits otherwise); `blocking` and
   `unschedulable_timeout` are in the DAG JSON's resource entry.
-- **278. A resource's cleanup without a `timeout` gets `[worker] resource_cleanup_timeout`, 30
+- <a id="D278"></a>**278. A resource's cleanup without a `timeout` gets `[worker] resource_cleanup_timeout`, 30
   minutes by default** (public; the user picked 30 minutes over Claude's hour): its run doesn't cancel it (277) and ends only after it, keeping its
   `max_active_runs` slot, so one hung on a system that never answers held the DAG's next runs for
   ever. The master marks the assignment (`AssignTask.resource_cleanup`), the agent fills the
@@ -7841,7 +7838,7 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   tries (cancel it, or set a shorter `timeout=`). Not chosen: `[worker] cleanup_timeout` (5 minutes
   kills real teardowns, a cluster's deletion, halfway); no default (the hang); a hidden value
   (operators tune it for their teardowns).
-- **279. `schedr tasks cancel` stops a resource's cleanup** (the panel's Cancel too), as any
+- <a id="D279"></a>**279. `schedr tasks cancel` stops a resource's cleanup** (the panel's Cancel too), as any
   task: one waiting (for its users, a worker or a retry) is cancelled at once, a running one is
   stopped; a run's cancel still keeps them (277). The resource is `cleanup_cancelled` (what its
   setup made may be left) and the run ends `cancelled` (`failed` if something failed). A
@@ -7849,7 +7846,7 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   none, so nothing else. The Cancel dialog says so. Not chosen: only with `--force` (the run's
   cancel already keeps it, so stopping one is a deliberate act); the run ending `failed` (a
   deliberate act read as an error); `success` (a possible leftover hidden).
-- **280. A task without `cleanup_anywhere` may run twice while its worker is cut off: at least
+- <a id="D280"></a>**280. A task without `cleanup_anywhere` may run twice while its worker is cut off: at least
   once, made visible.** A cut worker can't tell a master outage from its own cut, so it stops
   only `cleanup_anywhere` tasks (252); a master that is up marks the cut worker's attempts
   `lost` at the lease and retries them elsewhere, and its other tasks run on in both places
@@ -7865,7 +7862,7 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   database outage would kill all running work, what 252 avoids); an opt-in `exclusive=True`
   (B's stop-and-wait per task, a public option: a later step if wanted); never retrying a cut
   worker's tasks (work stalls for the whole cut).
-- **281. Nothing a worker starts was given away (B163):** the agent ends a stream silent for the
+- <a id="D281"></a>**281. Nothing a worker starts was given away (B163):** the agent ends a stream silent for the
   worker lease whatever it runs (not only with a `cleanup_anywhere` task) and acts on nothing
   arriving past it, and the master takes back an unstarted assignment only after the lease (it
   was 10 s), so an assignment held in a one-way cut is never started after the master ran the
@@ -7878,21 +7875,21 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   again, as a worker that knew its lease already did). Not chosen (the user, 2026-11-05): the
   agent side alone (an assignment held between 10 s and the lease still started); the worker
   asking before each start (a round trip on every task).
-- **282. A moving cleanup's result from its own worker counts:** a worker cut off while its
+- <a id="D282"></a>**282. A moving cleanup's result from its own worker counts:** a worker cut off while its
   cleanup ran (255) reports the result when it comes back; arriving before the move took place,
   it is stored and the move dropped, so the cleanup doesn't run again. Its `Finished` in the
   journal of its `Register` is answered `Continue`, not `Kill`, so it is sent again. Only the
   worker it first moved from ran the task: from one it moved from later (a cleanup alone), the
   task's kept result stands. Not chosen (the user, 2026-11-05): ignoring it as before (the
   cleanup ran twice in stress scenario 21).
-- **290. Resources beside the tasks on the graph (the user's, 2026-11-05):** a run's graph
+- <a id="D290"></a>**290. Resources beside the tasks on the graph (the user's, 2026-11-05):** a run's graph
   draws its resources' setups and cleanups in a "Resources" box on the left, a lane per
   resource (resources at once in lanes of their own), each at the height of the row it would
   have had, so the tasks' rows stay as they were; their lines run in a channel between the box
   and the tasks (a track per resource and direction) and cross over only between rows, never
   through a box. Not chosen: the right side; the resources listed from the top, away from their
   rows.
-- **291. A resource's lines cut down (the user: "two lines + hover", 2026-11-05):** when its
+- <a id="D291"></a>**291. A resource's lines cut down (the user: "two lines + hover", 2026-11-05):** when its
   users share a group, one line from the setup into the group's box (at its users' first row)
   and one from the box (at their last row) to the cleanup; otherwise the lines to its first
   users and from its last ones. The other lines show on hover or selection of the resource (its
@@ -7900,7 +7897,7 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   resources' colour. The lines from a cleanup to what follows it are always drawn. Not chosen:
   no lines but on hover (the order not visible at a glance); one trunk per resource with a
   branch to each user (many users, many branches).
-- **297. A master that doesn't lead is neither ready nor holding streams (B165):** paused (its
+- <a id="D297"></a>**297. A master that doesn't lead is neither ready nor holding streams (B165):** paused (its
   database lease not renewed) or taken over, it answers `/readyz` with 503 ("starting: master",
   as a standby) until it leads again, so its Service sends workers to the master that leads; a
   stream that reaches it anyway is refused at once with UNAVAILABLE, "not leading", and the
@@ -7908,14 +7905,14 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   worker's reconnect could wait there past its lease (stress scenario 05). Not chosen (the user,
   2026-11-05): only the refusal (a Service still sending every new stream to it); only the
   readiness (a worker that got there anyway waits).
-- **307. A worker waits at most half the master's lease between tries (B168, 2026-11-05):**
+- <a id="D307"></a>**307. A worker waits at most half the master's lease between tries (B168, 2026-11-05):**
   once a master has told it its lease, a worker's reconnect backoff is capped at half of it,
   so a worker still alive reaches a master back from a restart before that master's lease on it
   runs out (a restarted master gives every worker a fresh lease from its start). It used to wait
   up to `reconnect_max` (30 s by default, past a short lease): the master took it for lost and
   moved its cleanup with only the handles it had got, so a handle registered while the master
   was down was left behind.
-- **308. Handles the master never got are cleaned by the worker that has them (B169, the
+- <a id="D308"></a>**308. Handles the master never got are cleaned by the worker that has them (B169, the
   user's: "Worker cleans the rest" and "Take it back", 2026-11-05):** a worker's `Register`
   says how many handles each attempt in its journal has (`JournalEntry.handles`). When its
   cleanup moved from that worker (`cleanup_anywhere`) and the master has fewer:
@@ -7937,7 +7934,7 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
   counts its handles from its journal. A worker that never comes back takes its unknown handles
   with it: nothing knows they exist. Not chosen (the user, 2026-11-05): the worker left to clean
   everything again while the move waits (the known handles cleaned twice).
-- **309. A yellow `SUCCESS`: a run's state changed after its end (the user's, 2026-11-05):** a
+- <a id="D309"></a>**309. A yellow `SUCCESS`: a run's state changed after its end (the user's, 2026-11-05):** a
   run that ended `SUCCESS` and learns of a failure afterwards keeps its state (whatever its
   success set off has happened) but is shown yellow, not green, with the reason; for now one
   reason, `LATE_CLEANUP_FAILED`: a rest cleanup (308) failed after the run's end, its handles
@@ -8158,52 +8155,52 @@ Decisions 242-251 (the user's, 2026-11-04; the options were Claude's), for M4.8b
 
 Decisions 231-238 (the user's, 2026-11-04; the options were Claude's).
 
-- **231. A timing is a key only if its right value depends on the deployment.** New keys:
+- <a id="D231"></a>**231. A timing is a key only if its right value depends on the deployment.** New keys:
   `[master] parse_job_timeout`, `[webserver] worker_request_timeout`,
   `connection_test_timeout`, `[worker] runner_start_timeout`, `fork_server_preload_timeout`,
   `cleanup_timeout`, Vault storages' `request_timeout` and `connect_timeout`. Each has a doc
   comment saying what it does and when to change it. Not chosen: every timing a key (a wrong
   value can run tasks twice or lose a healthy worker).
-- **232. Eighteen timings left the config:** `tick_interval`, `heartbeat_interval`,
+- <a id="D232"></a>**232. Eighteen timings left the config:** `tick_interval`, `heartbeat_interval`,
   `lease_timeout`, `lease_period`, `read_back_window`, `read_back_interval`, `query_timeout`
   (with the lease fixed at 30 s it could only go down), `loop_stall_timeout`, `set_aside`,
   `listen_retry`, `quiet_dag_after`, `quiet_dag_wake_ahead`, `quiet_dag_full_pass_interval`,
   `refresh_interval`, `worker_connect_timeout`, `drain_report_period`,
   `memory_check_interval`, `handshake_timeout`. A file or `SCHEDR_CONFIG__*` setting one fails
   as an unknown key; no migration, it is a prerelease.
-- **233. `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing:** environment only, read
+- <a id="D233"></a>**233. `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing:** environment only, read
   once at startup with the configuration, each one set warned about, documented as unsupported
   and at one's own risk. The tests use it to run in seconds. The odd name keeps anyone from
   setting one by accident. An unknown name or a bad duration stops the start. Not chosen:
   keeping them as keys with a warning; a build for tests only (the tests would run another
   binary).
-- **234. A hidden timing of zero is refused,** for all of them: a zero interval panics in
+- <a id="D234"></a>**234. A hidden timing of zero is refused,** for all of them: a zero interval panics in
   `tokio::time::interval`.
-- **235. A cleanup without its own timeout takes `[worker] cleanup_timeout`:** the DAG JSON
+- <a id="D235"></a>**235. A cleanup without its own timeout takes `[worker] cleanup_timeout`:** the DAG JSON
   leaves `timeout_ms` out, and the worker fills it in. Not chosen: the 5 minutes fixed in the
   Python API (the key would change nothing).
-- **236. The constants follow in M4.8u,** about 40 more on the hidden route, as values passed
+- <a id="D236"></a>**236. The constants follow in M4.8u,** about 40 more on the hidden route, as values passed
   down in each crate's own struct with defaults, in the server, worker and webserver only: the
   client, `task-ctx` and the CLI don't load this configuration. The two auth timings stay
   constants until it is checked what they do to a revoked token. Not chosen: one global set at
   startup (tests in a process would share it, and it hides a dependency).
-- **237. A new configuration value is public or hidden, and a constant in the binary only for a
+- <a id="D237"></a>**237. A new configuration value is public or hidden, and a constant in the binary only for a
   really good reason:** a key when its right value depends on the deployment, `SCHEDR_HIDDEN__*`
   otherwise. Not chosen: a constant by default (changing it takes a rebuild).
-- **238. A public timing that can't work at zero is refused at load:** `[dags] poll_interval`,
+- <a id="D238"></a>**238. A public timing that can't work at zero is refused at load:** `[dags] poll_interval`,
   `parse_file_timeout`, `[master] parse_job_timeout`, `[webserver] worker_request_timeout`,
   `[worker] log_retention`, `runner_start_timeout`, `fork_server_preload_timeout`,
   `cleanup_timeout`, Vault storages' `request_timeout` and `connect_timeout`. Where zero means
   something (`settle_time`, `cancel_grace`, `code_wait`, `drain_terminate_period`,
   `fork_server_import_retry`, `cache_ttl`) it stays allowed.
 - **Built (M4.8u; decisions 239-241):** every server-side timing on the hidden route, 61 in all.
-- **239. The auth timings go hidden too.** Checked for decision 236: a change of the users file
+- <a id="D239"></a>**239. The auth timings go hidden too.** Checked for decision 236: a change of the users file
   forgets every remembered check, so `auth_remembered` has no effect on revocation and only
   saves bcrypt runs; `auth_recheck` is how long a change takes to count, and the docs say so.
   Neither has a reason to stay a constant (decision 237).
-- **240. The inline timings count as well:** Vault's two renewal waits, a stopped group's poll,
+- <a id="D240"></a>**240. The inline timings count as well:** Vault's two renewal waits, a stopped group's poll,
   a connection test's cancel grace, the listeners' retry after a failed accept.
-- **241. What stays a constant, and why:** the gauge refresh limit (derived in production, half
+- <a id="D241"></a>**241. What stays a constant, and why:** the gauge refresh limit (derived in production, half
   of `loop_stall_timeout`), the connection for migrating (no `query_timeout`, so no limit to
   tie to), and what the client, `task-ctx` and the CLI use (they don't load this configuration).
 
@@ -8251,7 +8248,7 @@ sure an output can be serialized, from earliest to last:
      producer's type, for every reference at any depth.
    - **Literal arguments** are encoded against the parameter's type at parse time, so a wrong
      literal is a parse error too.
-   - **An argument written as a structure with references inside is built as the
+   - <a id="D112"></a>**An argument written as a structure with references inside is built as the
      parameter's type** (decision 112, the user's, 2026-10-31: A; B65): `consume((produce(),
      3))` for `tuple[int, int]` gets a tuple, `consume({"x": produce()})` for a dataclass or a
      Pydantic model gets an instance (the model validated by Pydantic's rules for Python
@@ -8285,7 +8282,7 @@ task annotated `Any` still gets the real type back:
 | `timedelta` | `{"$timedelta": 3600000000}` (whole microseconds: exact, simple to read in Rust) |
 | `tuple` | `{"$tuple": [1, "a"]}` |
 
-**Numbers arrive exactly** (decision 105, the user's, 2026-10-31: A; B64). Python writes a
+<a id="D105"></a>**Numbers arrive exactly** (decision 105, the user's, 2026-10-31: A; B64). Python writes a
 float's shortest exact text, and the agent and the master read it back to the same bits
 (`serde_json`'s `float_roundtrip`). An integer is stored only in the range Rust reads
 exactly, `-2**63` to `2**64 - 1`; a larger one fails the attempt with "outside the 64-bit
@@ -8296,14 +8293,14 @@ text through the agent and the master, a change to every place that reads one, a
 Postgres's `jsonb` keeps but other readers may not); C storing large integers tagged (a new
 tag, for a rare value).
 
-**No NUL in a stored string** (decision 106, the user's, 2026-10-31: A; B86). Postgres
+<a id="D106"></a>**No NUL in a stored string** (decision 106, the user's, 2026-10-31: A; B86). Postgres
 stores no NUL in `text` or `jsonb`, so a string or dict key holding one fails the attempt
 where the runner encodes it ("a string containing NUL (\0) can't be stored"), instead of
 the master failing to store the completion and the task staying `running`. Not chosen: B
 replacing NUL silently (a different value downstream); C escaping it in storage (every
 reader of outputs would need to undo it).
 
-**The master stores no NUL** (decision 114, the user's, 2026-10-31: A; B105). Text a worker
+<a id="D114"></a>**The master stores no NUL** (decision 114, the user's, 2026-10-31: A; B105). Text a worker
 sends may hold NUL that no runner check refused (an exception's message and traceback, an
 import error, a warning, a DAG's own strings, or an older agent's values): the database layer
 replaces it with U+FFFD in every string and key of the JSON it writes, so Postgres takes it and
@@ -8311,14 +8308,14 @@ the attempt's end isn't refused for ever. JSON without NUL is written as it is (
 Not chosen: B replacing it only in the runner's error summaries (older agents and other text
 still refused).
 
-**A command's output shows NUL as `�`** (decision 110, the user's, 2026-10-31: A; B104).
+<a id="D110"></a>**A command's output shows NUL as `�`** (decision 110, the user's, 2026-10-31: A; B104).
 The `stdout` and `stderr` of a `ProcessResult` are text: the agent already replaces invalid
 UTF-8 with U+FFFD, and replaces NUL the same way, so `find -print0`'s output is stored (and its
 names are separated by `�`). The log file keeps the bytes. Not chosen: B failing the attempt
 (every `-print0` or binary-ish command would fail); A' writing NUL as the text `\0`
 (ambiguous with a real backslash and zero).
 
-**A dict shaped like a tag is escaped** (decision 104, the user's, 2026-10-31: A; B66). A
+<a id="D104"></a>**A dict shaped like a tag is escaped** (decision 104, the user's, 2026-10-31: A; B66). A
 dict of the user's own whose only key is a tag (`$datetime`, `$date`, `$timedelta`, `$tuple`,
 or `$dict` itself) is stored as `{"$dict": {...}}`, so `{"$date": "x"}` reads back as that dict,
 not as a date (or an error). Only that shape is escaped; a dict with two keys, or with a key
@@ -8422,7 +8419,7 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
   field names, so a path `out.url` is by attribute name, as type checkers read it; `by_name`
   needs 2.11), so **Pydantic's own rules** apply (lax by default, strict if the model says
   so). Built in M4.1e (2026-10-29).
-  - **The type is Pydantic's JSON Schema** (decision 59, the user's, 2026-10-29: C): DAG
+  - <a id="D59"></a>**The type is Pydantic's JSON Schema** (decision 59, the user's, 2026-10-29: C): DAG
     JSON's `{"type": "model", "name", "schema"}`. An output holds the serialization schema
     (every field marked required: `model_dump` writes defaults too), a parameter the
     validation schema (fields with defaults optional). Rust only stores it (`TypeDesc::Model`;
@@ -8435,7 +8432,7 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
     compared (`allOf`, `not`, `if`, differing patterns, schedr's tagged tuples against
     Pydantic's lists) fits only when identical (59.2). `$ref`s are followed; recursive models fit
     themselves. The error names the field and both sides' constraints.
-  - **A model is read back as JSON** (decision 111, the user's, 2026-10-31: A; B68): its
+  - <a id="D111"></a>**A model is read back as JSON** (decision 111, the user's, 2026-10-31: A; B68): its
     stored data is JSON, so the runner validates it as Pydantic validates JSON
     (`model_validate_json`): a strict field takes a date as ISO text there, as from any JSON,
     and refuses what JSON wouldn't give it (`"3"` for an `int`). schedr's own tags in the data
@@ -8443,7 +8440,7 @@ earlier if `[retention] outputs` is shorter (see State storage: Retention).
     JSON (dates as ISO text, durations as ISO 8601 durations, tuples as lists). schedr still
     never imports Pydantic. Not chosen: B validating in Python mode with `strict=False` (it
     would accept coercions the author forbade).
-  - **A model's dates are dates** (decision 60, the user's, 2026-10-29: B; "the user sees
+  - <a id="D60"></a><a id="D63"></a>**A model's dates are dates** (decision 60, the user's, 2026-10-29: B; "the user sees
     `datetime` and expects it to just work"): Pydantic writes them as text (`date-time`,
     `date`, `duration`), schedr tags its own (`{"$datetime": ...}`); the comparison lets
     each fit the other, and the runner converts when the task receives the value: text
@@ -8574,7 +8571,7 @@ and no cluster. Four levels, from cheapest to fullest.
   code 0 if the run ended `success`, 1 if `failed`. `--task <id>` runs that task and its
   upstream tasks only. Not chosen: running the tasks in one Python process like Airflow's
   `dag.test()` (faster, but skips what differs in production).
-  - **How it works (1.15a):** `schedr standalone` in the same process, on 127.0.0.1 with ports
+  - <a id="D117"></a>**How it works (1.15a):** `schedr standalone` in the same process, on 127.0.0.1 with ports
     chosen by the system (0) and a temporary data directory (SQLite, logs) removed afterwards;
     the run is a `manual` run triggered and followed through the REST API, like the CLI does.
     The DAG roots are `--path <file or dir>` if given, else the configured roots, else the
@@ -9088,7 +9085,7 @@ BashOperator(task_id="x", bash_command=t"echo {ds} {params.region}")          # 
   `dag_ctx.run.planned_for` formatted `%Y-%m-%d`); one without a native equivalent is an error in
   the Airflow layer, unless the native API gets it for a native reason.
 - Not planned: a restricted `"{{ ... }}"` string syntax as a fallback.
-- **No values in shell source** (decision 99, the user's, 2026-10-30: A, on Codex's second
+- <a id="D99"></a>**No values in shell source** (decision 99, the user's, 2026-10-30: A, on Codex's second
   opinion; B53). A shell-string `command` (a `str` or a t-string, run by `/bin/sh`) takes **no
   placeholders**: a t-string with one is refused when the DAG file loads (also by the master's
   validation and by the agent before launch), with the two ways to write it instead in the
@@ -9221,7 +9218,7 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
 
 ### Python
 
-- **No `Any`** (the user, 2026-10-29: "avoid Any at all cost"): public signatures carry
+- <a id="D73"></a>**No `Any`** (the user, 2026-10-29: "avoid Any at all cost"): public signatures carry
   precise types (overloads, protocols, generics, unions, `object` for an unknown value the
   caller narrows, the `Json` alias for JSON); `Any` never silences a type checker. Where a
   precise type can't be written, a comment or an explicit, local `cast` says why. Left alone:
@@ -9321,23 +9318,23 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
   - Both run under an **arbitrary UID**.
 - **Helm chart** for deploying.
 - **Releases** (decisions 153-158, the user's, 2026-11-02; PLAN.md, Release 0.1.0):
-  - **153. Trusted Publishing to PyPI** from `.github/workflows/release.yml`
+  - <a id="D153"></a>**153. Trusted Publishing to PyPI** from `.github/workflows/release.yml`
     (`pypa/gh-action-pypi-publish`, pinned by commit SHA), in an environment `pypi` that needs
     the user's approval for each release. Not chosen: a PyPI API token as a repository secret
     (long-lived); uploading CI's wheels by hand.
-  - **154. A pushed tag starts a release:** `vX.Y.Z` (checked against the versions in
+  - <a id="D154"></a>**154. A pushed tag starts a release:** `vX.Y.Z` (checked against the versions in
     `Cargo.toml` and `pyproject.toml`) builds and smoke-tests the four wheels, publishes them,
     then creates the GitHub Release. Not chosen: a manually dispatched workflow tagging the
     commit itself; a GitHub Release published by hand starting the upload.
-  - **155. What a release carries:** release notes from a hand-kept `CHANGELOG.md` (the
+  - <a id="D155"></a>**155. What a release carries:** release notes from a hand-kept `CHANGELOG.md` (the
     version's section); the wheels and a `SHA256SUMS` attached to the GitHub Release; build
     provenance attestations for each wheel (`actions/attest-build-provenance`, pinned by SHA).
     No sdist: installing one would build the Rust binary on the user's machine; a platform
     without a wheel can't install. Not chosen: GitHub's generated notes; an sdist.
-  - **156. 0.x is a preview:** the schema (`0001_initial.sql`) and the protocol are edited in
+  - <a id="D156"></a>**156. 0.x is a preview:** the schema (`0001_initial.sql`) and the protocol are edited in
     place until 1.0.0, so 0.1 to 0.2 means a fresh database; the README and release notes say
     so. Not chosen: migrations from 0.1.0 on.
-  - **157. The images are pushed with a release, the chart is not:** the server and worker
+  - <a id="D157"></a>**157. The images are pushed with a release, the chart is not:** the server and worker
     base images to `ghcr.io/ptutak/schedr-server` and `ghcr.io/ptutak/schedr` (decision 164)
     (x86_64, from the musllinux wheel; pushed with the workflow's `GITHUB_TOKEN`); the Helm
     chart stays in the repository. Not chosen: an OCI chart; multi-arch images (later).
@@ -9354,35 +9351,35 @@ Makefile                # setup / fmt / fmt-check / lint / test / check
     Not chosen: `cargo about` (a tool to install and pin, for what `cargo metadata` gives);
     nothing until 0.1.1 (the MIT and Apache-2.0 notices go with every binary copy). The author
     on PyPI and in the crates is `p.tutak@outlook.com` (the user, the same day).
-  - **165. The docs on GitHub Pages** (https://ptutak.github.io/schedr/; the user,
+  - <a id="D165"></a>**165. The docs on GitHub Pages** (https://ptutak.github.io/schedr/; the user,
     2026-11-02): the site CI builds (`docs-site`, what `make docs` makes), deployed by the
     release workflow's last job (`actions/deploy-pages`, environment `github-pages`). Not
     chosen: Read the Docs (an account, and its build would have to reproduce ours: Rust for
     rustdoc and the generated pages).
-  - **166. The site shows the latest release** (the user, 2026-11-02): a final tag deploys
+  - <a id="D166"></a>**166. The site shows the latest release** (the user, 2026-11-02): a final tag deploys
     its docs; a rehearsal and main don't. Not chosen: main on every push (ahead of what
     users installed); both, main under `/dev/` (two builds to keep apart).
-  - **164. The image with Python is `ghcr.io/ptutak/schedr`, the one without
+  - <a id="D164"></a>**164. The image with Python is `ghcr.io/ptutak/schedr`, the one without
     `schedr-server`** (the user, 2026-11-02, after the rc pushed `schedr-worker`): one binary
     runs every role, so the image for anything that runs tasks (standalone, workers) is
     `schedr`, as it is locally and in the chart's `image`, and `schedr-server` runs the
     master, the webserver and `schedr ui`. Not chosen: keeping `schedr-worker` (a standalone
     user wouldn't look for it); also pushing `schedr-standalone` and `schedr-ui` (the same
     two images under more names: more packages to link and tag, and the question which one).
-  - **158. A rehearsal on TestPyPI:** a tag `vX.Y.ZrcN` publishes to TestPyPI (environment
+  - <a id="D158"></a>**158. A rehearsal on TestPyPI:** a tag `vX.Y.ZrcN` publishes to TestPyPI (environment
     `testpypi`, its own trusted publisher), and the wheel installed from there is
     smoke-tested; only a final tag goes to PyPI. Not chosen: straight to PyPI.
-  - **160. A release runs all of CI on its tag** (`ci.yml` called as a reusable workflow),
+  - <a id="D160"></a>**160. A release runs all of CI on its tag** (`ci.yml` called as a reusable workflow),
     then publishes CI's own wheels (the user, 2026-11-02). One definition of the build; a
     release takes as long as CI. Not chosen: a copy of the wheel jobs in `release.yml` (two
     builds to keep in step; the tag not tested again).
-  - **161. A rehearsal does every step, marked rc:** TestPyPI, a GitHub pre-release, images
+  - <a id="D161"></a>**161. A rehearsal does every step, marked rc:** TestPyPI, a GitHub pre-release, images
     tagged only `X.Y.ZrcN` (the user, 2026-11-02). Not chosen: TestPyPI only (the Release
     and the image push first tried for real).
-  - **162. Image tags `X.Y.Z` and `X.Y`, no `latest`** (the user, 2026-11-02): in the preview
+  - <a id="D162"></a>**162. Image tags `X.Y.Z` and `X.Y`, no `latest`** (the user, 2026-11-02): in the preview
     a new minor needs a fresh database (decision 156), and a floating `latest` would move a
     deployment onto it. Not chosen: `latest` too; only `X.Y.Z`.
-  - **163. The tree holds the version a tag names:** `0.1.0-rc1` in `Cargo.toml` for
+  - <a id="D163"></a>**163. The tree holds the version a tag names:** `0.1.0-rc1` in `Cargo.toml` for
     `v0.1.0rc1` (maturin writes `0.1.0rc1`; the agent compares a runner's version in that
     form; no dot after `rc`, which `SchedrVersion` would refuse), committed and tagged; the workflow only checks
     (`scripts/release.py check`) (the user, 2026-11-02). Not chosen: the workflow setting the
@@ -9470,7 +9467,7 @@ typed-path 0.12.4, utoipa-swagger-ui 10.0.2, webpki-root-certs 1.0.11, yoke 0.8.
 
 ### Testing
 
-**Failure at every write** (decision 98, the user's, 2026-10-30, after Codex's whole-repository
+<a id="D98"></a>**Failure at every write** (decision 98, the user's, 2026-10-30, after Codex's whole-repository
 review found the class again and again: B42, B49, B51): a fault-injection harness in the
 tests. A test-only hook in `schedr-db`'s query layer makes the Nth write fail;
 `fail_each_write` runs a master operation once per write it makes, that write failing, from
@@ -9898,29 +9895,3 @@ Questions still open. Once decided, they move into the sections above. Deliberat
 items ("possibly later") are noted where they belong.
 
 Nothing is open at the moment.
-
-## Journal
-
-Dated entries from 2026-11-08 on, newest last: each decision taken, with the question, the options,
-the choice, why, and "Not chosen". A decision's file (`decisions/D<n>.toml`) points here.
-
-### 2026-11-08: how the project keeps its documents (decision 367)
-
-- **Question:** the agent kept making wrong assumptions as the project grew (PROJECT.md 776 KB, about
-  200k tokens, read only in pieces; NEXT_SESSION.md 789 lines; a decision left unrecorded; a claim
-  about `schedr dags test` from memory that was false, and a decision built on it). How should the
-  project's knowledge be organized for minimal reads, easy tracking of changes and the current stage?
-- **Chosen (the user's, option A, all phases before M4.12a):** each question gets one small file:
-  `STATUS.md` (where things stand, rewritten, at most 60 lines), `design/<topic>.md` (how a part
-  works now: Current, Decisions, Where in code, Open), `decisions/D<n>.toml` (one per decision:
-  status, topic, a short summary, where its reasons are) with a generated `DECISIONS.md`, checked by
-  `scripts/decisions.py` in `make check`; and **PROJECT.md kept as the history** (the user: humans
-  think forward as a continuum): its topic part unchanged up to decision 366, then this Journal.
-  Migrated in four phases, every decision's file checked against the unclipped text (a side note:
-  a sample would let wrong summaries become the agent's first read). The layout, its tooling and
-  routines are kept for every project in the `project-docs` skill (the user's ask), with where the
-  skills live and how they are kept.
-- **Not chosen:** B, keeping PROJECT.md whole with only an index of decisions and STATUS.md (its
-  600-900-line sections stay, amendments keep piling up inside paragraphs); C, only STATUS.md and
-  the rule to check code (the decisions stay hard to find); splitting PROJECT.md up by topic or
-  reordering it by date (the continuum lost, or meaning shifted by cutting paragraphs apart).

@@ -7,7 +7,8 @@ summary = '''
 Each running master heartbeats a masters table row with its role and configuration.
 A master that stops reporting ages out.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D123"
 step = "M4.4b"
+also = ["deployment"]
 code = ["crates/schedr-db/migrations/postgres/0001_initial.sql", "crates/schedr-db/migrations/sqlite/0001_initial.sql"]
 checked = 2026-11-08

@@ -9,7 +9,8 @@ The task result is reported when its process ends and retained while the instanc
 completed work. The cleanup moves when `cleanup_anywhere` permits it; otherwise it is recorded as
 `worker_lost`.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8"
+history = "PROJECT.md#D229"
+step = "M4.8b2"
+also = ["protocol", "outcomes", "workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs"]
 checked = 2026-11-08

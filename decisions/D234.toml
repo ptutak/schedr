@@ -7,6 +7,6 @@ summary = '''
 Every hidden timing must be nonzero.
 A zero hidden timing is refused.
 '''
-history = "PROJECT.md: Timings: public keys and hidden ones"
+history = "PROJECT.md#D234"
 step = "M4.8t"
 checked = 2026-11-08

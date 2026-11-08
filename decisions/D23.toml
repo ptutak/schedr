@@ -7,6 +7,8 @@ summary = '''
 The server reads new log bytes from the worker’s range endpoint using `from`.
 Since D175 the browser requests each part while the attempt runs.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D23"
+step = "M3.3"
+also = ["ui-cli"]
 code = ["crates/schedr-ui/src/live.rs"]
 checked = 2026-11-08

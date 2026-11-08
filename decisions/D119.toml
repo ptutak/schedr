@@ -7,7 +7,8 @@ summary = '''
 An .on(...) selection on a mapped output checks each element even when another use makes the edge whole.
 After the whole upstream finishes, instances with other outcomes or skips are skipped.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D119"
 step = "M4.3e"
+also = ["python-api"]
 code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
 checked = 2026-11-08

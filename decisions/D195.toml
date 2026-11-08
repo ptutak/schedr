@@ -8,7 +8,7 @@ One option file supports both vendors: login and loose-ssl-mode in [client], wit
 MariaDB's TLS settings in [client-mariadb]. Without ca_cert, verification uses system
 CAs for every client; a self-made certificate needs sslmode=require.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D195"
 step = "M4.7b2"
 code = ["crates/schedr-agent/src/connection_env.rs"]
 checked = 2026-11-08

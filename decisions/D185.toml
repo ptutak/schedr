@@ -7,6 +7,6 @@ summary = '''
 HTTP is tested against a local server and Postgres in a test container.
 MySQL, Mongo and OpenSSH run in integration containers and pinned CI service containers.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D185"
 step = "M4.7b1"
 checked = 2026-11-08

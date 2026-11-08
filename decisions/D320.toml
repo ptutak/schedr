@@ -9,7 +9,8 @@ between calls after successful preparation, preserving deadline and retries, or 
 with a logged reason; full-control sensors remain until completion. Old hosts exit when empty, and
 memory_budget covers all worker hosts.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D320"
 step = "M4.11a2"
+also = ["workers", "code-delivery"]
 code = ["crates/schedr-agent/src/watchers.rs", "crates/schedr-model/src/runner.rs", "python/schedr/runner/watchers.py"]
 checked = 2026-11-08

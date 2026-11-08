@@ -1,0 +1,13 @@
+title = "Work reaches main through git; undone-check guards recent commits"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+No worktree's files are copied over main: merge, rebase or cherry-pick; colleagues' record edits go in
+field by field. make undone-check and CI fail on a change removing over 20 lines the last 10 commits
+added, unless its message says Undoes: ...
+'''
+history = "JOURNAL.md#D371"
+step = "n/a"
+code = ["scripts/undone.py"]

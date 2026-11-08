@@ -9,7 +9,8 @@ incompatible-protocol refusals name both versions. Within a protocol, new reques
 unknown fields are ignored and unknown requests receive `error`. Other changes, including new enum values,
 require a new protocol.
 '''
-history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+history = "PROJECT.md#D148"
 step = "M4.5b"
+also = ["protocol"]
 code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "python/schedr/script.py"]
 checked = 2026-11-08

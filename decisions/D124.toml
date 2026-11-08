@@ -7,7 +7,7 @@ summary = '''
 The Deployments page is scheduled for M4.4b, after M4.4 and before 1.0.0.
 The schema and protocol can still be edited in place.
 '''
-history = "PROJECT.md: Web UI and CLI"
-step = "M4.4b"
+history = "PROJECT.md#D124"
+step = "n/a"
 code = ["crates/schedr-ui/src/deployments.rs"]
 checked = 2026-11-08

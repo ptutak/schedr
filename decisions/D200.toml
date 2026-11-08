@@ -8,7 +8,8 @@ A connection test defaults to a 60-second timeout, adjustable with --timeout. Ti
 counts from arrival at the worker, including queueing and secret reads. The test
 process is stopped when that deadline expires.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D200"
 step = "M4.7c"
+also = ["workers", "ui-cli"]
 code = ["crates/schedr-agent/src/connection_jobs.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-model/src/commands.rs"]
 checked = 2026-11-08

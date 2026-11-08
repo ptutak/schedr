@@ -8,7 +8,8 @@ A cleanup waits while a user is `unschedulable`, until the user finishes or is c
 `unschedulable_timeout` may fail the user and release cleanup; the default is unlimited, and the
 shortest resource timeout applies.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D273"
 step = "M4.8c2"
+also = ["assignment"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/execution.rs"]
 checked = 2026-11-08

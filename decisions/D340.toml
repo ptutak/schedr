@@ -7,7 +7,8 @@ summary = '''
 Sensors and resources have endpoints of their own.
 Resources appear inside a run’s detail.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D340"
 step = "M4.11a3"
+also = ["cleanup", "wait-steps"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr/src/cli.rs"]
 checked = 2026-11-08

@@ -7,6 +7,7 @@ summary = '''
 `schedr secrets new-key` prints a new `SCHEDR_SECRET_KEY`.
 The key is 32 random bytes encoded as base64; rotation is not built now.
 '''
-history = "PROJECT.md: Secret storage"
+history = "PROJECT.md#D169"
 step = "M4.6c"
+also = ["configuration"]
 checked = 2026-11-08

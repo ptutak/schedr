@@ -7,7 +7,8 @@ summary = '''
 When dags test selects a file, its directory is the root but only that file is parsed.
 Imports from sibling files still work; the internal selection is not configurable.
 '''
-history = "PROJECT.md: Testing DAGs"
+history = "PROJECT.md#D117"
 step = "M4.3e"
+also = ["code-delivery"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/roots.rs"]
 checked = 2026-11-08

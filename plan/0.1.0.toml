@@ -1,0 +1,46 @@
+title = "after M4.5"
+order = 65
+done_when = "`pip install schedr` gives 0.1.0; the GitHub Release and the images exist."
+notes = '''
+Decided by the user (2026-11-02, decisions 153-163 in PROJECT.md, Packaging and releases):
+**the first release, 0.1.0, comes after M4.5**, a preview: until 1.0.0 the schema and the
+protocol are still edited in place (below), so 0.1 to 0.2 means a fresh database; the README
+and the release notes say so, and the classifier is `Development Status :: 3 - Alpha`.
+
+Note (R0.1b): *(note)* A pending publisher doesn't reserve the name on PyPI, nor does TestPyPI: `schedr` is taken by the first real upload. Checked free on 2026-11-02; the user accepted the risk of waiting for `v0.1.0` (not chosen: an alpha uploaded by hand to reserve it)
+'''
+
+[[steps]]
+id = "R0.1"
+title = "The release workflow"
+scope = '''
+(`.github/workflows/release.yml`): a pushed tag `vX.Y.Z` (or `vX.Y.ZrcN`) checks that it matches `Cargo.toml` and `pyproject.toml`, builds and smoke-tests the four wheels as CI does, attests their provenance, publishes them with Trusted Publishing (an `rc` tag to TestPyPI, environment `testpypi`; a final one to PyPI, environment `pypi`, the user's approval), then creates the GitHub Release (the version's `CHANGELOG.md` section, the wheels, `SHA256SUMS`) and pushes the server and worker base images to `ghcr.io/ptutak/` (x86_64); `CHANGELOG.md` with 0.1.0 (M1-M4.5); the README's preview note
+'''
+done_when = '''
+the workflow's checks pass on a branch; the user has added the pending publishers
+'''
+status = "done"
+done = 2026-11-02
+commits = ["2e4bb05"]
+
+[[steps]]
+id = "R0.2"
+title = "Rehearsal"
+scope = "`v0.1.0rc1` to TestPyPI, `pip install` from there smoke-tested"
+done_when = '''
+the rc installs and runs from TestPyPI: done (2026-11-02, run 41453862503; each image's first push denied until ghcr linked its package, re-run; the image with Python then renamed `schedr`, decision 164)
+'''
+status = "done"
+done = 2026-11-02
+commits = ["a629ec0"]
+
+[[steps]]
+id = "R0.3"
+title = "0.1.0"
+scope = "the tag `v0.1.0`"
+done_when = '''
+`pip install schedr` gives 0.1.0; the GitHub Release and the images exist: done (2026-11-02, `fd2da59`, run 41483839551; checked as a user: `pip install schedr==0.1.0` on 3.14, the four wheels' sums and attestations, anonymous pulls of `schedr` and `schedr-server` `:0.1.0` and `:0.1`, https://ptutak.github.io/schedr/)
+'''
+status = "done"
+done = 2026-11-02
+commits = ["23481d0", "fd2da59"]

@@ -7,5 +7,5 @@ summary = '''
 The proposal was dropped when laid out.
 `ctx.handles` only records handles; a test calls the cleanup itself.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D227"
 checked = 2026-11-08

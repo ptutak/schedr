@@ -7,7 +7,8 @@ summary = '''
 `schedr dag-ctx` provides `params get` and `run get`, each with optional `--field`.
 Parameter values print in the JSON form accepted by `--params`.
 '''
-history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+history = "PROJECT.md#D144"
 step = "M4.5b"
+also = ["ui-cli"]
 code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs"]
 checked = 2026-11-08

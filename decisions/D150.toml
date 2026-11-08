@@ -9,7 +9,8 @@ uses an empty password input, with defaults and choices withheld from the browse
 from the form fingerprint; leaving the input empty sends nothing, so the master supplies the current
 default.
 '''
-history = "PROJECT.md: Run parameters and the DAG context"
+history = "PROJECT.md#D150"
 step = "M4.5c"
+also = ["task-context", "secrets"]
 code = ["crates/schedr-api/src/views/form.rs", "crates/schedr-ui/src/params_form.rs"]
 checked = 2026-11-08

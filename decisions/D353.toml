@@ -12,7 +12,8 @@ paused periods. Function sensors and triggers receive `RunResult[T]` on watcher 
 terminal states; sensors may return `NOT_YET`, and failed calls retry the same handed run, with
 trigger retry limits or manual skip available.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D353"
 step = "M4.11d"
+also = ["wait-steps", "triggers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs"]
 checked = 2026-11-08

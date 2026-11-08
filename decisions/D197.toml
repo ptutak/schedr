@@ -7,6 +7,6 @@ summary = '''
 The prefixed Postgres URL includes `passfile` pointing to the generated `.pgpass`.
 The URL contains no password and can be passed directly to psql.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D197"
 step = "M4.7b2"
 checked = 2026-11-08

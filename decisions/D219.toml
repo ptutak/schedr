@@ -8,6 +8,7 @@ Cancellation leaves a running per-task cleanup running until it finishes or reac
 `cleanup_timeout`. During drain it may continue until the pod is killed; outside
 Kubernetes the agent waits for it.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8"
+history = "PROJECT.md#D219"
+step = "M4.8b"
+also = ["workers", "runs"]
 checked = 2026-11-08

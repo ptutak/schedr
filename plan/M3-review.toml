@@ -1,0 +1,31 @@
+title = "the whole repository reviewed (Codex, from 2026-10-30)"
+order = 55
+done_when = '''
+The whole repository reviewed by sections, the confirmed findings fixed or logged (Codex's scan: F1-F11 done, F12-F14 after M4).
+'''
+notes = '''
+Asked by the user (2026-10-27): once M3 is done, Grok reviews the **whole repository**, not
+one step's diff (it has only reviewed diffs so far), with a proof test or script per finding,
+and brings the documentation up to date with the code. Claude verifies the findings and fixes
+the confirmed ones (out-of-scope ones go to BUGS.md); the user schedules the fixes. To plan
+then: how to split the repository into review tasks (by crate or concern) to keep each Grok
+session small.
+
+**When** (the user, 2026-10-28): after Grok's weekly allowance resets, **Friday 2026-10-30 at
+9:00** (at 86% after M3.4; the rest of the week goes to M3.5's and M3.6's reviews and docs).
+
+**Not yet reviewed, so first in it** (the user, 2026-10-28: committed before a review, to be
+reviewed there): what was built after Grok's M3.6 review — the fixes of its findings (the
+followed users and token files, the lease given back on a failed migration, the chart's Istio
+objects for `mode: ui` and the UI's pods, the UI port kept for other UIs, a `default` listed
+twice), decision 40A (`[webserver] ui_port_in_mesh`, the chart's mesh proof and its DENY
+policy, `istio.authorizationPolicy.ui.principals`), 41A (the sign-in pairs, `ui.auth` taking
+`webserver.auth`'s), `scripts/users-file.py`, and the guide's Sign-in section (written by
+Claude, no docs round).
+
+**How it is run** (the user, 2026-10-30): split into 14 sections by concern, riskiest first,
+one fresh read-only session each. **Moved to Codex** the same day, before any section ran
+(the plan is in the Codex skill's `reviews/schedr-full-2026-10-30.md`); Grok's allowance goes
+wholly to current work (reviews, bug fixing, docs). The share of Codex's week it takes is set
+with the user; its pace follows from the first sections' cost.
+'''

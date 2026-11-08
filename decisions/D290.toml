@@ -7,6 +7,7 @@ summary = '''
 The run graph places resource setups and cleanups in lanes in a Resources box to the left of tasks.
 They remain at their corresponding row heights, with lines in a separate channel crossing only between rows.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D290"
 step = "M4.8z"
+also = ["ui-cli"]
 checked = 2026-11-08

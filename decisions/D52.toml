@@ -8,5 +8,6 @@ M4 is split into small substeps, each committed after Claude’s own review and 
 tests. Reviews follow the revised session/whole-repository schedule, with later M4 reviews to be
 planned after the whole-repository review.
 '''
-history = "PLAN.md: M4: Native API complete"
+history = "plan/M4.toml: notes"
+step = "n/a"
 checked = 2026-11-08

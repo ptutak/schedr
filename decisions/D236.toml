@@ -6,8 +6,9 @@ topic = "configuration"
 summary = '''
 M4.8u passes hidden timings through each crate's own struct with defaults in the
 server, worker and webserver, including `auth_remembered` and `auth_recheck`. The
-client, `task-ctx` and CLI do not load this configuration.
+client, `task-ctx` and the CLI's commands don't use these timings (the binary reads the
+configuration file for every command but `task-ctx` and `dag-ctx`).
 '''
-history = "PROJECT.md: Timings: public keys and hidden ones"
+history = "PROJECT.md#D236"
 step = "M4.8u"
 checked = 2026-11-08

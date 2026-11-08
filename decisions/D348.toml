@@ -7,6 +7,7 @@ summary = '''
 A trigger runs on a watcher slot as a hidden sensor, without a graph node or attempt.
 Events are acknowledged after storage; the trigger resumes from its bookmark and restarts on code changes.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D348"
 step = "M4.11b"
+also = ["wait-steps"]
 checked = 2026-11-08

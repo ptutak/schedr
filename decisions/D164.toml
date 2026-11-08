@@ -7,6 +7,7 @@ summary = '''
 `ghcr.io/ptutak/schedr` includes Python and runs standalone or workers.
 `schedr-server` runs the master, webserver and `schedr ui`.
 '''
-history = "PROJECT.md: Packaging and releases"
+history = "PROJECT.md#D164"
 step = "R0.3"
+also = ["components", "deployment"]
 checked = 2026-11-08

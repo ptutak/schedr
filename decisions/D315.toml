@@ -7,6 +7,7 @@ summary = '''
 Async tasks can await task_ctx.asecret, task_ctx.asecret_value and acleanup_handle.
 Sync calls remain available and block the event loop while waiting.
 '''
-history = "PROJECT.md: Async task functions"
+history = "PROJECT.md#D315"
 step = "M4.10"
+also = ["async-tasks"]
 checked = 2026-11-08

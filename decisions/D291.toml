@@ -8,7 +8,8 @@ Shared-group users get one setup-to-group line and one group-to-cleanup line; ot
 connect first and last users. Other lines and the rail appear on hover or selection, each user has a
 colored dot, and lines from cleanup onward remain visible.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D291"
 step = "M4.8z"
+also = ["ui-cli"]
 code = ["crates/schedr-ui/src/runs.rs", "crates/schedr-ui/templates/run.html"]
 checked = 2026-11-08

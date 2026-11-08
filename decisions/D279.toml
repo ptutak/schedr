@@ -10,7 +10,8 @@ setup failed, skipped or was cancelled; the run ends cancelled unless something 
 blocking cleanup cancels what follows its group; cancelling a non-blocking cleanup affects nothing
 else.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D279"
 step = "M4.8f"
+also = ["runs", "ui-cli"]
 code = ["crates/schedr-ui/src/runs.rs"]
 checked = 2026-11-08

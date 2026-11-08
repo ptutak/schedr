@@ -1,0 +1,64 @@
+title = "sign-in against LDAP"
+order = 90
+done_when = '''
+A person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests.
+'''
+notes = '''
+Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in PROJECT.md): a sign-in mode
+of its own, `[*.auth] mode = "ldap"`, checking HTTP Basic credentials against the
+organisation's directory (a bind), for deployments without Istio and Keycloak (decision 39: no
+users of schedr's own). Decisions laid out on 2026-10-28, to take when M6 starts:
+
+- **45, finding the person's entry:** A search, then bind (a service account searches
+  `(uid={user})` under a base DN, then the password is checked by binding as the DN found;
+  works with Active Directory and people in several OUs; the service account's password from
+  a Secret); B a DN template (`uid={user},ou=people,…`; no service account; fails across OUs);
+  C both.
+- **46, who may sign in:** A an optional `group_dn` (members only when set, by `memberOf` or a
+  group search); B a group required; C none (any valid account). Membership isn't a role.
+- **47, the connection:** A TLS required (`ldaps://` or StartTLS, an optional CA file; plain
+  `ldap://` only on loopback); B plain allowed with a flag and a warning.
+- **Settled by precedent:** `ldap3` 0.12.1 (checked 2026-10-28, re-check its age then); a check
+  that passed remembered 5 minutes as `basic`'s; `behind_tls_proxy` beyond loopback; the bind
+  password from a mounted Secret, never the configuration; a wrong password, an unknown user
+  and a non-member answered alike, in comparable time. Tested against an OpenLDAP container.
+
+### M6 proposals
+
+**Scheduled for M6:** B39's rest (the run graph's width with many groups; decisions 1-12 and
+open findings in BUGS.md). The user, 2026-10-30: fix it in M6 by **(1) a layout correct by
+construction**, each group laid out as a block of its own tasks first, then placed as one
+node in the outer graph, recursively (as Graphviz's clusters and ELK do), replacing the
+push-boxes-apart repair whose rules interact; **and (2) a safety net**: after the layout,
+check it (no box over a foreign task, nested boxes inside their parents, the width within
+the side-by-side bound) and fall back to strips (a group a vertical strip, recursively) when
+it fails. Merged meanwhile (2026-10-30): the partial fix, far better on the bad shapes and
+wider on about 5% of random ones (BUGS.md B39).
+
+Ideas logged for M6, not decided:
+
+- **Changing a concurrency limit without a code change** (decision 95, 2026-10-30: not in
+  M4.4): an override through the API or CLI during an incident, like Airflow's editable
+  pools; with limits shared across DAGs.
+- **Skip (or set a task's state) from the UI and the CLI** (the user, 2026-10-30): a person
+  marks a task that hasn't run as skipped. To settle then: what its downstream gets (a data
+  edge of a skipped task passes `None`, so the parse-time check of `None` would have to
+  cover it; "mark success" would need an output schedr can't invent), whether a running task
+  can be skipped, a mapped task's instances, and the command log recording who and why.
+- **Human in the loop** (the user, 2026-11-05: built in M6, after 1.0.0; designed, decisions
+  283-289, PROJECT.md "Human in the loop"): `approve(...)` and `ask(...)`, a wait step the
+  master holds (no worker slot), the answer typed and checked, `Rejected` and `TimedOut`
+  outcomes, `approvers=` and `four_eyes=`, an email with a link to the UI, each answer in the
+  command log; the docs show a `@sensor.poke` for answers kept in other systems.
+- **`exclusive=True`: a task stopped on a cut, retried only after the lease** (the user,
+  2026-11-05: an idea, built when a user needs it; decision 280's not-chosen opt-in). About one
+  step on M4.8b3's machinery: the agent's set of tasks stopped at the lease (today the
+  `cleanup_anywhere` gates) widened to exclusive tasks, the master's retry of one lost with its
+  worker not before the lease, the cancel grace and a margin, the stress checker failing on
+  its overlap. Why not now: it closes a narrow gap (a worker cut from the master but not from
+  what its task writes to, past the lease); a frozen worker and a crash before the result is
+  stored still run a task twice, so tasks with outside effects must be idempotent anyway, and
+  then it adds nothing; the name reads as a guarantee it isn't; every such task stops on a
+  master or database outage past the lease. To decide then: the name, a DAG-level default,
+  resource setups, whether the stop uses a retry.
+'''

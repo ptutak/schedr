@@ -7,6 +7,6 @@ summary = '''
 Timings whose right values depend on the deployment are public keys.
 Each key has a doc comment describing its effect and when to change it.
 '''
-history = "PROJECT.md: Timings: public keys and hidden ones"
+history = "PROJECT.md#D231"
 step = "M4.8t"
 checked = 2026-11-08

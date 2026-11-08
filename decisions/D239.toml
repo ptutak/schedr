@@ -7,6 +7,7 @@ summary = '''
 `auth_remembered` and `auth_recheck` use hidden timing values.
 Changing the users file forgets remembered checks; `auth_recheck` sets the change delay.
 '''
-history = "PROJECT.md: Timings: public keys and hidden ones"
+history = "PROJECT.md#D239"
 step = "M4.8u"
+also = ["ui-cli"]
 checked = 2026-11-08

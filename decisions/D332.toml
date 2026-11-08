@@ -9,6 +9,7 @@ cores the agent may use; 1 parses sequentially. dags check uses it and forks whe
 interpreter has a fork server. Parsing consumes no task slots; each process has its own
 memory budget.
 '''
-history = "PROJECT.md: DAG code delivery"
+history = "PROJECT.md#D332"
 step = "M4.11L"
+also = ["code-delivery"]
 checked = 2026-11-08

@@ -194,6 +194,11 @@ with coverage, per language: `test-rust`, `test-python`), `test-integration`, `d
 `docs-serve`, `smoke` (package smoke test), `check` (everything CI runs), `clean`, and
 `target-size` (`check` runs it first: cleans the build directory once it holds more than a
 set size, 50 GiB here, since Cargo never deletes old artifacts).
+- **`undone-check`** (first in `check`): `scripts/undone.py` (the `project-docs` skill's
+  template) fails when the uncommitted changes remove more than 20 lines the last 10 commits
+  added and don't add them back elsewhere; CI runs it on each pushed commit
+  (`--range BEFORE..AFTER`, a full fetch), where a commit meaning it says `Undoes: ...`. It
+  catches work copied over main from an older worktree.
 
 - **Integration tests start on a quiet disk:** build the test binaries, `sync`, then start
   the database and the tests. A rebuild leaves gigabytes unflushed, and a database's fsyncs
@@ -349,18 +354,24 @@ question has one small file that answers it, so an agent reads little and never 
 
 | File | Answers | Written |
 |---|---|---|
-| `STATUS.md` | where things stand, what's next, what waits for the user | rewritten at each step's or session's end, at most 60 lines |
-| `design/<topic>.md` | how a part works **now** (Current, Decisions, Where in code, Open) | edited in place, at most ~300 lines |
-| `decisions/D<n>.toml`, `DECISIONS.md` | what was decided, whether it still holds, where its reasons are | one file per decision (status `active`, `superseded`, `dropped`, `untraced`); `DECISIONS.md` generated |
-| `PROJECT.md` | how the project got here and **why**: reasons and "Not chosen" | dated Journal entries appended, never rewritten |
-| `PLAN.md` | milestones, each with a "done when"; steps in dependency order, each with its own | edited; a status line when a milestone is done |
+| `STATUS.md` | where things stand, what waits for the user | rewritten at each step's or session's end, at most 60 lines; its top block (milestone, next step, open questions, bugs) generated |
+| `design/<topic>.md` | how a part works **now** (Current, Decisions, Where in code, Open) | Current by hand, at most ~300 lines; the lists of decisions, code and open questions generated |
+| `decisions/D<n>.toml` | what was decided, whether it holds, the step that builds it, its anchor in `PROJECT.md` | one file per decision; `DECISIONS.md` generated, one line each |
+| `questions/Q<n>.toml` | what is not decided yet, with the current proposal | one file per question; shown in `DECISIONS.md` and the topic's page |
+| `plan/<milestone>.toml` | milestones and steps in order, each with its scope, "done when" and status | edited; `PLAN.md` generated, one line per step; "next" is the first planned step |
+| `JOURNAL.md` | how the project goes on and **why**: each decision's question, options, choice, reasons and "Not chosen" | dated entries appended, never rewritten, each starting with its anchor `<a id="D<n>"></a>` |
+| `PROJECT.md` (an older project's log) | the history before the journal | left as it is: only anchors added, the same way |
 | `bugs/`, `BUGS.md` | open bugs, ranked | one TOML per bug, generated `BUGS.md` (below) |
 
+- **Generated views are indexes:** one line per item, saying where the details are; the
+  records (TOML files, anchors) hold the content. A list or a state that two files would
+  otherwise both hold is generated from one.
 - **A decision** is recorded the moment it is taken, in one change: its TOML
-  (`scripts/decisions.py new`), a Journal entry in `PROJECT.md` (the options, the choice, why,
-  "Not chosen"), and the topic's "Current". `make decisions-check` (in `make check` and CI) fails
-  on an invalid file, a gap in the numbers, a decision named anywhere but not recorded, an
-  active decision's code path gone, or a stale `DECISIONS.md`.
+  (`scripts/records.py decision "<title>"`), a dated entry in `JOURNAL.md` (the options, the
+  choice, why, "Not chosen") starting with its anchor, and the topic's "Current". `make records` writes
+  every generated view; `make records-check` (in `make check` and CI) fails on an invalid
+  record, a gap in the numbers, a decision named anywhere but not recorded, a missing anchor, a
+  step not in the plan, an active decision's code path gone, or a stale view.
 - **Bugs:** open bugs with stable IDs (B1, B2, …, never reused), one TOML file each,
   `bugs/B<n>.toml`: a title, a rating (severity critical/high/medium/low × probability
   likely/possible/rare, and a kind: security, data, correctness, reliability, performance,

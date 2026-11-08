@@ -7,6 +7,7 @@ summary = '''
 A cleanup that fails after its last retry remains `cleanup_failed` and fails the run.
 The failure is shown clearly; a retry command comes later.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D263"
 step = "M4.8c2"
+also = ["runs", "outcomes"]
 checked = 2026-11-08

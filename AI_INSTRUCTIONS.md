@@ -123,9 +123,17 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   in the middle of a choice, answer it, then ask again.
 - **Record "Not chosen: …"** for alternatives that were seriously considered.
 - **Record each decision the moment it is taken** (the `project-docs` skill's routine): its
-  `decisions/D<n>.toml`, a dated entry in `PROJECT.md`'s Journal with the reasons and "Not
-  chosen", and the topic's "Current" in `design/<topic>.md`; a replaced one marked
-  `superseded`. `make decisions-check` catches one named but not recorded.
+  `decisions/D<n>.toml` (`python3 scripts/records.py decision "<title>"`; its `step` the plan
+  step that builds it), a dated entry in `JOURNAL.md` with the reasons and "Not chosen",
+  starting with the decision's anchor (`<a id="D<n>"></a>`), and the topic's "Current" in
+  `design/<topic>.md`; a replaced one marked `superseded`. Built or planned is never written by
+  hand: it is the step's status in `plan/`. The commit that finishes a step sets the step's
+  `status = "done"`, its date and commit, and turns "planned" into the present in the design
+  pages. `make records-check` catches a decision named but not recorded, a missing anchor, a
+  stale generated view.
+- **Generated views are indexes:** `DECISIONS.md`, `PLAN.md`, `STATUS.md`'s block and the
+  design pages' lists say in one line per item where the details are; read the record (the
+  TOML, the anchor) before relying on it.
 - **A decision's summary is an index, not the decision:** before building options or code on
   one, read its full text where its `history` points. Before saying how something behaves,
   read the code (the topic's "Where in code") or run it, and say which.
@@ -178,6 +186,17 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   `M2.1: <what>, <what>; <what>`, then the co-author trailer the session asks for.
 - Pre-commit hooks must pass; don't bypass them. Stage a rename together with everything that
   uses it, so no commit holds half of it.
+- **Work done in a worktree reaches main through git only** (commit on its branch, then merge,
+  rebase or cherry-pick), never by copying its files over main: that silently undoes whatever
+  main gained since the worktree was made (B190: a step's commit undid the whole step before
+  it, tests included, and CI stayed green). A colleague's edits to records go in field by
+  field onto main's current files.
+- **Read `git diff --cached --stat` before every commit:** after a `git stash pop` that hit a
+  conflict, every cleanly merged file is left staged, and a commit of "three files" takes them
+  all. Keep a backup (a patch, a tar of new files) before stash or merge juggling.
+- **A commit that means to remove recent work says so:** `Undoes: <what, why>` in its message
+  (`make undone-check` and CI fail on a change removing over 20 lines the last 10 commits
+  added; before committing, `SCHEDR_UNDO_OK=1` lets a meant one through).
 
 ## Communication
 

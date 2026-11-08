@@ -7,7 +7,8 @@ summary = '''
 A confirmation names the connection and says Test logs in to the real system
 with this deployment's secrets. Anyone signed in can run it.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D210"
 step = "M4.7e"
+also = ["ui-cli"]
 code = ["crates/schedr-ui/src/connections.rs"]
 checked = 2026-11-08

@@ -7,6 +7,6 @@ summary = '''
 A run’s tasks include rows for mapped instances, identified by `map_index`.
 Per-instance operations use `?map_index=N`; unmapped tasks use index -1.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D71"
 step = "M4.3c"
 checked = 2026-11-08

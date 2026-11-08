@@ -7,7 +7,7 @@ summary = '''
 Vault KV v2 values that are not strings are read as JSON text.
 The resulting text is masked as a secret.
 '''
-history = "PROJECT.md: Secret storage"
-step = "M4.6c"
+history = "PROJECT.md#D171"
+step = "M4.6d"
 code = ["crates/schedr-agent/src/vault.rs"]
 checked = 2026-11-08

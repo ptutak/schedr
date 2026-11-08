@@ -7,7 +7,7 @@ summary = '''
 A job declaration containing `notify` produces an import error naming the job.
 The error says notifications are not available yet.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D298"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs"]
 checked = 2026-11-08

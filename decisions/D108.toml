@@ -9,6 +9,7 @@ registers again with its roots and journal. Under D115, data faults keep the str
 Finished becomes an acknowledged result_not_stored failure, other refused messages are logged and
 dropped, and registration adopts open attempts whose start record was refused.
 '''
-history = "PROJECT.md: Worker lifecycle"
+history = "PROJECT.md#D108"
 step = "M4.3e"
+also = ["protocol", "state"]
 checked = 2026-11-08

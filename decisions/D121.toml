@@ -7,7 +7,8 @@ summary = '''
 The page is named Deployments, matching the UI and its deployments configuration.
 It shows the deployments available to the UI.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D121"
 step = "M4.4b"
+also = ["deployment"]
 code = ["crates/schedr-ui/src/deployments.rs"]
 checked = 2026-11-08

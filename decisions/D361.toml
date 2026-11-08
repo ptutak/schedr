@@ -7,6 +7,6 @@ summary = '''
 A retry starts a new target run only after the previous run failed.
 The run is created and recorded on the task in one transaction.
 '''
-history = "PROJECT.md: Dependencies between DAGs"
+history = "PROJECT.md#D361"
 step = "M4.12a"
 checked = 2026-11-08

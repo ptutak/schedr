@@ -7,7 +7,8 @@ summary = '''
 A parsing worker reports an import error naming a script root it lacks.
 Workers parsing DAGs need the script roots those DAGs use.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D295"
 step = "M4.9b"
+also = ["code-delivery"]
 code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-model/src/runner.rs"]
 checked = 2026-11-08

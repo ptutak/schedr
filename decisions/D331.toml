@@ -7,7 +7,7 @@ summary = '''
 Checking a named file or folder within a configured root retains its module path and other roots.
 A named file that a worker does not receive is an error.
 '''
-history = "PROJECT.md: DAG code delivery"
+history = "PROJECT.md#D331"
 step = "M4.11L"
 code = ["crates/schedr/src/local.rs"]
 checked = 2026-11-08

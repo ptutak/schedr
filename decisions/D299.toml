@@ -7,7 +7,7 @@ summary = '''
 A script root and a DAG root with the same name cause a startup error naming both paths.
 `[scripts.roots]` can rename a script root.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D299"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-config/src/roots.rs"]
 checked = 2026-11-08

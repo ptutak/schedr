@@ -1,12 +1,13 @@
 title = "A DAG root imports only from itself and installed packages"
 date = 2026-10-31
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 327
 topic = "code-delivery"
 summary = '''
 A root's code depends only on that root and installed packages.
 Shared code is installed as a package or kept in each root.
 '''
-history = "PROJECT.md: Code versions and change detection"
-step = "M4.3e"
+history = "PROJECT.md#D103"
+step = "n/a"
 checked = 2026-11-08

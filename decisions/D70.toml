@@ -8,7 +8,8 @@ An element-wise mapped-output lane expands after its upstream expands; instance 
 instance i. Other edges, an explicit order edge, or another reference to that upstream make it a
 whole-task barrier. Outcome narrowing with `.on(...)` remains per instance even behind that barrier.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D70"
 step = "M4.3b"
+also = ["outcomes"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
 checked = 2026-11-08

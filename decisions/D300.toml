@@ -7,7 +7,7 @@ summary = '''
 A standalone job's one task uses the job name as its task ID.
 Job names contain only letters, digits, `_` and `-`; invalid names produce an import error.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D300"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs"]
 checked = 2026-11-08

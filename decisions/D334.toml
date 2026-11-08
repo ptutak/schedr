@@ -9,7 +9,8 @@ imports are reused within the host; failed imports are retried for the next atte
 folder is the worker log folder and its environment is the allow-list plus `pass_env`; wait steps
 obtain run values from `dag_ctx` and `task_ctx` and use absolute paths.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D334"
 step = "M4.11a2"
+also = ["workers"]
 code = ["crates/schedr-agent/src/watchers.rs"]
 checked = 2026-11-08

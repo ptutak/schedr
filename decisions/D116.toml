@@ -9,6 +9,7 @@ server waits and request sending. The process receives only the remaining budget
 launch starts no process and ends timed_out, removing connection files. Timeout or cancellation
 before hello stops the runner and ends the attempt accordingly.
 '''
-history = "PROJECT.md: Task assignment"
+history = "PROJECT.md#D116"
 step = "M4.3e"
+also = ["assignment"]
 checked = 2026-11-08

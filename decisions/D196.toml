@@ -9,7 +9,7 @@ tests cover login, TLS modes and both vendors' clients. Documentation states tha
 11.4+'s self-made certificate cannot pass verify-*; use a real certificate or
 sslmode=require.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D196"
 step = "M4.7b2"
 code = ["python/schedr/connection_types.py"]
 checked = 2026-11-08

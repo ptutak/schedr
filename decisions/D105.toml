@@ -7,7 +7,8 @@ summary = '''
 Floats round-trip to the same bits; integers outside -2**63 through 2**64 - 1 fail where written.
 The integer limit also applies to Literal integers and timedelta microseconds.
 '''
-history = "PROJECT.md: Output serialization"
+history = "PROJECT.md#D105"
 step = "M4.3e"
+also = ["python-api"]
 code = ["python/schedr/_serialization/codec.py"]
 checked = 2026-11-08

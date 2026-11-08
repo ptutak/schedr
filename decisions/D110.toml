@@ -7,6 +7,7 @@ summary = '''
 The agent replaces NUL in ProcessResult stdout and stderr with U+FFFD.
 The log file keeps the original bytes.
 '''
-history = "PROJECT.md: Output serialization"
+history = "PROJECT.md#D110"
 step = "M4.3e"
+also = ["task-processes"]
 checked = 2026-11-08

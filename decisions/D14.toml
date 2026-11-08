@@ -7,6 +7,7 @@ summary = '''
 The shim reports core dumps and process usage with the exit status.
 If usage cannot be read, it reports null and still reports the exit.
 '''
-history = "PROJECT.md: How Python tasks are started"
+history = "PROJECT.md#D14"
 step = "M2.5.3"
+also = ["observability"]
 checked = 2026-11-08

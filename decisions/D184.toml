@@ -8,7 +8,8 @@ A `CommandOperator` connection dict supplies prefixed variables and agent-writte
 The list form allows `task-ctx connection NAME --env P` to supply them at runtime.
 Files are mode 0600 and removed when the attempt ends.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D184"
 step = "M4.7b2"
+also = ["task-processes", "task-context"]
 code = ["crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/connection_env.rs", "crates/schedr-agent/src/secrets.rs"]
 checked = 2026-11-08

@@ -7,6 +7,6 @@ summary = '''
 A new value is a public key when deployment determines its right value; otherwise it is hidden.
 A binary constant requires a really good reason.
 '''
-history = "PROJECT.md: Timings: public keys and hidden ones"
-step = "M4.8t"
+history = "PROJECT.md#D237"
+step = "n/a"
 checked = 2026-11-08

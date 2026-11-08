@@ -8,7 +8,8 @@ For a task declaring per-task cleanup without `cleanup_anywhere`, worker loss re
 a failed cleanup and fails the run even when no handle was registered or the task's
 retry succeeds. The failure message points to `cleanup_anywhere`.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8"
+history = "PROJECT.md#D220"
+step = "M4.8b2"
+also = ["workers", "runs"]
 code = ["crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/dispatch/tests.rs"]
 checked = 2026-11-08

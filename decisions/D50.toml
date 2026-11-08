@@ -4,8 +4,11 @@ by = "user"
 status = "active"
 topic = "workers"
 summary = '''
-The internal `schedr task-exec` sets the data limit before executing a limited command.
-A fork-server child sets its own limit before running user code.
+Planned (M4.15), not built: an internal `schedr task-exec` sets the data limit before executing a
+limited command; a fork-server child sets its own limit before running user code. Until then the
+`setrlimit` flag in the protocol is always false.
 '''
-history = "PROJECT.md: Worker memory protection and crash recovery"
+history = "PROJECT.md#D50"
+step = "M4.15"
+also = ["task-processes"]
 checked = 2026-11-08

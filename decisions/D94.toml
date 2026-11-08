@@ -7,6 +7,8 @@ summary = '''
 A dependency from a group joins its last tasks, including a branch, to following tasks with order edges.
 Each following task applies its own run_if; the branch's own edges remain choices.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D94"
+step = "M4.3c"
+also = ["outcomes"]
 code = ["crates/schedr-master/src/validate.rs", "python/schedr/_build.py"]
 checked = 2026-11-08

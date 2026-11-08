@@ -7,6 +7,8 @@ summary = '''
 Each parse_files row records the worker_id and parsed_at for that file.
 A retry records its own worker and time.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D93"
+step = "M4.3c"
+also = ["ui-cli"]
 code = ["crates/schedr-db/src/dags.rs", "crates/schedr-master/src/discovery.rs"]
 checked = 2026-11-08

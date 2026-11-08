@@ -9,7 +9,8 @@ applied by `schedr db migrate` or startup `--migrate`, holding the lease, never 
 The webserver follows the database’s trigger state; when off, it sends refresh events every
 `[webserver] refresh_interval` (15 s).
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D38"
 step = "M3.4"
+also = ["state", "configuration"]
 code = ["crates/schedr/src/roles.rs"]
 checked = 2026-11-08

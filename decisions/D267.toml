@@ -7,7 +7,7 @@ summary = '''
 A resource is shared by DAGs that import it, with its cleanup attached to the resource.
 A different cleanup requires a different resource.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D267"
 step = "M4.8c1"
 code = ["python/schedr/resources.py"]
 checked = 2026-11-08

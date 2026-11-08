@@ -11,6 +11,8 @@ after repair. ParseTimeout and RunnerDied hold nothing; transiently failed files
 starting after 30 s and doubling to 10 min, preferring another worker. Holds and their file-level
 reasons appear in the API, UI, CLI, metrics and logs.
 '''
-history = "PROJECT.md: DAG code delivery"
+history = "PROJECT.md#D72"
+step = "M4.3a"
+also = ["runs", "ui-cli", "assignment"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/migrations/postgres/0001_initial.sql"]
 checked = 2026-11-08

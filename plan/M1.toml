@@ -1,0 +1,209 @@
+title = "Standalone runs a native DAG"
+order = 20
+done_when = '''
+A new user can `pip install` the wheel, write the example DAG, run `schedr dags test` on it, start `schedr standalone`, trigger a run with `schedr runs trigger --for ...` and see it succeed with `schedr runs list`.
+'''
+notes = '''
+In dependency order; each step ends with **unit tests**, and with **integration tests**
+where its "done when" needs real processes, files or the whole system. The integration tests
+of 1.4–1.14 were written after 1.14 (first planned as one step at the end, 1.17); from 1.15
+on, each step brings its own.
+
+
+**M1 is done** when a new user can `pip install` the wheel, write the example DAG from
+PROJECT.md (Native API), run `schedr dags test` on it, start `schedr standalone`, unpause the
+DAG, trigger a run with `schedr runs trigger --for ...`, and see it succeed with
+`schedr runs list`.
+
+**Status (2026-10-22): M1 is done.** Steps 1.1–1.17 are committed (the last: 1.16, `df309b8`).
+The paragraph above is checked automatically by `scripts/smoke-wheel.sh` (CI's `wheel` job,
+`make smoke`): the release wheel installed into a fresh venv, `dags check`, `dags test` on the
+example DAG, then `schedr standalone` with `dags unpause`, `runs trigger --for ...` and `runs
+list` until the run succeeds. Open bugs are in `BUGS.md`.
+'''
+
+[[steps]]
+id = "1.1"
+title = "Native API, parse side"
+scope = '''
+`Dag` context manager, `@task` with required return annotation, `CommandOperator`, `EmptyOperator`, data flow and `>>`, IDs and duplicates, strict arguments, no subclassing, `Cron` / `Every` / presets, `StepDefaults`, `dag_ctx` references
+'''
+done_when = "`with Dag(...)` produces DAG JSON that validates against the schema"
+status = "done"
+done = 2026-10-21
+commits = ["a6c9ddf"]
+
+[[steps]]
+id = "1.2"
+title = "Serialization"
+scope = '''
+the type model and parse-time checks (return types, inputs, paths, `None` from skippable tasks), run-time encode / decode with tagged types, dataclasses, strict checks, size limits
+'''
+done_when = "unit tests per supported / rejected type, with the exact error messages"
+status = "done"
+done = 2026-10-21
+commits = ["3978d3a"]
+
+[[steps]]
+id = "1.3"
+title = "Templates"
+scope = '''
+t-strings to template parts, nested traversal rules, format specs (`raw`), parse errors (dict keys, untraversed containers, unknown specs)
+'''
+done_when = "unit tests"
+status = "done"
+done = 2026-10-21
+commits = ["5d2657b"]
+
+[[steps]]
+id = "1.4"
+title = "Runner `parse`"
+scope = '''
+and the socket protocol (length-prefixed JSON, version handshake), per-file results and import errors
+'''
+done_when = "integration test: a directory of DAG files → JSON + errors"
+status = "done"
+done = 2026-10-21
+commits = ["5f806d8"]
+
+[[steps]]
+id = "1.5"
+title = "Agent, processes"
+scope = '''
+spawn with `process_group(0)`, stdout / stderr to log files, clean environment + allow-list + `SCHEDR_*`, working directory, timeouts, SIGTERM → SIGKILL on the group, attempt statuses, `ProcessResult` with truncation
+'''
+done_when = '''
+integration tests with real processes (sleep, output floods, ignoring SIGTERM, child processes)
+'''
+status = "done"
+done = 2026-10-21
+commits = ["9eb635f"]
+
+[[steps]]
+id = "1.6"
+title = "Agent, rendering"
+scope = '''
+command templates rendered in Rust, shell quoting with `shlex.quote` parity, argument-list commands, references resolved from inputs and run information
+'''
+done_when = "parity tests against Python's `shlex.quote` over generated strings"
+status = "done"
+done = 2026-10-21
+commits = ["eff7356"]
+
+[[steps]]
+id = "1.7"
+title = "Runner `task`"
+scope = '''
+import the DAG file, find the task, decode inputs, call, encode the output or an error summary
+'''
+done_when = "integration tests through the agent"
+status = "done"
+done = 2026-10-21
+commits = ["b7ea162"]
+
+[[steps]]
+id = "1.8"
+title = "Master, DAGs"
+scope = '''
+parse jobs per (root, hash, version), change detection (poll, settle, hash), validation, storage, new DAGs paused, removed DAGs, conflicts (single worker)
+'''
+done_when = "integration tests over a temp root with files added, changed, removed"
+status = "done"
+done = 2026-10-21
+commits = ["1c768e2", "e2fcf36"]
+
+[[steps]]
+id = "1.9"
+title = "Master, scheduling"
+scope = '''
+fire times (cron in a zone, DST rules, `Every` in UTC), `planned_for` / `since`, `catchup`, `max_active_runs` (missed vs `queued`), manual runs with `--for` (UTC without offset, with a warning), uniqueness for scheduled runs
+'''
+done_when = "unit tests with a fake clock, incl. DST changes in Europe/Warsaw"
+status = "done"
+done = 2026-10-21
+commits = ["81e5a42"]
+
+[[steps]]
+id = "1.10"
+title = "Master, execution"
+scope = '''
+task instance states, `NoneFailed`, assignment (one local worker, slots), `AssignTask` / `Started` / `Finished` / `FinishedAck`, retries and `retry_delay`, the no-`Started` timeout, run results, cancellation
+'''
+done_when = "integration tests: chains, joins, failures, retries, cancel"
+status = "done"
+done = 2026-10-21
+commits = ["3634b4d", "5a64a7b"]
+
+[[steps]]
+id = "1.11"
+title = "Commands"
+scope = '''
+command rows (trigger, cancel, pause, unpause), validation and `applied` / `rejected` with reasons, polling
+'''
+done_when = "unit + integration tests"
+status = "done"
+done = 2026-10-21
+commits = ["0e001f9"]
+
+[[steps]]
+id = "1.12"
+title = "Webserver REST subset"
+scope = '''
+(`/api/v1`): DAGs, runs, tasks, attempts, commands; version headers; OpenAPI generated and checked in CI
+'''
+done_when = "API tests; CI check"
+status = "done"
+done = 2026-10-21
+commits = ["6126500"]
+
+[[steps]]
+id = "1.13"
+title = "The user CLI"
+scope = '''
+`dags list` / `pause` / `unpause`, `runs trigger` / `list` / `cancel`, human output with UTC + local time, `--json`
+'''
+done_when = "CLI tests against a running standalone"
+status = "done"
+done = 2026-10-21
+commits = ["339f54f"]
+
+[[steps]]
+id = "1.14"
+title = "`schedr standalone`"
+scope = "all roles in one process, SQLite, gRPC on localhost"
+done_when = "the end-to-end example from PROJECT.md runs"
+status = "done"
+done = 2026-10-22
+commits = ["a47e9f6", "95b5c22", "4767d69"]
+
+[[steps]]
+id = "1.15"
+title = "`dags check`, `dags test`, `schedr.testing`"
+scope = '''
+plain-function `@task` calls, `task_context`, `run_dag` with per-task inspection (`state`, `output`, `attempts`, `log`, …)
+'''
+done_when = "the example DAGs in `examples/` have tests that pass in CI"
+status = "done"
+done = 2026-10-22
+commits = ["f9988c0", "fb0d5ec"]
+
+[[steps]]
+id = "1.16"
+title = "Packaging"
+scope = '''
+maturin wheel with the binary for Linux x86_64 (others in M2), `pip install` + `schedr standalone` smoke test in CI
+'''
+done_when = "a wheel built in CI runs the example"
+status = "done"
+done = 2026-10-22
+commits = ["df309b8"]
+
+[[steps]]
+id = "1.17"
+title = "Integration tests"
+scope = '''
+written after 1.14 for 1.4–1.14 (a directory of DAG files through the runner, real processes through the agent, every query on Postgres, the runner as a real process, `schedr standalone` end to end through the CLI and the API, also on Postgres), and with each step since
+'''
+done_when = "all pass in CI"
+status = "done"
+done = 2026-10-22

@@ -7,6 +7,7 @@ summary = '''
 The master answers each `Heartbeat` with `HeartbeatAck` as it arrives.
 The response is not behind the master’s lock and is not sent while paused.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D258"
 step = "M4.8b3"
+also = ["workers"]
 checked = 2026-11-08

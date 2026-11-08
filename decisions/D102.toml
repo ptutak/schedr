@@ -7,7 +7,8 @@ summary = '''
 The agent copies scanned root files into its data directory and hashes the copied bytes.
 Parse jobs and tasks import from the read-only copy; unused older copies are removed and bytecode is not used.
 '''
-history = "PROJECT.md: Code versions and change detection"
+history = "PROJECT.md#D102"
 step = "M4.3e"
+also = ["task-processes"]
 code = ["crates/schedr-agent/src/agent.rs"]
 checked = 2026-11-08

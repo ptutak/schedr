@@ -7,7 +7,8 @@ summary = '''
 A connection without a check is opened and closed by `connections test`.
 An exception fails the test; a Generic connection renders its values.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D198"
 step = "M4.7c"
+also = ["ui-cli"]
 code = ["crates/schedr-agent/src/connection_jobs.rs", "crates/schedr-model/src/runner.rs", "crates/schedr/src/cli.rs"]
 checked = 2026-11-08

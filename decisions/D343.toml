@@ -7,7 +7,8 @@ summary = '''
 The Workers page and metrics show each host’s code hash, wait steps, threads, memory and losses.
 The DAG page lists switched-off sensors with switch-on; the DAGs list shows their count.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D343"
 step = "M4.11a4"
+also = ["workers", "wait-steps"]
 code = ["crates/schedr-api/src/views.rs"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 A mapped task has one graph node labeled with its instance count and counts by state.
 Its panel lists instances with their attempts, logs and outputs.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D83"
 step = "M4.3c"
 code = ["crates/schedr-ui/src/runs.rs"]
 checked = 2026-11-08

@@ -7,6 +7,6 @@ summary = '''
 `delay` waits from the first try’s start; `until` waits for a planned-time offset or aware datetime.
 Both return the moment they end, and retries of `delay` wait only the remaining time.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D355"
 step = "M4.11g"
 checked = 2026-11-08

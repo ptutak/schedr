@@ -10,6 +10,8 @@ oversized lines visibly cut and their remainder skipped. Ordinary downstream tas
 outputs, already masked for secret values by the agent under D167; `RunOf` readers receive API-
 masked outputs.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D131"
+step = "M4.4b"
+also = ["task-logs", "outcomes"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-config/src/masked.rs"]
 checked = 2026-11-08

@@ -7,5 +7,5 @@ summary = '''
 The proposed fake for `schedr dags test` and `run_dag` is dropped.
 These runs use their local standalone master and temporary database for API calls.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D366"
 checked = 2026-11-08

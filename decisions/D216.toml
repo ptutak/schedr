@@ -7,7 +7,8 @@ summary = '''
 A rejected attempt, missing secret, or timeout during reads can leave the process unstarted.
 Its cleanup result is `not needed`.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8"
+history = "PROJECT.md#D216"
+step = "M4.8a"
+also = ["assignment", "outcomes"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-model/src/states.rs"]
 checked = 2026-11-08

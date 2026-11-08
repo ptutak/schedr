@@ -7,6 +7,7 @@ summary = '''
 A task stopped after losing contact with the master ends `lost`.
 It uses a retry.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D257"
 step = "M4.8b3"
+also = ["workers", "outcomes"]
 checked = 2026-11-08

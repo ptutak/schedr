@@ -7,6 +7,8 @@ summary = '''
 DAG IDs cannot be `.` or `..`.
 A file defining either ID receives an import error explaining why.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D127"
+step = "M4.4b"
+also = ["python-api"]
 code = ["crates/schedr-model/src/ids.rs"]
 checked = 2026-11-08

@@ -8,7 +8,7 @@ summary = '''
 The Config page shows the UI's masked configuration, versions, connection states and signed-in identity.
 In standalone it shows the process configuration.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D125"
 step = "M4.4b"
 code = ["crates/schedr-ui/src/deployments.rs"]
 checked = 2026-11-08

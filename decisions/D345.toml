@@ -7,5 +7,7 @@ summary = '''
 A task starts after its upstream tasks have ended.
 To act on the first of several, use a `first_of` node.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D345"
+step = "M4.11c"
+also = ["wait-steps"]
 checked = 2026-11-08

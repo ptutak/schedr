@@ -7,5 +7,7 @@ summary = '''
 Only a recorded worker `Finished` triggers an extra scheduler round.
 A new worker’s registration waits for the next regular tick.
 '''
-history = "PROJECT.md: Components and roles"
+history = "PROJECT.md#D43"
+step = "M3.6"
+also = ["assignment"]
 checked = 2026-11-08

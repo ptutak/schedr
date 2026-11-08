@@ -7,5 +7,6 @@ summary = '''
 `approve` produces a yes-or-no answer; `ask` accepts a `Literal`, `Enum`, dataclass or pydantic model.
 The answer is the step's output and the master validates it against its schema.
 '''
-history = "PROJECT.md: Human in the loop (M6)"
+history = "PROJECT.md#D284"
+step = "M6"
 checked = 2026-11-08

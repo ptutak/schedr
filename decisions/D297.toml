@@ -7,7 +7,8 @@ summary = '''
 A paused or superseded master returns 503 from `/readyz` until it leads again. It refuses worker
 streams with `UNAVAILABLE`, including registrations that waited for its lock while it paused.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D297"
 step = "M4.8z"
+also = ["workers", "observability"]
 code = ["crates/schedr-agent/src/jobs.rs"]
 checked = 2026-11-08

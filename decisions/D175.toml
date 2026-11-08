@@ -8,7 +8,8 @@ A SharedWorker distributes the deployments' changes to live pages, with replay o
 Without SharedWorker each page has its own stream, released after 10 seconds hidden.
 Running attempts' log tails are polled.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D175"
 step = "M4.6f"
+also = ["task-logs"]
 code = ["crates/schedr-ui/src/assets.rs", "crates/schedr-ui/src/live.rs"]
 checked = 2026-11-08

@@ -11,6 +11,8 @@ expand_kwargs elements fail their instance at assignment, unretried, with input_
 expand_kwargs dictionaries have names and types checked at load, including overlap with partial
 arguments.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D76"
+step = "M4.3b"
+also = ["protocol", "serialization"]
 code = ["crates/schedr-master/src/mapping.rs", "python/schedr/runner/task.py"]
 checked = 2026-11-08

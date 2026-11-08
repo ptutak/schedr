@@ -10,7 +10,8 @@ length-prefixed JSON, beginning with protocol `hello`. The agent serves at most 
 the attempt ends and rejects later calls; malformed descriptor messages are dropped and their
 descriptors closed. Linux and macOS are supported.
 '''
-history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+history = "PROJECT.md#D143"
 step = "M4.5b"
+also = ["protocol", "task-processes"]
 code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs"]
 checked = 2026-11-08

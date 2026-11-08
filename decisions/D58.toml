@@ -7,5 +7,7 @@ summary = '''
 `[grpc] max_message_size` limits worker messages, defaults to 64 MiB and ranges from 4 MiB to 1 GiB.
 The master announces it to workers in `Registered`.
 '''
-history = "PROJECT.md: Master–worker protocol"
+history = "PROJECT.md#D58"
+step = "M4.2a"
+also = ["configuration"]
 checked = 2026-11-08

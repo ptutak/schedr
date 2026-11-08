@@ -9,7 +9,8 @@ selection uses fewest attempts, then name; --worker selects an eligible worker. 
 workers are refused, including explicitly named workers. A check without a name covers every connection in
 the root.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D193"
 step = "M4.7c"
+also = ["workers", "assignment", "ui-cli"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/connection_jobs.rs"]
 checked = 2026-11-08

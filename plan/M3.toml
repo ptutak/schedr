@@ -1,0 +1,95 @@
+title = "Web UI"
+order = 50
+done_when = '''
+The web UI shows DAGs, runs (their graph, tasks, attempts, outputs and logs, live), workers and commands, and takes the actions the API takes, with the auth modes, times in UTC and local, light and dark themes, over a list of deployments.
+'''
+notes = '''
+Done when (PROJECT.md, Roadmap): the web UI shows DAGs, runs (their graph, tasks, attempts,
+outputs and logs, live), workers and commands, and takes the actions the API takes, with the
+auth modes, times in UTC and local, light and dark themes, over a list of deployments.
+
+Steps planned with the user (2026-10-27; decisions 21B-26A in PROJECT.md, Web UI): `schedr ui`,
+a role of its own talking only to webservers' JSON APIs (21B); askama and htmx (26A); a layered
+graph layout of our own (22A); the log tail polled and relayed over SSE (23A); no sessions of our
+own, actions checked by `Origin` (24A); M4's views as shells (25B); one stylesheet of our own,
+light and dark themes with a toggle (the user's). Claude implements each step; Grok reviews it
+and updates the guide.
+'''
+
+[[steps]]
+id = "M3.1"
+title = "Foundations"
+scope = '''
+the `schedr ui` role (a deployments list, one the common case; its own API client to the webservers; standalone serves it too), askama templates, the assets embedded in the binary (htmx vendored when first used, in M3.2), the stylesheet with light and dark themes and the toggle, times in UTC and local (the zone cookie), URLs following `X-Forwarded-Prefix`; the documentation at `/docs` from the image (28A); the DAG list and the DAG page, read-only
+'''
+done_when = "the UI lists DAGs and shows one, in both themes; the docs served"
+status = "done"
+done = 2026-10-28
+commits = ["0628b51"]
+
+[[steps]]
+id = "M3.2a"
+title = "Runs, the API"
+scope = '''
+the endpoints the run pages need: `GET /api/v1/runs` (every DAG's, filtered by DAG and state, paged by `before`), a run's DAG (`/runs/{run}/dag`, for the graph), a task's output (`/runs/{run}/tasks/{task}/output`), a run's commands (`/runs/{run}/commands`); the client's methods for them
+'''
+done_when = "the endpoints answer on SQLite and Postgres, in the OpenAPI description"
+status = "done"
+done = 2026-10-28
+commits = ["cc2ec1c"]
+
+[[steps]]
+id = "M3.2b"
+title = "Runs, the pages"
+scope = '''
+the runs lists (all DAGs and one DAG's, filters), the run page with its SVG graph (the layered layout), the task panel (attempts, output, logs; shells for cleanup and resources), the run summary and its command history; htmx vendored; the Playwright suite started (27A)
+'''
+done_when = "a run is shown whole, from the API alone"
+status = "done"
+done = 2026-10-28
+
+[[steps]]
+id = "M3.3"
+title = "Live"
+scope = '''
+the master's `NOTIFY` on state changes (polling in standalone), the webserver's SSE change events (keep-alive, polling fallback), relayed by the UI; the live log tail (23A)
+'''
+done_when = "a run and its logs update without a reload"
+status = "done"
+done = 2026-10-28
+commits = ["8291ba6"]
+
+[[steps]]
+id = "M3.4"
+title = "Actions"
+scope = '''
+trigger (the moment shown in both zones), cancel, pause / unpause with their confirmations, retry, drain / resume; the workers page with its warnings; the banners (database unavailable, log unavailable, cancel too late)
+'''
+done_when = "every API action from the UI"
+status = "done"
+done = 2026-10-28
+commits = ["dec2577"]
+
+[[steps]]
+id = "M3.5"
+title = "Auth modes"
+scope = '''
+`none` / `proxy_header` / `basic` with their safety rules, for the webserver and the UI; the UI's actions checked by `Origin` (24A)
+'''
+done_when = "each mode tested, CSRF refused"
+status = "done"
+done = 2026-10-28
+commits = ["669ae0f"]
+
+[[steps]]
+id = "M3.6"
+title = "Federation, in production"
+scope = '''
+several deployments in one UI, any mix of standalones on SQLite, standalones on Postgres and distributed ones (the user, 2026-10-28: the way from a federation of standalones on SQLite to Postgres to distributed, a deployment at a time, every stage possible); merged lists, a deployment down shown unavailable, each action to its deployment, one identity across them (the token for standalones); standalone without its own UI (`schedr standalone --no-ui`); the chart deploys `schedr ui` with distributed (37A) and **alone**, over a list of deployments in other releases or namespaces; the chart's values for M3.5's sign-in (the auth sections, the users file and tokens from Secrets, the webserver's UI port and the UI's certificate)
+'''
+done_when = '''
+one UI over a standalone on SQLite, a standalone on Postgres and a distributed deployment, one of them down; the chart renders each shape
+'''
+status = "done"
+done = 2026-10-28
+commits = ["669ae0f"]

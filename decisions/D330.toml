@@ -7,7 +7,7 @@ summary = '''
 dags check reads the same filtered copy as dags test and workers.
 Files excluded by .schedrignore are unavailable for imports.
 '''
-history = "PROJECT.md: DAG code delivery"
+history = "PROJECT.md#D330"
 step = "M4.11L"
 code = ["crates/schedr/src/local.rs"]
 checked = 2026-11-08

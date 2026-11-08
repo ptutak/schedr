@@ -7,7 +7,8 @@ summary = '''
 The attempt row moves to the new worker for the cleanup.
 The old worker’s name remains in the log and error summary.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D243"
 step = "M4.8b2"
+also = ["workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]
 checked = 2026-11-08

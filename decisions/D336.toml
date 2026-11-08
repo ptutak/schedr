@@ -10,7 +10,8 @@ standard-library `platform`, `ctypes.util` and `uuid` helpers; library threads a
 `asyncio.to_thread` are allowed. This is not a sandbox: C code can bypass enforcement. Leftover
 asyncio tasks are cancelled and awaited.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D336"
 step = "M4.11a2"
+also = ["task-processes"]
 code = ["python/schedr/_wait_rules.py", "python/schedr/runner/waiting.py", "crates/schedr-agent/src/watchers.rs"]
 checked = 2026-11-08

@@ -7,7 +7,8 @@ summary = '''
 If the main process exits during cancellation, remaining group members keep the rest of the grace
 period, then are killed. The stop ends at once when the group is empty.
 '''
-history = "PROJECT.md: Master–worker protocol"
+history = "PROJECT.md#D100"
 step = "M4.3e"
+also = ["workers"]
 code = ["crates/schedr-agent/src/supervise.rs"]
 checked = 2026-11-08

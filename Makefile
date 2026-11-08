@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check decisions decisions-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -94,11 +94,11 @@ bugs-check:      ## Fail if a bug's file is invalid or BUGS.md is out of date
 undone-check:    ## Fail if the changes not committed remove the last commit's lines (B190; SCHEDR_UNDO_OK=1 if meant)
 	python3 scripts/undone.py
 
-decisions:       ## Regenerate DECISIONS.md from decisions/
-	python3 scripts/decisions.py render
+records:         ## Regenerate PLAN.md, DECISIONS.md and the generated blocks from plan/, decisions/, questions/
+	python3 scripts/records.py render
 
-decisions-check: ## Fail if a decision's file is invalid, one is missing, or DECISIONS.md is out of date
-	python3 scripts/decisions.py check
+records-check:   ## Fail if a record is invalid or missing, an anchor is gone, or a generated view is stale
+	python3 scripts/records.py check
 
 third-party:     ## Write LICENSE-THIRD-PARTY (the binary's crates' licences) from Cargo.lock
 	cargo fetch --locked
@@ -525,7 +525,7 @@ pin-check:       ## Fail if a workflow, tool, image or requirements pin is missi
 
 check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size
-	@$(MAKE) --no-print-directory undone-check pin-check fmt-check lint schema-check bugs-check decisions-check third-party-check chart-check test test-integration
+	@$(MAKE) --no-print-directory undone-check pin-check fmt-check lint schema-check bugs-check records-check third-party-check chart-check test test-integration
 
 target-size:     ## Clean target/ over TARGET_MAX_GIB (50), other worktrees' over WORKTREE_TARGET_MAX_GIB (20)
 	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \

@@ -7,7 +7,8 @@ summary = '''
 A nested model or dataclass, list or dict uses a JSON text box.
 It is pre-filled with its default as JSON and checked by the master.
 '''
-history = "PROJECT.md: Run parameters and the DAG context"
+history = "PROJECT.md#D152"
 step = "M4.5c"
+also = ["task-context"]
 code = ["crates/schedr-api/src/views/form.rs", "crates/schedr-ui/src/params_form.rs", "crates/schedr-ui/templates/trigger_params.html"]
 checked = 2026-11-08

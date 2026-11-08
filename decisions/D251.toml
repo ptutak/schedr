@@ -7,6 +7,6 @@ summary = '''
 M4.8b covers the journal, restarts, kept result, `worker_lost`, and drain.
 M4.8b2 sends handles to the master and implements `cleanup_anywhere`.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8b"
+history = "PROJECT.md#D251"
+step = "n/a"
 checked = 2026-11-08

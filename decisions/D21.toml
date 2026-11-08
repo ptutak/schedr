@@ -8,7 +8,8 @@ summary = '''
 standalones through their JSON APIs. It can deploy alone from the chart; standalones can run with
 `--no-ui` and prove the UI’s calls through a shared token. Webservers continue serving the API.
 '''
-history = "PROJECT.md: Components and roles"
-step = "M3.1"
+history = "PROJECT.md#D21"
+step = "M3.6"
+also = ["ui-cli", "deployment"]
 code = ["crates/schedr-ui/src/lib.rs"]
 checked = 2026-11-08

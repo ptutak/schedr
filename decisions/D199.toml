@@ -7,7 +7,8 @@ summary = '''
 Connection tests run beside tasks without using a task slot.
 Each worker runs one connection test at a time.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D199"
 step = "M4.7c"
+also = ["workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/connection_jobs.rs", "crates/schedr/src/cli.rs"]
 checked = 2026-11-08

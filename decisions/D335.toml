@@ -7,7 +7,8 @@ summary = '''
 A poke finishes its current call and moves to new code without a retry or deadline change,
 if the new host can prepare it; otherwise it stays on old code. Full-control sensors stay until they end.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D335"
 step = "M4.11a2"
+also = ["code-delivery"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/watchers.rs"]
 checked = 2026-11-08

@@ -1,0 +1,923 @@
+title = "Native API complete"
+order = 60
+done_when = '''
+The native API's whole design is built, so a DAG written against it runs as designed, distributed and in standalone.
+'''
+notes = '''
+Done when (PROJECT.md, Roadmap): the native API's whole design is built, so a DAG written
+against it runs as designed, distributed and in standalone. **Planned with the user
+(2026-10-28; decisions 49-53 in PROJECT.md):** async points settled (49A), `setrlimit` through
+`schedr task-exec` (50A), this order (51A), connections' sync and async clients and `check()`
+(53); nearly all of the rest of the design is already in PROJECT.md's sections, which each step
+follows. **Reviews (52A, refined by the user 2026-10-28):** steps are split into small sub-steps
+(M4.1a, M4.1b, …), each committed after Claude's own review and mutation-checked tests; Grok
+reviews a batch of about five sub-steps at once, then writes the guide for them. Sub-steps
+built before the 2026-10-30 reset go into the whole-repository review. The order puts the result model first (everything graph-like
+builds on it), the agent channel before what talks over it, and the watcher host after async
+functions. Claude implements each step and updates the guide. **Grok reviews** (the user,
+2026-10-29): one during the 2026-10-29 session (on the $5 of credits), then Friday's
+whole-repository review (below); later M4 reviews planned after it. This replaces the batch
+reviews of about five sub-steps.
+
+
+### M4.4: decisions (taken by the user 2026-10-30: all as recommended, 87A 88A 89 90A 91 92B, 95 not now, 96 yes; recorded in PROJECT.md, Native API: Concurrency limits)
+
+What PROJECT.md already settles (Native API: Concurrency limits; Task assignment):
+`max_active_tasks` on the `Dag` (default `None`), `max_active` and `max_active_per_run` on a
+task (also operators and `StepDefaults`), checked when a task is assigned, counting
+`running`, `cleaning_up` and assigned-not-started; a task held back stays `queued` with its
+reason ("waiting: `max_active_per_run` (10) reached"); the order stays oldest-ready first
+among the tasks the limits allow (no head-of-line blocking). Open:
+
+- **87. Which DAG version's limits apply,** when runs of one DAG are on different versions:
+  A each run's own version for `max_active_per_run`, the DAG's **current** version for the
+  limits across runs (`max_active_tasks`, `max_active`); B each run's own version for all;
+  C the current version for all. Recommended: A (a limit across runs is today's intent).
+- **88. How the master counts:** A in memory (running, cleaning-up and assigned instances per
+  DAG and per task, rebuilt from the database when the master starts; the lease guarantees
+  one master, and its writes are fenced), checked as each task is assigned; B a count query
+  in each assignment's transaction (PROJECT.md's wording; simplest to trust, a query per
+  assignment, which B18 showed costs at thousands a round). Recommended: A, with a test that
+  the counts match the database after a restart.
+- **89. A mapped task:** its instances count one by one toward `max_active_tasks`,
+  `max_active` and `max_active_per_run` (the `-1` row never counts). Recommended as stated
+  (PROJECT.md's own example: 1,000 instances, 10 at a time).
+- **90. `max_active_per_run` on an unmapped task** (always one instance a run, so it limits
+  nothing): A a parse-time warning (a `TypingHint`-like hint shown by `dags check`); B
+  accepted silently; C an error. Recommended: A.
+- **91. The waiting reasons and the metric:** the reason as above, naming the limit and its
+  value; `master_tasks_waiting{reason="max_active_tasks"|"max_active"|"max_active_per_run"}`
+  beside the existing reasons. Recommended as stated.
+- **92. "Done when: limits hold under a stress scenario":** `make stress` is never run
+  without the user's go-ahead. A add a stress scenario and run it once, with the user's
+  go-ahead; B an integration test with many tasks and tight limits instead (no `make stress`).
+  Recommended: B now, A when the user next runs the stress suite.
+'''
+
+[[steps]]
+id = "M4.1"
+title = "Results and outcomes"
+scope = '''
+every task reports an (output, outcome) pair, stored per attempt, in DAG JSON (each task's outcome names), `Finished` and the database; Python outcomes (declared `Outcome` enums, unions of dataclasses / models / `None`), command exit codes as outcomes (`Outcome` `IntEnum`, `DefaultOutcome`); `.on(X)` (edge and narrowed data), `.outcome`; the edge kinds (on-outcome, selection, requirement); the trigger rules `NoneFailed` (default) and `RunIf.ALL_SUCCEEDED`, decided as soon as certain; skips and `None` data from skipped upstreams; the run result rules (PROJECT.md, Outcomes, failures and joins); the UI showing outcomes
+'''
+done_when = '''
+a DAG routing on a Python outcome union, an enum and a command's exit code runs as the tables say, on SQLite and Postgres
+'''
+status = "done"
+done = 2026-10-29
+
+[[steps]]
+id = "M4.1e"
+title = "Pydantic outputs"
+scope = '''
+(decision 59, the user's, 2026-10-29; B36): models as outputs and inputs, typed by Pydantic's JSON Schema and compared strictly; the `schedr[pydantic]` extra
+'''
+done_when = '''
+a DAG routing on an outcome union of models, passing a model and one of its fields, runs; mismatches refused at parse time
+'''
+status = "done"
+done = 2026-10-29
+commits = ["bb95aad"]
+part_of = "M4.1"
+
+[[steps]]
+id = "M4.2"
+title = "`@branch` and groups"
+scope = '''
+a branch task's chosen IDs and selection edges, skips propagated; `with group(...)` (prefixed IDs, dependencies on a group, its `StepDefaults`, `run_if`), group metadata shown in the UI's graph
+'''
+done_when = "a branch choosing a subset and an empty list; a group as one dependency"
+status = "done"
+done = 2026-10-29
+commits = ["2855681", "8f7a6d7", "eaf5914"]
+
+[[steps]]
+id = "M4.2a"
+title = "`@branch`"
+scope = "A task choosing which of its direct downstream tasks run; its edges are selection edges, skips propagated (no row of its own in the old PLAN.md: recorded from its commit)."
+done_when = "Not recorded (built before the plan kept it)."
+status = "done"
+done = 2026-10-28
+commits = ["2855681"]
+part_of = "M4.2"
+
+[[steps]]
+id = "M4.2b"
+title = "Task groups"
+scope = '''
+(decisions 56A, 64, 65): `with group(...)`, groups in DAG JSON, the run graph's clustered boxes
+'''
+done_when = "Not recorded (built before the plan kept it): done (2026-10-29)"
+status = "done"
+done = 2026-10-29
+commits = ["8f7a6d7"]
+part_of = "M4.2"
+
+[[steps]]
+id = "M4.2c"
+title = "Import errors in the UI"
+scope = '''
+(decisions 66-68; the user's request): each root's current parse recorded by the master, `GET /api/v1/import-errors`, a page with a nav count and a DAG-list notice
+'''
+done_when = "Not recorded (built before the plan kept it): done (2026-10-29)"
+status = "done"
+done = 2026-10-29
+commits = ["eaf5914"]
+part_of = "M4.2"
+
+[[steps]]
+id = "M4.3a"
+title = "Mapping, the API"
+scope = '''
+(decisions 69-71): `.partial` / `.expand` / `.expand_kwargs`, `expand` in DAG JSON, the parse-time checks, `[mapping] max_instances`; the master refuses mapped DAGs until M4.3b
+'''
+done_when = "Not recorded (built before the plan kept it): done (2026-10-29, `82f9b47`)"
+status = "done"
+done = 2026-10-29
+commits = ["82f9b47"]
+part_of = "M4.3"
+
+[[steps]]
+id = "M4.3b"
+title = "Mapping, the master"
+scope = '''
+instances created once inputs exist, per-instance inputs, the mapped task's state, fan-in lists (`None` for skipped instances), element-wise mapping and `.on`, empty expansion, the instance limit; lanes (70 B), a failed step cancels the rest (75a B), `run_if` over instances (75b D), the written order (79)
+'''
+done_when = "Not recorded (built before the plan kept it): done (2026-10-30)"
+status = "done"
+done = 2026-10-30
+commits = ["9d86e3c"]
+part_of = "M4.3"
+
+[[steps]]
+id = "M4.3c"
+title = "Mapping, around it"
+scope = '''
+`map_index` in the runner and task context, the API and CLI per instance, the UI's summary node and instance list, `run_dag`'s `tasks["x"][3]`; decisions 80-86 (`task_ctx`)
+'''
+done_when = '''
+Not recorded (built before the plan kept it): done (2026-10-30); decision 86's CLI commands in M4.3d
+'''
+status = "done"
+done = 2026-10-30
+commits = ["97fc889"]
+part_of = "M4.3"
+
+[[steps]]
+id = "M4.3d"
+title = "The CLI's run and task reads"
+scope = '''
+(B37, the user's 2026-10-30): `schedr runs show`, `schedr tasks attempts` and `schedr tasks output` over the client's existing methods, `--map-index N` on them, a mapped task's instances listed as `fetch[0]`, `fetch[1]`, ... after its own row (decision 86), human output and `--json`; the CLI reference regenerated
+'''
+done_when = '''
+each command against a standalone with a mapped run, an instance and the gathered list: done (2026-10-30); **M4.3 done**
+'''
+status = "done"
+done = 2026-10-30
+commits = ["94d8f88"]
+part_of = "M4.3"
+
+[[steps]]
+id = "M4.3"
+title = "Mapping"
+scope = '''
+`.partial(...)` / `.expand(...)`, instances `map_index` 0..N-1 created once the input exists, element-wise `.on` and expansion over a mapped output, the whole output as `Output[list[T]]` (input order; `[]` for an empty expansion; `upstream_failed` on a failed instance), `[mapping] max_instances`; instances in the API and UI
+'''
+done_when = '''
+a mapped task over a literal and over an upstream output, empty included, with per-instance results: done (2026-10-30, M4.3a-c)
+'''
+status = "done"
+done = 2026-10-31
+
+[[steps]]
+id = "M4.3e"
+title = "Bug fixing before M4.4"
+scope = '''
+(the user, 2026-10-30: "finish bugfixing before we move on with M4.4"; "let's make a pause for bugs"). **First, the fault-injection harness** (decision 98, the user's, 2026-10-30): a test-only write hook in `schedr-db` (the Nth write fails), a consistency check (no half-done state: an attempt ended with its task running, a lost worker with open attempts, a run's state against its tasks, the master's reserved slots against open attempts, queued cancels for rolled-back work), and `fail_each_write` running an operation once per write with that write failing; one test per master operation (assign, start, finish, reject, expiry, worker lost, reconnect, each command). Then the fixes, **most severe first** (the user, 2026-10-30: "focus until the end of this session on fixing bugs from most severe to least; let's not move on until we fix them"); bugs that only affect how something is drawn (B38, B39, and any like them) wait until after 1.0.0. Each checked by the harness where it applies: the worker link's bugs from Codex's whole-repo review F1, B41-B48 (a result not resent while the link lives, a lost worker's cleanup skipped after a failed write, a task's cancel lost on reconnect, an old stream disconnecting its replacement, a registration deadlocking on a full channel, a `Finished` from another worker accepted, a replayed result over the master's limit, the per-message snapshot's cost), and B40 (a lease test's 2 s limit under load); each with a reproducing test first (Codex's proofs reused), reviewed by Grok and Codex. The older suspected bugs (B4, B22, B24, B31, B32) investigated by Grok or Codex alongside; B38 with B39's graph work, in M6. **Run in parallel with the scan** (the user, 2026-10-30: option A): Codex keeps reviewing sections of the committed code while Claude fixes the high-severity bugs section by section (F1's B41-B48, F2's B49-B52, F6's B53-B57, then each new section's), each fix round reviewed by Grok; medium and low ones wait in BUGS.md. Decision 98 (B53's fix) taken when it comes up
+'''
+done_when = '''
+the high-severity bugs of every section scanned so far fixed, their tests failing first, `make check` passing; then M4.4
+'''
+status = "done"
+done = 2026-10-31
+commits = ["819dcbb", "fbcfd34", "fd56430", "ba7a001", "d7b5581", "0b1e848", "cd47a72", "3ef8fa2", "d0b955f", "6b42d9d", "41d1fc8"]
+part_of = "M4.3"
+
+[[steps]]
+id = "M4.4"
+title = "Concurrency limits"
+scope = '''
+`Dag(max_active_tasks=)`, `@task(max_active=, max_active_per_run=)` (also operators, `StepDefaults`), counted in the master's memory and checked as each task is assigned (88A), each mapped instance counting (89), the limits across runs from the current version (87A), a parse-time warning for `max_active_per_run` on an unmapped task (90A), the waiting reason and its metric (91), each limit with its current count on the DAG page (96)
+'''
+done_when = '''
+limits hold in an integration test with many tasks and tight limits (92B; kept to a few seconds like the other standalone tests, or the user decides whether it leaves the default suite: the user, 2026-10-30), and a stress scenario written for it, run when the user next runs the stress suite, the counts match the database after a restart, reasons shown; done (2026-11-01): the integration test holds the limits on 6 slots, scenario 16 written (not run yet), the counts read back after a restart, reasons shown
+'''
+status = "done"
+done = 2026-11-01
+commits = ["f1d1633", "03ce00c", "7ccb426"]
+
+[[steps]]
+id = "M4.4b"
+title = "The Deployments page"
+scope = '''
+(decisions 121-124, the user's, 2026-10-31): a `masters` table (each master, leader or standby, heartbeating its role and effective configuration), workers' effective configuration in `Register`, the webserver's own configuration and the others through the REST API (`GET /api/v1/deployment`: nodes and their configurations); the UI's `/deployments` list and `/deployments/<name>` page with the configuration and the node graph (distributed: a rectangle per master and worker; standalone: one rectangle holding the master and workers; no database, no webserver), live node states; the Workers page's Master column (`workers.master_id`, linked to the master's node) and Drain/Resume dialogs naming the deployment and master; Deployments and Config in the navigation between Runs and Workers; the Config page (decision 125: the UI's masked configuration, versions, connection states, the signed-in identity); the guide's UI and API pages
+'''
+done_when = '''
+the page shows a distributed deployment's leader, a standby and two workers with each one's configuration, and a standalone's single rectangle, in integration tests on SQLite and Postgres; no secret in clear anywhere (a database URL's password `****`, masked by the node itself), checked for every configuration field
+'''
+status = "done"
+done = 2026-11-01
+commits = ["41a0200"]
+part_of = "M4.4"
+
+[[steps]]
+id = "M4.5"
+title = "The agent channel, params and `dag_ctx`"
+scope = '''
+per-call connections to the agent (`SCM_RIGHTS`), `schedr task-ctx` / `schedr dag-ctx`, `schedr.script`; `Dag(params=...)` (dataclass or model, JSON Schema in the DAG JSON), values validated by the master before a run exists (`runs trigger -p`, `--params`, the UI's form), stored with the run; `dag_ctx` references in the DAG body, values at run time, `dag_ctx.params(...)`
+'''
+done_when = '''
+a Python task, a command and a plain script read the same params and run information
+'''
+status = "done"
+done = 2026-11-02
+
+[[steps]]
+id = "M4.5a"
+title = "Params"
+scope = '''
+(decisions 132-138, the user's, 2026-11-01): `Dag(params=)` (a dataclass or a Pydantic model: its type, a JSON Schema and its defaults in DAG JSON; a scheduled DAG's fields all with defaults), the master's check of every schema (only keywords and formats the `jsonschema` crate checks, local `$ref`s) and of a trigger's values (defaults filled in, unknown keys refused, 64 KiB), stored typed like outputs; `runs trigger -p` / `--params`, `dags test -p` / `--params`, `run_dag(params=)`, `task_context(params=)`; `dag_ctx.params.<path>` references (checked at parse time, not mapped over) and values, `dag_ctx.params(Cls)`; the run's params masked in the API, `runs show` and the run page
+'''
+done_when = '''
+a Python task, a typed argument and a command's t-string read a run's params; refusals with the reason
+'''
+status = "done"
+done = 2026-11-01
+commits = ["ab6ffb9"]
+part_of = "M4.5"
+
+[[steps]]
+id = "M4.5b"
+title = "The agent channel"
+scope = '''
+a command task's context channel, per-call connections to the agent (`SCM_RIGHTS`, decisions 143-147), `schedr dag-ctx` (`params get`, `run get`), `schedr.script`'s `dag_ctx`; `schedr task-ctx` later in M4 on the same channel
+'''
+done_when = "a command and a plain script read the same params and run information"
+status = "done"
+done = 2026-11-02
+commits = ["8515b29"]
+part_of = "M4.5"
+
+[[steps]]
+id = "M4.5c"
+title = "The UI's trigger form"
+scope = '''
+(decisions 149-152 and 159, the user's, 2026-11-02): the single DAG's API view describes the form (`params`: each field's name, kind, required, default, a `Literal`'s choices; defaults under secret names withheld); the Trigger dialog gets an input per field, pre-filled with the defaults, a password input left empty for a secret name, a "none" checkbox for an optional field, a JSON text box for a nested value; only changed fields are sent; a page whose fields or defaults changed since it loaded refused (reload); the master's refusal shown in the dialog
+'''
+done_when = '''
+a run triggered from the form with params (a browser test); refusals with the reason; no secret default in the page
+'''
+status = "done"
+done = 2026-11-02
+commits = ["8722b5f"]
+part_of = "M4.5"
+
+[[steps]]
+id = "M4.6"
+title = "Secrets"
+scope = '''
+the secret storage abstraction, Vault (KV v2, Kubernetes auth, token renewal, cache), the `db` storage for standalone (encrypted, `SCHEDR_SECRET_KEY`) and `schedr secrets set/list/get/delete/export`; placeholders rendered by the agent, `secrets=` and `SecretPrefix` on demand, masking (`min_mask_length`, `unmasked_prefixes`), the error kinds; storage names checked at DAG validation; the chart's key and Vault role
+'''
+done_when = '''
+a task reads secrets from Vault (a dev-mode container in the integration tests) and from `db`, masked in its log
+'''
+status = "done"
+done = 2026-11-03
+commits = ["b390fde"]
+
+[[steps]]
+id = "M4.6a"
+title = "Secrets, the model and the Python API"
+scope = '''
+(planned with the user 2026-11-02, decisions 167-169): `secrets['path#key']`, `secrets.<storage>[...]`, a whole secret `secrets['path']`, as references in DAG JSON (arguments, t-strings, `env`); `secrets=` (plain strings, placeholders, whole secrets, `SecretPrefix`); the parse errors (a plain string ending in `/`, a secret in a command line or shell source, a whole secret in text); workers report their storages, the master refuses a DAG naming an unknown one
+'''
+done_when = '''
+DAGs with each form parse to the expected DAG JSON; each error says what to write instead; an unknown storage is a DAG error: done (2026-11-02, M4.6a+b in one commit)
+'''
+status = "done"
+done = 2026-11-02
+commits = ["b702efc"]
+part_of = "M4.6"
+
+[[steps]]
+id = "M4.6b"
+title = "Secrets in the agent"
+scope = '''
+the storage abstraction and an in-memory storage (`run_dag(secrets=)`, `task_context(secrets=)`, `dags test --secret`); everything fetched before the process starts; filled into `env`, command arguments and Python arguments; `task-ctx secret get` and `task_ctx.secret()`, prefixes on demand (168); the error kinds and retry rules; masking in logs, outputs and error summaries (167), `min_mask_length` with its warning, `unmasked_prefixes`
+'''
+done_when = '''
+a command and a Python task read declared secrets, masked in the log and the output; each error kind with its retry rule: done (2026-11-02, M4.6a+b in one commit)
+'''
+status = "done"
+done = 2026-11-02
+part_of = "M4.6"
+
+[[steps]]
+id = "M4.6c"
+title = "The `db` storage"
+scope = '''
+the `secrets` table, XChaCha20-Poly1305 under `SCHEDR_SECRET_KEY` bound to `path#key`, `schedr secrets set/list/get/delete/export/new-key` (169), always there in standalone and its default without `[secret_storage]`, refused in a distributed deployment
+'''
+done_when = '''
+a standalone task reads a secret set with the CLI, on SQLite and Postgres; no value readable in the table; export loads into Vault's format: done (2026-11-02)
+'''
+status = "done"
+done = 2026-11-02
+commits = ["f9589e2"]
+part_of = "M4.6"
+
+[[steps]]
+id = "M4.6d"
+title = "Vault"
+scope = '''
+KV v2, token and Kubernetes auth (renewal, a login again on an expired token), `cache_ttl`, `namespace`, `ca_cert`; the startup errors; the chart's `SCHEDR_SECRET_KEY` from an existing Secret and its Vault role
+'''
+done_when = '''
+a task reads secrets from a dev-mode Vault container in the integration tests (podman; a service container in CI), Kubernetes auth against a fake Kubernetes API; **M4.6 done**: done (2026-11-02)
+'''
+status = "done"
+done = 2026-11-02
+commits = ["d865d23"]
+part_of = "M4.6"
+
+[[steps]]
+id = "M4.6e"
+title = "Secrets typed as their values"
+scope = '''
+(decisions 176-178, B155): `secrets['etl/db']` (`dict[str, str]`), `['password']` (`str`), `.get(key, default)`, `secrets.value('path#key', default=)`, `secrets['path#key']` refused; `task_ctx.secret(path, key)` / `task_ctx.secret(path)` / `task_ctx.secret_value('path#key')`; `schedr.text(t"...")`; typing tests both ways (mypy, basedpyright); the guide and the example back to the plain forms
+'''
+done_when = '''
+a typed DAG passing secrets and a t-string to `str` parameters passes `mypy --strict` and basedpyright with no cast; B155 closed: done (2026-11-03, reviewed by Codex)
+'''
+status = "done"
+done = 2026-11-03
+commits = ["7f84998"]
+part_of = "M4.6"
+
+[[steps]]
+id = "M4.6f"
+title = "One live stream per browser"
+scope = '''
+(decision 175, B31 and B32): a SharedWorker holds the stream and hands its changes to every page (the user chose it over a Web Lock, which needs https or localhost), each page filtering for itself; the log tail by polling; the guide's note on HTTP/2 through a TLS ingress
+'''
+done_when = '''
+a browser test with eight live tabs: another page loads within 2 s, and each tab shows a new run within 5 s (before: 7-10 s waits); B31 and B32 closed; done (2026-11-03)
+'''
+status = "done"
+done = 2026-11-03
+commits = ["1c65862"]
+part_of = "M4.6"
+
+[[steps]]
+id = "M4.7"
+title = "Connections"
+scope = '''
+(decision 174; M4.7a `@connection`, Python use, `task-ctx connection`, doubles; M4.7b typed connections; M4.7c `connections check` / `test`; `async with` with M4.10): `@connection` generator functions, the built-in typed connections (`HTTP` and `Mongo` sync and async through httpx and pymongo, `SSH` and `SQL` sync, `Generic`) with `check()`, `CommandOperator(connections=)` variables and files, `schedr task-ctx connection`, `schedr connections check` / `test`, optional `@task(connections=[...])`, test doubles (decision 53)
+'''
+done_when = "the same DAG reads a connection's values from two environments' storages"
+status = "done"
+done = 2026-11-04
+commits = ["c45d766", "2578f0d", "eda9764", "9deac32", "1e0b5ed", "7440df6"]
+
+[[steps]]
+id = "M4.7a"
+title = "`@connection`"
+scope = '''
+(decisions 179, 180): the parser records each file's connections, the master a registry per root sent with each assignment; tasks declare what they open (`connections=`), rendered and masked before the start; `with name():` in Python, `schedr task-ctx connection NAME --env PREFIX \| --json` in a command; `connection_not_found` / `connection_denied`; a DAG's warning when a declared name is missing, `dags check`; `task_context(connections=)`, `run_dag(connections=)`, `dags test --connection`
+'''
+done_when = '''
+a task opens a connection whose secret the agent fetched and masked, from Python and from a shell command; one not declared fails as `connection_denied`; done (2026-11-03)
+'''
+status = "done"
+done = 2026-11-03
+commits = ["c45d766"]
+part_of = "M4.7"
+
+[[steps]]
+id = "M4.7b1"
+title = "Typed connections"
+scope = '''
+(decisions 183, 185-189): `HTTP`, `SSH`, `Mongo`, `SQL`, `Generic`, their Python clients through the extras, a check each, `@name.check`; TLS verified by default (SQL's `sslmode`, Mongo's), credentials apart from the URL or encoded in it
+'''
+done_when = '''
+each client opens and checks against a real server (HTTP served by the test; Postgres, MySQL, Mongo, OpenSSH in containers); an SSH host whose key isn't in `known_hosts` is refused; done (2026-11-03)
+'''
+status = "done"
+done = 2026-11-03
+commits = ["2578f0d"]
+part_of = "M4.7"
+
+[[steps]]
+id = "M4.7b2"
+title = "What commands get"
+scope = '''
+(decisions 184, 190-197; MariaDB, decision 196): `CommandOperator(connections={"P": c})` variables and 0600 files in the attempt's folder (`P_CURL_CONFIG`, `P_SSH_CONFIG`, `P_PGPASSFILE`, `P_JSON`, ...), a custom connection's `P_PARAM`; `task-ctx connection --env` writing the files too
+'''
+done_when = '''
+`curl -K` and `ssh -F` reach the test servers from a command; no secret on a command line; the files gone when the attempt ends; done (2026-11-03)
+'''
+status = "done"
+done = 2026-11-03
+commits = ["eda9764"]
+part_of = "M4.7"
+
+[[steps]]
+id = "M4.7c"
+title = "`schedr connections check` / `test`"
+scope = '''
+(decisions 174, 193, 198-200): commands through the master to a worker having the root at its current code (`--worker` to pick one); `check [ROOT]` renders every connection there (secrets present or missing, never a value), `test NAME` runs its check (or opens and closes it) as a one-off job beside the tasks, one at a time per worker, stopped after 60 s (`--timeout`)
+'''
+done_when = '''
+a check against a missing secret names it; a test reaches a real server, and a wrong password fails it with the masked message
+'''
+status = "done"
+done = 2026-11-03
+commits = ["9deac32"]
+part_of = "M4.7"
+
+[[steps]]
+id = "M4.7d"
+title = "A connections demo"
+scope = '''
+(decisions 202-205): `make demo` builds a demo image FROM the base image (client tools, connection extras) and runs a compose file: Postgres, MySQL, MariaDB, Mongo, an SSH server and go-httpbin, `dev` and `prod` standalones running one DAG folder with their own secrets, one `schedr ui` over both
+'''
+done_when = '''
+each type opened from Python and from a command in both deployments, each reading its own values; `connections check` / `test` against both
+'''
+status = "done"
+done = 2026-11-04
+commits = ["1e0b5ed"]
+part_of = "M4.7"
+
+[[steps]]
+id = "M4.7e"
+title = "Connections in the UI"
+scope = '''
+(decisions 207-212): the DAG page's Connections section (a row per connection its tasks declare: type, tasks, last result; Check all, Test per row behind a confirm dialog), a `/connections` page over every deployment (a heading per root, every connection, the same buttons; `GET /api/v1/connections`), results filled in live from the command's answer; every connection type's clients in the base image (Python and command line), `schedr[connections]`
+'''
+done_when = '''
+a Check and a Test from the DAG page and the Connections page, a missing secret and a refused login shown, in Playwright tests
+'''
+status = "done"
+done = 2026-11-04
+commits = ["7440df6"]
+part_of = "M4.7"
+
+[[steps]]
+id = "M4.8"
+title = "Cleanup and resources"
+scope = '''
+(decisions 214-230): per-task cleanups (`cleanup=`, the runner's `cleanup` mode through the fork server, handles registered and journaled, `cleaning_up`, `cleanup_timeout`, cleanup retries, `cleanup_anywhere`, a failed cleanup failing the run, drain timing); resources (`@resource`, `@<resource>.cleanup`, `uses=`, requirement edges, static and code-less resources, `CommandResource` / `ScriptResource`, `task-ctx cleanup/resource`); the UI's shells filled (25B)
+'''
+done_when = '''
+a task killed mid-way is cleaned up after, on its worker and, with `cleanup_anywhere`, after its worker was lost; a resource cleaned once after its last user
+'''
+status = "done"
+done = 2026-11-05
+commits = ["e41d579", "9a57f03", "a540de5", "05743b3", "d68e572", "5ef945c", "a5d73cd", "00f77ca", "1bf8531", "f7ec6a6", "b9fa0e3", "8c24fa3"]
+
+[[steps]]
+id = "M4.8t"
+title = "Timings: public keys and hidden ones"
+scope = '''
+(the user, 2026-11-04; right after M4.8a, its own commit; decisions 231-235): timings a deployment may need to tune are keys, with today's values as defaults and a doc comment saying what they do and when to change them; 18 others left the config and only `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes them (environment only, read once at startup, warned about, unsupported, documented in their own section)
+'''
+done_when = '''
+what a deployment may need to tune is in the config, documented; nothing critical can be changed by accident
+'''
+status = "done"
+done = 2026-11-04
+commits = ["9a57f03"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8u"
+title = "Every server-side timing on the hidden route"
+scope = '''
+(decisions 236, 239-241): about 40 constants and inline timings as values passed down in each crate's own struct with defaults, the auth timings among them once checked; server, worker and webserver only
+'''
+done_when = "any timing can be tried without a rebuild, and tests can set their own"
+status = "done"
+done = 2026-11-04
+commits = ["a540de5"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8a"
+title = "Cleanups on the same worker"
+scope = '''
+`cleanup=`, `cleanup_handle`, the runner's `cleanup` mode, `task-ctx cleanup`, handles (masked, 1 MiB per attempt), `TaskEnded` at the process's end (229), `cleaning_up`, `cleanup_timeout`, retries, the task's secrets and connections kept for it, a failed cleanup failing the run
+'''
+done_when = '''
+a task that failed, timed out or was cancelled is cleaned up after, in its slot, before its retry and downstream tasks
+'''
+status = "done"
+done = 2026-11-04
+commits = ["e41d579"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8b"
+title = "Surviving restarts"
+scope = '''
+(decisions 242-251): handles and what a cleanup needs journaled, the task's result kept when its worker is lost (229), cleanups from the journal on the master's `Continue` after an agent restart, "didn't run: worker lost", drain timing and `termination_grace_period`
+'''
+done_when = '''
+a cleanup cut off by a restart runs again; a worker lost during a cleanup leaves the task's result
+'''
+status = "done"
+done = 2026-11-04
+commits = ["05743b3"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8b2"
+title = "Cleanups on another worker"
+scope = '''
+handles sent to the master, `cleanup_anywhere`, a moved cleanup's limits and waiting
+'''
+done_when = '''
+a task killed with its worker is cleaned up on another with `cleanup_anywhere`; without it the run fails
+'''
+status = "done"
+done = 2026-11-04
+commits = ["d68e572"]
+part_of = "M4.8b"
+
+[[steps]]
+id = "M4.8b3"
+title = "A worker cut off"
+scope = '''
+(decisions 252-258): `HeartbeatAck`, tasks with `cleanup_anywhere` stopped at the lease, their cleanups held for the master's answer, the master waiting before a move
+'''
+done_when = "a master gone stops such a task; its cleanup runs once, on the answer"
+status = "done"
+done = 2026-11-04
+commits = ["5ef945c"]
+part_of = "M4.8b"
+
+[[steps]]
+id = "M4.8c1"
+title = "Python resources, the API"
+scope = '''
+`@resource`, `@<resource>.cleanup`, `Resource`, `uses=`, requirement edges in the model, the parse rules (decisions 223, 224, 259-269)
+'''
+done_when = "a DAG with resources parses, and every rule is refused or warned at parse"
+status = "done"
+done = 2026-11-05
+commits = ["a5d73cd"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8c2"
+title = "Python resources, running"
+scope = '''
+resource instances and their states, `<resource>.cleanup` instances, an empty cleanup finished by the master, the run result
+'''
+done_when = "a resource is cleaned once after its last user"
+status = "done"
+done = 2026-11-05
+commits = ["00f77ca"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8d"
+title = "Command resources"
+scope = '''
+(decision 271; scripts moved to M4.9, which brings script tasks): `CommandResource`, `<resource>.cleanup_command(...)`, `task-ctx resource set/get`
+'''
+done_when = "a command's setup reports a value its users and cleanup receive"
+status = "done"
+done = 2026-11-05
+commits = ["1bf8531"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8e"
+title = "UI and test doubles"
+scope = '''
+the UI's shells filled (25B), `task_context`'s `ctx.handles`, `run_dag`'s `cleanup`, `handles` and `resources`
+'''
+done_when = "a run's cleanups and resources are shown and can be asserted in a test"
+status = "done"
+done = 2026-11-05
+commits = ["f7ec6a6"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8f"
+title = "A hung resource cleanup"
+scope = '''
+(decisions 278, 279): `schedr tasks cancel` stops a resource's cleanup (`cleanup_cancelled`); `[worker] resource_cleanup_timeout`, 30 minutes per try, for one without `timeout=`
+'''
+done_when = "a hung resource cleanup no longer holds its run and the DAG's next runs for ever"
+status = "done"
+done = 2026-11-05
+commits = ["b9fa0e3"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.8z"
+title = "Chaos scenarios"
+scope = '''
+(between M4.8 and what follows it): the stress suite's TCP proxy between worker and master; start and end lines for cleanups, checked (never during the task, run once); scenarios for a silent cut around the lease, a one-way cut, a slow link, a worker frozen past the lease. A seeded random schedule under load after them, a fresh seed each night, kept in the run's report. All in the nightly `stress.yml`, never on every push; the latest Stress run is checked at the start of each step, a failure going to `bugs/` with its seed
+'''
+done_when = "a cut worker's cleanups hold every invariant under the stress suite"
+status = "done"
+done = 2026-11-05
+commits = ["8c24fa3"]
+part_of = "M4.8"
+
+[[steps]]
+id = "M4.9a"
+title = "Script roots and `schedr.toml`"
+scope = '''
+(decisions 292-296): `SCHEDR_SCRIPT_PATH`, script roots (`[scripts.roots]`), their scan, hash and settle time as DAG roots; the agent reads and checks `schedr.toml` in Rust (every key, unknown keys an error); standalone jobs (one-task DAGs, paused when first found); an unscheduled declaration a script for DAGs only (DAG-level keys an error); `schedr dags check` for TOML
+'''
+done_when = "a scheduled job found, checked and listed; a bad key an import error naming it"
+status = "done"
+done = 2026-11-05
+commits = ["9094400"]
+
+[[steps]]
+id = "M4.9b"
+title = "The `script` task kind and `ScriptOperator`"
+scope = '''
+interpreters, rejections 3-5, the `SCHEDR_*` run variables, `CODE_MISMATCH` for script roots; `ScriptOperator` asking the agent for the declaration (293), its overrides, a script root missing on a parsing worker an import error (295); a changed declaration re-parsing the DAGs that use it (294, 301-304); B167; libraries: a Python script's root copy on `PYTHONPATH`, the other DAG roots' copies (not their configured paths) on a Python task's `sys.path`
+'''
+done_when = "a scheduled job and a script used from a DAG run"
+status = "done"
+done = 2026-11-05
+commits = ["4a7fa2c"]
+
+[[steps]]
+id = "M4.9c"
+title = "The rest of `[jobs.<name>]`"
+scope = '''
+`params`, `outcomes`, `[jobs.<name>.cleanup]`, `ScriptResource` and `<resource>.cleanup_script(...)` (moved from M4.8d)
+'''
+done_when = '''
+a scheduled job and a script used from a DAG run, with params, outcomes and a cleanup
+'''
+status = "done"
+done = 2026-11-06
+commits = ["7590334"]
+
+[[steps]]
+id = "M4.9d"
+title = "Libraries in roots"
+scope = '''
+(decision 305, the user's, 2026-11-05): the parser loads only the `.py` files whose text mentions `schedr`; the others are shipped and hashed, never parsed; documented with a library example, and that a file defining DAGs needs at least `import schedr` (a factory-call file otherwise skipped, its DAGs removed)
+'''
+done_when = '''
+a root with a package using relative imports: its DAG runs, no import error for the library
+'''
+status = "done"
+done = 2026-11-06
+commits = ["0da582b"]
+
+[[steps]]
+id = "M4.10"
+title = "Async task functions"
+scope = '''
+`async def` tasks (`asyncio.run` per attempt, SIGTERM cancelling the main coroutine), async in-task calls, async cleanups and resources, `uvloop` whenever it is installed (decision 316; `schedr[uvloop]` installs it), a plain call returning the coroutine, leftover tasks cancelled (49A); `async with` on connections
+'''
+done_when = "an async task with concurrent waits, cancelled cleanly, in tests and a run"
+status = "done"
+done = 2026-11-06
+commits = ["ac54f40"]
+
+[[steps]]
+id = "M4.11a"
+title = "Wait steps"
+scope = '''
+the watcher host (`schedr.runner watchers`, one per code set (decision 320), on `uvloop` whenever it is installed (decision 316), the 30-second rule and its watchdog, its memory budget, logs per watcher), `@sensor` and `@sensor.poke`, `TimedOut`, watcher slots and placement, drain and loss
+'''
+done_when = "a wait step ends with a value and with `TimedOut`; a blocked loop is caught"
+status = "done"
+done = 2026-11-07
+commits = ["b1e760e", "04cb6be", "4e6d9c1", "4a9c41f", "965074e"]
+
+[[steps]]
+id = "M4.11a1"
+title = "Part of M4.11a"
+scope = '''
+Part of M4.11a: `@sensor`, `@sensor.poke`, `NOT_YET`, `TimedOut`; DAG JSON kind `sensor`; the master accepts it; `run_dag` and `dags test` run them in the test's loop
+'''
+done_when = '''
+a poke and a full-control sensor run locally, ending with a value and with `TimedOut`
+'''
+status = "done"
+done = 2026-11-06
+commits = ["b1e760e"]
+part_of = "M4.11a"
+
+[[steps]]
+id = "M4.11L"
+title = "How DAG files load"
+scope = '''
+(B170, B172-B181; decisions 326-333): ordinary imports, a process per file, on the fork server where it is on; versions of all roots; filtered checks; a parse stress scenario
+'''
+done_when = "the 118 scenarios behave as Python, on workers too"
+status = "done"
+done = 2026-11-06
+commits = ["a13816a"]
+
+[[steps]]
+id = "M4.11a2"
+title = "Part of M4.11a"
+scope = '''
+Part of M4.11a: the host (`schedr.runner watchers`), its multiplexed protocol, per-watcher logs and context, the agent starting and supervising hosts per code set; a poke moving to new code, no process or thread of its own, `asyncio.to_thread` stopped with its step (decisions 334-337)
+'''
+done_when = "wait steps run on a real worker in one process"
+status = "done"
+done = 2026-11-06
+commits = ["04cb6be"]
+part_of = "M4.11a"
+
+[[steps]]
+id = "M4.11a3"
+title = "Part of M4.11a"
+scope = '''
+Part of M4.11a: the block watchdog and `blocked_event_loop`, a repeat offender switched off (decision 338), threads watched (decision 339), the memory budget, crash and loss
+'''
+done_when = '''
+a blocked loop is caught, the other watchers start again; a step that keeps blocking stops reaching a host
+'''
+status = "done"
+done = 2026-11-06
+commits = ["4e6d9c1"]
+part_of = "M4.11a"
+
+[[steps]]
+id = "M4.11a4"
+title = "Part of M4.11a"
+scope = '''
+Part of M4.11a: watcher slots in the master's placement, the kept deadline, drain and loss, metrics, UI (a host's threads, tied and untied, decision 339; hosts lost per code set, decision 342)
+'''
+done_when = "no free slot waits `queued`; a drain moves pokes without a retry"
+status = "done"
+done = 2026-11-07
+commits = ["4a9c41f", "965074e"]
+part_of = "M4.11a"
+
+[[steps]]
+id = "M4.11b"
+title = "Triggers"
+scope = '''
+`@trigger` and `@trigger.poke`, events (`events` table, bookmarks), event runs (`dag_ctx.event`, queueing, back-pressure), the master's trigger supervisor, restarts, manual runs with an event, the CLI, API and UI
+'''
+done_when = '''
+an event-triggered DAG runs once per event, resumes from its bookmark after a restart
+'''
+status = "done"
+done = 2026-11-07
+commits = ["53f6bec", "7016877", "1a1df00"]
+
+[[steps]]
+id = "M4.11c"
+title = "`first_of`"
+scope = '''
+(decision 347): a node the master ends with the first edge taken, its value and the winner's name; the Python API and type checkers, the graph; `sensors_demo` uses it instead of its third wait step; `at_least(n, ...)` on the same count (not yet in the decision log); joining `@branch` paths; the options in one box with one dashed line (decision 351)
+'''
+done_when = '''
+`fast_report` runs after the first of two wait steps with its value, the other runs on, and one failing later fails the run but not the node
+'''
+status = "done"
+done = 2026-11-07
+commits = ["c09c9a9"]
+
+[[steps]]
+id = "M4.11d"
+title = "Waiting for another DAG's run"
+scope = '''
+(decision 353): `RunOf("orders", task=..., lag=...)`; d1: the node `wait_for(RunOf(...), max_wait=...)` the master ends (the run's ID, `Failed`, `TimedOut`), and `trigger=RunOf(...)` starting a run when one ends; d2: `@sensor(wait_for=RunOf(...))` and `@trigger(wait_for=RunOf(...))` with a function given a `RunResult[T]`
+'''
+done_when = '''
+a run waits for another DAG's task and goes on, or routes `Failed` / `TimedOut`; a run of one DAG starts one of another
+'''
+status = "done"
+done = 2026-11-08
+commits = ["9198ebc", "4a2e1cd", "a820ecc", "50c06a6"]
+
+[[steps]]
+id = "M4.11e"
+title = "Events through the API"
+scope = '''
+`POST` of a named event, for `@trigger` (starts a run) and `@sensor` (wakes a waiting step); stored so an early event isn't lost; posting needs what triggering a run needs (schedr has no permissions of its own); a security review
+'''
+done_when = "a posted event starts a run and wakes the right waiting run"
+status = "done"
+done = 2026-11-08
+commits = ["3413561", "15a88c3"]
+
+[[steps]]
+id = "M4.11f"
+title = "`batch=` on `@trigger.poke`"
+scope = '''
+(decision 352): gathered in Python, one ordinary event, `dag_ctx.event.data` a `list[Event[T]]`
+'''
+done_when = '''
+one run per window, none for an empty one; a restart loses nothing a poke can find again
+'''
+status = "done"
+done = 2026-11-08
+commits = ["4f6fe16"]
+
+[[steps]]
+id = "M4.11g"
+title = "`delay` and `until` wait steps"
+scope = '''
+(the user, 2026-11-08): built-in `@sensor`s in `schedr.sensors`, no new step kind; `until` from the run's `planned_for` (`dag_ctx`), `delay` from when the step became ready, given in its context so a restart on another host waits only what is left; ideas kept for later: `by_deadline(a, b, at=...)` and `first_of(..., cancel_rest=True)`; `approval(...)` goes to M6 (human in the loop); `none_of` dropped (a plain branch does it)
+'''
+done_when = '''
+a restarted `delay` ends at its first moment; `until` past its moment ends at once; both `TimedOut` past `max_wait`
+'''
+status = "done"
+done = 2026-11-08
+commits = ["18dc3ac"]
+
+[[steps]]
+id = "M4.11h"
+title = "`schedr.api`, Python access to the REST API"
+scope = '''
+(the user, 2026-11-08: 1A 2A 3A 4A 5A, B2): one `Client` with two transports: inside a task, with no settings, through its agent and the master (a tunnel of REST requests: `ApiCall`/`ApiAnswer` on the Control stream, run by the master through the same router as the task's identity, `task:<dag>/<run>/<task>`, on an allow-list of routes: for now `POST` and `GET /api/v1/events`, any name); outside, httpx over REST (`Client(base_url, token=...)`, the `http` extra; a `SchedrApi` connection type wrapping it, its token a secret); sync and async; `post_event` and `events` shortcuts; command tasks through `schedr task-ctx api ...` and `schedr task-ctx events post`; the agent resends a call on a new stream (the `Idempotency-Key`), gives up after a minute
+'''
+done_when = '''
+a task posts an event that starts another DAG's run, with no settings; a command task and a script post one; a route off the list is refused; a repeat with the same key is one event
+'''
+status = "done"
+done = 2026-11-08
+commits = ["1f06df5"]
+
+[[steps]]
+id = "M4.12"
+title = "Runs between and over time"
+scope = '''
+`TriggerDagOperator` (chained runs, `wait`, cancel, cycles) and backfill (`runs backfill`, `--all`, `max_runs`, `runs cancel --backfill`, priorities)
+'''
+done_when = "a parent waits on a chained run; a backfill fills missing periods oldest first"
+status = "planned"
+
+[[steps]]
+id = "M4.12a"
+title = "`TriggerDagOperator`"
+scope = '''
+(decisions 357-362, 365; the user's, 2026-11-08): a `trigger_dag` task the master runs; a `chained` run planned for the parent's `planned_for` or `planned_for=`, queued with manual runs' priority, run even if paused; `wait=True` gives the run's ID, `Failed` (routable, cancelled too) or `TimedOut` past `max_wait`, the target left running; a retry starts a new run only after a failure, created in the task's transaction; cancelling the parent cancels a waited run; a cycle in the chain of parents fails the task; `params=` with references, checked against the target's schema; the Airflow mapping (`logical_date`).
+'''
+done_when = '''
+a parent waits on a chained run and routes its `Failed`; a cycle fails; a restart starts no second run
+'''
+status = "planned"
+part_of = "M4.12"
+
+[[steps]]
+id = "M4.12b"
+title = "Backfill"
+scope = '''
+(decisions 363, 364): `schedr runs backfill` (`--from`/`--to`, `--all`, `-p`, `--dry-run`), `[backfill] max_runs`, `POST /api/v1/dags/{id}/backfills` and `GET /api/v1/backfills/{id}`, `runs cancel --backfill`, oldest first behind the other kinds; the UI's form and "backfill 3/31"
+'''
+done_when = '''
+a backfill fills the missing periods oldest first, skips the succeeded ones, and is cancelled as one
+'''
+status = "planned"
+part_of = "M4.12"
+
+[[steps]]
+id = "M4.13"
+title = "Notifications"
+scope = '''
+channels in the server's configuration (email and webhook), `Dag(notify=...)`, the events (`RUN_FAILED` by default; `LATE_CLEANUP_FAILED`, decision 309), fixed messages, metrics
+'''
+done_when = "a failed run sends one email and one webhook, a pure cancel none"
+status = "planned"
+
+[[steps]]
+id = "M4.14"
+title = "Retention"
+scope = '''
+`[retention]` (runs, outputs, events, commands), the master's batched job, never the latest run nor an unfinished one, "output deleted by retention"
+'''
+done_when = "old runs and outputs go, the protected ones stay, on SQLite and Postgres"
+status = "planned"
+
+[[steps]]
+id = "M4.15"
+title = "Per-task memory and upgrade rules"
+scope = '''
+a task's own memory budget in the API, `setrlimit` opt-in through `schedr task-exec` (50A); the upgrade rules checked against what M2 built (version gating, warnings within a major) and completed
+'''
+done_when = '''
+a task over its own budget is killed; a rolling upgrade keeps old-parse tasks on old workers
+'''
+status = "planned"

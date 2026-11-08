@@ -7,7 +7,7 @@ summary = '''
 Rust Askama templates render HTML and htmx supplies interactive partial updates.
 Assets are embedded in the binary and require no JavaScript build.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D26"
 step = "M3.1"
 code = ["crates/schedr-ui/src/lib.rs"]
 checked = 2026-11-08

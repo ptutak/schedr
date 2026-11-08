@@ -7,7 +7,8 @@ summary = '''
 A queued run keeps the values validated against the version on which it was created.
 They are not checked again when it starts.
 '''
-history = "PROJECT.md: Run parameters and the DAG context"
+history = "PROJECT.md#D137"
 step = "M4.5a"
+also = ["runs"]
 code = ["python/schedr/_params.py"]
 checked = 2026-11-08

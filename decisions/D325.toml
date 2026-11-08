@@ -9,6 +9,7 @@ replaces TaskDefaults without an alias and supplies shared settings for both kin
 applying only to its kind. Wait limits follow step, group, DAG, then [sensors] default_max_wait
 precedence.
 '''
-history = "PROJECT.md: Sensors and triggers"
+history = "PROJECT.md#D325"
 step = "M4.11a1"
+also = ["configuration"]
 checked = 2026-11-08

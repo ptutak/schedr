@@ -9,6 +9,7 @@ dispatch and lost-worker handling. It retains its execution kind; `Dag.resources
 cleanup role. Resource state is derived from setup and cleanup tasks, without a `resource_instances`
 table.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D261"
 step = "M4.8c2"
+also = ["state"]
 checked = 2026-11-08

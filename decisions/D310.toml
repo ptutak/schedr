@@ -9,7 +9,8 @@ job’s timezone, homogeneous-list, or nested-table defaults. Empty/mixed lists,
 times without dates are import errors naming the key. Triggers replace nested objects whole;
 parameter names contain letters, digits and underscores.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D310"
 step = "M4.9c"
+also = ["task-context"]
 code = ["crates/schedr-agent/src/jobs.rs"]
 checked = 2026-11-08

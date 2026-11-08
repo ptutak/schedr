@@ -9,6 +9,8 @@ Distributed app mode uses mTLS on the webserver’s UI port. Mesh proof uses tha
 excluding other callers. Standalones, mesh deployments without that policy, and shared-account
 setups use a token.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D40"
+step = "M3.6"
+also = ["deployment"]
 code = ["charts/schedr/values.yaml"]
 checked = 2026-11-08

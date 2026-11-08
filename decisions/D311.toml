@@ -9,6 +9,6 @@ enum replaces them and enables enum routing and .outcome. Without one, only decl
 DefaultOutcome.SUCCESS can be routed on; other .on selections and .outcome are parse
 errors.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D311"
 step = "M4.9c"
 checked = 2026-11-08

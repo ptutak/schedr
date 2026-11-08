@@ -7,7 +7,7 @@ summary = '''
 Declare command and script cleanups with `cluster.cleanup_command([...])` and
 `cluster.cleanup_script(job=...)`. Both methods accept `blocking=`.
 '''
-history = "PROJECT.md: Cleanup and resources"
-step = "M4.8d"
+history = "PROJECT.md#D271"
+step = "M4.9c"
 code = ["python/schedr/resources.py"]
 checked = 2026-11-08

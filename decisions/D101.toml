@@ -7,6 +7,7 @@ summary = '''
 Tasks run as the agent's user and can act as their worker; sender checks guard against confused workers.
 Teams that must be kept apart use separate schedr deployments.
 '''
-history = "PROJECT.md: Master–worker protocol"
-step = "M4.3e"
+history = "PROJECT.md#D101"
+step = "n/a"
+also = ["deployment"]
 checked = 2026-11-08

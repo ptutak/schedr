@@ -9,6 +9,7 @@ retries elsewhere until reconnect. A frozen worker may permit any task to overla
 `cleanup_anywhere` tasks outlasting the lease and cleanup move wait. Chaos scenarios record these
 permitted overlaps as `tries_run_twice` and fail on all others. Tasks should be idempotent.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D280"
 step = "M4.8z"
+also = ["cleanup"]
 checked = 2026-11-08

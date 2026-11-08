@@ -1,0 +1,123 @@
+title = "Foundations"
+order = 10
+done_when = '''
+The shared model, configuration, database schema and CLI skeleton are in place (no criterion of its own: PROJECT.md, Roadmap).
+'''
+notes = '''
+Python package layout:
+
+```
+python/schedr/
+  __init__.py        # public native API re-exports
+  _model/            # private builder API and DAG JSON writer (used by the Airflow layer later)
+  dag.py             # Dag, StepDefaults
+  tasks.py           # @task, Output, output references and paths
+  operators.py       # CommandOperator, EmptyOperator
+  triggers.py        # Trigger, Cron, Every, Once, presets
+  context.py         # dag_ctx
+  types.py           # the Json type alias, ProcessResult, KiB / MiB
+  _serialization/    # type model, parse-time checks, encode / decode (tagged types, dataclasses)
+  _templates.py      # t-strings -> template parts, reference checks
+  runner/            # python -m schedr.runner {parse,task}; the socket protocol
+  testing.py         # task_context, run_dag
+```
+'''
+
+[[steps]]
+id = "0.1"
+title = "Workspace"
+scope = '''
+Workspace: new crates, shared lints, `make check` and CI updated; `schedr-core` removed
+'''
+done_when = "`make check` green"
+status = "done"
+done = 2026-10-21
+commits = ["f4611a5"]
+
+[[steps]]
+id = "0.2"
+title = "`schedr-model` v0"
+scope = '''
+`schedr-model` v0: DAG JSON for the M1 subset (tasks `python` / `command` / `empty`, plain edges, templates as text + typed references, output references with paths, schedules, task defaults, type descriptors for outputs); run, task instance and attempt states
+'''
+done_when = "round-trip tests; JSON Schema generated"
+status = "done"
+done = 2026-10-21
+commits = ["627df66"]
+
+[[steps]]
+id = "0.3"
+title = "Schema generation + CI check"
+scope = '''
+Schema generation + CI check (`schema/dag.schema.json`, `schema/runner.schema.json`)
+'''
+done_when = "CI fails on a stale schema"
+status = "done"
+done = 2026-10-21
+commits = ["f33df94"]
+
+[[steps]]
+id = "0.4"
+title = "`schedr-config`"
+scope = '''
+`schedr-config`: file discovery (`--config`, `SCHEDR_CONFIG_FILE`, default), env mirror, precedence, `SCHEDR_DAG_PATH` / `SCHEDR_SCRIPT_PATH` aliases, roots and their startup errors (nested, duplicate names), `[interpreters]`, durations and sizes
+'''
+done_when = "unit tests per rule"
+status = "done"
+done = 2026-10-21
+commits = ["77f89fd"]
+
+[[steps]]
+id = "0.5"
+title = "`schedr-db`"
+scope = '''
+`schedr-db`: schema v1 (DAGs, DAG versions, parse results, runs, task instances, attempts, outputs, commands, workers), migrations for SQLite and Postgres, `schedr db migrate`, "refuse to start on an outdated schema"
+'''
+done_when = "migrations tested on both (Postgres in CI via a service container)"
+status = "done"
+done = 2026-10-21
+commits = ["8b4fb59"]
+
+[[steps]]
+id = "0.6"
+title = "`schedr-proto`"
+scope = '''
+`schedr-proto`: Protobuf for Register / Registered / Heartbeat / AssignTask / Started / Rejected / Finished / FinishedAck / AssignParse / CodeVersionChanged, versioned `major.minor`
+'''
+done_when = "generated code compiles; version check unit-tested"
+status = "done"
+done = 2026-10-21
+commits = ["278faeb"]
+
+[[steps]]
+id = "0.7"
+title = "Binary skeleton"
+scope = '''
+Binary skeleton: `clap` tree for roles, user CLI, `db migrate`, in-task CLI; `tracing` setup (`[log] format`, `level`)
+'''
+done_when = "`schedr --help` shows the tree"
+status = "done"
+done = 2026-10-21
+commits = ["4a0784b"]
+
+[[steps]]
+id = "0.8"
+title = "Python package skeleton"
+scope = '''
+Python package skeleton: `schedr/_model/` (the private builder API: hand-written DAG JSON types for the M1 subset, mirroring `schedr-model` module for module, with the same ID / version / UTC timestamp rules); tests validate produced JSON against `schema/dag.schema.json` (`jsonschema`, dev only). The other modules of the layout below are created in 1.1, with their code
+'''
+done_when = "`make check` green"
+status = "done"
+done = 2026-10-21
+commits = ["e48a56a"]
+
+[[steps]]
+id = "0.9"
+title = "Documentation site"
+scope = '''
+(PROJECT.md, Repository and tooling: Documentation): `cargo xtask docs-sources` (PROJECT.md → one Markdown file per chapter, plus README, PLAN and the crate list, into `docs/_generated/`, tested), Sphinx + MyST + Furo + autodoc, rustdoc copied under `rust/`, `make docs` / `make docs-serve`, ruff `D` rules (Google convention) and `rustdoc::broken_intra_doc_links`, CI docs job failing on warnings; docstrings added where missing
+'''
+done_when = "`make docs` builds a site with every section; CI green"
+status = "done"
+done = 2026-10-21
+commits = ["226fb40"]

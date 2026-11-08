@@ -7,5 +7,6 @@ summary = '''
 Task details load in a panel beside the graph using htmx.
 A task query parameter opens the same panel on a link or reload.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D31"
+step = "M3.2b"
 checked = 2026-11-08

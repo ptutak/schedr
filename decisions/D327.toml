@@ -8,7 +8,7 @@ Other DAG roots’ content hashes fold into a root’s reported hash, so any roo
 reparses the others. Workers serving a root must agree on the DAG roots on its path.
 A lone root keeps its plain hash.
 '''
-history = "PROJECT.md: DAG code delivery"
+history = "PROJECT.md#D327"
 step = "M4.11L"
 code = ["crates/schedr-agent/src/agent.rs"]
 checked = 2026-11-08

@@ -7,7 +7,8 @@ summary = '''
 The agent logs when `cleanup_timeout` does not fit the grace period.
 It warns at assignment, once per task.
 '''
-history = "PROJECT.md: Cleanup and resources"
+history = "PROJECT.md#D250"
 step = "M4.8b"
+also = ["workers", "configuration"]
 code = ["crates/schedr-agent/src/agent.rs"]
 checked = 2026-11-08

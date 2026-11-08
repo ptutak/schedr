@@ -7,7 +7,8 @@ summary = '''
 A row shows running while its command is polled and fills in when the worker answers.
 Results stay until the user leaves the page.
 '''
-history = "PROJECT.md: Connections"
+history = "PROJECT.md#D209"
 step = "M4.7e"
+also = ["ui-cli"]
 code = ["crates/schedr-ui/src/connections.rs"]
 checked = 2026-11-08

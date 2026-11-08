@@ -7,6 +7,8 @@ summary = '''
 Setting `max_active_per_run` directly on an unmapped task produces a parse warning shown by `dags check`.
 A value inherited from `StepDefaults` does not produce this warning.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D90"
+step = "M4.4"
+also = ["assignment", "testing-dags"]
 code = ["crates/schedr-master/src/limits.rs", "python/schedr/_build.py"]
 checked = 2026-11-08

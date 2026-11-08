@@ -7,6 +7,6 @@ summary = '''
 M2.5.4 is split in two; M2.5.4a builds the agent side of the fork server.
 It starts and supervises fork servers and handles fork requests and fallback.
 '''
-history = "PLAN.md"
-step = "M2.5.4a"
+history = "plan/M2.5.toml: step M2.5.4a"
+step = "n/a"
 checked = 2026-11-08

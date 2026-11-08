@@ -97,6 +97,8 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "python").mkdir()
     commit(tmp_path, {"base.py": "x = 1\n"}, "first")
     monkeypatch.chdir(tmp_path)
+    # `make check` may run with it set (a commit that means a removal): not these tests.
+    monkeypatch.delenv("SCHEDR_UNDO_OK", raising=False)
     return tmp_path
 
 

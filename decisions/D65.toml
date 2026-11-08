@@ -7,7 +7,7 @@ summary = '''
 The run graph orders each layer by group and draws nested, padded boxes around group members.
 The layout keeps unrelated tasks outside boxes and avoids overlaps.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D65"
 step = "M4.2b"
 code = ["crates/schedr-ui/src/graph.rs"]
 checked = 2026-11-08

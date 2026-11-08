@@ -7,5 +7,6 @@ summary = '''
 `run_dag` exposes `TaskResult.output` as `object`, so a test narrows it before using fields.
 `output_json` uses the `Json` type.
 '''
-history = "PROJECT.md: Python"
+history = "PROJECT.md#D73"
+step = "M4.3a"
 checked = 2026-11-08

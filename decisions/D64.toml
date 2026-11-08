@@ -7,7 +7,7 @@ summary = '''
 DAG JSON records a top-level `groups` list and each task’s optional innermost group.
 The master validates group membership, parents and cycles.
 '''
-history = "PROJECT.md: Native API"
+history = "PROJECT.md#D64"
 step = "M4.2b"
 code = ["crates/schedr-master/src/validate.rs", "crates/schedr-model/src/dag.rs", "crates/schedr-model/src/task.rs"]
 checked = 2026-11-08

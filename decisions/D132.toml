@@ -8,6 +8,6 @@ M4.5a builds parameter declaration, validation, storage, CLI and test inputs,
 references, typed access and the run summary. M4.5b builds the agent channel;
 M4.5c builds the UI trigger form.
 '''
-history = "PROJECT.md: Run parameters and the DAG context"
-step = "M4.5a"
+history = "PROJECT.md#D132"
+step = "n/a"
 checked = 2026-11-08

@@ -1,0 +1,17 @@
+title = "a worker's Finished that failed to store still wakes the master's loop"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "Decision 42 wakes the loop for a Finished once recorded; the stream reader notifies for any Finished in the turn, also one whose handling failed, so a failed store costs an extra round (rate-limited by ROUND_GAP)"
+found = 2026-11-08
+suspected = false
+details = '''
+- **Found:** Codex's step round of the docs restructuring (D42/D43 against the code); checked by
+  Claude in `crates/schedr-master/src/service.rs`: `finished |= matches!(message, Finished(_))` is
+  set before `self.handle(...)`, and `self.finished.notify_one()` runs after the loop whatever the
+  handling's result (a data fault drops the message; another error ends the stream).
+- **Effect:** one extra scheduler round, at least `ROUND_GAP` after the last; nothing is dispatched
+  wrongly, since the round reads the stored state.
+- **Fix proposed:** set `finished` only when `handle` returned `Ok` for a `Finished`; a unit test
+  with a refused `Finished` and no wake.
+'''

@@ -9,6 +9,7 @@ Cleanup scripts use their task’s environment and working directory. Moved or r
 require only what the cleanup runs, so absence of the original task’s interpreter does not exclude a
 worker.
 '''
-history = "PROJECT.md: Plain script delivery"
+history = "PROJECT.md#D314"
 step = "M4.9c"
+also = ["assignment", "cleanup"]
 checked = 2026-11-08

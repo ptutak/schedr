@@ -7,5 +7,7 @@ summary = '''
 The wheel and image CI job waits for the strict documentation build.
 `make image` and `make server-image` build the docs first.
 '''
-history = "PROJECT.md: Web UI and CLI"
+history = "PROJECT.md#D29"
+step = "M3.1"
+also = ["deployment"]
 checked = 2026-11-08
