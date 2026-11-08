@@ -215,6 +215,13 @@ Each message's writes are one transaction too, stored **whole or not at all**: a
 whose last write fails leaves nothing of it stored (the worker sends it again when it
 reconnects), never an ended attempt with its run left behind.
 
+Tasks' API calls arrive from the agent on the Control stream. Under the master's lease, the
+master runs them in process through the API router as the task or trigger, only for an open
+attempt or trigger on that worker and only on the allow-list (currently `GET` and `POST`
+`/api/v1/events`). The agent keeps unanswered calls and resends them after reconnecting,
+giving up after a minute. `[grpc] max_message_size` limits requests (413 before sending)
+and answers (502 if too large); a command's context has a separate 1 MiB limit.
+
 | Message | What the master does |
 |---|---|
 | `Register` | Checks the protocol version, takes over from a dead earlier stream, records the worker's node for the Deployments page (this master, the worker's process, its configuration masked again), decides about each attempt the worker reports (continue, kill or acknowledge), and answers `Registered` with the timing settings. |

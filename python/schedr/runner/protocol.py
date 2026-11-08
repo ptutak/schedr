@@ -140,6 +140,14 @@ class Channel:
             raise ProtocolError("a message must be a JSON object with a string `type`")
         return message
 
+    def settimeout(self, seconds: float | None) -> None:
+        """Sets how long a send or a receive may wait.
+
+        Args:
+            seconds: The time; ``None``: no limit.
+        """
+        self._sock.settimeout(seconds)
+
     def close(self) -> None:
         """Closes the socket."""
         self._sock.close()

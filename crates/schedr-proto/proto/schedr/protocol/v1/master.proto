@@ -46,7 +46,28 @@ message WorkerMessage {
     TriggerEvent trigger_event = 13;
     TriggerStopped trigger_stopped = 14;
     TriggerPoked trigger_poked = 15;
+    ApiCall api_call = 16;
   }
+}
+
+// A REST request a task (or a trigger, a wait step) makes through its agent, with no URL or
+// token (M4.11h, B2): the master runs it through the same router as the task's identity, on an
+// allow-list of routes, and answers with `ApiAnswer`. Sent again on a new stream until
+// answered (`request_id` and the request's `Idempotency-Key` make that safe).
+message ApiCall {
+  // The agent's, unique on this worker: the answer names it.
+  uint64 request_id = 1;
+  // The attempt making it; or, with `trigger_dag_id`, the trigger instance.
+  string attempt_id = 2;
+  // A trigger's DAG, when `attempt_id` is a trigger instance; "" for an attempt.
+  string trigger_dag_id = 3;
+  string method = 4;
+  // The path and its query, e.g. `/api/v1/events?name=paid`.
+  string path = 5;
+  // The body, JSON; empty for none.
+  bytes body_json = 6;
+  // `Idempotency-Key`; "" for none.
+  string idempotency_key = 7;
 }
 
 // What a trigger found: the master stores it, starts a run for a new key, and acknowledges.
@@ -336,7 +357,17 @@ message MasterMessage {
     AssignTrigger assign_trigger = 9;
     CancelTrigger cancel_trigger = 10;
     TriggerEventAck trigger_event_ack = 11;
+    ApiAnswer api_answer = 12;
   }
+}
+
+// The answer to an `ApiCall`: the HTTP status and body the router gave, or the master's refusal
+// (403 for a route off the list or a caller that isn't the worker's).
+message ApiAnswer {
+  uint64 request_id = 1;
+  uint32 status = 2;
+  // The body, JSON (an error is `{"error": ...}`).
+  bytes body_json = 3;
 }
 
 // Run a DAG's trigger: `instance_id` names this run of it, and everything it sends.

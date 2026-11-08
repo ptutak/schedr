@@ -3970,3 +3970,94 @@ async fn a_lookback_raised_after_the_pruning_hands_nothing_passed_again() {
     core.settings.event_lookback = Duration::from_hours(2);
     assert_eq!(call(&mut core, 5).await, None, "`early` stays passed");
 }
+
+/// What a task's API calls reach: the request, as the router got it.
+#[derive(Debug, Default)]
+struct RecordedApi(std::sync::Mutex<Vec<task_api::TaskApiRequest>>);
+
+impl task_api::TaskApi for RecordedApi {
+    fn call(
+        &self,
+        request: task_api::TaskApiRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = task_api::TaskApiResponse> + Send + '_>>
+    {
+        self.0.lock().unwrap().push(request);
+        Box::pin(async {
+            task_api::TaskApiResponse {
+                status: 201,
+                body: b"{}".to_vec(),
+            }
+        })
+    }
+}
+
+/// M4.11h: a task's call reaches the API as the task, from the worker holding its attempt open
+/// and on a listed route; anything else is refused (403) and reaches nothing.
+#[tokio::test]
+async fn a_tasks_api_call_runs_as_the_task_only_from_its_worker_on_a_listed_route() {
+    let api = std::sync::Arc::new(RecordedApi::default());
+    let mut core = with_dag().await.with_task_api(api.clone());
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    let call = |attempt: &str, method: &str, path: &str| {
+        worker_message::Message::ApiCall(pb::ApiCall {
+            request_id: 7,
+            attempt_id: attempt.to_owned(),
+            method: method.to_owned(),
+            path: path.to_owned(),
+            body_json: br#"{"name": "paid", "key": "o-1"}"#.to_vec(),
+            idempotency_key: "k".to_owned(),
+            ..pb::ApiCall::default()
+        })
+    };
+    let status = |out: &[Outgoing]| {
+        let master_message::Message::ApiAnswer(answer) = message(&out[0]) else {
+            panic!("expected ApiAnswer, got {out:?}")
+        };
+        assert_eq!(answer.request_id, 7);
+        answer.status
+    };
+    let attempt = assign.attempt_id.as_str();
+    let posted = core
+        .handle("w1", call(attempt, "post", "/api/v1/events"), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(status(&posted), 201);
+    let off_list = core
+        .handle(
+            "w1",
+            call(attempt, "POST", "/api/v1/dags/sync/pause"),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status(&off_list), 403);
+    let another_worker = core
+        .handle("w2", call(attempt, "POST", "/api/v1/events"), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(status(&another_worker), 403);
+    let unknown = core
+        .handle("w1", call("nope", "POST", "/api/v1/events"), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(status(&unknown), 403);
+    let run = &core
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap()[0];
+    let reached = api.0.lock().unwrap();
+    assert_eq!(reached.len(), 1, "{reached:?}");
+    assert_eq!(reached[0].caller, format!("task:sync/{}/extract", run.id));
+    assert_eq!(
+        (
+            reached[0].method.as_str(),
+            reached[0].idempotency_key.as_deref()
+        ),
+        ("POST", Some("k"))
+    );
+}

@@ -35,6 +35,7 @@ fn info(version: &str) -> CtxInfo {
         secrets: None,
         handles: None,
         resource: None,
+        api: None,
     }
 }
 
@@ -651,4 +652,11 @@ async fn a_value_of_any_type_is_given_as_json() {
     assert_eq!(resource.outcome(), Some(Ok(json!([7, 8]))));
     let both = resource_value(&["a=1".to_owned()], Some("1")).unwrap_err();
     assert!(both.contains("not both"), "{both}");
+}
+
+#[test]
+fn a_query_value_is_percent_encoded() {
+    // Grok's review of M4.11h: an event name's `#` started a fragment, cutting the name.
+    assert_eq!(super::query_value("foo#bar/x:y"), "foo%23bar%2Fx%3Ay");
+    assert_eq!(super::query_value("a-b_c.d~e"), "a-b_c.d~e");
 }

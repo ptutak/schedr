@@ -43,7 +43,9 @@ use schedr_proto::convert::attempt_status_from_proto;
 use schedr_proto::convert::{parse_upload_parts, parsed_file_to_proto};
 use schedr_proto::pb::master_client::MasterClient;
 use schedr_proto::pb::{self, master_message, worker_message};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
+
+use crate::api::ApiCaller;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::transport::Channel;
 
@@ -788,6 +790,7 @@ impl ProcessExecutor {
             secrets: Some(Arc::clone(secrets)),
             handles: Some(Arc::clone(handles)),
             events: None,
+            api: spec.api.clone(),
         };
         let ran = match plan {
             // In a process shared with other wait steps: no budget of its own (the host's).
@@ -820,9 +823,9 @@ impl ProcessExecutor {
             }
             Plan::Command(process) => {
                 let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
-                ctx.secrets = Some(Arc::clone(secrets));
-                ctx.handles = Some(Arc::clone(handles));
+                (ctx.secrets, ctx.handles) = (Some(Arc::clone(secrets)), Some(Arc::clone(handles)));
                 ctx.resource.clone_from(&resource);
+                ctx.api.clone_from(&spec.api);
                 run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };
@@ -975,6 +978,11 @@ enum Done {
     },
     Attempt(pb::Finished),
     Trigger(TriggerDone),
+    /// A task's API call: on to the master, its answer to `answer` (M4.11h).
+    ApiCall {
+        call: pb::ApiCall,
+        answer: oneshot::Sender<pb::ApiAnswer>,
+    },
     Parse {
         job_id: String,
         root: pb::RootHash,
@@ -1051,6 +1059,10 @@ pub struct Agent<E> {
     /// Connections jobs' answers made while no master listened, sent once one does (the
     /// newest [`UNSENT_ANSWERS`]; the master calls an unanswered job lost in time anyway).
     unsent_answers: std::collections::VecDeque<pb::ConnectionJobDone>,
+    /// Tasks' API calls not answered yet, by request ID: sent again on a new stream (M4.11h).
+    api_calls: BTreeMap<u64, (pb::ApiCall, oneshot::Sender<pb::ApiAnswer>)>,
+    /// The last API call's request ID.
+    api_call_id: u64,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
     code_hashes: BTreeMap<String, String>,
     /// The content hashes of the other roots' copies a task runs from (its script root, the
@@ -1186,6 +1198,8 @@ impl<E: Executor> Agent<E> {
             warned_room: std::collections::BTreeSet::new(),
             unacked: BTreeMap::new(),
             unsent_answers: std::collections::VecDeque::new(),
+            api_calls: BTreeMap::new(),
+            api_call_id: first_api_call_id(),
             code_hashes: BTreeMap::new(),
             other_copies: BTreeMap::new(),
             uses: BTreeMap::new(),
@@ -2109,6 +2123,11 @@ impl<E: Executor> Agent<E> {
                 for trigger in self.triggers.values_mut() {
                     trigger.poke.unsent = trigger.poke.at.is_some();
                 }
+                // What went out on the old stream may not have got there, or its answer back.
+                self.api_calls.retain(|_, (_, answer)| !answer.is_closed());
+                for (call, _) in self.api_calls.values() {
+                    let _ = to_master.send(wrap(worker_message::Message::ApiCall(call.clone())));
+                }
                 for done in self.unsent_answers.drain(..) {
                     let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
                 }
@@ -2129,6 +2148,11 @@ impl<E: Executor> Agent<E> {
             master_message::Message::CancelTrigger(cancel) => {
                 if let Some(trigger) = self.triggers.get(&cancel.instance_id) {
                     let _ = trigger.stop.send(StopReason::Cancelled);
+                }
+            }
+            master_message::Message::ApiAnswer(answer) => {
+                if let Some((_, to)) = self.api_calls.remove(&answer.request_id) {
+                    let _ = to.send(answer);
                 }
             }
             master_message::Message::TriggerEventAck(ack) => {
@@ -2362,6 +2386,7 @@ impl<E: Executor> Agent<E> {
         }
         self.remember_code(&assign, &spec);
         self.note_cleanup(&mut spec, &assign);
+        spec.api = Some(ApiCaller::of_attempt(&spec.attempt_id, self.api_send()));
         if let Some(only) = &assign.cleanup_only
             && !matches!(planned, Err(NotRun::Rejected { .. }))
         {
@@ -2464,7 +2489,12 @@ impl<E: Executor> Agent<E> {
             after: assign.after.clone(),
         };
         spec.trigger = Some((start, sink));
-        spec.stand_in_secrets();
+        let send = self.api_send();
+        spec.api = Some(ApiCaller::of_trigger(
+            &assign.instance_id,
+            &assign.dag_id,
+            send,
+        ));
         spec.stand_in_secrets();
         let plan = match self.plan(&mut spec, &task_assign) {
             Ok(plan) => plan,
@@ -2733,6 +2763,55 @@ impl<E: Executor> Agent<E> {
             .get(&spec.dag_root)
             .and_then(RootWatcher::hash)
             .map(str::to_owned)
+    }
+
+    /// A task's API call: given its ID (and a key, if it has none), sent on to the master and
+    /// kept until answered; refused here when over the master's limit (M4.11h).
+    fn api_call(
+        &mut self,
+        mut call: pb::ApiCall,
+        answer: oneshot::Sender<pb::ApiAnswer>,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        // Its task gone or out of time: not sent (Grok's review), the call left to its key.
+        if answer.is_closed() {
+            return;
+        }
+        self.api_call_id = self.api_call_id.wrapping_add(1);
+        call.request_id = self.api_call_id;
+        // Over the master's limit, it would end the stream, the other calls with it.
+        let size = prost::Message::encoded_len(&call);
+        if size > self.master_limit.saturating_sub(1024) {
+            let error = format!(
+                "the request is {size} bytes, over the {} the master takes ([grpc] \
+                 max_message_size)",
+                self.master_limit
+            );
+            let _ = answer.send(pb::ApiAnswer {
+                request_id: call.request_id,
+                status: 413,
+                body_json: serde_json::to_vec(&serde_json::json!({ "error": error }))
+                    .unwrap_or_default(),
+            });
+            return;
+        }
+        if let Some(to_master) = to_master {
+            let _ = to_master.send(wrap(worker_message::Message::ApiCall(call.clone())));
+        }
+        // Calls given up (their task gone, or out of time) aren't kept.
+        self.api_calls.retain(|_, (_, answer)| !answer.is_closed());
+        self.api_calls.insert(call.request_id, (call, answer));
+    }
+
+    /// Where a task's API calls go: through the agent's loop, on to the master (M4.11h).
+    /// (See [`first_api_call_id`] for their IDs.)
+    fn api_send(&self) -> crate::api::ApiSend {
+        let done = self.done_tx.clone();
+        Arc::new(move |call| {
+            let (answer, answered) = oneshot::channel();
+            let _ = done.send(Done::ApiCall { call, answer });
+            answered
+        })
     }
 
     /// A task with a cleanup: its handles go to the journal, a drain leaves room for one try,
@@ -3236,6 +3315,9 @@ impl<E: Executor> Agent<E> {
                 }
             }
             Done::Trigger(done) => self.trigger_done(done, link.map(|(to, _)| to)),
+            Done::ApiCall { call, answer } => {
+                self.api_call(call, answer, link.map(|(to, _)| to));
+            }
             Done::Parse {
                 job_id,
                 root,
@@ -3978,4 +4060,14 @@ fn batches(task: &schedr_model::Task) -> bool {
             ..
         }
     )
+}
+
+/// The first API call's ID less one: the clock's nanoseconds, so a restarted agent's calls never
+/// take the IDs of its last incarnation's, whose answers may still come (Codex's review).
+fn first_api_call_id() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+        })
 }

@@ -270,10 +270,11 @@ already has the descriptor.
 
 `schedr task-ctx` uses the same channel for [secrets](13-secrets.md),
 [connections](14-connections.md), [cleanup handles](15-cleanup.md), and
-[resource values](16-resources.md#a-command-setup):
+[resource values](16-resources.md#a-command-setup), and [API calls and events](22-events.md#posting-from-a-task):
 
 | Command | What it does |
 |---|---|
+| `events post`, `events list`, `api METHOD PATH` | Post or list events, or call an allowed API route as the task. |
 | `resource set [FIELD ...] [--json JSON]` | Reports the setup's value, checked immediately against `CommandResource(..., value=T)` or `ScriptResource(..., value=T)`. Fields are `key=value` (text) or `key:=json`; alternatively, `--json` takes any JSON value. Report once per setup attempt. Only a command or script resource setup can call it. |
 | `resource get [--field NAME]` | Prints the setup's value in a resource's command or script cleanup: one line of JSON, in the form `--params` takes. `--field` prints a top-level string as text and other fields as JSON, followed by a newline. A resource with no value returns `null`. |
 

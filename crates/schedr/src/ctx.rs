@@ -24,6 +24,7 @@ use schedr_model::runner::CleanupHandle;
 
 use crate::cli::{
     CleanupCommand, ConnectionArgs, DagCtxCommand, GetCommand, ResourceCommand, SecretCommand,
+    TaskCtxCommand, TaskEventsCommand,
 };
 
 #[cfg(test)]
@@ -54,6 +55,42 @@ pub fn run_dag_ctx(
     let text = printed(&values, field.field.as_deref())?;
     out.write_all(text.as_bytes())
         .map_err(|e| format!("can't write output: {e}"))
+}
+
+/// Runs a `schedr task-ctx` command; the error is the message for stderr.
+///
+/// # Errors
+///
+/// As the command's own (`run_task_ctx_*`).
+pub fn run_task_ctx(
+    command: &TaskCtxCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    (out, err): (&mut impl Write, &mut impl Write),
+) -> Result<(), String> {
+    match command {
+        TaskCtxCommand::Secret { command } => run_task_ctx_secret(command, env, version, out),
+        TaskCtxCommand::Connection(command) => run_task_ctx_connection(command, env, version, out),
+        TaskCtxCommand::Cleanup { command } => run_task_ctx_cleanup(command, env, version, out),
+        TaskCtxCommand::Resource { command } => run_task_ctx_resource(command, env, version, out),
+        TaskCtxCommand::Api {
+            method,
+            path,
+            data,
+            idempotency_key,
+        } => {
+            let request = (
+                method.as_str(),
+                path.as_str(),
+                data.as_deref(),
+                idempotency_key.as_deref(),
+            );
+            run_task_ctx_api(request, env, version, (out, err))
+        }
+        TaskCtxCommand::Events { command } => {
+            run_task_ctx_events(command, env, version, (out, err))
+        }
+    }
 }
 
 /// Which command connects, for the message outside a task.
@@ -247,6 +284,150 @@ pub fn run_task_ctx_resource(
     }
 }
 
+/// Runs `schedr task-ctx api`: prints the answer's body as one line of JSON.
+///
+/// # Errors
+///
+/// Outside a task, when `--data` isn't JSON, when the channel is gone, or when the API answers
+/// an error status (its message).
+pub fn run_task_ctx_api(
+    (method, path, data, idempotency_key): (&str, &str, Option<&str>, Option<&str>),
+    env: &BTreeMap<String, String>,
+    version: &str,
+    (out, err): (&mut impl Write, &mut impl Write),
+) -> Result<(), String> {
+    let body = data
+        .map(|text| serde_json::from_str(text).map_err(|e| format!("--data isn't JSON: {e}")))
+        .transpose()?;
+    let request = CtxRequest::ApiCall {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        body,
+        idempotency_key: idempotency_key.map(str::to_owned),
+    };
+    let answer = api_call(env, version, &request, err)?;
+    out.write_all(format!("{answer}\n").as_bytes())
+        .map_err(|e| format!("can't write output: {e}"))
+}
+
+/// Runs `schedr task-ctx events`: the event posted, or those listed, one line of JSON each.
+///
+/// # Errors
+///
+/// Outside a task, when `--data` or `--at` doesn't read, when the channel is gone, or when
+/// the API refuses (its message).
+pub fn run_task_ctx_events(
+    command: &TaskEventsCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    (out, err): (&mut impl Write, &mut impl Write),
+) -> Result<(), String> {
+    let request = match command {
+        TaskEventsCommand::Post {
+            name,
+            key,
+            data,
+            at,
+            idempotency_key,
+        } => {
+            let data = crate::user::given_event_data(data.as_deref())
+                .map_err(|why| why.replace("--event-data", "--data"))?;
+            let mut body = serde_json::json!({
+                "name": name,
+                "key": key,
+                "data": data.unwrap_or_default(),
+            });
+            if let Some(text) = at {
+                let parsed = crate::times::parse_for(text).map_err(|why| format!("--at: {why}"))?;
+                if let Some(warning) = parsed.warning {
+                    let _ = writeln!(err, "{warning}");
+                }
+                body["at"] = Value::String(parsed.at.to_string());
+            }
+            CtxRequest::ApiCall {
+                method: "POST".to_owned(),
+                path: "/api/v1/events".to_owned(),
+                body: Some(body),
+                idempotency_key: idempotency_key.clone(),
+            }
+        }
+        TaskEventsCommand::List { name, limit } => {
+            let mut path = format!("/api/v1/events?limit={limit}");
+            if let Some(name) = name {
+                let name =
+                    schedr_model::EventName::new(name).map_err(|e| format!("--name: {e}"))?;
+                // Encoded: a name may hold `#` or `/` (Grok's review: `#` cut the query).
+                let _ = write!(path, "&name={}", query_value(name.as_str()));
+            }
+            CtxRequest::ApiCall {
+                method: "GET".to_owned(),
+                path,
+                body: None,
+                idempotency_key: None,
+            }
+        }
+    };
+    let answer = api_call(env, version, &request, err)?;
+    let text = match answer.get("events").and_then(Value::as_array) {
+        Some(events) if matches!(command, TaskEventsCommand::List { .. }) => {
+            events.iter().fold(String::new(), |mut text, event| {
+                let _ = writeln!(text, "{event}");
+                text
+            })
+        }
+        _ => format!("{answer}\n"),
+    };
+    out.write_all(text.as_bytes())
+        .map_err(|e| format!("can't write output: {e}"))
+}
+
+/// `text` as a query's value: all but unreserved characters percent-encoded.
+fn query_value(text: &str) -> String {
+    text.bytes().fold(String::new(), |mut encoded, byte| {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+        encoded
+    })
+}
+
+/// An API call through the task's agent: the answer's body, or its error as the message.
+fn api_call(
+    env: &BTreeMap<String, String>,
+    version: &str,
+    request: &CtxRequest,
+    err: &mut impl Write,
+) -> Result<Value, String> {
+    let mut stream = connect(env, Ctx::Task)?;
+    // The agent waits for the master up to its limit, over reconnects: the answer comes then.
+    stream
+        .set_read_timeout(Some(
+            schedr_agent::api::API_CALL_LIMIT.saturating_add(ANSWER_TIMEOUT),
+        ))
+        .map_err(|e| format!("can't set up the connection: {e}"))?;
+    let answer = call(&mut stream, version, request)?;
+    if let CtxAnswer::ApiAnswer {
+        note: Some(note), ..
+    } = &answer
+    {
+        let _ = writeln!(err, "{note}");
+    }
+    match answer {
+        CtxAnswer::ApiAnswer { status, body, .. } if status < 400 => Ok(body),
+        CtxAnswer::ApiAnswer { status, body, .. } => {
+            let why = body
+                .get("error")
+                .and_then(Value::as_str)
+                .map_or_else(|| body.to_string(), str::to_owned);
+            Err(format!("the API answered {status}: {why}"))
+        }
+        CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => Err(reason),
+        _ => Err("the agent answered with something else than the API's answer".to_owned()),
+    }
+}
+
 /// A resource's value: an object from `key=value` and `key:=json` fields, or any JSON from
 /// `--json` (`--json 7` for `value=int`).
 fn resource_value(fields: &[String], json: Option<&str>) -> Result<Value, String> {
@@ -335,6 +516,9 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         CtxAnswer::Run(run) => serde_json::to_value(run).map_err(|e| e.to_string()),
         CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => Err(reason),
         CtxAnswer::Welcome => Err("the agent answered `welcome` to a request".to_owned()),
+        CtxAnswer::ApiAnswer { .. } => {
+            Err("the agent answered with the API's answer to another request".to_owned())
+        }
         CtxAnswer::HandleAdded | CtxAnswer::HandleRefused { .. } | CtxAnswer::Handles { .. } => {
             Err("the agent answered with a cleanup handle to another request".to_owned())
         }

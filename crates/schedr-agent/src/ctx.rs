@@ -57,6 +57,8 @@ pub struct CtxInfo {
     /// The resource value it reports or reads (`schedr task-ctx resource`); none for a task
     /// that is no resource's command part.
     pub resource: Option<Arc<AttemptResource>>,
+    /// What it calls schedr's REST API with (`schedr task-ctx api`, M4.11h); none: it can't.
+    pub api: Option<crate::api::ApiCaller>,
 }
 
 impl CtxInfo {
@@ -76,6 +78,7 @@ impl CtxInfo {
             secrets: None,
             handles: None,
             resource: None,
+            api: None,
         }
     }
 }
@@ -331,82 +334,135 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
     loop {
         let answer = match read_request(stream).await? {
             None => return Ok(()),
-            Some(Ok(CtxRequest::ParamsGet)) => CtxAnswer::Params {
-                params: info.params.clone(),
-            },
-            Some(Ok(CtxRequest::RunGet)) => CtxAnswer::Run(info.run.clone()),
-            Some(Ok(CtxRequest::SecretGet { secret })) => match &info.secrets {
-                Some(secrets) => match secrets.read(&secret).await {
-                    Ok(value) => CtxAnswer::Secret { value },
-                    Err(error) => CtxAnswer::SecretFailed {
-                        kind: error.kind().to_owned(),
-                        reason: error.to_string(),
-                    },
-                },
-                None => CtxAnswer::SecretFailed {
-                    kind: SecretError::Denied(String::new()).kind().to_owned(),
-                    reason: format!("`{secret}` isn't declared in the task's `secrets=`"),
-                },
-            },
-            Some(Ok(CtxRequest::HandleAdd { handle })) => {
-                let added = match info.handles.as_ref() {
-                    Some(handles) => handles.add(handle).await,
-                    None => Err(HandleError::NoCleanup),
-                };
-                match added {
-                    Ok(()) => CtxAnswer::HandleAdded,
-                    Err(error) => CtxAnswer::HandleRefused {
-                        reason: error.to_string(),
-                    },
-                }
-            }
-            Some(Ok(CtxRequest::HandleList)) => match info.handles.as_ref() {
-                Some(handles) if handles.in_cleanup() => CtxAnswer::Handles {
-                    handles: handles.list(),
-                },
-                _ => CtxAnswer::Error {
-                    reason: "`cleanup list` works only inside a cleanup".to_owned(),
-                },
-            },
-            Some(Ok(CtxRequest::ConnectionGet { name })) => {
-                let opened = match &info.secrets {
-                    Some(secrets) => secrets.connection(&name).await,
-                    None => Err(ConnectionError::NotFound(format!(
-                        "connection `{name}`: no connections are known for this task"
-                    ))),
-                };
-                match opened {
-                    Ok(values) => CtxAnswer::Connection { values },
-                    Err(error) => CtxAnswer::ConnectionFailed {
-                        kind: error.kind().to_owned(),
-                        reason: error.to_string(),
-                    },
-                }
-            }
-            Some(Ok(CtxRequest::ConnectionEnvGet { name, prefix })) => {
-                let given = match &info.secrets {
-                    Some(secrets) => secrets.connection_env(&name, &prefix).await,
-                    None => Err(ConnectionError::NotFound(format!(
-                        "connection `{name}`: no connections are known for this task"
-                    ))),
-                };
-                match given {
-                    Ok(variables) => CtxAnswer::ConnectionEnv { variables },
-                    Err(error) => CtxAnswer::ConnectionFailed {
-                        kind: error.kind().to_owned(),
-                        reason: error.to_string(),
-                    },
-                }
-            }
-            Some(Ok(CtxRequest::ResourceSet { value })) => resource_answer(info, Some(&value)),
-            Some(Ok(CtxRequest::ResourceGet)) => resource_answer(info, None),
             Some(Ok(CtxRequest::Hello { .. })) => {
                 return refuse(stream, "`hello` was said already").await;
             }
+            Some(Ok(request)) => answer_to(info, request).await,
             Some(Err(reason)) => return refuse(stream, &reason).await,
         };
         write_answer(stream, &answer).await?;
     }
+}
+
+/// The answer to a request after the handshake.
+async fn answer_to(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
+    match request {
+        CtxRequest::ParamsGet => CtxAnswer::Params {
+            params: info.params.clone(),
+        },
+        CtxRequest::RunGet => CtxAnswer::Run(info.run.clone()),
+        CtxRequest::SecretGet { secret } => match &info.secrets {
+            Some(secrets) => match secrets.read(&secret).await {
+                Ok(value) => CtxAnswer::Secret { value },
+                Err(error) => CtxAnswer::SecretFailed {
+                    kind: error.kind().to_owned(),
+                    reason: error.to_string(),
+                },
+            },
+            None => CtxAnswer::SecretFailed {
+                kind: SecretError::Denied(String::new()).kind().to_owned(),
+                reason: format!("`{secret}` isn't declared in the task's `secrets=`"),
+            },
+        },
+        CtxRequest::ApiCall {
+            method,
+            path,
+            body,
+            idempotency_key,
+        } => match &info.api {
+            Some(api) => {
+                let request = crate::api::ApiRequest {
+                    method,
+                    path,
+                    body,
+                    idempotency_key,
+                    masked: false,
+                };
+                let request = request.masked_by(info.secrets.as_deref());
+                let note = request.note();
+                let (status, body) = api.call(request).await;
+                api_answer(status, body, note)
+            }
+            None => CtxAnswer::Error {
+                reason: crate::api::NO_MASTER.to_owned(),
+            },
+        },
+        CtxRequest::HandleAdd { handle } => {
+            let added = match info.handles.as_ref() {
+                Some(handles) => handles.add(handle).await,
+                None => Err(HandleError::NoCleanup),
+            };
+            match added {
+                Ok(()) => CtxAnswer::HandleAdded,
+                Err(error) => CtxAnswer::HandleRefused {
+                    reason: error.to_string(),
+                },
+            }
+        }
+        CtxRequest::HandleList => match info.handles.as_ref() {
+            Some(handles) if handles.in_cleanup() => CtxAnswer::Handles {
+                handles: handles.list(),
+            },
+            _ => CtxAnswer::Error {
+                reason: "`cleanup list` works only inside a cleanup".to_owned(),
+            },
+        },
+        CtxRequest::ConnectionGet { name } => {
+            let opened = match &info.secrets {
+                Some(secrets) => secrets.connection(&name).await,
+                None => Err(ConnectionError::NotFound(format!(
+                    "connection `{name}`: no connections are known for this task"
+                ))),
+            };
+            match opened {
+                Ok(values) => CtxAnswer::Connection { values },
+                Err(error) => CtxAnswer::ConnectionFailed {
+                    kind: error.kind().to_owned(),
+                    reason: error.to_string(),
+                },
+            }
+        }
+        CtxRequest::ConnectionEnvGet { name, prefix } => {
+            let given = match &info.secrets {
+                Some(secrets) => secrets.connection_env(&name, &prefix).await,
+                None => Err(ConnectionError::NotFound(format!(
+                    "connection `{name}`: no connections are known for this task"
+                ))),
+            };
+            match given {
+                Ok(variables) => CtxAnswer::ConnectionEnv { variables },
+                Err(error) => CtxAnswer::ConnectionFailed {
+                    kind: error.kind().to_owned(),
+                    reason: error.to_string(),
+                },
+            }
+        }
+        CtxRequest::ResourceSet { value } => resource_answer(info, Some(&value)),
+        CtxRequest::ResourceGet => resource_answer(info, None),
+        CtxRequest::Hello { .. } => CtxAnswer::Error {
+            reason: "`hello` was said already".to_owned(),
+        },
+    }
+}
+
+/// An API answer, or a 502 when it is over what the context's connection takes (Codex's
+/// review of M4.11h): the connection would break instead.
+fn api_answer(status: u16, body: serde_json::Value, note: Option<String>) -> CtxAnswer {
+    let size = serde_json::to_vec(&body).map_or(usize::MAX, |bytes| bytes.len());
+    let limit = usize::try_from(MAX_CTX_MESSAGE_SIZE).unwrap_or(usize::MAX);
+    // Room for the answer's own fields.
+    if size > limit.saturating_sub(1024) {
+        let error = format!(
+            "the API's answer is {size} bytes, over the {MAX_CTX_MESSAGE_SIZE} a task's context \
+             takes: ask for less (`limit=`)"
+        );
+        return CtxAnswer::ApiAnswer {
+            status: 502,
+            body: serde_json::json!({ "error": error }),
+            note,
+        };
+    }
+    CtxAnswer::ApiAnswer { status, body, note }
 }
 
 /// The answer to `resource set` (with the value) or `resource get`.

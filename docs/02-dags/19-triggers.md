@@ -91,8 +91,9 @@ again, so a restart loses that window's items.
 `Event(key, data, at)` carries a key, typed data (default `None`), and an optional
 time-zone-aware `at` for when it happened. The key identifies an event within its DAG: a
 key already seen starts no new run. It must be 1 to 1024 UTF-8 bytes with no control
-characters. A key holding a secret the trigger read is refused: keys are shown and
-stored masked, so two keys differing only in it would be one event. Use a stable, unique identifier for the same external event across retries and
+characters. Keep secrets out of keys: a key holding a secret the trigger read is stored and
+shown masked, so two keys differing only in secrets count as one key (the trigger's log says
+so, once). Use a stable, unique identifier for the same external event across retries and
 restarts; do not generate a fresh random key on each observation. Data is limited by the
 trigger's `max_output_size` (1 MiB by default); secrets are masked as in task output.
 

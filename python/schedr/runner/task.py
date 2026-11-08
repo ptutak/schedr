@@ -47,6 +47,7 @@ from schedr._templates import as_text
 from schedr.connections import ConnectionBase, ConnectionDeniedError, ConnectionNotFoundError
 from schedr.context import (
     HANDLES_PARAMETER,
+    ApiCaller,
     ConnectionEnter,
     ConnectionOpener,
     HandleAdder,
@@ -741,8 +742,9 @@ def _begin(
     imported()
     opener = connection_opener(channel) if channel is not None else None
     adder = handle_adder(channel) if channel is not None else None
+    api = api_caller(channel) if channel is not None else None
     own = TaskValues(
-        task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
+        task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder, api
     )
     return _Begun(function, arguments, hints, run_values(run, params_class), own, downstream)
 
@@ -900,9 +902,7 @@ async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: i
     if event.at is not None:
         message["at"] = event.at.isoformat()
     # In a thread: the master may take long, and the others on this loop go on.
-    answer = await asyncio.to_thread(channel.ask, message)
-    if answer.get("type") == "event_refused":
-        raise CodecError("", str(answer.get("message", "")))
+    await asyncio.to_thread(channel.ask, message)
 
 
 def _raised(error: BaseException) -> dict[str, Any]:
@@ -1084,6 +1084,45 @@ def _handle(handle: Mapping[str, Any], classes: Mapping[str, type], task_id: str
         return decode(handle["value"], classes[name])
     except CodecError as e:
         raise TaskInputError(f"a `{name}` handle of task `{task_id}`: {e.reason}") from None
+
+
+_told: set[str] = set()
+
+
+def tell_note(note: object) -> None:
+    """Prints what the agent says of an API request to the task's log (stderr), once per note.
+
+    Args:
+        note: The answer's ``note``: a secret in the request masked; ``None``: nothing.
+    """
+    if isinstance(note, str) and note not in _told:
+        _told.add(note)
+        print(note, file=sys.stderr)
+
+
+def api_caller(channel: Asking) -> ApiCaller:
+    """Calls schedr's REST API through the agent (``api_call``), one request at a time.
+
+    Args:
+        channel: The channel to the agent.
+
+    Returns:
+        The caller ``schedr.api`` uses.
+    """
+
+    def call(method: str, path: str, body: object, key: str | None) -> tuple[int, object]:
+        request: dict[str, Any] = {"type": "api_call", "method": method, "path": path}
+        if body is not None:
+            request["body"] = body
+        if key is not None:
+            request["idempotency_key"] = key
+        answer = channel.ask(request)
+        if answer.get("type") != "api_answer":
+            raise RuntimeError(f"schedr.api: unexpected answer {answer.get('type')!r}")
+        tell_note(answer.get("note"))
+        return int(answer["status"]), answer.get("body")
+
+    return call
 
 
 def handle_adder(channel: Asking) -> HandleAdder:

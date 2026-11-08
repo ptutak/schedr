@@ -75,6 +75,7 @@ __all__ = [
     "DbApiConnection",
     "Generic",
     "Mongo",
+    "SchedrApi",
     "TwoWayConnection",
     "connection",
 ]
@@ -748,4 +749,5 @@ from schedr.connection_types import (  # noqa: E402  # they import this module's
     DbApiConnection,
     Generic,
     Mongo,
+    SchedrApi,
 )

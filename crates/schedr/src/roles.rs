@@ -544,7 +544,7 @@ pub async fn listen(address: SocketAddr) -> Result<TcpListener, AppError> {
 pub async fn serve_master(
     db: Database,
     settings: Settings,
-    (tick, problems): (Duration, Problems),
+    (tick, problems, max_event_size): (Duration, Problems, usize),
     listener: TcpListener,
     tls: Option<Tls>,
     leadership: impl Future<Output = Result<Leadership, AppError>>,
@@ -581,11 +581,23 @@ pub async fn serve_master(
             (None, true)
         }
     };
+    // Tasks' requests to the API (M4.11h): answered in one message to their worker, with room
+    // for its envelope.
+    // Fenced as the master's writes: a call checked before another master took over writes
+    // nothing after (Codex's review).
+    let task_api = crate::task_api::RouterTaskApi::new(
+        leadership.fenced_db(),
+        max_event_size,
+        settings.max_message_size.saturating_sub(4096),
+    );
     // Its writes through the lease: refused once another master took it over.
-    let mut hub =
-        Hub::new(MasterCore::new(leadership.fenced_db(), settings).with_metrics(observed.metrics))
-            .with_refresh_limit(observed.health.stall() / 2)
-            .with_problems(problems);
+    let mut hub = Hub::new(
+        MasterCore::new(leadership.fenced_db(), settings)
+            .with_metrics(observed.metrics)
+            .with_task_api(std::sync::Arc::new(task_api)),
+    )
+    .with_refresh_limit(observed.health.stall() / 2)
+    .with_problems(problems);
     if retry {
         hub = hub.with_listen_retry(listen_retry);
     }
@@ -1492,7 +1504,11 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     Box::pin(serve_master(
         db,
         master_settings(config),
-        (config.timings.tick_interval, problems),
+        (
+            config.timings.tick_interval,
+            problems,
+            usize::try_from(config.events.max_size).unwrap_or(usize::MAX),
+        ),
         listener,
         tls,
         leadership,

@@ -156,16 +156,3 @@ def test_an_item_without_a_key_fails_the_trigger_as_alone() -> None:
 
     with pytest.raises(TypeError, match="non-empty"):
         _batches(keyless, every=0.001, window=60.0, calls=1)
-
-
-def test_an_event_the_agent_refuses_fails_as_data_that_cant_be_stored() -> None:
-    # Grok's review of M4.11f: a key holding a secret is refused by the agent.
-    from schedr._serialization import CodecError  # noqa: PLC0415
-    from schedr.runner.task import _tell_event  # noqa: PLC0415 (the teller itself)
-
-    class Refusing:
-        def ask(self, message: dict[str, Any]) -> dict[str, Any]:
-            return {"type": "event_refused", "message": "an event's key holds a secret"}
-
-    with pytest.raises(CodecError, match="holds a secret"):
-        asyncio.run(_tell_event(Refusing(), Event("k", 1), int, 1000))  # type: ignore[arg-type]

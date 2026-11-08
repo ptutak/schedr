@@ -1269,6 +1269,7 @@ fn connection_type(kind: schedr_model::connection::ConnectionType) -> String {
         ConnectionType::Mongo => "mongo",
         ConnectionType::Sql => "sql",
         ConnectionType::Generic => "generic",
+        ConnectionType::Schedr => "schedr",
     }
     .to_owned()
 }

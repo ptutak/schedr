@@ -339,6 +339,8 @@ pub struct PythonTask {
     pub handles: Option<Arc<AttemptHandles>>,
     /// Where a trigger's events go; none for anything else.
     pub events: Option<crate::watchers::EventSink>,
+    /// What it calls schedr's REST API with; none: it can't.
+    pub api: Option<crate::api::ApiCaller>,
 }
 
 impl From<TaskRequest> for PythonTask {
@@ -348,6 +350,7 @@ impl From<TaskRequest> for PythonTask {
             secrets: None,
             handles: None,
             events: None,
+            api: None,
         }
     }
 }
@@ -358,8 +361,11 @@ impl From<TaskRequest> for PythonTask {
 async fn task_conversation(
     stream: &mut UnixStream,
     request: TaskRequest,
-    secrets: Option<&AttemptSecrets>,
-    handles: Option<&AttemptHandles>,
+    (secrets, handles, api): (
+        Option<&AttemptSecrets>,
+        Option<&AttemptHandles>,
+        Option<&crate::api::ApiCaller>,
+    ),
 ) -> (Option<RunnerMessage>, Option<Duration>) {
     let request = AgentMessage::Task(Box::new(request));
     if write_message(stream, &request).await.is_err() {
@@ -402,6 +408,25 @@ async fn task_conversation(
                     return (None, import);
                 }
             }
+            Ok(RunnerMessage::ApiCall {
+                method,
+                path,
+                body,
+                idempotency_key,
+            }) => {
+                let request = crate::api::ApiRequest {
+                    method,
+                    path,
+                    body,
+                    idempotency_key,
+                    masked: false,
+                }
+                .masked_by(secrets);
+                let answer = crate::api::runner_answer(api, request).await;
+                if write_message(stream, &answer).await.is_err() {
+                    return (None, import);
+                }
+            }
             message => return (message.ok(), import),
         }
     }
@@ -432,6 +457,7 @@ pub async fn run_python(
         secrets,
         handles,
         events: _,
+        api,
     } = task.into();
     let started = Instant::now();
     // The remaining timeout includes the runner's start (B56, B160).
@@ -494,7 +520,8 @@ pub async fn run_python(
     };
     let forked = matches!(process, TaskProcess::Forked(_));
     // Sent while supervised: a runner that doesn't read is stopped on time all the same (B56).
-    let result = task_conversation(&mut stream, request, secrets.as_deref(), handles.as_deref());
+    let answers = (secrets.as_deref(), handles.as_deref(), api.as_ref());
+    let result = task_conversation(&mut stream, request, answers);
     let ((runner_result, import), supervised) = {
         // Boxed: the attempt's future stays small.
         let mut result = Box::pin(result);

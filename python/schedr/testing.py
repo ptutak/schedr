@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 from schedr import run_of
 from schedr._model import (
@@ -42,6 +43,7 @@ from schedr._serialization.codec import encode, encode_any, json_form
 from schedr._serialization.models import is_model
 from schedr.connections import ConnectionNotFoundError
 from schedr.context import (
+    ApiCaller,
     ConnectionEnter,
     ConnectionOpener,
     RunValues,
@@ -89,11 +91,14 @@ class TestRunValues(RunValues):
 
     Attributes:
         handles: The handles the block registered (``cleanup_handle``), in order.
+        posted_events: The events the block posted (``schedr.api``), in order, as the API
+            gives them (JSON).
     """
 
     __test__ = False  # not a test class, for pytest
 
     handles: list[object] = field(default_factory=list)
+    posted_events: list[dict[str, object]] = field(default_factory=list)
 
 
 @contextlib.contextmanager
@@ -173,9 +178,58 @@ def task_context(
     def add_handle(handle: object, _handle_type: str, _value: object) -> None:
         values.handles.append(handle)
 
-    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle)
+    api = _fake_api(values, f"task:{dag_id}/{values.run_id}/{task_id}")
+    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle, api)
     with running(values, own):
         yield values
+
+
+def _fake_api(values: TestRunValues, caller: str) -> ApiCaller:
+    """``schedr.api`` in a ``task_context``.
+
+    Events are posted to ``values.posted_events`` and listed from them; another route is
+    refused, as on a master.
+    """
+    keys: dict[str, dict[str, object]] = {}
+
+    def call(method: str, path: str, body: object, key: str | None) -> tuple[int, object]:
+        bare, _, query = path.partition("?")
+        if (method, bare) == ("GET", "/api/v1/events"):
+            asked = dict(parse_qsl(query))
+            name, limit = asked.get("name"), int(asked.get("limit", "50"))
+            listed = [e for e in reversed(values.posted_events) if name in {None, e["name"]}]
+            return 200, {"events": listed[:limit]}
+        if (method, bare) != ("POST", "/api/v1/events"):
+            return 403, {"error": f"`{method} {bare}` isn't open to tasks"}
+        if not isinstance(body, dict) or not body.get("name") or not body.get("key"):
+            return 400, {"error": "the event: a name and a key"}
+        if key is not None and key in keys:
+            first = keys[key]
+            # As the API: the same key with another event is refused.
+            same = (first["name"], first["key"], first["data"]) == (
+                body["name"],
+                body["key"],
+                body.get("data"),
+            ) and (body.get("at") is None or body.get("at") == first["at"])
+            if not same:
+                return 422, {"error": "this `Idempotency-Key` was sent before with another event"}
+            return 200, first
+        now = _now().isoformat()
+        event: dict[str, object] = {
+            "id": str(uuid.uuid7()),
+            "name": body["name"],
+            "key": body["key"],
+            "data": body.get("data"),
+            "at": body.get("at") or now,
+            "posted_at": now,
+            "posted_by": caller,
+        }
+        values.posted_events.append(event)
+        if key is not None:
+            keys[key] = event
+        return 201, event
+
+    return call
 
 
 def _doubles(connections: Mapping[str, object]) -> ConnectionOpener:

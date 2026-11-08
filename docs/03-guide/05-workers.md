@@ -241,6 +241,14 @@ on that connection, so concurrent calls keep their own answers.
 It serves at most 64 of those connections at once and tells the next caller so. A call
 waits up to 30 s to be taken, and 30 s to be answered.
 
+Tasks' API calls go from the agent to the master on the Control stream. Under the master's
+lease, the master runs them in process through the API router as the task or trigger, only
+for an open attempt or trigger on that worker and only on the allow-list (currently `GET`
+and `POST /api/v1/events`). The agent keeps unanswered calls and resends them after a
+reconnect, giving up after a minute (so a command's API call waits up to that, not 30 s).
+`[grpc] max_message_size` limits requests (413 before
+sending) and answers (502 if too large); a command's context has a separate 1 MiB limit.
+
 The same channel carries `resource_set` (a command or script resource setup reports its typed
 value
 once) and `resource_get` (a resource's command or script cleanup reads its setup's value); see

@@ -148,7 +148,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
     let master = serve_master(
         db.clone(),
         master_settings(&config()),
-        (Duration::from_millis(10), Problems::default()),
+        (Duration::from_millis(10), Problems::default(), 1024 * 1024),
         listen(loopback()).await.unwrap(),
         None,
         // Past three query limits (sqlx's 30 s acquire timeout), as a real lease: else it

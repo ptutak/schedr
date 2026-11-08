@@ -33,14 +33,25 @@ if TYPE_CHECKING:
     from pymongo.asynchronous.database import AsyncDatabase
     from pymongo.database import Database
 
+    from schedr.api import Client as SchedrClient
+
     MongoDatabase = Database[dict[str, object]]
     AsyncMongoDatabase = AsyncDatabase[dict[str, object]]
     AsyncSqlConnection = AsyncPostgres[tuple[object, ...]]
 else:
-    HttpClient = AsyncHttpClient = SSHClient = MongoDatabase = object
+    HttpClient = AsyncHttpClient = SSHClient = MongoDatabase = SchedrClient = object
     AsyncMongoDatabase = AsyncSqlConnection = object
 
-__all__ = ["HTTP", "SQL", "SSH", "DbApiConnection", "DbApiCursor", "Generic", "Mongo"]
+__all__ = [
+    "HTTP",
+    "SQL",
+    "SSH",
+    "DbApiConnection",
+    "DbApiCursor",
+    "Generic",
+    "Mongo",
+    "SchedrApi",
+]
 
 
 def _missing(module: str, extra: str, kind: str) -> ImportError:
@@ -254,6 +265,67 @@ class HTTP(TwoWayConnection[HttpClient, AsyncHttpClient]):
             name=name,
             kind="http",
             checker=_check_http,
+        )
+
+
+# --- schedr ---------------------------------------------------------------------------------
+
+
+def _schedr(
+    server: str,
+    token: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+) -> Iterator[SchedrClient]:
+    from schedr.api import Client  # noqa: PLC0415  # needs the http extra once used
+
+    yield Client(server, token=token, user=user, password=password)
+
+
+def _check_schedr(client: SchedrClient, _values: Mapping[str, object]) -> None:
+    """Lists one event: the server answers and takes the credentials."""
+    client.events(limit=1)
+
+
+class SchedrApi(Connection[SchedrClient]):
+    """A schedr deployment's REST API, over HTTP: a ``schedr.api.Client``.
+
+    For another deployment, or this one as a user of its own: ``with other_schedr() as api:
+    api.post_event(...)``. A task reaches its own deployment through ``schedr.api`` with no
+    connection at all.
+    """
+
+    def __init__(  # the type's shape
+        self,
+        name: str,
+        /,
+        *,
+        server: str,
+        token: str | None = None,
+        user: str | None = None,
+        password: str | None = None,
+    ) -> None:
+        """A schedr connection named ``name``.
+
+        Args:
+            name: Its name, unique in the DAG folder.
+            server: The webserver's URL.
+            token: A bearer token.
+            user: A user for HTTP Basic, with ``password``.
+            password: Its password.
+
+        Raises:
+            TypeError: For both a token and a user.
+        """
+        if token is not None and user is not None:
+            raise TypeError(f"connection `{name}`: a token or a user, not both")
+        given = {"server": server, "token": token, "user": user, "password": password}
+        super().__init__(
+            _schedr,
+            defined_values(_schedr, given, name, "schedr", _build.caller_file()),
+            name=name,
+            kind="schedr",
+            checker=_check_schedr,
         )
 
 

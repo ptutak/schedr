@@ -466,6 +466,7 @@ identical effects.
 | `TriggerPoked` | Worker when poke status changes, otherwise with a heartbeat | Keep the call time, last error and consecutive failures | Yes | — |
 | `TriggerStopped` | Worker when a trigger ends, including on the next stream if disconnected | Free its slot; record `struck` and `code_hash`; a failure can start it again after a wait | Yes | — |
 | `ConnectionJobDone` | Worker after connection check or test | Store reports if job is still open | Late or already settled answer is dropped | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) plus job allowance |
+| `ApiCall` | Worker for a task's or trigger's `schedr.api` request (its body and key masked with the secrets it read); all unanswered again on a new stream | Check the attempt (or trigger instance) is open on this worker and the route is on the allow-list, then run it through the REST router as the task, outside the core's lock, on the fenced database; answer `ApiAnswer` | Yes: every call carries an `Idempotency-Key` (the task's, or one made for it) | The agent gives up after a minute (503 naming the key); over `[grpc] max_message_size` it answers 413 itself |
 
 ### Master to worker on `Control`
 
@@ -481,6 +482,7 @@ identical effects.
 | `CancelTrigger` | Master when a trigger should stop: paused, moved, new code, or reported and not current | Stop it | Yes | — |
 | `TriggerEventAck` | Master when an event is stored, or is an old instance's | Let the trigger go on to the next one | Yes | — |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |
+| `ApiAnswer` | Master when an `ApiCall` ran or was refused (403 off the list or not this worker's) | Hand the status and body to the call of that `request_id`; one for no pending call is dropped | Yes | An answer over the message limit is a 502 |
 | `ConnectionJob` | Master for a check or test | Run one job, return reports | Do not rely on repeated execution being harmless for a test | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) |
 
 ### RPCs

@@ -6,6 +6,7 @@
 //! Python runner talks to it over a Unix socket ([`channel`]).
 
 pub mod agent;
+pub mod api;
 pub mod attempt;
 pub mod channel;
 pub mod connection_env;

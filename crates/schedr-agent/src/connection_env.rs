@@ -73,7 +73,7 @@ pub fn view(
         Some(ConnectionType::Ssh) => ssh(values, dir, &mut view)?,
         Some(ConnectionType::Mongo) => mongo(values, dir, &mut view)?,
         Some(ConnectionType::Sql) => sql(values, dir, &mut view)?,
-        Some(ConnectionType::Generic) | None => own(values, &mut view)?,
+        Some(ConnectionType::Generic | ConnectionType::Schedr) | None => own(values, &mut view)?,
     }
     let json = Value::Object(values.clone()).to_string();
     view.file(dir, "JSON", "connection.json", json);

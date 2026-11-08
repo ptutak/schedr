@@ -20,6 +20,7 @@ import contextlib
 import os
 import select
 import socket
+import sys
 import threading
 import time
 from collections.abc import Mapping
@@ -197,6 +198,66 @@ def load(environ: Mapping[str, str] | None = None) -> RunValues:
         params_class=None,
         from_script=True,
     )
+
+
+API_ANSWER_TIMEOUT = 100.0
+"""How long an API call's answer may take, in seconds: the agent waits for its master up to a
+minute, over reconnects."""
+
+
+def call_api(
+    method: str,
+    path: str,
+    body: object,
+    key: str | None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[int, object]:
+    """A request to schedr's REST API, made as the command task through its agent.
+
+    Args:
+        method: ``GET``, ``POST``, ...
+        path: The path and its query.
+        body: The JSON body; ``None`` for none.
+        key: Its ``Idempotency-Key``.
+        environ: The environment (for ``SCHEDR_CTX_FD``); ``os.environ`` by default.
+
+    Returns:
+        The status and the JSON answer.
+
+    Raises:
+        RuntimeError: Outside a command task, when its channel is closed or the task ended, or
+            when the agent refuses.
+    """
+    channel = _connect(os.environ if environ is None else environ)
+    try:
+        with contextlib.suppress(OSError):
+            channel.send(
+                {"type": "hello", "protocol": CTX_PROTOCOL, "schedr_version": version("schedr")}
+            )
+        reply = channel.receive()
+        if reply["type"] in {"refused", "error"}:
+            raise RuntimeError(f"the task's agent refused: {reply.get('reason', '')}")
+        if reply["type"] != "welcome":
+            raise ProtocolError(f"expected `welcome`, got `{reply['type']}`")
+        request: dict[str, Any] = {"type": "api_call", "method": method, "path": path}
+        if body is not None:
+            request["body"] = body
+        if key is not None:
+            request["idempotency_key"] = key
+        channel.settimeout(API_ANSWER_TIMEOUT)
+        channel.send(request)
+        reply = channel.receive()
+        if reply["type"] == "error":
+            raise RuntimeError(f"the task's agent: {reply.get('reason', '')}")
+        if reply["type"] != "api_answer":
+            raise ProtocolError(f"expected `api_answer`, got `{reply['type']}`")
+        if isinstance(note := reply.get("note"), str):
+            print(note, file=sys.stderr)
+    except (ProtocolError, OSError) as e:
+        raise RuntimeError(f"talking to the task's agent: {e} (the task may have ended)") from None
+    finally:
+        channel.close()
+    return int(reply["status"]), reply.get("body")
 
 
 def _values() -> RunValues:

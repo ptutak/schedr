@@ -283,6 +283,20 @@ pub enum RunnerMessage {
         /// The connection's name.
         name: String,
     },
+    /// A request to schedr's REST API (`schedr.api`, M4.11h): the agent has the master run it as
+    /// the task; it answers [`AgentMessage::ApiAnswer`].
+    ApiCall {
+        /// `GET`, `POST`, ...
+        method: String,
+        /// The path and its query, e.g. `/api/v1/events?name=paid`.
+        path: String,
+        /// The body, JSON; `None` for none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<serde_json::Value>,
+        /// Its `Idempotency-Key`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idempotency_key: Option<String>,
+    },
     /// A running task registers a cleanup handle (`cleanup_handle(x)`); the agent answers
     /// [`AgentMessage::HandleAdded`] or [`AgentMessage::HandleRefused`].
     HandleAdd {
@@ -642,12 +656,6 @@ pub enum AgentMessage {
     },
     /// The master has what a trigger found: on to the next.
     EventStored,
-    /// Why what a trigger found isn't sent: a key holding a secret it read, which would be
-    /// stored masked (keys masked alike would be one; Grok's review of M4.11f).
-    EventRefused {
-        /// What went wrong.
-        message: String,
-    },
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
     /// The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.
@@ -663,6 +671,16 @@ pub enum AgentMessage {
     Secret {
         /// A key's value as a string; a whole secret as an object of key to value.
         value: serde_json::Value,
+    },
+    /// What the API answered a [`RunnerMessage::ApiCall`].
+    ApiAnswer {
+        /// The HTTP status.
+        status: u16,
+        /// The body, JSON (`{"error": ...}` for a refusal).
+        body: serde_json::Value,
+        /// What the task is told of its request: a secret in it masked. Printed to its log.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// The handle of a [`RunnerMessage::HandleAdd`] is registered.
     HandleAdded,

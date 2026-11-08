@@ -7022,11 +7022,34 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   late reopened a stretch whose rows were forgotten, and the pruning looks up the DAG's own rows, not the name's
   history; Grok's security review: what was forgotten is now a floor the window never goes below, as a lookback
   raised meanwhile handed passed or skipped events again (`triggers.passed_floor`); an event whose key, or a batch
-  item's, holds a secret the trigger read is refused by the agent (`EventRefused`), as keys masked alike were stored
-  as one). An event dated before the previous one (the user's, 2026-11-08,
+  item's, holds a secret the trigger read was refused by the agent, as keys masked alike were stored as one; B189,
+  the user's: no refusal, the trigger's log says it once, as refusing failed triggers whose keys only resembled a secret,
+  and a hash of the real key would let a database reader recover a short secret). An event dated before the previous one (the user's, 2026-11-08,
   option A): its run's window is empty (`since` = `planned_for`), so no data is handled twice; a loader by window reads
   `dag_ctx.event` for it. Not chosen: no run, the status saying why (its data never handled); its window from the event
   dated just before it (overlapping windows, data handled twice).
+- **Plain Python wait steps: `delay` and `until`** (decision 355, the user's, 2026-11-08: all A; built in M4.11g):
+  `schedr.sensors.delay(timedelta)` waits from its first try's start (the master sends it with later tries as
+  `AssignTask.first_started`), so a step tried again waits only what is left; its `max_wait` defaults to the wait and a
+  minute. `schedr.sensors.until(timedelta | datetime)` waits until the run's `planned_for` plus a timedelta, or an
+  aware moment; one past ends at once. Their value is the moment they ended (not the target); each sleep is at most
+  60 s; a wait past what a `datetime` holds ends at `max_wait`.
+- **Tasks call schedr's REST API through their agent: `schedr.api`** (decision 356, the user's, 2026-11-08: 1A 2A 3A 4A
+  5A and B2; built in M4.11h): one `Client`, two transports. Inside a running task or trigger (and a command task's
+  script, and `schedr task-ctx api` / `schedr task-ctx events post|list`) it needs no settings: the request goes to
+  the agent, which sends it to the master on the Control stream (`ApiCall`, answered `ApiAnswer`), and the master runs
+  it through the API's own router in process, as `task:<dag>/<run>/<task>[i]` or `trigger:<dag>` (the posted-by
+  name), only for an attempt open on that worker (or the trigger instance it holds), and only on an allow-list:
+  `POST` and `GET /api/v1/events` for now (any event name). The agent resends unanswered calls on a new stream (an
+  `Idempotency-Key` makes a resend one event) and gives up after a minute (503: send it again with the same key);
+  an answer over `[grpc] max_message_size` is refused (502). What a task posts is masked
+  with the secrets it read, as its output is, and its log says so (as a trigger's does, B189). Outside a task the client goes over HTTP (httpx, the
+  `http` extra) to `SCHEDR_SERVER`, as the CLI; a `SchedrApi` connection type (`kind = "schedr"`: `server`, `token`
+  or `user`/`password`) gives a client for another deployment. Sync and async (`apost_event`, `aevents`: in a
+  thread, so a trigger's loop goes on). `schedr.testing.task_context` posts to a fake (`posted_events`); `schedr
+  dags test` has no master, so a call is refused there, saying so (Claude's, small). Not chosen: a URL and token
+  given to each task (secrets to hand out, and a route to the webserver from every worker); serving only events
+  through dedicated messages (each new route a protocol change).
 - **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; built in M4.11f):
   `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
   it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`

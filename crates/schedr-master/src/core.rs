@@ -32,6 +32,7 @@ use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey}
 use crate::quiet::{QuietSettings, Wakes};
 use crate::scheduler::{Scheduler, SchedulerError};
 
+pub mod task_api;
 pub(crate) mod triggers;
 
 #[cfg(test)]
@@ -445,6 +446,8 @@ pub struct MasterCore {
     /// keeps its watcher slot, as the worker's own count does, and what it ends with still counts
     /// (a strike for getting its host killed on the way).
     stopping_triggers: BTreeMap<String, (String, String)>,
+    /// The API tasks call through their agents (M4.11h); none: they are refused.
+    task_api: Option<Arc<dyn task_api::TaskApi>>,
 }
 
 impl MasterCore {
@@ -493,11 +496,19 @@ impl MasterCore {
             script_roots_seen: (BTreeMap::new(), None),
             connection_jobs: BTreeMap::new(),
             stopping_triggers: BTreeMap::new(),
+            task_api: None,
             settings,
             db,
         }
         // One set shared by every part, replaced by the caller's to register them.
         .with_metrics(MasterMetrics::default())
+    }
+
+    /// The master serving tasks' REST requests through `api` (M4.11h).
+    #[must_use]
+    pub fn with_task_api(mut self, api: Arc<dyn task_api::TaskApi>) -> Self {
+        self.task_api = Some(api);
+        self
     }
 
     /// The master recording its metrics in `metrics` (registered by the caller).
@@ -901,6 +912,23 @@ impl MasterCore {
         Ok(Vec::new())
     }
 
+    /// A worker's warnings recorded, as many and as long as kept (B183).
+    async fn worker_warnings(&self, worker_id: &str, reported: pb::Warnings) {
+        let limits = self.settings.worker_report;
+        let warnings: Vec<WorkerWarning> = limits
+            .take(worker_id, "warnings", reported.warnings)
+            .into_iter()
+            .map(|w| WorkerWarning {
+                kind: limits.cut(w.kind),
+                interpreter: limits.cut(w.interpreter),
+                message: limits.cut(w.message),
+            })
+            .collect();
+        if let Err(error) = self.db.set_worker_warnings(worker_id, &warnings).await {
+            tracing::warn!(worker_id, %error, "worker's warnings not recorded");
+        }
+    }
+
     /// A message on a registered worker's stream.
     ///
     /// # Errors
@@ -934,19 +962,7 @@ impl MasterCore {
             // For people, like the last heartbeat: a failed write is logged, not the message's
             // failure (the worker sends them again after its next registration).
             worker_message::Message::Warnings(reported) => {
-                let limits = self.settings.worker_report;
-                let warnings: Vec<WorkerWarning> = limits
-                    .take(worker_id, "warnings", reported.warnings)
-                    .into_iter()
-                    .map(|w| WorkerWarning {
-                        kind: limits.cut(w.kind),
-                        interpreter: limits.cut(w.interpreter),
-                        message: limits.cut(w.message),
-                    })
-                    .collect();
-                if let Err(error) = self.db.set_worker_warnings(worker_id, &warnings).await {
-                    tracing::warn!(worker_id, %error, "worker's warnings not recorded");
-                }
+                self.worker_warnings(worker_id, reported).await;
                 Vec::new()
             }
             // A message's writes are one transaction: stored whole or not at all, with one
@@ -1011,6 +1027,7 @@ impl MasterCore {
                 }
                 vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
             }
+            worker_message::Message::ApiCall(call) => self.api_call(worker_id, call).await?,
             worker_message::Message::HandlesAdded(added) => {
                 self.handles_added(worker_id, &added).await?
             }

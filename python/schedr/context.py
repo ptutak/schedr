@@ -150,6 +150,12 @@ type HandleAdder = Callable[[object, str, object], None]
 """Registers a cleanup handle: the handle, its type's name and its encoded value."""
 
 
+type ApiCaller = Callable[[str, str, object, str | None], tuple[int, object]]
+"""Makes a request to schedr's REST API as the task (``schedr.api``): the method, the path
+and query, the JSON body (``None``: none) and the ``Idempotency-Key``; gives the status and
+the JSON answer."""
+
+
 @dataclass(frozen=True, slots=True)
 class TaskValues:
     """The running task's own context (decision 84).
@@ -163,6 +169,7 @@ class TaskValues:
         connections: Opens a connection (``with name():``); ``None``: none here.
         handles: Registers a cleanup handle (``cleanup_handle``); ``None``: it can register
             none.
+        api: Calls schedr's REST API as the task (``schedr.api``); ``None``: it can't.
     """
 
     task_id: str
@@ -171,6 +178,7 @@ class TaskValues:
     secrets: SecretReader | None = None
     connections: ConnectionOpener | None = None
     handles: HandleAdder | None = None
+    api: ApiCaller | None = None
 
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)

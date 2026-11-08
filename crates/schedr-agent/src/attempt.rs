@@ -164,6 +164,8 @@ pub struct AttemptSpec {
     pub journal: Option<crate::journal::Journal>,
     /// Told each handle, to send it on to the master; `None` keeps them here.
     pub handle_sink: Option<crate::handles::HandleSink>,
+    /// What it calls schedr's REST API with (`schedr.api`, M4.11h); `None`: it can't.
+    pub api: Option<crate::api::ApiCaller>,
     /// Passed between the task's end and its cleanup, with `cleanup_anywhere` (decision 253).
     pub cleanup_gate: Option<CleanupGate>,
     /// Set for a trigger: what it starts from, and where its events go.
@@ -270,6 +272,7 @@ impl AttemptSpec {
             cleanup_handles: None,
             journal: None,
             handle_sink: None,
+            api: None,
             cleanup_gate: None,
             trigger: None,
         })

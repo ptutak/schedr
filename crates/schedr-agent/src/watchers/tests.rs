@@ -188,25 +188,33 @@ fn lost_hosts_are_told_until_their_code_is_old_and_counted_by_it_for_good() {
 }
 
 #[test]
-fn an_event_whose_key_holds_a_secret_is_refused() {
-    // Grok's review of M4.11f: keys masked alike were stored as one.
+fn an_event_whose_key_holds_a_secret_is_noticed() {
+    // Grok's review of M4.11f: keys masked alike are stored as one; the log says so (B189).
     let mask = MaskSet::new(4);
     mask.add("token", "tokenAAA-secret");
     let batch = json!([
         {"key": "acct-1", "data": 1, "at": null},
         {"key": "acct-tokenAAA-secret", "data": 2, "at": null}
     ]);
-    assert!(super::secret_key(&mask, "acct-tokenAAA-secret", &json!(1), false).is_some());
+    assert!(super::holds_secret(
+        &mask,
+        "acct-tokenAAA-secret",
+        &json!(1),
+        false
+    ));
     assert!(
-        super::secret_key(&mask, "acct-1", &batch, true).is_some(),
+        super::holds_secret(&mask, "acct-1", &batch, true),
         "an item's"
     );
     assert!(
-        super::secret_key(&mask, "acct-1", &batch, false).is_none(),
+        !super::holds_secret(&mask, "acct-1", &batch, false),
         "data unbatched is only data"
     );
-    assert!(super::secret_key(&mask, "acct-1", &json!(1), false).is_none());
-    assert!(
-        super::secret_key(&MaskSet::new(4), "acct-tokenAAA-secret", &json!(1), false).is_none()
-    );
+    assert!(!super::holds_secret(&mask, "acct-1", &json!(1), false));
+    assert!(!super::holds_secret(
+        &MaskSet::new(4),
+        "acct-tokenAAA-secret",
+        &json!(1),
+        false
+    ));
 }

@@ -22,6 +22,7 @@ fn info() -> CtxInfo {
         secrets: None,
         handles: None,
         resource: None,
+        api: None,
     }
 }
 
@@ -437,4 +438,25 @@ async fn reads_a_declared_secret_and_refuses_the_others() {
     // Without the attempt's secrets (a parse, a test's context), every read is refused.
     let got = conversation(&[hello, get("etl/db", "password")]).await;
     assert_eq!(got[1]["kind"], "secret_denied");
+}
+
+/// Codex's review of M4.11h: an API answer over what the context's connection takes is a 502,
+/// not a broken connection.
+#[test]
+fn an_api_answer_too_large_for_the_context_is_a_bad_gateway() {
+    let large = serde_json::Value::String("x".repeat(MAX_CTX_MESSAGE_SIZE as usize));
+    let CtxAnswer::ApiAnswer { status, body, .. } = super::api_answer(200, large, None) else {
+        panic!("an API answer")
+    };
+    assert_eq!(status, 502);
+    assert!(body["error"].as_str().unwrap().contains("limit="), "{body}");
+    let small = super::api_answer(201, json!({"id": "e1"}), Some("masked".to_owned()));
+    assert_eq!(
+        small,
+        CtxAnswer::ApiAnswer {
+            status: 201,
+            body: json!({"id": "e1"}),
+            note: Some("masked".to_owned()),
+        }
+    );
 }

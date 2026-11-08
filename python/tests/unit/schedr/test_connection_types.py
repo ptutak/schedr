@@ -11,16 +11,17 @@ import pytest
 
 from schedr import secrets
 from schedr.connection_types import _known_host, _private_file
-from schedr.connections import HTTP, SQL, SSH, Generic, Mongo, connection
+from schedr.connections import HTTP, SQL, SSH, Generic, Mongo, SchedrApi, connection
 from schedr.runner.parse import file_result
 from schedr.testing import task_context
 
 TYPED = """
 from schedr import secrets
-from schedr.connections import HTTP, Generic
+from schedr.connections import HTTP, Generic, SchedrApi
 
 billing = HTTP("billing", base_url="https://billing.example.com", token=secrets["billing"]["token"])
 flags = Generic("flags", region="eu", retries=3)
+other = SchedrApi("other", server="https://schedr.example", token=secrets["other"]["token"])
 """
 
 
@@ -40,6 +41,8 @@ def test_a_typed_connection_is_recorded_with_its_type_and_every_value(tmp_path: 
     # Its defaults too: a command reads every value.
     assert billing["params"]["timeout"] == {"literal": 30.0}
     assert billing["params"]["user"] == {"literal": None}
+    assert recorded["other"]["type"] == "schedr"
+    assert recorded["other"]["params"]["server"] == {"literal": "https://schedr.example"}
     assert recorded["flags"] == {
         "name": "flags",
         "type": "generic",
@@ -119,6 +122,16 @@ def test_without_its_extra_opening_one_names_the_extra(monkeypatch: pytest.Monke
         api.fn(base_url="https://api.example.com"),
     ):
         pass
+
+
+def test_schedr_api_gives_a_client_of_its_server() -> None:
+    from schedr import api  # noqa: PLC0415
+
+    other = SchedrApi("other", server="https://schedr.example", token="t")
+    with other.fn(server="https://schedr.example", token="t") as client:
+        assert isinstance(client, api.Client)
+    with pytest.raises(TypeError, match="a token or a user"):
+        SchedrApi("bad", server="u", token="t", user="me")
 
 
 def test_generic_gives_its_keys_as_a_dict() -> None:

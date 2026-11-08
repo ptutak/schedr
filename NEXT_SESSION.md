@@ -4,6 +4,21 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-08, evening): M4.11 done: M4.11h (`schedr.api`, B2) committed with B189; stop here
+
+- **M4.11h:** `schedr.api` (decision 356): inside a task, trigger or command script, `post_event`/`events` (and async)
+  with no settings, through the agent (`ApiCall`/`ApiAnswer`, resent on a new stream, a minute's limit, 413/502 on
+  size) and the master (checked: the attempt or trigger open on that worker, allow-list `POST`/`GET /api/v1/events`;
+  run outside the core's lock through the in-process router, on the fenced database, as `task:<dag>/<run>/<task>` or
+  `trigger:<dag>`, long names hashed); bodies and idempotency keys masked with the task's secrets, the task told once;
+  calls without a key given one (named in a 503); `schedr task-ctx api` / `events post|list`; outside: httpx to
+  `SCHEDR_SERVER`, the `SchedrApi` connection (`kind = "schedr"`); `task_context()` fakes it (`posted_events`);
+  `schedr dags test` refuses calls (no master). Codex's review: 9 fixed; Grok's security review: 4 fixed.
+- **B189 (fixed, the user's choice):** a trigger no longer refuses a key holding a secret: stored masked, its log says
+  so once (`EventRefused` removed). Not a hash of the real key: a database reader could recover a short secret.
+- **Decision 355** (`delay`/`until`) was missing from PROJECT.md; written now.
+- **Open:** B185, B187. Next is the user's call (M4B, or Codex's F12-F14 scan after M4).
+
 ## State (2026-11-08, afternoon): M4.11e, f and g committed; M4.11h (`schedr.api`, B2) next, the last of M4.11
 
 - **Committed:** e2 (`wait_for=EventNamed` forms), g (`delay`/`until`), f (`batch=` on `@trigger.poke`, with B188 fixed

@@ -53,6 +53,20 @@ pub enum CtxRequest {
         /// Which secret.
         secret: crate::secret::SecretName,
     },
+    /// A request to schedr's REST API (`schedr task-ctx api`, M4.11h), run by the master as
+    /// the task.
+    ApiCall {
+        /// `GET`, `POST`, ...
+        method: String,
+        /// The path and its query, e.g. `/api/v1/events?name=paid`.
+        path: String,
+        /// The body, JSON; `None` for none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<serde_json::Value>,
+        /// Its `Idempotency-Key`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idempotency_key: Option<String>,
+    },
     /// Registers a cleanup handle (`schedr task-ctx cleanup add`).
     HandleAdd {
         /// The handle.
@@ -114,6 +128,16 @@ pub enum CtxAnswer {
         kind: String,
         /// What went wrong, naming the secret (never a value).
         reason: String,
+    },
+    /// What the API answered an [`CtxRequest::ApiCall`].
+    ApiAnswer {
+        /// The HTTP status.
+        status: u16,
+        /// The body, JSON (`{"error": ...}` for a refusal).
+        body: serde_json::Value,
+        /// What the task is told of its request: a secret in it masked. Printed to its log.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// The handle is registered.
     HandleAdded,

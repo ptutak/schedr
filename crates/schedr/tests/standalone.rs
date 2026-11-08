@@ -2732,6 +2732,101 @@ fn posted_events_start_runs_and_end_the_waits_for_them() {
     );
 }
 
+/// M4.11h: `pay` posts `paid` through `schedr.api` (twice with one idempotency key: one event)
+/// and is refused a route not open to tasks; a command posts `packed` with `schedr task-ctx
+/// events post`, a command's script with `schedr.api`; `audit`'s trigger, called for `paid`,
+/// posts `audited` from its loop.
+const API_EVENTS: &str = r#"
+import sys
+from schedr import CommandOperator, Dag, Event, EventNamed, api, task, task_ctx, trigger
+from schedr.types import Json
+
+SCHEDR = @SCHEDR@
+SCRIPT = (
+    "from schedr import api\n"
+    "print('script posted', api.post_event('noted', key='o-1').posted_by)\n"
+)
+
+@task(secrets=["etl/db#password"])
+def pay() -> None:
+    # Masked as an output is: a secret it read isn't stored (Codex's review).
+    api.post_event("leak", key="o-1", data={"echo": task_ctx.secret("etl/db", "password")})
+    first = api.post_event("paid", key="o-1", data={"amount": 40}, idempotency_key="pay-o-1")
+    again = api.post_event("paid", key="o-1", data={"amount": 40}, idempotency_key="pay-o-1")
+    print("same event", first.id == again.id, first.posted_by)
+    try:
+        api.Client().request("GET", "/api/v1/dags")
+    except api.ApiError as e:
+        print("refused", e.status)
+
+with Dag("order"):
+    pay() >> CommandOperator("pack", ["sh", "-c",
+        f"{SCHEDR} task-ctx events post packed --key o-1 --data '{{\"box\": 3}}'"]) >> CommandOperator(
+        "note", [sys.executable, "-c", SCRIPT])
+
+@trigger(wait_for=EventNamed("paid"))
+async def on_paid(event: Event[Json]) -> Event | None:
+    await api.apost_event("audited", key=event.key)
+    return None
+
+with Dag("audit", trigger=on_paid()):
+    @task
+    def nothing() -> None:
+        pass
+    nothing()
+"#;
+
+#[test]
+fn tasks_commands_and_triggers_post_events_through_their_agent() {
+    let dag = API_EVENTS.replace("@SCHEDR@", &format!("{BINARY:?}"));
+    let standalone = Standalone::start(&[("ship.py", NAMED_EVENTS), ("order.py", &dag)], None);
+    let (code, out, err) = standalone.secrets(None, &["set", "etl/db", "password=hunter22-pw"]);
+    assert_eq!(code, 0, "{out}{err}");
+    standalone.wait("DAGs", || {
+        standalone.dag_ids() == ["audit", "order", "ship"]
+    });
+    for dag in ["ship", "audit"] {
+        let (code, _, err) = standalone.cli(&["dags", "unpause", dag]);
+        assert_eq!(code, 0, "{err}");
+    }
+    let command = standalone.cli_json(&["runs", "trigger", "order"]);
+    let order = command["result"]["run_id"].as_str().unwrap().to_owned();
+    standalone.wait_for_state(&order, "success");
+    standalone.wait("a run of ship", || standalone.runs("ship").len() == 1);
+    let ship = standalone.runs("ship")[0]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    standalone.wait_for_state(&ship, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains(&format!("same event True task:order/{order}/pay")),
+        "{logs}"
+    );
+    assert!(logs.contains("refused 403"), "{logs}");
+    assert!(logs.contains("shipped o-1 o-1 3"), "{logs}");
+    assert!(
+        logs.contains(&format!("script posted task:order/{order}/note")),
+        "{logs}"
+    );
+    let events = |name: &str| {
+        let listed = standalone.cli_json(&["events", "list", "--name", name]);
+        listed["events"].as_array().cloned().unwrap_or_default()
+    };
+    assert_eq!(events("paid").len(), 1, "one event for one idempotency key");
+    assert_eq!(events("leak")[0]["data"]["echo"], "****");
+    assert!(
+        logs.contains("held a secret this task read"),
+        "the task is told: {logs}"
+    );
+    assert_eq!(
+        events("packed")[0]["posted_by"],
+        format!("task:order/{order}/pack")
+    );
+    standalone.wait("the trigger's event", || events("audited").len() == 1);
+    assert_eq!(events("audited")[0]["posted_by"], "trigger:audit");
+}
+
 /// `keyed` waits for an event whose key a mapped task made (Codex's review of M4.11e).
 const MAPPED_KEY: &str = r#"
 from schedr import Dag, Event, EventNamed, task, wait_for

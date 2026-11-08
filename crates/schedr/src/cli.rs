@@ -599,6 +599,58 @@ pub enum TaskCtxCommand {
     },
     /// A connection the task declares (`connections=`): its values, its secrets filled in.
     Connection(ConnectionArgs),
+    /// A request to schedr's REST API, made as this task (open to tasks: `POST` and `GET
+    /// /api/v1/events`); prints the answer's JSON, fails on an error status.
+    Api {
+        /// `GET`, `POST`, ...
+        method: String,
+        /// The path and its query, e.g. `/api/v1/events?name=paid`.
+        path: String,
+        /// The body, JSON.
+        #[arg(long, value_name = "JSON")]
+        data: Option<String>,
+        /// Sent again with the same key, the request is the one made the first time.
+        #[arg(long, value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Events (`EventNamed`), posted and listed as this task.
+    Events {
+        /// The events command.
+        #[command(subcommand)]
+        command: TaskEventsCommand,
+    },
+}
+
+/// `schedr task-ctx events ...`: as `schedr events`, made as the task.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum TaskEventsCommand {
+    /// Post an event; prints it as stored, as one line of JSON.
+    Post {
+        /// Its name, written as a DAG ID is.
+        name: String,
+        /// Its key: a trigger starts one run per key, a waiting step matches its own.
+        #[arg(long)]
+        key: String,
+        /// Its data: JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON")]
+        data: Option<String>,
+        /// When it happened (UTC without an offset); now otherwise.
+        #[arg(long, value_name = "TIME")]
+        at: Option<String>,
+        /// Sent again with the same key (a retried task), it is the event stored the first
+        /// time.
+        #[arg(long, value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// List the events posted, newest first, one line of JSON each.
+    List {
+        /// Only those of this name.
+        #[arg(long)]
+        name: Option<String>,
+        /// How many at most (500 at most).
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
 }
 
 /// `schedr task-ctx cleanup ...`.

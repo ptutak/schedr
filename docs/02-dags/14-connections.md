@@ -117,6 +117,7 @@ What each type gives (the prefix `DB`; `?` when the value is given):
 | `Mongo` | `DB_URI` (the database in its path, `authSource`; no user or password; `tls=true` and `tlsCAFile` unless written), `DB_DATABASE`, `DB_AUTH_SOURCE`, `DB_USER`?, `DB_PASSWORD`?, `DB_TOOLS_CONFIG`, `DB_CA_FILE`? | `mongodump --config "$DB_TOOLS_CONFIG"` (and `mongorestore`, `mongoexport`, `mongoimport`); mongosh below |
 | `HTTP` | `DB_BASE_URL` (no user or password), `DB_TOKEN`? or `DB_USER`?/`DB_PASSWORD`?, `DB_CURL_CONFIG`, `DB_CA_FILE`?, `DB_CERT_FILE`?, `DB_KEY_FILE`? | `curl -q -K "$DB_CURL_CONFIG" "$DB_BASE_URL/orders"` (the token, headers, certificates and timeout in the config; `-q` first, or curl reads `~/.curlrc` too, which could turn off the TLS check or send the token through a proxy) |
 | `SSH` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_SSH_CONFIG`, `DB_KEY_FILE`?, `DB_KNOWN_HOSTS`, `DB_PASSWORD`?, `DB_KEY_PASSPHRASE`? | `ssh -F "$DB_SSH_CONFIG" target uptime`, `scp -F "$DB_SSH_CONFIG" file target:` |
+| `SchedrApi` | one per parameter, as for a generic connection | use the variables in a script |
 | `Generic`, a `@connection` | one per parameter, `DB_` and its name in capitals: text as it is, anything else as JSON | `"$DB_DSN"` |
 
 Every connection also gets `DB_JSON`, a file with all its values as one object of JSON, for
@@ -209,6 +210,7 @@ gives its client. Its name is the first argument, as an operator's task ID is:
 | `SSH` | `host`, `user`, `port`; `private_key` (and its `passphrase`) or `password`; `known_hosts`; `timeout` | a connected paramiko `SSHClient` | connecting |
 | `Mongo` | `uri`, `database`; `user`, `password`; `ca_cert` (PEM text), `timeout` | a pymongo `Database` | `ping` |
 | `SQL` | `url` (`postgresql://`, `mysql://` or `mariadb://`, `?sslmode=...`); `user`, `password`; `ca_cert` (PEM text), `timeout` | a DB-API connection (psycopg 3, PyMySQL); the block's work committed when it ends, rolled back on an error | `SELECT 1` |
+| `SchedrApi` | `server`; `token` or `user` and `password` | a `schedr.api.Client` | lists one event |
 | `Generic` | keys of your own | a `dict` | none |
 
 The async clients use the same TLS, certificate and authentication settings as the sync
@@ -220,7 +222,28 @@ clients:
 | `Mongo` | PyMongo's async database |
 | `Generic` | The same dict of values |
 | `SQL` | On Postgres, psycopg's `AsyncConnection`; commits at the end of the block and rolls back on an exception. On `mysql://` or `mariadb://`, opening raises an error directing you to use `with`. |
+| `SchedrApi` | Sync only, as `SSH`. In a coroutine, the task's own deployment is `await api.apost_event(...)`. |
 | `SSH` | Sync only. `async with` is a type error, and raises Python's own error at run time. |
+
+For another schedr deployment, define and open a `SchedrApi` connection:
+
+```python
+from schedr import Dag, secrets, task
+from schedr.connections import SchedrApi
+
+other = SchedrApi("other", server="https://schedr.example", token=secrets["other/api"]["token"])
+
+@task(connections=[other])
+def notify() -> None:
+    with other() as client:
+        client.post_event("paid", key="order-123")
+
+with Dag("notify_other"):
+    notify()
+```
+
+Its HTTP client needs `schedr[http]`. To reach the task's own deployment, use
+[`schedr.api`](22-events.md#posting-from-a-task) without a connection.
 
 Each client's library is an extra, installed where tasks run: `schedr[http]`,
 `schedr[ssh]`, `schedr[mongo]`, `schedr[postgres]`, `schedr[mysql]`, or all of them as

@@ -283,7 +283,7 @@ pub async fn run(
         let served = Box::pin(serve_master(
             master_db,
             setup.master,
-            (setup.tick, problems),
+            (setup.tick, problems, setup.api_timings.max_event_size),
             grpc,
             None,
             leadership,

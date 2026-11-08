@@ -811,6 +811,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
             worker_message::Message::Started(_) => Some("started"),
             worker_message::Message::TaskEnded(_) => Some("task ended"),
             worker_message::Message::HandlesAdded(_) => Some("handles"),
+            worker_message::Message::ApiCall(_) => Some("api call"),
             worker_message::Message::Rejected(r) => {
                 Some(match pb::RejectReason::try_from(r.reason) {
                     Ok(pb::RejectReason::NoFreeSlot) => "rejected: no slot",
@@ -3775,4 +3776,79 @@ fn only_a_trigger_call_that_returned_is_done_with_its_run() {
         assert_eq!(stopped.error_kind, "", "{status:?}: no error");
         assert_eq!(stopped.done, done, "{status:?}");
     }
+}
+
+/// M4.11h: a task's API call not answered on the old stream is sent again once registered on a
+/// new one; one its task gave up on is dropped.
+#[tokio::test]
+async fn an_unanswered_api_call_is_sent_again_on_a_new_stream() {
+    let call = |request_id: u64| pb::ApiCall {
+        request_id,
+        attempt_id: "a1".to_owned(),
+        method: "POST".to_owned(),
+        path: "/api/v1/events".to_owned(),
+        ..pb::ApiCall::default()
+    };
+    let (waiting, _answer) = tokio::sync::oneshot::channel();
+    let (given_up, answer) = tokio::sync::oneshot::channel();
+    drop(answer);
+    let registered = to_worker(master_message::Message::Registered(
+        pb::Registered::default(),
+    ));
+    let (seen, _) = against_script_with(
+        1,
+        Start::With(vec![]),
+        vec![registered],
+        |m| kinds(m).contains(&"api call"),
+        |agent| {
+            agent.api_calls.insert(1, (call(1), waiting));
+            agent.api_calls.insert(2, (call(2), given_up));
+        },
+    )
+    .await;
+    let sent: Vec<u64> = seen
+        .iter()
+        .filter_map(|m| match m.message.as_ref()? {
+            worker_message::Message::ApiCall(call) => Some(call.request_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, [1]);
+}
+
+/// Codex's and Grok's reviews of M4.11h: a call's ID is past the last incarnation's, one over
+/// the master's limit is answered here, one nobody waits for any more isn't sent.
+#[tokio::test]
+async fn an_api_call_gets_a_fresh_id_and_one_too_large_or_given_up_isnt_sent() {
+    let earlier = super::first_api_call_id();
+    let dir = TempDir::new().unwrap();
+    let mut agent = offline_agent(dir.path());
+    let send = agent.api_send();
+    let call = |path: String| pb::ApiCall {
+        attempt_id: "a1".to_owned(),
+        method: "POST".to_owned(),
+        path,
+        ..pb::ApiCall::default()
+    };
+    let _waiting = send(call("/api/v1/events".to_owned()));
+    offline_until(&mut agent, |agent| agent.api_calls.len() == 1).await;
+    let id = *agent.api_calls.keys().next().unwrap();
+    assert!(id > earlier, "{id} after {earlier}");
+    drop(send(call("/api/v1/events".to_owned())));
+    agent.master_limit = 4096;
+    let mut refused = send(call("x".repeat(8192)));
+    let answer = loop {
+        agent
+            .offline(tokio::time::sleep(Duration::from_millis(10)))
+            .await;
+        if let Ok(answer) = refused.try_recv() {
+            break answer;
+        }
+    };
+    assert_eq!(answer.status, 413);
+    assert_eq!(
+        agent.api_calls.keys().copied().collect::<Vec<_>>(),
+        [id],
+        "neither the one given up nor the one too large kept to be sent again"
+    );
 }

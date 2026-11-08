@@ -31,6 +31,61 @@ request without creating another event, send the same `Idempotency-Key`: the API
 first stored event. Reusing that request key for a different event is rejected. This request
 key is separate from the event's key.
 
+## Posting from a task
+
+A task or trigger can post and list events in its own deployment without settings:
+
+```python
+from schedr import Dag, Event, EventNamed, api, task, trigger
+from schedr.types import Json
+
+@task
+def pay() -> None:
+    api.post_event("paid", key="order-123", data={"amount": 42},
+                   idempotency_key="pay-order-123")
+    print(api.events(name="paid", limit=10))
+
+with Dag("payment"):
+    pay()
+
+@trigger(wait_for=EventNamed("paid"))
+async def audit(event: Event[Json]) -> Event | None:
+    await api.apost_event("audited", key=event.key)
+    return None
+
+@task
+def record(order: str) -> None:
+    print("audited", order)
+
+with Dag("audit", trigger=audit()):
+    record("order-123")
+```
+
+The event records `task:<dag>/<run>/<task>` as `posted_by` (a mapped task includes its
+index), or `trigger:<dag>` for a trigger. Use an `idempotency_key=` stable across attempts
+when a task may be retried. The agent's own resend after a reconnect is one event anyway.
+Secrets the task has read are masked in what it posts, as in its output, and its log
+says so (once per process; `schedr task-ctx` says it on stderr each time). Keep secrets out
+of event keys: two keys differing only in a secret become one. `api.ApiError` has a `.status`:
+403 means the route is not on the task's allow-list, 503 that the master was not reached
+within a minute: the call may still have been made, so send it again with the key it was
+made with, `error.body["idempotency_key"]` (yours, or one the agent gave a call without). Only `GET` and `POST` on
+`/api/v1/events` are open to tasks.
+
+A command task can use the same API:
+
+```sh
+schedr task-ctx events post paid --key order-123 --data '{"amount":42}' --idempotency-key pay-order-123
+schedr task-ctx events list --name paid
+schedr task-ctx api GET '/api/v1/events?name=paid'
+```
+
+A Python script run by a command uses `schedr.api` as above. Outside schedr, use
+`api.Client("https://schedr.example", token="...")`, or set `SCHEDR_SERVER` and
+`SCHEDR_TOKEN` and use `api.Client()`. HTTP needs the `schedr[http]` extra. `schedr dags
+test` has no master, so an API call there fails saying so; for a unit test use
+[`task_context()`](07-testing.md#one-task-and-its-context).
+
 ## Starting a run
 
 `Dag("ship_paid", trigger=EventNamed("paid"))` starts one run per event key posted while

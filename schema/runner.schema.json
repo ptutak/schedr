@@ -374,25 +374,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "Why what a trigger found isn't sent: a key holding a secret it read, which would be\nstored masked (keys masked alike would be one; Grok's review of M4.11f).",
-          "properties": {
-            "message": {
-              "description": "What went wrong.",
-              "type": "string"
-            },
-            "type": {
-              "const": "event_refused",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "message"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "Start a runner process (to the fork server).",
           "properties": {
             "cwd": {
@@ -580,6 +561,39 @@
           "required": [
             "type",
             "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What the API answered a [`RunnerMessage::ApiCall`].",
+          "properties": {
+            "body": {
+              "description": "The body, JSON (`{\"error\": ...}` for a refusal)."
+            },
+            "note": {
+              "description": "What the task is told of its request: a secret in it masked. Printed to its log.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "The HTTP status.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "api_answer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "body"
           ],
           "type": "object"
         },
@@ -855,6 +869,11 @@
         {
           "const": "generic",
           "description": "Keys of one's own.",
+          "type": "string"
+        },
+        {
+          "const": "schedr",
+          "description": "A schedr deployment's REST API (`schedr.api.Client`, M4.11h).",
           "type": "string"
         }
       ]
@@ -2004,6 +2023,40 @@
           "required": [
             "type",
             "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A request to schedr's REST API (`schedr.api`, M4.11h): the agent has the master run it as\nthe task; it answers [`AgentMessage::ApiAnswer`].",
+          "properties": {
+            "body": {
+              "description": "The body, JSON; `None` for none."
+            },
+            "idempotency_key": {
+              "description": "Its `Idempotency-Key`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "method": {
+              "description": "`GET`, `POST`, ...",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path and its query, e.g. `/api/v1/events?name=paid`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "api_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "method",
+            "path"
           ],
           "type": "object"
         },

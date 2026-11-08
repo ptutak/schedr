@@ -126,6 +126,38 @@
           "type": "object"
         },
         {
+          "description": "What the API answered an [`CtxRequest::ApiCall`].",
+          "properties": {
+            "body": {
+              "description": "The body, JSON (`{\"error\": ...}` for a refusal)."
+            },
+            "note": {
+              "description": "What the task is told of its request: a secret in it masked. Printed to its log.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "The HTTP status.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "api_answer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "body"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The handle is registered.",
           "properties": {
             "type": {
@@ -377,6 +409,39 @@
           "required": [
             "type",
             "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A request to schedr's REST API (`schedr task-ctx api`, M4.11h), run by the master as\nthe task.",
+          "properties": {
+            "body": {
+              "description": "The body, JSON; `None` for none."
+            },
+            "idempotency_key": {
+              "description": "Its `Idempotency-Key`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "method": {
+              "description": "`GET`, `POST`, ...",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path and its query, e.g. `/api/v1/events?name=paid`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "api_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "method",
+            "path"
           ],
           "type": "object"
         },

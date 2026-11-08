@@ -39,7 +39,7 @@ pub const ANONYMOUS: &str = "anonymous";
 pub const DEFAULT_PROXY_HEADER: &str = "x-forwarded-user";
 
 /// The longest name taken (a longer one is refused, not cut).
-const MAX_NAME: usize = 256;
+pub const MAX_NAME: usize = 256;
 
 /// A request from `schedr ui`, proven by how it arrived (the UI port's mTLS, or in-process):
 /// a request extension, which no client can set.

@@ -915,26 +915,38 @@ struct Answers {
     secrets: Option<Arc<AttemptSecrets>>,
     handles: Option<Arc<AttemptHandles>>,
     events: Option<EventSink>,
+    api: Option<crate::api::ApiCaller>,
     pending: tokio::task::JoinSet<()>,
+    /// Whether the log says already that a key held a secret (B189).
+    told_masked_key: bool,
 }
 
+/// What answers a watcher's requests: its task's secrets, handles, event sink and API caller.
+type AnswerParts = (
+    Option<Arc<AttemptSecrets>>,
+    Option<Arc<AttemptHandles>>,
+    Option<EventSink>,
+    Option<crate::api::ApiCaller>,
+);
+
 impl Answers {
-    fn new(
-        secrets: Option<Arc<AttemptSecrets>>,
-        handles: Option<Arc<AttemptHandles>>,
-        events: Option<EventSink>,
-    ) -> Self {
+    fn new((secrets, handles, events, api): AnswerParts) -> Self {
         Self {
             secrets,
             handles,
             events,
+            api,
             pending: tokio::task::JoinSet::new(),
+            told_masked_key: false,
         }
     }
 
-    /// Why an event can't be sent, if it can't: see [`secret_key`].
-    fn secret_key(&self, key: &str, data: &serde_json::Value, batched: bool) -> Option<String> {
-        secret_key(&self.secrets.as_ref()?.mask, key, data, batched)
+    /// Whether an event's key, or a batch item's, holds a secret the trigger read: see
+    /// [`holds_secret`].
+    fn masks_a_key(&self, key: &str, data: &serde_json::Value, batched: bool) -> bool {
+        self.secrets
+            .as_ref()
+            .is_some_and(|secrets| holds_secret(&secrets.mask, key, data, batched))
     }
 
     /// Takes what a watcher sent; gives back what isn't for it, which is the caller's.
@@ -963,12 +975,10 @@ impl Answers {
             let Some(events) = &self.events else {
                 return None;
             };
-            if let Some(why) = self.secret_key(&key, &data, events.batched) {
-                let _ = host.outbox.send(AgentMessage::ToWatcher {
-                    watcher,
-                    message: Box::new(AgentMessage::EventRefused { message: why }),
-                });
-                return None;
+            // Stored masked: said once in the trigger's log (B189, the user's: no refusal).
+            if !self.told_masked_key && self.masks_a_key(&key, &data, events.batched) {
+                self.told_masked_key = true;
+                log.write(OutputStream::Stderr, MASKED_KEY).await;
             }
             // What a run reads of it, and people see, as they would of an output.
             let (key, data) = match self.secrets.as_ref().map(|s| &s.mask) {
@@ -993,14 +1003,22 @@ impl Answers {
             RunnerMessage::SecretGet { .. }
                 | RunnerMessage::HandleAdd { .. }
                 | RunnerMessage::ConnectionGet { .. }
+                | RunnerMessage::ApiCall { .. }
         ) {
             return Some(message);
         }
         let secrets = self.secrets.clone();
         let handles = self.handles.clone();
+        let api = self.api.clone();
         let host = Arc::clone(host);
         self.pending.spawn(async move {
-            let answer = answer_to(message, secrets.as_deref(), handles.as_deref()).await;
+            let answer = answer_to(
+                message,
+                secrets.as_deref(),
+                handles.as_deref(),
+                api.as_ref(),
+            )
+            .await;
             let _ = host.outbox.send(AgentMessage::ToWatcher {
                 watcher,
                 message: Box::new(answer),
@@ -1014,8 +1032,25 @@ async fn answer_to(
     message: RunnerMessage,
     secrets: Option<&AttemptSecrets>,
     handles: Option<&AttemptHandles>,
+    api: Option<&crate::api::ApiCaller>,
 ) -> AgentMessage {
     match message {
+        RunnerMessage::ApiCall {
+            method,
+            path,
+            body,
+            idempotency_key,
+        } => {
+            let request = crate::api::ApiRequest {
+                method,
+                path,
+                body,
+                idempotency_key,
+                masked: false,
+            }
+            .masked_by(secrets);
+            crate::api::runner_answer(api, request).await
+        }
         RunnerMessage::SecretGet { secret } => secret_answer(secrets, &secret).await,
         RunnerMessage::ConnectionGet { name } => connection_answer(secrets, &name).await,
         RunnerMessage::HandleAdd { handle } => {
@@ -1439,7 +1474,9 @@ pub async fn run_watcher(
         secrets,
         handles,
         events,
+        api,
     } = task;
+    let parts = (secrets, handles, events, api);
     let started = Instant::now();
     let deadline = limits
         .timeout
@@ -1487,7 +1524,7 @@ pub async fn run_watcher(
         let starts = again.then_some(started);
         let place = Place::started(&entered, &request, starts);
         let (message, reason, killed) = {
-            let answers = Answers::new(secrets.clone(), handles.clone(), events.clone());
+            let answers = Answers::new(parts.clone());
             let talking = conversation(entered, poke, &place, answers, &mut log);
             let talking = Box::pin(talking);
             until_ended(talking, &mut stop, deadline, &place, limits).await
@@ -1718,22 +1755,18 @@ async fn cancelled(
     }
 }
 
-/// Why an event can't be sent: its key, or a batch item's, holds a secret the trigger read.
-/// Keys are stored and shown masked, so two would be one (Grok's review of M4.11f).
-fn secret_key(
-    mask: &MaskSet,
-    key: &str,
-    data: &serde_json::Value,
-    batched: bool,
-) -> Option<String> {
+/// What the trigger's log says, once, when a key held a secret it read (B189).
+const MASKED_KEY: &str = "schedr: an event's key held a secret this trigger read: it is stored \
+    and shown masked, so keys differing only in secrets count as one key (a key seen before \
+    starts no run); keep secrets out of keys\n";
+
+/// Whether an event's key, or a batch item's, holds a secret the trigger read: keys are stored
+/// and shown masked, so two differing only in secrets would be one (Grok's review of M4.11f).
+fn holds_secret(mask: &MaskSet, key: &str, data: &serde_json::Value, batched: bool) -> bool {
     if mask.is_empty() {
-        return None;
+        return false;
     }
     let items = data.as_array().filter(|_| batched).into_iter().flatten();
     let mut keys = std::iter::once(key).chain(items.filter_map(|item| item["key"].as_str()));
-    keys.any(|key| mask.mask_text(key) != key).then(|| {
-        "an event's key holds a secret the trigger read: keys are stored and shown masked, so \
-         keys differing only in it would be one event; keep secrets out of keys"
-            .to_owned()
-    })
+    keys.any(|key| mask.mask_text(key) != key)
 }

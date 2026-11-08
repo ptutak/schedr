@@ -190,6 +190,22 @@ instance you give. The context manager yields an object whose `.handles` list co
 dataclass instances registered with `cleanup_handle` in the block. The test can call the
 [cleanup](15-cleanup.md) itself.
 
+The block also gives `schedr.api` a fake API. Posts go into `values.posted_events` and
+listing reads from that list:
+
+```python
+from schedr import api
+from schedr.testing import task_context
+
+with task_context() as values:
+    api.post_event("paid", key="order-123", idempotency_key="pay-123")
+    assert api.events(name="paid")[0].key == "order-123"
+    assert values.posted_events[0]["name"] == "paid"
+```
+
+Reusing an idempotency key for another event raises `api.ApiError` with status 422; other
+routes return 403. The fake does not need a master.
+
 ## `run_dag`
 
 `run_dag(path, dag_id, *, for_=None, params=None)` runs `schedr dags test --json` and

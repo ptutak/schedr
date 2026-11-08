@@ -20,6 +20,7 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::core::task_api::ApiCallPlan;
 use crate::core::{Arrivals, CoreError, MasterCore};
 use crate::dispatch::Outgoing;
 use crate::lease::{Leadership, Renewal};
@@ -516,6 +517,30 @@ impl Hub {
         }
     }
 
+    /// A worker's message handled; a task's API call checked here and run outside the lock (a
+    /// request may take a while; M4.11h), its answer delivered when it comes.
+    async fn handle(
+        &self,
+        core: &mut MasterCore,
+        worker_id: &str,
+        message: worker_message::Message,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        let worker_message::Message::ApiCall(call) = message else {
+            return core.handle(worker_id, message, (self.clock)()).await;
+        };
+        match core.plan_api_call(worker_id, call).await? {
+            ApiCallPlan::Answered(answer) => Ok(vec![*answer]),
+            ApiCallPlan::Run(job) => {
+                let hub = self.clone();
+                tokio::spawn(async move {
+                    let answer = job.run().await;
+                    hub.deliver(vec![answer]).await;
+                });
+                Ok(Vec::new())
+            }
+        }
+    }
+
     async fn serve_stream(
         self,
         worker_id: String,
@@ -566,7 +591,7 @@ impl Hub {
                 let mut finished = false;
                 while let Some(message) = next.take() {
                     finished |= matches!(message, worker_message::Message::Finished(_));
-                    match core.handle(&worker_id, message, (self.clock)()).await {
+                    match self.handle(&mut core, &worker_id, message).await {
                         Ok(out) => outgoing.extend(out),
                         // Refused for its data, it would be refused again after a reconnect,
                         // and the worker's later messages with it: dropped, the stream goes on

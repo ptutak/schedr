@@ -24,6 +24,7 @@ pub mod roles;
 pub mod secret_storage;
 pub mod secrets;
 pub mod standalone;
+pub mod task_api;
 pub use schedr_client::times;
 pub mod user;
 
@@ -77,38 +78,8 @@ where
             Err(message) => report(err, &format!("error: {message}\n"), 1),
         };
     }
-    if let cli::Command::TaskCtx {
-        command: cli::TaskCtxCommand::Secret { command },
-    } = &cli.command
-    {
-        return match ctx::run_task_ctx_secret(command, env, VERSION, out) {
-            Ok(()) => 0,
-            Err(message) => report(err, &format!("error: {message}\n"), 1),
-        };
-    }
-    if let cli::Command::TaskCtx {
-        command: cli::TaskCtxCommand::Connection(command),
-    } = &cli.command
-    {
-        return match ctx::run_task_ctx_connection(command, env, VERSION, out) {
-            Ok(()) => 0,
-            Err(message) => report(err, &format!("error: {message}\n"), 1),
-        };
-    }
-    if let cli::Command::TaskCtx {
-        command: cli::TaskCtxCommand::Cleanup { command },
-    } = &cli.command
-    {
-        return match ctx::run_task_ctx_cleanup(command, env, VERSION, out) {
-            Ok(()) => 0,
-            Err(message) => report(err, &format!("error: {message}\n"), 1),
-        };
-    }
-    if let cli::Command::TaskCtx {
-        command: cli::TaskCtxCommand::Resource { command },
-    } = &cli.command
-    {
-        return match ctx::run_task_ctx_resource(command, env, VERSION, out) {
+    if let cli::Command::TaskCtx { command } = &cli.command {
+        return match ctx::run_task_ctx(command, env, VERSION, (&mut *out, &mut *err)) {
             Ok(()) => 0,
             Err(message) => report(err, &format!("error: {message}\n"), 1),
         };

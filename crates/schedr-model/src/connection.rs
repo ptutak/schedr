@@ -45,6 +45,8 @@ pub enum ConnectionType {
     Sql,
     /// Keys of one's own.
     Generic,
+    /// A schedr deployment's REST API (`schedr.api.Client`, M4.11h).
+    Schedr,
 }
 
 impl ConnectionDef {
