@@ -1,0 +1,12 @@
+title = "The REST API identifies mapped instances by map index"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+A run’s tasks include rows for mapped instances, identified by `map_index`.
+Per-instance operations use `?map_index=N`; unmapped tasks use index -1.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.3c"
+checked = 2026-11-08

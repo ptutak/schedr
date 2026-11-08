@@ -28,6 +28,8 @@ jobs:
       - run: make pin-check
       # BUGS.md must match bugs/ (see the Makefile, bugs-check).
       - run: make bugs-check
+      # DECISIONS.md must match decisions/, every decision named has a file (decisions-check).
+      - run: make decisions-check
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: "1.99.1"

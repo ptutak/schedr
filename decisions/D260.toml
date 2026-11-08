@@ -1,0 +1,15 @@
+title = "A resource without a cleanup function gets an empty cleanup"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Without a declared cleanup, a resource gets an empty cleanup in the graph and run. The master completes it
+without an attempt, process or worker, recording the explanation in the task’s reason where a log would
+appear. A repeated declaration from the same source replaces the first; one from another source is a parse
+error.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c2"
+code = ["python/schedr/resources.py"]
+checked = 2026-11-08

@@ -1,0 +1,15 @@
+title = "The context channel accepts callers by protocol version"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+The agent accepts context protocol 1 regardless of schedr version; `hello` supplies both, and
+incompatible-protocol refusals name both versions. Within a protocol, new requests and fields are allowed:
+unknown fields are ignored and unknown requests receive `error`. Other changes, including new enum values,
+require a new protocol.
+'''
+history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+step = "M4.5b"
+code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "python/schedr/script.py"]
+checked = 2026-11-08

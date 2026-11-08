@@ -1,0 +1,13 @@
+title = "Cleanups default to three retries 30 seconds apart"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+`cleanup_retries` and `cleanup_retry_delay` are available on tasks and in `StepDefaults`.
+Their defaults are three retries and 30 seconds between retries.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-model/src/task.rs"]
+checked = 2026-11-08

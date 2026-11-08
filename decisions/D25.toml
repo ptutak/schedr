@@ -1,0 +1,12 @@
+title = "Build M4 feature views as UI shells in M3"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+M3 builds empty tabs and panels for resources, cleanup, outcomes and mapped tasks.
+M4 fills those views as the features are built.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.8e"
+checked = 2026-11-08

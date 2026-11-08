@@ -1,0 +1,13 @@
+title = "Webservers accept forwarded identities only from a proven UI"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The UI forwards the person’s name; webservers trust it only from a proven UI. Proof is mTLS with the
+UI certificate name on the dedicated port in app mode, the guarded mesh port where enabled, a shared
+token otherwise, or an in-process call from standalone’s own UI.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["crates/schedr-api/src/auth.rs", "crates/schedr-client/src/lib.rs", "crates/schedr-config/src/config.rs"]
+checked = 2026-11-08

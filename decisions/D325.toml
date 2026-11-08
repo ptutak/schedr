@@ -1,0 +1,14 @@
+title = "Wait steps use max_wait and shared StepDefaults"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Wait steps use max_wait and tasks use timeout; supplying the other kind’s key is an error. StepDefaults
+replaces TaskDefaults without an alias and supplies shared settings for both kinds, with each limit
+applying only to its kind. Wait limits follow step, group, DAG, then [sensors] default_max_wait
+precedence.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a1"
+checked = 2026-11-08

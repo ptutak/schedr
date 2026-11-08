@@ -1,0 +1,11 @@
+title = "Release documentation is deployed to GitHub Pages"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+The release workflow deploys CI’s `docs-site` build to GitHub Pages.
+The deploy job uses the `github-pages` environment.
+'''
+history = "PROJECT.md: Packaging and releases"
+checked = 2026-11-08

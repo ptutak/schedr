@@ -1,0 +1,14 @@
+title = "The federated UI is a separate schedr ui role"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "components"
+summary = '''
+`schedr ui` is a separate role federating any mix of distributed deployments and SQLite or Postgres
+standalones through their JSON APIs. It can deploy alone from the chart; standalones can run with
+`--no-ui` and prove the UI’s calls through a shared token. Webservers continue serving the API.
+'''
+history = "PROJECT.md: Components and roles"
+step = "M3.1"
+code = ["crates/schedr-ui/src/lib.rs"]
+checked = 2026-11-08

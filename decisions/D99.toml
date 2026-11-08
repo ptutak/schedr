@@ -1,0 +1,13 @@
+title = "Shell-string commands take no placeholders"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+A shell-string command cannot contain placeholders; the DAG loader, master and agent refuse them.
+Values can be passed in an argument list or through env; :raw is removed.
+'''
+history = "PROJECT.md: Scope"
+step = "M4.3e"
+code = ["crates/schedr-agent/src/render.rs", "crates/schedr-master/src/validate.rs", "python/schedr/_model/tasks.py"]
+checked = 2026-11-08

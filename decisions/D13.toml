@@ -1,0 +1,12 @@
+title = "A shim per task reports its start and exit"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "task-processes"
+summary = '''
+The fork server forks a shim for each task; the shim creates the task’s process group and reports
+its PID and exit. It reaps the task only after the agent closes the status socket.
+'''
+history = "PROJECT.md: How Python tasks are started"
+step = "M2.5.3"
+checked = 2026-11-08

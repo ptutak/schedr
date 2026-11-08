@@ -1,0 +1,15 @@
+title = "Show a resource as two caps joined by a rail"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Setup and cleanup are named, coloured caps in a left-hand Resources box, one lane per resource,
+retaining their graph-row heights. Shared-group users get two summary lines; otherwise links reach
+first and last users. Remaining user links and the rail appear on hover or selection; cleanup-to-
+successor links remain visible. Lists show one row in two parts.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8e"
+code = ["crates/schedr-ui/src/runs.rs"]
+checked = 2026-11-08

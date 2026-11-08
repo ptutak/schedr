@@ -1,0 +1,13 @@
+title = "Per-task cleanup defaults to the worker cleanup timeout"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+A per-task cleanup without its own timeout uses `[worker] cleanup_timeout`; the DAG
+JSON omits `timeout_ms` and the worker supplies it. Resource cleanups instead default
+to `[worker] resource_cleanup_timeout`, 30 minutes per try.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8t"
+checked = 2026-11-08

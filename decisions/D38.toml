@@ -1,0 +1,15 @@
+title = "Enable live change notifications by default"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Database change notifications default on, including standalone. `[database] change_notifications` is
+applied by `schedr db migrate` or startup `--migrate`, holding the lease, never by a running master.
+The webserver follows the database’s trigger state; when off, it sends refresh events every
+`[webserver] refresh_interval` (15 s).
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M3.4"
+code = ["crates/schedr/src/roles.rs"]
+checked = 2026-11-08

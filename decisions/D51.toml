@@ -1,0 +1,11 @@
+title = "M4 implementation follows dependency order"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+M4 follows PLAN.md’s dependency order: the result model first,
+the agent channel before its consumers, and async functions before the watcher host.
+'''
+history = "PLAN.md: M4: Native API complete"
+checked = 2026-11-08

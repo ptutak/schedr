@@ -1,0 +1,15 @@
+title = "Connection checks and tests run on a selected worker"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Check and test select a connected, active worker matching the root's current parse hash. Automatic
+selection uses fewest attempts, then name; --worker selects an eligible worker. Draining and drained
+workers are refused, including explicitly named workers. A check without a name covers every connection in
+the root.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7c"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/connection_jobs.rs"]
+checked = 2026-11-08

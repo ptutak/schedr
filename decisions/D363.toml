@@ -1,0 +1,14 @@
+title = "Backfill has an API, CLI dry runs and UI progress"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "runs"
+summary = '''
+POST /api/v1/dags/{id}/backfills returns the backfill ID and created/skipped run counts;
+GET /api/v1/backfills/{id} returns run counts by state.
+`schedr runs backfill --dry-run` counts without creating runs.
+The DAG page has a Backfill form and displays progress.
+'''
+history = "PROJECT.md: Runs: manual runs, backfill and pausing"
+step = "M4.12b"
+checked = 2026-11-08

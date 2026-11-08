@@ -1,0 +1,11 @@
+title = "The documentation site shows the latest release"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+A final release tag deploys its documentation site.
+Release rehearsals and main do not deploy it.
+'''
+history = "PROJECT.md: Packaging and releases"
+checked = 2026-11-08

@@ -1,0 +1,12 @@
+title = "A task stopped on disconnection is `lost`"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A task stopped after losing contact with the master ends `lost`.
+It uses a retry.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b3"
+checked = 2026-11-08

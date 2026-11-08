@@ -1,0 +1,12 @@
+title = "Auth timings use the hidden configuration"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+`auth_remembered` and `auth_recheck` use hidden timing values.
+Changing the users file forgets remembered checks; `auth_recheck` sets the change delay.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8u"
+checked = 2026-11-08

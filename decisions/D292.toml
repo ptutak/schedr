@@ -1,0 +1,14 @@
+title = "M4.9 delivers scripts in three reviewed steps"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+M4.9a delivers script roots, TOML checking and standalone jobs; M4.9b delivers script tasks and
+`ScriptOperator`. M4.9c delivers params, outcomes and script cleanup and resource support; each step
+is reviewed and documented.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9a"
+code = ["crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

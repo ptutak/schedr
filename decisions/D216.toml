@@ -1,0 +1,13 @@
+title = "An attempt whose process never started has no cleanup"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A rejected attempt, missing secret, or timeout during reads can leave the process unstarted.
+Its cleanup result is `not needed`.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-model/src/states.rs"]
+checked = 2026-11-08

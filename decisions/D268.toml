@@ -1,0 +1,12 @@
+title = "A resource’s cleanup is declared with its method"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Use `@cluster.cleanup`, bare or with options such as `blocking=False`.
+The method works on a setup, its override and `Resource(name)`.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c1"
+checked = 2026-11-08

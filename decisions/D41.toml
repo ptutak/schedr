@@ -1,0 +1,12 @@
+title = "The UI and API use compatible sign-in modes"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The UI and webserver use the same auth mode, or the webserver uses `none`.
+The distributed chart enforces these pairs and defaults UI auth to webserver auth.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["charts/schedr/values.yaml"]
+checked = 2026-11-08

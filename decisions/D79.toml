@@ -1,0 +1,12 @@
+title = "Mapped product arguments vary in written order"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+In expansion over several lists, the first argument written varies slowest.
+This determines map-index and gather order; DAG JSON preserves `product` order.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-model/src/task.rs", "python/schedr/_model/tasks.py"]
+checked = 2026-11-08

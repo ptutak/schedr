@@ -1,0 +1,11 @@
+title = "The master holds approval and question steps"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "human-in-the-loop"
+summary = '''
+`approve` and `ask` declare an `ask` task with its question, answer schema, approvers and timeout.
+When ready it waits on the master for an answer, without running Python or occupying a worker or watcher slot.
+'''
+history = "PROJECT.md: Human in the loop (M6)"
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "Sensors and resources have their own endpoints"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Sensors and resources have endpoints of their own.
+Resources appear inside a run’s detail.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a3"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr/src/cli.rs"]
+checked = 2026-11-08

@@ -15,6 +15,7 @@ A decision's file is `decisions/D<n>.toml`:
     history = "PROJECT.md: Dependencies between DAGs"   # where its reasons are
     step = "M4.12a"             # optional: the step that built it
     code = ["crates/schedr-master/src/chained.rs"]      # optional: where it lives
+    checked = 2026-11-09        # optional: when a second reader compared it with the full text
 
 `untraced` is a number with no text found (skipped, or decided without being written down); its
 summary says what is known. `decisions/next-id` holds the next free number. Every number below
@@ -44,7 +45,7 @@ TOPICS = ROOT / "design" / "README.md"
 BY = ("user", "claude")
 STATUS = ("active", "superseded", "dropped", "untraced")
 REQUIRED = {"title", "date", "by", "status", "topic", "summary", "history"}
-OPTIONAL = {"superseded_by", "step", "code"}
+OPTIONAL = {"superseded_by", "step", "code", "checked"}
 NAME = re.compile(r"D([1-9][0-9]*)\.toml")
 TOPIC_ROW = re.compile(r"^\| `([a-z0-9-]+)` \|", re.MULTILINE)
 # "decision 12", "decisions 326-333", "decisions 87, 88 and 90"; a year (2026) isn't one.
@@ -85,6 +86,7 @@ class Decision:
     history: str
     step: str
     code: tuple[str, ...]
+    checked: datetime.date | None = None
 
     @property
     def id(self) -> str:
@@ -137,6 +139,11 @@ def read(path: Path, known_topics: set[str]) -> Decision:
             f"{path.name}: topic `{data['topic']}` isn't one of design/README.md's topics"
         )
     step, code = optional_fields(path.name, data)
+    checked = data.get("checked")
+    if checked is not None and (
+        not isinstance(checked, datetime.date) or isinstance(checked, datetime.datetime)
+    ):
+        raise DecisionError(f"{path.name}: `checked` is a date, e.g. 2026-11-09 (no quotes)")
     return Decision(
         number=int(name[1]),
         title=data["title"].strip(),
@@ -149,6 +156,7 @@ def read(path: Path, known_topics: set[str]) -> Decision:
         history=data["history"].strip(),
         step=step.strip(),
         code=tuple(code),
+        checked=checked,
     )
 
 

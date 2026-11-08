@@ -1,0 +1,13 @@
+title = "DAG checks use the shipped copy filtered by .schedrignore"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+dags check reads the same filtered copy as dags test and workers.
+Files excluded by .schedrignore are unavailable for imports.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.11L"
+code = ["crates/schedr/src/local.rs"]
+checked = 2026-11-08

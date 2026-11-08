@@ -1,0 +1,13 @@
+title = "A release rehearsal performs every step as a candidate"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+A release candidate publishes to TestPyPI and creates a GitHub pre-release.
+Its images are tagged only `X.Y.ZrcN`.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

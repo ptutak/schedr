@@ -1,0 +1,14 @@
+title = "One option file supports MySQL and MariaDB clients"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+One option file supports both vendors: login and loose-ssl-mode in [client], with
+MariaDB's TLS settings in [client-mariadb]. Without ca_cert, verification uses system
+CAs for every client; a self-made certificate needs sslmode=require.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/connection_env.rs"]
+checked = 2026-11-08

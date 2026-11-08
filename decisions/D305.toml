@@ -1,0 +1,14 @@
+title = "Only Python files mentioning schedr are parsed"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+Python files containing the exact bytes `schedr` are parsed; other files are shipped and hashed but
+skipped. Unreadable files are parsed to report the error; `schedr dags check` follows the same rule
+and reports skipped files.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.9d"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/scan.rs", "crates/schedr/src/local.rs"]
+checked = 2026-11-08

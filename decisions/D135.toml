@@ -1,0 +1,14 @@
+title = "Run parameters are limited to 64 KiB of JSON"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+A run's parameters, including defaults, may occupy at most 64 KiB as JSON.
+An oversized set is refused at trigger time; a DAG with oversized defaults
+is refused at parse time.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs", "python/schedr/_params.py"]
+checked = 2026-11-08

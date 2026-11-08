@@ -1,0 +1,11 @@
+title = "Show the last 64 KiB of task output"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The UI shows the last 64 KiB of the pretty-printed task output and marks it as cut.
+The complete output is available for download.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

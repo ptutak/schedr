@@ -1,0 +1,13 @@
+title = "A poke that exceeds every fails"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Each poke call is limited to every and calls do not overlap.
+A call that runs out of that time is cancelled and fails with a clear message.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a1"
+code = ["python/schedr/runner/waiting.py"]
+checked = 2026-11-08

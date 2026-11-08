@@ -1,0 +1,13 @@
+title = "Parse jobs and tasks run from a read-only copy of the hashed code"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+The agent copies scanned root files into its data directory and hashes the copied bytes.
+Parse jobs and tasks import from the read-only copy; unused older copies are removed and bytecode is not used.
+'''
+history = "PROJECT.md: Code versions and change detection"
+step = "M4.3e"
+code = ["crates/schedr-agent/src/agent.rs"]
+checked = 2026-11-08

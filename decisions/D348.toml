@@ -1,0 +1,12 @@
+title = "A trigger runs as a hidden sensor without an attempt"
+date = 2026-11-07
+by = "claude"
+status = "active"
+topic = "triggers"
+summary = '''
+A trigger runs on a watcher slot as a hidden sensor, without a graph node or attempt.
+Events are acknowledged after storage; the trigger resumes from its bookmark and restarts on code changes.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11b"
+checked = 2026-11-08

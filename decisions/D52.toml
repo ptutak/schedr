@@ -1,0 +1,12 @@
+title = "M4 uses small substeps and the revised review schedule"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+M4 is split into small substeps, each committed after Claude’s own review and mutation-checked
+tests. Reviews follow the revised session/whole-repository schedule, with later M4 reviews to be
+planned after the whole-repository review.
+'''
+history = "PLAN.md: M4: Native API complete"
+checked = 2026-11-08

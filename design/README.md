@@ -15,13 +15,13 @@ The other layers (see `AI_SETUP.md`, Project documents):
 | `STATUS.md` | where things stand, what's next | rewritten each session |
 | `design/<topic>.md` | how a part works now | edited in place |
 | `decisions/D<n>.toml`, `DECISIONS.md` | what was decided, whether it holds, where its reasons are | one file per decision; `DECISIONS.md` generated |
-| `PROJECT.md` | how the project got here, and why | by topic up to D356; then the Journal, dated entries appended |
+| `PROJECT.md` | how the project got here, and why | by topic up to D366; then the Journal, dated entries appended |
 
 ## Topics
 
 `scripts/decisions.py check` takes a decision's `topic` only from this table.
 
-| Topic | Covers | PROJECT.md sections (up to D356) |
+| Topic | Covers | PROJECT.md sections (up to D366) |
 |---|---|---|
 | `goal` | what schedr is for, the deployment target | Goal; Deployment target |
 | `components` | the roles (master, webserver, worker, standalone), how they fit | Architecture: Components and roles |

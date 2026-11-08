@@ -1,0 +1,14 @@
+title = "The master sends workers each DAG root's script roots"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+Parsed files persist requested script roots, including missing ones. At registration
+and on changes, the master sends each DAG root’s current uses, excluding script roots
+absent beyond D303’s grace; the recorded uses survive restarts.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9b"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/jobs.rs", "crates/schedr-agent/src/parse.rs"]
+checked = 2026-11-08

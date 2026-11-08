@@ -1,0 +1,15 @@
+title = "Command connection files default to memory-backed storage"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Files default under /dev/shm/schedr-<uid>/<data hash>/<worker>/; [worker] connection_dir overrides this,
+with the data directory the fallback. Startup refuses unsafe paths; the private directories must be real,
+user-owned, mode 0700. Startup sweeps old files except directories belonging to processes it could not
+stop.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/connection_env.rs", "crates/schedr/src/roles.rs"]
+checked = 2026-11-08

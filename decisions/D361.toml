@@ -1,0 +1,12 @@
+title = "An operator retry starts a new run only after failure"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+A retry starts a new target run only after the previous run failed.
+The run is created and recorded on the task in one transaction.
+'''
+history = "PROJECT.md: Dependencies between DAGs"
+step = "M4.12a"
+checked = 2026-11-08

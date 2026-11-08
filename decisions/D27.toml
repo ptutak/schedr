@@ -1,0 +1,11 @@
+title = "Run a small Playwright suite for the web UI"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+A Python Playwright suite checks the theme, zone cookie, htmx swap and live updates.
+`make test-ui` and a CI job run it outside `make check`.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

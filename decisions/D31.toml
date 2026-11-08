@@ -1,0 +1,11 @@
+title = "Task details open beside the run graph"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Task details load in a panel beside the graph using htmx.
+A task query parameter opens the same panel on a link or reload.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

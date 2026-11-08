@@ -1,0 +1,14 @@
+title = "The graph shows which tasks a cleanup holds back"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+With `blocking=True`, draw downstream order edges from the cleanup cap and omit
+redundant user order edges; retain user data edges. With `blocking=False`, retain
+original task/group edges and draw the users’ link to the cleanup dashed.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8e"
+code = ["crates/schedr-model/src/dag.rs", "crates/schedr-ui/src/runs.rs"]
+checked = 2026-11-08

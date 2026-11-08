@@ -1,0 +1,14 @@
+title = "A cleanup waits for an unschedulable user"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A cleanup waits while a user is `unschedulable`, until the user finishes or is cancelled. The DAG's
+`unschedulable_timeout` may fail the user and release cleanup; the default is unlimited, and the
+shortest resource timeout applies.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c2"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/execution.rs"]
+checked = 2026-11-08

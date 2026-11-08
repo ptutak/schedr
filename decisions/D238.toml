@@ -1,0 +1,12 @@
+title = "Public timings that cannot work at zero are refused"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+Public timings that cannot work at zero are rejected during configuration load.
+Timings where zero has a defined meaning remain allowed.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8t"
+checked = 2026-11-08

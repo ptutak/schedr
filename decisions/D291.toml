@@ -1,0 +1,14 @@
+title = "Resource graph lines summarize users and expand on hover"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Shared-group users get one setup-to-group line and one group-to-cleanup line; otherwise lines
+connect first and last users. Other lines and the rail appear on hover or selection, each user has a
+colored dot, and lines from cleanup onward remain visible.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8z"
+code = ["crates/schedr-ui/src/runs.rs", "crates/schedr-ui/templates/run.html"]
+checked = 2026-11-08

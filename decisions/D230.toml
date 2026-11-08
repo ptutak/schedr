@@ -1,0 +1,12 @@
+title = "Per-task cleanup has no flag to skip waiting"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Downstream tasks wait for per-task cleanup.
+There is no flag to skip the wait; independent slow cleanup can be a resource's.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+checked = 2026-11-08

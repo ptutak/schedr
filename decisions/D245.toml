@@ -1,0 +1,12 @@
+title = "A moved cleanup runs the new worker’s current code"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A cleanup on another worker uses that worker’s current code.
+A cleanup function missing from that code fails the cleanup.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b2"
+checked = 2026-11-08

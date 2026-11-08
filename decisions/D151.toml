@@ -1,0 +1,13 @@
+title = "Optional parameter fields have a none checkbox"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+An optional parameter field has a `none` checkbox beside its input.
+An empty string remains a value for an optional string.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5c"
+code = ["crates/schedr-api/src/views/form.rs", "crates/schedr-ui/src/params_form.rs", "crates/schedr-ui/templates/trigger_params.html"]
+checked = 2026-11-08

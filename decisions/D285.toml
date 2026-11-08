@@ -1,0 +1,11 @@
+title = "A rejected approval has the Rejected outcome"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "human-in-the-loop"
+summary = '''
+A no answer ends an approval with `Rejected`.
+`.on(Rejected)` branches on it, while tasks downstream through plain `>>` are skipped.
+'''
+history = "PROJECT.md: Human in the loop (M6)"
+checked = 2026-11-08

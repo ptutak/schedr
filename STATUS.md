@@ -11,10 +11,11 @@ are in `PROJECT.md`; earlier hand-offs in `history/`.
   F12-F14 review of the whole repository.
 - **In progress:** restructuring the project's documents (the user's, 2026-11-08: option A, all phases before
   M4.12a): `STATUS.md` (this), `decisions/` and `DECISIONS.md`, `design/<topic>.md`, `PROJECT.md` kept as the
-  history (by topic up to D356, then a dated Journal); then the `project-docs` skill and `AI_SETUP.md`.
+  history (by topic up to D366, then a dated Journal); then the `project-docs` skill and `AI_SETUP.md`.
   - Phase 1 (this file, `scripts/decisions.py`, `design/README.md`): committed.
-  - Phase 2: `decisions/D<n>.toml` for D1-D366 written by Codex from extracts (worktree `schedr-codex-docs`);
-    every one being checked against the unclipped text by fresh Codex sessions (sol, high), then corrected.
+  - Phase 2: `decisions/D1..D367.toml` and `DECISIONS.md`, each checked against the unclipped text by
+    a fresh Codex session (sol, high) and corrected (`checked = 2026-11-08`); `decisions-check` in
+    `make check` and CI: committed.
   - Phase 3: the `design/` topics. Phase 4: docs build, `AI_SETUP.md`, `AI_INSTRUCTIONS.md`, memory.
 - **The `project-docs` skill** (the user's ask): `~/.claude/skills/project-docs`, private repository
   `ptutak/project-docs-skill`: the layout, `templates/` with `init.sh`, the routines, where skills live.
@@ -35,7 +36,7 @@ Open: B185, B187 (`BUGS.md`, ranked). Next number: `bugs/next-id`.
 
 ## Colleagues
 
-Codex weekly ~16% used; Grok ~67% of the week used (resets Friday 9:00). Usage logs in the skills' `USAGE.md`.
+Codex weekly 36% used (resets Sat 14 Nov 21:47); Grok ~67% of the week used (resets Friday 9:00). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

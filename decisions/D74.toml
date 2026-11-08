@@ -1,0 +1,12 @@
+title = "A mapped task keeps a whole-task row"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+Every task has a `map_index = -1` row; for a mapped task it represents the task as a whole.
+Expansion creates runnable instances numbered `0..N-1`, each with its own retries and cancellation.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-db/src/instances.rs", "crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
+checked = 2026-11-08

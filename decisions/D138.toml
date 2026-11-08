@@ -1,0 +1,13 @@
+title = "Run parameters are described in DAG JSON and stored as tagged values"
+date = 2026-11-01
+by = "claude"
+status = "active"
+topic = "task-context"
+summary = '''
+DAG JSON carries the parameter type, JSON Schema and defaults. The master fills defaults,
+refuses unknown keys, validates values and stores them as tagged outputs; scheduled runs use defaults.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+code = ["crates/schedr-agent/src/render.rs", "crates/schedr-db/src/runs.rs", "crates/schedr-master/src/params.rs"]
+checked = 2026-11-08

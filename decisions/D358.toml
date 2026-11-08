@@ -1,0 +1,12 @@
+title = "`TriggerDagOperator` gives the target run’s ID"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+The operator’s value is the target run’s ID, whether or not `wait=True`.
+The target’s output can be read with a `RunOf` sensor or the API.
+'''
+history = "PROJECT.md: Dependencies between DAGs"
+step = "M4.12a"
+checked = 2026-11-08

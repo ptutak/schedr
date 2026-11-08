@@ -1,0 +1,11 @@
+title = "Running cleanup continues past the drain deadline"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+The agent does not stop a running cleanup at the drain deadline.
+A cleanup timeout that exceeds termination grace is warned once at worker start or per task.
+'''
+history = "PROJECT.md: Sensors and triggers"
+checked = 2026-11-08

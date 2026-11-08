@@ -1,0 +1,12 @@
+title = "The demo uses a pinned go-httpbin server"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+The demo's HTTP server is pinned go-httpbin.
+Its `/bearer` checks tokens and `/headers` echoes the request headers.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7d"
+checked = 2026-11-08

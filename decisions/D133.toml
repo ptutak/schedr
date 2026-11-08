@@ -1,0 +1,14 @@
+title = "The master checks run parameters and their schemas with jsonschema"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+The master validates values with jsonschema, with formats checked and remote references disabled.
+DAG validation accepts only supported schema keywords and formats, annotations and local references;
+other keywords are DAG errors. Pydantic validators run when a task decodes values.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+code = ["crates/schedr-master/src/params.rs", "crates/schedr-master/src/scheduler.rs", "crates/schedr-api/src/views.rs"]
+checked = 2026-11-08

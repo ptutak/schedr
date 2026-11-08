@@ -1,0 +1,11 @@
+title = "Schedr refuses to store naive datetimes"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+A naive datetime passed on from a Pydantic model is refused when schedr stores it.
+The error suggests `AwareDatetime` or adding a time zone.
+'''
+history = "PROJECT.md: Output serialization"
+checked = 2026-11-08

@@ -1,0 +1,15 @@
+title = "Only database trouble ends a worker stream"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+Transient database errors end the stream. A refused Finished becomes an acknowledged, non-retried
+result_not_stored failure, retaining duration and usage; other data-fault messages are logged and
+dropped. During registration, adopt an open journal attempt whose start record is refused, reserve
+its slot, and let the worker send Finished.
+'''
+history = "PROJECT.md: Worker lifecycle"
+step = "M4.3e"
+code = ["crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

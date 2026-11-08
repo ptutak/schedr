@@ -1,0 +1,13 @@
+title = "The connections demo lands after M4.7c"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+The demo has its own commit after M4.7c.
+It shows `schedr connections check` and `test`.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7d"
+code = ["examples/demo/compose.yaml"]
+checked = 2026-11-08

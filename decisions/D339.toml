@@ -1,0 +1,12 @@
+title = "Library threads in watcher hosts are watched"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Library threads are allowed and a thread alone is not a strike. A Python thread still alive
+at step end is logged; host thread counts are shown as tied and untied, and as a metric.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a3"
+checked = 2026-11-08

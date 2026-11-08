@@ -1,0 +1,13 @@
+title = "Build structures containing references as the parameter's type"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+Structured arguments containing references are built recursively as the parameter’s type. A union
+uses the first fitting member of the same shape; when only one member has that shape, its literals
+are checked at parse time. Missing or refused fields fail the attempt with input_mismatch.
+'''
+history = "PROJECT.md: Output serialization"
+step = "M4.3e"
+checked = 2026-11-08

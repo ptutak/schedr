@@ -1,0 +1,13 @@
+title = "run_dag exposes mapped instances under the task result"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "testing-dags"
+summary = '''
+`result.tasks["fetch"]` represents the whole task and its output is the gathered list.
+Indexing that result or using `.instances` accesses individual instance results.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.3c"
+code = ["python/schedr/testing.py"]
+checked = 2026-11-08

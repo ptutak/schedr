@@ -1,0 +1,15 @@
+title = "The returning worker cleans handles the master never received"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Register reports journal handle counts. If cleanup_anywhere moved from the original worker and its
+journal exceeds the master's contiguous prefix, an unassigned move is adopted back, dropping its
+kept lost result; if assigned or ended, the original worker stops any task and cleans from
+cleanup_from. The marked rest merges once, never as the whole cleanup: failed or worker_lost wins,
+otherwise ok wins, and tries and time add. Failure fails an open run or marks an already successful
+run yellow.
+'''
+history = "PROJECT.md: Cleanup and resources"
+checked = 2026-11-08

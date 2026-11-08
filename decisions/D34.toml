@@ -1,0 +1,12 @@
+title = "Live events identify what changed"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Live events identify the changed run, DAG or workers; the UI re-renders from the API.
+Postgres uses NOTIFY and the SQLite webserver polls about once a second.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["crates/schedr-ui/src/live.rs"]
+checked = 2026-11-08

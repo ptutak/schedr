@@ -1,0 +1,13 @@
+title = "A master that is not leading is unready and refuses streams"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "components"
+summary = '''
+A paused or superseded master returns 503 from `/readyz` until it leads again. It refuses worker
+streams with `UNAVAILABLE`, including registrations that waited for its lock while it paused.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8z"
+code = ["crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

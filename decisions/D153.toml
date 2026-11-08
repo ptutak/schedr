@@ -1,0 +1,14 @@
+title = "Releases use Trusted Publishing to PyPI"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+`.github/workflows/release.yml` uses Trusted Publishing through SHA-pinned
+`pypa/gh-action-pypi-publish`; the `pypi` environment requires the user’s approval
+for each release.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

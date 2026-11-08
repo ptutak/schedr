@@ -1,0 +1,12 @@
+title = "Tasks start runs with `TriggerDagOperator`"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+Tasks start runs with `TriggerDagOperator`.
+The task routes of `schedr.api` remain limited to events.
+'''
+history = "PROJECT.md: Dependencies between DAGs"
+step = "M4.12a"
+checked = 2026-11-08

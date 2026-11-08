@@ -1,0 +1,12 @@
+title = "A triggered run accepts an optional `planned_for`"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+`planned_for` accepts a datetime or a reference and defaults to the parent’s planned time.
+Airflow’s `logical_date` maps to it.
+'''
+history = "PROJECT.md: Dependencies between DAGs"
+step = "M4.12a"
+checked = 2026-11-08

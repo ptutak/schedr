@@ -1,0 +1,15 @@
+title = "Workers withdraw DAG roots when required script roots are missing"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+A worker lacking a required script root withdraws the DAG root, neither parsing nor running
+it, and warns. The master omits script roots unreported by live workers after the
+configured five-minute grace, also observed from master startup; references remain import
+errors.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9b"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/config.rs"]
+checked = 2026-11-08

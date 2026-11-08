@@ -1,0 +1,12 @@
+title = "Do not retry fork server thread or version failures"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "task-processes"
+summary = '''
+A disabled fork server is not retried for threads after preload or a version mismatch.
+The log reports failures and the disabled metric stays visible.
+'''
+history = "PROJECT.md: How Python tasks are started"
+code = ["crates/schedr-agent/src/fork.rs"]
+checked = 2026-11-08

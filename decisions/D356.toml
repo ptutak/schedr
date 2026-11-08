@@ -1,0 +1,12 @@
+title = "Tasks call schedr’s REST API through their agent"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+`schedr.api` sends allowed task and trigger requests through the agent to the master’s API.
+Outside a task it uses HTTP; local DAG tests use their standalone master and database.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11h"
+checked = 2026-11-08

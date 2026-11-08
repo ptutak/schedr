@@ -1,0 +1,13 @@
+title = "Build mapped elements containing templates or dag_ctx per instance"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+The master counts mapped elements containing t-strings or dag_ctx and sends them in stored form.
+Each instance's runner builds its element with the referenced outputs.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.3e"
+code = ["crates/schedr-master/src/mapping.rs"]
+checked = 2026-11-08

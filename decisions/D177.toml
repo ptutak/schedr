@@ -1,0 +1,13 @@
+title = "schedr.text marks a t-string as a string for Python tasks"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+`schedr.text(t'...')` marks a t-string passed where a Python task takes a string.
+It is typed as `str`.
+'''
+history = "PROJECT.md: Secret storage"
+step = "M4.6e"
+code = ["python/schedr/_templates.py"]
+checked = 2026-11-08

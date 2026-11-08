@@ -1,0 +1,12 @@
+title = "One connection definition provides sync and async clients"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A connection definition provides clients for with and async with where its type supports both.
+Mongo and HTTP support both; SSH is sync only and Generic gives a dict.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.10"
+checked = 2026-11-08

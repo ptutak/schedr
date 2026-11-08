@@ -1,0 +1,13 @@
+title = "A DAG root's hash includes its used script roots"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+The agent folds the hashes of script roots used by the last parse into the reported DAG root hash.
+A script change causes a new DAG root hash and re-parse; tasks use the parsed versions of both roots.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9b"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-proto/proto/schedr/protocol/v1/master.proto"]
+checked = 2026-11-08

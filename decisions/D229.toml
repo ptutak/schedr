@@ -1,0 +1,15 @@
+title = "Task and cleanup results are reported separately"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+The task result is reported when its process ends and retained while the instance is `cleaning_up`;
+`Finished` settles the cleanup and attempt. Worker loss preserves that result without rerunning
+completed work. The cleanup moves when `cleanup_anywhere` permits it; otherwise it is recorded as
+`worker_lost`.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs"]
+checked = 2026-11-08

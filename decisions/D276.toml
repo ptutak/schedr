@@ -1,0 +1,13 @@
+title = "An empty cleanup's message is the task's reason"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+An empty cleanup has no attempt; its message goes in the task's reason.
+The reason is shown where a log would be.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c2"
+code = ["crates/schedr-master/src/progress.rs"]
+checked = 2026-11-08

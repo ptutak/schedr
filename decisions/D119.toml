@@ -1,0 +1,13 @@
+title = "Mapped output outcome selection stays per element across a whole edge"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "outcomes"
+summary = '''
+An .on(...) selection on a mapped output checks each element even when another use makes the edge whole.
+After the whole upstream finishes, instances with other outcomes or skips are skipped.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.3e"
+code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
+checked = 2026-11-08

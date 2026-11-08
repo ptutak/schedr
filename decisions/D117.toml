@@ -1,0 +1,13 @@
+title = "Testing one DAG file parses that file alone"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "testing-dags"
+summary = '''
+When dags test selects a file, its directory is the root but only that file is parsed.
+Imports from sibling files still work; the internal selection is not configurable.
+'''
+history = "PROJECT.md: Testing DAGs"
+step = "M4.3e"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/roots.rs"]
+checked = 2026-11-08

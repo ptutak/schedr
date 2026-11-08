@@ -1,0 +1,15 @@
+title = "The webserver describes the trigger form"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The webserver builds `params` form descriptors for a single DAG view; the UI does not
+interpret JSON Schema. Fields describe their name, kind, requiredness, nullability,
+secrecy, default and Literal choices. Defaults and choices are withheld for secret
+fields.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5c"
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-api/src/views/form.rs", "crates/schedr-ui/src/params_form.rs"]
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "Command connections expose prefixed variables"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Connection variables use `<PREFIX>_...` names.
+Documentation shows how to map them to tool-specific environment variables.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/connection_env.rs", "crates/schedr-agent/src/secrets.rs"]
+checked = 2026-11-08

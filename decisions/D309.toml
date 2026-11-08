@@ -1,0 +1,12 @@
+title = "A late cleanup failure turns a successful run yellow"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A run that already ended SUCCESS keeps that state when a rest cleanup fails later.
+It is shown yellow with LATE_CLEANUP_FAILED; the failure is logged and counted.
+'''
+history = "PROJECT.md: Cleanup and resources"
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-db/src/runs.rs"]
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "The project's documents: STATUS, design topics, a file per decision, PROJECT.md as history"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+`STATUS.md` (rewritten, at most 60 lines) says where things stand; `design/<topic>.md` how each part
+works now; `decisions/D<n>.toml` one file per decision, indexed by the generated `DECISIONS.md` and
+checked by `scripts/decisions.py` in `make check`. PROJECT.md is kept as the history: by topic up to
+D366, then a dated Journal. The layout lives on in the `project-docs` skill.
+'''
+history = "PROJECT.md: Journal, 2026-11-08"
+code = ["scripts/decisions.py", "STATUS.md", "design/README.md"]

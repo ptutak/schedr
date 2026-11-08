@@ -1,0 +1,14 @@
+title = "Dependencies on groups use their roots and leaves"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+`x >> group` links to its roots and `group >> y` links from its leaves, computed from all edges once
+the whole DAG is written. Dependencies on empty or cyclic groups fail parsing when the DAG block
+ends, naming where the dependency was written.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.2b"
+code = ["crates/schedr-model/src/dag.rs", "python/schedr/_build.py"]
+checked = 2026-11-08

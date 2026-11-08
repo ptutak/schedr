@@ -1,0 +1,13 @@
+title = "A cleanup moved to another worker keeps the same attempt"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+The attempt row moves to the new worker for the cleanup.
+The old worker’s name remains in the log and error summary.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b2"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "Watcher host crashes and memory kills are visible as losses"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Crashes and memory kills blame no wait step and switch none off; each lost attempt uses a retry.
+The error names the host’s wait steps and a metric counts losses per code set.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a3"
+code = ["crates/schedr-agent/src/watchers.rs"]
+checked = 2026-11-08

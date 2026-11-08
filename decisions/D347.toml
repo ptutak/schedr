@@ -1,0 +1,16 @@
+title = "`first_of` and `at_least` select completed outcomes"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Master-ended `first_of` yields the first taken edge's value; `at_least(n, ...)` yields the first n
+values in completion order, with `with_winner=True` also supplying IDs. `first_of` is skipped if all
+edges are not taken, or becomes `upstream_failed` if an edge failed and none can still succeed.
+Losers continue; a failed loser still fails the run without changing the completed node or its
+downstream results.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11c"
+code = ["crates/schedr-master/src/validate.rs", "crates/schedr-model/src/task.rs", "python/schedr/first_of.py"]
+checked = 2026-11-08

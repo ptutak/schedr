@@ -1,0 +1,18 @@
+title = "`RunOf` waits for or triggers from another DAG’s run"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+`RunOf` selects another DAG's run or task; lagged waits use this run's `planned_for` minus lag and
+choose the newest matching run by `triggered_at`. The master-ended node yields a run ID or
+`TimedOut`; failed, cancelled or skipped targets yield routed `Failed`, otherwise failing the node
+and run. No-code triggers start runs only for successful completions while live, without catching up
+paused periods. Function sensors and triggers receive `RunResult[T]` on watcher slots for all
+terminal states; sensors may return `NOT_YET`, and failed calls retry the same handed run, with
+trigger retry limits or manual skip available.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11d"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs"]
+checked = 2026-11-08

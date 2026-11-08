@@ -1,0 +1,13 @@
+title = "A graph groups `first_of` options in a box"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+The graph draws `first_of` options in one box with a dashed edge to the node,
+highlighting the winner. Where a box cannot be drawn, options have separate dashed edges.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11c"
+code = ["crates/schedr-ui/src/runs.rs"]
+checked = 2026-11-08

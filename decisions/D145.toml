@@ -1,0 +1,15 @@
+title = "schedr.script decodes run context values"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+In a command-task script, `schedr.script.dag_ctx` loads context on first read using one connection
+and two requests. Stored forms decode to native dates, timedeltas and tuples; object fields become
+dictionaries because the script does not know the declared class. `dag_ctx.params(Cls)` decodes
+strictly into the supplied class. Inside a Python task, its existing context values are used.
+'''
+history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+step = "M4.5b"
+code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs"]
+checked = 2026-11-08

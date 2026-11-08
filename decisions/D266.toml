@@ -1,0 +1,15 @@
+title = "A group’s successors wait for its blocking resource cleanups"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+By default, group successors wait for cleanups of resources set up in that group, unless a successor or its
+descendants use the resource. Blocking cleanup failure makes successors `upstream_failed`. With
+`blocking=False`, successors proceed but cleanup failure still fails the run. Resources outside groups create
+no such barrier.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c1"
+code = ["crates/schedr-model/src/dag.rs", "python/schedr/_build.py", "python/schedr/_model/dag.py"]
+checked = 2026-11-08

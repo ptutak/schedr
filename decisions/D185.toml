@@ -1,0 +1,12 @@
+title = "Connection clients are tested against real servers"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+HTTP is tested against a local server and Postgres in a test container.
+MySQL, Mongo and OpenSSH run in integration containers and pinned CI service containers.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b1"
+checked = 2026-11-08

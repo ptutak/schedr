@@ -1,0 +1,16 @@
+title = "A resource cleanup can be cancelled directly"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+`schedr tasks cancel` and the panel cancel a waiting resource cleanup immediately or stop a running
+one; cancelling its run keeps it. The resource becomes `cleanup_cancelled`, or `not_needed` if its
+setup failed, skipped or was cancelled; the run ends cancelled unless something failed. Cancelling a
+blocking cleanup cancels what follows its group; cancelling a non-blocking cleanup affects nothing
+else.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8f"
+code = ["crates/schedr-ui/src/runs.rs"]
+checked = 2026-11-08

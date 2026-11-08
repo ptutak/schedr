@@ -1,0 +1,14 @@
+title = "A DAG root’s version includes the other roots on its path"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+Other DAG roots’ content hashes fold into a root’s reported hash, so any root edit
+reparses the others. Workers serving a root must agree on the DAG roots on its path.
+A lone root keeps its plain hash.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.11L"
+code = ["crates/schedr-agent/src/agent.rs"]
+checked = 2026-11-08

@@ -1,0 +1,12 @@
+title = "Expanding a setup is a parse error"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+`.expand` on a setup is a parse error.
+A setup cannot be expanded into resource instances.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c1"
+checked = 2026-11-08

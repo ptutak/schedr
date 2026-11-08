@@ -1,0 +1,12 @@
+title = "Replace NUL in command output text with U+FFFD"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+The agent replaces NUL in ProcessResult stdout and stderr with U+FFFD.
+The log file keeps the original bytes.
+'''
+history = "PROJECT.md: Output serialization"
+step = "M4.3e"
+checked = 2026-11-08

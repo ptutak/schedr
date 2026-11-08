@@ -1,0 +1,11 @@
+title = "The proposed sub-step commit decision was dropped"
+date = 2026-11-04
+by = "user"
+status = "dropped"
+topic = "cleanup"
+summary = '''
+The proposal was dropped when laid out.
+Each sub-step commits on the user's word.
+'''
+history = "PROJECT.md: Cleanup and resources"
+checked = 2026-11-08

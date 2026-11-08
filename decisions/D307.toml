@@ -1,0 +1,11 @@
+title = "Worker reconnect waits are capped at half the master's lease"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A worker caps its reconnect backoff at half the lease the master gave it.
+A restarted master gives each worker a fresh lease from its start.
+'''
+history = "PROJECT.md: Cleanup and resources"
+checked = 2026-11-08

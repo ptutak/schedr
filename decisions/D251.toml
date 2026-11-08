@@ -1,0 +1,12 @@
+title = "Split M4.8b into journal and moved-cleanup commits"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+M4.8b covers the journal, restarts, kept result, `worker_lost`, and drain.
+M4.8b2 sends handles to the master and implements `cleanup_anywhere`.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b"
+checked = 2026-11-08

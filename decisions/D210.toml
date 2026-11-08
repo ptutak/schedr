@@ -1,0 +1,13 @@
+title = "Anyone signed in can test a connection after confirmation"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A confirmation names the connection and says Test logs in to the real system
+with this deployment's secrets. Anyone signed in can run it.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7e"
+code = ["crates/schedr-ui/src/connections.rs"]
+checked = 2026-11-08

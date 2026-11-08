@@ -1,0 +1,13 @@
+title = "A moved cleanup goes ahead of waiting tasks"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A moved cleanup uses its task’s queue ahead of waiting tasks.
+It is not held by limits.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b2"
+code = ["crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

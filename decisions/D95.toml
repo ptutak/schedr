@@ -1,0 +1,11 @@
+title = "Concurrency limits cannot be overridden through the API or CLI"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "assignment"
+summary = '''
+Changing a concurrency limit without a code change has no API or CLI override.
+Limits shared across DAGs are a proposal for M6.
+'''
+history = "PROJECT.md: Native API"
+checked = 2026-11-08

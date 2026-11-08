@@ -1,0 +1,14 @@
+title = "Show the UI's configuration and connections on a Config page"
+date = 2026-10-31
+by = "user"
+status = "superseded"
+superseded_by = 128
+topic = "ui-cli"
+summary = '''
+The Config page shows the UI's masked configuration, versions, connection states and signed-in identity.
+In standalone it shows the process configuration.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4b"
+code = ["crates/schedr-ui/src/deployments.rs"]
+checked = 2026-11-08

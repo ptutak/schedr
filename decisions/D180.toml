@@ -1,0 +1,13 @@
+title = "Connection values contain secrets and plain values"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A connection is defined when its module loads outside a DAG.
+Run-specific values go through task arguments or `dag_ctx` read inside the task.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7a"
+code = ["python/schedr/_build.py", "python/schedr/connections.py"]
+checked = 2026-11-08

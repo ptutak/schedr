@@ -1,0 +1,12 @@
+title = "Deployment-dependent timings are configuration keys"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+Timings whose right values depend on the deployment are public keys.
+Each key has a doc comment describing its effect and when to change it.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8t"
+checked = 2026-11-08

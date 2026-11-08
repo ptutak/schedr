@@ -1,0 +1,13 @@
+title = "Resource cleanups keep the run’s active slot"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A run keeps its `max_active_runs` slot until ordinary task and resource cleanups end,
+including resource cleanups with `blocking=False`. A late rest cleanup under D308 can
+run after the run has ended.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c2"
+checked = 2026-11-08

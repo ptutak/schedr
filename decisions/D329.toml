@@ -1,0 +1,13 @@
+title = "A DAG belongs to the module running its with block"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+The module running a DAG’s with block owns it, including when a helper function builds it.
+An imported module owns its own DAG, and the file must mention schedr.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.11L"
+code = ["python/schedr/dag.py"]
+checked = 2026-11-08

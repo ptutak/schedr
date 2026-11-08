@@ -1,0 +1,13 @@
+title = "Warn about cleanup timeout at assignment once per task"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+The agent logs when `cleanup_timeout` does not fit the grace period.
+It warns at assignment, once per task.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b"
+code = ["crates/schedr-agent/src/agent.rs"]
+checked = 2026-11-08

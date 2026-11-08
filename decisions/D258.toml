@@ -1,0 +1,12 @@
+title = "The master acknowledges each worker heartbeat"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "protocol"
+summary = '''
+The master answers each `Heartbeat` with `HeartbeatAck` as it arrives.
+The response is not behind the master’s lock and is not sent while paused.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b3"
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "The run graph draws task groups as clustered boxes"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The run graph orders each layer by group and draws nested, padded boxes around group members.
+The layout keeps unrelated tasks outside boxes and avoids overlaps.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.2b"
+code = ["crates/schedr-ui/src/graph.rs"]
+checked = 2026-11-08

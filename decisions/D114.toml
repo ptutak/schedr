@@ -1,0 +1,13 @@
+title = "Replace NUL in database JSON strings and keys"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "state"
+summary = '''
+The database layer replaces NUL with U+FFFD in every string and key of JSON it writes.
+JSON without NUL is written unchanged.
+'''
+history = "PROJECT.md: Output serialization"
+step = "M4.3e"
+code = ["crates/schedr-db/src/query.rs"]
+checked = 2026-11-08

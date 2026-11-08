@@ -1,0 +1,11 @@
+title = "A task starts after all its upstream tasks end"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "outcomes"
+summary = '''
+A task starts after its upstream tasks have ended.
+To act on the first of several, use a `first_of` node.
+'''
+history = "PROJECT.md: Sensors and triggers"
+checked = 2026-11-08

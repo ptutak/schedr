@@ -1,0 +1,12 @@
+title = "Connection values are limited to 1 MiB"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A file defining connection values larger than 1 MiB fails to import.
+The SDK and the master both enforce the limit.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7a"
+checked = 2026-11-08

@@ -84,6 +84,7 @@ def test_a_folder_loads_by_number_and_renders_newest_first(tmp_path: Path) -> No
         ({1: decision(date='"2026-11-08"')}, "`date` is a date"),
         ({1: decision(colour='"red"')}, "unknown ['colour']"),
         ({1: decision(code='"a/path"')}, "`code` is a list"),
+        ({1: decision(checked='"2026-11-09"')}, "`checked` is a date"),
         ({1: decision(), 3: decision()}, "no file for D2"),
     ],
 )
@@ -138,3 +139,15 @@ def test_the_topics_are_read_from_the_design_readme(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     readme.write_text("| Topic | Covers |\n|---|---|\n| `runs` | runs |\n| `chained-runs` | x |\n")
     assert decisions().topics(readme) == {"runs", "chained-runs"}
+
+
+def test_a_checked_date_is_kept(tmp_path: Path) -> None:
+    loaded = decisions().load(folder(tmp_path, {1: decision(checked="2026-11-09")}), TOPICS)
+    assert str(loaded[0].checked) == "2026-11-09"
+
+
+def test_this_repositorys_decisions_md_is_current() -> None:
+    module = decisions()
+    assert (ROOT / "DECISIONS.md").read_text() == module.render(
+        ROOT / "decisions", module.topics(ROOT / "design" / "README.md")
+    ), "DECISIONS.md is out of date: run `make decisions`"

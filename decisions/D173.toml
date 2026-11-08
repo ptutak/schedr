@@ -1,0 +1,12 @@
+title = "Teams requiring isolation run separate deployments"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+A task can use its worker's Vault login and access its role's allowed paths.
+Teams kept apart use separate deployments; a federated UI can show them together.
+'''
+history = "PROJECT.md: Secret storage"
+step = "M4.6d"
+checked = 2026-11-08

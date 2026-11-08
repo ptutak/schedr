@@ -522,7 +522,7 @@ pin-check:       ## Fail if a workflow, tool, image or requirements pin is missi
 
 check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size
-	@$(MAKE) --no-print-directory pin-check fmt-check lint schema-check bugs-check third-party-check chart-check test test-integration
+	@$(MAKE) --no-print-directory pin-check fmt-check lint schema-check bugs-check decisions-check third-party-check chart-check test test-integration
 
 target-size:     ## Clean target/ over TARGET_MAX_GIB (50), other worktrees' over WORKTREE_TARGET_MAX_GIB (20)
 	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \

@@ -1,0 +1,12 @@
+title = "Connections use generators; resources use separate functions"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A connection opens and closes in a generator within one process.
+A resource has separate setup and cleanup functions in separate tasks.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c1"
+checked = 2026-11-08

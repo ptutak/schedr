@@ -1,0 +1,14 @@
+title = "Async task calls return coroutines outside a DAG"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "async-tasks"
+summary = '''
+Outside a DAG, a plain async task call returns a coroutine; typed tests use `await task.fn(...)`,
+since a plain call is typed as its result. Async cleanups and resource setups/cleanups are
+supported. Remaining background tasks are cancelled; their errors are warnings and do not change the
+attempt’s result.
+'''
+history = "PROJECT.md: Async task functions"
+code = ["python/schedr/runner/coroutines.py", "python/schedr/tasks.py"]
+checked = 2026-11-08

@@ -1,0 +1,12 @@
+title = "Concurrency limits use run and current DAG versions"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "assignment"
+summary = '''
+`max_active_per_run` comes from each run’s own DAG version.
+Across-run `max_active_tasks` and `max_active` come from the current DAG version.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-master/src/limits.rs", "crates/schedr-model/src/task.rs"]
+checked = 2026-11-08

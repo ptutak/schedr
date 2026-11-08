@@ -1,0 +1,13 @@
+title = "Import errors have their own page"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+An Import errors page sits beside DAGs, Runs and Workers and merges deployments.
+A navigation count and DAG-list notice load after the page.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.2c"
+code = ["crates/schedr-ui/src/imports.rs"]
+checked = 2026-11-08

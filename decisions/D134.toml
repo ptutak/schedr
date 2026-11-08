@@ -1,0 +1,16 @@
+title = "Run parameters are masked when shown"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+Shown parameters are masked like task outputs; tasks receive originals. Refusals never quote
+parameter or schema values, mask names, and omit even the keyword beneath secret-named fields. The
+webserver rejects NUL before storing a command; run-DAG views retain only masked parameter defaults.
+Bad bodies, `-p`, invalid dataclass defaults and Pydantic default serialization produce no value-
+bearing diagnostics; invalid dataclass defaults also omit their type.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-master/src/params.rs", "crates/schedr-ui/src/params_form.rs"]
+checked = 2026-11-08

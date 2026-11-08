@@ -1,0 +1,12 @@
+title = "A cleanup keeps its own task kind"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A cleanup retains its own kind, such as `python` or `empty`.
+Its role comes from `Dag.resources` and is shown as cleanup of its resource.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c2"
+checked = 2026-11-08

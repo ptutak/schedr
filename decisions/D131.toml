@@ -1,0 +1,15 @@
+title = "Mask task logs and outputs when shown"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+The webserver masks log text and output texts, names and fields named by secret words when shown.
+Log parts use whole lines and 64 KiB of preceding masking context; UI and CLI use 1 MiB parts, with
+oversized lines visibly cut and their remainder skipped. Ordinary downstream tasks receive stored
+outputs, already masked for secret values by the agent under D167; `RunOf` readers receive API-
+masked outputs.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-config/src/masked.rs"]
+checked = 2026-11-08

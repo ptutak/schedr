@@ -1,0 +1,16 @@
+title = "Pydantic JSON Schema describes model types"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+Pydantic model descriptors store JSON Schema: serialization schemas with all fields required for
+outputs, validation schemas for parameters. Python compares these with model, dataclass and plain
+types; Rust stores them. Compatibility requires proof that every output value is accepted;
+uncomparable constructs require identical schemas, references are followed, and errors name the
+field and constraints.
+'''
+history = "PROJECT.md: Output serialization"
+step = "M4.1e"
+code = ["crates/schedr-model/src/types.rs", "python/schedr/_model/types.py", "python/schedr/_serialization/compatibility.py"]
+checked = 2026-11-08

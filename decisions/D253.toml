@@ -1,0 +1,13 @@
+title = "A disconnected task’s cleanup waits for the master"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+The cleanup of a task stopped after disconnection waits for the master’s answer.
+`Continue` runs it and `Kill` drops it.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b3"
+code = ["crates/schedr-agent/src/attempt.rs"]
+checked = 2026-11-08

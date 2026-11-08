@@ -1,0 +1,13 @@
+title = "Render the UI in Rust with htmx"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Rust Askama templates render HTML and htmx supplies interactive partial updates.
+Assets are embedded in the binary and require no JavaScript build.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M3.1"
+code = ["crates/schedr-ui/src/lib.rs"]
+checked = 2026-11-08

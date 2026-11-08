@@ -1,0 +1,15 @@
+title = "Releases push server and worker images while the chart stays in the repository"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+Releases push x86_64 images from the musllinux wheel to
+`ghcr.io/ptutak/schedr-server` and `ghcr.io/ptutak/schedr`. The Helm chart stays in
+the repository; its default images use `appVersion`, checked against the release
+version.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

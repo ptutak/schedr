@@ -1,0 +1,11 @@
+title = "Oversized task results fail before they are sent"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "protocol"
+summary = '''
+DAG loading rejects task output limits that cannot fit in a worker message.
+An oversized finished result becomes an unretried `output_too_large` failure before journalling.
+'''
+history = "PROJECT.md: Master–worker protocol"
+checked = 2026-11-08

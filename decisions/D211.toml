@@ -1,0 +1,13 @@
+title = "A Connections page lists connections across deployments"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+`/connections` groups every root's connections by deployment, with Check all and row Tests.
+`GET /api/v1/connections` lists current names, types, files and declarers without values.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7e"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-ui/src/connections.rs"]
+checked = 2026-11-08

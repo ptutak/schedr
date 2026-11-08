@@ -1,0 +1,14 @@
+title = "An unscheduled script declaration is only for DAGs"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+A declaration without a schedule is not a standalone DAG or listed among DAGs; it is used through
+script operators and resources. Only `script` and `interpreter` are required, and DAG-level keys are
+errors.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9a"
+code = ["crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

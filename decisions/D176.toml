@@ -1,0 +1,14 @@
+title = "Secrets are typed as their values"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+Indexing a secret path gives a dict; indexing a key gives a string.
+`secrets.value('path#key', default=...)` gives a string; task context has matching methods.
+Indexing a `path#key` is refused when the file loads.
+'''
+history = "PROJECT.md: Secret storage"
+step = "M4.6e"
+code = ["crates/schedr-agent/src/secrets.rs", "crates/schedr-model/src/commands.rs", "crates/schedr-model/src/secret.rs"]
+checked = 2026-11-08

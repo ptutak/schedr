@@ -1,0 +1,12 @@
+title = "Resource tasks appear in a box beside the run graph"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+The run graph places resource setups and cleanups in lanes in a Resources box to the left of tasks.
+They remain at their corresponding row heights, with lines in a separate channel crossing only between rows.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8z"
+checked = 2026-11-08

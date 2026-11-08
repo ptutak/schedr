@@ -1,0 +1,16 @@
+title = "Connections use optional clients and worker-side checks and tests"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Connection clients are optional extras; SQL uses psycopg 3/PyMySQL, and SSH requires known hosts
+unless explicitly disabled. HTTP supports bearer/basic authentication, headers, CA and client
+certificates. Connections are registered per root; checks and tests run on workers. `task_context`
+injects client objects, while `run_dag` supplies arguments to the real connection function; async
+connections come with M4.10.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7"
+code = ["crates/schedr-agent/src/agent.rs"]
+checked = 2026-11-08

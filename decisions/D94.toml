@@ -1,0 +1,12 @@
+title = "A group ending in a branch connects to following tasks by order edges"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+A dependency from a group joins its last tasks, including a branch, to following tasks with order edges.
+Each following task applies its own run_if; the branch's own edges remain choices.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-master/src/validate.rs", "python/schedr/_build.py"]
+checked = 2026-11-08

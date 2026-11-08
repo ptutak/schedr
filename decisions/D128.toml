@@ -1,0 +1,17 @@
+title = "Show the UI and all deployments in one graph"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+`/deployments` is one graph containing the UI and framed deployments, grouping nodes by process in
+standalone. Links show HTTP from UI to webserver, the database from webserver to masters, and gRPC
+from workers to their registered master, dashed when disconnected; workers show queues. Node panels
+show details and configuration as TOML, omitting unset values. The UI panel retains the Config
+page’s content; `/config`, its navigation entry, and separate deployment pages and routes are
+removed.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4b"
+code = ["crates/schedr-ui/src/deployments.rs"]
+checked = 2026-11-08

@@ -1,0 +1,12 @@
+title = "A whole number with a fraction fits an integer parameter"
+date = 2026-11-01
+by = "claude"
+status = "active"
+topic = "task-context"
+summary = '''
+A whole number written with a fraction, such as `1.0`, fits an `int` field.
+It is stored as `1`.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+checked = 2026-11-08

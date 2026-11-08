@@ -1,0 +1,13 @@
+title = "Offline workers have no problem on the Deployments graph"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+An offline worker is grey and dashed; stale warnings and import errors do not colour it.
+A lost worker remains an error and a disconnected worker a warning.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4b"
+code = ["crates/schedr-api/src/routes.rs"]
+checked = 2026-11-08

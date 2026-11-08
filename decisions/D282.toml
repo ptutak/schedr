@@ -1,0 +1,15 @@
+title = "A moving cleanup's result from the worker it moved from counts"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+While a cleanup waits to move, its previous worker’s cleanup result is stored and the pending
+move dropped. Its journaled `Finished` receives `Continue` so the result is sent again. On the
+first move that worker’s task result counts; on later moves the previously kept task result
+remains.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8z"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs", "crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

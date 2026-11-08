@@ -1,0 +1,13 @@
+title = "Resource cleanup takes priority over waiting tasks"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A resource's cleanup goes ahead of waiting tasks and is not held by DAG limits.
+It still needs a worker slot.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

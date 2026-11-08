@@ -1,0 +1,13 @@
+title = "Secret values are masked in outputs before storage"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+The agent masks secret values in attempt outputs and error summaries before they leave the worker.
+Downstream tasks receive `****`; masking writes a warning naming the secret and replacement count.
+'''
+history = "PROJECT.md: Secret storage"
+step = "M4.6b"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/mask.rs"]
+checked = 2026-11-08

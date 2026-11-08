@@ -1,0 +1,16 @@
+title = "Show node problems on the Deployments graph"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "observability"
+summary = '''
+Warnings colour nodes yellow and errors red; panels list current problems. Unreachable webservers
+are errors and version mismatches warnings; masters report current problems in heartbeats. Lost
+workers are errors, while disconnected workers, reported warnings and import errors produce
+warnings. Offline workers have no problems and remain grey and dashed, ignoring stale warnings and
+import errors.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4b"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/src/nodes.rs"]
+checked = 2026-11-08

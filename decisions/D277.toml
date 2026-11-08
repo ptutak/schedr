@@ -1,0 +1,14 @@
+title = "Cancelling a run keeps its resource cleanups"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A cancelled run still runs the cleanup of each resource set up, including retries.
+It ends `cancelled`, or `failed` if a cleanup fails; a cleanup can itself be cancelled under D279.
+Cleanups ignore task concurrency limits.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c2"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-db/src/instances.rs", "crates/schedr-master/src/progress.rs"]
+checked = 2026-11-08

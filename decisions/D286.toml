@@ -1,0 +1,11 @@
+title = "Approvers default to users who may trigger the DAG"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "human-in-the-loop"
+summary = '''
+Anyone who may trigger the DAG can answer by default.
+`approvers` narrows access to users or groups, and `four_eyes=True` excludes the run's initiator.
+'''
+history = "PROJECT.md: Human in the loop (M6)"
+checked = 2026-11-08

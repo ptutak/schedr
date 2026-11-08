@@ -1,0 +1,12 @@
+title = "Mapped outputs are stored per instance"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "outcomes"
+summary = '''
+A mapped task’s output is stored per instance.
+A downstream list is assembled on read in map-index order, with `None` for skipped instances.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/mapping.rs"]
+checked = 2026-11-08

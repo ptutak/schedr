@@ -1,0 +1,11 @@
+title = "Invalid group dependencies name where they were written"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+A dependency on an empty group or a group whose tasks form a cycle is a parse error.
+The error is reported at the end of the DAG block and names the dependency's location.
+'''
+history = "PROJECT.md: Native API"
+checked = 2026-11-08

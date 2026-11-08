@@ -1,0 +1,13 @@
+title = "A task ending while disconnected holds its movable cleanup"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A task with `cleanup_anywhere` that ends by itself while disconnected holds its cleanup.
+It waits for the master’s answer.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b3"
+code = ["crates/schedr-agent/src/agent.rs"]
+checked = 2026-11-08

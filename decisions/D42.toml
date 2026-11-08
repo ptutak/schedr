@@ -1,0 +1,12 @@
+title = "A recorded task finish wakes a scheduler round"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "components"
+summary = '''
+A recorded worker `Finished` wakes the master’s loop to dispatch downstream tasks.
+Bursts coalesce into one wake, and a woken round starts at least 50 ms after the previous round ended.
+'''
+history = "PROJECT.md: Components and roles"
+code = ["crates/schedr-master/src/service.rs"]
+checked = 2026-11-08

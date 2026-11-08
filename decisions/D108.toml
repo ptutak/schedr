@@ -1,0 +1,14 @@
+title = "Database trouble ends the worker stream; data faults are handled separately"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+On database trouble, undo the failed message’s effects and end the worker stream; the worker
+registers again with its roots and journal. Under D115, data faults keep the stream open: a refused
+Finished becomes an acknowledged result_not_stored failure, other refused messages are logged and
+dropped, and registration adopts open attempts whose start record was refused.
+'''
+history = "PROJECT.md: Worker lifecycle"
+step = "M4.3e"
+checked = 2026-11-08

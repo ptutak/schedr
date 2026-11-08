@@ -1,0 +1,15 @@
+title = "Script cleanup settings can override declaration defaults"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+ScriptOperator and ScriptResource cleanup settings override the declaration, then DAG defaults; the
+declared cleanup script cannot change, and cleanup_* without a declared cleanup is a parse error.
+cleanup_script options override declaration settings, then cleanup defaults: three tries, 30 seconds and
+the setup’s queue.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9c"
+code = ["python/schedr/resources.py"]
+checked = 2026-11-08

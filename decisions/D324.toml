@@ -1,0 +1,15 @@
+title = "A wait step’s plain >> runs on its value"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+A wait call reads as Waited[T], containing its value or TimedOut; passing it directly to a parameter accepting
+only T is rejected. Select the value with .on(T), the timeout with .on(TimedOut), or accept both explicitly.
+Plain >> selects the value; failed waits propagate upstream_failed, with ordinary run_if rules for untaken
+edges.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a1"
+code = ["python/schedr/_build.py", "python/schedr/outcomes.py", "python/schedr/runner/task.py"]
+checked = 2026-11-08

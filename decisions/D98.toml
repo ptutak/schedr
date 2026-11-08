@@ -1,0 +1,14 @@
+title = "Inject a failure at each database write in master operation tests"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+A test hook fails the Nth database write; `fail_each_write` repeats an operation from fresh state
+for each write. A shared consistency check compares the database with itself and master memory.
+Every master operation that writes must have this test.
+'''
+history = "PROJECT.md: Testing"
+step = "M4.3e"
+code = ["crates/schedr-db/src/database.rs", "crates/schedr-db/src/faults.rs"]
+checked = 2026-11-08

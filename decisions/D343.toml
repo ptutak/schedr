@@ -1,0 +1,13 @@
+title = "The UI shows watcher hosts and switched-off sensors"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "observability"
+summary = '''
+The Workers page and metrics show each host’s code hash, wait steps, threads, memory and losses.
+The DAG page lists switched-off sensors with switch-on; the DAGs list shows their count.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a4"
+code = ["crates/schedr-api/src/views.rs"]
+checked = 2026-11-08

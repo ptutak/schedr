@@ -1,0 +1,13 @@
+title = "Escape user dictionaries shaped like serialization tags"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+A user dict whose sole key is a serialization tag is stored inside a $dict escape.
+Output paths and literal dictionaries containing references pass through the escape.
+'''
+history = "PROJECT.md: Output serialization"
+step = "M4.3e"
+code = ["python/schedr/_serialization/codec.py"]
+checked = 2026-11-08

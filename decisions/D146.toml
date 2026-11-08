@@ -1,0 +1,13 @@
+title = "The context channel is inherited by command tasks"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+Command tasks and their child processes inherit the context channel.
+Python tasks use their own `dag_ctx`; a closed inherited descriptor is reported.
+'''
+history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+step = "M4.5b"
+code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs"]
+checked = 2026-11-08

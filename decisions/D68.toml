@@ -1,0 +1,12 @@
+title = "Parse warnings stay in dags check"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The import errors view reports errors; parse warnings such as `TypingHint` remain in `dags check`.
+Warnings are not uploaded for this view.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.2c"
+checked = 2026-11-08

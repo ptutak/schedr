@@ -1,0 +1,14 @@
+title = "Import errors show failed files of current parses"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The API shows failed files of each root’s recorded current parse, including root, hash, per-file
+worker/time, exception, message and traceback. Their DAGs retain their last good version; non-
+transient errors hold them, while transient failures hold nothing and are retried.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.2c"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/migrations/postgres/0001_initial.sql"]
+checked = 2026-11-08

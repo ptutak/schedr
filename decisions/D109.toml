@@ -1,0 +1,12 @@
+title = "Retry a resumed worker's failed follow-up each round"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+A resume command is applied once; a failed search for its parse jobs is retried each round.
+Retries stop when the search succeeds or the worker is drained again.
+'''
+history = "PROJECT.md: Worker lifecycle"
+step = "M4.3e"
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "Command and script cleanups are resource methods"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Declare command and script cleanups with `cluster.cleanup_command([...])` and
+`cluster.cleanup_script(job=...)`. Both methods accept `blocking=`.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8d"
+code = ["python/schedr/resources.py"]
+checked = 2026-11-08

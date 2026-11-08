@@ -1,0 +1,13 @@
+title = "A queued run keeps its validated parameter values"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+A queued run keeps the values validated against the version on which it was created.
+They are not checked again when it starts.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+code = ["python/schedr/_params.py"]
+checked = 2026-11-08

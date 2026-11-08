@@ -1,0 +1,13 @@
+title = "Handles are limited to 1 MiB per attempt"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+An attempt's handles may total at most 1 MiB.
+Exceeding the limit fails the attempt and names the limit.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-agent/src/handles.rs", "crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

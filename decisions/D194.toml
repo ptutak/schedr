@@ -1,0 +1,15 @@
+title = "Mongo commands receive a database tools config file"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Commands get <PREFIX>_TOOLS_CONFIG, a 0600 YAML file containing a URI with the user but
+no password, and a separate password, for Mongo's database tools. <PREFIX>_URI names no
+user; mongosh authenticates through the prefixed USER, PASSWORD and AUTH_SOURCE
+variables.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/connection_env.rs"]
+checked = 2026-11-08

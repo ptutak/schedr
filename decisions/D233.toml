@@ -1,0 +1,12 @@
+title = "Hidden environment variables change fixed timings"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+`SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing at startup.
+Each setting is warned about; unknown names and invalid durations stop startup.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8t"
+checked = 2026-11-08

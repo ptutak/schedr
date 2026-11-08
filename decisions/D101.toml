@@ -1,0 +1,12 @@
+title = "Workers and the DAG code running on them are trusted"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+Tasks run as the agent's user and can act as their worker; sender checks guard against confused workers.
+Teams that must be kept apart use separate schedr deployments.
+'''
+history = "PROJECT.md: Master–worker protocol"
+step = "M4.3e"
+checked = 2026-11-08

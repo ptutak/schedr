@@ -1,0 +1,12 @@
+title = "Keep user management outside schedr"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+schedr keeps no user database, user management UI, admin role or sessions. People remain with the
+organisation’s identity provider; Basic auth retains its users file for labs and single machines. A
+separate LDAP mode checking Basic credentials by directory bind is planned for M6.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

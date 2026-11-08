@@ -1,0 +1,13 @@
+title = "Retry fork server preload import failures for a limited time"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "task-processes"
+summary = '''
+Preload import failures are retried with backoff for `[worker] fork_server_import_retry`, default 20 minutes.
+After that the server stays disabled until restart; 0s disables retries.
+'''
+history = "PROJECT.md: How Python tasks are started"
+step = "M2.5.4a"
+code = ["crates/schedr-agent/src/fork.rs"]
+checked = 2026-11-08

@@ -1,0 +1,14 @@
+title = "Mapped output lanes advance per instance"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+An element-wise mapped-output lane expands after its upstream expands; instance i waits for upstream
+instance i. Other edges, an explicit order edge, or another reference to that upstream make it a
+whole-task barrier. Outcome narrowing with `.on(...)` remains per instance even behind that barrier.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.3b"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
+checked = 2026-11-08

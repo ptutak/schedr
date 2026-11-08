@@ -1,0 +1,13 @@
+title = "Connection check and test results live on the page"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A row shows running while its command is polled and fills in when the worker answers.
+Results stay until the user leaves the page.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7e"
+code = ["crates/schedr-ui/src/connections.rs"]
+checked = 2026-11-08

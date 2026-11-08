@@ -1,0 +1,16 @@
+title = "A DAG is held while its file fails to import"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+Non-transient file errors hold every DAG of that file, including InvalidDag, InvalidPath and
+ParseResultTooLarge; these rejections are not retried. Held DAGs create no runs, reject manual
+triggers and leave queued runs waiting; running runs continue, and missed fire times follow catchup
+after repair. ParseTimeout and RunnerDied hold nothing; transiently failed files retry indefinitely,
+starting after 30 s and doubling to 10 min, preferring another worker. Holds and their file-level
+reasons appear in the API, UI, CLI, metrics and logs.
+'''
+history = "PROJECT.md: DAG code delivery"
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/migrations/postgres/0001_initial.sql"]
+checked = 2026-11-08

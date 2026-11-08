@@ -1,0 +1,15 @@
+title = "Script job parameters have types inferred from TOML values"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+Job parameter types come from string, integer, float, boolean, date, offset-free datetime in the
+job’s timezone, homogeneous-list, or nested-table defaults. Empty/mixed lists, empty tables and
+times without dates are import errors naming the key. Triggers replace nested objects whole;
+parameter names contain letters, digits and underscores.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9c"
+code = ["crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

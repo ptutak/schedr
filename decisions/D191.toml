@@ -1,0 +1,13 @@
+title = "Command connections use the Python clients' TLS defaults"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+SQL URLs, MySQL option files, Mongo URIs and SSH configs carry verifying defaults.
+Curl's config names the CA file when one is supplied.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/connection_env.rs"]
+checked = 2026-11-08

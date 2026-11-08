@@ -1,0 +1,13 @@
+title = "A changed script declaration re-parses its DAGs"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+A script root change re-parses DAGs whose `ScriptOperator`s refer to it, updating scheduling keys
+from the declaration. Workers run scripts at the script root hash expected by the master.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9b"
+code = ["crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

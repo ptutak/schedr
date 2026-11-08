@@ -1,0 +1,13 @@
+title = "Cleanup and resources are built in separate sub-steps"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+M4.8a covers same-worker cleanup; M4.8b/b2/b3 cover recovery, moved cleanups and
+network cuts. M4.8c1/c2 cover Python-resource parsing and execution; M4.8d command
+resources; M4.8e UI and test doubles. Script resources and cleanups belong to M4.9c.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+checked = 2026-11-08

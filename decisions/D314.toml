@@ -1,0 +1,14 @@
+title = "Workers reject tasks whose cleanup script they cannot run"
+date = 2026-11-05
+by = "claude"
+status = "active"
+topic = "scripts"
+summary = '''
+A worker missing a task cleanup’s interpreter or script rejects the task with rejection 3 or 5.
+Cleanup scripts use their task’s environment and working directory. Moved or recovered cleanups
+require only what the cleanup runs, so absence of the original task’s interpreter does not exclude a
+worker.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9c"
+checked = 2026-11-08

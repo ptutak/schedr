@@ -1,0 +1,13 @@
+title = "Show each deployment node's effective configuration masked at source"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+Each node supplies its own effective configuration for the API and Deployments page.
+The node masks secrets before its configuration leaves the process.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4b"
+code = ["crates/schedr-config/src/masked.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-agent/src/agent.rs"]
+checked = 2026-11-08

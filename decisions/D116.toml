@@ -1,0 +1,14 @@
+title = "A task's timeout counts from its launch"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "task-processes"
+summary = '''
+Timeout covers the whole attempt: secret and connection reads, runner or command startup, fork-
+server waits and request sending. The process receives only the remaining budget; exhaustion before
+launch starts no process and ends timed_out, removing connection files. Timeout or cancellation
+before hello stops the runner and ends the attempt accordingly.
+'''
+history = "PROJECT.md: Task assignment"
+step = "M4.3e"
+checked = 2026-11-08

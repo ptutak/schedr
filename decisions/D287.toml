@@ -1,0 +1,11 @@
+title = "Questions time out with the TimedOut outcome"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "human-in-the-loop"
+summary = '''
+An ask step uses its `timeout`, or `[ask] default_timeout` when absent.
+The default is seven days; expiration produces `TimedOut`.
+'''
+history = "PROJECT.md: Human in the loop (M6)"
+checked = 2026-11-08

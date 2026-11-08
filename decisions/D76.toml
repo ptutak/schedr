@@ -1,0 +1,16 @@
+title = "The master sends each mapped instance its elements"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+The master sends each instance’s resolved elements under $expand and mapped-upstream element
+outcomes under $expand_outcomes; task JSON is shared. The mapped list is not additionally sent
+whole; other inputs contain only what the task’s other arguments reference. Non-dict mapped-upstream
+expand_kwargs elements fail their instance at assignment, unretried, with input_mismatch. Literal
+expand_kwargs dictionaries have names and types checked at load, including overlap with partial
+arguments.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-master/src/mapping.rs", "python/schedr/runner/task.py"]
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "Releases carry notes, wheels, checksums and attestations"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+Release notes come from the version section of `CHANGELOG.md`; wheels and `SHA256SUMS`
+are attached to the GitHub Release. Each wheel has provenance attestation; there is no sdist.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

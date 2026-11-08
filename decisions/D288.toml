@@ -1,0 +1,11 @@
+title = "Pending questions appear in the UI, CLI and notifications"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "human-in-the-loop"
+summary = '''
+The UI has a Waiting for you list, badge and task-panel answer form; the CLI provides `schedr runs answer`.
+A `WAITING_FOR_ANSWER` notification is sent through configured channels, with email linking to the task.
+'''
+history = "PROJECT.md: Human in the loop (M6)"
+checked = 2026-11-08

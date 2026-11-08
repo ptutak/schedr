@@ -1,0 +1,15 @@
+title = "Mapped task state follows its instances"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "outcomes"
+summary = '''
+An exhausted instance failure or lane-upstream failure immediately ends the mapped task and cancels
+its other instances. Running instances are stopped; late results are ignored and their outputs are
+not stored. The task is failed, or upstream_failed when only lanes failed; otherwise its run_if
+evaluates all finished instances. NONE_FAILED skips only when all instances skipped; ALL_SUCCEEDED
+skips when any skipped; zero instances succeed with [].
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-db/src/instances.rs", "crates/schedr-master/src/execution.rs", "crates/schedr-master/src/mapping.rs"]
+checked = 2026-11-08

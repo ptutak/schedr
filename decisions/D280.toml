@@ -1,0 +1,14 @@
+title = "A disconnected or frozen worker can cause a task to run twice"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+A disconnected worker stops only `cleanup_anywhere` tasks at its lease; other tasks may overlap
+retries elsewhere until reconnect. A frozen worker may permit any task to overlap, including
+`cleanup_anywhere` tasks outlasting the lease and cleanup move wait. Chaos scenarios record these
+permitted overlaps as `tries_run_twice` and fail on all others. Tasks should be idempotent.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8z"
+checked = 2026-11-08

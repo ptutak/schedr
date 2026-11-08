@@ -1,0 +1,12 @@
+title = "Inline server timings use the hidden configuration"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+Hidden timings include Vault renewal waits, a stopped group’s poll, and connection-test cancel grace.
+They also include listeners’ retry after a failed accept.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8u"
+checked = 2026-11-08

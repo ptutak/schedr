@@ -1,0 +1,12 @@
+title = "Each parsed file records its worker and parse time"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+Each parse_files row records the worker_id and parsed_at for that file.
+A retry records its own worker and time.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["crates/schedr-db/src/dags.rs", "crates/schedr-master/src/discovery.rs"]
+checked = 2026-11-08

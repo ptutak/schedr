@@ -1,0 +1,13 @@
+title = "Repeatedly blocking wait steps and triggers are switched off"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Consecutive blocking strikes switch off a sensor or trigger after `[watchers] switch_off_after`.
+Success clears strikes; a command or new code switches it on, with one chance for new code.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a3"
+code = ["crates/schedr-agent/src/attempt.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs"]
+checked = 2026-11-08

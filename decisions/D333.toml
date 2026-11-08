@@ -1,0 +1,13 @@
+title = "Worker pass_env reaches parsing and the fork server"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+Parsing and the fork server receive all of [worker] pass_env, as tasks do. DAG code
+can read these variables at parse time. pass_env must not contain secrets; parse
+tracebacks are not masked.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.11L"
+checked = 2026-11-08

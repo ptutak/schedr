@@ -1,0 +1,13 @@
+title = "A disconnected worker stops tasks with `cleanup_anywhere`"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+After a worker lease without word from the master, the worker stops its tasks with `cleanup_anywhere`.
+Other tasks are not stopped by this rule.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b3"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/status.rs"]
+checked = 2026-11-08

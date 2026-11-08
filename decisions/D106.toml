@@ -1,0 +1,12 @@
+title = "Reject NUL in stored output strings and dictionary keys"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+The runner fails an attempt when an output string or dictionary key contains NUL.
+The error identifies the value at encoding time.
+'''
+history = "PROJECT.md: Output serialization"
+step = "M4.3e"
+checked = 2026-11-08

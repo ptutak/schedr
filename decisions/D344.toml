@@ -1,0 +1,12 @@
+title = "A timed-out wait step is grey and leaves its run successful"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+A running wait step pulses unless reduced motion is requested; a failed one is red.
+A timeout is grey and says `TimedOut`, and the run stays successful.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a4"
+checked = 2026-11-08

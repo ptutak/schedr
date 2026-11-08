@@ -1,0 +1,15 @@
+title = "SQL supports MariaDB URLs"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+SQL accepts mariadb:// through PyMySQL as it does mysql://. MariaDB 11.8 integration and CI
+tests cover login, TLS modes and both vendors' clients. Documentation states that MariaDB
+11.4+'s self-made certificate cannot pass verify-*; use a real certificate or
+sslmode=require.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["python/schedr/connection_types.py"]
+checked = 2026-11-08

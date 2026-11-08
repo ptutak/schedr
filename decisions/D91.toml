@@ -1,0 +1,12 @@
+title = "Concurrency waiting reasons name the limit and value"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "observability"
+summary = '''
+A waiting reason names the reached concurrency limit and its value.
+`master_tasks_waiting` labels these waits by the limit’s name.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-master/src/limits.rs"]
+checked = 2026-11-08

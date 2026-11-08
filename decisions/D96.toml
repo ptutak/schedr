@@ -1,0 +1,13 @@
+title = "The DAG page shows concurrency limits with their current counts"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The DAG page shows each configured concurrency limit and its current count.
+The counts come from the master and appear beside the waiting reasons.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.4"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-ui/src/pages.rs"]
+checked = 2026-11-08

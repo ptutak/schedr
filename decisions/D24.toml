@@ -1,0 +1,11 @@
+title = "The UI has no sessions of its own"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Basic authentication uses the browser’s credentials and proxy-header authentication uses the proxy’s session.
+UI POST actions require matching `Origin` or `Sec-Fetch-Site` information.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

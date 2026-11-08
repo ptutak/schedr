@@ -1,0 +1,13 @@
+title = "A missing script root is a parse import error"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+A parsing worker reports an import error naming a script root it lacks.
+Workers parsing DAGs need the script roots those DAGs use.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9b"
+code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-model/src/runner.rs"]
+checked = 2026-11-08

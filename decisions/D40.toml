@@ -1,0 +1,14 @@
+title = "UI proof follows the deployment TLS mode"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+Distributed app mode uses mTLS on the webserver’s UI port. Mesh proof uses that port over HTTP with
+`ui_port_in_mesh`, Istio authorization, a UI account shared with no other role, and a DENY policy
+excluding other callers. Standalones, mesh deployments without that policy, and shared-account
+setups use a token.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["charts/schedr/values.yaml"]
+checked = 2026-11-08

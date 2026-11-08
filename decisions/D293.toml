@@ -1,0 +1,15 @@
+title = "The agent reads and checks schedr.toml"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+The Rust agent checks every `schedr.toml` key and builds standalone jobs as one-task DAGs; Python does not
+read TOML. During parsing, `ScriptOperator` requests checked declarations over the runner socket. Outside
+parsing it only records the reference; `schedr dags check` resolves references through
+`SCHEDR_SCRIPT_PATH`.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9a"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

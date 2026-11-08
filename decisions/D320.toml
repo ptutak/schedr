@@ -1,0 +1,15 @@
+title = "A watcher host serves one interpreter and code set"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+A watcher host holds one interpreter and set of root copies; new code uses a new host. Pokes move
+between calls after successful preparation, preserving deadline and retries, or remain on old code
+with a logged reason; full-control sensors remain until completion. Old hosts exit when empty, and
+memory_budget covers all worker hosts.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a2"
+code = ["crates/schedr-agent/src/watchers.rs", "crates/schedr-model/src/runner.rs", "python/schedr/runner/watchers.py"]
+checked = 2026-11-08

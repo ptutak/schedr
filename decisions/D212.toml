@@ -1,0 +1,12 @@
+title = "Every connection type works in the base image"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+The base image includes every connection type's Python client and command-line tools.
+`schedr[connections]` installs all Python clients outside the image.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7e"
+checked = 2026-11-08

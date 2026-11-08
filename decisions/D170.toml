@@ -1,0 +1,12 @@
+title = "Secret export writes one JSON file per secret"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+`schedr secrets export --to DIR` writes each secret to `DIR/<path>.json` with mode 0600.
+It refuses a nonempty directory and prints no secret values to the terminal.
+'''
+history = "PROJECT.md: Secret storage"
+code = ["crates/schedr/src/secrets.rs"]
+checked = 2026-11-08

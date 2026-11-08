@@ -1,0 +1,13 @@
+title = "Release candidates publish to TestPyPI"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+A `vX.Y.ZrcN` tag publishes to TestPyPI using its own trusted publisher.
+The published wheel is installed and smoke-tested; final tags publish to PyPI.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

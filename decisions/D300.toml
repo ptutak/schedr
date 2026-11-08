@@ -1,0 +1,13 @@
+title = "A standalone job's task has the job's name"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+A standalone job's one task uses the job name as its task ID.
+Job names contain only letters, digits, `_` and `-`; invalid names produce an import error.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9a"
+code = ["crates/schedr-agent/src/jobs.rs"]
+checked = 2026-11-08

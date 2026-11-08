@@ -122,6 +122,13 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 - **When I reject or question a proposal,** rework it; don't defend it. When I ask a question
   in the middle of a choice, answer it, then ask again.
 - **Record "Not chosen: …"** for alternatives that were seriously considered.
+- **Record each decision the moment it is taken** (the `project-docs` skill's routine): its
+  `decisions/D<n>.toml`, a dated entry in `PROJECT.md`'s Journal with the reasons and "Not
+  chosen", and the topic's "Current" in `design/<topic>.md`; a replaced one marked
+  `superseded`. `make decisions-check` catches one named but not recorded.
+- **A decision's summary is an index, not the decision:** before building options or code on
+  one, read its full text where its `history` points. Before saying how something behaves,
+  read the code (the topic's "Where in code") or run it, and say which.
 - Small naming and formatting questions get a few concrete examples, not essays.
 
 ## Tests

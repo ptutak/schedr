@@ -1,0 +1,13 @@
+title = "Async tasks and watcher hosts use uvloop whenever installed"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "async-tasks"
+summary = '''
+The interpreter uses uvloop when it can import it; otherwise it uses asyncio.
+Each async attempt logs its loop, and schedr[uvloop] offers an installation extra.
+'''
+history = "PROJECT.md: Async task functions"
+step = "M4.10"
+code = ["python/schedr/runner/coroutines.py"]
+checked = 2026-11-08

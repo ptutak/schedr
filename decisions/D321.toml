@@ -1,0 +1,13 @@
+title = "A wait step keeps its deadline across retries and moves"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+The max_wait clock starts at the instance’s first start and continues across retries and moves.
+A wait that runs out of time ends with TimedOut, including while waiting to run again.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a4"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

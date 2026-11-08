@@ -1,0 +1,12 @@
+title = "Triggers have endpoints, manual event runs and test helpers"
+date = 2026-11-07
+by = "user"
+status = "active"
+topic = "triggers"
+summary = '''
+Trigger API and CLI endpoints show, restart and switch on triggers and list events.
+Manual runs supply an event; test helpers and the DAG page expose trigger events.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11b"
+checked = 2026-11-08

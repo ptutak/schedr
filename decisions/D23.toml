@@ -1,0 +1,12 @@
+title = "The live log tail reads the worker range endpoint"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "task-logs"
+summary = '''
+The server reads new log bytes from the worker’s range endpoint using `from`.
+Since D175 the browser requests each part while the attempt runs.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["crates/schedr-ui/src/live.rs"]
+checked = 2026-11-08

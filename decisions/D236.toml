@@ -1,0 +1,13 @@
+title = "Fixed timings are passed in per-crate structs"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+M4.8u passes hidden timings through each crate's own struct with defaults in the
+server, worker and webserver, including `auth_remembered` and `auth_recheck`. The
+client, `task-ctx` and CLI do not load this configuration.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8u"
+checked = 2026-11-08

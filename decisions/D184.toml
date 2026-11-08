@@ -1,0 +1,14 @@
+title = "Commands receive connections at startup or through task-ctx"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A `CommandOperator` connection dict supplies prefixed variables and agent-written files at startup.
+The list form allows `task-ctx connection NAME --env P` to supply them at runtime.
+Files are mode 0600 and removed when the attempt ends.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/connection_env.rs", "crates/schedr-agent/src/secrets.rs"]
+checked = 2026-11-08

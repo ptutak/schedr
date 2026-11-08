@@ -1,0 +1,11 @@
+title = "Build the documentation as part of releases"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+The wheel and image CI job waits for the strict documentation build.
+`make image` and `make server-image` build the docs first.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

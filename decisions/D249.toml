@@ -1,0 +1,12 @@
+title = "A cleanup can outlast the pod grace period"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A cleanup continues until the pod is killed if it outlasts the grace period.
+Outside Kubernetes, the agent waits for it.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b"
+checked = 2026-11-08

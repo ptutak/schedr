@@ -1,0 +1,13 @@
+title = "DAG files use ordinary Python imports in separate processes"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+Each parsed file has its own process and ordinary module name; tasks import it the same way.
+Python import behavior applies, and dots in file or folder names are refused.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.11L"
+code = ["crates/schedr-agent/src/parse.rs", "crates/schedr/src/local.rs", "python/schedr/runner/parse.py"]
+checked = 2026-11-08

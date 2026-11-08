@@ -1,0 +1,15 @@
+title = "Watcher hosts stop when their last watcher ends"
+date = 2026-11-06
+by = "claude"
+status = "active"
+topic = "wait-steps"
+summary = '''
+A watcher host is spawned, never forked, and stops when its last watcher ends. Successful DAG
+imports are reused within the host; failed imports are retried for the next attempt. Its working
+folder is the worker log folder and its environment is the allow-list plus `pass_env`; wait steps
+obtain run values from `dag_ctx` and `task_ctx` and use absolute paths.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a2"
+code = ["crates/schedr-agent/src/watchers.rs"]
+checked = 2026-11-08

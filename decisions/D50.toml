@@ -1,0 +1,11 @@
+title = "Limited tasks start through schedr task-exec"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "workers"
+summary = '''
+The internal `schedr task-exec` sets the data limit before executing a limited command.
+A fork-server child sets its own limit before running user code.
+'''
+history = "PROJECT.md: Worker memory protection and crash recovery"
+checked = 2026-11-08

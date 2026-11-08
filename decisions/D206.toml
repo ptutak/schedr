@@ -1,0 +1,12 @@
+title = "Mongo users log in using the URI's authentication database"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Mongo login uses the URI's `authSource`, then its path database, then `admin`.
+`database=` selects only the database the task gets, in Python and tools' files.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7d"
+checked = 2026-11-08

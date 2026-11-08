@@ -1,0 +1,11 @@
+title = "Approval and question answers have typed outputs"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "human-in-the-loop"
+summary = '''
+`approve` produces a yes-or-no answer; `ask` accepts a `Literal`, `Enum`, dataclass or pydantic model.
+The answer is the step's output and the master validates it against its schema.
+'''
+history = "PROJECT.md: Human in the loop (M6)"
+checked = 2026-11-08

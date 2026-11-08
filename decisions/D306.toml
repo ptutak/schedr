@@ -1,0 +1,13 @@
+title = "ScriptOperator references are checked during parsing"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+Outside a parse, `ScriptOperator` only records its reference.
+`schedr dags check` checks references against the configured script roots in `SCHEDR_SCRIPT_PATH`.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9b"
+code = ["python/schedr/operators.py"]
+checked = 2026-11-08

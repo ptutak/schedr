@@ -1,0 +1,16 @@
+title = "Each context caller sends its own socket end"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+Command-task processes inherit the datagram channel named by `SCHEDR_CTX_FD`; each caller passes one
+end of a fresh stream socket pair through `SCM_RIGHTS` and uses its own connection. It speaks
+length-prefixed JSON, beginning with protocol `hello`. The agent serves at most 64 connections until
+the attempt ends and rejects later calls; malformed descriptor messages are dropped and their
+descriptors closed. Linux and macOS are supported.
+'''
+history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+step = "M4.5b"
+code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs"]
+checked = 2026-11-08

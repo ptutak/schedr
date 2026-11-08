@@ -1,0 +1,12 @@
+title = "A failed target gives a routable `Failed` outcome"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+A failed, cancelled or skipped target gives `Failed`, including its state.
+The DAG can route it with `.on(Failed)`; otherwise the operator task fails.
+'''
+history = "PROJECT.md: Dependencies between DAGs"
+step = "M4.12a"
+checked = 2026-11-08

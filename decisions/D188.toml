@@ -1,0 +1,15 @@
+title = "SQL and Mongo credentials may be separate or URL encoded"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+SQL and Mongo accept separate user/password values passed to drivers as keywords. URL t-string
+substitutions are percent-encoded, and their encoded forms are masked. Structural values such as a whole
+URL or host:port must be supplied whole. Credentials supplied both separately and in the URL are refused
+at load.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b1"
+code = ["crates/schedr-agent/src/mask.rs", "crates/schedr-agent/src/mask/tests.rs", "crates/schedr-agent/src/render/tests.rs"]
+checked = 2026-11-08

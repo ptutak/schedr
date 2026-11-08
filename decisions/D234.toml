@@ -1,0 +1,12 @@
+title = "Hidden timings cannot be zero"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+Every hidden timing must be nonzero.
+A zero hidden timing is refused.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8t"
+checked = 2026-11-08

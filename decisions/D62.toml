@@ -1,0 +1,11 @@
+title = "Parse results stream one file per message"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "protocol"
+summary = '''
+`UploadParseResult` streams a header followed by one message per file.
+An oversized file is uploaded as `ParseResultTooLarge`; uploads run independently of heartbeats.
+'''
+history = "PROJECT.md: Master–worker protocol"
+checked = 2026-11-08

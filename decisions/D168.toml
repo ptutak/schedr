@@ -1,0 +1,13 @@
+title = "Failed on-demand secret reads can set the attempt error kind"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+A failed on-demand secret read fails the CLI call or raises in Python and is remembered.
+If the attempt fails without its own error kind, the secret’s kind fills it; success remains success.
+'''
+history = "PROJECT.md: Secret storage"
+step = "M4.6b"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/agent/tests.rs", "crates/schedr-agent/src/secrets.rs"]
+checked = 2026-11-08

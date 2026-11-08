@@ -1,0 +1,12 @@
+title = "Concurrency limits have integration and stress coverage"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+An integration test samples active counts with many tasks and tight limits.
+M4.4 also writes a stress scenario to run when the user next runs the stress suite.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.4"
+checked = 2026-11-08

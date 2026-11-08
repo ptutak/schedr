@@ -1,0 +1,16 @@
+title = "Eighteen fixed timings leave the configuration"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+Removed configuration keys: `tick_interval`, `heartbeat_interval`, `lease_timeout`, `lease_period`,
+`read_back_window`, `read_back_interval`, `query_timeout`, `loop_stall_timeout`, `set_aside`,
+`listen_retry`, `quiet_dag_after`, `quiet_dag_wake_ahead`, `quiet_dag_full_pass_interval`,
+`refresh_interval`, `worker_connect_timeout`, `drain_report_period`, `memory_check_interval`,
+`handshake_timeout`. Setting one in a file or through `SCHEDR_CONFIG__*` fails as an unknown key;
+there is no migration.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8t"
+checked = 2026-11-08

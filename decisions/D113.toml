@@ -1,0 +1,15 @@
+title = "A worker's move to new code or a revert makes that hash newest"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+A worker’s move to an unseen hash or one recorded before the hash it left makes that hash newest;
+moving to a later-recorded hash is catching up. Compare with the worker’s previous report, including
+across reconnects. An unseen hash is newest on first report; a revert while the master was down is
+not detected as a switch.
+'''
+history = "PROJECT.md: Code versions and change detection"
+step = "M4.3e"
+code = ["crates/schedr-master/src/discovery.rs"]
+checked = 2026-11-08

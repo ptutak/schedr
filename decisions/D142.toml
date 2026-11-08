@@ -1,0 +1,12 @@
+title = "Trigger-time parameter values are masked"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+Trigger-time values are masked in refusals, run views, errors and logs; stored parameters
+and defaults are shown masked. Code-authored text is shown as written where code is shown.
+'''
+history = "PROJECT.md: Run parameters and the DAG context"
+step = "M4.5a"
+checked = 2026-11-08

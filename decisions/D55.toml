@@ -1,0 +1,12 @@
+title = "An unchosen branch edge counts as skipped"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "outcomes"
+summary = '''
+A branch returns downstream task handles; each unchosen selection edge counts as skipped.
+The target’s trigger rule considers its other edges, and an empty selection is allowed.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.2a"
+checked = 2026-11-08

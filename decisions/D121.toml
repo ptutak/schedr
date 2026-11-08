@@ -1,0 +1,13 @@
+title = "Call the page Deployments"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The page is named Deployments, matching the UI and its deployments configuration.
+It shows the deployments available to the UI.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4b"
+code = ["crates/schedr-ui/src/deployments.rs"]
+checked = 2026-11-08

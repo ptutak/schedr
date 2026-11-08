@@ -1,0 +1,13 @@
+title = "Script resources reject contradictory declarations"
+date = 2026-11-05
+by = "user"
+status = "active"
+topic = "scripts"
+summary = '''
+ScriptResource and cleanup_script reject declarations with outcomes; cleanup_script also rejects cleanup.
+A ScriptResource setup retains its declared cleanup for a partly failed setup.
+'''
+history = "PROJECT.md: Plain script delivery"
+step = "M4.9c"
+code = ["python/schedr/operators.py"]
+checked = 2026-11-08

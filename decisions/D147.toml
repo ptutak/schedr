@@ -1,0 +1,15 @@
+title = "The inherited descriptor uses unsafe code in schedr-fd"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "task-context"
+summary = '''
+Only `schedr-fd` relaxes `unsafe_code` from `forbid` to `deny`, permitting its single unsafe site through
+`#[expect]`; every other crate retains `forbid`. It borrows the inherited descriptor solely to duplicate it
+close-on-exec, then validates the copy as a Unix datagram socket. It never owns or closes the inherited
+descriptor.
+'''
+history = "PROJECT.md: In-task CLI: `schedr task-ctx` and `schedr dag-ctx`"
+step = "M4.5b"
+code = ["crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs"]
+checked = 2026-11-08

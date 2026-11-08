@@ -1,0 +1,15 @@
+title = "Pydantic dates interoperate with schedr date types"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "serialization"
+summary = '''
+Pydantic date/datetime/duration text and schedr’s corresponding tagged types fit each other both
+ways; the runner converts through Pydantic’s parsing and JSON validation. Plain strings do not fit
+date types without the appropriate schema format. A model’s naive datetime stays naive when read,
+but schedr refuses it when subsequently storing it as its own datetime, advising `AwareDatetime` or
+an explicit zone.
+'''
+history = "PROJECT.md: Output serialization"
+code = ["python/schedr/_serialization/codec.py", "python/schedr/_serialization/models.py", "python/schedr/_serialization/schemas.py"]
+checked = 2026-11-08

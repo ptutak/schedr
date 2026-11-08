@@ -1,7 +1,10 @@
 # schedr: Project Decisions
 
-This file records what has been decided about schedr. Open questions are listed at the end
-and move up into the decided sections once settled.
+The history of schedr's design: how it got here, and why. Up to decision 366 (2026-11-08) it is
+organized by topic, each decision with its reasons and "Not chosen" in its section; from then on
+the **Journal** at the end holds dated entries, appended, never rewritten (decision 367). What
+holds **now** is in `design/<topic>.md`; every decision has a file `decisions/D<n>.toml`, indexed
+in `DECISIONS.md`, whose `history` says where its text is here. Start a session from `STATUS.md`.
 
 ## Goal
 
@@ -9884,3 +9887,29 @@ Questions still open. Once decided, they move into the sections above. Deliberat
 items ("possibly later") are noted where they belong.
 
 Nothing is open at the moment.
+
+## Journal
+
+Dated entries from 2026-11-08 on, newest last: each decision taken, with the question, the options,
+the choice, why, and "Not chosen". A decision's file (`decisions/D<n>.toml`) points here.
+
+### 2026-11-08: how the project keeps its documents (decision 367)
+
+- **Question:** the agent kept making wrong assumptions as the project grew (PROJECT.md 776 KB, about
+  200k tokens, read only in pieces; NEXT_SESSION.md 789 lines; a decision left unrecorded; a claim
+  about `schedr dags test` from memory that was false, and a decision built on it). How should the
+  project's knowledge be organized for minimal reads, easy tracking of changes and the current stage?
+- **Chosen (the user's, option A, all phases before M4.12a):** each question gets one small file:
+  `STATUS.md` (where things stand, rewritten, at most 60 lines), `design/<topic>.md` (how a part
+  works now: Current, Decisions, Where in code, Open), `decisions/D<n>.toml` (one per decision:
+  status, topic, a short summary, where its reasons are) with a generated `DECISIONS.md`, checked by
+  `scripts/decisions.py` in `make check`; and **PROJECT.md kept as the history** (the user: humans
+  think forward as a continuum): its topic part unchanged up to decision 366, then this Journal.
+  Migrated in four phases, every decision's file checked against the unclipped text (a side note:
+  a sample would let wrong summaries become the agent's first read). The layout, its tooling and
+  routines are kept for every project in the `project-docs` skill (the user's ask), with where the
+  skills live and how they are kept.
+- **Not chosen:** B, keeping PROJECT.md whole with only an index of decisions and STATUS.md (its
+  600-900-line sections stay, amendments keep piling up inside paragraphs); C, only STATUS.md and
+  the rule to check code (the decisions stay hard to find); splitting PROJECT.md up by topic or
+  reordering it by date (the continuum lost, or meaning shifted by cutting paragraphs apart).

@@ -1,0 +1,13 @@
+title = "Release images use version and minor tags"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+Final release images receive `X.Y.Z` and `X.Y` tags.
+They do not receive a `latest` tag.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

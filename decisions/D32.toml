@@ -1,0 +1,11 @@
+title = "Merge runs from all deployments into one list"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The runs list merges deployments and shows a Deployment column when needed.
+A shared cursor pages the list and filters apply to each deployment.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

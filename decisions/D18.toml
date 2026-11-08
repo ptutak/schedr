@@ -1,0 +1,12 @@
+title = "Spawned process usage is read before the process is reaped"
+date = 2026-10-27
+by = "user"
+status = "active"
+topic = "task-processes"
+summary = '''
+The agent reads CPU time and major faults from the spawned process’s zombie.
+Peak RSS and context switches are null; unreadable usage is null.
+'''
+history = "PROJECT.md: How Python tasks are started"
+code = ["crates/schedr-agent/src/process.rs", "crates/schedr-agent/src/usage.rs"]
+checked = 2026-11-08

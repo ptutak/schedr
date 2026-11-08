@@ -1,0 +1,11 @@
+title = "A fake for API calls in local runs was dropped"
+date = 2026-11-08
+by = "user"
+status = "dropped"
+topic = "testing-dags"
+summary = '''
+The proposed fake for `schedr dags test` and `run_dag` is dropped.
+These runs use their local standalone master and temporary database for API calls.
+'''
+history = "PROJECT.md: Sensors and triggers"
+checked = 2026-11-08

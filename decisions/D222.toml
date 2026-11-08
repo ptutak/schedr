@@ -1,0 +1,13 @@
+title = "Handles are masked before the journal and master"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+Handles are masked like outputs before reaching the worker journal or master, with a log warning.
+A cleanup needing a secret declares it; resource values are masked as outputs.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-agent/src/handles.rs"]
+checked = 2026-11-08

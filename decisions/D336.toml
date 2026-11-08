@@ -1,0 +1,16 @@
+title = "A wait step cannot start a process or thread"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+At DAG definition, process and thread creation in the author's code, including its own helpers and
+classes, is rejected. Runtime process creation is refused in inherited step contexts, except for the
+standard-library `platform`, `ctypes.util` and `uuid` helpers; library threads and
+`asyncio.to_thread` are allowed. This is not a sandbox: C code can bypass enforcement. Leftover
+asyncio tasks are cancelled and awaited.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a2"
+code = ["python/schedr/_wait_rules.py", "python/schedr/runner/waiting.py", "crates/schedr-agent/src/watchers.rs"]
+checked = 2026-11-08

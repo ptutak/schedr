@@ -1,0 +1,14 @@
+title = "DAG parse concurrency defaults to four files"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+[dags] parse_concurrency defaults to 4 concurrent spawned or forked parses, capped at the
+cores the agent may use; 1 parses sequentially. dags check uses it and forks when the
+interpreter has a fork server. Parsing consumes no task slots; each process has its own
+memory budget.
+'''
+history = "PROJECT.md: DAG code delivery"
+step = "M4.11L"
+checked = 2026-11-08

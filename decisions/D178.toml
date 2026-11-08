@@ -1,0 +1,12 @@
+title = "secrets= accepts strings and placeholders"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "secrets"
+summary = '''
+`secrets=` accepts plain path or path-and-key strings.
+It also accepts whole-secret and key placeholders.
+'''
+history = "PROJECT.md: Secret storage"
+step = "M4.6e"
+checked = 2026-11-08

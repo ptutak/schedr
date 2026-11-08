@@ -1,0 +1,14 @@
+title = "SQL verifies TLS and server identity by default"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+SQL uses libpq `sslmode` vocabulary for Postgres and MySQL, defaulting to `verify-full`.
+Both accept a PEM `ca_cert` or use system CAs; MySQL URL keys outside this vocabulary are refused.
+A server without TLS requires an explicit `sslmode=disable`.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b1"
+code = ["python/schedr/connection_types.py"]
+checked = 2026-11-08

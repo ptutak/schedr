@@ -1,0 +1,12 @@
+title = "The connections demo shows dev and prod deployments"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Dev and prod use the same DAG folder and separate secrets for their databases and users.
+One federated `schedr ui` shows both deployments.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7d"
+checked = 2026-11-08

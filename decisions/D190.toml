@@ -1,0 +1,13 @@
+title = "Command connection secrets go to files and prefixed variables"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Connection secrets go to the tool's file and prefixed script variables, masked in logs.
+Passwords are moved out of URL variables into the files.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b2"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/connection_env.rs", "crates/schedr-agent/src/secrets.rs"]
+checked = 2026-11-08

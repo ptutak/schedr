@@ -1,0 +1,13 @@
+title = "A cleanup already running continues after disconnection"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A cleanup under way when the master becomes unavailable keeps running.
+It may overlap a cleanup moved to another worker; the docs say so.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8b3"
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-08

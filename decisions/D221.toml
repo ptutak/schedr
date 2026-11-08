@@ -1,0 +1,13 @@
+title = "Cleanup anywhere waits when no worker can take it"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A `cleanup_anywhere` cleanup waits when no worker can take it and is shown as `unschedulable`.
+The task's retry waits too.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8"
+code = ["crates/schedr-master/src/dispatch/tests.rs"]
+checked = 2026-11-08

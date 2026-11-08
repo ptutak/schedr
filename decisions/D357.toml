@@ -1,0 +1,11 @@
+title = "Build the trigger operator and backfill in two parts"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "chained-runs"
+summary = '''
+M4.12a builds `TriggerDagOperator`.
+M4.12b builds backfill.
+'''
+history = "PROJECT.md: Dependencies between DAGs"
+checked = 2026-11-08

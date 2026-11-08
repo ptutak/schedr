@@ -1,0 +1,13 @@
+title = "A release runs CI on its tag and publishes CI wheels"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+The release workflow calls all of CI on the release tag.
+It publishes the wheels produced by that CI run.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["scripts/release.py"]
+checked = 2026-11-08

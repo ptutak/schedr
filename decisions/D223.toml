@@ -1,0 +1,13 @@
+title = "Calling a setup twice in one DAG is a parse error"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "cleanup"
+summary = '''
+A setup can be called only once in a DAG.
+Calling it twice is a parse error.
+'''
+history = "PROJECT.md: Cleanup and resources"
+step = "M4.8c1"
+code = ["python/schedr/_build.py"]
+checked = 2026-11-08

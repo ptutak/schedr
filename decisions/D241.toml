@@ -1,0 +1,13 @@
+title = "Some timings remain constants"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "configuration"
+summary = '''
+The production gauge-refresh limit is half of `loop_stall_timeout`.
+Migration-connection timings remain fixed, without `query_timeout`; client,
+`task-ctx` and CLI timings also remain constants.
+'''
+history = "PROJECT.md: Timings: public keys and hidden ones"
+step = "M4.8u"
+checked = 2026-11-08

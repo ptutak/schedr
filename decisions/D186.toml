@@ -1,0 +1,12 @@
+title = "M4.7b builds typed connections and command access in two steps"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+M4.7b1 builds the five typed connections, Python clients, checks and extras.
+M4.7b2 builds command variables and files, including JSON and custom connections.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7b1"
+checked = 2026-11-08

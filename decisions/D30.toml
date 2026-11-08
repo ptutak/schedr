@@ -1,0 +1,11 @@
+title = "The run graph flows from top to bottom"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The run graph places layers down the page.
+Task names have the full width available.
+'''
+history = "PROJECT.md: Web UI and CLI"
+checked = 2026-11-08

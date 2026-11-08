@@ -1,0 +1,14 @@
+title = "Live UI pages share one stream per browser"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+A SharedWorker distributes the deployments' changes to live pages, with replay or refresh.
+Without SharedWorker each page has its own stream, released after 10 seconds hidden.
+Running attempts' log tails are polled.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.6f"
+code = ["crates/schedr-ui/src/assets.rs", "crates/schedr-ui/src/live.rs"]
+checked = 2026-11-08

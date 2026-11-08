@@ -1,0 +1,15 @@
+title = "Type checkers read task calls as their values"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "python-api"
+summary = '''
+DAG calls produce runtime references but are typed as their declared values; data-free calls use
+handle types, and context fields are typed as values. `schedr.Data` and `schedr.pydantic.Model`
+provide typed DAG operations; plain outcome classes remain allowed with `schedr.on` and a
+`TypingHint` warning shown by `dags check` and pytest. `make lint` checks example DAGs and typing
+fixtures with mypy strict and basedpyright; graph/value misuse and mapped arguments still require
+loading-time checks.
+'''
+history = "PROJECT.md: Native API"
+checked = 2026-11-08

@@ -1,0 +1,13 @@
+title = "`EventNamed` waits for events posted through the API"
+date = 2026-11-08
+by = "user"
+status = "active"
+topic = "triggers"
+summary = '''
+Named events can trigger DAGs or be awaited by nodes, sensors and trigger functions.
+Waits match events posted since run creation; triggers start at most one run per name and key.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11e"
+code = ["crates/schedr-api/src/named_events.rs", "crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs"]
+checked = 2026-11-08

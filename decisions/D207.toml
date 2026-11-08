@@ -1,0 +1,14 @@
+title = "The DAG page has connection Check and Test buttons"
+date = 2026-11-04
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+The DAG page lists its declared connections, their names, types, tasks using them and
+results. Check all renders on a worker and checks secret availability without contacting
+services. Each row's Test opens the connection and runs its check, making a real login.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7e"
+code = ["crates/schedr-ui/src/connections.rs", "crates/schedr-ui/src/pages.rs"]
+checked = 2026-11-08

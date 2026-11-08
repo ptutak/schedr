@@ -1,0 +1,11 @@
+title = "TaskResult output is typed as object"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "testing-dags"
+summary = '''
+`run_dag` exposes `TaskResult.output` as `object`, so a test narrows it before using fields.
+`output_json` uses the `Json` type.
+'''
+history = "PROJECT.md: Python"
+checked = 2026-11-08

@@ -21,11 +21,14 @@ names and versions to the project; keep the principles. How to work with the use
 
 ```
 README.md               # what it is, how to install and run
-PROJECT.md              # decision log (see Project documents)
+STATUS.md               # where things stand, what's next (rewritten each session; see Project documents)
 PLAN.md                 # milestones and steps
+design/<topic>.md       # how each part works now; design/README.md lists the topics
+decisions/D<n>.toml     # one file per decision; DECISIONS.md generated from them
+PROJECT.md              # the history: how the project got here, and why (dated entries appended)
 BUGS.md                 # open bugs, generated from bugs/ (one TOML file per bug)
-NEXT_SESSION.md         # hand-off for the next working session
-AI_SETUP.md, AI_INSTRUCTIONS.md   # the Grok and Codex skills live in ~/.claude/skills, not here
+history/                # old hand-offs, archived unchanged
+AI_SETUP.md, AI_INSTRUCTIONS.md   # the skills (grok, codex, project-docs) live in ~/.claude/skills, not here
 Makefile                # every task has a target; `make help` lists them
 .pre-commit-config.yaml
 .github/workflows/ci.yml
@@ -291,7 +294,8 @@ Separate jobs. The ones that run on this machine each have a make target:
   How they work together is in `AI_INSTRUCTIONS.md`, Working with a second agent, and in
   each skill's `SKILL.md`.
 - **Set up once per machine,** not per repository. Each skill is a folder with its own private
-  git repository:
+  git repository (the `project-docs` skill, `ptutak/project-docs-skill`, says where every skill
+  lives and how they are kept):
 
   | | Grok | Codex |
   |---|---|---|
@@ -339,25 +343,35 @@ Separate jobs. The ones that run on this machine each have a make target:
 
 ## Project documents
 
-- **`PROJECT.md`, the decision log:** what is decided, by topic; each decision with its
-  reasons and **"Not chosen: …"** alternatives; open questions at the end, moved up when
-  decided.
-- **`PLAN.md`:** milestones, each with a "done when"; steps in dependency order, each with
-  its own "done when"; a status line when a milestone is done.
-- **`bugs/` and `BUGS.md`:** open bugs with stable IDs (B1, B2, …, never reused), one TOML
-  file each, `bugs/B<n>.toml`: a title, a rating (severity critical/high/medium/low ×
-  probability likely/possible/rare, and a kind: security, data, correctness, reliability,
-  performance, usability, tests), a one-line summary, the date found, whether it is only
-  suspected, and the details (found, symptom, repro, cause or suspect, plan) in Markdown.
-  `bugs/README.md` holds the rules and scales, `bugs/next-id` the next free number (fixed
-  bugs' files are gone). `scripts/bugs.py` validates the files and generates `BUGS.md` (the
-  rules, the ranking with security first, then the entries); `make bugs` writes it,
-  `make bugs-check` (in `make check` and CI) fails when a file is invalid or `BUGS.md` is
-  stale, and `scripts/bugs.py new "<title>"` starts a new one. A fix deletes its file in the
-  same commit, with a test that would have caught it. The rule for when bugs are fixed is in
-  `AI_INSTRUCTIONS.md`, Bugs.
-- **`NEXT_SESSION.md`:** where things stand, next steps in order, working rules, environment
-  notes, a short code map; rewritten at the end of a milestone or session.
+The layout, its tooling and the routines are the **`project-docs` skill**'s
+(`~/.claude/skills/project-docs/SKILL.md`; `init.sh <repo>` seeds a new project). In short, each
+question has one small file that answers it, so an agent reads little and never guesses:
+
+| File | Answers | Written |
+|---|---|---|
+| `STATUS.md` | where things stand, what's next, what waits for the user | rewritten at each step's or session's end, at most 60 lines |
+| `design/<topic>.md` | how a part works **now** (Current, Decisions, Where in code, Open) | edited in place, at most ~300 lines |
+| `decisions/D<n>.toml`, `DECISIONS.md` | what was decided, whether it still holds, where its reasons are | one file per decision (status `active`, `superseded`, `dropped`, `untraced`); `DECISIONS.md` generated |
+| `PROJECT.md` | how the project got here and **why**: reasons and "Not chosen" | dated Journal entries appended, never rewritten |
+| `PLAN.md` | milestones, each with a "done when"; steps in dependency order, each with its own | edited; a status line when a milestone is done |
+| `bugs/`, `BUGS.md` | open bugs, ranked | one TOML per bug, generated `BUGS.md` (below) |
+
+- **A decision** is recorded the moment it is taken, in one change: its TOML
+  (`scripts/decisions.py new`), a Journal entry in `PROJECT.md` (the options, the choice, why,
+  "Not chosen"), and the topic's "Current". `make decisions-check` (in `make check` and CI) fails
+  on an invalid file, a gap in the numbers, a decision named anywhere but not recorded, an
+  active decision's code path gone, or a stale `DECISIONS.md`.
+- **Bugs:** open bugs with stable IDs (B1, B2, …, never reused), one TOML file each,
+  `bugs/B<n>.toml`: a title, a rating (severity critical/high/medium/low × probability
+  likely/possible/rare, and a kind: security, data, correctness, reliability, performance,
+  usability, tests), a one-line summary, the date found, whether it is only suspected, and the
+  details (found, symptom, repro, cause or suspect, plan) in Markdown. `bugs/README.md` holds
+  the rules and scales, `bugs/next-id` the next free number (fixed bugs' files are gone).
+  `scripts/bugs.py` validates the files and generates `BUGS.md` (the rules, the ranking with
+  security first, then the entries); `make bugs` writes it, `make bugs-check` (in `make check`
+  and CI) fails when a file is invalid or `BUGS.md` is stale, and `scripts/bugs.py new
+  "<title>"` starts a new one. A fix deletes its file in the same commit, with a test that would
+  have caught it. The rule for when bugs are fixed is in `AI_INSTRUCTIONS.md`, Bugs.
 
 ## Style
 

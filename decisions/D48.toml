@@ -1,0 +1,10 @@
+title = "No record found"
+date = 2026-10-28
+by = "user"
+status = "untraced"
+topic = "development"
+summary = '''
+No record found: the number was skipped or the decision isn't written down.
+'''
+history = "none"
+checked = 2026-11-08

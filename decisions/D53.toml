@@ -1,0 +1,17 @@
+title = "Connections provide sync and async clients and checks"
+date = 2026-10-28
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+Connections use generator functions with secret/literal arguments and missing-secret defaults; tasks
+must declare what they open, and test doubles are supported. `connections check` renders without
+opening; `connections test` runs built-in/custom checks on a worker. One definition supplies
+sync/async clients where supported: HTTP via httpx, Mongo via pymongo, SQL async on Postgres only;
+SSH is sync. Async generators/checks are supported; Airflow reads its own entry format from the same
+storage.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7"
+code = ["crates/schedr-model/src/connection.rs", "python/schedr/connections.py"]
+checked = 2026-11-08

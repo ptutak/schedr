@@ -1,0 +1,15 @@
+title = "Store a command once per idempotency key and person"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "ui-cli"
+summary = '''
+The webserver stores one command per Idempotency-Key and person, returns it for the same request,
+and answers 422 for another command under that key. The CLI creates a key per command; the UI
+creates one when the dialog opens and retains it in the tab until delivery is definite. Both make at
+most three attempts using that key after missing answers or server failures; the UI says unresolved
+delivery ‘may have arrived’.
+'''
+history = "PROJECT.md: Web UI and CLI"
+step = "M4.4"
+checked = 2026-11-08

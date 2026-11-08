@@ -1,0 +1,15 @@
+title = "An outcome-filtered order edge from a mapped task counts each instance"
+date = 2026-10-31
+by = "user"
+status = "active"
+topic = "outcomes"
+summary = '''
+An .on(...) order edge from a mapped task contributes one edge per instance, taken when that
+instance ends with a selected outcome. Downstream run_if combines these with its other edges:
+NONE_FAILED permits any matching instance, ALL_SUCCEEDED requires every instance to match. An empty
+mapping takes the edge.
+'''
+history = "PROJECT.md: Native API"
+step = "M4.3e"
+code = ["crates/schedr-master/src/progress.rs"]
+checked = 2026-11-08

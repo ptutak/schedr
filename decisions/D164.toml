@@ -1,0 +1,12 @@
+title = "The Python image is schedr and the server image is schedr-server"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+`ghcr.io/ptutak/schedr` includes Python and runs standalone or workers.
+`schedr-server` runs the master, webserver and `schedr ui`.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.3"
+checked = 2026-11-08

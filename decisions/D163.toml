@@ -1,0 +1,14 @@
+title = "The committed tree holds the version named by the tag"
+date = 2026-11-02
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+Commit the version before tagging: Cargo uses `X.Y.Z-rcN`, the tag `vX.Y.ZrcN`, and
+the wheel and runner comparison `X.Y.ZrcN`, without a dot after `rc`. The workflow
+checks the committed version rather than rewriting it.
+'''
+history = "PROJECT.md: Packaging and releases"
+step = "R0.1"
+code = ["crates/schedr-model/src/runner.rs", "crates/schedr-model/src/runner/tests.rs", "scripts/release.py"]
+checked = 2026-11-08

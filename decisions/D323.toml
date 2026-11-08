@@ -1,0 +1,14 @@
+title = "Wait steps do not accept task cleanup options"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+Wait steps accept applicable task options, using max_wait instead of timeout, and
+excluding cleanup and its settings, preload and fresh_process. Cleanup options cause
+a parse error directing the author to finally.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a1"
+code = ["python/schedr/sensors.py"]
+checked = 2026-11-08

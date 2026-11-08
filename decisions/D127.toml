@@ -1,0 +1,12 @@
+title = "Reject DAG IDs that are dot or dot-dot"
+date = 2026-11-01
+by = "user"
+status = "active"
+topic = "code-delivery"
+summary = '''
+DAG IDs cannot be `.` or `..`.
+A file defining either ID receives an import error explaining why.
+'''
+history = "PROJECT.md: Web UI and CLI"
+code = ["crates/schedr-model/src/ids.rs"]
+checked = 2026-11-08

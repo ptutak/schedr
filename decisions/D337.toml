@@ -1,0 +1,13 @@
+title = "A wait step owns its `asyncio.to_thread` calls"
+date = 2026-11-06
+by = "user"
+status = "active"
+topic = "wait-steps"
+summary = '''
+`asyncio.to_thread` calls run in their wait step’s context and are tracked.
+Calls still running at cancellation or step end are stopped; a stuck thread ends with its host.
+'''
+history = "PROJECT.md: Sensors and triggers"
+step = "M4.11a2"
+code = ["crates/schedr-model/src/runner.rs", "python/schedr/runner/waiting.py", "python/schedr/runner/watchers.py"]
+checked = 2026-11-08

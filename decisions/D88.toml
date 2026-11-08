@@ -1,0 +1,12 @@
+title = "The master keeps concurrency counts in memory"
+date = 2026-10-30
+by = "user"
+status = "active"
+topic = "assignment"
+summary = '''
+The master counts running, cleaning-up and assigned-not-started instances per DAG and task.
+It rebuilds counts from the database at startup and checks them on assignment.
+'''
+history = "PROJECT.md: Native API"
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/faults.rs"]
+checked = 2026-11-08

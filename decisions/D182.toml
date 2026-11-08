@@ -1,0 +1,12 @@
+title = "An imported file keeps connections when its DAG is invalid"
+date = 2026-11-03
+by = "user"
+status = "active"
+topic = "connections"
+summary = '''
+A file that imports but has an invalid DAG still defines its connections for the root.
+A file that fails to import defines none; the master clears its reported connections.
+'''
+history = "PROJECT.md: Connections"
+step = "M4.7a"
+checked = 2026-11-08
