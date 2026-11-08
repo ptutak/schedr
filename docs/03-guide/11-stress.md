@@ -115,7 +115,7 @@ the busy and quiet gauges at the start and end of each window.
 tell the webserver what changed are part of the schema (see
 [Live updates](12-ui.md#live-updates)). 15 runs scenario 1's load on Postgres, four times,
 each on a database of its own, the triggers off, then on, then on, then off, so a drift
-over the scenario weighs on both alike. With them on, a client follows `GET /api/v1/events`,
+over the scenario weighs on both alike. With them on, a client follows `GET /api/v1/changes`,
 as a live page does, so the webserver follows the changes during the load. 15b is the same
 comparison on SQLite through `schedr standalone`, with scenario 9's load. There the triggers
 append a row to the `changes` table. The runs without them leave the triggers in place and

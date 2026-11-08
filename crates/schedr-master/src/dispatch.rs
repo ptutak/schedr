@@ -56,6 +56,7 @@ use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::quiet::Wakes;
 use crate::workers::{Needs, Workers};
 
+mod event_wait;
 #[cfg(test)]
 mod tests;
 
@@ -957,6 +958,11 @@ impl Dispatcher {
                     run_of,
                     max_wait_ms,
                 }) => (run_of, max_wait_ms),
+                Some(TaskKind::WaitForEvent { event, max_wait_ms }) => {
+                    self.wait_for_event(waiting, event, *max_wait_ms, now, &mut reasons)
+                        .await?;
+                    continue;
+                }
                 Some(TaskKind::Sensor {
                     wait_for: Some(wait_for),
                     max_wait_ms,
@@ -3219,6 +3225,7 @@ fn waits_for_a_run(task: &schedr_model::Task) -> bool {
     matches!(
         task.kind,
         TaskKind::WaitFor { .. }
+            | TaskKind::WaitForEvent { .. }
             | TaskKind::Sensor {
                 wait_for: Some(_),
                 ..

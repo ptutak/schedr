@@ -49,6 +49,11 @@ pub struct Timings {
     /// How long no alive worker must report a script root before DAG roots using it are no
     /// longer withdrawn for it (decision 303).
     pub script_root_grace: Duration,
+    /// How far before the newest event an `EventNamed` trigger acted on it looks again, for one
+    /// stored late (decision 354: a post's time is taken before it commits, and webservers'
+    /// clocks differ); the keys its DAG has are skipped. Longer than a `query_timeout` and the
+    /// webservers' clock skew.
+    pub event_lookback: Duration,
     /// How long the master's lease lasts (one master per database: a second one waits as a
     /// standby, and takes over at most this long after the first dies); renewed every third
     /// of it. At least three `query_timeout`s, shorter than `loop_stall_timeout`.
@@ -216,6 +221,7 @@ impl Default for Timings {
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
             script_root_grace: Duration::from_mins(5),
+            event_lookback: Duration::from_mins(1),
             lease_period: Duration::from_secs(30),
             read_back_window: Duration::from_secs(3),
             read_back_interval: Duration::from_millis(500),
@@ -401,6 +407,8 @@ pub struct Config {
     pub triggers: TriggersSection,
     /// `[grpc]`: the link between the master and its workers, both ends.
     pub grpc: GrpcSection,
+    /// `[events]`: events posted through the API (decision 354).
+    pub events: EventsSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).
@@ -1107,6 +1115,27 @@ pub enum TlsMode {
     App,
     /// Plain traffic: a service mesh (e.g. Istio) provides mTLS between the pods.
     Mesh,
+}
+
+/// `[events]`: events posted through the API (`POST /api/v1/events`, decision 354).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct EventsSection {
+    /// The largest event's data, as JSON; a bigger one is refused (`413`).
+    #[serde(
+        deserialize_with = "deserialize_size",
+        serialize_with = "serialize_size"
+    )]
+    #[schemars(with = "SizeText")]
+    pub max_size: u64,
+}
+
+impl Default for EventsSection {
+    fn default() -> Self {
+        Self {
+            max_size: 1024 * 1024,
+        }
+    }
 }
 
 /// `[grpc]`: the link between the master and its workers. Set the same on both: each end reads

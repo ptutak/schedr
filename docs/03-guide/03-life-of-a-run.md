@@ -4,7 +4,9 @@ This page follows one manual run of a two-task DAG `sync` (`extract` → `load`)
 its result. A scheduled run goes the same way, except that the scheduler creates it in step 3
 with the DAG's default parameters, instead of a command.
 A [`RunOf` trigger](../02-dags/21-wait-for.md#starting-a-dag-after-another) starts a run
-when another DAG's run or task succeeds; the new run carries an event identifying it.
+when another DAG's run or task succeeds; the new run carries an event identifying it. An
+[`EventNamed` trigger](../02-dags/22-events.md) starts a run for a posted event key and
+carries that event.
 
 ```mermaid
 sequenceDiagram
@@ -80,7 +82,7 @@ scheduler creates no run of it, a fire time during the hold is missed as while i
 and a queued run is not started. A run that has already started is not cancelled. A timeout
 or a runner that died holds nothing: the file is parsed again.
 [Parsing](06-parsing.md#a-held-dag) is the whole of it. A `RunOf` trigger waits through a
-hold and resumes looking when the hold clears.
+hold and resumes looking when the hold clears, as does an `EventNamed` trigger.
 
 ## 4. The same round dispatches
 
@@ -138,7 +140,9 @@ A [sensor](../02-dags/18-sensors.md) instead runs in a shared watcher host and h
 watcher slot. Its memory, cancellation and deployment behavior are
 described in [The watcher host](05-workers.md#the-watcher-host).
 For [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md), the master waits and ends the
-step without a worker or slot.
+step without a worker or slot. It also resolves a
+[`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run) each round and ends
+it with a matching posted event or `TimedOut`.
 
 ## 6. The result comes back
 

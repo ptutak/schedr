@@ -399,6 +399,46 @@ class WaitForKind:
 
 
 @dataclass(frozen=True, slots=True)
+class WaitForEventKind:
+    """``wait_for(EventNamed(...))``: waits for an event posted, ended by the master.
+
+    Decision 354: the event is posted through the API.
+
+    Attributes:
+        name: The event's name.
+        key: The key it matches (a literal string, the run's params, ``dag_ctx.run.id``,
+            ``dag_ctx.dag_id``, ``dag_ctx.event.key`` or an upstream output); ``None``: any.
+        max_wait_ms: How long it waits; ``None``: the master's ``[sensors] default_max_wait``.
+    """
+
+    name: str
+    key: Value | None = None
+    max_wait_ms: int | None = None
+
+    def references(self) -> list[Reference]:
+        """Its key's references.
+
+        Returns:
+            Those of the key, if it has one.
+        """
+        return [] if self.key is None else self.key.references()
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind as DAG JSON.
+
+        Returns:
+            ``{"kind": "wait_for_event", "event": {"name": ...}}``, with what is set.
+        """
+        event: dict[str, Any] = {"name": self.name}
+        if self.key is not None:
+            event["key"] = self.key.to_json()
+        result: dict[str, Any] = {"kind": "wait_for_event", "event": event}
+        if self.max_wait_ms is not None:
+            result["max_wait_ms"] = self.max_wait_ms
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class FirstOfKind:
     """``first_of`` and ``at_least``: ended by the master, no process (decision 347)."""
 
@@ -529,7 +569,14 @@ class ScriptKind:
 
 
 type TaskKind = (
-    PythonKind | SensorKind | CommandKind | ScriptKind | EmptyKind | FirstOfKind | WaitForKind
+    PythonKind
+    | SensorKind
+    | CommandKind
+    | ScriptKind
+    | EmptyKind
+    | FirstOfKind
+    | WaitForKind
+    | WaitForEventKind
 )
 """Any task kind."""
 

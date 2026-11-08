@@ -220,6 +220,7 @@ pub async fn execute(
         (Command::Resources { client, command }, None) => {
             resources(command, client, env, out).await
         }
+        (Command::Events { client, command }, None) => events(command, client, env, out, err).await,
         (Command::Runs { client, command }, None) => {
             let (api, output) = connect(client, env);
             run_runs(command, &api, &output, out, err).await
@@ -361,6 +362,17 @@ async fn triggers(
 ) -> Result<(), AppError> {
     let (api, output) = connect(client, env);
     crate::user::run_triggers(command, &api, &output, out).await
+}
+
+async fn events(
+    command: &crate::cli::EventsCommand,
+    client: &crate::cli::ClientArgs,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<(), AppError> {
+    let (api, output) = connect(client, env);
+    crate::user::run_events(command, &api, &output, out, err).await
 }
 
 async fn resources(

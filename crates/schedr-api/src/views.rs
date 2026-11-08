@@ -663,6 +663,48 @@ pub struct EventView {
     pub received_at: Timestamp,
 }
 
+/// An event to post (`POST /api/v1/events`, decision 354).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PostEventRequest {
+    /// Its name, written as a DAG ID is.
+    pub name: String,
+    /// Its key: a trigger starts one run per key, a waiting step matches its own key.
+    pub key: String,
+    /// Its data, JSON of any kind; `null` if not given.
+    #[serde(default)]
+    pub data: serde_json::Value,
+    /// When it happened; now if not given. A run it starts is planned for it.
+    #[serde(default)]
+    pub at: Option<Timestamp>,
+}
+
+/// An event posted through the API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NamedEventView {
+    /// Its ID.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+    /// Its key.
+    pub key: String,
+    /// Its data, masked as an output is.
+    pub data: serde_json::Value,
+    /// When it happened.
+    pub at: Timestamp,
+    /// When it was posted.
+    pub posted_at: Timestamp,
+    /// Who posted it.
+    pub posted_by: String,
+}
+
+/// Posted events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NamedEventList {
+    /// Newest posted first.
+    pub events: Vec<NamedEventView>,
+}
+
 /// A trigger's events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct EventList {

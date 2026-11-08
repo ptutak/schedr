@@ -126,6 +126,36 @@ impl DagId {
     }
 }
 
+/// The name of an event posted through the API (decision 354): written as a DAG ID is.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct EventName(String);
+
+impl EventName {
+    /// Validates `name` and wraps it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`IdError`] if `name` is empty, too long, contains a character that isn't
+    /// allowed, or is `.` or `..`.
+    pub fn new(name: impl Into<String>) -> Result<Self, IdError> {
+        let name = name.into();
+        check_chars("event name", &name, DAG_ID_ALLOWED, |c| {
+            c.is_ascii_alphanumeric() || "_.-:/#".contains(c)
+        })?;
+        if name == "." || name == ".." {
+            return Err(IdError::DotSegment { id: name });
+        }
+        Ok(Self(name))
+    }
+
+    /// The name as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The ID of a task within its DAG, `group.task` for tasks in groups.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -205,4 +235,5 @@ macro_rules! id_conversions {
 }
 
 id_conversions!(DagId, r"^[A-Za-z0-9_.:/#-]+$");
+id_conversions!(EventName, r"^[A-Za-z0-9_.:/#-]+$");
 id_conversions!(TaskId, r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$");

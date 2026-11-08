@@ -71,6 +71,9 @@ pub struct Settings {
     /// too) before it counts as absent: DAG roots using it are then no longer withdrawn for it
     /// (decision 303).
     pub script_root_grace: Duration,
+    /// How far before the newest event an `EventNamed` trigger acted on it looks again, for one
+    /// stored late (`SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK`, decision 354).
+    pub event_lookback: Duration,
     /// How a commit cut off is read back (see [`crate::dispatch::ReadBack`]).
     pub read_back: crate::dispatch::ReadBack,
     /// How often to try listening for commands again after it failed to start.
@@ -146,6 +149,7 @@ impl Default for Settings {
             handed_call_min: crate::dispatch::DEFAULT_HANDED_CALL_MIN,
             cleanup_move_wait: Duration::from_secs(10),
             script_root_grace: DEFAULT_SCRIPT_ROOT_GRACE,
+            event_lookback: Duration::from_mins(1),
             read_back: crate::dispatch::ReadBack::default(),
             listen_retry: Duration::from_mins(30),
             timings: MasterTimings::default(),

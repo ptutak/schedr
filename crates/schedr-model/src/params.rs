@@ -358,7 +358,8 @@ pub fn escaped(object: Map<String, Value>) -> Value {
 }
 
 /// Every dict shaped like a tag escaped, at any depth (a model's or `Any`'s data).
-fn escape_tags(value: &Value) -> Value {
+#[must_use]
+pub fn escape_tags(value: &Value) -> Value {
     match value {
         Value::Array(items) => Value::Array(items.iter().map(escape_tags).collect()),
         Value::Object(object) => escaped(

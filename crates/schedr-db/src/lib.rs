@@ -13,6 +13,7 @@ pub mod database;
 mod faults;
 pub mod instances;
 pub mod lease;
+pub mod named_events;
 pub mod nodes;
 mod query;
 pub mod reads;

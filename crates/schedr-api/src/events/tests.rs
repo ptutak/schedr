@@ -86,7 +86,7 @@ async fn a_change_arrives_as_its_event() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/v1/events")
+                .uri("/api/v1/changes")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -154,7 +154,7 @@ async fn with_the_switch_off_pages_are_refreshed_and_turning_it_on_is_followed()
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri("/api/v1/events")
+                .uri("/api/v1/changes")
                 .body(Body::empty())
                 .unwrap(),
         )

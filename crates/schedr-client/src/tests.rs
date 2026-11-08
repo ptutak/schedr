@@ -315,7 +315,7 @@ async fn the_router_transport_calls_the_api_in_process() {
 async fn events_stream_from_the_api_in_process() {
     use axum::response::sse::{Event, Sse};
     let app = axum::Router::new().route(
-        "/api/v1/events",
+        "/api/v1/changes",
         axum::routing::get(|| async {
             let events = [("run", "{\"run_id\":\"r1\"}"), ("workers", "{}")].map(|(name, data)| {
                 Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data))
@@ -538,7 +538,7 @@ async fn a_stalled_stream_dropped_by_its_reader_is_closed_at_once() {
         tokio::time::timeout(Duration::from_secs(2), socket.read(&mut rest)).await
     });
     let transport = HttpTransport::new(&format!("http://{address}"), Auth::None);
-    let mut chunks = transport.open("/api/v1/events".to_owned()).await.unwrap();
+    let mut chunks = transport.open("/api/v1/changes".to_owned()).await.unwrap();
     assert_eq!(chunks.next().await.unwrap().unwrap(), b"hello");
     drop(chunks);
     let closed = server.await.unwrap();
@@ -552,14 +552,14 @@ async fn a_stalled_in_process_stream_dropped_by_its_reader_is_closed_at_once() {
     let (feed, held) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(4);
     let receiver = std::sync::Arc::new(std::sync::Mutex::new(Some(held)));
     let app = axum::Router::new().route(
-        "/api/v1/events",
+        "/api/v1/changes",
         axum::routing::get(move || {
             let receiver = receiver.lock().unwrap().take().unwrap();
             async move { Sse::new(tokio_stream::wrappers::ReceiverStream::new(receiver)) }
         }),
     );
     let transport = RouterTransport::new(app);
-    let mut chunks = transport.open("/api/v1/events".to_owned()).await.unwrap();
+    let mut chunks = transport.open("/api/v1/changes".to_owned()).await.unwrap();
     feed.send(Ok(Event::default().event("run").data("{}")))
         .await
         .unwrap();

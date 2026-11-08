@@ -293,7 +293,7 @@ from `SCHEDR_PASSWORD`.
 
 ## The events stream
 
-`GET /api/v1/events` is a server-sent events stream of what changed. The UI is the client. A
+`GET /api/v1/changes` is a server-sent events stream of what changed. The UI is the client. A
 browser doesn't open this path. It opens the pages, and in standalone those pages are on this
 same port. The stream carries:
 

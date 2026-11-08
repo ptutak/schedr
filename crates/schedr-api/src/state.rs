@@ -35,8 +35,10 @@ pub struct ApiState {
     pub metrics: ApiMetrics,
     /// How long a connection test may take when its request doesn't say.
     pub connection_test_timeout: std::time::Duration,
-    /// What changed, for `GET /api/v1/events`.
+    /// What changed, for `GET /api/v1/changes`.
     pub feed: Feed,
+    /// The largest posted event's data (`[events] max_size`).
+    pub max_event_size: usize,
     /// This webserver as a node of its deployment (`GET /api/v1/deployment`), its
     /// configuration masked.
     pub node: Arc<crate::views::NodeView>,
@@ -58,6 +60,7 @@ impl ApiState {
             metrics: ApiMetrics::default(),
             connection_test_timeout: crate::routes::CONNECTION_TEST_TIMEOUT,
             feed,
+            max_event_size: crate::named_events::DEFAULT_MAX_EVENT_SIZE,
             node: Arc::new(crate::views::NodeView {
                 process_id: String::new(),
                 host: String::new(),
@@ -72,6 +75,15 @@ impl ApiState {
     pub fn with_connection_test_timeout(self, timeout: std::time::Duration) -> Self {
         Self {
             connection_test_timeout: timeout,
+            ..self
+        }
+    }
+
+    /// This state, refusing posted events whose data is over `bytes` (`[events] max_size`).
+    #[must_use]
+    pub fn with_max_event_size(self, bytes: usize) -> Self {
+        Self {
+            max_event_size: bytes,
             ..self
         }
     }

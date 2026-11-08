@@ -1255,7 +1255,7 @@ values, `fail`). Not chosen: copies in each script (they drifted apart).
     the last 1,000 rows) that the webserver reads every second. The webserver follows them
     once (started by the first subscriber; listening only through a connection checked not
     to pass a pooler in transaction mode, as the master's commands) and serves `GET
-    /api/v1/events` (`run`, `dag`, `workers`, `refresh`; a keep-alive comment every 15 s);
+    /api/v1/changes` (`run`, `dag`, `workers`, `refresh`; a keep-alive comment every 15 s);
     when changes can't be followed (notifications off, a pooler without
     `notifications_url`) it sends `refresh` every 5 s, and a client that fell behind gets
     `refresh`. The UI relays one stream per deployment (reopened after 1 s, doubling to 30
@@ -6969,7 +6969,7 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   each a dependency with the usual guarantees. The winner is highlighted in the box and named on the node. Where one box
   can't be drawn (a task is an option of two nodes, options at different depths, or in different task groups) each option
   gets its own dashed line (Claude's, a layout detail).
-- **Named events through the API: `EventNamed`** (decision 354, the user's, 2026-11-08; to be built in M4.11e): an
+- **Named events through the API: `EventNamed`** (decision 354, the user's, 2026-11-08; built in M4.11e, part 1 the trigger and the node): an
   outside system posts `POST /api/v1/events {name, key, data, at}` (or `schedr events post`), and the four forms of
   `RunOf` take it: `trigger=EventNamed("order-created")` (a run per event), the node `wait_for(EventNamed("approved",
   key=...))`, and `@sensor(wait_for=EventNamed(...))` / `@trigger(wait_for=EventNamed(...))` with the `Event` as the
@@ -6981,7 +6981,29 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   chosen: several names, `dag_ctx.event.name`). Posting needs what triggering a run needs, schedr having no
   permissions of its own; an event at most `[events] max_size` (1 MiB), its key 1024 bytes, its name written as a DAG
   ID; kept until M4.14's `[retention] events`; a security review (option A; not chosen: a token that can only post).
-  Claude's: `at` defaults to the moment it is posted, and a trigger's run is planned for it.
+  Claude's: `at` defaults to the moment it is posted, and a trigger's run is planned for it; every post is an event
+  of its own, a repeat of a name and key too (a waiting step in a rerun matches one posted again; a trigger still
+  starts no second run for a key), a client's retry deduplicated by its `Idempotency-Key` (after a side agent saw
+  that "stored once" left a rerun waiting for ever). The change stream the UI follows moved from `GET
+  /api/v1/events` to `GET /api/v1/changes`, freeing the name (the user's, 2026-11-08; not chosen:
+  `/api/v1/named-events`, two "events" meaning different things). Claude's, when part 1 was built: "since the run
+  started" is since it was created (`triggered_at`), so a run queued behind `max_active_runs` keeps what comes
+  meanwhile; the trigger's cursor (the last event seen, by when it was posted and its ID) is kept as `RunOf`'s, of its
+  name, from when the DAG was live, at most what `[triggers] max_queued_events` leaves room for per pass; the node's
+  key is resolved by the master each round (a literal, `dag_ctx.params...`, `dag_ctx.run.id`, `dag_ctx.dag_id`,
+  `dag_ctx.event.key`, an upstream output), and one resolving to no string fails the step with why (it has no
+  `Failed` outcome: nothing happened elsewhere); its value is the `Event[Json]`, its data's tag-shaped dicts escaped.
+  `Json` reads as `Any` in output and parameter types (it held `Mapping[str, object]`, which the describer refused
+  and recursed on), and generic dataclasses are described and encoded with their parameters, as they were decoded:
+  `Event[Json]` is a task's parameter type. After the reviews (Claude's): a trigger reads back
+  `SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK` (a minute) behind the newest event it acted on, by the keys its DAG has, for
+  a post committed after a later one; a repeat leaves the next run's window as it was, and a run is never given a
+  `since` after its `planned_for` (an event for an earlier moment has an empty window); an event's `at` at most a
+  minute ahead, as `--for`; a key has no line separators or bidirectional marks (the CLI's tables broke on them);
+  data shaped like a schedr tag is escaped on every path (a post, a manual run, the node's value); nothing posted
+  after a wait's `max_wait` counts. Part 2 (the user's, 2026-11-08, option A): a key read from the run in
+  `@sensor(wait_for=EventNamed(..., key=...))` is written by defining the sensor inside the DAG's block, where
+  `dag_ctx` and outputs are references (not chosen: a per-call form; a reserved `key=` argument).
 - **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; to be built in M4.11f):
   `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
   it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`

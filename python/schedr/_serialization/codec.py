@@ -23,7 +23,7 @@ import json
 import math
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
-from typing import Any, Literal, NoDefault, TypeVar, cast, get_args, get_origin, is_typeddict
+from typing import Any, Literal, cast, get_args, get_origin, is_typeddict
 
 from schedr._serialization import models
 from schedr._serialization.annotations import (
@@ -32,6 +32,7 @@ from schedr._serialization.annotations import (
     TypeModelError,
     is_union,
     label,
+    substituted,
     tuple_items,
     type_hints,
     unwrap,
@@ -142,6 +143,12 @@ def encode(value: object, annotation: object, at: str = "") -> Any:  # noqa: PLR
         if not isinstance(value, annotation):
             raise CodecError(at, f"expected {annotation.__name__}, got {_type_of(value)}")
         return _encode_dataclass(value, annotation, at)
+    if isinstance(origin, type) and dataclasses.is_dataclass(origin):
+        # A generic dataclass given its parameters (`Event[Json]`), as it is decoded.
+        if not isinstance(value, origin):
+            raise CodecError(at, f"expected {origin.__name__}, got {_type_of(value)}")
+        parameters = getattr(origin, "__parameters__", ())
+        return _encode_dataclass(value, origin, at, dict(zip(parameters, args, strict=False)))
     raise TypeModelError(f"`{label(annotation)}` is not supported")
 
 
@@ -289,8 +296,12 @@ def _encode_typed_dict(value: object, cls: type, at: str) -> Any:
     )
 
 
-def _encode_dataclass(value: object, cls: type, at: str) -> Any:
+def _encode_dataclass(
+    value: object, cls: type, at: str, given: Mapping[object, object] | None = None
+) -> Any:
     hints = type_hints(cls, f"`{cls.__name__}`")
+    if getattr(cls, "__parameters__", ()):
+        hints = {name: substituted(hint, given or {}) for name, hint in hints.items()}
     return {
         f.name: encode(getattr(value, f.name), hints[f.name], f"{at}.{f.name}")
         for f in dataclasses.fields(cls)
@@ -474,19 +485,6 @@ def decode(data: Any, annotation: object, at: str = "") -> Any:  # noqa: PLR0911
     raise TypeModelError(f"`{label(annotation)}` is not supported")
 
 
-def _substituted(hint: object, given: Mapping[object, object]) -> object:
-    """``hint`` with the type parameters ``given`` put in, a missing one its default or ``Any``."""
-    if isinstance(hint, TypeVar):
-        if hint in given:
-            return given[hint]
-        default = getattr(hint, "__default__", NoDefault)
-        return Any if default is NoDefault else default
-    parameters = getattr(hint, "__parameters__", ())
-    if not parameters:
-        return hint
-    return hint[tuple(_substituted(p, given) for p in parameters)]  # type: ignore[index]
-
-
 def json_form(data: Any) -> Any:
     """Stored data as plain JSON: schedr's tags written as Pydantic writes those values.
 
@@ -564,7 +562,7 @@ def _decode_dataclass(
         raise CodecError(at, f"expected {cls.__name__} (an object), got {_type_of(data)}")
     hints = type_hints(cls, f"`{cls.__name__}`")
     if getattr(cls, "__parameters__", ()):
-        hints = {name: _substituted(hint, given or {}) for name, hint in hints.items()}
+        hints = {name: substituted(hint, given or {}) for name, hint in hints.items()}
     fields = {f.name: f for f in dataclasses.fields(cls)}
     unknown = sorted(set(data) - set(fields))
     if unknown:

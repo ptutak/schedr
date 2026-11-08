@@ -1989,3 +1989,56 @@ async fn the_runs_of_another_dag_are_found_after_a_cursor_on_postgres() {
     db.set_paused_at(&sync(), false, ended).await.unwrap();
     assert_eq!(db.live_since("sync").await.unwrap(), Some(ended));
 }
+
+#[tokio::test]
+async fn posted_events_are_stored_once_per_request_key_and_read_in_order_on_postgres() {
+    use schedr_db::named_events::{NewNamedEvent, Posted};
+    let db = fresh().await;
+    let data = serde_json::json!({"amount": 40});
+    let event = |key| NewNamedEvent {
+        name: "paid",
+        key,
+        data: &data,
+        at: ts("2026-11-08T10:00:00Z"),
+    };
+    let now = ts("2026-11-08T10:00:01Z");
+    let Posted::New(first) = db
+        .post_named_event(&event("o-1"), "anna", Some("k1"), now)
+        .await
+        .unwrap()
+    else {
+        panic!("a new event")
+    };
+    let again = db
+        .post_named_event(&event("o-1"), "anna", Some("k1"), now)
+        .await
+        .unwrap();
+    assert_eq!(again, Posted::Again(first.clone()));
+    let taken = db
+        .post_named_event(&event("o-2"), "anna", Some("k1"), now)
+        .await
+        .unwrap();
+    assert_eq!(taken, Posted::KeyTaken);
+    let later = ts("2026-11-08T10:00:02Z");
+    db.post_named_event(&event("o-2"), "anna", None, later)
+        .await
+        .unwrap();
+    let all = db.named_events_after("paid", now, None, 10).await.unwrap();
+    assert_eq!(
+        all.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+        ["o-1", "o-2"]
+    );
+    let rest = db
+        .named_events_after("paid", now, Some((now, &first)), 10)
+        .await
+        .unwrap();
+    assert_eq!(rest.len(), 1);
+    let found = db
+        .first_named_event("paid", Some("o-2"), now)
+        .await
+        .unwrap();
+    assert_eq!(found.map(|e| e.key), Some("o-2".to_owned()));
+    let any = db.first_named_event("paid", None, later).await.unwrap();
+    assert_eq!(any.map(|e| e.posted_at), Some(later));
+    assert_eq!(db.named_events(None, 10).await.unwrap().len(), 2);
+}

@@ -125,6 +125,15 @@ pub enum Command {
         #[command(subcommand)]
         command: TriggersCommand,
     },
+    /// Events posted for `EventNamed` triggers and waiting steps (decision 354).
+    Events {
+        /// How to reach the server.
+        #[command(flatten)]
+        client: ClientArgs,
+        /// The events command.
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
     /// A run's resources.
     Resources {
         /// How to reach the server.
@@ -489,6 +498,35 @@ pub enum TriggersCommand {
     },
 }
 
+/// `schedr events ...` (decision 354).
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum EventsCommand {
+    /// Post an event: a trigger on its name starts a run per key, a step waiting for it in a
+    /// run goes on.
+    Post {
+        /// Its name, written as a DAG ID is.
+        name: String,
+        /// Its key.
+        #[arg(long)]
+        key: String,
+        /// Its data: JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON")]
+        data: Option<String>,
+        /// When it happened (UTC without an offset); now otherwise.
+        #[arg(long, value_name = "TIME")]
+        at: Option<String>,
+    },
+    /// List the events posted, newest first.
+    List {
+        /// Only those of this name.
+        #[arg(long)]
+        name: Option<String>,
+        /// How many at most.
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+}
+
 /// `schedr sensors ...` (decision 338).
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum SensorsCommand {
@@ -680,6 +718,7 @@ impl Command {
             | Self::Workers { .. }
             | Self::Sensors { .. }
             | Self::Triggers { .. }
+            | Self::Events { .. }
             | Self::Resources { .. }
             | Self::Connections { .. }
             | Self::DagCtx { .. }
@@ -704,6 +743,7 @@ impl Command {
             Self::Workers { .. } => "workers",
             Self::Sensors { .. } => "sensors",
             Self::Triggers { .. } => "triggers",
+            Self::Events { .. } => "events",
             Self::Resources { .. } => "resources",
             Self::Connections { .. } => "connections",
             Self::TaskCtx { .. } => "task-ctx",

@@ -147,6 +147,16 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
             run_of_trigger_problems(dag, run_of, problems);
             return;
         }
+        if let schedr_model::Trigger::EventNamed { event } = &dag.trigger {
+            if event.key.is_some() {
+                problems.push(format!(
+                    "DAG `{}`: an EventNamed trigger takes no `key`: it starts a run per event \
+                     of its name, each keyed by its own",
+                    dag.id
+                ));
+            }
+            return;
+        }
         for task in &dag.tasks {
             let reads = task.references().into_iter().any(|reference| {
                 matches!(
@@ -245,7 +255,7 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         (TaskKind::FirstOf { .. }, _) => {
             Some(format!("task `{id}`: first_of has nothing to clean up"))
         }
-        (TaskKind::WaitFor { .. }, _) => {
+        (TaskKind::WaitFor { .. } | TaskKind::WaitForEvent { .. }, _) => {
             Some(format!("task `{id}`: wait_for has nothing to clean up"))
         }
         (TaskKind::Script { .. }, _) => {
@@ -404,6 +414,9 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
             max_wait_ms,
             run_of,
         } => wait_for_problems(task, run_of, *max_wait_ms, problems),
+        TaskKind::WaitForEvent { event, max_wait_ms } => {
+            wait_for_event_problems(task, event, *max_wait_ms, problems);
+        }
         TaskKind::Empty | TaskKind::FirstOf { .. } => {}
     }
     in_text
@@ -528,6 +541,60 @@ fn wait_for_problems(
     }
     if mapping::is_mapped(task) {
         problems.push(format!("task `{id}`: wait_for can't be mapped"));
+    }
+}
+
+/// What a `wait_for(EventNamed(...))` (decision 354) can't be: mapped, waiting for no time, or
+/// keyed by what isn't a string the master can work out for the run (a literal string, the
+/// run's params, its ID, its DAG, its own event's key, an upstream output).
+fn wait_for_event_problems(
+    task: &Task,
+    event: &schedr_model::task::EventNamed,
+    max_wait_ms: Option<u64>,
+    problems: &mut Vec<String>,
+) {
+    let id = &task.id;
+    if max_wait_ms == Some(0) {
+        problems.push(format!(
+            "task `{id}`: wait_for's `max_wait` must be above zero"
+        ));
+    }
+    if mapping::is_mapped(task) {
+        problems.push(format!("task `{id}`: wait_for can't be mapped"));
+    }
+    if let Some(key) = &event.key
+        && let Some(why) = event_key_problem(key)
+    {
+        problems.push(format!("task `{id}`: EventNamed's `key` {why}"));
+    }
+}
+
+/// Why `key` can't be an `EventNamed`'s key, if it can't: a literal string, or one reference the
+/// master resolves for the run (decision 354).
+fn event_key_problem(key: &Value) -> Option<&'static str> {
+    use schedr_model::value::{DagCtxField, Reference};
+    match key {
+        Value::Literal(serde_json::Value::String(text)) if text.is_empty() => {
+            Some("can't be empty")
+        }
+        Value::Literal(serde_json::Value::String(_)) => None,
+        Value::Literal(_) => Some("is a string"),
+        Value::Ref(reference) => match reference {
+            Reference::Param { .. }
+            | Reference::Output { .. }
+            | Reference::DagCtx {
+                field: DagCtxField::RunId | DagCtxField::DagId | DagCtxField::EventKey,
+            } => None,
+            Reference::Secret(_) => Some("can't be a secret: it is stored and shown"),
+            Reference::Outcome { .. } | Reference::DagCtx { .. } => Some(
+                "is a literal string, the run's params, `dag_ctx.run.id`, `dag_ctx.dag_id`, \
+                 `dag_ctx.event.key` or an upstream output",
+            ),
+        },
+        _ => Some(
+            "is a literal string, the run's params, `dag_ctx.run.id`, `dag_ctx.dag_id`, \
+             `dag_ctx.event.key` or an upstream output",
+        ),
     }
 }
 
@@ -1138,7 +1205,10 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
         .iter()
         .filter_map(|task| {
             let streams = match task.kind {
-                TaskKind::Empty | TaskKind::FirstOf { .. } | TaskKind::WaitFor { .. } => {
+                TaskKind::Empty
+                | TaskKind::FirstOf { .. }
+                | TaskKind::WaitFor { .. }
+                | TaskKind::WaitForEvent { .. } => {
                     return None;
                 }
                 TaskKind::Command { .. } | TaskKind::Script { .. } => 2,

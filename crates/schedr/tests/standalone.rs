@@ -2684,6 +2684,84 @@ fn a_trigger_waiting_for_another_dags_runs_is_called_for_each_and_starts_runs() 
     assert_eq!(logs.matches("tally 7").count(), 2, "{logs}");
 }
 
+/// `ship` starts once per order paid, and waits in its run for that order to be packed
+/// (decision 354): both events posted with `schedr events post`.
+const NAMED_EVENTS: &str = r#"
+from schedr import Dag, Event, EventNamed, dag_ctx, task, wait_for
+from schedr.types import Json
+
+@task
+def ship(order: str, packed: Event[Json]) -> None:
+    print("shipped", order, packed.key, packed.data["box"])
+
+with Dag("ship", trigger=EventNamed("paid")):
+    ship(dag_ctx.event.key, wait_for(EventNamed("packed", key=dag_ctx.event.key)).on(Event))
+"#;
+
+/// M4.11e: an event posted starts a run of the DAG its name triggers, once per key; a step in
+/// it waits for another event of its key, and its task reads that event.
+#[test]
+fn posted_events_start_runs_and_end_the_waits_for_them() {
+    let standalone = Standalone::start(&[("ship.py", NAMED_EVENTS)], None);
+    standalone.wait("DAG `ship`", || standalone.dag_ids() == ["ship"]);
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "ship"]);
+    assert_eq!(code, 0, "{err}");
+    let post = |name: &str, key: &str, data: &str| {
+        let event = standalone.cli_json(&["events", "post", name, "--key", key, "--data", data]);
+        assert_eq!(event["name"], name, "{event}");
+    };
+    post("paid", "o-1", r#"{"amount": 40}"#);
+    post("paid", "o-1", r#"{"amount": 40}"#);
+    standalone.wait("a run of ship", || standalone.runs("ship").len() == 1);
+    // Another order's packing doesn't end the wait.
+    post("packed", "o-2", r#"{"box": 2}"#);
+    post("packed", "o-1", r#"{"box": 3}"#);
+    let run = standalone.runs("ship")[0]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    standalone.wait_for_state(&run, "success");
+    assert_eq!(standalone.runs("ship").len(), 1, "one run per key");
+    let logs = logs(standalone.dir.path());
+    assert!(logs.contains("shipped o-1 o-1 3"), "{logs}");
+    let listed = standalone.cli_json(&["events", "list", "--name", "paid"]);
+    assert_eq!(
+        listed["events"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+}
+
+/// `keyed` waits for an event whose key a mapped task made (Codex's review of M4.11e).
+const MAPPED_KEY: &str = r#"
+from schedr import Dag, Event, EventNamed, task, wait_for
+from schedr.types import Json
+
+@task
+def key_of(x: int) -> str:
+    return f"order-{x}"
+
+@task
+def done(packed: Event[Json]) -> None:
+    print("packed", packed.key)
+
+with Dag("keyed"):
+    keys = key_of.expand(x=[1])
+    done(wait_for(EventNamed("packed", key=keys[0])).on(Event[Json]))
+"#;
+
+#[test]
+fn a_wait_s_key_can_come_from_a_mapped_task() {
+    let standalone = Standalone::start(&[("keyed.py", MAPPED_KEY)], None);
+    standalone.wait("DAG `keyed`", || standalone.dag_ids() == ["keyed"]);
+    let command = standalone.cli_json(&["runs", "trigger", "keyed"]);
+    let run = command["result"]["run_id"].as_str().unwrap().to_owned();
+    standalone.cli_json(&["events", "post", "packed", "--key", "order-1"]);
+    standalone.wait_for_state(&run, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(logs.contains("packed order-1"), "{logs}");
+}
+
 #[test]
 fn a_sensor_waiting_for_another_dags_run_is_given_it_and_builds_on_its_output() {
     let standalone = Standalone::start(&[("run_of.py", RUN_OF)], None);

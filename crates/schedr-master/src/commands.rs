@@ -225,6 +225,10 @@ impl Commander {
             return Ok(Err(why));
         }
         let stored = self.db.stored_dag(dag_id).await?;
+        let stored_trigger = stored
+            .as_ref()
+            .and_then(|dag| dag.current.as_ref())
+            .map(|current| current.dag.trigger.clone());
         let limit =
             stored
                 .and_then(|dag| dag.current)
@@ -240,9 +244,18 @@ impl Commander {
                 "the event's data is {size} bytes, over its trigger's `max_output_size`"
             )));
         }
+        // An `EventNamed` DAG's data is outside JSON, as a posted event's: a dict shaped like
+        // one of schedr's tags is escaped (Grok's review of M4.11e).
+        let named = stored_trigger
+            .as_ref()
+            .is_some_and(|trigger| matches!(trigger, schedr_model::Trigger::EventNamed { .. }));
         Ok(Ok(Some(schedr_model::RunEvent {
             key: key.clone(),
-            data: data.clone(),
+            data: if named {
+                schedr_model::params::escape_tags(data)
+            } else {
+                data.clone()
+            },
             at,
         })))
     }

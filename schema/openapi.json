@@ -848,6 +848,66 @@
         ],
         "description": "A master, leading or standing by."
       },
+      "NamedEventList": {
+        "description": "Posted events.",
+        "properties": {
+          "events": {
+            "description": "Newest posted first.",
+            "items": {
+              "$ref": "#/components/schemas/NamedEventView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "type": "object"
+      },
+      "NamedEventView": {
+        "description": "An event posted through the API.",
+        "properties": {
+          "at": {
+            "description": "When it happened.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "data": {
+            "description": "Its data, masked as an output is."
+          },
+          "id": {
+            "description": "Its ID.",
+            "type": "string"
+          },
+          "key": {
+            "description": "Its key.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "posted_at": {
+            "description": "When it was posted.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "posted_by": {
+            "description": "Who posted it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "key",
+          "data",
+          "at",
+          "posted_at",
+          "posted_by"
+        ],
+        "type": "object"
+      },
       "NodeView": {
         "description": "A process of the deployment.",
         "properties": {
@@ -964,6 +1024,36 @@
             "type": "boolean"
           }
         },
+        "type": "object"
+      },
+      "PostEventRequest": {
+        "additionalProperties": false,
+        "description": "An event to post (`POST /api/v1/events`, decision 354).",
+        "properties": {
+          "at": {
+            "description": "When it happened; now if not given. A run it starts is planned for it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "description": "Its data, JSON of any kind; `null` if not given."
+          },
+          "key": {
+            "description": "Its key: a trigger starts one run per key, a waiting step matches its own key.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name, written as a DAG ID is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "key"
+        ],
         "type": "object"
       },
       "ProblemView": {
@@ -1833,6 +1923,23 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/changes": {
+      "get": {
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "Server-sent events: `run` (`{\"run_id\", \"dag_id\"}`), `dag` (`{\"dag_id\"}`), `workers` (`{}`) and `refresh` (`{}`: anything may have changed)"
+          }
+        },
+        "summary": "What changed, as it happens: `run`, `dag`, `workers` and `refresh` events (see the module\ndocumentation).",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/commands/{command_id}": {
       "get": {
         "operationId": "get_command",
@@ -2665,18 +2772,122 @@
     },
     "/api/v1/events": {
       "get": {
-        "operationId": "events",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "description": "Only those of this name.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many, 50 by default and 500 at most.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
-              "text/event-stream": {}
-            },
-            "description": "Server-sent events: `run` (`{\"run_id\", \"dag_id\"}`), `dag` (`{\"dag_id\"}`), `workers` (`{}`) and `refresh` (`{}`: anything may have changed)"
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamedEventList"
+                }
+              }
+            }
           }
         },
-        "summary": "What changed, as it happens: `run`, `dag`, `workers` and `refresh` events (see the module\ndocumentation).",
+        "summary": "The events posted, newest first, their data masked.",
         "tags": [
-          "runs"
+          "events"
+        ]
+      },
+      "post": {
+        "operationId": "post_event",
+        "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the event stored the first time",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamedEventView"
+                }
+              }
+            },
+            "description": "Sent again with its key: the event stored then"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamedEventView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Post an event: each post is one, a repeat of a name and key too; a trigger starts one run per\nkey, a waiting step matches one posted since its run started. Sent again with the same\n`Idempotency-Key`, it is the event stored the first time.",
+        "tags": [
+          "events"
         ]
       }
     },
@@ -3628,6 +3839,10 @@
     {
       "description": "Checking and testing connections on a worker",
       "name": "connections"
+    },
+    {
+      "description": "Events posted by outside systems, for `EventNamed`",
+      "name": "events"
     }
   ]
 }

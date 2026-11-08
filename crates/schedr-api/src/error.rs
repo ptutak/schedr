@@ -31,6 +31,9 @@ pub enum ApiError {
     /// Something the request needs can't be reached now (a worker holding a log).
     #[error("{0}")]
     Unavailable(String),
+    /// The request's content is over what is taken (a posted event's data).
+    #[error("{0}")]
+    TooLarge(String),
     /// The database failed (logged; the client gets a generic message).
     #[error(transparent)]
     Db(#[from] DbError),
@@ -47,6 +50,7 @@ impl ApiError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

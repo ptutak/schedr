@@ -154,6 +154,97 @@ impl MasterCore {
             self.run_of_pass(dag, queued_of(dag.dag.id.as_str()), now)
                 .await?;
         }
+        for dag in active
+            .iter()
+            .filter(|a| matches!(a.dag.trigger, Trigger::EventNamed { .. }))
+        {
+            self.event_named_pass(dag, queued_of(dag.dag.id.as_str()), now)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// How many runs a pass may start for a DAG with `queued` event runs waiting: at most
+    /// [`RUNS_OF_A_PASS`], and what `[triggers] max_queued_events` leaves room for.
+    fn pass_room(&self, queued: i64) -> u32 {
+        let most = self.settings.max_queued_events;
+        if most == 0 {
+            RUNS_OF_A_PASS
+        } else {
+            let left = i64::from(most).saturating_sub(queued);
+            u32::try_from(left.clamp(0, i64::from(RUNS_OF_A_PASS))).unwrap_or(0)
+        }
+    }
+
+    /// A DAG started by `EventNamed` (decision 354): a run per event of that name posted while
+    /// it is live, keyed by the event's key (a key seen before starts none: the DAG's events
+    /// table keeps one per key), with the event's data, planned for when it happened. As for
+    /// `RunOf`, what is posted while it is paused or gone is never caught up; held, it waits.
+    async fn event_named_pass(
+        &self,
+        dag: &ActiveDag,
+        queued: i64,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let Trigger::EventNamed { event: named } = &dag.dag.trigger else {
+            return Ok(());
+        };
+        let id = dag.dag.id.as_str();
+        if dag.paused || dag.held.is_some() {
+            return Ok(());
+        }
+        let Some(live) = self.db.live_since(id).await? else {
+            return Ok(());
+        };
+        let room = self.pass_room(queued);
+        if room == 0 {
+            return Ok(());
+        }
+        // The cursor (the newest event acted on, by when posted) is of this name only. Read
+        // again from a little before it, by the keys the DAG has (Codex's review): a post's
+        // time is taken before its commit, so one can be stored behind it.
+        let source = serde_json::to_string(named).unwrap_or_default();
+        let seen = self.db.run_of_seen(id, &source).await?;
+        let lookback =
+            SignedDuration::try_from(self.settings.event_lookback).unwrap_or(SignedDuration::MAX);
+        let since = seen
+            .as_ref()
+            .and_then(|seen| seen.at.checked_sub(lookback).ok())
+            .map_or(live, |from| from.max(live));
+        let found = self
+            .db
+            .named_events_unseen(named.name.as_str(), id, since, room)
+            .await?;
+        let mut last_planned_for = self.db.trigger(id).await?.and_then(|r| r.last_planned_for);
+        let mut last = seen.filter(|seen| seen.at >= live);
+        let mut moved = false;
+        for posted in found {
+            let event = RunEvent {
+                key: posted.key.clone(),
+                // Outside JSON, never schedr's tags: a dict shaped like one is escaped (Codex's
+                // review), as the waiting node's value is.
+                data: schedr_model::params::escape_tags(&posted.data),
+                at: Some(posted.at),
+            };
+            let started = self
+                .scheduler
+                .event_run(dag, &event, last_planned_for, now)
+                .await?;
+            // A repeat starts none and leaves the window as it was (Codex's review).
+            if started.is_some() {
+                last_planned_for = Some(posted.at);
+            }
+            if last.as_ref().is_none_or(|last| posted.posted_at > last.at) {
+                last = Some(RunOfSeen {
+                    at: posted.posted_at,
+                    run: posted.id,
+                });
+                moved = true;
+            }
+        }
+        if let Some(last) = last.filter(|_| moved) {
+            self.db.set_run_of_seen(id, &source, &last).await?;
+        }
         Ok(())
     }
 
@@ -179,13 +270,7 @@ impl MasterCore {
         let Some(live) = self.db.live_since(id).await? else {
             return Ok(());
         };
-        let most = self.settings.max_queued_events;
-        let room = if most == 0 {
-            RUNS_OF_A_PASS
-        } else {
-            let left = i64::from(most).saturating_sub(queued);
-            u32::try_from(left.clamp(0, i64::from(RUNS_OF_A_PASS))).unwrap_or(0)
-        };
+        let room = self.pass_room(queued);
         if room == 0 {
             return Ok(());
         }
@@ -219,10 +304,14 @@ impl MasterCore {
                 }),
                 at,
             };
-            self.scheduler
+            let started = self
+                .scheduler
                 .event_run(dag, &event, last_planned_for, now)
                 .await?;
-            last_planned_for = Some(at.unwrap_or(now));
+            // A repeat starts none and leaves the window as it was (Codex's review of M4.11e).
+            if started.is_some() {
+                last_planned_for = Some(at.unwrap_or(now));
+            }
             last = Some(RunOfSeen {
                 at: ended,
                 run: other,

@@ -127,6 +127,25 @@ CREATE TABLE events (
 
 CREATE INDEX events_newest ON events (dag_id, received_at DESC, key);
 
+-- Events posted through the API (decision 354): each post is one, a repeat too; a trigger
+-- starts a run per key it hasn't seen, a waiting step matches one posted since its run started.
+CREATE TABLE named_events (
+    id           UUID PRIMARY KEY,
+    name         TEXT NOT NULL,
+    key          TEXT NOT NULL,
+    data         JSONB NOT NULL,
+    at           TIMESTAMPTZ NOT NULL,
+    posted_at    TIMESTAMPTZ NOT NULL,
+    posted_by    TEXT NOT NULL,
+    -- The client's `Idempotency-Key`: sent again by the same person, it is this event.
+    request_key  TEXT
+);
+
+CREATE INDEX named_events_by_key ON named_events (name, key, posted_at, id);
+CREATE INDEX named_events_by_name ON named_events (name, posted_at, id);
+CREATE UNIQUE INDEX named_events_by_request ON named_events (posted_by, request_key)
+    WHERE request_key IS NOT NULL;
+
 -- Each event-triggered DAG's trigger. Its bookmark outlives everything else: `after` when it starts.
 CREATE TABLE triggers (
     dag_id       TEXT PRIMARY KEY,

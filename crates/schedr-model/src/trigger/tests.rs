@@ -118,3 +118,19 @@ fn the_window_comes_from_time_triggers(
 ) {
     assert_eq!((trigger.start(), trigger.end()), (start, end));
 }
+
+#[test]
+fn a_key_holds_nothing_a_terminal_would_act_on() {
+    // Grok's review of M4.11e: U+2028 broke `schedr events list`'s table.
+    for key in [
+        "a\u{2028}b",
+        "a\u{2029}b",
+        "a\u{202E}b",
+        "a\u{2066}b",
+        "a\nb",
+        "a\u{1b}b",
+    ] {
+        assert!(super::check_event_key(key).is_err(), "{key:?}");
+    }
+    assert!(super::check_event_key("order-123 é").is_ok());
+}

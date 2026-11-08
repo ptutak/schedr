@@ -680,15 +680,21 @@ async fn a_trigger_that_cant_be_told_leaves_the_rest_of_the_page() {
 
 #[tokio::test]
 async fn a_manual_run_of_a_dag_started_by_another_asks_for_its_event() {
-    let mut scripted = etl();
-    let mut sync = dag("sync", false);
-    sync["trigger"] = json!({"kind": "run_of", "run_of": {"dag": "orders"}});
-    scripted
-        .answers
-        .insert("/api/v1/dags/sync".to_owned(), (200, sync));
-    let app = ui(vec![deployment("etl", scripted)]);
-    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
-    assert!(html.contains(r#"name="event_key""#), "{html}");
+    // And of one started by posted events (Grok's review of M4.11e).
+    for trigger in [
+        json!({"kind": "run_of", "run_of": {"dag": "orders"}}),
+        json!({"kind": "event_named", "event": {"name": "paid"}}),
+    ] {
+        let mut scripted = etl();
+        let mut sync = dag("sync", false);
+        sync["trigger"] = trigger;
+        scripted
+            .answers
+            .insert("/api/v1/dags/sync".to_owned(), (200, sync));
+        let app = ui(vec![deployment("etl", scripted)]);
+        let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+        assert!(html.contains(r#"name="event_key""#), "{html}");
+    }
     let app = ui(vec![deployment("etl", etl())]);
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
     assert!(!html.contains(r#"name="event_key""#));

@@ -12,6 +12,21 @@ details = '''
   results sent one by one, the agent forwarding them, or the master recording each `Finished`
   (attempt, output, instance, and a run when its last step ends) in transactions of its own.
   One step noticing a change alone is fast.
+- **Cause (Grok's investigation, 2026-11-08; checked against `core.rs`):** the master. Each
+  `Started` and each `Finished` is its own `db.atomically` (`MasterCore::finished`, and the
+  `Started` arm of `handle`): on file SQLite about 15 ms each (an 8 ms durable commit plus the
+  statements), so a burst records at about 67 a second alone and 53 in `schedr standalone`, the
+  `Finished`s queued behind the `Started`s still committing. The host sends the burst at about
+  1400 a second and the agent's journal writes one in about 5 ms: neither is the limit.
+  Postgres (the stress run's 22 a second) not measured.
+- **Postponed to M4B** (the user, 2026-11-08): batching the whole turn's messages is M4B's
+  work anyway.
+- **Fix proposed (for M4B):** the messages of one worker's turn (`MESSAGES_PER_TURN`, 10) that
+  are `Finished` (and a leading run of `Started`) committed in one transaction, ending the batch at
+  any other message so the order holds; a data fault taken out of it and stored on its own (B106);
+  a failed commit stores and acks none (the journal resends); `CommitUnknown` settles every
+  attempt of the batch. A test counts the write transactions (`count_writes`): today one per
+  message, then about one per ten.
 - **Why it matters:** a sensor's point is reacting soon; a burst of events (a shared file, a
   run many steps wait for) delays the last by tens of seconds.
 '''

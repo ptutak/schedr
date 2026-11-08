@@ -366,9 +366,13 @@ impl Scheduler {
         now: Timestamp,
     ) -> Result<Option<String>, SchedulerError> {
         let planned_for = event.at.unwrap_or(now);
+        // An event may be for a moment before the last one's (a late webhook, a backfill): its
+        // window is then empty, never inverted (Grok's review of M4.11e).
         let times = RunTimes {
             planned_for,
-            since: since.unwrap_or(planned_for),
+            since: since
+                .filter(|since| *since <= planned_for)
+                .unwrap_or(planned_for),
         };
         let params = run_params(active, None)?;
         let mut new = new_run(active, RunKind::Event, times, now, EVENT_USER, &params);

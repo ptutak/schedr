@@ -980,6 +980,8 @@ fn a_bad_param_isnt_echoed(#[case] fields: &[&str], #[case] message: &str) {
 #[test]
 fn what_a_trigger_said_stays_on_one_line_of_a_table() {
     assert_eq!(one_line("a\nb\u{1b}]0;x\u{7}"), "a b ]0;x ");
+    // Grok's review of M4.11e: a line separator and a bidirectional override too.
+    assert_eq!(one_line("a\u{2028}b\u{202E}c"), "a b c");
 }
 
 #[tokio::test]

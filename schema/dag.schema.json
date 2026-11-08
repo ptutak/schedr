@@ -228,6 +228,37 @@
         }
       ]
     },
+    "EventName": {
+      "maxLength": 250,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:/#-]+$",
+      "type": "string"
+    },
+    "EventNamed": {
+      "additionalProperties": false,
+      "description": "An event posted through the API (decision 354), by name and, for a step waiting in a run,\nkey: `EventNamed(\"payment-completed\", key=dag_ctx.params.order_id)`.",
+      "properties": {
+        "key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Value"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its key, a literal or resolved for the run (its params, its own event's key or ID, an\nupstream output): only an event with this key matches. `None`: any of the name; a\ntrigger takes none."
+        },
+        "name": {
+          "$ref": "#/$defs/EventName",
+          "description": "Its name."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "Expand": {
       "description": "What a mapped task's instances vary over (decision 69): one instance per element.",
       "oneOf": [
@@ -894,6 +925,33 @@
           "required": [
             "kind",
             "run_of"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`wait_for(EventNamed(...))` (decision 354): waits for an event posted through the API,\nended by the master with no process and no slot. Its value is the event (`key`, `data`,\n`at`); `TimedOut` after `max_wait`.",
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/EventNamed",
+              "description": "Which event."
+            },
+            "kind": {
+              "const": "wait_for_event",
+              "type": "string"
+            },
+            "max_wait_ms": {
+              "description": "How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "event"
           ],
           "type": "object"
         },
@@ -1606,6 +1664,25 @@
           "required": [
             "kind",
             "run_of"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`trigger=EventNamed(...)` (decision 354): a run per event of that name posted through the\nAPI while this DAG is live, keyed by the event's key, planned for its `at`.",
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/EventNamed",
+              "description": "Which events: its name (a trigger takes no key)."
+            },
+            "kind": {
+              "const": "event_named",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "event"
           ],
           "type": "object"
         }

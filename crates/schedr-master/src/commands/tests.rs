@@ -1016,3 +1016,21 @@ async fn a_trigger_restarts_and_its_function_can_be_switched_on() {
     let why = decided(&mut world, &on("extract")).await.unwrap_err();
     assert_eq!(why, "no wait step `extract` in DAG `sync`");
 }
+
+#[tokio::test]
+async fn a_manual_run_of_an_event_named_dag_keeps_its_data_as_given() {
+    // Grok's review of M4.11e: a tag-shaped dict read back as a datetime.
+    let mut dag = serde_json::to_value(dag()).unwrap();
+    dag["trigger"] = serde_json::json!({"kind": "event_named", "event": {"name": "paid"}});
+    let mut world = world_of(serde_json::from_value(dag).unwrap()).await;
+    let data = serde_json::json!({"$datetime": "2026-01-01T00:00:00+00:00"});
+    let given = Some(AskedEvent::Given {
+        key: "o-9".to_owned(),
+        data: data.clone(),
+        at: None,
+    });
+    assert_eq!(decided(&mut world, &run_with(given)).await, Ok(()));
+    let run = &world.db.dag_runs(&sync(), None, 5).await.unwrap()[0];
+    let event = world.db.run_event(&run.id).await.unwrap().unwrap();
+    assert_eq!(event.data, serde_json::json!({"$dict": data}));
+}

@@ -6,7 +6,7 @@ import inspect
 import typing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 from schedr import _build
 from schedr import outcomes as _outcomes
@@ -18,7 +18,10 @@ from schedr.triggers import Trigger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from schedr.event_triggers import Event
+    from schedr.named_events import EventNamed
     from schedr.outcomes import Waited
+    from schedr.types import Json
 
 MAX_LAG = timedelta(days=3650)
 """The longest ``lag``, either way: 10 years (the master's ``MAX_LAG_MS``)."""
@@ -155,17 +158,33 @@ def _free_id(builder: _build.DagBuilder, run_of: RunOf) -> str:
     return task_id
 
 
+@overload
 def wait_for(
     run_of: RunOf, *, max_wait: timedelta | None = None, task_id: str | None = None
-) -> Waited[str]:
+) -> Waited[str]: ...
+
+
+@overload
+def wait_for(
+    run_of: EventNamed, *, max_wait: timedelta | None = None, task_id: str | None = None
+) -> Waited[Event[Json]]: ...
+
+
+def wait_for(
+    run_of: RunOf | EventNamed, *, max_wait: timedelta | None = None, task_id: str | None = None
+) -> Waited[str] | Waited[Event[Json]]:
     """A step the master ends when that run, or its task, has ended: no process, no slot.
 
     Its value is that run's ID: ``build(wait_for(RunOf("orders")).on(str))``. It ends ``Failed``
     when the run or task didn't succeed: route it with ``.on(Failed)``, or the step fails and its
     run too. After ``max_wait`` with no such run it ends ``TimedOut``, as any wait step.
 
+    Given an ``EventNamed`` (decision 354), it waits for the first event of that name (and key)
+    posted since its run was created, and its value is that event: ``Event[Json]``, read as
+    ``ship(wait_for(EventNamed("paid", key=dag_ctx.params.order)).on(Event))``.
+
     Args:
-        run_of: Which run, and which task of it.
+        run_of: Which run, and which task of it; or which event.
         max_wait: How long it waits; the master's ``[sensors] default_max_wait`` if not given.
         task_id: Its ID; ``wait_for_<task or DAG>``, numbered from the second on, if not given.
 
@@ -173,10 +192,14 @@ def wait_for(
         The step's output, read as its value, ``Failed`` or ``TimedOut``.
 
     Raises:
-        TypeError: For what isn't a ``RunOf``.
+        TypeError: For what isn't a ``RunOf`` or an ``EventNamed``.
     """
+    from schedr.named_events import EventNamed, wait_for_event  # noqa: PLC0415 (a cycle)
+
+    if isinstance(run_of, EventNamed):
+        return wait_for_event(run_of, max_wait=max_wait, task_id=task_id)
     if not isinstance(run_of, RunOf):
-        raise TypeError(f"wait_for: give it a RunOf, got {run_of!r}")
+        raise TypeError(f"wait_for: give it a RunOf or an EventNamed, got {run_of!r}")
     builder = _build.require_active("wait_for")
     node = builder.qualified(task_id) if task_id is not None else _free_id(builder, run_of)
     spec = _outcomes.OutcomeSpec(

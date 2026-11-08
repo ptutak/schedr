@@ -4,15 +4,17 @@ import collections.abc
 import dataclasses
 import types
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import (
     Annotated,
     Any,
     NewType,
+    NoDefault,
     NotRequired,
     ReadOnly,
     Required,
     TypeAliasType,
+    TypeVar,
     Union,
     get_args,
     get_origin,
@@ -30,7 +32,8 @@ def unwrap(annotation: object) -> object:
     """Resolves what only renames or qualifies a type.
 
     That is ``type`` aliases, ``Annotated``, ``NewType``, and the ``TypedDict`` qualifiers
-    ``NotRequired``, ``Required`` and ``ReadOnly``.
+    ``NotRequired``, ``Required`` and ``ReadOnly``. ``schedr.types.Json`` is ``Any``: any JSON,
+    unchecked (decision 354; its ``Mapping[str, object]`` is for type checkers).
 
     Args:
         annotation: A type annotation.
@@ -41,7 +44,11 @@ def unwrap(annotation: object) -> object:
     Raises:
         TypeModelError: For a generic ``type`` alias with parameters (not supported yet).
     """
+    from schedr.types import Json  # noqa: PLC0415 (schedr.types reads this module)
+
     while True:
+        if annotation is Json:
+            return Any
         if isinstance(annotation, TypeAliasType):
             annotation = annotation.__value__
         elif isinstance(get_origin(annotation), TypeAliasType):
@@ -53,6 +60,27 @@ def unwrap(annotation: object) -> object:
         else:
             break
     return None if annotation is type(None) else annotation
+
+
+def substituted(hint: object, given: Mapping[object, object]) -> object:
+    """``hint`` with the type parameters ``given`` put in, a missing one its default or ``Any``.
+
+    Args:
+        hint: A field's annotation in a generic class.
+        given: Each type parameter's argument.
+
+    Returns:
+        The annotation for those arguments.
+    """
+    if isinstance(hint, TypeVar):
+        if hint in given:
+            return given[hint]
+        default = getattr(hint, "__default__", NoDefault)
+        return Any if default is NoDefault else default
+    parameters = getattr(hint, "__parameters__", ())
+    if not parameters:
+        return hint
+    return hint[tuple(substituted(p, given) for p in parameters)]  # type: ignore[index]
 
 
 def is_union(annotation: object) -> bool:

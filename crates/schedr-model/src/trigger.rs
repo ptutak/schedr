@@ -82,6 +82,12 @@ pub enum Trigger {
         /// Which runs.
         run_of: crate::task::RunOf,
     },
+    /// `trigger=EventNamed(...)` (decision 354): a run per event of that name posted through the
+    /// API while this DAG is live, keyed by the event's key, planned for its `at`.
+    EventNamed {
+        /// Which events: its name (a trigger takes no key).
+        event: crate::task::EventNamed,
+    },
 }
 
 /// The longest key an event may have, in bytes: it is stored with every event and sent back as a
@@ -89,15 +95,29 @@ pub enum Trigger {
 /// `max_output_size`).
 pub const MAX_EVENT_KEY: usize = 1024;
 
+/// Whether a terminal or a page would act on `c` instead of showing it: a control character,
+/// a line or paragraph separator, or a bidirectional override or isolate (Grok's review of
+/// M4.11e: a key with U+2028 broke `schedr events list`'s table).
+#[must_use]
+pub const fn acts_on_display(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+        )
+}
+
 /// Whether a text can be an event's key.
 ///
 /// # Errors
 ///
 /// What is wrong with it.
 pub fn check_event_key(key: &str) -> Result<(), String> {
-    if key.is_empty() || key.len() > MAX_EVENT_KEY || key.chars().any(char::is_control) {
+    if key.is_empty() || key.len() > MAX_EVENT_KEY || key.chars().any(acts_on_display) {
         return Err(format!(
-            "an event's key has 1 to {MAX_EVENT_KEY} bytes and no control characters, got {} bytes",
+            "an event's key has 1 to {MAX_EVENT_KEY} bytes and no control, line-separator or \
+             bidirectional characters, got {} bytes",
             key.len()
         ));
     }
@@ -135,7 +155,10 @@ impl Trigger {
     /// it (`RunOf`).
     #[must_use]
     pub const fn brings_event(&self) -> bool {
-        matches!(self, Self::Event { .. } | Self::RunOf { .. })
+        matches!(
+            self,
+            Self::Event { .. } | Self::RunOf { .. } | Self::EventNamed { .. }
+        )
     }
 
     /// Whether missed fire times get runs in order; `false` for triggers without `catchup`
@@ -144,7 +167,11 @@ impl Trigger {
     pub const fn catchup(&self) -> bool {
         match self {
             Self::Cron { catchup, .. } | Self::Every { catchup, .. } => *catchup,
-            Self::None | Self::Once { .. } | Self::Event { .. } | Self::RunOf { .. } => false,
+            Self::None
+            | Self::Once { .. }
+            | Self::Event { .. }
+            | Self::RunOf { .. }
+            | Self::EventNamed { .. } => false,
         }
     }
 
@@ -156,7 +183,7 @@ impl Trigger {
             Self::Cron { start, .. } | Self::Every { start, .. } | Self::Event { start, .. } => {
                 *start
             }
-            Self::None | Self::Once { .. } | Self::RunOf { .. } => None,
+            Self::None | Self::Once { .. } | Self::RunOf { .. } | Self::EventNamed { .. } => None,
         }
     }
 
@@ -165,7 +192,7 @@ impl Trigger {
     pub const fn end(&self) -> Option<Timestamp> {
         match self {
             Self::Cron { end, .. } | Self::Every { end, .. } | Self::Event { end, .. } => *end,
-            Self::None | Self::Once { .. } | Self::RunOf { .. } => None,
+            Self::None | Self::Once { .. } | Self::RunOf { .. } | Self::EventNamed { .. } => None,
         }
     }
 }

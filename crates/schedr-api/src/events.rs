@@ -1,4 +1,4 @@
-//! `GET /api/v1/events`: what changed, as server-sent events, for the UI's live pages (see
+//! `GET /api/v1/changes`: what changed, as server-sent events, for the UI's live pages (see
 //! PROJECT.md, Web UI: 34A). Only what changed, never the new state: a client reads that from
 //! the other endpoints.
 //!
@@ -247,7 +247,7 @@ pub fn event(live: &Live) -> Event {
 
 /// What changed, as it happens: `run`, `dag`, `workers` and `refresh` events (see the module
 /// documentation).
-#[utoipa::path(get, path = "/api/v1/events", tag = "runs",
+#[utoipa::path(get, path = "/api/v1/changes", tag = "runs",
     responses((status = 200, content_type = "text/event-stream",
         description = "Server-sent events: `run` (`{\"run_id\", \"dag_id\"}`), `dag` \
             (`{\"dag_id\"}`), `workers` (`{}`) and `refresh` (`{}`: anything may have \

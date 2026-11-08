@@ -26,7 +26,15 @@ from pathlib import Path
 from typing import Any
 
 from schedr import run_of
-from schedr._model import CommandKind, PythonKind, SecretRef, SensorKind, WaitForKind, registry
+from schedr._model import (
+    CommandKind,
+    PythonKind,
+    SecretRef,
+    SensorKind,
+    WaitForEventKind,
+    WaitForKind,
+    registry,
+)
 from schedr._model.values import covers
 from schedr._serialization import decode, decode_any
 from schedr._serialization.annotations import type_hints
@@ -483,9 +491,10 @@ class _OutputTypes:
     def _annotation(
         entry: registry.DefinedDag, task_id: str, kind: object, outcome: str | None
     ) -> object:
-        if isinstance(kind, WaitForKind):
+        if isinstance(kind, WaitForKind | WaitForEventKind):
+            value = str if isinstance(kind, WaitForKind) else Event[Json]
             named = {TIMED_OUT_NAME: TimedOut, FAILED_NAME: Failed}
-            return named.get(outcome or "", str)
+            return named.get(outcome or "", value)
         if isinstance(kind, SensorKind):
             if outcome == TIMED_OUT_NAME:
                 return TimedOut

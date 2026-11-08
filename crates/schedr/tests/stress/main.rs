@@ -1200,7 +1200,7 @@ struct SignalRun {
 
 /// Run `number` of scenario 15's load (1's on Postgres, 9's on SQLite, 13's Python) on a database
 /// of its own, the change triggers `on` or not; with them on, a client follows `GET
-/// /api/v1/events` meanwhile, counting `run` events.
+/// /api/v1/changes` meanwhile, counting `run` events.
 fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> SignalRun {
     let mut stress = Stress::new(match backend {
         Backend::Postgres | Backend::PostgresPython => Some(postgres_database()),
@@ -1302,7 +1302,7 @@ fn signal_load(scenario: &str, number: usize, backend: Backend, on: bool) -> Sig
     }
 }
 
-/// Follows the webserver's `GET /api/v1/events` (the API's `http://host:port`) until `stop`,
+/// Follows the webserver's `GET /api/v1/changes` (the API's `http://host:port`) until `stop`,
 /// counting its `run` events.
 fn follow_events(api: &str, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<f64> {
     use std::io::{Read as _, Write as _};
@@ -1317,7 +1317,7 @@ fn follow_events(api: &str, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<f6
             .unwrap();
         write!(
             stream,
-            "GET /api/v1/events HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n"
+            "GET /api/v1/changes HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n\r\n"
         )
         .unwrap();
         let (mut events, mut tail) = (0_u32, Vec::new());

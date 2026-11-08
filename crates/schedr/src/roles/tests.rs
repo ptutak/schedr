@@ -1062,7 +1062,9 @@ async fn an_open_event_stream_doesnt_keep_the_api_from_stopping() {
         .await
     });
     // A page's stream, open (as a browser tab keeps it).
-    let stream = reqwest::get(format!("{base}/api/v1/events")).await.unwrap();
+    let stream = reqwest::get(format!("{base}/api/v1/changes"))
+        .await
+        .unwrap();
     assert_eq!(stream.status(), reqwest::StatusCode::OK);
     let _ = stop.send(1);
     tokio::time::timeout(REQUESTS_GRACE + Duration::from_secs(5), served)

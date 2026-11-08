@@ -2937,6 +2937,62 @@ async fn a_dag_started_by_runs_of_another_starts_once_for_each_that_succeeds_whi
     assert_eq!(sync_runs(&core).await.len(), 1);
 }
 
+/// [`dag_file`] with `sync` started by events named `paid` (decision 354).
+fn event_named_file() -> ParsedFile {
+    let mut file = serde_json::to_value(dag_file()).unwrap();
+    file["dags"][0]["trigger"] = json!({"kind": "event_named", "event": {"name": "paid"}});
+    file["dags"][0]["max_active_runs"] = json!(5);
+    serde_json::from_value(file).unwrap()
+}
+
+async fn post(core: &MasterCore, key: &str, at: Timestamp, posted_at: Timestamp) {
+    let event = schedr_db::named_events::NewNamedEvent {
+        name: "paid",
+        key,
+        data: &json!({"amount": 40}),
+        at,
+    };
+    core.db
+        .post_named_event(&event, "anna", None, posted_at)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_dag_started_by_named_events_starts_once_per_key_posted_while_live() {
+    let mut core = with_dag_of(&event_named_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    // Before it is live: not caught up.
+    post(&core, "o-0", ts(NOW), ts(NOW)).await;
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    core.tick(later(1)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 0);
+    post(&core, "o-1", ts("2026-10-21T00:00:00Z"), later(2)).await;
+    // The same key again (a new event, decision 354), and another one: one run more.
+    post(&core, "o-1", ts("2026-10-21T00:00:00Z"), later(3)).await;
+    post(&core, "o-2", ts("2026-10-22T00:00:00Z"), later(3)).await;
+    core.tick(later(4)).await.unwrap();
+    core.tick(later(5)).await.unwrap();
+    let runs = sync_runs(&core).await;
+    assert_eq!(
+        runs.iter().map(|(at, _)| *at).collect::<Vec<_>>(),
+        [ts("2026-10-21T00:00:00Z"), ts("2026-10-22T00:00:00Z")],
+        "one per key, planned for when it happened"
+    );
+    let event = core.db.stored_event("sync", "o-1").await.unwrap().unwrap();
+    assert_eq!(event.data, json!({"amount": 40}));
+    // Paused, what is posted meanwhile is never caught up.
+    core.db.set_paused_at(&sync, true, later(6)).await.unwrap();
+    post(&core, "o-3", later(7), later(7)).await;
+    core.tick(later(8)).await.unwrap();
+    core.db.set_paused_at(&sync, false, later(9)).await.unwrap();
+    core.tick(later(9)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 2);
+    post(&core, "o-4", later(10), later(10)).await;
+    core.tick(later(11)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 3);
+}
+
 #[tokio::test]
 async fn a_dag_started_by_runs_of_another_queues_no_more_than_the_limit_in_one_pass() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -3611,4 +3667,84 @@ async fn a_call_a_restarted_master_doesnt_know_holds_back_waiting_triggers_until
     core.handle("w2", ended, later(4)).await.unwrap();
     let call = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&call), first);
+}
+
+#[tokio::test]
+async fn an_event_stored_behind_the_newest_one_seen_still_starts_its_run() {
+    // Codex's review: a post's time is taken before its commit, so one can land behind.
+    let mut core = with_dag_of(&event_named_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    post(&core, "o-2", later(5), later(5)).await;
+    core.tick(later(6)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 1);
+    post(&core, "o-1", later(3), later(3)).await;
+    core.tick(later(7)).await.unwrap();
+    core.tick(later(8)).await.unwrap();
+    assert_eq!(sync_runs(&core).await.len(), 2, "the late one too, once");
+}
+
+#[tokio::test]
+async fn a_repeated_key_leaves_the_next_run_s_window_as_it_was() {
+    // Codex's review: a repeat moved the next run's `since`, depending on the passes.
+    let mut core = with_dag_of(&event_named_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    post(&core, "o-1", later(2), later(2)).await;
+    core.tick(later(3)).await.unwrap();
+    post(&core, "o-1", later(4), later(4)).await;
+    post(&core, "o-2", later(6), later(6)).await;
+    core.tick(later(7)).await.unwrap();
+    let runs = core.db.dag_runs(&sync, None, 50).await.unwrap();
+    let second = runs.iter().find(|r| r.planned_for == later(6)).unwrap();
+    assert_eq!(
+        second.since,
+        later(2),
+        "from the first run's moment, not the repeat's"
+    );
+}
+
+#[tokio::test]
+async fn an_event_s_data_shaped_like_a_tag_reaches_its_run_as_posted() {
+    let mut core = with_dag_of(&event_named_file()).await;
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), false, later(1))
+        .await
+        .unwrap();
+    let event = schedr_db::named_events::NewNamedEvent {
+        name: "paid",
+        key: "o-1",
+        data: &json!({"$dict": {"amount": 40}}),
+        at: later(2),
+    };
+    core.db
+        .post_named_event(&event, "anna", None, later(2))
+        .await
+        .unwrap();
+    core.tick(later(3)).await.unwrap();
+    let stored = core.db.stored_event("sync", "o-1").await.unwrap().unwrap();
+    assert_eq!(
+        stored.data,
+        json!({"$dict": {"$dict": {"amount": 40}}}),
+        "escaped"
+    );
+}
+
+#[tokio::test]
+async fn an_event_for_a_moment_before_the_last_one_s_has_an_empty_window_not_an_inverted_one() {
+    // Grok's review of M4.11e: `since` came after `planned_for`.
+    let mut core = with_dag_of(&event_named_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    post(&core, "o-1", later(100), later(2)).await;
+    post(&core, "o-2", later(5), later(3)).await;
+    core.tick(later(4)).await.unwrap();
+    for run in core.db.dag_runs(&sync, None, 50).await.unwrap() {
+        assert!(
+            run.since <= run.planned_for,
+            "{} > {}",
+            run.since,
+            run.planned_for
+        );
+    }
 }

@@ -2,7 +2,8 @@
 
 An event trigger watches for things outside a run and starts a DAG run for each new event.
 Unlike a [wait step](18-sensors.md), it belongs to the DAG, not to a run. Here file names
-carry their time, so sorting them lets the trigger resume after its last file:
+carry their time, so sorting them lets the trigger resume after its last file. An outside
+system can also [post named events](22-events.md) to start a DAG directly:
 
 ```{literalinclude} ../../examples/docs/event_triggers.py
 :language: python

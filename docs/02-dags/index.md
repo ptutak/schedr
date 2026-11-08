@@ -37,4 +37,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 19-triggers
 20-first-of
 21-wait-for
+22-events
 ```

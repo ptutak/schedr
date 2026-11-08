@@ -548,7 +548,10 @@ def names_for(spec: OutcomeSpec, kinds: Sequence[Any], where: str) -> tuple[str,
             names.append(TIMED_OUT_NAME)
         elif spec.failed and kind is Failed:
             names.append(FAILED_NAME)
-        elif spec.timed_out and _stands_for(kind) == _stands_for(spec.value):
+        elif spec.timed_out and _stands_for(kind) in {
+            _stands_for(spec.value),
+            typing.get_origin(spec.value),
+        } - {None}:
             names.append(SUCCESS_NAME)
         elif spec.timed_out and not isinstance(kind, Outcome):
             raise TypeError(

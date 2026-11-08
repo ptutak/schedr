@@ -42,7 +42,7 @@ mod tests;
 /// How many runs a list returns when the client doesn't say.
 pub const DEFAULT_RUNS: u32 = 50;
 
-type ApiResult<T> = Result<Json<T>, ApiError>;
+pub(crate) type ApiResult<T> = Result<Json<T>, ApiError>;
 type Accepted = Result<(StatusCode, Json<CommandView>), ApiError>;
 
 /// Every DAG not removed.

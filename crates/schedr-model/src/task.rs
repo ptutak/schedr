@@ -191,6 +191,20 @@ pub struct RunOf {
     pub lag_ms: Option<i64>,
 }
 
+/// An event posted through the API (decision 354), by name and, for a step waiting in a run,
+/// key: `EventNamed("payment-completed", key=dag_ctx.params.order_id)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventNamed {
+    /// Its name.
+    pub name: crate::EventName,
+    /// Its key, a literal or resolved for the run (its params, its own event's key or ID, an
+    /// upstream output): only an event with this key matches. `None`: any of the name; a
+    /// trigger takes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<crate::value::Value>,
+}
+
 /// What an `@sensor(wait_for=RunOf(...))` waits for, and the parameter its function is given the
 /// run in (its first: a `RunResult`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -254,6 +268,16 @@ pub enum TaskKind {
     WaitFor {
         /// Which run.
         run_of: RunOf,
+        /// How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_wait_ms: Option<u64>,
+    },
+    /// `wait_for(EventNamed(...))` (decision 354): waits for an event posted through the API,
+    /// ended by the master with no process and no slot. Its value is the event (`key`, `data`,
+    /// `at`); `TimedOut` after `max_wait`.
+    WaitForEvent {
+        /// Which event.
+        event: EventNamed,
         /// How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_wait_ms: Option<u64>,
@@ -503,6 +527,9 @@ impl Task {
                 .chain(env.values())
                 .flat_map(Template::references)
                 .collect(),
+            TaskKind::WaitForEvent { event, .. } => {
+                event.key.iter().flat_map(Value::references).collect()
+            }
             TaskKind::Empty | TaskKind::FirstOf { .. } | TaskKind::WaitFor { .. } => Vec::new(),
         }
     }

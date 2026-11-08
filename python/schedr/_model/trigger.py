@@ -184,5 +184,34 @@ class RunOfTrigger:
         return {"kind": "run_of", "run_of": run_of}
 
 
-type Trigger = NoTrigger | CronTrigger | EveryTrigger | OnceTrigger | EventTrigger | RunOfTrigger
+@dataclass(frozen=True, slots=True)
+class EventNamedTrigger:
+    """``trigger=EventNamed(...)``: a run per key of the events of a name posted.
+
+    Decision 354: the events are posted through the API.
+
+    Attributes:
+        name: The events' name.
+    """
+
+    name: str
+
+    def to_json(self) -> dict[str, Any]:
+        """The trigger as DAG JSON.
+
+        Returns:
+            ``{"kind": "event_named", "event": {"name": ...}}``.
+        """
+        return {"kind": "event_named", "event": {"name": self.name}}
+
+
+type Trigger = (
+    NoTrigger
+    | CronTrigger
+    | EveryTrigger
+    | OnceTrigger
+    | EventTrigger
+    | RunOfTrigger
+    | EventNamedTrigger
+)
 """Any trigger."""

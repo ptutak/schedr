@@ -2,7 +2,8 @@
 
 `wait_for(RunOf(...))` is a step that waits for a run of another DAG, or for one of its tasks. The
 master ends it when that run or task ends, as it does `EmptyOperator`: no process, no slot and no
-polling.
+polling. To wait for an event posted by an outside system, use
+[`wait_for(EventNamed(...))`](22-events.md#waiting-in-a-run).
 
 ```{literalinclude} ../../examples/docs/wait_for.py
 :language: python

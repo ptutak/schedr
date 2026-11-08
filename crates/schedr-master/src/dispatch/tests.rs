@@ -3236,6 +3236,128 @@ fn waiting_dag(run_of: &Json, routed: bool) -> Dag {
     .unwrap()
 }
 
+/// `sync` with `wait`, a `wait_for(EventNamed("paid", key=...))` (decision 354), then `after`.
+fn event_waiting_dag(key: Option<&Json>) -> Dag {
+    let mut dag = serde_json::to_value(waiting_dag(&json!({"dag": "orders"}), false)).unwrap();
+    let wait = &mut dag["tasks"][0];
+    wait.as_object_mut().unwrap().remove("run_of");
+    wait["kind"] = json!("wait_for_event");
+    wait["event"] = json!({"name": "paid"});
+    if let Some(key) = key {
+        wait["event"]["key"] = key.clone();
+    }
+    serde_json::from_value(dag).unwrap()
+}
+
+async fn post_paid(db: &Database, key: &str, posted_at: Timestamp) {
+    let event = schedr_db::named_events::NewNamedEvent {
+        name: "paid",
+        key,
+        data: &json!({"amount": 40, "$date": "kept as written"}),
+        at: ts("2026-10-21T08:00:00Z"),
+    };
+    db.post_named_event(&event, "anna", None, posted_at)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_wait_for_an_event_ends_with_the_first_of_its_key_posted_since_its_run_was_created() {
+    let (mut dispatcher, db, run_id) =
+        with_run(event_waiting_dag(Some(&json!({"literal": "o-1"})))).await;
+    // Before the run: doesn't count.
+    post_paid(&db, "o-1", ts("2026-10-21T07:00:00Z")).await;
+    dispatcher
+        .step_into(later(1), &mut Vec::new())
+        .await
+        .unwrap();
+    let (state, _) = state_of(&db, &run_id, "wait").await;
+    assert_eq!(state, TaskInstanceState::Queued);
+    let reason = db
+        .ready_instances(later(1))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.task_id == id("wait"))
+        .and_then(|r| r.queued_reason);
+    assert_eq!(
+        reason.as_deref(),
+        Some("waiting for event `paid` with key `o-1`")
+    );
+    post_paid(&db, "o-2", later(2)).await;
+    dispatcher
+        .step_into(later(3), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued,
+        "another key"
+    );
+    post_paid(&db, "o-1", later(4)).await;
+    dispatcher
+        .step_into(later(5), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
+    assert_eq!(
+        output_of(&db, &run_id, "wait").await,
+        json!({
+            "key": "o-1",
+            "data": {"amount": 40, "$date": "kept as written"},
+            "at": {"$datetime": "2026-10-21T08:00:00Z"},
+        })
+    );
+}
+
+#[rstest::rstest]
+#[case::the_run_s_id(Some(json!({"ref": {"kind": "dag_ctx", "field": "run_id"}})), true)]
+#[case::any_key(None, true)]
+#[case::not_a_string(Some(json!({"literal": 5})), false)]
+#[tokio::test]
+async fn a_wait_for_an_event_resolves_its_key_in_its_run(
+    #[case] key: Option<Json>,
+    #[case] ends: bool,
+) {
+    let (mut dispatcher, db, run_id) = with_run(event_waiting_dag(key.as_ref())).await;
+    post_paid(&db, &run_id, later(1)).await;
+    dispatcher
+        .step_into(later(2), &mut Vec::new())
+        .await
+        .unwrap();
+    let want = if ends {
+        TaskInstanceState::Success
+    } else {
+        TaskInstanceState::Failed
+    };
+    assert_eq!(state_of(&db, &run_id, "wait").await.0, want);
+}
+
+#[tokio::test]
+async fn a_wait_for_an_event_that_doesnt_come_times_out() {
+    let (mut dispatcher, db, run_id) =
+        with_run(event_waiting_dag(Some(&json!({"literal": "o-1"})))).await;
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    dispatcher
+        .step_into(later(61), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "after").await.0,
+        TaskInstanceState::Skipped
+    );
+}
+
 /// A run of DAG `orders` (one task, `load`) planned for `planned_for`, ended `state` at `ended`.
 async fn orders_run(
     db: &Database,
@@ -3445,6 +3567,7 @@ fn what_a_wait_for_decides(#[case] found: &[(&str, &str)], #[case] decided: Opti
         WaitEnd::Ran { run_id } => format!("ran {run_id}"),
         WaitEnd::Failed { state, run_id } => format!("failed {state} {run_id}"),
         WaitEnd::TimedOut => "timed out".to_owned(),
+        WaitEnd::Event { .. } | WaitEnd::Refused { .. } => unreachable!("not a run's"),
     });
     assert_eq!(shown.as_deref(), decided);
 }
@@ -3936,4 +4059,53 @@ fn an_assignment_over_what_a_worker_takes_is_never_sent() {
     );
     let why = super::too_big_to_send(&message, size - 1).unwrap();
     assert!(why.contains(&format!("{size} bytes")) && why.contains("[grpc] max_message_size"));
+}
+
+#[tokio::test]
+async fn an_event_posted_after_the_wait_ran_out_doesnt_count_though_seen_late() {
+    // Codex's review: seen a round late, it ended the wait `SUCCESS`.
+    let (mut dispatcher, db, run_id) =
+        with_run(event_waiting_dag(Some(&json!({"literal": "o-1"})))).await;
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    post_paid(&db, "o-1", later(70)).await;
+    dispatcher
+        .step_into(later(75), &mut Vec::new())
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("wait"))
+        .unwrap();
+    assert_eq!(wait.outcome.as_deref(), Some("TimedOut"));
+}
+
+#[tokio::test]
+async fn a_wait_s_key_from_a_parameter_reads_a_tuple_as_the_runner_does() {
+    // Codex's review: a tuple parameter is stored `{"$tuple": [...]}`.
+    let key = json!({"ref": {"kind": "param", "path": ["orders", 0]}});
+    let (mut dispatcher, db, run_id) = with_run(event_waiting_dag(Some(&key))).await;
+    let pool = match db.pool() {
+        schedr_db::Pool::Sqlite(pool) => pool.clone(),
+        schedr_db::Pool::Postgres(_) => unreachable!(),
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        r#"UPDATE runs SET params = '{{"orders": {{"$tuple": ["o-1"]}}}}' WHERE id = '{run_id}'"#
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    post_paid(&db, "o-1", later(1)).await;
+    dispatcher
+        .step_into(later(2), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
 }

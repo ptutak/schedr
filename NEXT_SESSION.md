@@ -4,6 +4,31 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-08, night): M4.11e part 1 built and reviewed by Codex (8 fixed), Grok security review running; e2 and f built in worktrees, not committed
+
+- **e1 (main checkout, uncommitted):** posted events (`POST/GET /api/v1/events`, `schedr events post|list`, `named_events`),
+  `trigger=EventNamed`, `wait_for(EventNamed(..., key=...))`, `/api/v1/changes`, `Json` as `Any`, generic dataclasses in the
+  describer and codec, `.on(Event[Json])`, docs page `docs/02-dags/22-events.md` (Codex terra), example tested. Codex's 8
+  findings fixed with regression tests (cursor lookback `SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK` + keys the DAG has; window on
+  repeats, also for `RunOf`; tag-shaped data escaped; nothing after `max_wait`; mapped and `$tuple` keys; body limit; `at` on a
+  retry). B184's cause (Grok) recorded in `bugs/B184.toml`.
+- **Next for e1:** read Grok's security report (session cf608a20-42d5-4ed7-b915-bfeffc54599d, worktree
+  `../schedr-grok-4.11e1`, task output `buhptckl3`), verify and fix, `make check`, `make docs`, commit, push, remove the
+  `codex/4.11e1` and `grok/4.11e1` worktrees, branches and pyenv envs.
+- **e2 (`../schedr-claude-e2`, branch `claude/e2` on the snapshot commit 9b73d08):** `@sensor(wait_for=EventNamed)` and
+  `@trigger(wait_for=EventNamed)` with tests passing; `trigger_passed` table added. After e1 is committed: rebase onto main,
+  then use `named_event_unpassed` + the lookback in `event_to_hand`, filter `posted_at <= deadline` in `sensor_event`, add
+  tests for both, then the reviews.
+- **f (`../schedr-claude-f`, branch `claude/f` on 9b73d08):** `@trigger.poke(batch=...)`: `batch_ms` in the model, master
+  validation (+ tests, not yet run), Python decorator, host window, `run_trigger`; 8 Python tests pass. To do: run the Rust
+  tests, mypy/basedpyright, docs, record the small decisions in decision 352 (event `at` is None; `run_trigger` batches per
+  poke), then the reviews.
+- **Answered (2026-11-08):** e2's key: A (define the sensor inside the DAG's block; in decision 354). B184 postponed to
+  M4B (the whole turn's messages batched there). M4.11g added to PLAN.md: `delay` / `until` as plain Python sensors.
+- **e1 now:** Grok's 4 security findings fixed with tests; `make check` stopped only on `cargo fmt`, which was run:
+  run `make check` again, then `make docs`, commit, push. The review worktrees are removed; e2 and f worktrees stay
+  (their `target/` can be cleaned, the code can't).
+
 ## State (2026-11-08): M4.11d done (d2 part 2 committed); M4.11e next, its questions answered. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
 
 - **M4.11b part 3:** `schedr triggers`, the trigger endpoints, manual runs with an event (`--event`, `--event-key`,

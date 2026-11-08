@@ -146,6 +146,7 @@ pub fn master_settings(config: &Config) -> Settings {
         handed_call_min: config.timings.handed_call_min,
         cleanup_move_wait: config.timings.cleanup_move_wait,
         script_root_grace: config.timings.script_root_grace,
+        event_lookback: config.timings.event_lookback,
         timings: schedr_master::core::MasterTimings {
             round_gap: config.timings.round_gap,
             notification_retry: config.timings.notification_retry,
@@ -829,6 +830,8 @@ pub struct ApiTimings {
     pub worker_request: Duration,
     /// `connection_test_timeout`.
     pub connection_test: Duration,
+    /// `[events] max_size`.
+    pub max_event_size: usize,
 }
 
 impl ApiTimings {
@@ -848,6 +851,11 @@ impl ApiTimings {
             worker_connect: config.timings.worker_connect_timeout,
             worker_request: config.webserver.worker_request_timeout,
             connection_test: config.webserver.connection_test_timeout,
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a size in bytes, a few MiB, on a 64-bit host"
+            )]
+            max_event_size: config.events.max_size as usize,
         }
     }
 }
@@ -883,6 +891,7 @@ pub async fn serve_api(
                 .with_timeouts(timings.worker_connect, timings.worker_request),
         ))
         .with_connection_test_timeout(timings.connection_test)
+        .with_max_event_size(timings.max_event_size)
         .with_metrics(observed.metrics);
     observed.ready.ready();
     let api = router(state);

@@ -44,6 +44,16 @@ pub enum WaitEnd {
     },
     /// Its `max_wait` ran out first.
     TimedOut,
+    /// The event a `wait_for(EventNamed(...))` waited for came (decision 354): its value.
+    Event {
+        /// The event, as the node's output (`Event[Json]`).
+        value: serde_json::Value,
+    },
+    /// It can't wait: its key isn't one (decision 354); it fails with this reason.
+    Refused {
+        /// Why.
+        reason: String,
+    },
 }
 
 /// Why a `first_of` failed whose output didn't fit, as an attempt's error kind says it.
@@ -742,6 +752,12 @@ impl Execution {
                 (FAILED.to_owned(), json!({"state": state, "run_id": other}))
             }
             WaitEnd::TimedOut => (TIMED_OUT.to_owned(), json!({})),
+            WaitEnd::Event { value } => (SUCCESS.to_owned(), value),
+            WaitEnd::Refused { reason } => {
+                let mut failed = update(task_id, -1, TaskInstanceState::Failed);
+                failed.reason = Some(reason);
+                return self.advance(run_id, &run, vec![failed], now).await;
+            }
         };
         self.db.store_output(&instance.id, &outcome, &value).await?;
         let ended = InstanceUpdate {

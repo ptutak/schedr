@@ -73,6 +73,7 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
     assert_eq!(
         paths,
         [
+            "/api/v1/changes",
             "/api/v1/commands/{command_id}",
             "/api/v1/connections",
             "/api/v1/connections/check",

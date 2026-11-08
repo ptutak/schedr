@@ -29,6 +29,7 @@ from schedr._serialization.annotations import (
     TypeModelError,
     is_union,
     label,
+    substituted,
     tuple_items,
     type_hints,
     unwrap,
@@ -105,6 +106,10 @@ def _describe(annotation: object, seen: frozenset[type], side: Side) -> TypeDesc
         return _typed_dict(annotation, seen, side)
     if isinstance(annotation, type) and dataclasses.is_dataclass(annotation):
         return _dataclass(annotation, seen, side)
+    if isinstance(origin, type) and dataclasses.is_dataclass(origin):
+        # A generic dataclass given its parameters (`Event[Json]`), as the codec reads it.
+        parameters = getattr(origin, "__parameters__", ())
+        return _dataclass(origin, seen, side, dict(zip(parameters, args, strict=False)))
     hint = _HINTS.get(origin or annotation)
     suffix = f" ({hint})" if hint else ""
     raise TypeModelError(f"`{label(annotation)}` is not supported{suffix}")
@@ -135,10 +140,19 @@ def _dict(annotation: object, args: tuple[Any, ...], seen: frozenset[type], side
     return DictType(_describe(args[1], seen, side))
 
 
-def _fields(cls: type, seen: frozenset[type], required: set[str] | None, side: Side) -> list[Field]:
+def _fields(
+    cls: type,
+    seen: frozenset[type],
+    required: set[str] | None,
+    side: Side,
+    given: dict[object, object] | None = None,
+) -> list[Field]:
     if cls in seen:
         raise TypeModelError(f"`{cls.__name__}` refers to itself; recursive types aren't supported")
     hints = type_hints(cls, f"`{cls.__name__}`")
+    if getattr(cls, "__parameters__", ()):
+        # Its type parameters given (else their defaults), as the codec reads it.
+        hints = {name: substituted(hint, given or {}) for name, hint in hints.items()}
     names: list[str]
     if required is None:  # a dataclass
         names = []
@@ -172,5 +186,7 @@ def _typed_dict(cls: type, seen: frozenset[type], side: Side) -> TypeDesc:
     return TypedDictType(cls.__name__, _fields(cls, seen, required, side))
 
 
-def _dataclass(cls: type, seen: frozenset[type], side: Side) -> TypeDesc:
-    return DataclassType(cls.__name__, _fields(cls, seen, None, side))
+def _dataclass(
+    cls: type, seen: frozenset[type], side: Side, given: dict[object, object] | None = None
+) -> TypeDesc:
+    return DataclassType(cls.__name__, _fields(cls, seen, None, side, given))

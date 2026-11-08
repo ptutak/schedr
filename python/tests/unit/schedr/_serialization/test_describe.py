@@ -127,3 +127,30 @@ def test_typed_dict_fields_with_required_flags() -> None:
 def test_unsupported_types_name_the_part(annotation: object, message: str) -> None:
     with pytest.raises(TypeModelError, match=message):
         describe(annotation)
+
+
+@dataclass
+class Boxed[T = None]:
+    value: T
+    items: list[T] = field(default_factory=list)
+
+
+def test_a_generic_dataclass_is_described_with_its_parameters_or_their_defaults() -> None:
+    assert describe(Boxed[int]) == DataclassType(
+        "Boxed",
+        [
+            Field("value", ScalarType("int"), required=True),
+            Field("items", ListType(ScalarType("int")), required=False),
+        ],
+    )
+    assert describe(Boxed).to_json()["fields"][0]["type"] == {"type": "none"}
+
+
+def test_json_is_any_json_unchecked() -> None:
+    from schedr.types import Json  # noqa: PLC0415
+
+    assert describe(Json) == ScalarType("any")
+    assert describe(Boxed[Json]).to_json()["fields"][1]["type"] == {
+        "type": "list",
+        "item": {"type": "any"},
+    }

@@ -11,9 +11,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use schedr_api::views::{
     AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
-    DagList, DagView, DeploymentView, EventList, ImportErrorList, LogChunk, OutputView,
-    PauseRequest, ResourceList, RunDetail, RunList, SensorList, TestConnectionRequest, TriggerList,
-    TriggerRequest, TriggerView, WorkerList,
+    DagList, DagView, DeploymentView, EventList, ImportErrorList, LogChunk, NamedEventList,
+    NamedEventView, OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList,
+    SensorList, TestConnectionRequest, TriggerList, TriggerRequest, TriggerView, WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -659,6 +659,43 @@ impl<T: Transport> Client<T> {
         .await
     }
 
+    /// `POST /api/v1/events`: posts an event (decision 354), sent under the current command key
+    /// when [`with_command_key`] set one (so [`Client::submit`] can send it again safely).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn post_event(
+        &self,
+        event: &PostEventRequest,
+    ) -> Result<NamedEventView, ClientError> {
+        self.call(
+            Method::Post,
+            "/api/v1/events".to_owned(),
+            Some(to_body(event)?),
+        )
+        .await
+    }
+
+    /// `GET /api/v1/events`: the newest events posted, of `name` if given, at most `limit`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn named_events(
+        &self,
+        name: Option<&str>,
+        limit: u32,
+    ) -> Result<NamedEventList, ClientError> {
+        let name = name.map_or_else(String::new, |name| format!("&name={}", path(name)));
+        self.call(
+            Method::Get,
+            format!("/api/v1/events?limit={limit}{name}"),
+            None,
+        )
+        .await
+    }
+
     /// `POST /api/v1/dags/{dag}/trigger/restart`: the command.
     ///
     /// # Errors
@@ -912,14 +949,14 @@ impl<T: Transport> Client<T> {
         .await
     }
 
-    /// `GET /api/v1/events`: what changed, as it happens (`run`, `dag`, `workers` and
+    /// `GET /api/v1/changes`: what changed, as it happens (`run`, `dag`, `workers` and
     /// `refresh` events).
     ///
     /// # Errors
     ///
     /// [`ClientError`] if the stream can't be opened.
     pub async fn events(&self) -> Result<EventReader, ClientError> {
-        let chunks = self.transport.open("/api/v1/events".to_owned()).await?;
+        let chunks = self.transport.open("/api/v1/changes".to_owned()).await?;
         Ok(EventReader::new(chunks))
     }
 
@@ -1282,13 +1319,9 @@ impl<T: Transport> Client<T> {
     ///
     /// The last try's [`ClientError`], or the first that isn't worth another try (the server
     /// refused the command).
-    pub async fn submit<F>(
-        &self,
-        key: String,
-        request: impl Fn() -> F,
-    ) -> Result<CommandView, ClientError>
+    pub async fn submit<R, F>(&self, key: String, request: impl Fn() -> F) -> Result<R, ClientError>
     where
-        F: Future<Output = Result<CommandView, ClientError>>,
+        F: Future<Output = Result<R, ClientError>>,
     {
         let mut delay = self.poll;
         let mut tries = 1;

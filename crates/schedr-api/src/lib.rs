@@ -16,6 +16,7 @@ pub mod error;
 pub mod events;
 pub mod logs;
 pub mod metrics;
+pub mod named_events;
 pub mod routes;
 pub mod state;
 pub mod version;
@@ -63,6 +64,8 @@ pub use state::ApiState;
         routes::get_deployment,
         routes::list_import_errors,
         events::events,
+        named_events::post_event,
+        named_events::list_events,
         routes::drain_worker,
         routes::resume_worker,
         routes::list_connections,
@@ -75,6 +78,7 @@ pub use state::ApiState;
         (name = "commands", description = "Actions and the master's decisions"),
         (name = "workers", description = "The worker registry"),
         (name = "connections", description = "Checking and testing connections on a worker"),
+        (name = "events", description = "Events posted by outside systems, for `EventNamed`"),
     ),
     modifiers(&BearerToken)
 )]
@@ -146,6 +150,11 @@ fn trigger_routes() -> Router<ApiState> {
 
 /// The API's routes over `state`.
 pub fn router(state: ApiState) -> Router {
+    // An event's data may be up to `[events] max_size`, over axum's 2 MiB default (Codex's
+    // review); the name, key and JSON around it get some room.
+    let event_body = state
+        .max_event_size
+        .saturating_add(named_events::EVENT_BODY_ROOM);
     Router::new()
         .route("/api/v1/dags", get(routes::list_dags))
         .route("/api/v1/dags/{dag_id}", get(routes::get_dag))
@@ -156,7 +165,13 @@ pub fn router(state: ApiState) -> Router {
             get(routes::list_runs).post(routes::trigger_run),
         )
         .route("/api/v1/runs", get(routes::list_all_runs))
-        .route("/api/v1/events", get(events::events))
+        .route("/api/v1/changes", get(events::events))
+        .route(
+            "/api/v1/events",
+            get(named_events::list_events)
+                .post(named_events::post_event)
+                .layer(axum::extract::DefaultBodyLimit::max(event_body)),
+        )
         .route("/api/v1/runs/{run_id}", get(routes::get_run))
         .route("/api/v1/runs/{run_id}/dag", get(routes::get_run_dag))
         .route(

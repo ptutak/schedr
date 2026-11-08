@@ -269,34 +269,44 @@ fn resolve_ref(reference: &Reference, sources: &Sources) -> Result<Json, String>
                     return Ok(Json::Null);
                 }
             }
-            let mut value = sources
+            let value = sources
                 .outputs
                 .get(task)
                 .ok_or_else(|| format!("the output of `{task}` isn't stored"))?;
-            for step in path {
-                value = match (step, value) {
-                    (PathElem::Field(name), Json::Object(fields)) => match fields.get("$dict") {
-                        // A dict shaped like a tag is stored escaped (B66).
-                        Some(Json::Object(inner)) if fields.len() == 1 => inner,
-                        _ => fields,
-                    }
-                    .get(name)
-                    .ok_or_else(|| format!("`{task}`: `{name}` doesn't exist in the output"))?,
-                    (PathElem::Index(i), Json::Array(items)) => usize::try_from(*i)
-                        .ok()
-                        .and_then(|i| items.get(i))
-                        .ok_or_else(|| format!("`{task}`: index {i} doesn't exist"))?,
-                    (PathElem::Index(i), Json::Object(fields)) => fields
-                        .get("$tuple")
-                        .and_then(Json::as_array)
-                        .and_then(|items| usize::try_from(*i).ok().and_then(|i| items.get(i)))
-                        .ok_or_else(|| format!("`{task}`: index {i} doesn't exist"))?,
-                    _ => return Err(format!("`{task}`: the path doesn't exist in the output")),
-                };
-            }
-            Ok(value.clone())
+            follow(value, path, &format!("`{task}`"), "the output")
         }
     }
+}
+
+/// `path` into a stored `value` (`what` of `whose`, for messages), as the runner reads it: a
+/// dict shaped like a tag is stored escaped (`$dict`, B66), a tuple as `$tuple`.
+///
+/// # Errors
+///
+/// A message for a path that doesn't exist in it.
+pub fn follow(value: &Json, path: &[PathElem], whose: &str, what: &str) -> Result<Json, String> {
+    let mut value = value;
+    for step in path {
+        value = match (step, value) {
+            (PathElem::Field(name), Json::Object(fields)) => match fields.get("$dict") {
+                Some(Json::Object(inner)) if fields.len() == 1 => inner,
+                _ => fields,
+            }
+            .get(name)
+            .ok_or_else(|| format!("{whose}: `{name}` doesn't exist in {what}"))?,
+            (PathElem::Index(i), Json::Array(items)) => usize::try_from(*i)
+                .ok()
+                .and_then(|i| items.get(i))
+                .ok_or_else(|| format!("{whose}: index {i} doesn't exist"))?,
+            (PathElem::Index(i), Json::Object(fields)) => fields
+                .get("$tuple")
+                .and_then(Json::as_array)
+                .and_then(|items| usize::try_from(*i).ok().and_then(|i| items.get(i)))
+                .ok_or_else(|| format!("{whose}: index {i} doesn't exist"))?,
+            _ => return Err(format!("{whose}: the path doesn't exist in {what}")),
+        };
+    }
+    Ok(value.clone())
 }
 
 /// A short description of `json`'s kind, for messages ("null", "a string").

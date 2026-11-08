@@ -2,7 +2,7 @@
 //! browsers, and a running attempt's log as it grows.
 //!
 //! - **Relays:** one per deployment, started by the first browser that wants its changes: it
-//!   reads the webserver's `GET /api/v1/events` and hands each change to every browser
+//!   reads the webserver's `GET /api/v1/changes` and hands each change to every browser
 //!   following that deployment; when the stream ends or can't be opened it tries again (after
 //!   1 s, doubling to 30 s), and once it is back sends `refresh`, since anything may have
 //!   changed meanwhile.

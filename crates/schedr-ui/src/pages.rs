@@ -107,12 +107,15 @@ async fn switched_off_in<T: Transport>(
     (switched_off, why)
 }
 
-/// Whether a manual run of the DAG brings an event: an event trigger's or a `RunOf`'s
-/// (decision 353).
+/// Whether a manual run of the DAG brings an event: an event trigger's, a `RunOf`'s (decision
+/// 353) or an `EventNamed`'s (decision 354).
 fn takes_event(dag: &DagView) -> bool {
-    dag.trigger
-        .as_ref()
-        .is_some_and(|trigger| matches!(trigger["kind"].as_str(), Some("event" | "run_of")))
+    dag.trigger.as_ref().is_some_and(|trigger| {
+        matches!(
+            trigger["kind"].as_str(),
+            Some("event" | "run_of" | "event_named")
+        )
+    })
 }
 
 /// Its trigger, for a DAG a trigger starts.

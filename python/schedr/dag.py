@@ -9,13 +9,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from types import FrameType, TracebackType
-from typing import Self
+from typing import Any, Self
 
 from schedr import _build, _params
 from schedr._model import Dag as DagModel
 from schedr._model import (
     DagCtxField,
     DagCtxRef,
+    EventNamedTrigger,
     Group,
     NoTrigger,
     RunOfTrigger,
@@ -200,6 +201,9 @@ class Dag:
         elif self.trigger is not None and isinstance(self.trigger.to_model(), RunOfTrigger):
             # The run that started it: `{"run_id", "dag_id", "planned_for"}` (decision 353).
             self._builder.event_data = describe(dict[str, str])
+        elif self.trigger is not None and isinstance(self.trigger.to_model(), EventNamedTrigger):
+            # The data posted with the event: any JSON (decision 354).
+            self._builder.event_data = describe(Any)
         if self._params is not None:
             self._builder.params_class = self.params
             self._builder.params_type = self._params.type_desc
@@ -297,8 +301,10 @@ class Dag:
                 )
             builder.functions[name] = self.trigger.function.fn
             return
-        if self.trigger is not None and isinstance(self.trigger.to_model(), RunOfTrigger):
-            return  # its runs bring the run that started them as their event
+        if self.trigger is not None and isinstance(
+            self.trigger.to_model(), RunOfTrigger | EventNamedTrigger
+        ):
+            return  # its runs bring the run, or the event posted, that started them
         fields = {DagCtxField.EVENT_KEY, DagCtxField.EVENT_DATA, DagCtxField.EVENT_AT}
         for task in builder.tasks.values():
             if {DagCtxRef(field) for field in fields} & set(task.references()):

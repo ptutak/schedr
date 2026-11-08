@@ -349,6 +349,7 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
             "MASTER__HEARTBEAT_INTERVAL" => &mut timings.heartbeat_interval,
             "MASTER__LEASE_TIMEOUT" => &mut timings.lease_timeout,
             "MASTER__SCRIPT_ROOT_GRACE" => &mut timings.script_root_grace,
+            "MASTER__EVENT_LOOKBACK" => &mut timings.event_lookback,
             "MASTER__LEASE_PERIOD" => &mut timings.lease_period,
             "MASTER__READ_BACK_WINDOW" => &mut timings.read_back_window,
             "MASTER__READ_BACK_INTERVAL" => &mut timings.read_back_interval,

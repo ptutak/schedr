@@ -25,7 +25,7 @@ pub mod version;
 
 pub use connection::ConnectionDef;
 pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params, Resource, ResourceState};
-pub use ids::{DagId, IdError, TaskId};
+pub use ids::{DagId, EventName, IdError, TaskId};
 pub use secret::{SecretDecl, SecretName};
 pub use states::{
     AttemptStatus, CleanupResult, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState,

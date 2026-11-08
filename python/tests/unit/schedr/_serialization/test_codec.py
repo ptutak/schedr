@@ -371,3 +371,22 @@ def test_an_outcome_named_with_nul_is_refused() -> None:
     assert encode(odd["fine"], odd) == "fine"
     with pytest.raises(CodecError, match="an outcome name containing NUL"):
         encode(odd["a\0b"], odd)
+
+
+@dataclass(frozen=True)
+class Boxed[T = None]:
+    value: T
+    at: datetime | None = None
+
+
+def test_a_generic_dataclass_is_encoded_and_decoded_by_its_parameters() -> None:
+    from schedr.types import Json  # noqa: PLC0415
+
+    boxed = Boxed[Json]({"n": [1, 2]}, MOMENT)
+    stored = encode(boxed, Boxed[Json])
+    assert stored == {"value": {"n": [1, 2]}, "at": {"$datetime": "2026-10-19T03:00:00+00:00"}}
+    assert decode(stored, Boxed[Json]) == boxed
+    with pytest.raises(CodecError, match="expected int"):
+        encode(Boxed("x"), Boxed[int])
+    with pytest.raises(CodecError, match="expected Boxed"):
+        encode("x", Boxed[int])

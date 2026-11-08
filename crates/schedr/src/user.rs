@@ -9,14 +9,14 @@ use std::io::Write;
 
 use jiff::tz::TimeZone;
 use schedr_api::views::{
-    AttemptView, CheckConnectionsRequest, CommandView, DagView, RunDetail, RunView, TaskView,
-    TestConnectionRequest, TriggerRequest, TriggerView, WorkerView,
+    AttemptView, CheckConnectionsRequest, CommandView, DagView, PostEventRequest, RunDetail,
+    RunView, TaskView, TestConnectionRequest, TriggerRequest, TriggerView, WorkerView,
 };
 
 use crate::app::AppError;
 use crate::cli::{
-    ConnectionsCommand, DagsCommand, LogsArgs, ResourcesCommand, RunsCommand, SensorsCommand,
-    TasksCommand, TriggersCommand, WorkersCommand,
+    ConnectionsCommand, DagsCommand, EventsCommand, LogsArgs, ResourcesCommand, RunsCommand,
+    SensorsCommand, TasksCommand, TriggersCommand, WorkersCommand,
 };
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
 use crate::times::{parse_for, show, show_short, trigger_text};
@@ -220,7 +220,7 @@ pub async fn run_triggers<T: Transport>(
                     vec![
                         one_line(&event.key),
                         event.received_at.to_string(),
-                        event.data.to_string(),
+                        one_line(&event.data.to_string()),
                     ]
                 })
                 .collect();
@@ -289,7 +289,13 @@ async fn trigger_command<T: Transport>(
 /// What a trigger said, on one line of a table and with nothing a terminal would act on.
 fn one_line(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if schedr_model::trigger::acts_on_display(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -304,6 +310,74 @@ fn trigger_row(trigger: &TriggerView) -> Vec<String> {
         trigger.failures.to_string(),
         shown(&trigger.last_error),
     ]
+}
+
+/// `schedr events ...` (decision 354).
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for data that isn't JSON or a time that doesn't read;
+/// [`AppError::Client`] as for [`run_dags`].
+pub async fn run_events<T: Transport>(
+    command: &EventsCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<(), AppError> {
+    match command {
+        EventsCommand::Post {
+            name,
+            key,
+            data,
+            at,
+        } => {
+            let data = given_event_data(data.as_deref())
+                .map_err(|why| AppError::BadArgument(why.replace("--event-data", "--data")))?;
+            let request = PostEventRequest {
+                name: name.clone(),
+                key: key.clone(),
+                data: data.unwrap_or_default(),
+                at: for_time(at.as_deref(), err)?,
+            };
+            // One key for every try: a post whose answer was lost is stored once.
+            let event = client
+                .submit(schedr_client::new_command_key(), || {
+                    client.post_event(&request)
+                })
+                .await?;
+            if output.json {
+                return print_json(out, &event);
+            }
+            writeln!(
+                out,
+                "posted event {} ({name}, key {})",
+                event.id,
+                one_line(&event.key)
+            )?;
+        }
+        EventsCommand::List { name, limit } => {
+            let list = client.named_events(name.as_deref(), *limit).await?;
+            if output.json {
+                return print_json(out, &list);
+            }
+            let rows: Vec<Vec<String>> = list
+                .events
+                .iter()
+                .map(|event| {
+                    vec![
+                        event.name.clone(),
+                        one_line(&event.key),
+                        event.at.to_string(),
+                        one_line(&event.posted_by),
+                        one_line(&event.data.to_string()),
+                    ]
+                })
+                .collect();
+            write_table(out, &["NAME", "KEY", "AT", "POSTED BY", "DATA"], &rows)?;
+        }
+    }
+    Ok(())
 }
 
 /// `--event-data`: JSON, or `@file.json`.

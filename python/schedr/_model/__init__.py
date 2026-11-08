@@ -33,11 +33,13 @@ from schedr._model.tasks import (
     TaskCleanup,
     TaskKind,
     TaskSettings,
+    WaitForEventKind,
     WaitForKind,
 )
 from schedr._model.timestamps import format_timestamp, parse_moment
 from schedr._model.trigger import (
     CronTrigger,
+    EventNamedTrigger,
     EveryTrigger,
     NoTrigger,
     OnceTrigger,
@@ -96,6 +98,7 @@ __all__ = [
     "Edge",
     "EdgeKind",
     "EmptyKind",
+    "EventNamedTrigger",
     "EveryTrigger",
     "Expand",
     "ExpandKwargs",
@@ -145,6 +148,7 @@ __all__ = [
     "TypedDictType",
     "UnionType",
     "Value",
+    "WaitForEventKind",
     "WaitForKind",
     "format_timestamp",
     "parse_moment",

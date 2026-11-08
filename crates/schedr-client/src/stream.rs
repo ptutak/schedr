@@ -1,5 +1,5 @@
 //! Streamed answers: a response body read as it comes ([`Chunks`]), and server-sent events
-//! read from one ([`EventReader`]), for `GET /api/v1/events`.
+//! read from one ([`EventReader`]), for `GET /api/v1/changes`.
 
 use tokio::sync::mpsc;
 

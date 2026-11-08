@@ -29,6 +29,21 @@ from schedr.triggers import UNSET, Moment, Trigger, _Unset, _window
 MAX_KEY_BYTES = 1024
 """The longest key an event may have: it is stored with every event."""
 
+_SHOWN_ODDLY = frozenset(
+    "\u2028\u2029\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+)
+"""Line separators and bidirectional marks: a terminal or a page acts on them (as the master)."""
+
+
+def acts_on_display(key: str) -> bool:
+    """Whether a key holds what a terminal or a page would act on instead of showing it.
+
+    Returns:
+        True for a control character, a line or paragraph separator, or a bidirectional mark.
+    """
+    return any(unicodedata.category(c) == "Cc" or c in _SHOWN_ODDLY for c in key)
+
+
 AFTER = "after"
 """The parameter every trigger function takes first: the last key acted on, or ``None``."""
 
@@ -58,10 +73,11 @@ class Event[T = None]:
         """
         if not isinstance(self.key, str):
             raise TypeError(f"an event's key must be a non-empty string, got {self.key!r}")
-        control = any(unicodedata.category(c) == "Cc" for c in self.key)
+        control = acts_on_display(self.key)
         if len(self.key.encode()) > MAX_KEY_BYTES or control:
             raise TypeError(
-                f"an event's key has at most {MAX_KEY_BYTES} bytes and no control characters, got "
+                f"an event's key has at most {MAX_KEY_BYTES} bytes and no control, line-separator "
+                "or bidirectional characters, got "
                 f"{self.key[:40]!r}..."
             )
         if self.at is not None and self.at.tzinfo is None:
