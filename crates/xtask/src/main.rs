@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::CommandFactory as _;
-use xtask::docs::{DOCS_GENERATED_DIR, crates_from_metadata, docs_sources};
+use xtask::docs::{DOCS_GENERATED_DIR, DocsInputs, crates_from_metadata, docs_sources};
 use xtask::reference::{MetricGroup, reference_sources};
 use xtask::{Command, GeneratedFile, parse_args, schema_files, stale_files, stale_message};
 
@@ -55,12 +55,26 @@ fn main() -> ExitCode {
             if generated.exists() {
                 std::fs::remove_dir_all(&generated).expect("clear the generated directory");
             }
-            let files = docs_sources(
-                &read("PROJECT.md"),
-                &read("README.md"),
-                &read("PLAN.md"),
-                &crates,
-            );
+            let mut design: Vec<(String, String)> = std::fs::read_dir(root.join("design"))
+                .expect("read design/")
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| Path::new(name).extension().is_some_and(|e| e == "md"))
+                .map(|name| {
+                    let text = read(&format!("design/{name}"));
+                    (name, text)
+                })
+                .collect();
+            design.sort();
+            let files = docs_sources(&DocsInputs {
+                project: read("PROJECT.md"),
+                journal: read("JOURNAL.md"),
+                decisions: read("DECISIONS.md"),
+                readme: read("README.md"),
+                plan: read("PLAN.md"),
+                design,
+                crates,
+            });
             write_files(&root, &files);
             write_files(&root, &references());
             ExitCode::SUCCESS

@@ -104,7 +104,7 @@ version.
 and `workers` (each `worker_id` and `schedr_version` as the worker reported it, every
 active worker). `message` is the same line the text output prints (`ok: ...` on a pass,
 `error: ...` on a failure). `ok` is false when this check fails. The decisions are in
-[Testing DAGs](../_generated/05-design/08-testing-dags.md).
+[Testing DAGs](../_generated/08-history/project/08-testing-dags.md).
 
 ## `schedr dags test`
 
@@ -150,7 +150,7 @@ does not print the parameters; `schedr runs show` does, for a run on a server.
 `--secret 'path#key=value'` (repeatable) gives a secret's value, for every storage name
 ([Secrets](13-secrets.md#testing)). `--task` is accepted and then reports that it is not
 implemented yet (milestone M4); running one task is
-[Testing DAGs](../_generated/05-design/08-testing-dags.md).
+[Testing DAGs](../_generated/08-history/project/08-testing-dags.md).
 
 ## One task, and its context
 
@@ -278,4 +278,4 @@ sent as given, and the master fills the rest. The checks are the ones a trigger 
 with the master's reason. `RunResult` does not carry the parameters. `secrets` gives
 secret values by `"path#key"`, passed as `--secret` and masked in the logs and outputs as on
 a worker. `step` and `replace` raise `NotImplementedError` (milestone M4). Those, and
-`schedr dags test --task`, are [Testing DAGs](../_generated/05-design/08-testing-dags.md).
+`schedr dags test --task`, are [Testing DAGs](../_generated/08-history/project/08-testing-dags.md).

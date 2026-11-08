@@ -129,12 +129,18 @@ fn rust_api_page_links_each_crate() {
 
 #[test]
 fn docs_sources_contains_every_page() {
-    let files = docs_sources(
-        PROJECT,
-        "# readme\n",
-        "# plan\n",
-        &[crate_doc("a", "a", "")],
-    );
+    let files = docs_sources(&DocsInputs {
+        project: PROJECT.to_owned(),
+        journal: "# journal\n".to_owned(),
+        decisions: "# decisions\n".to_owned(),
+        readme: "# readme\n".to_owned(),
+        plan: "# plan\n".to_owned(),
+        design: vec![
+            ("README.md".to_owned(), "# design\n".to_owned()),
+            ("workers.md".to_owned(), "# Workers\n".to_owned()),
+        ],
+        crates: vec![crate_doc("a", "a", "")],
+    });
     let paths: Vec<String> = files.iter().map(|f| f.path.display().to_string()).collect();
     assert_eq!(
         paths,
@@ -143,14 +149,19 @@ fn docs_sources_contains_every_page() {
             "docs/_generated/06-plan.md",
             "docs/_generated/07-api/01-python.md",
             "docs/_generated/07-api/02-rust.md",
-            "docs/_generated/05-design/00-schedr-project-decisions.md",
-            "docs/_generated/05-design/01-goal.md",
-            "docs/_generated/05-design/02-architecture.md",
+            "docs/_generated/05-design/decisions.md",
+            "docs/_generated/05-design/README.md",
+            "docs/_generated/05-design/topics/workers.md",
+            "docs/_generated/08-history/journal.md",
+            "docs/_generated/08-history/project/00-schedr-project-decisions.md",
+            "docs/_generated/08-history/project/01-goal.md",
+            "docs/_generated/08-history/project/02-architecture.md",
         ]
     );
     assert_eq!(files[0].contents, "# readme\n");
     assert_eq!(files[1].contents, "# plan\n");
-    assert!(files[5].contents.starts_with("# Goal\n"));
+    assert_eq!(files[6].contents, "# Workers\n");
+    assert!(files[9].contents.starts_with("# Goal\n"));
 }
 
 const METADATA: &str = r#"{"packages": [

@@ -17,7 +17,7 @@ and called inside each block.
 | `Once("2026-12-24T23:00", tz="Europe/Warsaw")` | That one moment. |
 | `None` | Manual runs only. |
 
-Event triggers are [Sensors and triggers](../_generated/05-design/07-python-api-structure.md#sensors-and-triggers).
+Event triggers are [Sensors and triggers](../_generated/08-history/project/07-python-api-structure.md#sensors-and-triggers).
 
 ## Cron
 

@@ -133,6 +133,6 @@ inside a [group](11-groups.md) gets the group's name as that prefix (`load.extra
 Subclassing `CommandOperator`, `EmptyOperator` or `Trigger` outside `schedr` is a
 `TypeError`. Share a function that creates tasks, or share a `@task` function.
 `ScriptOperator` is
-[Native API](../_generated/05-design/07-python-api-structure.md#native-api).
+[Native API](../_generated/08-history/project/07-python-api-structure.md#native-api).
 `TriggerDagOperator` is
-[Dependencies between DAGs](../_generated/05-design/07-python-api-structure.md#dependencies-between-dags).
+[Dependencies between DAGs](../_generated/08-history/project/07-python-api-structure.md#dependencies-between-dags).

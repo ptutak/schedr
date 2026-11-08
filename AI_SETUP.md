@@ -226,7 +226,7 @@ Separate jobs. The ones that run on this machine each have a make target:
   `wheel-linux-aarch64` and `wheel-macos-arm64`. The same script and smoke test on native
   runners. No local make target (this machine is x86_64, and there is no Mac). See
   `PROJECT.md`, Packaging and releases.
-- **Releases** (`.github/workflows/release.yml`, decisions 153-163): a pushed tag runs all of
+- **Releases** (`.github/workflows/release.yml`; schedr's release decisions): a pushed tag runs all of
   CI (`ci.yml` is also a `workflow_call`), then checks and attests the four wheels, publishes
   them with Trusted Publishing, installs the published one from the index and smoke-tests
   it, pushes the images to ghcr.io and creates the GitHub Release. `scripts/release.py`

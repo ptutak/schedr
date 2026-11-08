@@ -54,3 +54,10 @@ _generated/06-plan
 _generated/07-api/01-python
 _generated/07-api/02-rust
 ```
+
+```{toctree}
+:maxdepth: 1
+:caption: History
+
+08-history/index
+```

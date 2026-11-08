@@ -5,7 +5,7 @@ how tasks are grouped, how they route by outcome, how a task runs once per eleme
 runs start, the parameters a run is given, the secrets a task reads, how it cleans up, how to test the file, and how type checkers
 read it. These pages describe the API as it runs.
 [How schedr works](../03-guide/index.md) is what the system does with a DAG once it is stored.
-[Python API structure](../_generated/05-design/07-python-api-structure.md) is why the API is
+[Python API structure](../_generated/08-history/project/07-python-api-structure.md) is why the API is
 shaped this way, including features that are not built yet. Signatures are on the
 [Python API](../_generated/07-api/01-python.md) page. Commands and configuration keys are in
 the [Reference](../_generated/04-reference/02-cli.md).

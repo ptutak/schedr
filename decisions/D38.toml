@@ -6,8 +6,8 @@ topic = "ui-cli"
 summary = '''
 Database change notifications default on, including standalone. `[database] change_notifications` is
 applied by `schedr db migrate` or startup `--migrate`, holding the lease, never by a running master.
-The webserver follows the database’s trigger state; when off, it sends refresh events every
-`[webserver] refresh_interval` (15 s).
+The webserver follows the database’s trigger state; when off, it sends refresh events every 15 s
+(a hidden timing since D232: `SCHEDR_HIDDEN__WEBSERVER__REFRESH_INTERVAL`).
 '''
 history = "PROJECT.md#D38"
 step = "M3.4"

@@ -154,7 +154,7 @@ python/
   tests/integration/
 examples/           # example DAGs with their tests; examples/docs/ for the docs' examples
 schema/             # generated from schedr-model, committed (make schema)
-docs/               # the hand-written pages (02-dags, 03-guide, 05-design); the rest generated
+docs/               # the hand-written pages (02-dags, 03-guide, 05-design, 08-history indexes); the rest generated
 charts/schedr/      # the Helm chart
 images/             # Dockerfiles: schedr (with Python), schedr-server (without)
 scripts/            # smoke tests; kind-*.sh cluster checks (standalone, mesh, distributed, kill)
