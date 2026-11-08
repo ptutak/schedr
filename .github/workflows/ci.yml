@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # undone.py reads the pushed commits and the 10 before each (B190).
+          fetch-depth: 0
       # pin-check is Python (uv run --no-sync). It does not build the package.
       # The dev group, including PyYAML, is installed here. The Makefile target
       # does not sync: a local `uv sync` once removed packages already installed.
@@ -28,6 +31,20 @@ jobs:
       - run: make pin-check
       # BUGS.md must match bugs/ (see the Makefile, bugs-check).
       - run: make bugs-check
+      # No pushed commit removes what the 10 before it added, unless it says so (B190).
+      # A new branch or a tag (no "before") is not checked.
+      - env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then BEFORE=$BASE AFTER=$HEAD; fi
+          if [ "$EVENT" = push ] || [ "$EVENT" = pull_request ]; then
+            if [ -n "$BEFORE" ] && [ -z "${BEFORE//0/}" ]; then exit 0; fi
+            python3 scripts/undone.py --range "$BEFORE..$AFTER"
+          fi
       # DECISIONS.md must match decisions/, every decision named has a file (decisions-check).
       - run: make decisions-check
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
