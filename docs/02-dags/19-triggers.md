@@ -32,16 +32,17 @@ async def new_numbers(after: str | None) -> list[Event[int]]:
 ## Wait steps and triggers side by side
 
 In the plain forms you write the loop yourself; in the `.poke` forms schedr owns it; with
-`wait_for=` the master waits and calls your function once per run of another DAG.
+`wait_for=` the master waits and calls your function for a run of another DAG or a
+[named event](22-events.md).
 
 | Form | Your function is | It returns | Called again |
 |---|---|---|---|
 | `@sensor` | `async def`, its own waiting loop | Its value, once | Never: it is the whole wait, limited to `max_wait` |
 | `@sensor.poke(every=...)` | `async def`, one check | Its value, or `NOT_YET` | After `NOT_YET`, `every` after the last call started |
-| [`@sensor(wait_for=...)`](21-wait-for.md#reading-the-run-sensorwait_for) | `async def`, one look at a run | Its value, or `NOT_YET` (not this run) | With a later matching run, until `max_wait`; each call limited by `timeout=` if given |
+| [`@sensor(wait_for=...)`](21-wait-for.md#reading-the-run-sensorwait_for) | `async def`, one look at a run or event | Its value, or `NOT_YET` (not this item) | With a later match, until `max_wait`; each call limited by `timeout=` if given |
 | `@trigger` | An async generator, its own loop | Never returns: it yields an `Event` each time it finds one | Never: it runs while its DAG is live; returning or raising is an error on its status |
 | `@trigger.poke(every=...)` | `async def`, one check | `list[Event[T]]`, oldest first; `[]` for nothing | Every `every`, counted from when each call started |
-| [`@trigger(wait_for=...)`](21-wait-for.md#deciding-per-run-triggerwait_for) | `async def`, one look at a run | An `Event`, or `None` for no run | Once for each run that ends; limited to `timeout=` |
+| [`@trigger(wait_for=...)`](21-wait-for.md#deciding-per-run-triggerwait_for) | `async def`, one look at a run or event | An `Event`, or `None` for no run | For each run that ends or named event posted while live; limited to `timeout=` |
 
 A wait step ends with one value, or `TimedOut`, and its run goes on. A trigger never ends:
 each event it finds starts a run. `NOT_YET` is a wait step's only: a plain `@sensor` waits by

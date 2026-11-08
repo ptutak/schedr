@@ -13,7 +13,16 @@ import unicodedata
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Concatenate, Self, Unpack, get_args, get_origin, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Concatenate,
+    Self,
+    Unpack,
+    get_args,
+    get_origin,
+    overload,
+)
 
 from schedr import _secrets
 from schedr._build import to_value
@@ -25,6 +34,9 @@ from schedr._serialization import describe
 from schedr.connections import ConnectionsArg, declared_connections
 from schedr.run_of import RunOf, RunResult, call_limit_ms, run_parameter
 from schedr.triggers import UNSET, Moment, Trigger, _Unset, _window
+
+if TYPE_CHECKING:
+    from schedr.named_events import EventNamed
 
 MAX_KEY_BYTES = 1024
 """The longest key an event may have: it is stored with every event."""
@@ -193,15 +205,20 @@ class EventTrigger(Trigger):
         )
 
 
-def event_for_run[T](event: Event[T], run: RunResult[Any], lag: timedelta | None) -> Event[T]:
+def event_for_run[T](
+    event: Event[T], run: RunResult[Any] | Event[Any], lag: timedelta | None
+) -> Event[T]:
     """What an ``@trigger(wait_for=...)``'s event is, as its function returned it for ``run``.
 
     Its key is the run's ID unless it gives one; its moment the run's ``planned_for`` plus the
-    ``RunOf``'s ``lag``, unless it gives one (decision 353).
+    ``RunOf``'s ``lag``, unless it gives one (decision 353). Called for an event posted
+    (``EventNamed``, decision 354): that event's key and moment unless it gives them.
 
     Returns:
         The event, filled in.
     """
+    if isinstance(run, Event):
+        return dataclasses.replace(event, key=event.key or run.key, at=event.at or run.at)
     at = event.at
     if at is None and lag is not None:
         at = run.planned_for + lag
@@ -223,7 +240,7 @@ class TriggerFunction[**P, R]:
         fn: Callable[..., object],
         every: timedelta | None,
         options: TriggerOptions,
-        wait_for: RunOf | None = None,
+        wait_for: RunOf | EventNamed | None = None,
         run_retries: int | None = None,
         timeout: timedelta | None = None,
     ) -> None:
@@ -234,7 +251,8 @@ class TriggerFunction[**P, R]:
             every: How often to call it (``@trigger.poke``); ``None``: it yields events.
             options: What it declares.
             wait_for: ``@trigger(wait_for=RunOf(...))``: called once per run of that DAG that
-                ends, with it as its first parameter (decision 353).
+                ends, with it as its first parameter (decision 353); ``EventNamed(...)``: once
+                per event of that name posted, with it (decision 354).
             run_retries: With ``wait_for``, how many times a run it raised on is tried again
                 before it is passed; ``None``: tried until ``schedr triggers skip`` passes it.
             timeout: With ``wait_for``, how long one call may take, 10 minutes by default; a call
@@ -292,13 +310,22 @@ class TriggerFunction[**P, R]:
             )
         if self.run_retries is not None and self.run_retries < 0:
             raise TypeError(f"{where}: `run_retries` is at least 0, got {self.run_retries}")
-        lag = self.wait_for.lag if self.wait_for is not None else None
+        from schedr.named_events import EventNamed  # noqa: PLC0415 (it imports this module)
+
+        wait_for = self.wait_for
+        lag = wait_for.lag if isinstance(wait_for, RunOf) else None
+        if isinstance(wait_for, EventNamed) and wait_for.key is not None:
+            raise TypeError(
+                f"{where}: an EventNamed it waits for takes no `key`: it is called for every "
+                "event of its name"
+            )
         if lag is not None and lag < timedelta(0):
             raise TypeError(
                 f"{where}: its RunOf's `lag` can't be negative: a run can't be planned before "
                 "the one starting it"
             )
-        self.run_param = run_parameter(fn, where)
+        given = Event if isinstance(wait_for, EventNamed) else RunResult
+        self.run_param = run_parameter(fn, where, given)
         signature = inspect.signature(fn)
         self._signature = signature.replace(parameters=list(signature.parameters.values())[1:])
         self._secrets = _secrets.declared(options.get("secrets") or (), where)
@@ -386,6 +413,10 @@ class TriggerFunction[**P, R]:
             if wait_for is None
             else SensorWaitFor(
                 wait_for.dag, wait_for.task, wait_for.lag_ms, self.run_param, self.timeout_ms
+            )
+            if isinstance(wait_for, RunOf)
+            else SensorWaitFor(
+                None, None, None, self.run_param, self.timeout_ms, event_name=wait_for.name
             ),
         )
         settings = TaskSettings(timeout_ms=None)
@@ -419,6 +450,16 @@ class _WaitForDecorator(typing.Protocol):
     ) -> TriggerFunction[P, D]: ...
 
 
+class _WaitForEventDecorator(typing.Protocol):
+    """What ``@trigger(wait_for=EventNamed(...))`` gives: the event is its first parameter."""
+
+    def __call__[T, D, **P](
+        self,
+        fn: Callable[Concatenate[Event[T], P], Coroutine[object, object, Event[D] | None]],
+        /,
+    ) -> TriggerFunction[P, D]: ...
+
+
 class _PokeDecorator(typing.Protocol):
     """What ``@trigger.poke(...)`` gives."""
 
@@ -445,13 +486,23 @@ class _Trigger:
         **options: Unpack[TriggerOptions],
     ) -> _WaitForDecorator: ...
     @overload
+    def __call__(
+        self,
+        /,
+        *,
+        wait_for: EventNamed,
+        run_retries: int | None = None,
+        timeout: timedelta | None = None,
+        **options: Unpack[TriggerOptions],
+    ) -> _WaitForEventDecorator: ...
+    @overload
     def __call__(self, /, **options: Unpack[TriggerOptions]) -> _TriggerDecorator: ...
     def __call__(
         self,
         fn: Callable[..., object] | None = None,
         /,
         *,
-        wait_for: RunOf | None = None,
+        wait_for: RunOf | EventNamed | None = None,
         run_retries: int | None = None,
         timeout: timedelta | None = None,
         **options: Unpack[TriggerOptions],
@@ -469,9 +520,13 @@ class _Trigger:
         again on the same run; ``run_retries`` passes it after so many tries, and ``schedr
         triggers skip <dag>`` passes it by hand (decision 353).
 
+        With ``wait_for=EventNamed(...)`` it is called the same way once for each event of that
+        name posted while this DAG is live, ``event: Event[T]``; the event it returns has that
+        event's key and moment unless it gives them (decision 354).
+
         Args:
             fn: The function (``@trigger`` without arguments).
-            wait_for: The runs it is called for.
+            wait_for: The runs, or the events, it is called for.
             run_retries: With ``wait_for``, how many times a run it raised on is tried again
                 before it is passed; ``None``: until ``schedr triggers skip``.
             timeout: With ``wait_for``, how long one call may take, 10 minutes by default; one
@@ -482,8 +537,12 @@ class _Trigger:
         Returns:
             The trigger, or a decorator making one.
         """
-        if wait_for is not None and not isinstance(wait_for, RunOf):
-            raise TypeError(f"@trigger: `wait_for` takes a RunOf, got {wait_for!r}")
+        from schedr.named_events import EventNamed  # noqa: PLC0415 (it imports this module)
+
+        if wait_for is not None and not isinstance(wait_for, RunOf | EventNamed):
+            raise TypeError(
+                f"@trigger: `wait_for` takes a RunOf or an EventNamed, got {wait_for!r}"
+            )
 
         def made(function: Callable[..., object]) -> object:
             return TriggerFunction(function, None, options, wait_for, run_retries, timeout)

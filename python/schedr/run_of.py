@@ -115,34 +115,37 @@ class RunResult[T = None]:
     output: T | None = None
 
 
-def run_parameter(fn: Callable[..., object], where: str) -> str:
-    """The name of a ``wait_for=`` function's first parameter, the run's: ``RunResult[T]``.
+def run_parameter(fn: Callable[..., object], where: str, given: type = RunResult) -> str:
+    """The name of a ``wait_for=`` function's first parameter, given the run or the event.
 
     Args:
         fn: An ``@sensor(wait_for=...)``'s or ``@trigger(wait_for=...)``'s function.
         where: Who it is, for messages.
+        given: What it is given: ``RunResult`` for a ``RunOf``, ``Event`` for an
+            ``EventNamed`` (decision 354).
 
     Returns:
         The parameter's name.
 
     Raises:
-        TypeError: If it has none, or it isn't annotated ``RunResult``.
+        TypeError: If it has none, or it isn't annotated as what it is given.
     """
+    what = "run" if given is RunResult else "event"
     parameters = list(inspect.signature(fn).parameters.values())
     if not parameters or parameters[0].kind not in {
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.KEYWORD_ONLY,
     }:
         raise TypeError(
-            f"{where}: with `wait_for=`, its first parameter is the run it waits for: "
-            "`run: RunResult[...]`"
+            f"{where}: with `wait_for=`, its first parameter is the {what} it waits for: "
+            f"`{what}: {given.__name__}[...]`"
         )
     first = parameters[0]
     annotation = typing.get_type_hints(fn).get(first.name)
-    if annotation is not RunResult and typing.get_origin(annotation) is not RunResult:
+    if annotation is not given and typing.get_origin(annotation) is not given:
         raise TypeError(
-            f"{where}: with `wait_for=`, its first parameter `{first.name}` is the run it waits "
-            f"for: annotate it `RunResult[...]`, got `{annotation}`"
+            f"{where}: with `wait_for=`, its first parameter `{first.name}` is the {what} it "
+            f"waits for: annotate it `{given.__name__}[...]`, got `{annotation}`"
         )
     return first.name
 

@@ -92,7 +92,7 @@ async fn a_waiting_step_gets_the_first_since_its_run_started_and_a_trigger_reads
     }
     let since = ts("2026-11-08T10:00:00Z");
     let found = db
-        .first_named_event("paid", Some("o1"), since)
+        .first_named_event("paid", Some("o1"), since, None)
         .await
         .unwrap();
     assert_eq!(
@@ -101,28 +101,26 @@ async fn a_waiting_step_gets_the_first_since_its_run_started_and_a_trigger_reads
         "not the one before"
     );
     assert!(
-        db.first_named_event("paid", Some("o3"), since)
+        db.first_named_event("paid", Some("o3"), since, None)
             .await
             .unwrap()
             .is_none()
     );
     let any = db
-        .first_named_event("paid", None, since)
+        .first_named_event("paid", None, since, None)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(any.key, "o1");
-    let all = db
-        .named_events_after("paid", since, None, 10)
+    // No DAG has seen a key, nor passed an event, yet: both read all from `since`.
+    let unseen = db
+        .named_events_unseen("paid", "sync", since, 10)
         .await
         .unwrap();
-    assert_eq!(all.len(), 2);
-    let after = db
-        .named_events_after("paid", since, Some((all[0].posted_at, &all[0].id)), 10)
+    assert_eq!(unseen.len(), 2);
+    let unpassed = db
+        .named_event_unpassed("paid", "sync", since)
         .await
         .unwrap();
-    assert_eq!(
-        after.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
-        ["o2"]
-    );
+    assert_eq!(unpassed.map(|e| e.key), Some("o1".to_owned()));
 }

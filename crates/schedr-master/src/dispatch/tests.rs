@@ -4109,3 +4109,128 @@ async fn a_wait_s_key_from_a_parameter_reads_a_tuple_as_the_runner_does() {
         TaskInstanceState::Success
     );
 }
+
+#[tokio::test]
+async fn a_wait_s_key_from_a_field_named_as_a_secret_is_hidden_in_its_reason() {
+    // Grok's review: the run's page hides `params.token`; its reason showed it.
+    let key = json!({"ref": {"kind": "param", "path": ["token"]}});
+    let (mut dispatcher, db, run_id) = with_run(event_waiting_dag(Some(&key))).await;
+    let pool = match db.pool() {
+        schedr_db::Pool::Sqlite(pool) => pool.clone(),
+        schedr_db::Pool::Postgres(_) => unreachable!(),
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        r#"UPDATE runs SET params = '{{"token": "sk-live-SECRETVALUE"}}' WHERE id = '{run_id}'"#
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    dispatcher
+        .step_into(later(1), &mut Vec::new())
+        .await
+        .unwrap();
+    let reason = db
+        .ready_instances(later(1))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.task_id == id("wait"))
+        .and_then(|r| r.queued_reason);
+    assert_eq!(
+        reason.as_deref(),
+        Some("waiting for event `paid` with key `****`")
+    );
+}
+
+/// DAG `sync`: `wait`, an `@sensor(wait_for=EventNamed("paid", key="o-1"))` given the event as
+/// `run` (decision 354).
+fn event_sensor_dag() -> Dag {
+    let mut dag = serde_json::to_value(sensor_dag()).unwrap();
+    dag["tasks"][0]["wait_for"] = json!({
+        "event": {"name": "paid", "key": {"literal": "o-1"}}, "param": "run"
+    });
+    dag["tasks"][0]["max_wait_ms"] = json!(60_000);
+    serde_json::from_value(dag).unwrap()
+}
+
+#[tokio::test]
+async fn a_sensor_waiting_for_an_event_is_called_with_it_and_then_with_a_later_one() {
+    let (mut dispatcher, db, run_id) = with_run(event_sensor_dag()).await;
+    post_paid(&db, "o-1", later(-1)).await;
+    post_paid(&db, "o-2", later(1)).await;
+    assert_eq!(
+        dispatcher.step(later(1)).await.unwrap().len(),
+        0,
+        "one before its run, and another key"
+    );
+    post_paid(&db, "o-1", later(2)).await;
+    let out = dispatcher.step(later(3)).await.unwrap();
+    assert_eq!(out.len(), 1);
+    let first = handed_run(&out[0]);
+    assert_eq!(
+        (&first["key"], &first["data"]["amount"]),
+        (&json!("o-1"), &json!(40))
+    );
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(3))
+        .await
+        .unwrap();
+    let not_yet = pb::Finished {
+        outcome: "NotYet".to_owned(),
+        ..finished(&attempt, pb::AttemptStatus::Success, &json!(null))
+    };
+    dispatcher.finished("w1", &not_yet, later(4)).await.unwrap();
+    assert_eq!(
+        dispatcher.step(later(5)).await.unwrap().len(),
+        0,
+        "not the same event again"
+    );
+    post_paid(&db, "o-1", later(6)).await;
+    let out = dispatcher.step(later(7)).await.unwrap();
+    assert_eq!(out.len(), 1, "a later one");
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(7))
+        .await
+        .unwrap();
+    let done = finished(&attempt, pb::AttemptStatus::Success, &json!("rows"));
+    dispatcher.finished("w1", &done, later(8)).await.unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Success
+    );
+}
+
+#[tokio::test]
+async fn a_sensor_waiting_for_an_event_that_doesnt_come_times_out() {
+    let (mut dispatcher, db, run_id) = with_run(event_sensor_dag()).await;
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(dispatcher.step(later(61)).await.unwrap().len(), 0);
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = run
+        .instances
+        .iter()
+        .find(|i| i.task_id.as_str() == "wait")
+        .unwrap();
+    assert_eq!(
+        (wait.state, wait.outcome.as_deref()),
+        (TaskInstanceState::Success, Some("TimedOut"))
+    );
+}
+
+#[tokio::test]
+async fn a_sensor_isn_t_given_an_event_posted_after_its_wait_ran_out() {
+    // As for the node (Codex's review of part 1).
+    let (mut dispatcher, db, run_id) = with_run(event_sensor_dag()).await;
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    post_paid(&db, "o-1", later(70)).await;
+    assert_eq!(dispatcher.step(later(75)).await.unwrap().len(), 0);
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let wait = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("wait"))
+        .unwrap();
+    assert_eq!(wait.outcome.as_deref(), Some("TimedOut"));
+}

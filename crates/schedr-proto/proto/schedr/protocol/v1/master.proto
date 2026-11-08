@@ -85,6 +85,9 @@ message TriggerStopped {
   // An `@trigger(wait_for=...)`'s call returned (decision 353): done with the run it was given.
   // Asked to stop (cancelled, interrupted), it isn't.
   bool done = 7;
+  // It returned an event: its item is passed when the master stores that event, not here (one
+  // the master dropped, stopping it, is handed again).
+  bool returned_event = 8;
 }
 
 enum RootKind {

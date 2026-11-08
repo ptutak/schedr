@@ -32,7 +32,9 @@ The names used across the documentation, the API and the logs.
 : A watcher belonging to a DAG that finds events and starts runs for new keys. See
   [Event triggers](../02-dags/19-triggers.md). A DAG can also use
   [`RunOf`](../02-dags/21-wait-for.md#starting-a-dag-after-another) to start runs after another DAG succeeds, or
-  [`EventNamed`](../02-dags/22-events.md) for events posted by outside systems.
+  [`EventNamed`](../02-dags/22-events.md) for events posted by outside systems. A
+  `@trigger(wait_for=...)` inspects each matching run or named event in a call before
+  deciding whether to start a run.
 
 **Event**
 : A trigger's finding, or a successful run found by `RunOf`, identified by a key within its DAG,
@@ -61,7 +63,8 @@ The names used across the documentation, the API and the logs.
 : A step that waits for a value or times out. A [sensor](../02-dags/18-sensors.md) runs
   on a watcher; [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) waits for another
   DAG's run or task, and [`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run)
-  waits for a posted event. Both are ended by the master.
+  waits for a posted event. Both are ended by the master. An `@sensor(wait_for=...)`
+  waits there for a matching run or named event, then receives it in a watcher call.
 
 **Outcome**
 : Which kind of success a finished task had. A name (`SUCCESS`, `Rows`, `CHANGED`).

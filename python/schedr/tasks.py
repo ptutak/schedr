@@ -685,7 +685,7 @@ class TaskFunction[**P, R]:
             outcome_types = self._outcome_types(spec, annotation, describe)
         except TypeModelError as e:
             raise TypeModelError(f"{where}: return type `{label(annotation)}`: {e}") from None
-        upstream: list[_build.Upstream] = []
+        upstream: list[_build.Upstream] = list(self._kind_upstream())
         fixed = self._with_secret_defaults(fixed, expand)
         # The None checks its arguments queue are its own: dropped if it isn't added (an ID
         # already taken would otherwise give them to the task that has it).
@@ -761,6 +761,10 @@ class TaskFunction[**P, R]:
     def _kind(self, arguments: Mapping[str, Value]) -> TaskKind:
         """Its kind in DAG JSON."""
         return PythonKind(arguments, branch=self._branch)
+
+    def _kind_upstream(self) -> list[_build.Upstream]:
+        """The upstream tasks its kind reads besides its arguments: none for a plain task."""
+        return []
 
     def _mapped(
         self,

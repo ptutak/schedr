@@ -37,8 +37,8 @@ use schedr_model::ctx::MAX_CTX_MESSAGE_SIZE;
 use schedr_model::runner::{
     CleanupHandle, DAG_FILE_MISSING, ErrorSummary, ProcessUsage, TASK_NOT_FOUND,
 };
-use schedr_model::task::SensorWaitFor;
 use schedr_model::task::{CleanupRun, RunOf, TaskCleanup};
+use schedr_model::task::{SensorWaitFor, WaitSource};
 use schedr_model::{
     AttemptStatus, CleanupResult, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
 };
@@ -57,6 +57,7 @@ use crate::quiet::Wakes;
 use crate::workers::{Needs, Workers};
 
 mod event_wait;
+pub(crate) use event_wait::event_value;
 #[cfg(test)]
 mod tests;
 
@@ -1027,7 +1028,15 @@ impl Dispatcher {
             return Ok(false);
         };
         let deadline = self.deadline(wait.since, max_wait_ms);
-        let run_of = &wait_for.run_of;
+        let run_of = match wait_for.source() {
+            Some(WaitSource::RunOf(run_of)) => run_of,
+            Some(WaitSource::Event(event)) => {
+                return self
+                    .sensor_event(waiting, event, &wait, (deadline, now), reasons)
+                    .await;
+            }
+            None => return Ok(false),
+        };
         // A retry gets the run it was handed, unless its function said `NOT_YET` to it: the
         // data a call failed on isn't swapped for a newer run's (decision 353).
         let again = wait

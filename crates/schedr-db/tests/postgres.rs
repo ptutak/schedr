@@ -2023,22 +2023,25 @@ async fn posted_events_are_stored_once_per_request_key_and_read_in_order_on_post
     db.post_named_event(&event("o-2"), "anna", None, later)
         .await
         .unwrap();
-    let all = db.named_events_after("paid", now, None, 10).await.unwrap();
+    let all = db
+        .named_events_unseen("paid", "sync", now, 10)
+        .await
+        .unwrap();
     assert_eq!(
         all.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
         ["o-1", "o-2"]
     );
-    let rest = db
-        .named_events_after("paid", now, Some((now, &first)), 10)
-        .await
-        .unwrap();
-    assert_eq!(rest.len(), 1);
+    let first_unpassed = db.named_event_unpassed("paid", "sync", now).await.unwrap();
+    assert_eq!(first_unpassed.map(|e| e.id), Some(first.clone()));
     let found = db
-        .first_named_event("paid", Some("o-2"), now)
+        .first_named_event("paid", Some("o-2"), now, None)
         .await
         .unwrap();
     assert_eq!(found.map(|e| e.key), Some("o-2".to_owned()));
-    let any = db.first_named_event("paid", None, later).await.unwrap();
+    let any = db
+        .first_named_event("paid", None, later, None)
+        .await
+        .unwrap();
     assert_eq!(any.map(|e| e.posted_at), Some(later));
     assert_eq!(db.named_events(None, 10).await.unwrap().len(), 2);
 }

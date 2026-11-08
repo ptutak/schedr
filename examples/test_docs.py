@@ -39,6 +39,8 @@ SECRETS = {
 # The event a docs DAG's run brings, by DAG, when a trigger starts its runs.
 EVENTS: dict[str, Event[Any]] = {
     "ship_paid": Event("order-123", {"amount": 42}, at=FOR),
+    "inspect_packing": Event("order-123", {"amount": 42}, at=FOR),
+    "inspect_payment": Event("order-123", {"amount": 42}, at=FOR),
     "event_triggers": Event("a.csv", {"path": "/in/a.csv", "size": 3}, at=FOR),
     "tally_orders": Event(
         "01a1b600-0000-7000-8000-000000000000",
@@ -150,6 +152,12 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
             assert result.tasks["wait_for_packed"].outcome == "TimedOut"
             assert result.tasks["late"].output == "packing timed out"
             assert result.tasks["ship"].state == "skipped"
+        if path.name == "named_event_sensor.py":
+            assert result.tasks["packed"].outcome == "TimedOut"
+            assert result.tasks["late"].output == "packing timed out"
+            assert result.tasks["report"].state == "skipped"
+        if path.name == "named_event_trigger.py":
+            assert result.tasks["handle"].output == "handling order-123"
         if path.name == "event_triggers.py":
             assert result.tasks["load"].output == "a.csv: 3 bytes in /in/a.csv"
         if path.name == "async_tasks.py":

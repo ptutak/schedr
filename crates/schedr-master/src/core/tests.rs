@@ -3748,3 +3748,131 @@ async fn an_event_for_a_moment_before_the_last_one_s_has_an_empty_window_not_an_
         );
     }
 }
+
+/// [`waiting_trigger_file`] waiting for the events named `paid` instead (decision 354).
+fn event_waiting_trigger_file() -> ParsedFile {
+    let mut file = serde_json::to_value(waiting_trigger_file(None)).unwrap();
+    file["dags"][0]["trigger"]["task"]["wait_for"] =
+        json!({"event": {"name": "paid"}, "param": "run"});
+    serde_json::from_value(file).unwrap()
+}
+
+/// A call's end that says it returned an event (`returned_event`).
+fn returned_with_event(assign: &pb::AssignTrigger) -> worker_message::Message {
+    worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        done: true,
+        returned_event: true,
+        ..pb::TriggerStopped::default()
+    })
+}
+
+#[tokio::test]
+async fn a_call_s_event_the_master_didn_t_store_hands_its_item_again() {
+    // Codex's review of part 2: stopped while its call ran, the event it returned was dropped
+    // and its end passed the item for good.
+    let mut core = with_dag_of(&event_waiting_trigger_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    post(&core, "o-1", later(2), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    assert_eq!(handed_event(&assign)["key"], json!("o-1"));
+    // Its DAG changed while the call ran (as a deploy does): the event is of the old version.
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query("UPDATE triggers SET dag_version_id = 'before'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let answer = core
+        .handle("w1", found(&assign, 1, "o-1"), later(4))
+        .await
+        .unwrap();
+    assert_eq!(ack_of(&answer), Some(1), "acknowledged, not stored");
+    core.handle("w1", returned_with_event(&assign), later(4))
+        .await
+        .unwrap();
+    assert_eq!(
+        core.db.queued_runs(&sync).await.unwrap().len(),
+        0,
+        "dropped"
+    );
+    let again = assign_of(&core.tick(later(5)).await.unwrap()).expect("handed again");
+    assert_eq!(handed_event(&again)["key"], json!("o-1"));
+    core.handle("w1", found(&again, 1, "o-1"), later(6))
+        .await
+        .unwrap();
+    core.handle("w1", returned_with_event(&again), later(6))
+        .await
+        .unwrap();
+    assert_eq!(core.db.queued_runs(&sync).await.unwrap().len(), 1, "stored");
+    assert!(
+        assign_of(&core.tick(later(7)).await.unwrap()).is_none(),
+        "passed once stored"
+    );
+}
+
+fn handed_event(assign: &pb::AssignTrigger) -> serde_json::Value {
+    let task: serde_json::Value = serde_json::from_slice(&assign.task_json).unwrap();
+    task["arguments"]["run"]["literal"].clone()
+}
+
+#[tokio::test]
+async fn a_trigger_waiting_for_events_is_called_once_for_each_posted_while_live() {
+    let mut core = with_dag_of(&event_waiting_trigger_file()).await;
+    post(&core, "o-0", ts(NOW), ts(NOW)).await;
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), false, later(1))
+        .await
+        .unwrap();
+    assert!(
+        assign_of(&core.tick(later(2)).await.unwrap()).is_none(),
+        "one posted before it was live: not called"
+    );
+    post(&core, "o-1", ts("2026-10-21T00:00:00Z"), later(3)).await;
+    post(&core, "o-1", ts("2026-10-21T00:00:00Z"), later(4)).await;
+    let assign = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
+    let event = handed_event(&assign);
+    assert_eq!(
+        (&event["key"], &event["data"]["amount"]),
+        (&json!("o-1"), &json!(40))
+    );
+    core.handle("w1", returned(&assign), later(5))
+        .await
+        .unwrap();
+    let next = assign_of(&core.tick(later(6)).await.unwrap()).unwrap();
+    assert_eq!(
+        handed_event(&next)["key"],
+        json!("o-1"),
+        "each post is an event"
+    );
+    assert_ne!(next.instance_id, assign.instance_id);
+    core.handle("w1", returned(&next), later(6)).await.unwrap();
+    assert!(assign_of(&core.tick(later(7)).await.unwrap()).is_none());
+}
+
+#[tokio::test]
+async fn a_trigger_waiting_for_events_is_called_for_one_stored_behind_the_last_once() {
+    // Codex's review of part 1: a post's time is taken before its commit.
+    let mut core = with_dag_of(&event_waiting_trigger_file()).await;
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), false, later(1))
+        .await
+        .unwrap();
+    post(&core, "o-2", later(5), later(5)).await;
+    let assign = assign_of(&core.tick(later(6)).await.unwrap()).unwrap();
+    assert_eq!(handed_event(&assign)["key"], json!("o-2"));
+    core.handle("w1", returned(&assign), later(6))
+        .await
+        .unwrap();
+    post(&core, "o-1", later(3), later(3)).await;
+    let late = assign_of(&core.tick(later(7)).await.unwrap()).unwrap();
+    assert_eq!(handed_event(&late)["key"], json!("o-1"), "the late one too");
+    core.handle("w1", returned(&late), later(7)).await.unwrap();
+    assert!(
+        assign_of(&core.tick(later(8)).await.unwrap()).is_none(),
+        "and each once"
+    );
+}

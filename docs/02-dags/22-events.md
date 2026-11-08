@@ -53,4 +53,34 @@ key; a missing or invalid value fails the step. The event is an `Event[Json]`, w
 within `max_wait`, the step ends with `TimedOut`; without `max_wait`, the master's
 `[sensors] default_max_wait` applies.
 
-The `@sensor` and `@trigger` forms for named events come in part 2.
+## Reading an event in a sensor
+
+A sensor can inspect a matching event before deciding whether to finish. Define it inside
+`with Dag(...)` when its key depends on the run: `dag_ctx` and the run's parameters are
+references there, as are upstream outputs.
+
+```{literalinclude} ../../examples/docs/named_event_sensor.py
+:language: python
+:caption: examples/docs/named_event_sensor.py
+```
+
+The master gives the first matching event posted since the run was created and no later than
+its `max_wait` to the function's first parameter. `NOT_YET` means “not this event”: it waits
+for a later match until `max_wait`. A retry gets the same event. Without `key=`, any key
+matches. As with the node, every waiting run can receive the same event.
+
+## Deciding whether an event starts a run
+
+A trigger can inspect each posted event before starting a run:
+
+```{literalinclude} ../../examples/docs/named_event_trigger.py
+:language: python
+:caption: examples/docs/named_event_trigger.py
+```
+
+`@trigger(wait_for=EventNamed("paid"))` takes no `key=`: it is called for each event of
+that name posted while the DAG is live, with the `Event` as its first parameter. Each event
+is passed once. The returned `Event` starts a run, with the input event's key and `at` unless
+the return gives its own; `None` starts none. A repeated key still starts no second run.
+A failed call is retried with the same event, subject to `run_retries=` and the trigger's
+[other call rules](21-wait-for.md#deciding-per-run-triggerwait_for).

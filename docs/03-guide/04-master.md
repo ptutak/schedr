@@ -70,6 +70,12 @@ newest event it acted on, bounded by when the DAG became live. The lookback
 later post but whose transaction committed after it. The pass skips keys the DAG already
 has and respects `[triggers] max_queued_events`.
 
+For `@trigger(wait_for=...)`, the trigger pass hands one ended run or named event to a
+call on a watcher. For named events it records passed items in `trigger_passed` and reads
+back a minute behind the last, bounded by when the DAG became live, to find late commits.
+When a call returns an event, its input is passed when the returned event is stored; if the
+return is dropped, the input is handed again.
+
 The limits are counted in the master's memory: the open attempts (assigned and not yet
 started, running, cleaning up) by DAG, by task and by a run's task. A new master reads them
 from the database before its first assignment, and keeps them as it assigns and as attempts
@@ -192,7 +198,10 @@ An empty task the rule marks ready is completed by the master (`success`, outcom
 [`first_of` and `at_least`](../02-dags/20-first-of.md) itself when enough options succeed,
 without waiting for the others. They need no worker or slot.
 It also ends [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) when the other run or
-task ends, or the wait times out. It also resolves the key of each queued [`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run) each round and ends it with the first matching event posted since the run was created, or `TimedOut`. While waiting, the step is `queued` with a reason.
+task ends, or the wait times out. It also resolves the key of each queued [`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run) each round and ends it with the first matching event posted since the run was created, or `TimedOut`. While waiting, the step is `queued` with a reason. For an `@sensor(wait_for=...)`, the
+dispatcher waits without a slot, then assigns a call with the matching run or the first
+matching event posted since the run was created and no later than its deadline. A retry
+gets the same item; `NOT_YET` waits for a later match.
 
 ## Between rounds: messages from workers
 

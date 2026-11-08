@@ -2649,6 +2649,7 @@ impl<E: Executor> Agent<E> {
             return;
         };
         let mut stopped = trigger_stopped(trigger.dag_id, instance_id.to_owned(), finished);
+        stopped.returned_event = trigger.next_seq > 0;
         if let Some(code) = code {
             stopped.code_hash = code;
         }
@@ -3529,6 +3530,7 @@ fn trigger_stopped(
         struck: finished.struck,
         code_hash: finished.code_hash.clone(),
         done: finished.status == pb::AttemptStatus::Success as i32,
+        returned_event: false,
     }
 }
 

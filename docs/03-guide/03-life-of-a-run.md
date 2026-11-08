@@ -6,7 +6,8 @@ with the DAG's default parameters, instead of a command.
 A [`RunOf` trigger](../02-dags/21-wait-for.md#starting-a-dag-after-another) starts a run
 when another DAG's run or task succeeds; the new run carries an event identifying it. An
 [`EventNamed` trigger](../02-dags/22-events.md) starts a run for a posted event key and
-carries that event.
+carries that event. An `@trigger(wait_for=...)` can inspect each matching run or posted
+event before returning an event to start a run; the master hands one item per call.
 
 ```mermaid
 sequenceDiagram
@@ -142,7 +143,10 @@ described in [The watcher host](05-workers.md#the-watcher-host).
 For [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md), the master waits and ends the
 step without a worker or slot. It also resolves a
 [`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run) each round and ends
-it with a matching posted event or `TimedOut`.
+it with a matching posted event or `TimedOut`. For an `@sensor(wait_for=...)`, it waits
+for a matching run or event before assigning the sensor. A named-event sensor receives the
+first match posted since its run was created and no later than its deadline; a retry receives
+the same event, and `NOT_YET` waits for a later one.
 
 ## 6. The result comes back
 

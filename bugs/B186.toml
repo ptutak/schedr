@@ -1,0 +1,18 @@
+title = "trigger_passed grows without bound, and each hand of a waiting trigger walks the lookback's passed rows"
+severity = "medium"
+probability = "likely"
+kind = "performance"
+summary = "Every item an @trigger(wait_for=...) passes (a run of another DAG, a named event) adds a row to trigger_passed that nothing deletes, even when the DAG is removed; the next hand reads a minute behind the last and skips the passed rows one by one"
+found = 2026-11-08
+suspected = false
+details = '''
+- **Found:** Grok's security review of M4.11e part 2 (by reading: no `DELETE` of
+  `trigger_passed` anywhere; no load was run).
+- **Where:** `pass_trigger_run` and `pass_trigger_run_stored` insert; `named_event_unpassed` is
+  the only reader, for rows within `SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK` (1 min) behind the
+  trigger's last item. `RunOf` items are inserted and never read.
+- **Fix proposed (M4.14, retention):** delete rows older than the lookback behind each trigger's
+  cursor (they are never read again), and a removed DAG's rows; stop inserting `RunOf` items.
+  A burst of one name within a minute still walks its passed rows: an index on
+  `(dag_id, item)` exists; measure before more.
+'''

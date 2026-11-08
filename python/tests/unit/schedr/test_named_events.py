@@ -5,9 +5,22 @@ from typing import Any
 
 import pytest
 
-from schedr import Dag, Event, EventNamed, TimedOut, dag_ctx, task, wait_for
+from schedr import (
+    Dag,
+    Event,
+    EventNamed,
+    RunResult,
+    TimedOut,
+    dag_ctx,
+    sensor,
+    task,
+    trigger,
+    wait_for,
+)
 from schedr._model import registry
 from schedr._serialization import decode
+from schedr.sensors import NotYet
+from schedr.testing import run_trigger
 from schedr.types import Json
 
 
@@ -109,3 +122,72 @@ def test_the_event_waited_for_reads_as_an_event() -> None:
     }
     event = decode(stored, Event[Any])
     assert event == Event("o-1", {"amount": 40}, datetime(2026, 10, 21, 8, tzinfo=UTC))
+
+
+def _sensor_wait_for() -> dict[str, Any]:
+    (dag,) = registry.take_defined()
+    tasks: list[dict[str, Any]] = dag.to_json()["tasks"]
+    return next(t for t in tasks if t["kind"] == "sensor")["wait_for"]
+
+
+def test_a_sensor_waiting_for_an_event_is_given_it_first() -> None:
+    with Dag("ship"):
+        # Defined in the DAG: `dag_ctx` gives references there.
+        @sensor(wait_for=EventNamed("packed", key=dag_ctx.run.id), timeout=timedelta(seconds=5))
+        async def packed(event: Event[Json], least: int) -> int | NotYet:
+            return least
+
+        packed(least=2)
+    assert _sensor_wait_for() == {
+        "event": {"name": "packed", "key": {"ref": {"kind": "dag_ctx", "field": "run_id"}}},
+        "param": "event",
+        "timeout_ms": 5000,
+    }
+
+
+def test_a_sensor_s_event_key_from_upstream_makes_it_downstream_of_that_task() -> None:
+    with Dag("ship"):
+
+        @sensor(wait_for=EventNamed("packed", key=order_of()))
+        async def packed(event: Event[Json]) -> str:
+            return event.key
+
+        packed()
+    (dag,) = registry.take_defined()
+    edges = dag.to_json()["edges"]
+    assert any(e["from"] == "order_of" and e["to"] == "packed" for e in edges), edges
+
+
+def test_a_sensor_waiting_for_an_event_takes_an_event_first() -> None:
+    with pytest.raises(TypeError, match="annotate it `Event"):
+
+        @sensor(wait_for=EventNamed("packed"))
+        async def packed(run: RunResult[int]) -> int:
+            return 1
+
+
+def test_a_trigger_waiting_for_events_is_called_with_each_and_fills_its_event() -> None:
+    @trigger(wait_for=EventNamed("paid"))
+    async def on_paid(event: Event[Json], least: int) -> Event[int] | None:
+        amount = event.data["amount"] if isinstance(event.data, dict) else 0
+        return Event(data=amount) if amount >= least else None
+
+    with Dag("ship", trigger=on_paid(least=10)):
+        echo(dag_ctx.event.key)
+    (dag,) = registry.take_defined()
+    shown = dag.to_json()["trigger"]["task"]["wait_for"]
+    assert shown == {"event": {"name": "paid"}, "param": "event", "timeout_ms": 600_000}
+    at = datetime(2026, 11, 8, 9, tzinfo=UTC)
+    (found,) = run_trigger(on_paid(least=10), run=Event("o-1", {"amount": 40}, at))
+    assert found == Event("o-1", 40, at), "the event's key and moment"
+    assert run_trigger(on_paid(least=10), run=Event("o-2", {"amount": 4}, at)) == []
+    with pytest.raises(ValueError, match=r"run=schedr\.Event"):
+        run_trigger(on_paid(least=10))
+
+
+def test_a_trigger_waiting_for_events_takes_no_key() -> None:
+    with pytest.raises(TypeError, match="takes no `key`"):
+
+        @trigger(wait_for=EventNamed("paid", key="o-1"))
+        async def on_paid(event: Event[Json]) -> Event[int] | None:
+            return None

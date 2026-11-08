@@ -572,7 +572,17 @@ impl Database {
             last_error = COALESCE($3, last_error), instance_id = NULL, worker_id = NULL, \
             dag_version_id = NULL, code_hash = NULL \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $4";
+        // Kept as passed in the same transaction, under the same conditions (decision 354).
+        const KEEP: &str = "INSERT INTO trigger_passed (dag_id, item) \
+            SELECT dag_id, run_of_handed_run FROM triggers WHERE dag_id = $1 \
+            AND run_of_handed_run IS NOT NULL AND ($2 IS NULL AND instance_id IS NULL \
+            OR instance_id = $2) ON CONFLICT (dag_id, item) DO NOTHING";
         let passed = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, KEEP))
+                .bind(dag)
+                .bind(call)
+                .execute(&mut *tx)
+                .await?;
             let statement = match call {
                 Some(call) => sqlx::query(sql(backend, END_AND_PASS))
                     .bind(dag)
@@ -591,6 +601,44 @@ impl Database {
 }
 
 impl Database {
+    /// An `@trigger(wait_for=...)` of `dag` whose call `call` returned an event the master has
+    /// stored: its item is passed, the call left running (its end passes nothing more). Gives
+    /// whether it was passed.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn pass_trigger_run_stored(
+        &self,
+        dag: &str,
+        source: &str,
+        call: &str,
+    ) -> Result<bool, DbError> {
+        const PASS: &str = "UPDATE triggers SET run_of_source = $2, \
+            run_of_seen_at = run_of_handed_at, run_of_seen_run = run_of_handed_run, \
+            run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL \
+            WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $3";
+        const KEEP: &str = "INSERT INTO trigger_passed (dag_id, item) \
+            SELECT dag_id, run_of_handed_run FROM triggers WHERE dag_id = $1 \
+            AND run_of_handed_run IS NOT NULL AND instance_id = $2 \
+            ON CONFLICT (dag_id, item) DO NOTHING";
+        let passed = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, KEEP))
+                .bind(dag)
+                .bind(call)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(sql(backend, PASS))
+                .bind(dag)
+                .bind(source)
+                .bind(call)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(passed == 1)
+    }
+
     /// An `@trigger(wait_for=...)` of `dag` whose call couldn't be made for its run (too big to
     /// send): a failure with `error`, not started again before `not_before`.
     ///

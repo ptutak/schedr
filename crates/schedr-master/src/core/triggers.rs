@@ -9,7 +9,7 @@ use schedr_db::run_of::{RunOfFrom, RunOfSeen};
 use schedr_db::runs::ActiveDag;
 use schedr_db::triggers::{STOPPED_BACK_PRESSURE, STOPPED_RETURNED, TriggerRecord};
 use schedr_db::{Database, DbError};
-use schedr_model::task::SensorWaitFor;
+use schedr_model::task::{EventNamed, SensorWaitFor, WaitSource};
 use schedr_model::trigger::check_event_key;
 use schedr_model::value::Value;
 use schedr_model::{DagId, RunEvent, SensorMode, TaskId, TaskKind, Trigger};
@@ -98,7 +98,12 @@ pub(crate) fn waits_for(dag: &schedr_model::Dag) -> Option<(&SensorWaitFor, Opti
 
 /// What an `@trigger(wait_for=...)`'s cursor is of: its source, as stored with it.
 fn source_of(wait: &SensorWaitFor) -> String {
-    serde_json::to_string(&wait.run_of).unwrap_or_default()
+    match wait.source() {
+        Some(WaitSource::RunOf(run_of)) => serde_json::to_string(run_of),
+        Some(WaitSource::Event(event)) => serde_json::to_string(event),
+        None => Ok(String::new()),
+    }
+    .unwrap_or_default()
 }
 
 /// The most runs one look for the next run to hand passes because they are gone.
@@ -570,7 +575,8 @@ impl MasterCore {
     /// The run an `@trigger(wait_for=...)` is called for next, as its function gets it (another
     /// DAG's output masked, as the API shows it): the one it was given and hasn't passed, while
     /// it is still of the time it is live; else the next that ended since. A run gone (deleted)
-    /// is passed.
+    /// is passed. For an `EventNamed` (decision 354), the same with the events of its name
+    /// posted while it is live.
     async fn run_to_hand(
         &self,
         dag: &ActiveDag,
@@ -581,7 +587,14 @@ impl MasterCore {
             return Ok(None);
         };
         let source = source_of(wait);
-        let task = wait.run_of.task.as_ref();
+        let run_of = match wait.source() {
+            Some(WaitSource::RunOf(run_of)) => run_of,
+            Some(WaitSource::Event(event)) => {
+                return self.event_to_hand(id, event, &source, live).await;
+            }
+            None => return Ok(None),
+        };
+        let task = run_of.task.as_ref();
         if let Some(handed) = self.db.trigger_run_handed(id).await?
             && handed.at >= live
         {
@@ -600,11 +613,7 @@ impl MasterCore {
             };
             let found = self
                 .db
-                .ended_since(
-                    (wait.run_of.dag.as_str(), task.map(TaskId::as_str)),
-                    from,
-                    1,
-                )
+                .ended_since((run_of.dag.as_str(), task.map(TaskId::as_str)), from, 1)
                 .await?;
             let Some((run, _, ended)) = found.into_iter().next() else {
                 return Ok(None);
@@ -617,6 +626,49 @@ impl MasterCore {
             self.db.set_run_of_seen(id, &source, &next).await?;
         }
         Ok(None)
+    }
+
+    /// The event an `@trigger(wait_for=EventNamed(...))` is called for next (decision 354): the
+    /// one it was given and hasn't passed, while of the time it is live; else the next of its
+    /// name posted since, by when posted. The cursor holds an event's posting time and ID.
+    async fn event_to_hand(
+        &self,
+        id: &str,
+        event: &EventNamed,
+        source: &str,
+        live: Timestamp,
+    ) -> Result<Option<(RunOfSeen, serde_json::Value, bool)>, CoreError> {
+        if let Some(handed) = self.db.trigger_run_handed(id).await?
+            && handed.at >= live
+        {
+            if let Some(found) = self.db.named_events_by_id(&handed.run).await? {
+                return Ok(Some((handed, crate::dispatch::event_value(&found), false)));
+            }
+            self.db
+                .pass_trigger_run(id, source, Some(&gone(&handed.run)), None)
+                .await?;
+        }
+        // From a little before the last one passed, by what was passed (Codex's review of part
+        // 1): a post's time is taken before its commit, so one can be stored behind it.
+        let seen = self.db.run_of_seen(id, source).await?;
+        let lookback =
+            SignedDuration::try_from(self.settings.event_lookback).unwrap_or(SignedDuration::MAX);
+        let since = seen
+            .as_ref()
+            .and_then(|seen| seen.at.checked_sub(lookback).ok())
+            .map_or(live, |from| from.max(live));
+        let found = self
+            .db
+            .named_event_unpassed(event.name.as_str(), id, since)
+            .await?;
+        Ok(found.map(|found| {
+            let value = crate::dispatch::event_value(&found);
+            let next = RunOfSeen {
+                at: found.posted_at,
+                run: found.id,
+            };
+            (next, value, true)
+        }))
     }
 
     /// A run's result as an `@trigger(wait_for=...)` or a sensor gets it: secret fields and
@@ -712,6 +764,12 @@ impl MasterCore {
             .scheduler
             .event_run(&dag, &found, record.last_planned_for, now)
             .await?;
+        // Stored: done with the item its call was given (one dropped above is handed again).
+        if let Some((wait, _)) = waits_for(&dag.dag) {
+            self.db
+                .pass_trigger_run_stored(&event.dag_id, &source_of(wait), &event.instance_id)
+                .await?;
+        }
         self.metrics.trigger_event(started.is_some());
         // It works: a strike is for one that keeps getting its host killed.
         if let Trigger::Event { task, .. } = &dag.dag.trigger {
@@ -740,9 +798,12 @@ impl MasterCore {
             self.dispatcher.trigger_released(&stopped.instance_id);
             if let Some((_, dag)) = dag {
                 self.count_strike(&dag, None, &stopped, now).await?;
-                // Its call returned before the stop reached it: done with its run all the same.
-                // Of the DAG it was given, never of the one the message names (Grok's review).
+                // Its call returned before the stop reached it: done with its run all the same,
+                // unless it returned an event, dropped while it stopped: handed again (Codex's
+                // review). Of the DAG it was given, never of the one the message names (Grok's
+                // review).
                 if stopped.done
+                    && !stopped.returned_event
                     && let Some(active) = self.active_dag(&dag).await?
                     && let Some((wait, _)) = waits_for(&active.dag)
                 {
@@ -763,8 +824,9 @@ impl MasterCore {
         if stopped.error_kind.is_empty() {
             self.dispatcher.trigger_released(&stopped.instance_id);
             // Done with the run it was given (decision 353), the call ended in the same
-            // statement: the next call gets the next. Asked to stop, it keeps its run.
-            let passed = match (waiting, stopped.done) {
+            // statement: the next call gets the next. Asked to stop, it keeps its run. One that
+            // returned an event was passed when it was stored; if it wasn't, it is handed again.
+            let passed = match (waiting, stopped.done && !stopped.returned_event) {
                 (Some((wait, _)), true) => {
                     self.call_done(&stopped.dag_id, wait, Some(&stopped.instance_id))
                         .await?

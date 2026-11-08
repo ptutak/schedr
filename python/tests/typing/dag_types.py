@@ -21,6 +21,8 @@ from schedr import (
     DefaultOutcome,
     Done,
     EmptyOperator,
+    Event,
+    EventNamed,
     NotYet,
     Outcome,
     Task,
@@ -38,9 +40,11 @@ from schedr import (
     task,
     task_ctx,
     text,
+    trigger,
+    wait_for,
 )
 from schedr.connections import HTTP, SQL, SSH
-from schedr.types import ProcessResult
+from schedr.types import Json, ProcessResult
 
 
 @dataclass
@@ -507,3 +511,27 @@ def sync_rows() -> int:
 
 
 sync_rows.fn()  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+
+
+# Events posted through the API (decision 354): the node's value is the `Event[Json]`, a
+# waiting sensor's and trigger's function takes the event first.
+@task
+def shipped(order: str, packed: Event[Json]) -> str:
+    return order + packed.key
+
+
+@trigger(wait_for=EventNamed("paid"))
+async def on_paid(event: Event[Json], least: int) -> Event[int] | None:
+    return None
+
+
+with Dag("events_typed", trigger=on_paid(least=5)):
+    packed = wait_for(EventNamed("packed", key=dag_ctx.event.key))
+    shipped(dag_ctx.event.key, packed.on(Event[Json]))
+
+    @sensor(wait_for=EventNamed("labelled", key=dag_ctx.event.key))
+    async def labelled(event: Event[Json], copies: int) -> int | NotYet:
+        return copies
+
+    printed: int = labelled(copies=2).on(int)
+    shipped(dag_ctx.event.key, packed)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use schedr_model::runner::{ErrorSummary, ParsedFile};
-use schedr_model::task::{CleanupRun, Task};
+use schedr_model::task::{CleanupRun, Task, WaitSource};
 use schedr_model::value::DagCtxField;
 use schedr_model::{
     CommandLine, Dag, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl,
@@ -445,8 +445,20 @@ fn sensor_wait_for_problems(
             wait_for.param
         ));
     }
-    if let Some(why) = lag_problem(&wait_for.run_of) {
-        problems.push(format!("task `{id}`: {why}"));
+    match wait_for.source() {
+        Some(WaitSource::RunOf(run_of)) => {
+            if let Some(why) = lag_problem(run_of) {
+                problems.push(format!("task `{id}`: {why}"));
+            }
+        }
+        Some(WaitSource::Event(event)) => {
+            if let Some(why) = event.key.as_ref().and_then(event_key_problem) {
+                problems.push(format!("task `{id}`: its event's key {why}"));
+            }
+        }
+        None => problems.push(format!(
+            "task `{id}`: `wait_for` is a RunOf or an EventNamed, one of them"
+        )),
     }
     if wait_for.timeout_ms == Some(0) {
         problems.push(format!(
@@ -502,23 +514,39 @@ fn trigger_wait_for_problems(
             wait_for.param
         ));
     }
-    if wait_for.run_of.dag == dag.id {
-        problems.push(format!(
-            "trigger `{id}`: it waits for runs of its own DAG, which would start it for ever"
-        ));
-    }
-    if let Some(why) = lag_problem(&wait_for.run_of) {
-        problems.push(format!("trigger `{id}`: {why}"));
+    match wait_for.source() {
+        Some(WaitSource::RunOf(run_of)) => {
+            if run_of.dag == dag.id {
+                problems.push(format!(
+                    "trigger `{id}`: it waits for runs of its own DAG, which would start it for \
+                     ever"
+                ));
+            }
+            if let Some(why) = lag_problem(run_of) {
+                problems.push(format!("trigger `{id}`: {why}"));
+            }
+            if run_of.lag_ms.is_some_and(|lag| lag < 0) {
+                problems.push(format!(
+                    "trigger `{id}`: its RunOf's `lag` can't be negative: a run can't be planned \
+                     before the one starting it"
+                ));
+            }
+        }
+        Some(WaitSource::Event(event)) => {
+            if event.key.is_some() {
+                problems.push(format!(
+                    "trigger `{id}`: an EventNamed it waits for takes no `key`: it is called for \
+                     every event of its name"
+                ));
+            }
+        }
+        None => problems.push(format!(
+            "trigger `{id}`: `wait_for` is a RunOf or an EventNamed, one of them"
+        )),
     }
     if wait_for.timeout_ms == Some(0) {
         problems.push(format!(
             "trigger `{id}`: a call's `timeout` must be above zero"
-        ));
-    }
-    if wait_for.run_of.lag_ms.is_some_and(|lag| lag < 0) {
-        problems.push(format!(
-            "trigger `{id}`: its RunOf's `lag` can't be negative: a run can't be planned before \
-             the one starting it"
         ));
     }
 }

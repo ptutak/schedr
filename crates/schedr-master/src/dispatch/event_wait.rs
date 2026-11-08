@@ -5,6 +5,7 @@
 use jiff::Timestamp;
 use schedr_db::attempts::ReadyInstance;
 use schedr_db::named_events::NamedEvent;
+use schedr_db::run_of::SensorWait;
 use schedr_model::task::EventNamed;
 use schedr_model::value::{DagCtxField, Reference, Value};
 use serde_json::{Value as Json, json};
@@ -39,7 +40,7 @@ impl Dispatcher {
             Ok(key) => {
                 let found = self
                     .db
-                    .first_named_event(event.name.as_str(), key.as_deref(), run.triggered_at)
+                    .first_named_event(event.name.as_str(), key.as_deref(), run.triggered_at, None)
                     .await?;
                 // One posted after its time ran out doesn't count, though seen late (a round
                 // late, a master restarting; Codex's review), as for a run waited for.
@@ -49,14 +50,7 @@ impl Dispatcher {
                     },
                     None if now >= deadline => WaitEnd::TimedOut,
                     None => {
-                        let reason = match &key {
-                            Some(key) => format!(
-                                "waiting for event `{}` with key `{}`",
-                                event.name,
-                                schedr_config::masked::mask_text(key)
-                            ),
-                            None => format!("waiting for event `{}`", event.name),
-                        };
+                        let reason = waiting_reason(event, key.as_deref());
                         if waiting.queued_reason.as_deref() != Some(reason.as_str()) {
                             reasons.push((waiting.instance_id.clone(), reason));
                         }
@@ -74,6 +68,75 @@ impl Dispatcher {
         })
         .await?;
         Ok(())
+    }
+
+    /// An `@sensor(wait_for=EventNamed(...))` queued (decision 354): the first matching event
+    /// posted since its run was created (after the one its function said `NOT_YET` to; a retry
+    /// gets the one it was handed) is recorded and to be assigned with it; past its `max_wait`
+    /// it ends `TimedOut`; a key resolving to none fails it; else it says what it waits for.
+    /// Returns whether it is to be assigned.
+    pub(super) async fn sensor_event(
+        &mut self,
+        waiting: &ReadyInstance,
+        event: &EventNamed,
+        wait: &SensorWait,
+        (deadline, now): (Timestamp, Timestamp),
+        reasons: &mut Vec<(String, String)>,
+    ) -> Result<bool, DispatchError> {
+        let key = match self.event_key(waiting, event).await? {
+            Ok(key) => key,
+            Err(reason) => {
+                let ended = WaitEnd::Refused {
+                    reason: format!("its event's key: {reason}"),
+                };
+                self.whole(async |me| {
+                    let (_, stops) = me
+                        .execution
+                        .wait_ended(&waiting.run_id, &waiting.task_id, ended, now)
+                        .await?;
+                    me.stop(&waiting.run_id, &stops).await
+                })
+                .await?;
+                return Ok(false);
+            }
+        };
+        let again = wait
+            .handed
+            .clone()
+            .filter(|(handed, _)| wait.waited.as_ref().is_none_or(|(seen, _)| seen != handed));
+        let again_id = again.as_ref().map(|(id, _)| id.clone());
+        let found = if let Some((id, _)) = again {
+            self.db.named_events_by_id(&id).await?
+        } else {
+            let Some(run) = self.db.run_record(&waiting.run_id).await? else {
+                return Ok(false);
+            };
+            let after = wait.waited.as_ref().map(|(id, at)| (*at, id.as_str()));
+            self.db
+                .first_named_event(event.name.as_str(), key.as_deref(), run.triggered_at, after)
+                .await?
+        };
+        // A new one posted after its time ran out doesn't count, though seen late (as for the
+        // node, Codex's review of part 1); a retry gets the one it was handed.
+        let found = found.filter(|found| again_id.is_some() || found.posted_at <= deadline);
+        if let Some(found) = found {
+            self.db
+                .hand_run(&waiting.instance_id, &found.id, found.posted_at)
+                .await?;
+            self.handing
+                .insert(waiting.instance_id.clone(), event_value(&found));
+            return Ok(true);
+        }
+        if now >= deadline {
+            self.whole(async |me| me.time_out(waiting, now).await)
+                .await?;
+            return Ok(false);
+        }
+        let reason = waiting_reason(event, key.as_deref());
+        if waiting.queued_reason.as_deref() != Some(reason.as_str()) {
+            reasons.push((waiting.instance_id.clone(), reason));
+        }
+        Ok(false)
     }
 
     /// The key a wait matches in its run: `None` for any (no key given); `Err` with why for a
@@ -132,9 +195,33 @@ impl Dispatcher {
     }
 }
 
+/// What a step waiting for `event` says it waits for (its key masked, as shown): a key read
+/// from a field named as a secret (`params.token`) is hidden, as the run's page hides that
+/// field (Grok's review).
+fn waiting_reason(event: &EventNamed, key: Option<&str>) -> String {
+    let secret = matches!(
+        &event.key,
+        Some(Value::Ref(Reference::Param { path } | Reference::Output { path, .. }))
+            if path.iter().any(|elem| matches!(
+                elem,
+                schedr_model::value::PathElem::Field(name)
+                    if schedr_config::masked::names_secret_in_words(name)
+            ))
+    );
+    match key {
+        Some(_) if secret => format!("waiting for event `{}` with key `****`", event.name),
+        Some(key) => format!(
+            "waiting for event `{}` with key `{}`",
+            event.name,
+            schedr_config::masked::mask_text(key)
+        ),
+        None => format!("waiting for event `{}`", event.name),
+    }
+}
+
 /// An event as the node's output, an `Event[Json]` (a dataclass, stored as its fields): its
 /// data's dicts shaped like a tag escaped (B66), its `at` a tagged `datetime`.
-fn event_value(event: &NamedEvent) -> Json {
+pub(crate) fn event_value(event: &NamedEvent) -> Json {
     json!({
         "key": event.key,
         "data": schedr_model::params::escape_tags(&event.data),

@@ -7004,6 +7004,23 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   after a wait's `max_wait` counts. Part 2 (the user's, 2026-11-08, option A): a key read from the run in
   `@sensor(wait_for=EventNamed(..., key=...))` is written by defining the sensor inside the DAG's block, where
   `dag_ctx` and outputs are references (not chosen: a per-call form; a reserved `key=` argument).
+  Built in part 2 (Claude's): `@sensor(wait_for=EventNamed(...))` is called with the first matching event posted
+  since its run was created and before its `max_wait`, `NOT_YET` waiting for a later one, a retry getting the same;
+  `@trigger(wait_for=EventNamed("name"))` is called once per event of its name posted while live (no `key=`), the
+  event it returns keyed and timed as that event unless it says; what it passed is kept in `trigger_passed`, read
+  back a minute behind the last, so one stored late is still called for, once; `SensorWaitFor` holds `run_of` or
+  `event`, exactly one. Codex's review: a call's item was passed when the call ended, even when the master had
+  dropped the event it returned (its DAG changed meanwhile, a queue past its limit, a stop on its way), so the item
+  was lost for good (both forms; `RunOf` since M4.11d2). Now a call that returned an event says so
+  (`TriggerStopped.returned_event`) and its item is passed when that event is stored; one dropped is handed again (a
+  repeat key starts no second run). The schemas, out of date, regenerated. Grok's security review: a key read from a field named as a secret
+  (`params.token`) showed in the step's queued reason, though the run's page hides that field: now `****`. Not
+  fixed: a worker built before `returned_event` (only a development build: a released 0.1.0 worker can't run
+  `wait_for` triggers); logged: B185 (a sensor's `NOT_YET` cursor has no lookback), B186 (`trigger_passed` never
+  pruned, for M4.14's retention). An event dated before the previous one (the user's, 2026-11-08,
+  option A): its run's window is empty (`since` = `planned_for`), so no data is handled twice; a loader by window reads
+  `dag_ctx.event` for it. Not chosen: no run, the status saying why (its data never handled); its window from the event
+  dated just before it (overlapping windows, data handled twice).
 - **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; to be built in M4.11f):
   `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
   it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`

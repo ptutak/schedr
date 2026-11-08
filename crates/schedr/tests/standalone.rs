@@ -2762,6 +2762,66 @@ fn a_wait_s_key_can_come_from_a_mapped_task() {
     assert!(logs.contains("packed order-1"), "{logs}");
 }
 
+/// `bill` is started by an `@trigger(wait_for=EventNamed("paid"))` for each payment over 10,
+/// and its `@sensor(wait_for=EventNamed("signed", key=...))` waits for that order's signature,
+/// saying `NOT_YET` to one that isn't final (decision 354).
+const EVENT_FUNCTIONS: &str = r#"
+from schedr import Dag, Event, EventNamed, dag_ctx, sensor, task, trigger
+from schedr.sensors import NOT_YET, NotYet
+from schedr.types import Json
+
+@trigger(wait_for=EventNamed("paid"))
+async def on_paid(event: Event[Json], least: int) -> Event[int] | None:
+    print("called for", event.key)
+    amount = event.data["amount"]
+    return Event(data=amount) if amount >= least else None
+
+@task
+def bill(order: str, amount: int, signer: str) -> None:
+    print("billed", order, amount, signer)
+
+with Dag("bill", trigger=on_paid(least=10)):
+    @sensor(wait_for=EventNamed("signed", key=dag_ctx.event.key))
+    async def signed(event: Event[Json]) -> str | NotYet:
+        return event.data["by"] if event.data["final"] else NOT_YET
+
+    bill(dag_ctx.event.key, dag_ctx.event.data, signed().on(str))
+"#;
+
+/// M4.11e part 2: an `@trigger(wait_for=EventNamed)` is called for each event posted, and an
+/// `@sensor(wait_for=EventNamed)` is given the event of its key, then a later one.
+#[test]
+fn functions_waiting_for_events_are_called_with_them() {
+    let standalone = Standalone::start(&[("bill.py", EVENT_FUNCTIONS)], None);
+    standalone.wait("DAG `bill`", || standalone.dag_ids() == ["bill"]);
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "bill"]);
+    assert_eq!(code, 0, "{err}");
+    let post = |name: &str, key: &str, data: &str| {
+        standalone.cli_json(&["events", "post", name, "--key", key, "--data", data]);
+    };
+    post("paid", "o-1", r#"{"amount": 4}"#);
+    post("paid", "o-2", r#"{"amount": 40}"#);
+    standalone.wait("a run of bill", || standalone.runs("bill").len() == 1);
+    post("signed", "o-2", r#"{"by": "ann", "final": false}"#);
+    post("signed", "o-2", r#"{"by": "bob", "final": true}"#);
+    let run = standalone.runs("bill")[0]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    standalone.wait_for_state(&run, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains("called for o-1") && logs.contains("called for o-2"),
+        "{logs}"
+    );
+    assert!(logs.contains("billed o-2 40 bob"), "{logs}");
+    assert_eq!(
+        standalone.runs("bill").len(),
+        1,
+        "the small payment started none"
+    );
+}
+
 #[test]
 fn a_sensor_waiting_for_another_dags_run_is_given_it_and_builds_on_its_output() {
     let standalone = Standalone::start(&[("run_of.py", RUN_OF)], None);

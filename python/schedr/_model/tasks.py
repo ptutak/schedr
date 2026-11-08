@@ -235,7 +235,8 @@ class SensorKind:
         Returns:
             Every reference, by parameter name order (as stored).
         """
-        return [r for name in sorted(self.arguments) for r in self.arguments[name].references()]
+        found = [r for name in sorted(self.arguments) for r in self.arguments[name].references()]
+        return found + ([] if self.wait_for is None else self.wait_for.references())
 
     def to_json(self) -> dict[str, Any]:
         """The kind's fields as DAG JSON.
@@ -257,34 +258,57 @@ class SensorKind:
 
 @dataclass(frozen=True, slots=True)
 class SensorWaitFor:
-    """What an ``@sensor(wait_for=RunOf(...))`` is called for (decision 353).
+    """What an ``@sensor(wait_for=...)`` or ``@trigger(wait_for=...)`` is called for.
+
+    A run of another DAG (``RunOf``, decision 353), or, with ``event_name``, an event posted
+    (``EventNamed``, decision 354).
 
     Attributes:
-        dag: The other DAG.
+        dag: The other DAG; ``None`` for an event.
         task: Its task; ``None``: the whole run.
         lag_ms: The run planned this long before the waiting run's; ``None``: the next to end.
-        param: The function's parameter given the run (its first).
-        timeout_ms: ``@sensor(wait_for=..., timeout=...)``: how long one call may take.
+        param: The function's parameter given the run or the event (its first).
+        timeout_ms: ``wait_for=..., timeout=...``: how long one call may take.
+        event_name: The event's name, for an ``EventNamed``.
+        event_key: Its key; ``None``: any.
     """
 
-    dag: str
+    dag: str | None
     task: str | None
     lag_ms: int | None
     param: str
     timeout_ms: int | None = None
+    event_name: str | None = None
+    event_key: Value | None = None
+
+    def references(self) -> list[Reference]:
+        """Its event key's references.
+
+        Returns:
+            Those of the key, if it has one.
+        """
+        return [] if self.event_key is None else self.event_key.references()
 
     def to_json(self) -> dict[str, Any]:
         """As DAG JSON.
 
         Returns:
-            ``{"run_of": {"dag": ...}, "param": ...}``, with what is set.
+            ``{"run_of": {"dag": ...}, "param": ...}`` or
+            ``{"event": {"name": ...}, "param": ...}``, with what is set.
         """
-        run_of: dict[str, Any] = {"dag": self.dag}
-        if self.task is not None:
-            run_of["task"] = self.task
-        if self.lag_ms is not None:
-            run_of["lag_ms"] = self.lag_ms
-        shown: dict[str, Any] = {"run_of": run_of, "param": self.param}
+        shown: dict[str, Any]
+        if self.event_name is not None:
+            event: dict[str, Any] = {"name": self.event_name}
+            if self.event_key is not None:
+                event["key"] = self.event_key.to_json()
+            shown = {"event": event, "param": self.param}
+        else:
+            run_of: dict[str, Any] = {"dag": self.dag}
+            if self.task is not None:
+                run_of["task"] = self.task
+            if self.lag_ms is not None:
+                run_of["lag_ms"] = self.lag_ms
+            shown = {"run_of": run_of, "param": self.param}
         if self.timeout_ms is not None:
             shown["timeout_ms"] = self.timeout_ms
         return shown

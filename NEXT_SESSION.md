@@ -4,6 +4,19 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
+## State (2026-11-08, late morning): M4.11e committed; f and g reviewed by Codex, fixed and documented
+
+- **e2 committed:** `@sensor`/`@trigger` `wait_for=EventNamed`; Codex's 3 findings (a dropped returned event passed:
+  `TriggerStopped.returned_event`) and Grok's (a secret-named key masked in the reason) fixed; B185, B186 logged;
+  late-dated events keep their empty window (the user's A).
+- **f (`../schedr-claude-f`, branch `claude/f`):** Codex's 5 findings fixed (a window ending during a poke now sent at its
+  end; items sized once; schemas; a tight test), docs by Codex, the moot `restart_if_idle` vs `batch` check removed.
+  Next: rebase onto main, Grok security review, `make check`, commit.
+- **g (`../schedr-claude-g`, branch `claude/g`, decision 355, all A by the user):** Codex's 5 findings fixed (the value is
+  when it ended; the agent sets a first try's start; a negative parameter refused; tests), docs by Codex. Grok's security
+  review running (worktree `../schedr-grok-4.11g`, task `brgoiuof7`). Next: its fixes, rebase after f, `make check`,
+  commit. Then M4.11 is done: stop.
+
 ## State (2026-11-08, night): M4.11e part 1 built and reviewed by Codex (8 fixed), Grok security review running; e2 and f built in worktrees, not committed
 
 - **e1 (main checkout, uncommitted):** posted events (`POST/GET /api/v1/events`, `schedr events post|list`, `named_events`),

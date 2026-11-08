@@ -32,6 +32,8 @@ from schedr._model import SensorKind, SensorMode, SensorWaitFor
 from schedr._secrets import SecretsArg
 from schedr._wait_rules import refused_in
 from schedr.connections import ConnectionsArg
+from schedr.event_triggers import Event
+from schedr.named_events import EventNamed
 from schedr.run_of import RunOf, RunResult, call_limit_ms, run_parameter
 from schedr.tasks import AsyncTaskFunction, Output, TaskFunction, is_async, task
 
@@ -116,7 +118,7 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         task_id: str,
         options: _build.TaskOptions,
         every: timedelta | None,
-        wait_for: RunOf | None = None,
+        wait_for: RunOf | EventNamed | None = None,
         call_timeout_ms: int | None = None,
     ) -> None:
         """Wraps ``fn`` as a wait step.
@@ -127,7 +129,8 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             options: The task's own options, with how long it waits.
             every: How often to call it (``@sensor.poke``); ``None``: called once.
             wait_for: ``@sensor(wait_for=RunOf(...))``: called once that run has ended, with it
-                as its first parameter (decision 353).
+                as its first parameter (decision 353); ``EventNamed(...)``: once such an event
+                is posted, with it (decision 354).
             call_timeout_ms: With ``wait_for``, how long one call may take; ``None``: what is
                 left of ``max_wait``.
 
@@ -139,8 +142,12 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         self._wait_for = wait_for
         self._call_timeout_ms = call_timeout_ms
         self._run_param: str | None = None
+        # An `EventNamed`'s key, as stored, while the step is being added (see `_record`).
+        self._event_key: Value | None = None
+        self._key_upstream: list[_build.Upstream] = []
         if wait_for is not None:
-            self._run_param = run_parameter(fn, where)
+            given = Event if isinstance(wait_for, EventNamed) else RunResult
+            self._run_param = run_parameter(fn, where, given)
             # The DAG never gives it: the master does, with the run (see `_kind`).
             rest = list(self._signature.parameters.values())[1:]
             self._signature = self._signature.replace(parameters=rest)
@@ -169,7 +176,20 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             raise TypeError(
                 f"@sensor `{self._task_id}`: `{refused.what}` ({refused.where}) {refused.why}"
             )
-        return super()._record(builder, fixed, expand)
+        wait_for = self._wait_for
+        if not isinstance(wait_for, EventNamed) or wait_for.key is None:
+            return super()._record(builder, fixed, expand)
+        # Its key may come from upstream: an edge from that task, as for an argument.
+        self._key_upstream = []
+        self._event_key = _build.to_value(wait_for.key, "EventNamed key", self._key_upstream)
+        try:
+            return super()._record(builder, fixed, expand)
+        finally:
+            self._event_key = None
+            self._key_upstream = []
+
+    def _kind_upstream(self) -> list[_build.Upstream]:
+        return list(self._key_upstream)
 
     def _output_hint(self, hints: Mapping[str, object], where: str) -> object:
         annotation = hints["return"]
@@ -218,6 +238,16 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             None
             if wait_for is None or self._run_param is None
             else SensorWaitFor(
+                None,
+                None,
+                None,
+                self._run_param,
+                self._call_timeout_ms,
+                event_name=wait_for.name,
+                event_key=self._event_key,
+            )
+            if isinstance(wait_for, EventNamed)
+            else SensorWaitFor(
                 wait_for.dag,
                 wait_for.task,
                 wait_for.lag_ms,
@@ -257,14 +287,14 @@ def _made[**P, R, A](
     fn: Callable[P, object],
     every: timedelta | None,
     options: SensorOptions,
-    wait_for: RunOf | None = None,
+    wait_for: RunOf | EventNamed | None = None,
     timeout: timedelta | None = None,
 ) -> SensorFunction[P, R, A]:
     max_wait = options.pop("max_wait", None)
     where = f"@sensor `{getattr(fn, '__name__', '')}`"
     call_timeout_ms = None if timeout is None else call_limit_ms(timeout, where)
-    if wait_for is not None and not isinstance(wait_for, RunOf):
-        raise TypeError(f"@sensor: `wait_for` takes a RunOf, got {wait_for!r}")
+    if wait_for is not None and not isinstance(wait_for, RunOf | EventNamed):
+        raise TypeError(f"@sensor: `wait_for` takes a RunOf or an EventNamed, got {wait_for!r}")
     for name in options:
         if name not in SensorOptions.__annotations__:
             raise TypeError(
@@ -308,6 +338,14 @@ class _WaitForDecorator(typing.Protocol):
     ) -> SensorFunction[P, _outcomes.Waited[R], R | NotYet]: ...
 
 
+class _WaitForEventDecorator(typing.Protocol):
+    """What ``@sensor(wait_for=EventNamed(...))`` gives: the event is its first parameter."""
+
+    def __call__[**P, T, R](
+        self, fn: Callable[Concatenate[Event[T], P], Coroutine[object, object, R | NotYet]], /
+    ) -> SensorFunction[P, _outcomes.Waited[R], R | NotYet]: ...
+
+
 class _PokeDecorator(typing.Protocol):
     """What ``@sensor.poke(...)`` gives: its function's value is what isn't ``NOT_YET``."""
 
@@ -337,13 +375,22 @@ class _Sensor:
         **options: Unpack[SensorOptions],
     ) -> _WaitForDecorator: ...
     @overload
+    def __call__(
+        self,
+        /,
+        *,
+        wait_for: EventNamed,
+        timeout: timedelta | None = None,
+        **options: Unpack[SensorOptions],
+    ) -> _WaitForEventDecorator: ...
+    @overload
     def __call__(self, /, **options: Unpack[SensorOptions]) -> _SensorDecorator: ...
     def __call__(
         self,
         fn: Callable[..., object] | None = None,
         /,
         *,
-        wait_for: RunOf | None = None,
+        wait_for: RunOf | EventNamed | None = None,
         timeout: timedelta | None = None,
         **options: Unpack[SensorOptions],
     ) -> object:
@@ -355,9 +402,13 @@ class _Sensor:
         later matching run (with ``lag``, a newer one for the same moment, as when it is run
         again), until ``max_wait`` (decision 353).
 
+        With ``wait_for=EventNamed(...)`` it is called the same way once an event of that name
+        (and key) is posted since its run was created, ``event: Event[T]``; ``NOT_YET`` waits for
+        a later one (decision 354).
+
         Args:
             fn: The function (``@sensor`` without arguments).
-            wait_for: The run it is called for.
+            wait_for: The run, or the event, it is called for.
             timeout: With ``wait_for``, how long one call may take, below what is left of
                 ``max_wait``: one over it is cancelled and fails the attempt, whose retries get
                 the same run (``TimedOut`` stays for ``max_wait``). ``None``: no limit of its own.

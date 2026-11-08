@@ -567,7 +567,7 @@ def run_trigger(
     after: str | None = None,
     take: int = 1,
     timeout: timedelta = timedelta(seconds=30),
-    run: run_of.RunResult[Any] | None = None,
+    run: run_of.RunResult[Any] | Event[Any] | None = None,
 ) -> list[Event[Any]]:
     """Runs a trigger in this process until it has found ``take`` events, and gives them.
 
@@ -581,7 +581,8 @@ def run_trigger(
         after: What it starts from: the last key acted on.
         take: How many events to wait for.
         timeout: How long to wait for them.
-        run: For an ``@trigger(wait_for=...)``, the run it is called for.
+        run: For an ``@trigger(wait_for=...)``, the run it is called for; for one waiting for an
+            ``EventNamed``, the ``Event``.
 
     Returns:
         The events it found, in order, fewer than ``take`` only when a generator returned.
@@ -597,12 +598,19 @@ def run_trigger(
     called = trigger if isinstance(trigger, EventTrigger) else trigger()
     wait_for = called.function.wait_for
     if wait_for is not None:
-        if run is None:
+        if isinstance(wait_for, run_of.RunOf):
+            if not isinstance(run, run_of.RunResult):
+                raise ValueError(
+                    f"@trigger `{called.function.task_id}` is called for a run of "
+                    f"`{wait_for.dag}`: give it as run=schedr.RunResult(...)"
+                )
+            return _called_for_run(called, run, wait_for.lag, timeout)
+        if not isinstance(run, Event):
             raise ValueError(
-                f"@trigger `{called.function.task_id}` is called for a run of "
-                f"`{wait_for.dag}`: give it as run=schedr.RunResult(...)"
+                f"@trigger `{called.function.task_id}` is called for an event "
+                f"`{wait_for.name}`: give it as run=schedr.Event(...)"
             )
-        return _called_for_run(called, run, wait_for.lag, timeout)
+        return _called_for_run(called, run, None, timeout)
     if run is not None:
         raise ValueError("run= is for an @trigger(wait_for=...)")
     found: list[Event[Any]] = []
@@ -633,7 +641,10 @@ def run_trigger(
 
 
 def _called_for_run(
-    called: EventTrigger, run: run_of.RunResult[Any], lag: timedelta | None, timeout: timedelta
+    called: EventTrigger,
+    run: run_of.RunResult[Any] | Event[Any],
+    lag: timedelta | None,
+    timeout: timedelta,
 ) -> list[Event[Any]]:
     """An ``@trigger(wait_for=...)``'s one call, for ``run``: the event it returned, filled in.
 

@@ -130,39 +130,6 @@ impl Database {
         )
     }
 
-    /// The events named `name` posted from `since` on (strictly after `after`, a `(posted_at,
-    /// id)` cursor, when given), oldest first, at most `limit`: what an `EventNamed` trigger
-    /// hasn't seen.
-    ///
-    /// # Errors
-    ///
-    /// [`DbError`] if the query fails or a row doesn't read.
-    pub async fn named_events_after(
-        &self,
-        name: &str,
-        since: Timestamp,
-        after: Option<(Timestamp, &str)>,
-        limit: u32,
-    ) -> Result<Vec<NamedEvent>, DbError> {
-        let query = format!(
-            "SELECT {COLUMNS} FROM named_events WHERE name = $1 AND posted_at >= $2{{ts}} \
-             AND ($3{{ts}} IS NULL OR posted_at > $3{{ts}} OR (posted_at = $3{{ts}} \
-             AND id > $4{{uuid}})) ORDER BY posted_at, id LIMIT $5"
-        );
-        let (after_at, after_id) = after.map_or((None, None), |(at, id)| (Some(at), Some(id)));
-        let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
-                .bind(name)
-                .bind(db_time(since))
-                .bind(after_at.map(db_time))
-                .bind(after_id)
-                .bind(i64::from(limit))
-                .fetch_all(pool)
-                .await?
-        });
-        rows.into_iter().map(row).collect()
-    }
-
     /// The events named `name` posted from `since` on whose key `dag_id`'s events don't have,
     /// oldest first, at most `limit`: what an `EventNamed` trigger starts runs for (decision 354).
     /// Read by the keys a DAG has, not strictly after the last one seen, so one stored late
@@ -195,9 +162,39 @@ impl Database {
         rows.into_iter().map(row).collect()
     }
 
-    /// The first event named `name` with `key` posted from `since` on: what a step waiting in a
-    /// run started at `since` gets (decision 354: one posted before the step began waiting, but
-    /// after its run started, counts).
+    /// The first event named `name` posted from `since` on that `dag_id`'s `@trigger(wait_for=
+    /// EventNamed(...))` hasn't passed (decision 354): read by what it passed, not strictly after
+    /// the last one, so one stored late is still called for, once.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the row doesn't read.
+    pub async fn named_event_unpassed(
+        &self,
+        name: &str,
+        dag_id: &str,
+        since: Timestamp,
+    ) -> Result<Option<NamedEvent>, DbError> {
+        let query = format!(
+            "SELECT {COLUMNS} FROM named_events n WHERE n.name = $1 AND n.posted_at >= $2{{ts}} \
+             AND NOT EXISTS (SELECT 1 FROM trigger_passed p WHERE p.dag_id = $3 \
+             AND p.item = n.id{{text}}) ORDER BY n.posted_at, n.id LIMIT 1"
+        );
+        let found: Option<Row> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql_text(backend, &query))
+                .bind(name)
+                .bind(db_time(since))
+                .bind(dag_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        found.map(row).transpose()
+    }
+
+    /// The first event named `name` with `key` (any, if `None`) posted from `since` on, and
+    /// strictly after `after` (a `(posted_at, id)` cursor: one a sensor's function said
+    /// `NOT_YET` to) when given: what a step waiting in a run started at `since` gets (decision
+    /// 354: one posted before the step began waiting, but after its run started, counts).
     ///
     /// # Errors
     ///
@@ -207,16 +204,21 @@ impl Database {
         name: &str,
         key: Option<&str>,
         since: Timestamp,
+        after: Option<(Timestamp, &str)>,
     ) -> Result<Option<NamedEvent>, DbError> {
         let query = format!(
             "SELECT {COLUMNS} FROM named_events WHERE name = $1 AND ($2 IS NULL OR key = $2) \
-             AND posted_at >= $3{{ts}} ORDER BY posted_at, id LIMIT 1"
+             AND posted_at >= $3{{ts}} AND ($4{{ts}} IS NULL OR posted_at > $4{{ts}} \
+             OR (posted_at = $4{{ts}} AND id > $5{{uuid}})) ORDER BY posted_at, id LIMIT 1"
         );
+        let (after_at, after_id) = after.map_or((None, None), |(at, id)| (Some(at), Some(id)));
         let found: Option<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql_text(backend, &query))
                 .bind(name)
                 .bind(key)
                 .bind(db_time(since))
+                .bind(after_at.map(db_time))
+                .bind(after_id)
                 .fetch_optional(pool)
                 .await?
         });

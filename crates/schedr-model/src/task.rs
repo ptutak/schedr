@@ -205,13 +205,18 @@ pub struct EventNamed {
     pub key: Option<crate::value::Value>,
 }
 
-/// What an `@sensor(wait_for=RunOf(...))` waits for, and the parameter its function is given the
-/// run in (its first: a `RunResult`).
+/// What an `@sensor(wait_for=...)` / `@trigger(wait_for=...)` waits for, and the parameter its
+/// function is given it in (its first): a run of another DAG (`RunOf`, a `RunResult`) or an
+/// event posted (`EventNamed`, an `Event`, decision 354); exactly one of the two.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SensorWaitFor {
     /// The run, and of it which task.
-    pub run_of: RunOf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_of: Option<RunOf>,
+    /// The event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<EventNamed>,
     /// The function's parameter given the run.
     pub param: String,
     /// `@sensor(wait_for=..., timeout=...)`: how long one call may take, in milliseconds; one
@@ -219,6 +224,27 @@ pub struct SensorWaitFor {
     /// `max_wait`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+}
+
+/// What a [`SensorWaitFor`] waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitSource<'a> {
+    /// A run of another DAG.
+    RunOf(&'a RunOf),
+    /// An event posted.
+    Event(&'a EventNamed),
+}
+
+impl SensorWaitFor {
+    /// What it waits for; `None` for neither or both (refused when the DAG is validated).
+    #[must_use]
+    pub const fn source(&self) -> Option<WaitSource<'_>> {
+        match (&self.run_of, &self.event) {
+            (Some(run_of), None) => Some(WaitSource::RunOf(run_of)),
+            (None, Some(event)) => Some(WaitSource::Event(event)),
+            _ => None,
+        }
+    }
 }
 
 /// The kind of a task and what it runs.
@@ -507,9 +533,23 @@ impl Task {
     #[must_use]
     pub fn argument_references(&self) -> Vec<&Reference> {
         match &self.kind {
-            TaskKind::Python { arguments, .. } | TaskKind::Sensor { arguments, .. } => {
+            TaskKind::Python { arguments, .. } => {
                 arguments.values().flat_map(Value::references).collect()
             }
+            TaskKind::Sensor {
+                arguments,
+                wait_for,
+                ..
+            } => arguments
+                .values()
+                .chain(
+                    wait_for
+                        .iter()
+                        .filter_map(|w| w.event.as_ref())
+                        .filter_map(|e| e.key.as_ref()),
+                )
+                .flat_map(Value::references)
+                .collect(),
             TaskKind::Command { command, env, .. } => command
                 .templates()
                 .into_iter()

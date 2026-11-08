@@ -813,12 +813,12 @@ async def _called_for_run(
             return failure(
                 error,
                 "trigger_timed_out",
-                f"{where}: its call for run {run.run_id} took over its timeout, {took}",
+                f"{where}: its call for {_called_for(run)} took over its timeout, {took}",
             )
         if found is not None:
             if not isinstance(found, Event):
                 raise TypeError(f"{where} returns an `Event` or `None`, got {type(found).__name__}")
-            lag = wait_for["run_of"].get("lag_ms")
+            lag = wait_for.get("run_of", {}).get("lag_ms")
             event = event_for_run(found, run, None if lag is None else timedelta(milliseconds=lag))
             returned = begun.hints.get("return")
             hint = next(
@@ -830,6 +830,13 @@ async def _called_for_run(
     except Exception as error:  # an author's error is the trigger's status
         return _raised(error)
     return {"type": "task_succeeded", "output": None, "outcome": SUCCESS}
+
+
+def _called_for(run: object) -> str:
+    """What an ``@trigger(wait_for=...)``'s call was for, in a message: a run or an event."""
+    if isinstance(run, Event):
+        return f"event `{run.key}`"
+    return f"run {getattr(run, 'run_id', '?')}"
 
 
 async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: int) -> None:

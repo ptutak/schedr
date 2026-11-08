@@ -146,6 +146,15 @@ CREATE INDEX named_events_by_name ON named_events (name, posted_at, id);
 CREATE UNIQUE INDEX named_events_by_request ON named_events (posted_by, request_key)
     WHERE request_key IS NOT NULL;
 
+-- What each `@trigger(wait_for=...)` was done with or passed: the runs or events it was called
+-- for, so one stored behind its cursor (an event's time is taken before it commits) is still
+-- called for, and only once (decision 354).
+CREATE TABLE trigger_passed (
+    dag_id  TEXT NOT NULL,
+    item    TEXT NOT NULL,
+    PRIMARY KEY (dag_id, item)
+);
+
 -- Each event-triggered DAG's trigger. Its bookmark outlives everything else: `after` when it starts.
 CREATE TABLE triggers (
     dag_id       TEXT PRIMARY KEY,
