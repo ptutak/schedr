@@ -116,6 +116,7 @@ def task_context(
     try_number: int = 1,
     map_index: int | None = None,
     event: Event[Any] | None = None,
+    first_started: datetime | None = None,
 ) -> Iterator[TestRunValues]:
     """Gives ``dag_ctx`` values inside the block, as while the runner calls a task.
 
@@ -141,6 +142,8 @@ def task_context(
         try_number: ``task_ctx.try_number``.
         map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
         event: ``dag_ctx.event``: the event the run was started by.
+        first_started: When the step's first try started, for a wait step tried again
+            (``delay`` counts from it); ``None``: this is its first try.
 
     Yields:
         The values ``dag_ctx`` gives, and ``.handles``: what ``cleanup_handle`` registered.
@@ -179,7 +182,7 @@ def task_context(
         values.handles.append(handle)
 
     api = _fake_api(values, f"task:{dag_id}/{values.run_id}/{task_id}")
-    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle, api)
+    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle, api, first_started)
     with running(values, own):
         yield values
 

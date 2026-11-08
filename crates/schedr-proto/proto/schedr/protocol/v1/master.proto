@@ -500,6 +500,9 @@ message AssignTask {
   // The task is a resource's cleanup: without a timeout of its own, it gets the worker's
   // `resource_cleanup_timeout` (it isn't cancelled with its run, decision 277).
   bool resource_cleanup = 17;
+  // When the task's first try started, for a wait step tried again: `delay` counts from it
+  // (M4.11g). Unset on its first try, which counts from its own start.
+  google.protobuf.Timestamp first_started = 18;
 }
 
 message CleanupOnly {

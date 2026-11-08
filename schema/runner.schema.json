@@ -1707,6 +1707,14 @@
           ],
           "description": "The event that started it, for a run of an event-triggered DAG."
         },
+        "first_started": {
+          "description": "When a wait step's first try started, for one tried again (`delay` counts from it);\n`None` on its first try, and for other tasks.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "$ref": "#/$defs/RunKind",
           "description": "The run's kind."

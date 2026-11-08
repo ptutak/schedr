@@ -170,6 +170,8 @@ class TaskValues:
         handles: Registers a cleanup handle (``cleanup_handle``); ``None``: it can register
             none.
         api: Calls schedr's REST API as the task (``schedr.api``); ``None``: it can't.
+        first_started: When a wait step's first try started, for one tried again (``delay``
+            counts from it); ``None`` on its first try.
     """
 
     task_id: str
@@ -179,6 +181,7 @@ class TaskValues:
     connections: ConnectionOpener | None = None
     handles: HandleAdder | None = None
     api: ApiCaller | None = None
+    first_started: datetime | None = None
 
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)

@@ -160,6 +160,10 @@ must be isolated with separate queues and workers.
 [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) is ended by the master and does not
 use a watcher host or slot.
 
+A wait step's `max_wait` counts from its first start, across retries and moves. The agent
+sets that first start on the first try; the master sends it with a later try, so `delay`
+counts from the same moment.
+
 A poke can move between calls to new code after the new host imports it and builds its call.
 It keeps its deadline and uses no retry. If preparation fails, it stays on the old code and
 logs why. A full-control `@sensor` keeps its host and code copy until it ends; frequent

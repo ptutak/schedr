@@ -1702,13 +1702,14 @@ impl Dispatcher {
     }
 
     /// What is left of a wait step's `max_wait`, once it has started: it runs from its instance's
-    /// first start, over retries and moves (decision 321).
+    /// first start, over retries and moves (decision 321). With it, that first start (for an
+    /// `@sensor(wait_for=...)`, when it began to wait).
     async fn time_left(
         &self,
         ready: &ReadyInstance,
         task: &schedr_model::Task,
         now: Timestamp,
-    ) -> Result<Option<u64>, DispatchError> {
+    ) -> Result<Option<(u64, Timestamp)>, DispatchError> {
         let schedr_model::TaskKind::Sensor {
             max_wait_ms,
             wait_for,
@@ -1733,9 +1734,10 @@ impl Dispatcher {
         let max_wait = max_wait_ms
             .unwrap_or_else(|| u64::try_from(self.sensor_max_wait.as_millis()).unwrap_or(u64::MAX));
         let gone = now.duration_since(first).as_millis().max(0);
-        Ok(Some(
+        Ok(Some((
             max_wait.saturating_sub(u64::try_from(gone).unwrap_or(u64::MAX)),
-        ))
+            first,
+        )))
     }
 
     /// Ends a wait step whose time ran out while it waited to run again: it would only time out,
@@ -1747,7 +1749,12 @@ impl Dispatcher {
         task: &schedr_model::Task,
         now: Timestamp,
     ) -> Result<bool, DispatchError> {
-        if self.time_left(ready, task, now).await? != Some(0) {
+        if self
+            .time_left(ready, task, now)
+            .await?
+            .map(|(left, _)| left)
+            != Some(0)
+        {
             return Ok(false);
         }
         self.time_out(ready, now).await?;
@@ -1824,7 +1831,7 @@ impl Dispatcher {
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         let handed = self.handing.get(&ready.instance_id);
-        let left = self.time_left(ready, task, now).await?;
+        let (left, first) = self.time_left(ready, task, now).await?.unzip();
         if left.is_none() && handed.is_none() {
             return Ok(());
         }
@@ -1838,6 +1845,10 @@ impl Dispatcher {
         {
             if left.is_some() {
                 *max_wait_ms = left;
+            }
+            // Tried again: `delay` (a plain `@sensor`) counts from its first try's start.
+            if wait_for.is_none() {
+                message.first_started = first.map(proto_time);
             }
             if handed.is_some() {
                 let least = u64::try_from(self.handed_call_min.as_millis()).unwrap_or(u64::MAX);
@@ -2922,6 +2933,7 @@ impl Dispatcher {
             },
             cleanup_only: None,
             resource_cleanup: ready.dag.resource_of_cleanup(&ready.task_id).is_some(),
+            first_started: None,
         }
     }
 }
