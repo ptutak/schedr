@@ -733,8 +733,15 @@ def _begin(
     imported()
     opener = connection_opener(channel) if channel is not None else None
     adder = handle_adder(channel) if channel is not None else None
+    first = run.get("first_started")
     own = TaskValues(
-        task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
+        task_id,
+        int(run.get("try_number", 1)),
+        run.get("map_index"),
+        secrets,
+        opener,
+        adder,
+        None if first is None else datetime.fromisoformat(first),
     )
     return _Begun(function, arguments, hints, run_values(run, params_class), own, downstream)
 

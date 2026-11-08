@@ -163,6 +163,8 @@ class TaskValues:
         connections: Opens a connection (``with name():``); ``None``: none here.
         handles: Registers a cleanup handle (``cleanup_handle``); ``None``: it can register
             none.
+        first_started: When a wait step's first try started, for one tried again (``delay``
+            counts from it); ``None`` on its first try.
     """
 
     task_id: str
@@ -171,6 +173,7 @@ class TaskValues:
     secrets: SecretReader | None = None
     connections: ConnectionOpener | None = None
     handles: HandleAdder | None = None
+    first_started: datetime | None = None
 
 
 _RUNNING: ContextVar[RunValues | None] = ContextVar("schedr_running_task", default=None)

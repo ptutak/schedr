@@ -75,6 +75,7 @@ fn assign(task: &serde_json::Value) -> pb::AssignTask {
         connections_json: Vec::new(),
         cleanup_only: None,
         resource_cleanup: false,
+        first_started: None,
     }
 }
 
@@ -876,4 +877,33 @@ fn a_wait_step_without_a_max_wait_gets_the_workers_default_and_a_limit_past_its_
     let mut own = python_task();
     own["max_wait_ms"] = json!(5000);
     assert_eq!(wait_of(own), (Some(5000), Some(5000 + margin)));
+}
+
+#[test]
+fn a_wait_step_s_first_start_is_the_masters_or_now_on_its_first_try() {
+    // Codex's review of M4.11g: a host restarted in the same attempt reuses the request, so a
+    // first try's `delay` counts from when the agent took it, not again from zero.
+    let mut wait = python_task();
+    wait["kind"] = json!("sensor");
+    wait["mode"] = json!("loop");
+    let before = Timestamp::now();
+    let first = AttemptSpec::from_assign(&assign(&wait), None).unwrap();
+    let taken = first.run.first_started.expect("now, on its first try");
+    assert!(before <= taken && taken <= Timestamp::now());
+    let earlier = prost_types::Timestamp {
+        seconds: 1_792_036_800,
+        nanos: 0,
+    };
+    let again = pb::AssignTask {
+        first_started: Some(earlier),
+        ..assign(&wait)
+    };
+    let spec = AttemptSpec::from_assign(&again, None).unwrap();
+    assert_eq!(
+        spec.run.first_started,
+        Some(Timestamp::from_second(1_792_036_800).unwrap()),
+        "the master's, tried again"
+    );
+    let task = AttemptSpec::from_assign(&assign(&python_task()), None).unwrap();
+    assert_eq!(task.run.first_started, None, "a task has none");
 }

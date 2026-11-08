@@ -4,18 +4,18 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-08, late morning): M4.11e committed; f and g reviewed by Codex, fixed and documented
+## State (2026-11-08, noon): M4.11e and M4.11g committed; M4.11f waits for the user's decision on B188; then M4.11 is done
 
-- **e2 committed:** `@sensor`/`@trigger` `wait_for=EventNamed`; Codex's 3 findings (a dropped returned event passed:
-  `TriggerStopped.returned_event`) and Grok's (a secret-named key masked in the reason) fixed; B185, B186 logged;
-  late-dated events keep their empty window (the user's A).
-- **f (`../schedr-claude-f`, branch `claude/f`):** Codex's 5 findings fixed (a window ending during a poke now sent at its
-  end; items sized once; schemas; a tight test), docs by Codex, the moot `restart_if_idle` vs `batch` check removed.
-  Next: rebase onto main, Grok security review, `make check`, commit.
-- **g (`../schedr-claude-g`, branch `claude/g`, decision 355, all A by the user):** Codex's 5 findings fixed (the value is
-  when it ended; the agent sets a first try's start; a negative parameter refused; tests), docs by Codex. Grok's security
-  review running (worktree `../schedr-grok-4.11g`, task `brgoiuof7`). Next: its fixes, rebase after f, `make check`,
-  commit. Then M4.11 is done: stop.
+- **Committed:** e2 (`@sensor`/`@trigger` `wait_for=EventNamed`) and g (`schedr.sensors.delay` / `until`, decision 355,
+  all A; `AssignTask.first_started`; Codex 5 and Grok 1 findings fixed).
+- **f (`../schedr-claude-f`, branch `claude/f`, rebased on e2, one commit plus snapshots):** `batch=` on `@trigger.poke`.
+  Codex's 5 and Grok's 4 fixable findings fixed with tests (window sent at its end; items sized once with room for
+  masking; empty keys; the trigger's size checked; docs). Logged in its branch: B187 (no protocol minor bump: a 0.1
+  worker drops new fields) and **B188 (high): a window whose last key is a repeat starts no run, its new items lost**.
+  The user decides B188: A (the master deduplicates per item, recommended), B (docs: ordered sources only), C (a hash
+  key, bookmark apart). Then: fix, rebase onto main (after g), `make check`, commit, push, remove f's worktrees
+  (`../schedr-claude-f`, `../schedr-codex-4.11f`, `../schedr-grok-4.11f`, their branches and pyenvs).
+- **After M4.11:** M4.12 (`TriggerDagOperator`, backfill), per PLAN.md. B185, B186 (medium) wait.
 
 ## State (2026-11-08, night): M4.11e part 1 built and reviewed by Codex (8 fixed), Grok security review running; e2 and f built in worktrees, not committed
 

@@ -2090,6 +2090,7 @@ fn command_needing_secret(
         connections_json: serde_json::to_vec(&connections).unwrap(),
         cleanup_only: None,
         resource_cleanup: false,
+        first_started: None,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2330,6 +2331,7 @@ async fn command_with_connection(
         connections_json: serde_json::to_vec(&connections).unwrap(),
         cleanup_only: None,
         resource_cleanup: false,
+        first_started: None,
     };
     let mut spec = crate::attempt::AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2629,6 +2631,7 @@ fn attempt_with_timed_cleanup(
         connections_json: Vec::new(),
         cleanup_only: None,
         resource_cleanup: false,
+        first_started: None,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();

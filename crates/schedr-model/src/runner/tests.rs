@@ -161,6 +161,7 @@ fn request() -> TaskRequest {
         outcomes: std::collections::BTreeMap::new(),
         run: RunInfo {
             event: None,
+            first_started: None,
             params: serde_json::json!({}),
             dag_id: "sync".into(),
             run_id: "0192c4e1".into(),

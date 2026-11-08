@@ -154,6 +154,7 @@ pub fn test_spec(
             map_index: None,
             params: json!({}),
             event: None,
+            first_started: None,
         },
         inputs: std::collections::BTreeMap::new(),
         outcomes: std::collections::BTreeMap::new(),

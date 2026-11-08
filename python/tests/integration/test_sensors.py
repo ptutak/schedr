@@ -1,5 +1,7 @@
 """Wait steps, run for real: ``schedr dags test``, a process per task (M4.11a1)."""
 
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from schedr.testing import run_dag
@@ -321,3 +323,33 @@ with Dag("d"):
     assert result.tasks["of_number"].output == "7"
     assert result.tasks["of_found"].output == "Found(name='f')"
     assert result.tasks["of_nothing"].output == "None"
+
+
+def test_delay_and_until_wait_and_give_their_moment(tmp_path: Path) -> None:
+    # M4.11g: plain wait steps from `schedr.sensors`.
+    planned = datetime.now(UTC) - timedelta(hours=1)
+    started = time.monotonic()
+    result = run_dag(
+        _write(
+            tmp_path,
+            """
+from datetime import datetime
+from schedr.sensors import delay, until
+
+@task
+def took(at: datetime) -> str:
+    return at.isoformat()
+
+with Dag("d"):
+    took(delay(timedelta(milliseconds=700)).on(datetime))
+    took.override(task_id="past")(until(timedelta(minutes=30)).on(datetime))
+""",
+        ),
+        "d",
+        for_=planned,
+    )
+    assert result.state == "success", result
+    assert time.monotonic() - started >= 0.7
+    past = datetime.fromisoformat(result.tasks["past"].output)
+    assert planned + timedelta(minutes=30) < past <= datetime.now(UTC), "when it ended"
+    assert datetime.fromisoformat(result.tasks["took"].output) <= datetime.now(UTC)

@@ -7030,6 +7030,23 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   `restart_if_idle` must be longer than `batch`; a restart finds the items again from the bookmark, which a poke that consumes
   what it reads can't. A run reads `dag_ctx.event.data` as `list[Event[T]]`, what the pokes returned (the user's): the same objects, each
   stored once. Not chosen: `list[T]` (the items' keys and times would be gone); `batch="50s"` (every other duration is a `timedelta`); `tuple[list[T], list[Event]]` (each item stored twice).
+- **`delay` and `until`: plain wait steps in Python** (decision 355, the user's, 2026-11-08; built in M4.11g): two
+  `@sensor`s schedr ships in `schedr.sensors`, no new step kind: `delay(timedelta(minutes=10))` waits that long from its
+  first try's start, `until(timedelta(hours=2))` until the run's `planned_for` plus that (a `datetime` with a time zone:
+  that moment); one past ends at once. A step tried again (its worker lost) waits only what is left: the master sends a wait
+  step's first try's start with each later assignment (`AssignTask.first_started`, the same moment its `max_wait` counts
+  from), the host gives it the step (`TaskValues.first_started`, not on `task_ctx`). They sleep at most a minute at a time, so
+  a clock set meanwhile is seen. Claude's, confirmed by the user (2026-11-08, all option A): their value is the moment they ended (a `datetime`); IDs `delay` and
+  `until`, numbered from the second on; a `delay` given a `timedelta` waits up to that and a minute (`max_wait`) unless told,
+  as a long delay would otherwise end `TimedOut` at the default; `until` keeps the usual default; a run parameter can give
+  either; they aren't in `schedr`'s top level (`until` is a common name); the first try's start isn't on `task_ctx`. Not chosen: a `None` value (a downstream task couldn't say when it was released); the usual `max_wait` for `delay` (a two-day delay would end `TimedOut` at 24 h); top-level names (`until` clashes); `task_ctx.first_started` (one more public field to keep). Codex's review: they gave their moment, not when they ended (now the end); a
+  first try's `delay` restarted its count when its host was restarted in the same attempt (the agent now sets a wait
+  step's first start itself on its first try, kept with the request); a negative wait from a run parameter wasn't
+  refused (now when it runs). Grok's security review: a wait past what a `datetime` holds (a parameter of millions
+  of days) raised and failed the attempt; now it ends at its `max_wait`, one before year 1 at once. Not fixed: a new
+  worker under a master without `first_started` (the upgrade order is master first). Kept for later: `by_deadline(a, b, at=...)` and
+  `first_of(..., cancel_rest=True)`; `approval(...)` goes to M6 (human in the loop); `none_of` dropped (a plain branch
+  does it).
 - **A task starts after its upstream tasks end** (decision 345, the user's, 2026-11-07): no `run_if`
   starts one on the first of several. To act on the first, `first_of` (decision 347) is a node of its own,
   after which a task starts as usual. Not chosen: `RunIf.ANY_SUCCEEDED` (too many
