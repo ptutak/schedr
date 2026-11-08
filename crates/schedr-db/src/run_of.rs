@@ -133,11 +133,48 @@ impl Database {
     /// [`DbError`] if the query fails or a stored time doesn't read.
     pub async fn succeeded_since(
         &self,
-        (dag, task): (&str, Option<&str>),
+        of: (&str, Option<&str>),
         started: &str,
         from: RunOfFrom<'_>,
         limit: u32,
     ) -> Result<Vec<(String, Timestamp, Timestamp)>, DbError> {
+        self.runs_since(of, started, from, limit, false).await
+    }
+
+    /// As [`Self::succeeded_since`], every run that ended, whatever its state: what an
+    /// `@trigger(wait_for=...)`'s function is called for.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn ended_since(
+        &self,
+        of: (&str, Option<&str>),
+        from: RunOfFrom<'_>,
+        limit: u32,
+    ) -> Result<Vec<(String, Timestamp, Timestamp)>, DbError> {
+        self.runs_since(of, "", from, limit, true).await
+    }
+
+    async fn runs_since(
+        &self,
+        (dag, task): (&str, Option<&str>),
+        started: &str,
+        from: RunOfFrom<'_>,
+        limit: u32,
+        any_end: bool,
+    ) -> Result<Vec<(String, Timestamp, Timestamp)>, DbError> {
+        const RUNS_ENDED: &str = "SELECT r.id{text}, {ts<}r.planned_for{>ts}, {ts<}r.ended_at{>ts} FROM runs r \
+            WHERE r.dag_id = $1 AND r.state IN ('success', 'failed', 'cancelled') AND r.ended_at >= $2{ts} \
+            AND (r.ended_at > $2{ts} OR $4 IS NULL OR r.id > $4{uuid}) \
+            ORDER BY r.ended_at, r.id LIMIT $3";
+        const TASKS_ENDED: &str = "SELECT r.id{text}, {ts<}r.planned_for{>ts}, {ts<}t.ended_at{>ts} \
+            FROM task_instances t JOIN runs r ON r.id = t.run_id \
+            WHERE t.task_id = $5 AND t.map_index = -1 \
+            AND t.state IN ('success', 'failed', 'cancelled', 'skipped', 'upstream_failed') \
+            AND t.ended_at >= $2{ts} AND r.dag_id = $1 \
+            AND (t.ended_at > $2{ts} OR $4 IS NULL OR r.id > $4{uuid}) \
+            ORDER BY t.ended_at, r.id LIMIT $3";
         const RUNS: &str = "SELECT r.id{text}, {ts<}r.planned_for{>ts}, {ts<}r.ended_at{>ts} FROM runs r \
             WHERE r.dag_id = $1 AND r.state = 'success' AND r.ended_at >= $2{ts} \
             AND (r.ended_at > $2{ts} OR $5 IS NULL OR r.id > $5{uuid}) \
@@ -155,13 +192,21 @@ impl Database {
             RunOfFrom::After(seen) => (seen.at, Some(seen.run.as_str())),
         };
         let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
-            let mut statement =
-                sqlx::query_as(sql(backend, if task.is_some() { TASKS } else { RUNS }))
-                    .bind(dag)
-                    .bind(db_time(since))
-                    .bind(started)
-                    .bind(i64::from(limit))
-                    .bind(after_run);
+            // What ended for a function is never deduplicated by its events: it may start none,
+            // or key them its own way; its cursor alone says what it has had.
+            let query = match (task.is_some(), any_end) {
+                (true, false) => TASKS,
+                (false, false) => RUNS,
+                (true, true) => TASKS_ENDED,
+                (false, true) => RUNS_ENDED,
+            };
+            let mut statement = sqlx::query_as(sql(backend, query))
+                .bind(dag)
+                .bind(db_time(since));
+            if !any_end {
+                statement = statement.bind(started);
+            }
+            statement = statement.bind(i64::from(limit)).bind(after_run);
             if let Some(task) = task {
                 statement = statement.bind(task);
             }
@@ -445,5 +490,129 @@ impl Database {
             serde_json::json!(found.as_ref().and_then(|(_, outcome, _)| outcome.as_ref()));
         result["output"] = output.unwrap_or(serde_json::Value::Null);
         Ok(Some(result))
+    }
+}
+
+impl Database {
+    /// Records the run an `@trigger(wait_for=...)` of `dag` was given, as it is placed: what its
+    /// clean end moves it past, or a skip passes (decision 353).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn hand_trigger_run(&self, dag: &str, seen: &RunOfSeen) -> Result<(), DbError> {
+        // Another run than the one it failed on starts with no failures (Codex's review): those
+        // were the dropped run's.
+        const HAND: &str = "INSERT INTO triggers (dag_id, failures, run_of_handed_run, \
+            run_of_handed_at) VALUES ($1, 0, $2, $3{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
+            failures = CASE WHEN COALESCE(triggers.run_of_handed_run, '') = excluded.run_of_handed_run \
+                THEN triggers.failures ELSE 0 END, \
+            not_before = CASE WHEN COALESCE(triggers.run_of_handed_run, '') = excluded.run_of_handed_run \
+                THEN triggers.not_before ELSE NULL END, \
+            run_of_handed_run = excluded.run_of_handed_run, \
+            run_of_handed_at = excluded.run_of_handed_at";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, HAND))
+                .bind(dag)
+                .bind(&seen.run)
+                .bind(db_time(seen.at))
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// The run an `@trigger(wait_for=...)` of `dag` was last given and hasn't passed yet.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the stored time doesn't read.
+    pub async fn trigger_run_handed(&self, dag: &str) -> Result<Option<RunOfSeen>, DbError> {
+        const READ: &str = "SELECT run_of_handed_run, {ts<}run_of_handed_at{>ts} FROM triggers \
+            WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND run_of_handed_at IS NOT NULL";
+        let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, READ))
+                .bind(dag)
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(|(run, at)| {
+            Ok(RunOfSeen {
+                at: parse_time("triggers.run_of_handed_at", &at)?,
+                run,
+            })
+        })
+        .transpose()
+    }
+
+    /// Moves an `@trigger(wait_for=...)` of `dag` reading `source` past the run it was given:
+    /// done with it, or passing it (`skipped`: why, kept as its last error). Its failures in a
+    /// row start again. With `call`, ends that call in the same statement, so the call can't
+    /// end without the run passed (Codex's review); without, only while no call runs. Gives
+    /// whether it was passed.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn pass_trigger_run(
+        &self,
+        dag: &str,
+        source: &str,
+        skipped: Option<&str>,
+        call: Option<&str>,
+    ) -> Result<bool, DbError> {
+        const PASS: &str = "UPDATE triggers SET run_of_source = $2, \
+            run_of_seen_at = run_of_handed_at, run_of_seen_run = run_of_handed_run, \
+            run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL, \
+            last_error = COALESCE($3, last_error) \
+            WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id IS NULL";
+        const END_AND_PASS: &str = "UPDATE triggers SET run_of_source = $2, \
+            run_of_seen_at = run_of_handed_at, run_of_seen_run = run_of_handed_run, \
+            run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL, \
+            last_error = COALESCE($3, last_error), instance_id = NULL, worker_id = NULL, \
+            dag_version_id = NULL, code_hash = NULL \
+            WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $4";
+        let passed = in_tx!(self, |tx, backend| {
+            let statement = match call {
+                Some(call) => sqlx::query(sql(backend, END_AND_PASS))
+                    .bind(dag)
+                    .bind(source)
+                    .bind(skipped)
+                    .bind(call),
+                None => sqlx::query(sql(backend, PASS))
+                    .bind(dag)
+                    .bind(source)
+                    .bind(skipped),
+            };
+            statement.execute(&mut *tx).await?.rows_affected()
+        });
+        Ok(passed == 1)
+    }
+}
+
+impl Database {
+    /// An `@trigger(wait_for=...)` of `dag` whose call couldn't be made for its run (too big to
+    /// send): a failure with `error`, not started again before `not_before`.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn trigger_call_refused(
+        &self,
+        dag: &str,
+        error: &str,
+        not_before: Option<Timestamp>,
+    ) -> Result<(), DbError> {
+        const REFUSED: &str = "UPDATE triggers SET last_error = $2, failures = failures + 1, \
+            not_before = $3{ts} WHERE dag_id = $1 AND instance_id IS NULL";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, REFUSED))
+                .bind(dag)
+                .bind(error)
+                .bind(not_before.map(db_time))
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
     }
 }

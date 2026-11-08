@@ -6,11 +6,25 @@ without it the step fails, and the run with it. Run alone, as `dags test` does, 
 `orders` run and its wait runs out: `TimedOut`, which `late` handles. `tally_orders` is started by
 each run of `orders` that succeeds. `checked_report` reads the run itself: an `@sensor` with
 `wait_for=` is called once that `load` has ended, with the run as its first parameter.
+`big_orders` is started by an `@trigger` with `wait_for=`: called once for each run of `orders`
+that ends, given it, it decides whether that run starts one.
 """
 
 from datetime import timedelta
 
-from schedr import Dag, Failed, RunOf, RunResult, TimedOut, sensor, task, wait_for
+from schedr import (
+    Dag,
+    Event,
+    Failed,
+    RunOf,
+    RunResult,
+    TimedOut,
+    dag_ctx,
+    sensor,
+    task,
+    trigger,
+    wait_for,
+)
 from schedr.sensors import NOT_YET, NotYet
 
 
@@ -78,3 +92,21 @@ with Dag("checked_report"):
     orders = loaded_orders(least=1)
     build_from(orders.on(int))
     late(orders.on(TimedOut))
+
+
+@trigger(wait_for=RunOf("orders", task="load", lag=timedelta(0)), run_retries=3)
+async def on_big_orders(run: RunResult[int], least: int) -> Event[int] | None:
+    """A run of `big_orders` for a load of at least `least` orders; keyed by that run's ID."""
+    if run.task_state != "success" or run.output is None or run.output < least:
+        return None
+    return Event(data=run.output)
+
+
+@task
+def handle_big(orders: int) -> str:
+    """Handles a big day."""
+    return f"{orders} orders: a big day"
+
+
+with Dag("big_orders", trigger=on_big_orders(least=40)):
+    handle_big(dag_ctx.event.data)  # pyright: ignore[reportAny]

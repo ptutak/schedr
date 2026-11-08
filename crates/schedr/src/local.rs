@@ -401,7 +401,7 @@ pub fn check_scripts(path: &Path, config: &Config) -> Result<Option<Vec<ParsedFi
     }
     let interpreters: Vec<String> = config.interpreters.keys().cloned().collect();
     let parsed = schedr_agent::jobs::read_root(&name, &dir, (&files, &wanted), Some(&interpreters));
-    let limit = usize::try_from(config.master.grpc_max_message_size).unwrap_or(usize::MAX);
+    let limit = usize::try_from(config.grpc.max_message_size).unwrap_or(usize::MAX);
     Ok(Some(validate_files(
         &name,
         parsed,
@@ -522,7 +522,7 @@ pub async fn check_root(
             &output,
         ))
     })?;
-    let limit = usize::try_from(config.master.grpc_max_message_size).unwrap_or(usize::MAX);
+    let limit = usize::try_from(config.grpc.max_message_size).unwrap_or(usize::MAX);
     Ok(validate_files(
         &root.name,
         parsed,

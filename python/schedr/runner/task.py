@@ -16,7 +16,7 @@ import operator
 import sys
 import types
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, is_typeddict
 from urllib.parse import quote
@@ -49,7 +49,7 @@ from schedr.context import (
     handle_classes,
     running,
 )
-from schedr.event_triggers import Event, event_data_hint
+from schedr.event_triggers import Event, event_data_hint, event_for_run
 from schedr.outcomes import (
     FIRST_OF_VALUE,
     TIMED_OUT_NAME,
@@ -764,8 +764,10 @@ async def execute_trigger(
     # Slow to import; most tasks aren't triggers.
     from schedr.runner.waiting import run_trigger  # noqa: PLC0415
 
-    hint = event_data_hint(begun.hints.get("return"), f"@trigger `{request['task']['id']}`")
     limit: int = request["task"]["settings"]["max_output_size"]
+    if request["task"].get("wait_for") is not None:
+        return await _called_for_run(request, begun, channel, limit)
+    hint = event_data_hint(begun.hints.get("return"), f"@trigger `{request['task']['id']}`")
     try:
         with running(begun.values, begun.own):
             await run_trigger(
@@ -785,12 +787,60 @@ async def execute_trigger(
     )
 
 
+async def _called_for_run(
+    request: Mapping[str, Any], begun: _Begun, channel: Asking, limit: int
+) -> dict[str, Any]:
+    """An ``@trigger(wait_for=...)``'s one call, for the run it was given (decision 353).
+
+    The event it returns is told, its key that run's ID unless it gives one, planned for that
+    run's moment plus ``lag``; then a clean end, which moves its trigger past the run.
+    """
+    task = request["task"]
+    wait_for = task["wait_for"]
+    run = begun.arguments[wait_for["param"]]
+    where = f"@trigger `{task['id']}`"
+    limit_ms = wait_for.get("timeout_ms")
+    deadline = asyncio.timeout(None if limit_ms is None else limit_ms / 1000)
+    try:
+        try:
+            async with deadline:
+                with running(begun.values, begun.own):
+                    found = await begun.function(**begun.arguments)
+        except TimeoutError as error:
+            if not deadline.expired():
+                raise
+            took = timedelta(milliseconds=limit_ms or 0)
+            return failure(
+                error,
+                "trigger_timed_out",
+                f"{where}: its call for run {run.run_id} took over its timeout, {took}",
+            )
+        if found is not None:
+            if not isinstance(found, Event):
+                raise TypeError(f"{where} returns an `Event` or `None`, got {type(found).__name__}")
+            lag = wait_for["run_of"].get("lag_ms")
+            event = event_for_run(found, run, None if lag is None else timedelta(milliseconds=lag))
+            returned = begun.hints.get("return")
+            hint = next(
+                (get_args(a)[0] for a in get_args(returned) if get_origin(a) is Event), None
+            )
+            await _tell_event(channel, event, hint, limit)
+    except CodecError as error:
+        return failure(error, "event_refused", f"an event's data: {error.reason}")
+    except Exception as error:  # an author's error is the trigger's status
+        return _raised(error)
+    return {"type": "task_succeeded", "output": None, "outcome": SUCCESS}
+
+
 async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: int) -> None:
     """Tells the agent what a trigger found, and waits until the master has it.
 
     Raises:
         CodecError: For data that can't be stored, or is over ``limit`` bytes.
+        TypeError: For an event with no key.
     """
+    if not event.key:
+        raise TypeError("an event's key must be a non-empty string, got ''")
     data = encode(event.data, hint)
     check_size(data, limit)
     message = {"type": "trigger_event", "key": event.key, "data": data}

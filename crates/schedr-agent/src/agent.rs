@@ -3496,14 +3496,16 @@ fn proto_time(time: Timestamp) -> prost_types::Timestamp {
     }
 }
 
-/// How a trigger ended, as the master hears it: asked to stop, it is no error.
+/// How a trigger ended, as the master hears it: asked to stop, or done with the run it was
+/// called for (`@trigger(wait_for=...)`, decision 353), it is no error.
 fn trigger_stopped(
     dag_id: String,
     instance_id: String,
     finished: &pb::Finished,
 ) -> pb::TriggerStopped {
     let asked = finished.status == pb::AttemptStatus::Cancelled as i32
-        || finished.status == pb::AttemptStatus::Interrupted as i32;
+        || finished.status == pb::AttemptStatus::Interrupted as i32
+        || finished.status == pb::AttemptStatus::Success as i32;
     let (error_kind, message) = if asked {
         (String::new(), String::new())
     } else {
@@ -3526,6 +3528,7 @@ fn trigger_stopped(
         message,
         struck: finished.struck,
         code_hash: finished.code_hash.clone(),
+        done: finished.status == pb::AttemptStatus::Success as i32,
     }
 }
 
@@ -3727,8 +3730,8 @@ fn fit_result(finished: &mut pb::Finished, limit: usize) {
     }
     let size = prost::Message::encoded_len(finished);
     let message = format!(
-        "the result is {size} bytes, more than the master accepts ({limit} bytes, [master] \
-         grpc_max_message_size): lower the task's max_output_size, or raise the setting"
+        "the result is {size} bytes, more than the master accepts ({limit} bytes, [grpc] \
+         max_message_size): lower the task's max_output_size, or raise the setting"
     );
     tracing::error!(attempt_id = finished.attempt_id.as_str(), %message, "result too large");
     finished.status = pb::AttemptStatus::Failed.into();
@@ -3747,7 +3750,7 @@ fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
     }
     let message = format!(
         "the file's parse result is {size} bytes, more than the master accepts ({limit} \
-         bytes, [master] grpc_max_message_size): raise the setting, or split the file"
+         bytes, [grpc] max_message_size): raise the setting, or split the file"
     );
     tracing::error!(path = file.path.as_str(), %message, "parsed file not uploaded");
     pb::ParsedFile {

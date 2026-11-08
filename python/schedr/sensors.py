@@ -7,7 +7,6 @@ with the ``TimedOut`` outcome (waiting in vain is an expected problem, not a fai
 from __future__ import annotations
 
 import functools
-import inspect
 import types
 import typing
 from dataclasses import replace
@@ -33,7 +32,7 @@ from schedr._model import SensorKind, SensorMode, SensorWaitFor
 from schedr._secrets import SecretsArg
 from schedr._wait_rules import refused_in
 from schedr.connections import ConnectionsArg
-from schedr.run_of import RunOf, RunResult
+from schedr.run_of import RunOf, RunResult, call_limit_ms, run_parameter
 from schedr.tasks import AsyncTaskFunction, Output, TaskFunction, is_async, task
 
 if TYPE_CHECKING:
@@ -118,6 +117,7 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         options: _build.TaskOptions,
         every: timedelta | None,
         wait_for: RunOf | None = None,
+        call_timeout_ms: int | None = None,
     ) -> None:
         """Wraps ``fn`` as a wait step.
 
@@ -128,6 +128,8 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             every: How often to call it (``@sensor.poke``); ``None``: called once.
             wait_for: ``@sensor(wait_for=RunOf(...))``: called once that run has ended, with it
                 as its first parameter (decision 353).
+            call_timeout_ms: With ``wait_for``, how long one call may take; ``None``: what is
+                left of ``max_wait``.
 
         Raises:
             TypeError: If ``fn`` can't be a wait step.
@@ -135,9 +137,10 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         where = f"@sensor `{task_id}`"
         super().__init__(fn, task_id, options)
         self._wait_for = wait_for
+        self._call_timeout_ms = call_timeout_ms
         self._run_param: str | None = None
         if wait_for is not None:
-            self._run_param = _run_parameter(fn, where)
+            self._run_param = run_parameter(fn, where)
             # The DAG never gives it: the master does, with the run (see `_kind`).
             rest = list(self._signature.parameters.values())[1:]
             self._signature = self._signature.replace(parameters=rest)
@@ -174,6 +177,12 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             # NOT_YET waits for a later run: never its output.
             return output_hint(annotation)
         if self._every is None:
+            if _has_not_yet(annotation):
+                raise TypeError(
+                    f"{where}: a @sensor waits by awaiting until it has its value, called once: "
+                    "`NOT_YET` is for @sensor.poke (called again) or @sensor(wait_for=...) (given "
+                    f"a later run); annotate it without `NotYet`, got `{annotation}`"
+                )
             return annotation
         if not _has_not_yet(annotation):
             raise TypeError(
@@ -208,7 +217,13 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
         waits = (
             None
             if wait_for is None or self._run_param is None
-            else SensorWaitFor(wait_for.dag, wait_for.task, wait_for.lag_ms, self._run_param)
+            else SensorWaitFor(
+                wait_for.dag,
+                wait_for.task,
+                wait_for.lag_ms,
+                self._run_param,
+                self._call_timeout_ms,
+            )
         )
         # `max_wait` comes with the options, from the defaults too: see `add_task`.
         return SensorKind(arguments, mode, self._every_ms, wait_for=waits)
@@ -225,33 +240,10 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             raise TypeError(
                 f"@sensor `{task_id}`: `timeout` limits a task's work; a wait step has `max_wait`"
             )
-        made = SensorFunction(self._fn, task_id, options, self._every, self._wait_for)
+        made = SensorFunction(
+            self._fn, task_id, options, self._every, self._wait_for, self._call_timeout_ms
+        )
         return cast("Self", made)
-
-
-def _run_parameter(fn: Callable[..., object], where: str) -> str:
-    """The name of an ``@sensor(wait_for=...)``'s first parameter, the run's: ``RunResult[T]``.
-
-    Raises:
-        TypeError: If it has none, or it isn't annotated ``RunResult``.
-    """
-    parameters = list(inspect.signature(fn).parameters.values())
-    if not parameters or parameters[0].kind not in {
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        inspect.Parameter.KEYWORD_ONLY,
-    }:
-        raise TypeError(
-            f"{where}: with `wait_for=`, its first parameter is the run it waits for: "
-            "`run: RunResult[...]`"
-        )
-    first = parameters[0]
-    annotation = typing.get_type_hints(fn).get(first.name)
-    if annotation is not RunResult and get_origin(annotation) is not RunResult:
-        raise TypeError(
-            f"{where}: with `wait_for=`, its first parameter `{first.name}` is the run it waits "
-            f"for: annotate it `RunResult[...]`, got `{annotation}`"
-        )
-    return first.name
 
 
 def _no_cleanup(task_id: str) -> str:
@@ -266,8 +258,11 @@ def _made[**P, R, A](
     every: timedelta | None,
     options: SensorOptions,
     wait_for: RunOf | None = None,
+    timeout: timedelta | None = None,
 ) -> SensorFunction[P, R, A]:
     max_wait = options.pop("max_wait", None)
+    where = f"@sensor `{getattr(fn, '__name__', '')}`"
+    call_timeout_ms = None if timeout is None else call_limit_ms(timeout, where)
     if wait_for is not None and not isinstance(wait_for, RunOf):
         raise TypeError(f"@sensor: `wait_for` takes a RunOf, got {wait_for!r}")
     for name in options:
@@ -287,7 +282,9 @@ def _made[**P, R, A](
     decorate = cast("Callable[..., Callable[..., TaskFunction[..., object]]]", task)
     plain = decorate(**options)(fn)
     made = replace(plain._options, max_wait=max_wait)
-    return SensorFunction(cast("Callable[P, R]", fn), plain.task_id, made, every, wait_for)
+    return SensorFunction(
+        cast("Callable[P, R]", fn), plain.task_id, made, every, wait_for, call_timeout_ms
+    )
 
 
 class _SensorDecorator(typing.Protocol):
@@ -332,7 +329,12 @@ class _Sensor:
     ) -> SensorFunction[P, _outcomes.Waited[R], R]: ...
     @overload
     def __call__(
-        self, /, *, wait_for: RunOf, **options: Unpack[SensorOptions]
+        self,
+        /,
+        *,
+        wait_for: RunOf,
+        timeout: timedelta | None = None,
+        **options: Unpack[SensorOptions],
     ) -> _WaitForDecorator: ...
     @overload
     def __call__(self, /, **options: Unpack[SensorOptions]) -> _SensorDecorator: ...
@@ -342,6 +344,7 @@ class _Sensor:
         /,
         *,
         wait_for: RunOf | None = None,
+        timeout: timedelta | None = None,
         **options: Unpack[SensorOptions],
     ) -> object:
         """Makes an ``async def`` function a wait step, which you write the waiting of.
@@ -355,15 +358,26 @@ class _Sensor:
         Args:
             fn: The function (``@sensor`` without arguments).
             wait_for: The run it is called for.
+            timeout: With ``wait_for``, how long one call may take, below what is left of
+                ``max_wait``: one over it is cancelled and fails the attempt, whose retries get
+                the same run (``TimedOut`` stays for ``max_wait``). ``None``: no limit of its own.
             **options: ``max_wait``, how long it waits before ending with the ``TimedOut``
                 outcome; the others as for ``@task``, but for ``cleanup=`` (use ``finally``).
 
         Returns:
             The wait step, or a decorator making one.
+
+        Raises:
+            TypeError: For a ``timeout`` without ``wait_for``.
         """
+        if timeout is not None and wait_for is None:
+            raise TypeError(
+                "@sensor: `timeout` limits a task's work; a wait step has `max_wait` (with "
+                "`wait_for=`, `timeout` limits one call)"
+            )
 
         def made(function: Callable[..., object]) -> object:
-            return _made(function, None, options.copy(), wait_for)
+            return _made(function, None, options.copy(), wait_for, timeout)
 
         return made if fn is None else made(fn)
 

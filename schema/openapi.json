@@ -1401,6 +1401,13 @@
               "null"
             ]
           },
+          "called_for": {
+            "description": "`@trigger(wait_for=...)` (decision 353): the run of the other DAG it is called for and\nhasn't ended well with yet; `schedr triggers skip` passes it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "dag_id": {
             "description": "Its DAG.",
             "type": "string"
@@ -2466,6 +2473,58 @@
           }
         },
         "summary": "Start a DAG's trigger again from its bookmark, whatever stopped it. Applied by the master;\npoll the command for the decision.",
+        "tags": [
+          "triggers"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger/skip": {
+      "post": {
+        "operationId": "skip_trigger_run",
+        "parameters": [
+          {
+            "description": "A key of the client's",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Pass the run an `@trigger(wait_for=...)` is called for and keeps failing on, so its next call\ngets the next run (decision 353); refused while a call of it runs. Applied by the master; poll\nthe command for the decision.",
         "tags": [
           "triggers"
         ]

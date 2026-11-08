@@ -55,6 +55,12 @@ pub enum Command {
         /// Its DAG.
         dag_id: DagId,
     },
+    /// Pass the run an `@trigger(wait_for=...)` keeps failing on, so it is called for the next
+    /// (`schedr triggers skip`, decision 353); refused while a call of it runs.
+    SkipTriggerRun {
+        /// Its DAG.
+        dag_id: DagId,
+    },
     /// Cancel a run (queued or running).
     CancelRun {
         /// The run.
@@ -260,6 +266,7 @@ impl Command {
             Self::UnpauseDag { .. } => "unpause_dag",
             Self::SwitchOnSensor { .. } => "switch_on_sensor",
             Self::RestartTrigger { .. } => "restart_trigger",
+            Self::SkipTriggerRun { .. } => "skip_trigger_run",
             Self::CancelTask { .. } => "cancel_task",
             Self::RetryTask { .. } => "retry_task",
             Self::DrainWorker { .. } => "drain_worker",

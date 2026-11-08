@@ -85,6 +85,7 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
             "/api/v1/dags/{dag_id}/trigger",
             "/api/v1/dags/{dag_id}/trigger/events",
             "/api/v1/dags/{dag_id}/trigger/restart",
+            "/api/v1/dags/{dag_id}/trigger/skip",
             "/api/v1/dags/{dag_id}/trigger/switch-on",
             "/api/v1/dags/{dag_id}/unpause",
             "/api/v1/deployment",

@@ -673,6 +673,20 @@ impl<T: Transport> Client<T> {
         .await
     }
 
+    /// `POST /api/v1/dags/{dag}/trigger/skip`: the command.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn skip_trigger_run(&self, dag: &str) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Post,
+            format!("/api/v1/dags/{}/trigger/skip", path(dag)),
+            None,
+        )
+        .await
+    }
+
     /// `POST /api/v1/dags/{dag}/trigger/switch-on`: the command.
     ///
     /// # Errors

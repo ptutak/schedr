@@ -1705,3 +1705,180 @@ fn timed_check(report: &mut Report, name: &str, fork: bool, concurrency: u32, fi
     println!("{name}: {took:.1} s, peak {mib:.0} MiB");
     took
 }
+
+/// Scenario 23: many wait steps at once (decision 353's sizing question): 500 on one worker, the
+/// default `[watchers] slots`, plain `@sensor`s awaiting a file and pokes checking for it, held
+/// until all are in. The worker's memory with all its watcher hosts (proportional, so what they
+/// share counts once), per wait step, and what the hosts report; then the file comes and every
+/// run succeeds.
+#[test]
+fn stress_23_many_sensors() {
+    const DAGS: usize = 50;
+    const PER_DAG: usize = 10;
+    const POKES_PER_DAG: usize = 2;
+    let mut stress = Stress::new(Some(postgres_database()));
+    let mut report = Report::new("23_many_sensors");
+    let gate = stress.cluster.dir.path().join("gate");
+    let dags: Vec<String> = (1..=DAGS)
+        .map(|i| {
+            let id = format!("waits{i:03}");
+            stress.write_dag(&id, &sensors_dag(&id, &gate, PER_DAG, POKES_PER_DAG));
+            id
+        })
+        .collect();
+    let steps = DAGS * PER_DAG;
+    stress.start_core("master", &[]);
+    stress.start_workers(1, 2, &[]);
+    stress.wait_for_dags(DAGS, 10 * MINUTE);
+    let worker = pid_of(&stress.cluster, "w01");
+    let idle_kib = tree_pss_kib(worker);
+    stress.trigger(&dags, 1);
+    let started = std::time::Instant::now();
+    let mut held: Option<(f64, u64, f64, f64)> = None;
+    let mut opened = 0.0;
+    stress.wait_for_runs(DAGS, 15 * MINUTE, |stress| {
+        if held.is_some() {
+            return;
+        }
+        let (_, metrics) = stress.cluster.ops_get("w01", "/metrics");
+        let used = gauge(&metrics, "schedr_worker_watcher_slots_used");
+        #[expect(clippy::cast_precision_loss, reason = "500 wait steps")]
+        let all_in = used >= steps as f64;
+        if all_in {
+            // A few seconds in: their imports done, their loops waiting.
+            std::thread::sleep(Duration::from_secs(5));
+            let (_, metrics) = stress.cluster.ops_get("w01", "/metrics");
+            held = Some((
+                started.elapsed().as_secs_f64(),
+                tree_pss_kib(worker),
+                gauge(&metrics, "schedr_worker_watcher_memory_bytes"),
+                gauge(&metrics, "schedr_worker_watcher_hosts"),
+            ));
+            opened = check::now_s();
+            std::fs::write(&gate, b"go").unwrap();
+        }
+    });
+    let Some((took, kib, hosts_bytes, hosts)) = held else {
+        report.broken(vec![format!("never {steps} wait steps running at once")]);
+        finish(&stress, report, &["success"]);
+        return;
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "memory in KiB and a few hundred steps"
+    )]
+    {
+        let mib = |kib: u64| kib as f64 / 1024.0;
+        report.set("wait_steps", steps as f64);
+        report.set("all_in_s", took);
+        report.set("worker_idle_mib", mib(idle_kib));
+        report.set("worker_held_mib", mib(kib));
+        report.set(
+            "per_wait_step_kib",
+            kib.saturating_sub(idle_kib) as f64 / steps as f64,
+        );
+        report.set("hosts_reported_mib", hosts_bytes / (1024.0 * 1024.0));
+        report.set("watcher_hosts", hosts);
+        // Under `[watchers] memory_budget` (1 GiB), or the largest host is killed.
+        report.at_most(
+            "hosts_reported_mib",
+            hosts_bytes / (1024.0 * 1024.0),
+            1024.0,
+        );
+    }
+    println!(
+        "{steps} wait steps: worker {} MiB idle, {} MiB held, hosts report {:.0} MiB in {hosts} \
+         hosts",
+        idle_kib / 1024,
+        kib / 1024,
+        hosts_bytes / (1024.0 * 1024.0)
+    );
+    response_times(&stress, &mut report, opened);
+    let ok = stress
+        .db
+        .count("SELECT COUNT(*) FROM task_instances WHERE state = 'success'");
+    if ok != i64::try_from(steps).unwrap() {
+        report.broken(vec![format!("{ok} wait steps succeeded of {steps}")]);
+    }
+    finish(&stress, report, &["success"]);
+}
+
+/// How soon each of scenario 23's wait steps saw the file opened at `opened` and ended: its own
+/// check (1 s awaiting, 5 s poking), the runner's answer and the master's recording of it.
+fn response_times(stress: &Stress, report: &mut Report, opened: f64) {
+    for (kind, like) in [("await", "wait%"), ("poke", "poke%")] {
+        let seen: Vec<f64> = stress
+            .db
+            .floats(&format!(
+                "SELECT {} FROM task_instances WHERE task_id LIKE '{like}' AND ended_at IS NOT NULL",
+                stress.db.epoch("ended_at")
+            ))
+            .into_iter()
+            .map(|ended| ended - opened)
+            .collect();
+        report.set(&format!("{kind}_response_p50_s"), quantile(&seen, 0.5));
+        report.set(&format!("{kind}_response_p99_s"), quantile(&seen, 0.99));
+        report.set(
+            &format!("{kind}_response_max_s"),
+            seen.iter().copied().fold(0.0, f64::max),
+        );
+    }
+}
+
+/// A DAG of `count` wait steps waiting for `gate` to exist: `pokes` of them `@sensor.poke`s
+/// checking every 5 s, the rest plain `@sensor`s awaiting it.
+fn sensors_dag(id: &str, gate: &std::path::Path, count: usize, pokes: usize) -> String {
+    let gate = gate.display();
+    let mut source = format!(
+        r#"import asyncio
+from datetime import timedelta
+from pathlib import Path
+
+from schedr import Dag, sensor
+from schedr.sensors import NOT_YET, NotYet
+
+GATE = Path("{gate}")
+"#
+    );
+    for i in 0..count {
+        if i < pokes {
+            let _ = write!(
+                source,
+                r"
+@sensor.poke(every=timedelta(seconds=5), max_wait=timedelta(minutes=30))
+async def poke{i}() -> int | NotYet:
+    return 1 if GATE.exists() else NOT_YET
+"
+            );
+        } else {
+            let _ = write!(
+                source,
+                r"
+@sensor(max_wait=timedelta(minutes=30))
+async def wait{i}() -> int:
+    while not GATE.exists():
+        await asyncio.sleep(1)
+    return 1
+"
+            );
+        }
+    }
+    let _ = write!(source, "\nwith Dag(\"{id}\"):\n");
+    for i in 0..count {
+        let name = if i < pokes { "poke" } else { "wait" };
+        let _ = writeln!(source, "    {name}{i}()");
+    }
+    source
+}
+
+/// A gauge's value in Prometheus text: the sum over its labels.
+fn gauge(metrics: &str, name: &str) -> f64 {
+    metrics
+        .lines()
+        .filter(|line| {
+            line.strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('{'))
+        })
+        .filter_map(|line| line.rsplit_once(' ')?.1.parse::<f64>().ok())
+        .sum()
+}

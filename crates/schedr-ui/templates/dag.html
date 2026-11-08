@@ -65,11 +65,15 @@
 {% if !trigger.state.is_empty() %}
 <div class="actions">
   {% call confirm::action("Restart", "Restart the trigger of " ~ row.dag_id ~ "?", "It starts again from its bookmark, whatever stopped it.", trigger.restart, "", page.base) %}{% endcall %}
+  {% if !trigger.called_for.is_empty() && trigger.state != "running" %}
+  {% call confirm::action("Skip run", "Skip run " ~ trigger.called_for ~ " for the trigger of " ~ row.dag_id ~ "?", "Its function isn't called for this run again: the next call gets the next run that ended. What it failed with stays its last error.", trigger.skip, "", page.base) %}{% endcall %}
+  {% endif %}
 </div>
 <dl class="facts">
   <dt>State</dt><dd><span class="state {{ trigger.state }}{% if trigger.state == "running" %} waiting{% endif %}">{{ trigger.state }}</span> <span class="mono">{{ trigger.function }}</span></dd>
   {% if !trigger.worker.is_empty() %}<dt>Worker</dt><dd class="mono">{{ trigger.worker }}</dd>{% endif %}
   {% if !trigger.bookmark.is_empty() %}<dt>Bookmark</dt><dd class="mono">{{ trigger.bookmark }}</dd>{% endif %}
+  {% if !trigger.called_for.is_empty() %}<dt>Called for run</dt><dd class="mono">{{ trigger.called_for }}</dd>{% endif %}
   {% for moment in trigger.moments %}<dt>{{ moment.0 }}</dt><dd class="time">{{ moment.1 }}</dd>{% endfor %}
   {% if !trigger.last_error.is_empty() %}<dt>Last error</dt><dd class="mono">{{ trigger.last_error }} ({{ trigger.failures }} in a row)</dd>{% endif %}
 </dl>

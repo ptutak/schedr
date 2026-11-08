@@ -17,10 +17,10 @@ use crate::sources::{
 };
 use crate::units::{format_duration, format_size, parse_duration};
 
-/// The smallest `[master] grpc_max_message_size`: gRPC's default, which workers rely on.
+/// The smallest `[grpc] max_message_size`: gRPC's default, which workers rely on.
 const MIN_MESSAGE_SIZE: u64 = 4 * 1024 * 1024;
 
-/// The largest `[master] grpc_max_message_size`.
+/// The largest `[grpc] max_message_size`.
 const MAX_MESSAGE_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[cfg(test)]
@@ -78,9 +78,9 @@ pub enum ConfigError {
         /// `termination_grace_period`, as written.
         grace: String,
     },
-    /// `[master] grpc_max_message_size` is out of its range.
+    /// `[grpc] max_message_size` is out of its range.
     #[error(
-        "[master] grpc_max_message_size ({size}) must be from 4MiB (gRPC's default, which \
+        "[grpc] max_message_size ({size}) must be from 4MiB (gRPC's default, which \
          workers rely on) to 1GiB"
     )]
     MessageSize {
@@ -192,9 +192,9 @@ pub fn load(
             grace: format_duration(worker.termination_grace_period),
         });
     }
-    if !(MIN_MESSAGE_SIZE..=MAX_MESSAGE_SIZE).contains(&config.master.grpc_max_message_size) {
+    if !(MIN_MESSAGE_SIZE..=MAX_MESSAGE_SIZE).contains(&config.grpc.max_message_size) {
         return Err(ConfigError::MessageSize {
-            size: format_size(config.master.grpc_max_message_size),
+            size: format_size(config.grpc.max_message_size),
         });
     }
     if crate::config::log_mode(&worker.log_mode).is_none() {

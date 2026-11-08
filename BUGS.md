@@ -53,34 +53,47 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 2 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 3 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 5 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 8 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 9 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 10 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 11 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 12 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 13 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 14 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 15 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 16 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 17 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 18 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 19 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 20 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 21 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 22 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 23 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 24 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 25 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 26 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 27 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 28 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
+| 2 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 3 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 4 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 6 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 9 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 10 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 11 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 12 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 13 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 14 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 15 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 16 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 17 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 18 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 19 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 20 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 21 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 22 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 23 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 24 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 25 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 26 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 27 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 28 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 29 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second
+
+- **Rating:** severity **medium**, probability **possible**, performance (score 4): Stress scenario 23 (`23_many_sensors`): 500 wait steps on one worker, released together by a file; each awaiting `@sensor` checks every 1 s, yet their ends spread evenly over 0 to 23 s after the file (p50 10.6 s, p99 22.6 s), and the pokes (every 5 s) come later still (p50 24 s, p99 35 s). A throughput limit on a burst of ends, somewhere between the watcher host, the agent and the master's recording.
+- **Found:** 2026-11-08, `make stress STRESS=23_many_sensors` (quick profile) on the M4.11d2
+  part 2 tree: all 500 succeed; memory is fine (about 135 KiB a wait step, one host at 41 MiB).
+- **To find:** where the time goes when many wait steps end in the same second: the host's
+  results sent one by one, the agent forwarding them, or the master recording each `Finished`
+  (attempt, output, instance, and a run when its last step ends) in transactions of its own.
+  One step noticing a change alone is fast.
+- **Why it matters:** a sensor's point is reacting soon; a burst of events (a shared file, a
+  run many steps wait for) delays the last by tens of seconds.
 
 ## B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15)
 

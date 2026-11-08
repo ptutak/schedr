@@ -139,6 +139,7 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
     let schedr_model::Trigger::Event {
         task,
         restart_if_idle_ms,
+        run_retries,
         ..
     } = &dag.trigger
     else {
@@ -183,6 +184,13 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
             "trigger `{id}`: restart_if_idle must be more than zero"
         ));
     }
+    trigger_wait_for_problems(
+        dag,
+        task,
+        restart_if_idle_ms.is_some(),
+        *run_retries,
+        problems,
+    );
     for declared in &task.secrets {
         if let Err(error) = declared.check() {
             problems.push(format!("trigger `{id}`: secrets=: {error}"));
@@ -427,9 +435,77 @@ fn sensor_wait_for_problems(
     if let Some(why) = lag_problem(&wait_for.run_of) {
         problems.push(format!("task `{id}`: {why}"));
     }
+    if wait_for.timeout_ms == Some(0) {
+        problems.push(format!(
+            "task `{id}`: a call's `timeout` must be above zero"
+        ));
+    }
     if mapping::is_mapped(task) {
         problems.push(format!(
             "task `{id}`: a @sensor with `wait_for=` can't be mapped"
+        ));
+    }
+}
+
+/// What an `@trigger(wait_for=RunOf(...))` (decision 353) can't be: anything but a function
+/// called once per run (no timer, no idle restart), given its run as an argument too, or reading
+/// its own DAG's runs; `run_retries` is for it alone.
+fn trigger_wait_for_problems(
+    dag: &Dag,
+    task: &Task,
+    idle_restart: bool,
+    run_retries: Option<u32>,
+    problems: &mut Vec<String>,
+) {
+    let id = &task.id;
+    let TaskKind::Sensor {
+        mode,
+        arguments,
+        wait_for: Some(wait_for),
+        ..
+    } = &task.kind
+    else {
+        if run_retries.is_some() {
+            problems.push(format!(
+                "trigger `{id}`: `run_retries` is for a trigger with `wait_for=`"
+            ));
+        }
+        return;
+    };
+    if *mode != SensorMode::Loop {
+        problems.push(format!(
+            "trigger `{id}`: with `wait_for=` it is called once per run, never on a timer"
+        ));
+    }
+    if idle_restart {
+        problems.push(format!(
+            "trigger `{id}`: with `wait_for=` it is called once per run: nothing to restart \
+             when idle"
+        ));
+    }
+    if arguments.contains_key(&wait_for.param) {
+        problems.push(format!(
+            "trigger `{id}`: `{}` is given the run it waits for, so it takes no argument",
+            wait_for.param
+        ));
+    }
+    if wait_for.run_of.dag == dag.id {
+        problems.push(format!(
+            "trigger `{id}`: it waits for runs of its own DAG, which would start it for ever"
+        ));
+    }
+    if let Some(why) = lag_problem(&wait_for.run_of) {
+        problems.push(format!("trigger `{id}`: {why}"));
+    }
+    if wait_for.timeout_ms == Some(0) {
+        problems.push(format!(
+            "trigger `{id}`: a call's `timeout` must be above zero"
+        ));
+    }
+    if wait_for.run_of.lag_ms.is_some_and(|lag| lag < 0) {
+        problems.push(format!(
+            "trigger `{id}`: its RunOf's `lag` can't be negative: a run can't be planned before \
+             the one starting it"
         ));
     }
 }
@@ -1053,7 +1129,7 @@ pub fn connection_problems(files: Vec<ParsedFile>) -> Vec<ParsedFile> {
 const RESULT_OVERHEAD: u64 = 64 * 1024;
 
 /// The tasks whose output can't reach the master: a result past its message limit
-/// (`[master] grpc_max_message_size`) would end the worker's stream (B33). A command's
+/// (`[grpc] max_message_size`) would end the worker's stream (B33). A command's
 /// output holds stdout and stderr, each up to its `max_output_size`.
 #[must_use]
 pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
@@ -1078,7 +1154,7 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
                 };
                 format!(
                     "task `{}`: max_output_size {}{each} can't reach the master, which accepts \
-                     results up to {} ([master] grpc_max_message_size, less 64 KiB for the \
+                     results up to {} ([grpc] max_message_size, less 64 KiB for the \
                      rest of the result): lower max_output_size, or raise the setting",
                     task.id,
                     shown_size(size),

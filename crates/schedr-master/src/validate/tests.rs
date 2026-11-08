@@ -502,7 +502,7 @@ fn a_task_whose_output_cant_reach_the_master_is_refused() {
         output_problems(&dag, LIMIT),
         [
             "task `dump`: max_output_size 40 MiB (stdout and stderr each) can't reach the master, \
-          which accepts results up to 32736 KiB ([master] grpc_max_message_size, less 64 KiB \
+          which accepts results up to 32736 KiB ([grpc] max_message_size, less 64 KiB \
           for the rest of the result): lower max_output_size, or raise the setting"
         ]
     );
@@ -1167,5 +1167,95 @@ fn a_run_of_lag_stays_within_ten_years_and_a_trigger_starts_no_dag_by_itself_or_
             "task `wait`: RunOf's `lag` is at most 10 years either way, got {} ms",
             -OVER
         )]
+    );
+}
+
+#[test]
+fn a_trigger_waiting_for_runs_is_called_once_per_run_of_another_dag() {
+    let trigger = |mode: &str, arguments: Json, run_of: Json, extra: Json| {
+        let mut trigger = json!({
+            "kind": "event",
+            "task": {
+                "id": "on_orders", "kind": "sensor", "mode": mode, "arguments": arguments,
+                "wait_for": {"run_of": run_of, "param": "run"},
+                "settings": {
+                    "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                    "queue": "default", "max_output_size": 1_048_576
+                },
+                "output_type": {"type": "none"}
+            }
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            trigger[key] = value.clone();
+        }
+        problems(&json!({ "trigger": trigger }))
+    };
+    let orders = json!({"dag": "orders"});
+    assert_eq!(
+        trigger("loop", json!({}), orders.clone(), json!({"run_retries": 2})),
+        Vec::<String>::new()
+    );
+    let found = trigger(
+        "poke",
+        json!({"run": {"literal": 1}}),
+        json!({"dag": "sync", "lag_ms": -1}),
+        json!({"restart_if_idle_ms": 1000}),
+    );
+    let found = found.join("\n");
+    for wanted in [
+        "never on a timer",
+        "nothing to restart when idle",
+        "`run` is given the run it waits for",
+        "runs of its own DAG",
+        "can't be negative",
+    ] {
+        assert!(found.contains(wanted), "{wanted}: {found}");
+    }
+    let mut no_time = json!({
+        "kind": "event",
+        "task": {
+            "id": "on_orders", "kind": "sensor", "mode": "loop", "arguments": {},
+            "wait_for": {"run_of": {"dag": "orders"}, "param": "run", "timeout_ms": 0},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    assert_eq!(
+        problems(&json!({ "trigger": no_time.take() })),
+        ["trigger `on_orders`: a call's `timeout` must be above zero"]
+    );
+    let mut generator = json!({
+        "kind": "event",
+        "run_retries": 1,
+        "task": {
+            "id": "found", "kind": "sensor", "mode": "loop", "arguments": {},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    assert_eq!(
+        problems(&json!({ "trigger": generator.take() })),
+        ["trigger `found`: `run_retries` is for a trigger with `wait_for=`"]
+    );
+}
+
+#[test]
+fn a_sensor_waiting_for_a_run_limits_a_call_to_above_zero() {
+    let mut wait = sensor("loop", None, None);
+    wait["wait_for"] = json!({"run_of": {"dag": "orders"}, "param": "run", "timeout_ms": 0});
+    assert_eq!(
+        problems(&json!({"tasks": [wait.clone()], "edges": []})),
+        ["task `wait`: a call's `timeout` must be above zero"]
+    );
+    wait["wait_for"]["timeout_ms"] = json!(1000);
+    assert_eq!(
+        problems(&json!({"tasks": [wait], "edges": []})),
+        Vec::<String>::new()
     );
 }

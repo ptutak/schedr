@@ -1817,7 +1817,7 @@ Asked by the user (2026-10-29): a place in the UI for the DAG files that failed 
 - **schedr's own rejections hold too** (decision 72.3, the user's, 2026-10-30: B):
   `InvalidDag` (the file imports, but the master's checks refuse a DAG of it), `InvalidPath`
   and `ParseResultTooLarge` (the JSON of all the file's DAGs together is past
-  `[master] grpc_max_message_size`) are not parsed again (the same code gives the same
+  `[grpc] max_message_size`) are not parsed again (the same code gives the same
   result) and hold **every DAG of the file**: the master never got the new definitions, and
   running the new code with the last good version's structure and arguments could quietly
   use stale data. The error is the **file's**, so the reason shown (API `held.reason`, the
@@ -2219,7 +2219,7 @@ SchedrScriptOperator(
     `$XDG_DATA_HOME/schedr`, else `~/.local/share/schedr`.
   - **The worker's identity and capacity:** `[worker] id` (else the host name), `slots` (2),
     `queues` (none: `default`), `pass_env`; `[dags] parse_file_timeout` (60 s) per file.
-- **The largest message from a worker:** `[master] grpc_max_message_size`, 64 MiB by
+- **The largest message from a worker:** `[grpc] max_message_size`, 64 MiB by
   default, from 4 MiB to 1 GiB (decision 58A, the user's, 2026-10-29; fixes B30), announced
   to each worker in `Registered` (`max_message_size`). Not chosen for 58: B a fixed 64 MiB
   (nothing to raise for a very large root); C the upload split per DAG (a protocol change,
@@ -6931,6 +6931,37 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   list; `T` is narrowed by the task's outcome; a retry gets the same run; a run that ended within `max_wait` is handed,
   its call given at least `SCHEDR_HIDDEN__MASTER__HANDED_CALL_MIN` (1 min); the wait starts at the instance's `ready_at`. Not chosen: the latest
   run, or the latest that succeeded (hard to follow over backfills and reruns); failing at once when no run exists yet;
+  The trigger form (Claude's design, the user's choice for a run it keeps failing on, 2026-11-07: C with an opt-in
+  `run_retries`): each run of the other DAG (or its task) that ends while the DAG is live, oldest first, is one short call
+  of the trigger on a watcher slot (`AssignTrigger`), the run's `RunResult` (masked) the literal value of its first
+  parameter; one call at a time. It returns `Event[T] | None`: the event's key is the run's ID unless it gives one, its `at`
+  the run's `planned_for` plus `lag` unless it gives one (`lag` can't be negative). A clean end moves the cursor past the
+  run, the run started or not; a raise is a trigger failure (backoff, `failing_after`) and the next call gets the same run
+  (recorded on the `triggers` row as handed, `run_of_handed_run/at`), dropped if the DAG has been paused or its trigger
+  changed since (never caught up). A run gone from the database is passed, logged. `run_retries=N` passes a run it raised on
+  after N more tries, the reason kept as its last error; without it, `schedr triggers skip <dag>` (the API's
+  `POST .../trigger/skip`, the UI's "Skip run" on the trigger panel, which shows the run it is called for) passes it, refused
+  while a call runs. A call is limited to `timeout=` (10 minutes by default; the user's, 2026-11-07, after a side
+  agent saw that a hung `await` held the trigger, every later run and the skip): the runner cancels it, a failure
+  (`trigger_timed_out`) as a raise is; one blocking the loop is the 30-second rule's (not chosen: no limit, `restart`
+  then `skip` by hand; a limit only when the author sets one). Its run is passed only for a call that returned
+  (`TriggerStopped.done`; interrupted or cancelled it keeps it), in the statement that ends the call; a run handed
+  after another was dropped starts with no failures; a return clears its strikes (Codex's review). It can't be a
+  poke, `restart_if_idle`, or read its own DAG's runs; `run_retries` and `timeout` are for it alone.
+  `@sensor(wait_for=..., timeout=...)` limits each of its calls too, opt-in (the user's, 2026-11-07, option A: a
+  handed run's call gets what is left of `max_wait`, hours, so a hung `await` read as "no run came"; not chosen: on
+  every `@sensor`, whose one call is its wait; nothing). Over it, the attempt fails (retries, the same run);
+  `max_wait` first still gives `TimedOut`. Both forms keep it in `wait_for.timeout_ms` (the user's, option A:
+  `settings.timeout_ms` stays the agent's hard stop of a wait step; not chosen: inside `RunOf`, which the no-code
+  forms share and where a call limit means nothing). The handed run travels inside the assignment: one too big for
+  `[grpc] max_message_size` fails the call (a sensor `inputs_too_large`, a trigger a failed call that `run_retries`
+  and a skip pass), and the worker takes messages up to that size (Grok's review; the user's, option A; not chosen:
+  the master's check alone; fetching the run apart, a protocol change). The setting moved from `[master]
+  grpc_max_message_size` to `[grpc] max_message_size`, read by both ends (the user's, 2026-11-07), with no alias
+  for the old name: schedr is a preview (the user's, 2026-11-08). Not
+  chosen: A, retrying a run for ever with no way past it; B, passing a run after `failing_after` failures, which would mix
+  "the trigger is broken" with "this run is bad"; a long-lived function fed runs (the generator form's state for nothing).
+  Not chosen either:
   `offset=` (too broad; its sign would flip between the forms) and `planned_for_with_offset=` (long), for what is `lag`
   inside `RunOf`; `wait_for_run(...)` for the node; a skip counting as done (the function form sees the real state); a trigger for every run that ends, whatever its state; catching up runs that ended while paused; refusing an unknown DAG at load.
 - **Options are drawn as one group** (decision 351, the user's, 2026-11-07; built in M4.11c): the options of `first_of`
@@ -6938,6 +6969,19 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   each a dependency with the usual guarantees. The winner is highlighted in the box and named on the node. Where one box
   can't be drawn (a task is an option of two nodes, options at different depths, or in different task groups) each option
   gets its own dashed line (Claude's, a layout detail).
+- **Named events through the API: `EventNamed`** (decision 354, the user's, 2026-11-08; to be built in M4.11e): an
+  outside system posts `POST /api/v1/events {name, key, data, at}` (or `schedr events post`), and the four forms of
+  `RunOf` take it: `trigger=EventNamed("order-created")` (a run per event), the node `wait_for(EventNamed("approved",
+  key=...))`, and `@sensor(wait_for=EventNamed(...))` / `@trigger(wait_for=EventNamed(...))` with the `Event` as the
+  first parameter (option A; not chosen: an `event="name"` keyword beside `wait_for=RunOf`, with no node form; only
+  the no-code forms). A waiting step wakes on an event of its name whose key equals its `key=` (no `key=`: any);
+  every run so waiting wakes; one posted after the run started but before the step began waiting is kept and
+  matched (option A; not chosen: only events after it waits, which lose a fast caller's; any stored event, which
+  matches last week's). One name per trigger, a repeat (the same name and key) starting nothing (option A; not
+  chosen: several names, `dag_ctx.event.name`). Posting needs what triggering a run needs, schedr having no
+  permissions of its own; an event at most `[events] max_size` (1 MiB), its key 1024 bytes, its name written as a DAG
+  ID; kept until M4.14's `[retention] events`; a security review (option A; not chosen: a token that can only post).
+  Claude's: `at` defaults to the moment it is posted, and a trigger's run is planned for it.
 - **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; to be built in M4.11f):
   `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
   it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`

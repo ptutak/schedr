@@ -165,7 +165,7 @@ impl Held {
                  together, not of `{dag_id}` alone) is too large for the master: {message}. \
                  Every DAG of the file is held until it fits: move large DAGs to files of their \
                  own, keep large data out of the DAGs' arguments (load it when the task runs), \
-                 or raise [master] grpc_max_message_size"
+                 or raise [grpc] max_message_size"
             ),
             INVALID_DAG_EXCEPTION => format!(
                 "its file `{path}` imports, but defines a DAG the master's checks refuse \

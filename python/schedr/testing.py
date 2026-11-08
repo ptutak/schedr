@@ -11,6 +11,7 @@ and ``replace=`` come with milestone M4.
 import asyncio
 import contextlib
 import dataclasses
+import inspect
 import json
 import os
 import shutil
@@ -24,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from schedr import run_of
 from schedr._model import CommandKind, PythonKind, SecretRef, SensorKind, WaitForKind, registry
 from schedr._model.values import covers
 from schedr._serialization import decode, decode_any
@@ -41,7 +43,7 @@ from schedr.context import (
     declared_secrets,
     running,
 )
-from schedr.event_triggers import Event, EventTrigger, TriggerFunction
+from schedr.event_triggers import Event, EventTrigger, TriggerFunction, event_for_run
 from schedr.outcomes import FAILED_NAME, TIMED_OUT_NAME, Failed, TimedOut
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
@@ -556,29 +558,44 @@ def run_trigger(
     after: str | None = None,
     take: int = 1,
     timeout: timedelta = timedelta(seconds=30),
+    run: run_of.RunResult[Any] | None = None,
 ) -> list[Event[Any]]:
     """Runs a trigger in this process until it has found ``take`` events, and gives them.
 
     For unit tests of a trigger's function: ``run_trigger(new_files(prefix="in/"), take=3)``. Run
-    it inside ``task_context`` to give it secrets and connections.
+    it inside ``task_context`` to give it secrets and connections. An
+    ``@trigger(wait_for=...)`` is called once, for ``run``: ``run_trigger(on_orders(least=5),
+    run=schedr.RunResult(...))`` gives the event it returned, as the master gets it, or none.
 
     Args:
         trigger: The trigger with its arguments, or its function when it takes none.
         after: What it starts from: the last key acted on.
         take: How many events to wait for.
         timeout: How long to wait for them.
+        run: For an ``@trigger(wait_for=...)``, the run it is called for.
 
     Returns:
         The events it found, in order, fewer than ``take`` only when a generator returned.
 
     Raises:
         TimeoutError: If they don't come in time.
-        ValueError: For a ``take`` below 1.
+        ValueError: For a ``take`` below 1, or ``run`` given to a trigger without ``wait_for``
+            or missing for one with it.
         RuntimeError: If a poke's call failed.
     """
     if take < 1:
         raise ValueError(f"take must be at least 1, got {take}")
     called = trigger if isinstance(trigger, EventTrigger) else trigger()
+    wait_for = called.function.wait_for
+    if wait_for is not None:
+        if run is None:
+            raise ValueError(
+                f"@trigger `{called.function.task_id}` is called for a run of "
+                f"`{wait_for.dag}`: give it as run=schedr.RunResult(...)"
+            )
+        return _called_for_run(called, run, wait_for.lag, timeout)
+    if run is not None:
+        raise ValueError("run= is for an @trigger(wait_for=...)")
     found: list[Event[Any]] = []
 
     class _EnoughError(Exception):
@@ -595,15 +612,45 @@ def run_trigger(
 
     task = {} if called.function.every is None else {"every_ms": called.function.every_ms}
 
-    async def run() -> None:
+    async def go() -> None:
         async with asyncio.timeout(timeout.total_seconds()):
             await run_trigger_function(
                 called.function.fn, called.arguments, task, after, tell, poked
             )
 
     with contextlib.suppress(_EnoughError):
-        asyncio.run(run())
+        asyncio.run(go())
     return found
+
+
+def _called_for_run(
+    called: EventTrigger, run: run_of.RunResult[Any], lag: timedelta | None, timeout: timedelta
+) -> list[Event[Any]]:
+    """An ``@trigger(wait_for=...)``'s one call, for ``run``: the event it returned, filled in.
+
+    Raises:
+        TypeError: If it returned something else than an ``Event`` or ``None``.
+    """
+
+    async def call() -> object:
+        async with asyncio.timeout(timeout.total_seconds()):
+            # By name, as the runner gives it: the run's parameter may be keyword-only.
+            arguments = {**called.arguments, called.function.run_param: run}
+            called_now = called.function.fn(**arguments)
+            if not inspect.isawaitable(called_now):  # checked when defined: `async def`
+                raise TypeError(f"@trigger `{called.function.task_id}` must be `async def`")
+            return await called_now
+
+    found = asyncio.run(call())
+    if found is None:
+        return []
+    if not isinstance(found, Event):
+        raise TypeError(
+            f"@trigger `{called.function.task_id}` returns an `Event` or `None`, got "
+            f"{type(found).__name__}"
+        )
+    event: Event[Any] = found
+    return [event_for_run(event, run, lag)]
 
 
 def run_dag(

@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from schedr import Dag, Event, Every, dag_ctx, task, trigger
+from schedr.runner.task import _tell_event  # pyright: ignore[reportPrivateUsage]
 from schedr.runner.waiting import run_trigger
 from schedr.testing import run_trigger as run_trigger_for_test
 from schedr.testing import task_context
@@ -96,9 +97,21 @@ def test_arguments_are_checked_and_after_is_schedr_s() -> None:
 
 def test_an_event_needs_a_key_and_an_aware_time() -> None:
     with pytest.raises(TypeError, match="non-empty string"):
-        Event("")
+        Event(1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="non-empty string"):
+        asyncio.run(_tell_event(_NeverAsked(), Event(), None, 1024))
     with pytest.raises(TypeError, match="time-zone aware"):
         Event("a", at=datetime(2030, 1, 1))
+
+
+class _NeverAsked:
+    """A channel an event without a key never reaches."""
+
+    def ask(self, message: dict[str, object]) -> dict[str, object]:
+        raise AssertionError(f"told {message}")
+
+    def send(self, message: dict[str, object]) -> None:
+        raise AssertionError(f"sent {message}")
 
 
 def _define(starts: Trigger, body: Callable[[], object]) -> None:

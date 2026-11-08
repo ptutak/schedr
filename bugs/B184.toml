@@ -1,0 +1,17 @@
+title = "500 wait steps ending at once take about 23 s to be recorded, about 22 a second"
+severity = "medium"
+probability = "possible"
+kind = "performance"
+summary = "Stress scenario 23 (`23_many_sensors`): 500 wait steps on one worker, released together by a file; each awaiting `@sensor` checks every 1 s, yet their ends spread evenly over 0 to 23 s after the file (p50 10.6 s, p99 22.6 s), and the pokes (every 5 s) come later still (p50 24 s, p99 35 s). A throughput limit on a burst of ends, somewhere between the watcher host, the agent and the master's recording"
+found = 2026-11-08
+suspected = false
+details = '''
+- **Found:** 2026-11-08, `make stress STRESS=23_many_sensors` (quick profile) on the M4.11d2
+  part 2 tree: all 500 succeed; memory is fine (about 135 KiB a wait step, one host at 41 MiB).
+- **To find:** where the time goes when many wait steps end in the same second: the host's
+  results sent one by one, the agent forwarding them, or the master recording each `Finished`
+  (attempt, output, instance, and a run when its last step ends) in transactions of its own.
+  One step noticing a change alone is fast.
+- **Why it matters:** a sensor's point is reacting soon; a burst of events (a shared file, a
+  run many steps wait for) delays the last by tens of seconds.
+'''

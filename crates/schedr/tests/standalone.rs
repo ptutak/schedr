@@ -2614,6 +2614,76 @@ with Dag("report"):
     report(loaded(times=2).on(int))
 "#;
 
+const TRIGGER_RUN_OF: &str = r#"
+from datetime import timedelta
+from schedr import Dag, Event, RunOf, RunResult, dag_ctx, task, trigger
+
+@task
+def load() -> int:
+    return 7
+
+@trigger(wait_for=RunOf("orders", task="load", lag=timedelta(hours=1)))
+async def on_orders(run: RunResult[int], least: int) -> Event[int] | None:
+    print("called for", run.dag_id, run.task_state, run.output)
+    if run.output is None or run.output < least:
+        return None
+    return Event(data=run.output)
+
+@task
+def tally(orders: int) -> None:
+    print("tally", orders)
+
+with Dag("orders"):
+    load()
+
+with Dag("tally", trigger=on_orders(least=5)):
+    tally(dag_ctx.event.data)
+"#;
+
+/// M4.11d2: an `@trigger(wait_for=...)` is called once for each run of the other DAG that ends
+/// while it is live, given that run, and what it returns starts a run.
+#[test]
+fn a_trigger_waiting_for_another_dags_runs_is_called_for_each_and_starts_runs() {
+    let standalone = Standalone::start(&[("trigger_run_of.py", TRIGGER_RUN_OF)], None);
+    standalone.wait("DAGs `orders` and `tally`", || {
+        standalone.dag_ids() == ["orders", "tally"]
+    });
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "tally"]);
+    assert_eq!(code, 0, "{err}");
+    let mut orders = Vec::new();
+    for moment in ["2026-10-15T00:00:00Z", "2026-10-16T00:00:00Z"] {
+        let command = standalone.cli_json(&["runs", "trigger", "orders", "--for", moment]);
+        let run = command["result"]["run_id"].as_str().unwrap().to_owned();
+        standalone.wait_for_state(&run, "success");
+        orders.push(run);
+    }
+    let succeeded = || {
+        let runs = standalone.runs("tally");
+        runs.len() == 2 && runs.iter().all(|run| run["state"] == "success")
+    };
+    standalone.wait("a run of tally for each of orders", succeeded);
+    let mut planned: Vec<String> = standalone
+        .runs("tally")
+        .iter()
+        .map(|run| run["planned_for"].as_str().unwrap().to_owned())
+        .collect();
+    planned.sort();
+    assert_eq!(
+        planned,
+        ["2026-10-15T01:00:00Z", "2026-10-16T01:00:00Z"],
+        "planned for the run's moment plus lag"
+    );
+    let shown = standalone.cli_json(&["triggers", "show", "tally"]);
+    assert!(shown.get("called_for").is_none(), "both passed: {shown}");
+    let logs = logs(standalone.dir.path());
+    assert_eq!(
+        logs.matches("called for orders success 7").count(),
+        2,
+        "{logs}"
+    );
+    assert_eq!(logs.matches("tally 7").count(), 2, "{logs}");
+}
+
 #[test]
 fn a_sensor_waiting_for_another_dags_run_is_given_it_and_builds_on_its_output() {
     let standalone = Standalone::start(&[("run_of.py", RUN_OF)], None);

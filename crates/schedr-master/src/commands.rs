@@ -264,6 +264,49 @@ impl Commander {
         Ok(Outcome::Applied(json!({})))
     }
 
+    /// Passes the run an `@trigger(wait_for=...)` was given (decision 353); anything else is
+    /// refused.
+    async fn skip_trigger_run(
+        &self,
+        dag_id: &DagId,
+        pending: &PendingCommand,
+    ) -> Result<Outcome, CommandError> {
+        let Some(dag) = self.db.stored_dag(dag_id).await? else {
+            return Ok(no_dag(dag_id));
+        };
+        let Some(current) = dag.current else {
+            return Ok(no_dag(dag_id));
+        };
+        // The command's ID in it: recovery matches this command's skip, never an earlier one
+        // (Grok's review).
+        let why = format!(
+            "skipped by {} (command {})",
+            pending.requested_by, pending.id
+        );
+        let passed =
+            crate::core::triggers::pass_handed_run(&self.db, &current.dag, &why, None).await?;
+        Ok(match passed {
+            Ok(run) => Outcome::Applied(json!({ "run_id": run })),
+            Err(refused) => {
+                // Applied in a round that failed before its decision was stored (Codex's
+                // review): what it passed is the trigger's last error.
+                let record = self.db.trigger(dag_id.as_str()).await?;
+                let done = record
+                    .and_then(|r| r.last_error)
+                    .filter(|_| pending.applying)
+                    .and_then(|error| {
+                        let rest = error.strip_prefix("passed run ")?;
+                        let (run, said) = rest.split_once(": ")?;
+                        (said == why).then(|| run.to_owned())
+                    });
+                match done {
+                    Some(run) => Outcome::Applied(json!({ "run_id": run })),
+                    None => Outcome::Rejected(refused),
+                }
+            }
+        })
+    }
+
     /// Forgets a wait step's strikes; anything else named is refused, as it would look done.
     async fn switch_on(&self, dag_id: &DagId, sensor: &TaskId) -> Result<Outcome, CommandError> {
         let Some(dag) = self.db.stored_dag(dag_id).await? else {
@@ -323,6 +366,7 @@ impl Commander {
                     .await
             }
             Command::RestartTrigger { dag_id } => self.restart_trigger(dag_id).await,
+            Command::SkipTriggerRun { dag_id } => self.skip_trigger_run(dag_id, pending).await,
             Command::CancelRun { run_id } => {
                 let Some(run) = self.db.run_tasks(run_id).await? else {
                     return Ok(Outcome::Rejected(format!("no run `{run_id}`")));

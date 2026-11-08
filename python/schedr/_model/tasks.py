@@ -264,12 +264,14 @@ class SensorWaitFor:
         task: Its task; ``None``: the whole run.
         lag_ms: The run planned this long before the waiting run's; ``None``: the next to end.
         param: The function's parameter given the run (its first).
+        timeout_ms: ``@sensor(wait_for=..., timeout=...)``: how long one call may take.
     """
 
     dag: str
     task: str | None
     lag_ms: int | None
     param: str
+    timeout_ms: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         """As DAG JSON.
@@ -282,7 +284,10 @@ class SensorWaitFor:
             run_of["task"] = self.task
         if self.lag_ms is not None:
             run_of["lag_ms"] = self.lag_ms
-        return {"run_of": run_of, "param": self.param}
+        shown: dict[str, Any] = {"run_of": run_of, "param": self.param}
+        if self.timeout_ms is not None:
+            shown["timeout_ms"] = self.timeout_ms
+        return shown
 
 
 @dataclass(frozen=True, slots=True)

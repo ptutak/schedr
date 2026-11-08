@@ -978,6 +978,30 @@ async fn event_data_that_isnt_json_is_never_sent_and_the_key_is_kept() {
 }
 
 #[tokio::test]
+async fn a_trigger_s_run_is_skipped_from_its_panel() {
+    let mut etl = etl();
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger/skip".to_owned(),
+        (
+            202,
+            command(
+                "c1",
+                "skip_trigger_run",
+                "applied",
+                None,
+                &json!({"run_id": "r1"}),
+            ),
+        ),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = post(&app, "/d/etl/dags/sync/trigger/skip", "", &[SAME]).await;
+    assert_eq!(
+        texts(&html, ".command"),
+        ["Skip the run the trigger of sync is called for: applied."]
+    );
+}
+
+#[tokio::test]
 async fn a_trigger_is_restarted_from_its_panel() {
     let mut etl = etl();
     etl.answers.insert(

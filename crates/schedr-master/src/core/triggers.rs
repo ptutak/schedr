@@ -8,7 +8,10 @@ use jiff::{SignedDuration, Timestamp};
 use schedr_db::run_of::{RunOfFrom, RunOfSeen};
 use schedr_db::runs::ActiveDag;
 use schedr_db::triggers::{STOPPED_BACK_PRESSURE, STOPPED_RETURNED, TriggerRecord};
+use schedr_db::{Database, DbError};
+use schedr_model::task::SensorWaitFor;
 use schedr_model::trigger::check_event_key;
+use schedr_model::value::Value;
 use schedr_model::{DagId, RunEvent, SensorMode, TaskId, TaskKind, Trigger};
 use schedr_proto::pb::{self, master_message, worker_message};
 use serde_json::json;
@@ -74,6 +77,32 @@ fn idle_too_long(record: &TriggerRecord, dag: &ActiveDag, now: Timestamp) -> boo
         .and_then(|since| since.checked_add(idle).ok())
         .is_some_and(|at| at < now)
 }
+
+/// What an `@trigger(wait_for=RunOf(...))` waits for, and its `run_retries` (decision 353).
+pub(crate) fn waits_for(dag: &schedr_model::Dag) -> Option<(&SensorWaitFor, Option<u32>)> {
+    let Trigger::Event {
+        task, run_retries, ..
+    } = &dag.trigger
+    else {
+        return None;
+    };
+    let TaskKind::Sensor {
+        wait_for: Some(wait),
+        ..
+    } = &task.kind
+    else {
+        return None;
+    };
+    Some((wait, *run_retries))
+}
+
+/// What an `@trigger(wait_for=...)`'s cursor is of: its source, as stored with it.
+fn source_of(wait: &SensorWaitFor) -> String {
+    serde_json::to_string(&wait.run_of).unwrap_or_default()
+}
+
+/// The most runs one look for the next run to hand passes because they are gone.
+const GONE_RUNS_OF_A_LOOK: usize = 10;
 
 /// The wait before a trigger that failed `failures` times in a row starts again: doubling, up to
 /// `most`.
@@ -214,6 +243,19 @@ impl MasterCore {
         now: Timestamp,
     ) -> Result<bool, CoreError> {
         if self.too_many_queued(queued) {
+            return Ok(false);
+        }
+        // A call being stopped still runs, with the run it was given: the next waits for its
+        // end, or for its worker to be gone, so a run is never called twice (Grok's review).
+        // One whose DAG isn't known (a worker reporting it to a master started since) may be
+        // any DAG's: every such trigger waits for it, its cancel already sent (Codex's review).
+        let id = dag.dag.id.as_str();
+        if waits_for(&dag.dag).is_some()
+            && self
+                .stopping_triggers
+                .values()
+                .any(|(_, d)| d == id || d.is_empty())
+        {
             return Ok(false);
         }
         if let Some(record) = record {
@@ -371,11 +413,51 @@ impl MasterCore {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), CoreError> {
         let instance = uuid::Uuid::now_v7().to_string();
-        let start = record.map_or((None, 0), |r| (r.bookmark.clone(), r.failures));
-        let Some((message, code)) = self.dispatcher.place_trigger(dag, &instance, start, now)
+        let mut start = record.map_or((None, 0), |r| (r.bookmark.clone(), r.failures));
+        let mut handed = None;
+        let mut given = None;
+        if let Some((wait, _)) = waits_for(&dag.dag) {
+            // Called for one run at a time: with none ended to hand, it doesn't start.
+            let Some((run, result, fresh)) = self.run_to_hand(dag, wait).await? else {
+                return Ok(());
+            };
+            if fresh {
+                // Its failures were another run's: handing this one starts them again.
+                start.1 = 0;
+            }
+            let mut with_run = dag.clone();
+            if let Trigger::Event { task, .. } =
+                &mut std::sync::Arc::make_mut(&mut with_run.dag).trigger
+                && let TaskKind::Sensor { arguments, .. } = &mut task.kind
+            {
+                arguments.insert(wait.param.clone(), Value::Literal(result));
+            }
+            handed = Some(run);
+            given = Some(with_run);
+        }
+        let placed = given.as_ref().unwrap_or(dag);
+        let Some((message, code)) = self.dispatcher.place_trigger(placed, &instance, start, now)
         else {
             return Ok(());
         };
+        // The whole message, within what a worker takes (Grok's and Codex's reviews): the run
+        // rides in it. Over, it is a failed call without one, which `run_retries` and a skip
+        // pass.
+        if let Some(run) = &handed
+            && let Some(why) =
+                crate::dispatch::too_big_to_send(&message.message, self.settings.max_message_size)
+        {
+            self.dispatcher.trigger_released(&instance);
+            self.db.hand_trigger_run(dag.dag.id.as_str(), run).await?;
+            self.refuse_call(dag, &why, now).await?;
+            return Ok(());
+        }
+        if let Some(run) = &handed
+            && let Err(error) = self.db.hand_trigger_run(dag.dag.id.as_str(), run).await
+        {
+            self.dispatcher.trigger_released(&instance);
+            return Err(error.into());
+        }
         let stored = self
             .db
             .trigger_assigned(
@@ -394,6 +476,72 @@ impl MasterCore {
         }
         outgoing.push(message);
         Ok(())
+    }
+
+    /// The run an `@trigger(wait_for=...)` is called for next, as its function gets it (another
+    /// DAG's output masked, as the API shows it): the one it was given and hasn't passed, while
+    /// it is still of the time it is live; else the next that ended since. A run gone (deleted)
+    /// is passed.
+    async fn run_to_hand(
+        &self,
+        dag: &ActiveDag,
+        wait: &SensorWaitFor,
+    ) -> Result<Option<(RunOfSeen, serde_json::Value, bool)>, CoreError> {
+        let id = dag.dag.id.as_str();
+        let Some(live) = self.db.live_since(id).await? else {
+            return Ok(None);
+        };
+        let source = source_of(wait);
+        let task = wait.run_of.task.as_ref();
+        if let Some(handed) = self.db.trigger_run_handed(id).await?
+            && handed.at >= live
+        {
+            if let Some(result) = self.masked_result(&handed.run, task).await? {
+                return Ok(Some((handed, result, false)));
+            }
+            self.db
+                .pass_trigger_run(id, &source, Some(&gone(&handed.run)), None)
+                .await?;
+        }
+        for _ in 0..GONE_RUNS_OF_A_LOOK {
+            let seen = self.db.run_of_seen(id, &source).await?;
+            let from = match &seen {
+                Some(seen) if seen.at >= live => RunOfFrom::After(seen),
+                _ => RunOfFrom::Since(live),
+            };
+            let found = self
+                .db
+                .ended_since(
+                    (wait.run_of.dag.as_str(), task.map(TaskId::as_str)),
+                    from,
+                    1,
+                )
+                .await?;
+            let Some((run, _, ended)) = found.into_iter().next() else {
+                return Ok(None);
+            };
+            let next = RunOfSeen { at: ended, run };
+            if let Some(result) = self.masked_result(&next.run, task).await? {
+                return Ok(Some((next, result, true)));
+            }
+            tracing::warn!(dag = id, run = next.run, "a run to hand is gone; passed");
+            self.db.set_run_of_seen(id, &source, &next).await?;
+        }
+        Ok(None)
+    }
+
+    /// A run's result as an `@trigger(wait_for=...)` or a sensor gets it: secret fields and
+    /// passwords of its output masked (decision 131); `None` if the run is gone.
+    async fn masked_result(
+        &self,
+        run: &str,
+        task: Option<&TaskId>,
+    ) -> Result<Option<serde_json::Value>, CoreError> {
+        let mut result = self.db.run_result(run, task).await?;
+        if let Some(output) = result.as_mut().and_then(|r| r.get_mut("output")) {
+            schedr_config::masked::mask_data(output);
+        }
+        Ok(result)
     }
 
     /// What a worker says of a trigger.
@@ -503,6 +651,14 @@ impl MasterCore {
             self.dispatcher.trigger_released(&stopped.instance_id);
             if let Some((_, dag)) = dag {
                 self.count_strike(&dag, None, &stopped, now).await?;
+                // Its call returned before the stop reached it: done with its run all the same.
+                // Of the DAG it was given, never of the one the message names (Grok's review).
+                if stopped.done
+                    && let Some(active) = self.active_dag(&dag).await?
+                    && let Some((wait, _)) = waits_for(&active.dag)
+                {
+                    self.call_done(&dag, wait, None).await?;
+                }
             }
             return Ok(Vec::new());
         }
@@ -513,11 +669,24 @@ impl MasterCore {
         let code = record.code_hash.as_deref();
         self.count_strike(&record.dag_id, code, &stopped, now)
             .await?;
+        let dag = self.active_dag(&stopped.dag_id).await?;
+        let waiting = dag.as_ref().and_then(|dag| waits_for(&dag.dag));
         if stopped.error_kind.is_empty() {
             self.dispatcher.trigger_released(&stopped.instance_id);
-            self.db
-                .trigger_ended(&stopped.dag_id, &stopped.instance_id, None, None)
-                .await?;
+            // Done with the run it was given (decision 353), the call ended in the same
+            // statement: the next call gets the next. Asked to stop, it keeps its run.
+            let passed = match (waiting, stopped.done) {
+                (Some((wait, _)), true) => {
+                    self.call_done(&stopped.dag_id, wait, Some(&stopped.instance_id))
+                        .await?
+                }
+                _ => false,
+            };
+            if !passed {
+                self.db
+                    .trigger_ended(&stopped.dag_id, &stopped.instance_id, None, None)
+                    .await?;
+            }
             return Ok(Vec::new());
         }
         if stopped.error_kind == TRIGGER_RETURNED {
@@ -535,6 +704,24 @@ impl MasterCore {
         } else {
             format!("{}: {}", stopped.error_kind, stopped.message)
         };
+        // Its `run_retries` used up: the run is passed, recorded, and the next one called for.
+        if let (Some(dag), Some((_, Some(retries)))) = (&dag, waiting)
+            && record.failures >= retries
+        {
+            self.dispatcher.trigger_released(&stopped.instance_id);
+            let tries = record.failures.saturating_add(1);
+            let why = format!("failed {tries} times, the last: {why}");
+            let call = Some(stopped.instance_id.as_str());
+            if pass_handed_run(&self.db, &dag.dag, &why, call)
+                .await?
+                .is_err()
+            {
+                self.db
+                    .trigger_ended(&stopped.dag_id, &stopped.instance_id, None, None)
+                    .await?;
+            }
+            return Ok(Vec::new());
+        }
         self.trigger_failed(
             &stopped.dag_id,
             &stopped.instance_id,
@@ -544,6 +731,67 @@ impl MasterCore {
         )
         .await?;
         Ok(Vec::new())
+    }
+
+    /// An `@trigger(wait_for=...)`'s call that can't be made for its run: a failure as a
+    /// raise is, with its wait; past its `run_retries`, the run is passed.
+    async fn refuse_call(
+        &self,
+        dag: &ActiveDag,
+        why: &str,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let id = dag.dag.id.as_str();
+        let failures = self.db.trigger(id).await?.map_or(0, |r| r.failures);
+        if let Some((_, Some(retries))) = waits_for(&dag.dag)
+            && failures >= retries
+        {
+            let tries = failures.saturating_add(1);
+            let why = format!("failed {tries} times, the last: {why}");
+            pass_handed_run(&self.db, &dag.dag, &why, None).await?.ok();
+            return Ok(());
+        }
+        let wait = backoff(
+            failures.saturating_add(1),
+            self.settings.timings.trigger_restart_backoff,
+            self.settings.timings.trigger_restart_backoff_max,
+        );
+        let wait = SignedDuration::try_from(wait).unwrap_or(SignedDuration::MAX);
+        self.db
+            .trigger_call_refused(id, &fit_error(why), now.checked_add(wait).ok())
+            .await?;
+        tracing::warn!(dag = id, why, "a trigger's call couldn't be made");
+        Ok(())
+    }
+
+    /// A DAG as it is now, if it is.
+    async fn active_dag(&self, dag_id: &str) -> Result<Option<ActiveDag>, CoreError> {
+        let Ok(id) = DagId::new(dag_id) else {
+            return Ok(None);
+        };
+        Ok(self.db.active_dags_of(&[&id]).await?.into_iter().next())
+    }
+
+    /// An `@trigger(wait_for=...)` of `dag_id` had its call return: its run is passed (with
+    /// `call`, ending that call in the same statement), and, if it was, its strikes are cleared,
+    /// as it works (Codex's review). Gives whether the run was passed.
+    async fn call_done(
+        &self,
+        dag_id: &str,
+        wait: &SensorWaitFor,
+        call: Option<&str>,
+    ) -> Result<bool, CoreError> {
+        let passed = self
+            .db
+            .pass_trigger_run(dag_id, &source_of(wait), None, call)
+            .await?;
+        if passed
+            && let Some(dag) = self.active_dag(dag_id).await?
+            && let Trigger::Event { task, .. } = &dag.dag.trigger
+        {
+            self.db.clear_wait_step(dag_id, task.id.as_str()).await?;
+        }
+        Ok(passed)
     }
 
     /// Counts a strike of a trigger that got its host killed (decision 338), on the code it ran:
@@ -718,6 +966,52 @@ impl MasterCore {
         }
         self.triggers_reported(worker_id, reported).await
     }
+}
+
+/// Passes the run an `@trigger(wait_for=...)` of `dag` was given without its function having
+/// ended well with it (`schedr triggers skip`, or its `run_retries` used up): its next call gets
+/// the next run. Refused while a call of it runs. Gives the run passed, or why none was.
+///
+/// # Errors
+///
+/// [`DbError`] if the store fails.
+pub(crate) async fn pass_handed_run(
+    db: &Database,
+    dag: &schedr_model::Dag,
+    why: &str,
+    call: Option<&str>,
+) -> Result<Result<String, String>, DbError> {
+    let id = dag.id.as_str();
+    let Some((wait, _)) = waits_for(dag) else {
+        return Ok(Err(format!(
+            "DAG `{id}`: its trigger isn't called for another DAG's runs (`wait_for=`)"
+        )));
+    };
+    let Some(handed) = db.trigger_run_handed(id).await? else {
+        return Ok(Err(format!("DAG `{id}`: its trigger has no run to skip")));
+    };
+    let why = fit_error(&format!("passed run {}: {why}", handed.run));
+    if !db
+        .pass_trigger_run(id, &source_of(wait), Some(&why), call)
+        .await?
+    {
+        return Ok(Err(format!(
+            "DAG `{id}`: its trigger is being called with run {}; skip once that call has ended",
+            handed.run
+        )));
+    }
+    tracing::warn!(
+        dag = id,
+        run = handed.run,
+        why,
+        "a trigger's run was passed"
+    );
+    Ok(Ok(handed.run))
+}
+
+/// Why a run handed to a trigger was passed: it is gone.
+fn gone(run: &str) -> String {
+    format!("passed run {run}: it is gone")
 }
 
 /// Whether this worker has this run of a trigger.

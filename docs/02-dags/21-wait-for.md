@@ -61,6 +61,12 @@ secret fields and passwords in URLs come as `****`. The DAG gives the other para
 `loaded_orders(least=1)`. A run that ended within `max_wait` is handed though little of it is left:
 the call then gets at least a minute.
 
+A call gets what is left of `max_wait`, which can be hours. `timeout=` limits each call by itself:
+`@sensor(wait_for=RunOf("orders"), timeout=timedelta(minutes=5))`. A call still awaiting then, as on
+a network read that never answers, is cancelled and fails the attempt, whose retries get the same
+run; reaching `max_wait` first still ends the step with `TimedOut`. Without `wait_for=`, a
+`@sensor` has no `timeout=`: its one call is its wait, which `max_wait` limits.
+
 What it returns is its value. `NOT_YET` says "not this run": the step waits for a later matching
 one, until `max_wait`. With `lag` that is a newer run for the same moment, as when `orders` is run
 again for that day; without it, the next run of `orders` to end. So it fits two cases: waiting for
@@ -81,5 +87,47 @@ Only runs that end while the DAG is live (unpaused, present and not in conflict)
 before it was live or while it was paused are never caught up. A DAG can't be started by its own
 runs, as it would start itself for ever. Queued runs count
 against `[triggers] max_queued_events`, as an event trigger's do.
+
+## Deciding per run: `@trigger(wait_for=...)`
+
+When whether a run of `orders` should start one depends on what it holds, or on runs that
+failed too, an `@trigger` takes `wait_for=RunOf(...)`. It is called once for each run of
+`orders` (or its `task`) that ends while the DAG is live, oldest first and one at a time, with
+that run as its first parameter, as a sensor is:
+
+```python
+@trigger(wait_for=RunOf("orders", task="load", lag=timedelta(0)), run_retries=3)
+async def on_big_orders(run: RunResult[int], least: int) -> Event[int] | None:
+    if run.task_state != "success" or run.output is None or run.output < least:
+        return None
+    return Event(data=run.output)
+
+with Dag("big_orders", trigger=on_big_orders(least=40)):
+    handle_big(dag_ctx.event.data)
+```
+
+It sees every run that ends: succeeded, failed or cancelled. An `Event` starts a run, `None`
+starts none. The event's key is the run's ID unless it gives one, so a run starts one run however
+often it is looked at; its `at` is the run's `planned_for` plus `lag` unless it gives one. Each
+call runs on a watcher slot like any trigger, with its secrets and connections, and ends with
+the run: a long-lived connection belongs in a generator `@trigger` instead.
+
+A call may take `timeout=` (10 minutes unless it says): one still awaiting then, as on a network
+read that never answers, is cancelled and fails as a raise does. A call that blocks the event
+loop instead (`time.sleep`, a blocking client) can't be cancelled; it falls under the host's
+[30-second rule](../03-guide/05-workers.md#the-watcher-host) and stops the trigger with `blocked_event_loop`.
+
+When the function raises, the trigger fails as any does: it waits (doubling) and the next call
+gets the same run again. With `run_retries=N`, a run it raised on is tried N more times, then
+passed, the reason kept as its last error. Without it, the trigger keeps trying that run until
+`schedr triggers skip <dag>` (or "Skip run" on the DAG page) passes it; `schedr triggers show
+<dag>` says which run it is called for. A skip is refused while a call runs: skip once it has
+ended. Only runs that
+end while the DAG is live count; a run it was given before a pause, or before its trigger
+changed, is dropped with the rest. It can't be a `@trigger.poke`, take `restart_if_idle`, or wait
+for its own DAG's runs.
+
+`schedr.testing.run_trigger(on_big_orders(least=40), run=RunResult(...))` calls it once in the
+test's process and gives the event it returned, filled in as the master gets it, or none.
 
 Any DAG may wait for any other's runs, as anyone signed in sees them.

@@ -4,7 +4,7 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-07): M4.11d1 done, B182/B183 fixed, option C in (all pushed); M4.11d2 is next, its questions answered. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
+## State (2026-11-08): M4.11d done (d2 part 2 committed); M4.11e next, its questions answered. Commits and pushes pre-accepted to the end of M4.11 (c to f), or a decision
 
 - **M4.11b part 3:** `schedr triggers`, the trigger endpoints, manual runs with an event (`--event`, `--event-key`,
   `--event-data`, `--event-at`), the DAG page's panel, `run_trigger`, `run_dag(event=)`, the example, `docs/02-dags/19-triggers.md`
@@ -25,20 +25,16 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
   statement that pauses, removes, brings back or changes the trigger; a strict cursor (end, run ID) on the `triggers` row tied
   to its `RunOf`; queue room per pass; `lag` at most 10 years (wait_for too); the UI's dialog asks for the event. Reviews:
   Codex 6, Grok 6 (3 the same, on the snapshot before Codex's fixes), all fixed.
-- **M4.11d2, in progress (uncommitted):** the sensor form is built and tested (model `Sensor.wait_for {run_of, param}`,
-  dispatch `sensor_run`/`matching_run`, `task_instances.waiting_since/handed_run/handed_at/waited_run/waited_at`, NOT_YET
-  outcome `NotYet` requeued in `attempt_finished`, `RunResult[T]` in `run_of.py`, codec generic dataclasses, a standalone
-  end-to-end test, example `checked_report`, docs section). Next: the trigger function form `@trigger(wait_for=RunOf)`,
-  then one review round over all of d2 (Codex, fix, then Grok), make check, commit.
-- **d2 part 2, decided (the user, 2026-11-07, option C with an opt-in):** a run a trigger function always raises on is
-  passed by `schedr triggers skip <dag>` (API, UI button; recorded; the panel shows the run and error), and by an opt-in
-  `@trigger(..., run_retries=N)` that skips it after N failures (recorded, logged); without it the same run is retried.
-  Built as one `AssignTrigger` per ended run (run as first argument, clean end moves the cursor, key defaults to run ID).
-- **M4.11d2 (was next):** the function forms `@sensor(wait_for=RunOf)` and `@trigger(wait_for=RunOf)` with `RunResult[T]`. Its
-  questions, answered by the user 2026-11-07 (l A, m A, n A, o A): the function runs on a watcher slot, the master handing it
-  each matching run's `RunResult` once it ends; a trigger function sees every run that ends (success, failed, cancelled); it
-  returns `Event[T] | None` (key defaulting to the other run's ID); a raise fails a sensor's attempt (its retries), and counts
-  as a trigger failure that retries the same run (the cursor doesn't move). Record them in decision 353 when building d2.
+- **M4.11d2 part 1, committed (a820ecc):** `@sensor(wait_for=RunOf(...))` with `RunResult[T]`, NOT_YET, the handed run.
+- **M4.11d2 part 2, committed:** `@trigger(wait_for=RunOf(...), run_retries=N, timeout=...)` (a call per ended
+  run, the run handed, `TriggerStopped.done`, `schedr triggers skip`, "Skip run" in the UI); `@sensor(wait_for=...,
+  timeout=...)` opt-in; both in `wait_for.timeout_ms`; a handed run too big for the message fails the call;
+  `[master] grpc_max_message_size` moved to `[grpc] max_message_size` (no alias: a preview), read by both ends;
+  the forms' side-by-side table in `docs/02-dags/19-triggers.md`; stress scenario 23 (500 wait steps: about 135
+  KiB each; their ends recorded about 22 a second, B184 to Grok). Reviews: Codex 7 + 2, Grok 4, all fixed.
+- **M4.11e is next (decision 354, the user's answers 2026-11-08, all A):** `EventNamed` in the four `RunOf` forms,
+  `POST /api/v1/events` and `schedr events post`, key matching with early events kept, one name per trigger,
+  posting as triggering a run, `[events] max_size` 1 MiB, a security review. Then M4.11f (`batch=`).
 - **Done after d1 (pushed 60fa56c, 972a938):** option C (the user's): `wait_for` with `lag` takes only the newest run for the
   moment. B182 (`[worker] log_mode`, 0600, set on each log and at start on the folder and old logs) and B183 (report
   limits, hidden `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_*`; an oversized registration refused). Security bugs are fixed at
@@ -46,14 +42,8 @@ names. `PROJECT.md` is the decision log: every decision goes there, in its secti
 - **Prompts and logs for colleagues:** in `$CLAUDE_JOB_DIR/tmp`, not `target/`: `make check`'s size guard runs `cargo
   clean` past 50 GiB and wiped `target/prompts`.
 - **Reviews one at a time (the user, 2026-11-07):** Codex, fix, then Grok security on the fixed tree.
-- **Questions waiting for the user; number 2 blocks M4.11e, nothing before it:**
-  1. Settled by the user: M4.11d, e, f come before M4.12 (`PLAN.md`); a batched run reads `list[Event[T]]` (352).
-  2. M4.11e, asked 2026-11-07, Claude's picks: (6) one `event=` word, or `wait_for=EventNamed(...)` like `RunOf`, for `@trigger`
-     and `@sensor`, no `signal`; (7) a sensor's `key=` matches, every matching waiting run wakes; (8) an event before the step
-     starts is stored and matched if newer than the run's start; (9) several names on a `@trigger`, `dag_ctx.event.name`,
-     repeats by `(dag, name, key)`; (10) posting needs what triggering a run needs (no permissions of schedr's own); (11) kept by
-     `[retention] events` (M4.14), with a size limit per event.
-  3. Optional: a typed `data_as(Cls)` on `dag_ctx.event.data`, typed `Any` today, so the example needs a pyright ignore.
+- **Questions waiting for the user:** none for M4.11e/f. Optional: a typed `data_as(Cls)` on
+  `dag_ctx.event.data`, typed `Any` today, so the examples need a pyright ignore.
 - **For the user to know:** notifications aren't built, so `TRIGGER_FAILING` has nothing to go through, and their planned
   `Event` enum needs another name. A masked event key in the list can make "Run again" fail for that key (rare, accepted).
   `a_master_gone_silent_stops_a_task_whose_cleanup_may_move` failed once under load: watch whether it recurs.

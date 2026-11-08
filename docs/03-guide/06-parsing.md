@@ -42,7 +42,7 @@ flowchart LR
 5. **Upload.** The agent sends the DAG JSON and the import errors per file.
    The master validates them and stores a new DAG version for each DAG that changed. A new
    DAG is stored **paused**. The upload is a stream: a header, then one message per file, so
-   only a single file's size counts against `[master] grpc_max_message_size` (64 MiB by
+   only a single file's size counts against `[grpc] max_message_size` (64 MiB by
    default), which the master sends the worker in `Registered`. A file whose parse result is
    bigger is uploaded as its import error, `ParseResultTooLarge`, naming the setting. That,
    a file the master refuses after it imported (`InvalidDag`), and a path that isn't inside
@@ -132,7 +132,7 @@ code that failed. A warning or a `TypingHint` is not among them.
 |---|---|---|
 | The file raised while it was imported | that exception, its message and its traceback | every DAG of the file is [held](#a-held-dag) |
 | The import took longer than `parse_file_timeout`, or the runner died | `ParseTimeout` or `RunnerDied` | nothing is held; the file is [parsed again](#parsed-again) |
-| The file imported, but a DAG in it fails the master's checks, its path isn't inside the root, or the whole file's parse result is bigger than `grpc_max_message_size` | `InvalidDag`, `InvalidPath` or `ParseResultTooLarge` | every DAG of the file is held, and the file is not parsed again |
+| The file imported, but a DAG in it fails the master's checks, its path isn't inside the root, or the whole file's parse result is bigger than `[grpc] max_message_size` | `InvalidDag`, `InvalidPath` or `ParseResultTooLarge` | every DAG of the file is held, and the file is not parsed again |
 
 A file that failed, for any of these, keeps the DAGs of its last version that imported.
 A file that has never imported defines none yet.

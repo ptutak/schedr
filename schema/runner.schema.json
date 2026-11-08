@@ -2621,6 +2621,15 @@
         "run_of": {
           "$ref": "#/$defs/RunOf",
           "description": "The run, and of it which task."
+        },
+        "timeout_ms": {
+          "description": "`@sensor(wait_for=..., timeout=...)`: how long one call may take, in milliseconds; one\nover it fails the attempt (its retries get the same run). `None`: what is left of\n`max_wait`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3503,6 +3512,15 @@
             "restart_if_idle_ms": {
               "description": "Started again from its bookmark when no event came for this long; `None`: never.",
               "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "run_retries": {
+              "description": "`@trigger(wait_for=RunOf(...), run_retries=N)` (decision 353): a run its function\nraised on is tried again this many times, then passed, recorded; `None`: tried until\n`schedr triggers skip` passes it.",
+              "format": "uint32",
               "minimum": 0,
               "type": [
                 "integer",

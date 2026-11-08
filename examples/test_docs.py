@@ -48,6 +48,7 @@ EVENTS: dict[str, Event[Any]] = {
         },
         at=FOR,
     ),
+    "big_orders": Event("01a1b600-0000-7000-8000-000000000000", 42, at=FOR),
 }
 
 

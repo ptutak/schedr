@@ -110,6 +110,10 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             post(actions::restart_trigger::<T>),
         )
         .route(
+            "/d/{deployment}/dags/{dag}/trigger/skip",
+            post(actions::skip_trigger_run::<T>),
+        )
+        .route(
             "/d/{deployment}/dags/{dag}/trigger/run-event",
             post(actions::run_event::<T>),
         )

@@ -894,7 +894,7 @@ pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);
 /// The longest a gauge refresh may take unless set otherwise.
 pub const DEFAULT_REFRESH_LIMIT: Duration = Duration::from_secs(30);
 
-/// The largest message from a worker unless set otherwise (`[master] grpc_max_message_size`'s
+/// The largest message from a worker unless set otherwise (`[grpc] max_message_size`'s
 /// default; gRPC's own, 4 MiB, is too small for a large root's parse upload).
 pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 << 20;
 

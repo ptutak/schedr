@@ -94,6 +94,10 @@ class PokeTooSlowError(Exception):
     """A ``@sensor.poke`` call ran out its ``every`` (decision 322)."""
 
 
+class CallTimedOutError(Exception):
+    """An ``@sensor(wait_for=...)``'s call ran out its ``timeout`` (decision 353)."""
+
+
 async def _within(
     call: Coroutine[object, object, object], limit: float | None
 ) -> tuple[bool, object]:
@@ -204,6 +208,7 @@ async def waited(
 
     Raises:
         PokeTooSlowError: If a ``@sensor.poke`` call ran out its ``every``.
+        CallTimedOutError: If an ``@sensor(wait_for=...)`` call ran out its ``timeout``.
         WatcherMovedError: If ``moving`` was set before a value came.
     """
     _guard()
@@ -227,6 +232,21 @@ async def _waited(
         loop = asyncio.get_running_loop()
         deadline = None if seconds is None else loop.time() + seconds
         return await _poked(lambda: function(**arguments), every / 1000, deadline, moving)
+    wait_for = task.get("wait_for")
+    call_ms = (
+        cast("dict[str, object]", wait_for).get("timeout_ms")
+        if isinstance(wait_for, dict)
+        else None
+    )
+    if isinstance(call_ms, int) and (seconds is None or call_ms / 1000 < seconds):
+        # Its own limit comes first: a call over it hung, a failure its retries cover (the
+        # same run), not the end of the wait.
+        ended, value = await _within(function(**arguments), call_ms / 1000)
+        if not ended:
+            raise CallTimedOutError(
+                f"a call took longer than its `timeout` ({call_ms / 1000:g} s), and was cancelled"
+            )
+        return value
     ended, value = await _within(function(**arguments), seconds)
     return value if ended else TimedOut()
 

@@ -399,6 +399,8 @@ pub struct Config {
     pub sensors: SensorsSection,
     /// Event triggers.
     pub triggers: TriggersSection,
+    /// `[grpc]`: the link between the master and its workers, both ends.
+    pub grpc: GrpcSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).
@@ -727,16 +729,6 @@ pub struct MasterSection {
     pub bind: IpAddr,
     /// The gRPC port workers connect to.
     pub grpc_port: u16,
-    /// The largest message the master accepts from a worker: a root's parse upload (every
-    /// DAG it defines, in one message) or a `Finished` with its output. A larger upload is
-    /// refused and the worker logs it; a larger message on the worker's stream ends the
-    /// stream. From 4 MiB (gRPC's default) to 1 GiB.
-    #[serde(
-        deserialize_with = "deserialize_size",
-        serialize_with = "serialize_size"
-    )]
-    #[schemars(with = "SizeText")]
-    pub grpc_max_message_size: u64,
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
     #[serde(
         deserialize_with = "deserialize_duration",
@@ -776,7 +768,6 @@ impl Default for MasterSection {
         Self {
             bind: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             grpc_port: 8070,
-            grpc_max_message_size: 64 * 1024 * 1024,
             cancel_grace: Duration::from_secs(30),
             parse_job_timeout: Duration::from_mins(10),
             code_wait: Duration::from_mins(10),
@@ -1116,6 +1107,32 @@ pub enum TlsMode {
     App,
     /// Plain traffic: a service mesh (e.g. Istio) provides mTLS between the pods.
     Mesh,
+}
+
+/// `[grpc]`: the link between the master and its workers. Set the same on both: each end reads
+/// its own.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct GrpcSection {
+    /// The largest message either end takes from the other: a root's parse upload (every DAG it
+    /// defines, in one message) or a `Finished` with its output, to the master; an assignment
+    /// carrying another DAG's run result (`wait_for=`), to a worker. A larger upload is refused
+    /// and the worker logs it; a larger message on the stream ends it; a run result too big for
+    /// it fails the call that would carry it. From 4 MiB (gRPC's default) to 1 GiB.
+    #[serde(
+        deserialize_with = "deserialize_size",
+        serialize_with = "serialize_size"
+    )]
+    #[schemars(with = "SizeText")]
+    pub max_message_size: u64,
+}
+
+impl Default for GrpcSection {
+    fn default() -> Self {
+        Self {
+            max_message_size: 64 * 1024 * 1024,
+        }
+    }
 }
 
 /// `[tls]`: certificates are PEM files (mounted from Kubernetes Secrets), read again when they

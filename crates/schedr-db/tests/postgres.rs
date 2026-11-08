@@ -1943,6 +1943,11 @@ async fn the_runs_of_another_dag_are_found_after_a_cursor_on_postgres() {
             .await
             .unwrap();
         assert_eq!(tie.len(), 1, "the same end, a later run ID");
+        let ended = db
+            .ended_since(("sync", task), RunOfFrom::Since(before), 10)
+            .await
+            .unwrap();
+        assert_eq!(ended.len(), 1, "{task:?}");
     }
     let seen = RunOfSeen {
         at: ended,
@@ -1958,6 +1963,26 @@ async fn the_runs_of_another_dag_are_found_after_a_cursor_on_postgres() {
     assert_eq!(
         db.run_of_seen("sync", r#"{"dag":"other"}"#).await.unwrap(),
         None
+    );
+    // An `@trigger(wait_for=...)`'s run handed, then passed (decision 353).
+    let handed = RunOfSeen {
+        at: ended,
+        run: run_id.clone(),
+    };
+    db.hand_trigger_run("sync", &handed).await.unwrap();
+    assert_eq!(
+        db.trigger_run_handed("sync").await.unwrap(),
+        Some(handed.clone())
+    );
+    assert!(
+        db.pass_trigger_run("sync", r#"{"dag":"other"}"#, Some("skipped"), None)
+            .await
+            .unwrap()
+    );
+    assert_eq!(db.trigger_run_handed("sync").await.unwrap(), None);
+    assert_eq!(
+        db.run_of_seen("sync", r#"{"dag":"other"}"#).await.unwrap(),
+        Some(handed)
     );
     db.set_paused_at(&sync(), true, ts(NOW)).await.unwrap();
     assert_eq!(db.live_since("sync").await.unwrap(), None);

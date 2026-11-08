@@ -156,7 +156,11 @@ CREATE TABLE triggers (
     -- run it started one for; a pass reads only what ended after.
     run_of_source TEXT,
     run_of_seen_at TIMESTAMPTZ,
-    run_of_seen_run TEXT
+    run_of_seen_run TEXT,
+    -- `@trigger(wait_for=RunOf(...))`: the run its function was last given, not passed yet (its
+    -- clean end, or a skip, moves the cursor to it).
+    run_of_handed_run TEXT,
+    run_of_handed_at TIMESTAMPTZ
 );
 
 -- A wait step that got its host killed (decision 338): gone at its next success.

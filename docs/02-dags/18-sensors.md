@@ -4,7 +4,8 @@ A wait step waits for one thing belonging to a run, then ends with its value or 
 `TimedOut` outcome. Declare an `async def` with `@sensor` when you write the waiting
 yourself, or with `@sensor.poke(every=...)` when schedr should call it repeatedly. To wait
 for another DAG's run or task, use [`wait_for(RunOf(...))`](21-wait-for.md), which can
-also produce `Failed`.
+also produce `Failed`. [Wait steps and triggers side by side](19-triggers.md#wait-steps-and-triggers-side-by-side)
+compares every form.
 
 ```{literalinclude} ../../examples/docs/sensors.py
 :language: python

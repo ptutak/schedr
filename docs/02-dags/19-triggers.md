@@ -28,6 +28,28 @@ async def new_numbers(after: str | None) -> list[Event[int]]:
     return [Event(str(number), number)]
 ```
 
+## Wait steps and triggers side by side
+
+In the plain forms you write the loop yourself; in the `.poke` forms schedr owns it; with
+`wait_for=` the master waits and calls your function once per run of another DAG.
+
+| Form | Your function is | It returns | Called again |
+|---|---|---|---|
+| `@sensor` | `async def`, its own waiting loop | Its value, once | Never: it is the whole wait, limited to `max_wait` |
+| `@sensor.poke(every=...)` | `async def`, one check | Its value, or `NOT_YET` | After `NOT_YET`, `every` after the last call started |
+| [`@sensor(wait_for=...)`](21-wait-for.md#reading-the-run-sensorwait_for) | `async def`, one look at a run | Its value, or `NOT_YET` (not this run) | With a later matching run, until `max_wait`; each call limited by `timeout=` if given |
+| `@trigger` | An async generator, its own loop | Never returns: it yields an `Event` each time it finds one | Never: it runs while its DAG is live; returning or raising is an error on its status |
+| `@trigger.poke(every=...)` | `async def`, one check | `list[Event[T]]`, oldest first; `[]` for nothing | Every `every`, counted from when each call started |
+| [`@trigger(wait_for=...)`](21-wait-for.md#deciding-per-run-triggerwait_for) | `async def`, one look at a run | An `Event`, or `None` for no run | Once for each run that ends; limited to `timeout=` |
+
+A wait step ends with one value, or `TimedOut`, and its run goes on. A trigger never ends:
+each event it finds starts a run. `NOT_YET` is a wait step's only: a plain `@sensor` waits by
+awaiting, and a trigger with nothing to report yields nothing, returns `[]` or `None`. The
+generator and the poke take `after: str | None` first, the last key acted on.
+Every form's function must reach an `await` within 30 seconds: one that blocks the event loop
+stops every wait step and trigger on its worker's [watcher host](../03-guide/05-workers.md#the-watcher-host),
+which is restarted without it.
+
 ## Events and the bookmark
 
 `Event(key, data, at)` carries a key, typed data (default `None`), and an optional
@@ -112,4 +134,5 @@ new key can still start its own run.
 `schedr triggers list` lists triggers, `schedr triggers show <dag>` shows one, and
 `schedr triggers events <dag>` lists its events. `schedr triggers restart <dag>` starts it
 again from its bookmark; `schedr triggers switch-on <dag>` clears its strikes and switches
-it back on. The [DAG page](../03-guide/12-ui.md#a-dag) also shows trigger status and events.
+it back on. `schedr triggers skip <dag>` passes the run an
+[`@trigger(wait_for=...)`](21-wait-for.md#deciding-per-run-triggerwait_for) keeps failing on. The [DAG page](../03-guide/12-ui.md#a-dag) also shows trigger status and events.

@@ -69,6 +69,11 @@ pub enum Trigger {
         /// It stops at this moment.
         #[serde(default)]
         end: Option<Timestamp>,
+        /// `@trigger(wait_for=RunOf(...), run_retries=N)` (decision 353): a run its function
+        /// raised on is tried again this many times, then passed, recorded; `None`: tried until
+        /// `schedr triggers skip` passes it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_retries: Option<u32>,
     },
     /// `trigger=RunOf(...)` (decision 353): a run per run of another DAG (or its task) that
     /// succeeded while this one is live, planned for that run's `planned_for` plus `lag`, or for

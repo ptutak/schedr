@@ -169,8 +169,7 @@ pub fn master_settings(config: &Config) -> Settings {
             full_pass_interval: config.timings.quiet_dag_full_pass_interval,
         },
         // At most 1 GiB (checked when the configuration is read).
-        max_message_size: usize::try_from(config.master.grpc_max_message_size)
-            .unwrap_or(usize::MAX),
+        max_message_size: usize::try_from(config.grpc.max_message_size).unwrap_or(usize::MAX),
         max_instances: usize::try_from(config.mapping.max_instances).unwrap_or(usize::MAX),
         worker_report: schedr_master::core::ReportLimits {
             records: config.limits.worker_report_records,
@@ -964,6 +963,9 @@ pub struct WorkerLinks {
     pub log_listener: TcpListener,
     /// What logs to keep.
     pub retention: LogRetention,
+    /// The largest message taken from the master (`[grpc] max_message_size`): an assignment
+    /// carries another DAG's run result (Grok's review of M4.11d2).
+    pub max_message_size: usize,
 }
 
 /// Runs a worker agent connected to the master until it has drained after a stop request
@@ -981,6 +983,7 @@ pub async fn run_worker(
         tls,
         log_listener,
         retention,
+        max_message_size,
     } = links;
     let timeouts = agent.setup.timeouts;
     let endpoint = LogEndpoint {
@@ -1042,7 +1045,9 @@ pub async fn run_worker(
                 async move {
                     schedr_tls::channel(&url, tls.as_ref())
                         .await
-                        .map(MasterClient::new)
+                        .map(|channel| {
+                            MasterClient::new(channel).max_decoding_message_size(max_message_size)
+                        })
                 }
             },
             stop,
@@ -1737,6 +1742,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         tls,
         log_listener,
         retention: log_retention(&config),
+        max_message_size: usize::try_from(config.grpc.max_message_size).unwrap_or(usize::MAX),
     };
     let observed = Observed {
         metrics,

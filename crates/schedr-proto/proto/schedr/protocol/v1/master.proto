@@ -82,6 +82,9 @@ message TriggerStopped {
   // It got its host killed: counted as a sensor's strike, on the code it ran.
   bool struck = 5;
   string code_hash = 6;
+  // An `@trigger(wait_for=...)`'s call returned (decision 353): done with the run it was given.
+  // Asked to stop (cancelled, interrupted), it isn't.
+  bool done = 7;
 }
 
 enum RootKind {
@@ -394,7 +397,7 @@ message JournalDecision {
 message Registered {
   Timing timing = 1;
   repeated JournalDecision decisions = 2;
-  // The largest message the master accepts ([master] grpc_max_message_size): the agent turns
+  // The largest message the master accepts ([grpc] max_message_size): the agent turns
   // a result or a parsed file past it into a failure instead of sending it (B33, B35).
   uint64 max_message_size = 3;
   // Which script roots each DAG root uses (decision 304), as ScriptUses.

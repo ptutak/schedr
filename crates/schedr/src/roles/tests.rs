@@ -32,7 +32,7 @@ fn loopback() -> SocketAddr {
 fn the_master_settings_come_from_the_config() {
     let mut config = config();
     config.timings.lease_timeout = Duration::from_secs(90);
-    config.master.grpc_max_message_size = 16 << 20;
+    config.grpc.max_message_size = 16 << 20;
     let settings = master_settings(&config);
     assert_eq!(settings.lease_timeout, Duration::from_secs(90));
     assert_eq!(settings.max_message_size, 16 << 20);
@@ -203,6 +203,7 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
         tls: None,
         log_listener: listen(loopback()).await.unwrap(),
         retention: log_retention(&config()),
+        max_message_size: 64 << 20,
     };
     let health = Health::new(Duration::from_secs(120));
     let observed = Observed {

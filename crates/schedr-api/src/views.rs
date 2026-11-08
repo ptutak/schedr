@@ -637,6 +637,10 @@ pub struct TriggerView {
     pub last_poked_at: Option<Timestamp>,
     /// When it was last started again for finding nothing for its `restart_if_idle`.
     pub last_restart_at: Option<Timestamp>,
+    /// `@trigger(wait_for=...)` (decision 353): the run of the other DAG it is called for and
+    /// hasn't ended well with yet; `schedr triggers skip` passes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub called_for: Option<String>,
 }
 
 /// The triggers.

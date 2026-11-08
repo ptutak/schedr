@@ -475,7 +475,7 @@ fn a_hold_is_explained_as_the_files_failure_with_what_to_do() {
         "the parse result of its file `etl/all.py` (the JSON of all the file's DAGs together, \
          not of `sync` alone) is too large",
         "move large DAGs to files of their own",
-        "[master] grpc_max_message_size",
+        "[grpc] max_message_size",
     ] {
         assert!(too_large.contains(part), "{part}\n{too_large}");
     }

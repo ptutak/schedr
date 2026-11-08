@@ -270,6 +270,22 @@ pub async fn restart_trigger<T: Transport>(
     .await
 }
 
+/// `POST /d/<deployment>/dags/<dag>/trigger/skip`.
+pub async fn skip_trigger_run<T: Transport>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, dag_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    act(
+        &ui,
+        &headers,
+        &deployment,
+        format!("Skip the run the trigger of {dag_id} is called for"),
+        Action::SkipTriggerRun { dag_id: &dag_id },
+    )
+    .await
+}
+
 /// `POST /d/<deployment>/dags/<dag>/trigger/run-event`: the form's `key`, of an event it found.
 pub async fn run_event<T: Transport>(
     State(ui): State<Arc<Ui<T>>>,
@@ -460,6 +476,9 @@ enum Action<'a> {
     RestartTrigger {
         dag_id: &'a str,
     },
+    SkipTriggerRun {
+        dag_id: &'a str,
+    },
     CancelRun {
         run_id: &'a str,
     },
@@ -489,6 +508,7 @@ impl Action<'_> {
             } => client.set_paused(dag_id, paused, cancel_runs).await,
             Self::Trigger { dag_id, request } => client.trigger_with(dag_id, request).await,
             Self::RestartTrigger { dag_id } => client.restart_trigger(dag_id).await,
+            Self::SkipTriggerRun { dag_id } => client.skip_trigger_run(dag_id).await,
             Self::CancelRun { run_id } => client.cancel(run_id).await,
             Self::Task {
                 run_id,

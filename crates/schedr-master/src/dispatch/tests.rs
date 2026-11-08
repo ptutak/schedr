@@ -3919,3 +3919,21 @@ async fn a_sensor_waits_from_when_it_was_queued_and_an_idle_round_writes_nothing
     dispatcher.step(later(6)).await.unwrap();
     assert_eq!(db.writes(), 0, "an idle round only reads");
 }
+
+#[test]
+fn an_assignment_over_what_a_worker_takes_is_never_sent() {
+    let message = pb::MasterMessage {
+        message: Some(pb::master_message::Message::AssignTask(pb::AssignTask {
+            task_json: vec![b'x'; 2000],
+            ..pb::AssignTask::default()
+        })),
+    };
+    let size = prost::Message::encoded_len(&message);
+    assert_eq!(
+        super::too_big_to_send(&message, size),
+        None,
+        "exactly the limit fits"
+    );
+    let why = super::too_big_to_send(&message, size - 1).unwrap();
+    assert!(why.contains(&format!("{size} bytes")) && why.contains("[grpc] max_message_size"));
+}

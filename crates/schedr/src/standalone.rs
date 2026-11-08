@@ -313,6 +313,7 @@ pub async fn run(
         tls: None,
         log_listener: logs,
         retention: setup.retention,
+        max_message_size: setup.master.max_message_size,
     };
     let worker = Box::pin(run_worker(
         agent,

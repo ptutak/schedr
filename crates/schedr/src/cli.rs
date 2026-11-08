@@ -477,6 +477,11 @@ pub enum TriggersCommand {
         /// Its DAG.
         dag: String,
     },
+    /// Pass the run an `@trigger(wait_for=...)` keeps failing on: it is called for the next.
+    Skip {
+        /// Its DAG.
+        dag: String,
+    },
     /// Switch a DAG's trigger back on, forgetting its strikes.
     SwitchOn {
         /// Its DAG.

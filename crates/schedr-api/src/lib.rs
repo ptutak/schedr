@@ -44,6 +44,7 @@ pub use state::ApiState;
         routes::dag_trigger,
         routes::trigger_events,
         routes::restart_trigger,
+        routes::skip_trigger_run,
         routes::switch_on_trigger,
         routes::list_runs,
         routes::trigger_run,
@@ -132,6 +133,10 @@ fn trigger_routes() -> Router<ApiState> {
         .route(
             "/api/v1/dags/{dag_id}/trigger/restart",
             post(routes::restart_trigger),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/trigger/skip",
+            post(routes::skip_trigger_run),
         )
         .route(
             "/api/v1/dags/{dag_id}/trigger/switch-on",

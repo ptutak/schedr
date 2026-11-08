@@ -200,6 +200,11 @@ pub struct SensorWaitFor {
     pub run_of: RunOf,
     /// The function's parameter given the run.
     pub param: String,
+    /// `@sensor(wait_for=..., timeout=...)`: how long one call may take, in milliseconds; one
+    /// over it fails the attempt (its retries get the same run). `None`: what is left of
+    /// `max_wait`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// The kind of a task and what it runs.

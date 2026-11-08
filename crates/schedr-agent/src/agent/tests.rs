@@ -1720,7 +1720,7 @@ async fn a_parsed_file_past_the_masters_limit_is_uploaded_as_its_import_error() 
     assert_eq!(error.exception, "ParseResultTooLarge");
     assert!(
         error.message.ends_with(
-            "more than the master accepts (1 bytes, [master] grpc_max_message_size): raise the \
+            "more than the master accepts (1 bytes, [grpc] max_message_size): raise the \
              setting, or split the file"
         ),
         "{}",
@@ -1752,10 +1752,7 @@ async fn a_result_past_the_masters_limit_is_sent_as_output_too_large() {
     assert_eq!(finished.output_json, Vec::<u8>::new());
     let summary = String::from_utf8(finished.error_summary_json.clone()).unwrap();
     assert!(summary.contains("ResultTooLarge"), "{summary}");
-    assert!(
-        summary.contains("[master] grpc_max_message_size"),
-        "{summary}"
-    );
+    assert!(summary.contains("[grpc] max_message_size"), "{summary}");
 }
 
 /// Root `etl` as git-sync lays it out: a symbolic link to the revision `rev-a`.
@@ -3760,5 +3757,22 @@ async fn a_trigger_that_cant_start_here_is_told_as_stopped() {
         assert_eq!(one.instance_id, instance);
         assert_eq!(one.error_kind, "not_placed", "{}", one.message);
         assert_ne!(one.message, "");
+    }
+}
+
+#[test]
+fn only_a_trigger_call_that_returned_is_done_with_its_run() {
+    for (status, done) in [
+        (pb::AttemptStatus::Success, true),
+        (pb::AttemptStatus::Interrupted, false),
+        (pb::AttemptStatus::Cancelled, false),
+    ] {
+        let finished = pb::Finished {
+            status: status as i32,
+            ..pb::Finished::default()
+        };
+        let stopped = super::trigger_stopped("sync".to_owned(), "i1".to_owned(), &finished);
+        assert_eq!(stopped.error_kind, "", "{status:?}: no error");
+        assert_eq!(stopped.done, done, "{status:?}");
     }
 }

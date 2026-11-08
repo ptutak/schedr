@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import typing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -14,6 +16,8 @@ from schedr.tasks import Output
 from schedr.triggers import Trigger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from schedr.outcomes import Waited
 
 MAX_LAG = timedelta(days=3650)
@@ -108,6 +112,38 @@ class RunResult[T = None]:
     output: T | None = None
 
 
+def run_parameter(fn: Callable[..., object], where: str) -> str:
+    """The name of a ``wait_for=`` function's first parameter, the run's: ``RunResult[T]``.
+
+    Args:
+        fn: An ``@sensor(wait_for=...)``'s or ``@trigger(wait_for=...)``'s function.
+        where: Who it is, for messages.
+
+    Returns:
+        The parameter's name.
+
+    Raises:
+        TypeError: If it has none, or it isn't annotated ``RunResult``.
+    """
+    parameters = list(inspect.signature(fn).parameters.values())
+    if not parameters or parameters[0].kind not in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }:
+        raise TypeError(
+            f"{where}: with `wait_for=`, its first parameter is the run it waits for: "
+            "`run: RunResult[...]`"
+        )
+    first = parameters[0]
+    annotation = typing.get_type_hints(fn).get(first.name)
+    if annotation is not RunResult and typing.get_origin(annotation) is not RunResult:
+        raise TypeError(
+            f"{where}: with `wait_for=`, its first parameter `{first.name}` is the run it waits "
+            f"for: annotate it `RunResult[...]`, got `{annotation}`"
+        )
+    return first.name
+
+
 def _free_id(builder: _build.DagBuilder, run_of: RunOf) -> str:
     name = f"wait_for_{run_of.dag}" if run_of.task is None else f"wait_for_{run_of.task}"
     name = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
@@ -162,3 +198,19 @@ def wait_for(
         },
     )
     return Output(node, dag=builder)  # type: ignore[return-value]
+
+
+def call_limit_ms(timeout: timedelta, where: str) -> int:
+    """A ``wait_for=`` function's ``timeout`` for one call, in milliseconds (decision 353).
+
+    Returns:
+        The milliseconds.
+
+    Raises:
+        TypeError: Unless it is a ``timedelta`` above zero, in whole milliseconds.
+    """
+    if not isinstance(timeout, timedelta) or timeout <= timedelta(0):
+        raise TypeError(f"{where}: `timeout` is a timedelta above zero, got {timeout!r}")
+    if timeout % timedelta(milliseconds=1):
+        raise TypeError(f"{where}: `timeout` is whole milliseconds, got {timeout}")
+    return timeout // timedelta(milliseconds=1)

@@ -226,6 +226,7 @@ fn url_has_password_looks_at_the_user_info_only(#[case] url: &str, #[case] expec
 #[test]
 fn master_and_webserver_defaults() {
     let config = Config::default();
+    assert_eq!(config.grpc.max_message_size, 64 * 1024 * 1024);
     assert_eq!(config.dags.parse_file_timeout, Duration::from_secs(60));
     assert_eq!(config.dags.parse_concurrency, 4);
     assert_eq!(
@@ -233,7 +234,6 @@ fn master_and_webserver_defaults() {
         MasterSection {
             bind: std::net::IpAddr::from([0, 0, 0, 0]),
             grpc_port: 8070,
-            grpc_max_message_size: 64 * 1024 * 1024,
             cancel_grace: Duration::from_secs(30),
             code_wait: Duration::from_mins(10),
             parse_job_timeout: Duration::from_mins(10),

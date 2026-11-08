@@ -693,3 +693,33 @@ async fn a_manual_run_of_a_dag_started_by_another_asks_for_its_event() {
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
     assert!(!html.contains(r#"name="event_key""#));
 }
+
+#[tokio::test]
+async fn a_trigger_waiting_for_runs_shows_the_run_it_is_called_for_and_can_skip_it() {
+    let view = |state: &str| {
+        json!({
+            "dag_id": "sync", "trigger": "found", "state": state, "worker": null,
+            "bookmark": null, "stopped_why": null, "failures": 3,
+            "last_error": "trigger_failed: no", "not_before": null, "started_at": null,
+            "last_event_at": null, "last_poked_at": null, "last_restart_at": null,
+            "called_for": "r1"
+        })
+    };
+    for (state, skip) in [("waiting", true), ("running", false)] {
+        let mut etl = etl_with_trigger();
+        etl.answers
+            .insert("/api/v1/dags/sync/trigger".to_owned(), (200, view(state)));
+        etl.answers.insert(
+            "/api/v1/dags/sync/trigger/events?limit=20".to_owned(),
+            (200, json!({"events": []})),
+        );
+        let app = ui(vec![deployment("etl", etl)]);
+        let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+        assert!(html.contains("Called for run"), "{html}");
+        assert_eq!(
+            html.contains("/d/etl/dags/sync/trigger/skip"),
+            skip,
+            "only while no call runs: {state}"
+        );
+    }
+}

@@ -3106,3 +3106,509 @@ async fn a_registration_over_the_limits_is_refused_not_stored() {
             .is_ok()
     );
 }
+
+/// [`run_of_file`] with `sync` started by an `@trigger(wait_for=RunOf("orders"))` instead.
+fn waiting_trigger_file(run_retries: Option<u32>) -> ParsedFile {
+    let mut file = serde_json::to_value(run_of_file(&json!({"dag": "orders"}))).unwrap();
+    let mut trigger = json!({
+        "kind": "event",
+        "task": {
+            "id": "on_orders", "kind": "sensor", "mode": "loop",
+            "arguments": {"least": {"literal": 5}},
+            "wait_for": {"run_of": {"dag": "orders"}, "param": "run"},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    if let Some(retries) = run_retries {
+        trigger["run_retries"] = json!(retries);
+    }
+    file["dags"][0]["trigger"] = trigger;
+    serde_json::from_value(file).unwrap()
+}
+
+/// A waiting trigger's call that returned: done with its run.
+fn returned(assign: &pb::AssignTrigger) -> worker_message::Message {
+    worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: assign.dag_id.clone(),
+        instance_id: assign.instance_id.clone(),
+        done: true,
+        ..pb::TriggerStopped::default()
+    })
+}
+
+/// The run an `AssignTrigger` hands its function, by its ID.
+fn handed_run(assign: &pb::AssignTrigger) -> String {
+    let task: serde_json::Value = serde_json::from_slice(&assign.task_json).unwrap();
+    task["arguments"]["run"]["literal"]["run_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no run handed: {task}"))
+        .to_owned()
+}
+
+/// `sync` and `orders` live from `later(1)`, with a waiting trigger.
+async fn with_waiting_trigger(run_retries: Option<u32>) -> MasterCore {
+    let core = with_dag_of(&waiting_trigger_file(run_retries)).await;
+    for dag in ["sync", "orders"] {
+        core.db
+            .set_paused_at(&DagId::new(dag).unwrap(), false, later(1))
+            .await
+            .unwrap();
+    }
+    core
+}
+
+#[tokio::test]
+async fn a_trigger_waiting_for_runs_is_called_once_for_each_that_ends_with_it() {
+    let mut core = with_waiting_trigger(None).await;
+    assert!(
+        assign_of(&core.tick(later(2)).await.unwrap()).is_none(),
+        "nothing ended: not called"
+    );
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(3)).await;
+    let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(4)).await;
+    let assign = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&assign), first, "oldest first");
+    let task: serde_json::Value = serde_json::from_slice(&assign.task_json).unwrap();
+    assert_eq!(task["arguments"]["least"], json!({"literal": 5}));
+    assert!(
+        assign_of(&core.tick(later(6)).await.unwrap()).is_none(),
+        "one call at a time"
+    );
+    // Its event, keyed by the run, then a clean end: the next call gets the next run.
+    let answer = core
+        .handle("w1", found(&assign, 1, &first), later(6))
+        .await
+        .unwrap();
+    assert_eq!(ack_of(&answer), Some(1));
+    core.handle("w1", returned(&assign), later(6))
+        .await
+        .unwrap();
+    let next = assign_of(&core.tick(later(7)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&next), second);
+    core.handle("w1", returned(&next), later(7)).await.unwrap();
+    assert!(assign_of(&core.tick(later(8)).await.unwrap()).is_none());
+    assert_eq!(
+        sync_runs(&core).await.len(),
+        1,
+        "the second call started none"
+    );
+    let record = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(record.failures, 0);
+}
+
+#[tokio::test]
+async fn a_trigger_waiting_for_runs_gets_the_same_run_after_failing_until_its_retries_are_used() {
+    let mut core = with_waiting_trigger(Some(1)).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&assign), first);
+    core.handle(
+        "w1",
+        stopped_with(&assign, "trigger_failed", false),
+        later(3),
+    )
+    .await
+    .unwrap();
+    assert!(
+        assign_of(&core.tick(later(4)).await.unwrap()).is_none(),
+        "after its wait"
+    );
+    let again = assign_of(&core.tick(later(60)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&again), first, "the same run, tried again");
+    core.handle(
+        "w1",
+        stopped_with(&again, "trigger_failed", false),
+        later(60),
+    )
+    .await
+    .unwrap();
+    let record = core.db.trigger("sync").await.unwrap().unwrap();
+    let error = record.last_error.unwrap();
+    assert!(
+        error.contains(&format!("passed run {first}")) && error.contains("failed 2 times"),
+        "{error}"
+    );
+    assert_eq!(record.failures, 0);
+    let next = assign_of(&core.tick(later(61)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&next), second, "passed: the next at once");
+}
+
+#[tokio::test]
+async fn skip_passes_the_run_a_trigger_keeps_failing_on_but_not_while_it_is_called() {
+    let mut core = with_waiting_trigger(None).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    let skip = schedr_model::commands::Command::SkipTriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+    };
+    let refused = core
+        .db
+        .insert_command(&skip, "anna", later(4))
+        .await
+        .unwrap();
+    core.tick(later(4)).await.unwrap();
+    let record = core.db.command(&refused).await.unwrap().unwrap();
+    assert_eq!(record.status, CommandStatus::Rejected);
+    assert!(
+        record
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("being called"),
+        "{:?}",
+        record.reason
+    );
+    core.handle(
+        "w1",
+        stopped_with(&assign, "trigger_failed", false),
+        later(4),
+    )
+    .await
+    .unwrap();
+    let mut calls = 0;
+    for at in [10, 25, 50] {
+        let call = assign_of(&core.tick(later(at)).await.unwrap()).unwrap();
+        assert_eq!(handed_run(&call), first, "never passed by itself");
+        core.handle(
+            "w1",
+            stopped_with(&call, "trigger_failed", false),
+            later(at),
+        )
+        .await
+        .unwrap();
+        calls += 1;
+    }
+    assert_eq!(calls, 3);
+    let skipped = core
+        .db
+        .insert_command(&skip, "anna", later(55))
+        .await
+        .unwrap();
+    // Applied first in the round, which then calls it for the next run.
+    let next = assign_of(&core.tick(later(55)).await.unwrap()).unwrap();
+    let record = core.db.command(&skipped).await.unwrap().unwrap();
+    assert_eq!(
+        (record.status, record.result),
+        (CommandStatus::Applied, Some(json!({"run_id": first})))
+    );
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert!(stored.last_error.unwrap().starts_with(&format!(
+        "passed run {first}: skipped by anna (command {skipped})"
+    )));
+    assert_eq!(handed_run(&next), second);
+}
+
+#[tokio::test]
+async fn a_waiting_trigger_interrupted_or_cancelled_keeps_its_run() {
+    let mut core = with_waiting_trigger(None).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    // Asked to stop by its worker (draining): no error, but not done.
+    core.handle("w1", stopped_with(&assign, "", false), later(3))
+        .await
+        .unwrap();
+    let again = assign_of(&core.tick(later(4)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&again), first, "not passed");
+}
+
+#[tokio::test]
+async fn a_waiting_trigger_s_call_ends_with_its_run_passed_or_not_at_all() {
+    let mut core = with_waiting_trigger(None).await;
+    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    core.db.fail_write(1);
+    assert!(
+        core.handle("w1", returned(&assign), later(3))
+            .await
+            .is_err()
+    );
+    let record = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(
+        record.instance_id.as_deref(),
+        Some(assign.instance_id.as_str()),
+        "the call is still held, so its end can come again"
+    );
+    core.handle("w1", returned(&assign), later(4))
+        .await
+        .unwrap();
+    let next = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&next), second);
+}
+
+#[tokio::test]
+async fn a_new_run_after_a_pause_has_its_own_retries_and_a_return_clears_strikes() {
+    let mut core = with_waiting_trigger(Some(1)).await;
+    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    core.handle(
+        "w1",
+        stopped_with(&assign, "trigger_failed", true),
+        later(3),
+    )
+    .await
+    .unwrap();
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, true, later(4)).await.unwrap();
+    core.tick(later(4)).await.unwrap();
+    core.db.set_paused_at(&sync, false, later(5)).await.unwrap();
+    let fresh = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(6)).await;
+    let call = assign_of(&core.tick(later(10)).await.unwrap()).unwrap();
+    assert_eq!(
+        handed_run(&call),
+        fresh,
+        "the run from before the pause is dropped"
+    );
+    assert_eq!(call.failures, 0, "the dropped run's failures aren't its");
+    core.handle(
+        "w1",
+        stopped_with(&call, "trigger_failed", false),
+        later(10),
+    )
+    .await
+    .unwrap();
+    let retried = assign_of(&core.tick(later(20)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&retried), fresh, "its one retry");
+    core.handle("w1", returned(&retried), later(20))
+        .await
+        .unwrap();
+    let strikes = core
+        .db
+        .wait_step_strikes("sync", "on_orders")
+        .await
+        .unwrap();
+    assert!(
+        strikes.as_ref().is_none_or(|s| s.strikes == 0),
+        "a call that returned clears its strikes: {strikes:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_skip_applied_before_its_decision_was_stored_is_applied_again() {
+    let mut core = with_waiting_trigger(None).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    core.handle(
+        "w1",
+        stopped_with(&assign, "trigger_failed", false),
+        later(3),
+    )
+    .await
+    .unwrap();
+    let skip = schedr_model::commands::Command::SkipTriggerRun {
+        dag_id: DagId::new("sync").unwrap(),
+    };
+    let id = core
+        .db
+        .insert_command(&skip, "anna", later(4))
+        .await
+        .unwrap();
+    // The round passed the run and was cut before storing the decision.
+    core.db.mark_applying(&id, later(4)).await.unwrap();
+    let active = core
+        .db
+        .active_dags_of(&[&DagId::new("sync").unwrap()])
+        .await
+        .unwrap();
+    let why = format!("skipped by anna (command {id})");
+    crate::core::triggers::pass_handed_run(&core.db, &active[0].dag, &why, None)
+        .await
+        .unwrap()
+        .unwrap();
+    core.tick(later(5)).await.unwrap();
+    let record = core.db.command(&id).await.unwrap().unwrap();
+    assert_eq!(
+        (record.status, record.result),
+        (CommandStatus::Applied, Some(json!({"run_id": first})))
+    );
+}
+
+#[tokio::test]
+async fn a_call_being_stopped_is_not_made_again_until_it_has_ended() {
+    let mut core = with_waiting_trigger(None).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    core.register(&register("w2", "i2", vec![]), later(3))
+        .await
+        .unwrap();
+    let drain = schedr_model::commands::Command::DrainWorker {
+        worker_id: "w1".to_owned(),
+    };
+    core.db
+        .insert_command(&drain, "anna", later(4))
+        .await
+        .unwrap();
+    let told = core.tick(later(4)).await.unwrap();
+    assert!(
+        told.iter().any(|o| matches!(
+            message(o),
+            master_message::Message::CancelTrigger(cancel)
+                if cancel.instance_id == assign.instance_id
+        )),
+        "{told:?}"
+    );
+    assert!(
+        assign_of(&told).is_none(),
+        "the run isn't called twice: {told:?}"
+    );
+    assert!(assign_of(&core.tick(later(5)).await.unwrap()).is_none());
+    // Its end, cancelled: the run, kept, is called on the other worker.
+    core.handle("w1", stopped_with(&assign, "", false), later(5))
+        .await
+        .unwrap();
+    let again = core.tick(later(6)).await.unwrap();
+    let call = assign_of(&again).unwrap();
+    assert_eq!(handed_run(&call), first);
+    assert!(again.iter().any(|o| o.worker_id == "w2"));
+}
+
+#[tokio::test]
+async fn a_worker_being_stopped_cant_pass_another_dags_run() {
+    let mut file = serde_json::to_value(waiting_trigger_file(None)).unwrap();
+    let mut report = file["dags"][0].clone();
+    report["id"] = json!("report");
+    file["dags"].as_array_mut().unwrap().push(report);
+    let file: ParsedFile = serde_json::from_value(file).unwrap();
+    let mut core = with_dag_of(&file).await;
+    for dag in ["sync", "orders", "report"] {
+        core.db
+            .set_paused_at(&DagId::new(dag).unwrap(), false, later(1))
+            .await
+            .unwrap();
+    }
+    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let calls = core.tick(later(3)).await.unwrap();
+    let calls: Vec<pb::AssignTrigger> = calls
+        .iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::AssignTrigger(a) => Some(a.clone()),
+            _ => None,
+        })
+        .collect();
+    let of = |dag: &str| calls.iter().find(|a| a.dag_id == dag).unwrap().clone();
+    let (sync, report) = (of("sync"), of("report"));
+    // `report`'s call fails: between calls, its run handed.
+    core.handle(
+        "w1",
+        stopped_with(&report, "trigger_failed", false),
+        later(3),
+    )
+    .await
+    .unwrap();
+    let handed = core.db.trigger_run_handed("report").await.unwrap();
+    assert!(handed.is_some());
+    core.db
+        .set_paused_at(&DagId::new("sync").unwrap(), true, later(4))
+        .await
+        .unwrap();
+    core.tick(later(4)).await.unwrap();
+    // Told to stop `sync`'s call, the worker names `report`.
+    let lie = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: "report".to_owned(),
+        instance_id: sync.instance_id.clone(),
+        done: true,
+        ..pb::TriggerStopped::default()
+    });
+    core.handle("w1", lie, later(5)).await.unwrap();
+    assert_eq!(
+        core.db.trigger_run_handed("report").await.unwrap(),
+        handed,
+        "another DAG's run stays"
+    );
+}
+
+#[tokio::test]
+async fn a_run_too_big_to_send_is_a_failed_call_that_run_retries_pass() {
+    for (retries, passed) in [(None, false), (Some(0), true)] {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.migrate().await.unwrap();
+        let settings = Settings {
+            // Room for results (64 KiB), less than the assignment below.
+            max_message_size: 70 * 1024,
+            ..Settings::default()
+        };
+        let mut core = MasterCore::new(db, settings);
+        let (_, outgoing) = core
+            .register(&register("w1", "i1", vec![]), ts(NOW))
+            .await
+            .unwrap();
+        let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+            panic!("expected AssignParse")
+        };
+        // Outputs that fit the small limit, or the DAGs aren't taken.
+        let mut file = serde_json::to_value(waiting_trigger_file(retries)).unwrap();
+        for dag in file["dags"].as_array_mut().unwrap() {
+            for task in dag["tasks"].as_array_mut().unwrap() {
+                task["settings"]["max_output_size"] = json!(10);
+            }
+            if dag["trigger"]["kind"] == "event" {
+                dag["trigger"]["task"]["settings"]["max_output_size"] = json!(10);
+                // With the run, the whole assignment is over the limit.
+                dag["trigger"]["task"]["arguments"]["least"] =
+                    json!({"literal": "x".repeat(80 * 1024)});
+            }
+        }
+        let file: ParsedFile = serde_json::from_value(file).unwrap();
+        core.upload(upload_of(&job.parse_job_id, &file), ts(NOW))
+            .await
+            .unwrap();
+        for dag in ["sync", "orders"] {
+            core.db
+                .set_paused_at(&DagId::new(dag).unwrap(), false, later(1))
+                .await
+                .unwrap();
+        }
+        let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+        let told = core.tick(later(3)).await.unwrap();
+        assert!(
+            assign_of(&told).is_none(),
+            "never sent: it would end the stream"
+        );
+        let record = core.db.trigger("sync").await.unwrap().unwrap();
+        let error = record.last_error.unwrap_or_default();
+        assert!(error.contains("a worker takes"), "{error}");
+        let handed = core.db.trigger_run_handed("sync").await.unwrap();
+        if passed {
+            assert_eq!(handed, None, "run_retries=0: passed at once");
+            assert!(error.starts_with(&format!("passed run {first}")), "{error}");
+        } else {
+            assert_eq!(handed.map(|h| h.run), Some(first), "kept, for a skip");
+            assert_eq!(record.failures, 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_call_a_restarted_master_doesnt_know_holds_back_waiting_triggers_until_it_ends() {
+    let mut core = with_waiting_trigger(None).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    // A worker coming back with a call this master never gave (its DAG unknown here).
+    let mut back = register("w2", "i2", vec![]);
+    back.running_triggers = vec!["from-before".to_owned()];
+    let (_, told) = core.register(&back, later(3)).await.unwrap();
+    assert!(
+        told.iter().any(|o| matches!(
+            message(o),
+            master_message::Message::CancelTrigger(cancel) if cancel.instance_id == "from-before"
+        )),
+        "{told:?}"
+    );
+    assert!(
+        assign_of(&core.tick(later(3)).await.unwrap()).is_none(),
+        "it may be this trigger's call, with this run"
+    );
+    let ended = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        dag_id: "sync".to_owned(),
+        instance_id: "from-before".to_owned(),
+        ..pb::TriggerStopped::default()
+    });
+    core.handle("w2", ended, later(4)).await.unwrap();
+    let call = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&call), first);
+}

@@ -32,7 +32,7 @@ use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey}
 use crate::quiet::{QuietSettings, Wakes};
 use crate::scheduler::{Scheduler, SchedulerError};
 
-mod triggers;
+pub(crate) mod triggers;
 
 #[cfg(test)]
 mod tests;
@@ -79,7 +79,7 @@ pub struct Settings {
     pub timings: MasterTimings,
     /// Which DAGs a round visits (`[master] quiet_dag*`).
     pub quiet: QuietSettings,
-    /// The largest message a worker may send (`[master] grpc_max_message_size`).
+    /// The largest message a worker may send (`[grpc] max_message_size`).
     pub max_message_size: usize,
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub max_instances: usize,
@@ -463,6 +463,7 @@ impl MasterCore {
         let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
             .with_switch_off_after(settings.switch_off_after)
             .with_sensor_max_wait(settings.sensor_max_wait)
+            .with_max_message_size(settings.max_message_size)
             .with_code_wait(settings.code_wait)
             .with_set_aside(settings.set_aside, settings.read_back)
             .with_handed_call_min(settings.handed_call_min)

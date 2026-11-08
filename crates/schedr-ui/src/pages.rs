@@ -76,6 +76,9 @@ struct TriggerPanel {
     moments: Vec<(&'static str, String)>,
     /// Where it is started again.
     restart: String,
+    /// `@trigger(wait_for=...)`: the run it is called for, and where that run is passed.
+    called_for: String,
+    skip: String,
     events: Vec<EventRow>,
 }
 
@@ -177,6 +180,8 @@ async fn trigger_panel<T: Transport>(
         last_error: trigger.last_error.unwrap_or_default(),
         moments,
         restart: format!("{actions}/restart"),
+        called_for: trigger.called_for.unwrap_or_default(),
+        skip: format!("{actions}/skip"),
         events,
     }
 }

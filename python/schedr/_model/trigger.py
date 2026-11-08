@@ -126,12 +126,15 @@ class EventTrigger:
         restart_if_idle_ms: Started again from its bookmark when no event came for this long.
         start: It runs from this moment on (aware).
         end: It stops at this moment (aware).
+        run_retries: ``@trigger(wait_for=..., run_retries=N)``: a run its function raised on so many
+            times in a row is passed (decision 353); ``None``: until ``schedr triggers skip``.
     """
 
     task: Task
     restart_if_idle_ms: int | None = None
     start: datetime | None = None
     end: datetime | None = None
+    run_retries: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         """The trigger as DAG JSON.
@@ -148,6 +151,8 @@ class EventTrigger:
         }
         if self.restart_if_idle_ms is not None:
             result["restart_if_idle_ms"] = self.restart_if_idle_ms
+        if self.run_retries is not None:
+            result["run_retries"] = self.run_retries
         return result
 
 

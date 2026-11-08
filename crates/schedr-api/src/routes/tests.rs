@@ -1854,4 +1854,6 @@ async fn a_dag_without_a_trigger_has_nothing_to_switch_on() {
     // Whether it has one is the master's to say, as for any command.
     let (status, _) = send(&app, Method::POST, "/api/v1/dags/sync/trigger/restart", "").await;
     assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, _) = send(&app, Method::POST, "/api/v1/dags/sync/trigger/skip", "").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
 }

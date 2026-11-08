@@ -306,6 +306,9 @@ pub struct Dispatcher {
     handing: BTreeMap<String, serde_json::Value>,
     /// The least such a call gets of its `max_wait`, the run having ended within it.
     handed_call_min: Duration,
+    /// The largest message a worker takes (`[grpc] max_message_size`): a run handed to
+    /// an `@sensor(wait_for=...)` goes inside its assignment.
+    max_message_size: usize,
 }
 
 /// The dispatcher's memory that a worker's message changes (see [`Dispatcher::memory`]).
@@ -360,6 +363,7 @@ impl Dispatcher {
             set_aside: BTreeMap::new(),
             handing: BTreeMap::new(),
             handed_call_min: DEFAULT_HANDED_CALL_MIN,
+            max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
                 .unwrap_or(SignedDuration::MAX),
             start_timeout: START_TIMEOUT,
@@ -496,6 +500,13 @@ impl Dispatcher {
     #[must_use]
     pub const fn with_handed_call_min(mut self, least: Duration) -> Self {
         self.handed_call_min = least;
+        self
+    }
+
+    /// The largest message a worker takes (`[grpc] max_message_size`).
+    #[must_use]
+    pub const fn with_max_message_size(mut self, bytes: usize) -> Self {
+        self.max_message_size = bytes;
         self
     }
 
@@ -1392,9 +1403,6 @@ impl Dispatcher {
             .await?;
             return Ok(());
         }
-        self.take_slot(task, (&worker_id, &attempt_id), now);
-        self.active.assigned(&attempt_id, ready);
-        tally.assigned += 1;
         let mut message = self.assign_message(
             ready,
             &worker_id,
@@ -1404,12 +1412,13 @@ impl Dispatcher {
         );
         self.add_event(ready, &mut message).await?;
         self.keep_deadline(ready, task, &mut message, now).await?;
-        outgoing.push(Outgoing {
-            worker_id,
-            message: pb::MasterMessage {
-                message: Some(pb::master_message::Message::AssignTask(message)),
-            },
-        });
+        let Some(message) = self.if_it_fits(ready, &attempt_id, message, now).await? else {
+            return Ok(());
+        };
+        self.take_slot(task, (&worker_id, &attempt_id), now);
+        self.active.assigned(&attempt_id, ready);
+        tally.assigned += 1;
+        outgoing.push(Outgoing { worker_id, message });
         Ok(())
     }
 
@@ -1750,6 +1759,28 @@ impl Dispatcher {
             self.record(&attempt, &end, &result, now).await?;
         }
         Ok(())
+    }
+
+    /// The message of an attempt just assigned, if it is within what a worker takes; over, the
+    /// attempt ends and it never leaves (Codex's review of M4.11d2: a wait step's handed run
+    /// rides in it).
+    async fn if_it_fits(
+        &mut self,
+        ready: &ReadyInstance,
+        attempt_id: &str,
+        assign: pb::AssignTask,
+        now: Timestamp,
+    ) -> Result<Option<pb::MasterMessage>, DispatchError> {
+        let message = pb::MasterMessage {
+            message: Some(pb::master_message::Message::AssignTask(assign)),
+        };
+        let Some(why) = too_big_to_send(&message, self.max_message_size) else {
+            return Ok(Some(message));
+        };
+        self.handing.remove(&ready.instance_id);
+        let end = failed_by_master(INPUTS_TOO_LARGE, "InputsTooLarge", &why);
+        self.end_ready(ready, attempt_id, end, now).await?;
+        Ok(None)
     }
 
     /// Takes the slot its kind of task runs on.
@@ -3068,6 +3099,18 @@ fn with_context(summary: Option<&str>, context: &str) -> String {
         Some((text, Err(_))) => ErrorSummary::json("CodeChanged", &format!("{context}: {text}")),
         None => ErrorSummary::json("CodeChanged", context),
     }
+}
+
+/// Why `message` can't go to a worker that takes at most `limit` bytes, if it can't: a run
+/// handed to a `wait_for=` function rides in it (decision 353; Grok's and Codex's reviews).
+pub(crate) fn too_big_to_send(message: &pb::MasterMessage, limit: usize) -> Option<String> {
+    let size = prost::Message::encoded_len(message);
+    (size > limit).then(|| {
+        format!(
+            "its assignment, with the run it is given, is {size} bytes, over the {limit} a \
+             worker takes ([grpc] max_message_size)"
+        )
+    })
 }
 
 fn inputs_too_large() -> AttemptEnd {

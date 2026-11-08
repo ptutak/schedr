@@ -204,6 +204,9 @@ pub async fn run_triggers<T: Transport>(
             if let Some(why) = &trigger.stopped_why {
                 writeln!(out, "stopped: {}", one_line(why))?;
             }
+            if let Some(run) = &trigger.called_for {
+                writeln!(out, "called for run: {run}")?;
+            }
         }
         TriggersCommand::Events { dag, limit } => {
             let list = client.trigger_events(dag, *limit).await?;
@@ -223,7 +226,25 @@ pub async fn run_triggers<T: Transport>(
                 .collect();
             write_table(out, &["KEY", "RECEIVED", "DATA"], &rows)?;
         }
-        TriggersCommand::Restart { dag } => {
+        TriggersCommand::Restart { dag }
+        | TriggersCommand::Skip { dag }
+        | TriggersCommand::SwitchOn { dag } => {
+            trigger_command(command, dag, client, output, out).await?;
+        }
+    }
+    Ok(())
+}
+
+/// `schedr triggers restart|skip|switch-on <dag>`: the command, waited for.
+async fn trigger_command<T: Transport>(
+    command: &TriggersCommand,
+    dag: &str,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    match command {
+        TriggersCommand::Restart { .. } => {
             let command = client
                 .wait(client.send_command(|| client.restart_trigger(dag)).await?)
                 .await?;
@@ -232,7 +253,22 @@ pub async fn run_triggers<T: Transport>(
             }
             writeln!(out, "restarting the trigger of {dag}")?;
         }
-        TriggersCommand::SwitchOn { dag } => {
+        TriggersCommand::Skip { .. } => {
+            let command = client
+                .wait(client.send_command(|| client.skip_trigger_run(dag)).await?)
+                .await?;
+            if output.json {
+                return print_json(out, &command);
+            }
+            let run = command
+                .result
+                .as_ref()
+                .and_then(|result| result.get("run_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            writeln!(out, "passed run {run} of the trigger of {dag}")?;
+        }
+        TriggersCommand::SwitchOn { .. } => {
             let command = client
                 .wait(
                     client
@@ -245,6 +281,7 @@ pub async fn run_triggers<T: Transport>(
             }
             writeln!(out, "switched on the trigger of {dag}")?;
         }
+        TriggersCommand::List | TriggersCommand::Show { .. } | TriggersCommand::Events { .. } => {}
     }
     Ok(())
 }

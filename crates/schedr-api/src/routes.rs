@@ -513,7 +513,31 @@ fn trigger_view(
         last_event_at: record.last_event_at,
         last_poked_at: record.last_poked_at,
         last_restart_at: record.last_restart_at,
+        called_for: None,
     })
+}
+
+/// The run an `@trigger(wait_for=...)` is called for (decision 353), on its view.
+async fn add_called_for(
+    db: &schedr_db::Database,
+    active: &schedr_db::runs::ActiveDag,
+    view: &mut TriggerView,
+) -> Result<(), ApiError> {
+    if let schedr_model::Trigger::Event { task, .. } = &active.dag.trigger
+        && matches!(
+            task.kind,
+            schedr_model::TaskKind::Sensor {
+                wait_for: Some(_),
+                ..
+            }
+        )
+    {
+        view.called_for = db
+            .trigger_run_handed(active.dag.id.as_str())
+            .await?
+            .map(|handed| handed.run);
+    }
+    Ok(())
 }
 
 /// Every DAG's trigger.
@@ -523,25 +547,24 @@ pub async fn list_triggers(State(state): State<ApiState>) -> ApiResult<TriggerLi
     let records = state.db.triggers().await?;
     let off = state.db.switched_off_wait_steps().await?;
     let now = Timestamp::now();
-    let triggers = state
-        .db
-        .active_dags()
-        .await?
-        .iter()
-        .filter_map(|active| {
-            let dag = active.dag.id.as_str();
-            let function = match &active.dag.trigger {
-                schedr_model::Trigger::Event { task, .. } => task.id.as_str(),
-                _ => return None,
-            };
-            trigger_view(
-                active,
-                records.iter().find(|r| r.dag_id == dag),
-                off.iter().any(|s| s.dag_id == dag && s.task_id == function),
-                now,
-            )
-        })
-        .collect();
+    let mut triggers = Vec::new();
+    for active in &state.db.active_dags().await? {
+        let dag = active.dag.id.as_str();
+        let function = match &active.dag.trigger {
+            schedr_model::Trigger::Event { task, .. } => task.id.as_str(),
+            _ => continue,
+        };
+        let Some(mut view) = trigger_view(
+            active,
+            records.iter().find(|r| r.dag_id == dag),
+            off.iter().any(|s| s.dag_id == dag && s.task_id == function),
+            now,
+        ) else {
+            continue;
+        };
+        add_called_for(&state.db, active, &mut view).await?;
+        triggers.push(view);
+    }
     Ok(Json(TriggerList { triggers }))
 }
 
@@ -567,7 +590,8 @@ pub async fn dag_trigger(
         .await?
         .is_some_and(|strikes| strikes.off_at.is_some());
     let record = state.db.trigger(&dag_id).await?;
-    let view = trigger_view(active, record.as_ref(), off, Timestamp::now()).ok_or_else(none)?;
+    let mut view = trigger_view(active, record.as_ref(), off, Timestamp::now()).ok_or_else(none)?;
+    add_called_for(&state.db, active, &mut view).await?;
     Ok(Json(view))
 }
 
@@ -639,6 +663,23 @@ pub async fn restart_trigger(
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
     submit(&state, &user, key, Command::RestartTrigger { dag_id }).await
+}
+
+/// Pass the run an `@trigger(wait_for=...)` is called for and keeps failing on, so its next call
+/// gets the next run (decision 353); refused while a call of it runs. Applied by the master; poll
+/// the command for the decision.
+#[utoipa::path(post, path = "/api/v1/dags/{dag_id}/trigger/skip", tag = "triggers",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn skip_trigger_run(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+) -> Accepted {
+    let dag_id = parse_dag_id(&dag_id)?;
+    submit(&state, &user, key, Command::SkipTriggerRun { dag_id }).await
 }
 
 /// Switch a DAG's trigger back on, forgetting its strikes. Applied by the master; poll the
