@@ -4,18 +4,17 @@ Read this file, then `PLAN.md` (M4 and M4B), `BUGS.md`, and the parts of `PROJEC
 names. `PROJECT.md` is the decision log: every decision goes there, in its section, with
 "Not chosen" and why.
 
-## State (2026-11-08, late morning): M4.11e committed; f and g reviewed by Codex, fixed and documented
+## State (2026-11-08, afternoon): M4.11e, f and g committed; M4.11h (`schedr.api`, B2) next, the last of M4.11
 
-- **e2 committed:** `@sensor`/`@trigger` `wait_for=EventNamed`; Codex's 3 findings (a dropped returned event passed:
-  `TriggerStopped.returned_event`) and Grok's (a secret-named key masked in the reason) fixed; B185, B186 logged;
-  late-dated events keep their empty window (the user's A).
-- **f (`../schedr-claude-f`, branch `claude/f`):** Codex's 5 findings fixed (a window ending during a poke now sent at its
-  end; items sized once; schemas; a tight test), docs by Codex, the moot `restart_if_idle` vs `batch` check removed.
-  Next: rebase onto main, Grok security review, `make check`, commit.
-- **g (`../schedr-claude-g`, branch `claude/g`, decision 355, all A by the user):** Codex's 5 findings fixed (the value is
-  when it ended; the agent sets a first try's start; a negative parameter refused; tests), docs by Codex. Grok's security
-  review running (worktree `../schedr-grok-4.11g`, task `brgoiuof7`). Next: its fixes, rebase after f, `make check`,
-  commit. Then M4.11 is done: stop.
+- **Committed:** e2 (`wait_for=EventNamed` forms), g (`delay`/`until`), f (`batch=` on `@trigger.poke`, with B188 fixed
+  the user's way A: each item its own event, a run of the new ones; B186 fixed: `trigger_passed` keeps named events only,
+  pruned behind a floor; keys holding a secret refused by the agent; B187 logged: no protocol minor bump).
+- **M4.11h (PLAN.md's row, the user's 1A 2A 3A 4A 5A, B2):** `schedr.api`: one `Client`, two transports. Inside a task,
+  no settings: `ApiCall`/`ApiAnswer` on the Control stream (agent: pending calls by request ID, resent on a new stream,
+  a minute's limit), run by the master through the REST router as `task:<dag>/<run>/<task>`, on an allow-list (for
+  now `POST`/`GET /api/v1/events`, any name). Outside: httpx (`http` extra), `Client(base_url, token)`, a `SchedrApi`
+  connection type; sync and async; `post_event`/`events` shortcuts; `schedr task-ctx api ...` and `task-ctx events post`.
+  Then reviews (Codex, Grok security), docs, commit; then M4.11 is done: stop.
 
 ## State (2026-11-08, night): M4.11e part 1 built and reviewed by Codex (8 fixed), Grok security review running; e2 and f built in worktrees, not committed
 
