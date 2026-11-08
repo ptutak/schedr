@@ -173,10 +173,9 @@ pub const MASKED_REQUEST: &str = "schedr: a request to the API held a secret thi
                                   was sent masked (****), as an output is; event keys differing \
                                   only in secrets count as one key";
 
-/// Why a task run with no master (`schedr dags test`) can't call the API.
-pub const NO_MASTER: &str = "this task runs without a master (`schedr dags test`, a local run): \
-                             schedr's API isn't reachable from it; in a test, \
-                             `schedr.testing.task_context` posts to a fake";
+/// Why a process that isn't a task's or a trigger's (a connection's test) can't call the API.
+pub const NO_MASTER: &str = "schedr's API is called from a task or a trigger a worker runs, as \
+                             that task; this process runs for neither (a connection's test)";
 
 /// A key of a call's own, for one made without: unique in this process (the clock and a count).
 fn new_call_key() -> String {

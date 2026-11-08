@@ -82,9 +82,10 @@ schedr task-ctx api GET '/api/v1/events?name=paid'
 
 A Python script run by a command uses `schedr.api` as above. Outside schedr, use
 `api.Client("https://schedr.example", token="...")`, or set `SCHEDR_SERVER` and
-`SCHEDR_TOKEN` and use `api.Client()`. HTTP needs the `schedr[http]` extra. `schedr dags
-test` has no master, so an API call there fails saying so; for a unit test use
-[`task_context()`](07-testing.md#one-task-and-its-context).
+`SCHEDR_TOKEN` and use `api.Client()`. HTTP needs the `schedr[http]` extra. Under `schedr
+dags test` (and `run_dag`) a task posts to the test's own local schedr, whose database goes
+with it; the folder's other DAGs start paused there, so an event starts none of them. For a
+unit test of one task use [`task_context()`](07-testing.md#one-task-and-its-context).
 
 ## Starting a run
 

@@ -2738,8 +2738,8 @@ incarnation, or `LOST` after 60 s without a heartbeat (its attempts fail and are
     compatibility.
   - Failed Python tasks include a structured **error summary**: exception type, message and the
     last lines of the traceback, so the UI can show it without opening the log.
-- **Run states:** **`queued`** (created, waiting for `max_active_runs`; only manual and backfill
-  runs wait, see Runs: manual runs, backfill and pausing), **`running`**, and the results
+- **Run states:** **`queued`** (created, waiting for `max_active_runs`; manual, chained, event and
+  backfill runs wait, scheduled ones are missed instead, see Runs: manual runs, backfill and pausing), **`running`**, and the results
   **`success`**, **`failed`**, **`cancelled`** (set once every task and cleanup has finished,
   by the run result rule, see Outcomes, failures and joins: Run result).
 - **Task instance states** (where the task stands in its DAG run, decided by the master from
@@ -6135,6 +6135,11 @@ are, how runs share `max_active_runs`, how they are identified, and what pausing
        runs: point 3).
      - **Parameters:** the `-p` / `--params` values apply to every run, validated once before
        anything is created.
+     - **API, progress and UI** (decision 363, the user's, 2026-11-08): `POST /api/v1/dags/{id}/backfills` answers
+       the backfill's ID and how many runs it created and skipped; `GET /api/v1/backfills/{id}` gives its runs' counts
+       by state; `schedr runs backfill --dry-run` counts without creating; the UI has a "Backfill" form on the DAG
+       page and shows "backfill 3/31". Not chosen: the UI later.
+     - **Order** (decision 364): oldest first only. Not chosen: `--newest-first` (Airflow's `--run-backwards`).
 3. **Overlap:** manual and backfill runs **count towards `max_active_runs`**. They are
    **never dropped**: at the limit a run is created and **waits**, unlike a scheduled fire time,
    which is treated as missed (a missed fire time recurs with the schedule and `catchup`
@@ -6229,6 +6234,25 @@ TriggerDagOperator(
 - Not chosen: leaving it out (merging DAGs, or triggering from task code: no link, no waiting,
   failures don't propagate); waiting on another DAG's run (not covered yet: see Sensors and
   triggers).
+- **Updated for M4.12** (decisions 357-366, the user's, 2026-11-08, all as recommended), after `RunOf` (decision 353)
+  gave waiting nodes outcomes:
+  - **Built in two parts** (357): M4.12a the operator, M4.12b backfill.
+  - **Its value** (358, option A'): the target run's ID, as the `RunOf` node gives, with `wait=True` or not; the
+    target's output is read with `@sensor(wait_for=RunOf(...))` or the API. Not chosen: a `RunResult[T]` (richer than
+    the node, so the two would differ; I first misdescribed it as the node's).
+  - **A failed target** (359): as the `RunOf` node, `Failed` is an outcome where the DAG routes it (`.on(Failed)`),
+    otherwise the task fails and the run goes red; a cancelled (or skipped) target counts as `Failed`, its state in
+    it. Replaces "fails if it failed or was cancelled". Not chosen: always a task failure.
+  - **`max_wait=`** (360): past it, a `TimedOut` outcome, as for any wait step; the target run goes on (it is a run of
+    its own). Not chosen: cancelling it at the limit; no limit (no worker runs it, so `timeout` doesn't apply).
+  - **Retries** (361): a retry starts a new target run only after the previous one failed; the run is created and
+    recorded on the task in one transaction, so a master's restart never starts two. Not chosen: a new run every try.
+  - **`planned_for=`** (362): optional, a datetime or a reference (`dag_ctx.run.planned_for`), the parent's by
+    default; Airflow's `logical_date` maps to it. Not chosen: always the parent's.
+  - **Not from `schedr.api`** (365): tasks start runs with this operator; the API's routes for tasks stay events
+    only.
+  - A cycle through `trigger=RunOf(...)` across DAGs (left to M4.12 by decision 353) stays uncaught: the check is the
+    chain of parent runs, which `RunOf` runs don't have (Claude's, noted for later).
 - **Airflow:** `TriggerDagRunOperator`: `trigger_dag_id` → `dag`, `conf` → `params`,
   `logical_date` → `planned_for` of the new run, `wait_for_completion` → `wait` (Airflow's
   default `False` is set explicitly); `reset_dag_run=True` is an error (no "clear"); non-default
@@ -7047,7 +7071,11 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   `http` extra) to `SCHEDR_SERVER`, as the CLI; a `SchedrApi` connection type (`kind = "schedr"`: `server`, `token`
   or `user`/`password`) gives a client for another deployment. Sync and async (`apost_event`, `aevents`: in a
   thread, so a trigger's loop goes on). `schedr.testing.task_context` posts to a fake (`posted_events`); `schedr
-  dags test` has no master, so a call is refused there, saying so (Claude's, small). Not chosen: a URL and token
+  dags test` and `run_dag` need nothing: they run a local standalone, master included, so a task posts to the test's
+  own database, gone with it (the folder's other DAGs start paused there, so none starts). Decision 366 (the user's,
+  2026-11-08: a fake for local runs) was taken on Claude's wrong statement that local runs had no master and refused
+  calls; checked with a run, it was dropped as needing nothing. A refusal is left only for a process that is no
+  task's or trigger's (a connection's test). Not chosen: a URL and token
   given to each task (secrets to hand out, and a route to the webserver from every worker); serving only events
   through dedicated messages (each new route a protocol change).
 - **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; built in M4.11f):

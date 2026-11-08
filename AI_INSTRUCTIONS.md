@@ -5,7 +5,8 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 
 ## At the start of a session
 
-- Read `NEXT_SESSION.md`, then `PROJECT.md`, `PLAN.md` and `BUGS.md` (whichever exist).
+- Read `STATUS.md`, then only what the step needs: its row in `PLAN.md`, `DECISIONS.md` and
+  `design/<topic>.md`, `BUGS.md` (whichever exist); `PROJECT.md` when a decision's reasons matter.
   Don't re-ask what is decided there.
 - If they disagree with each other or with the code, say so briefly and propose the fix.
 
@@ -210,5 +211,5 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   calendar days; a yanked `x.y.0` still dates its minor). A yanked version in the lock moves
   to a version that meets the rule, forward if one exists, else back. Record new libraries in
   `PROJECT.md`.
-- Update `NEXT_SESSION.md` at the end of a milestone or when I ask, so the next session can
-  start from it.
+- Rewrite `STATUS.md` at the end of each step or session (at most 60 lines), so the next
+  session can start from it.

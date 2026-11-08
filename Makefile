@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check decisions decisions-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -90,6 +90,12 @@ bugs:            ## Regenerate BUGS.md from bugs/
 
 bugs-check:      ## Fail if a bug's file is invalid or BUGS.md is out of date
 	python3 scripts/bugs.py check
+
+decisions:       ## Regenerate DECISIONS.md from decisions/
+	python3 scripts/decisions.py render
+
+decisions-check: ## Fail if a decision's file is invalid, one is missing, or DECISIONS.md is out of date
+	python3 scripts/decisions.py check
 
 third-party:     ## Write LICENSE-THIRD-PARTY (the binary's crates' licences) from Cargo.lock
 	cargo fetch --locked

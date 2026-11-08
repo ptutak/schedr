@@ -310,6 +310,31 @@ fn test_runs_the_dag_and_reports_each_task() {
     assert!(out.trim_end().ends_with(": success"), "{out}");
 }
 
+/// A task posting an event through `schedr.api` posts to the test's own local schedr (M4.11h):
+/// such a DAG passes `dags test` (a side note thought it would be refused).
+#[test]
+fn a_task_posting_an_event_passes_the_test() {
+    let posting = r#"
+from schedr import Dag, api, task
+
+@task
+def post() -> str:
+    event = api.post_event("paid", key="o-1", data={"amount": 3})
+    listed = api.events(name="paid")
+    print("posted by", event.posted_by, "listed", len(listed))
+    return event.key
+
+with Dag("poster"):
+    post()
+"#;
+    let local = Local::new(&[("poster.py", posting)]);
+    let (code, out, err) = local.test("poster", &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("posted by task:poster/"), "{out}");
+    assert!(out.contains("listed 1"), "{out}");
+    assert!(out.trim_end().ends_with(": success"), "{out}");
+}
+
 #[test]
 fn test_names_a_mapped_tasks_outputs_by_instance() {
     let mapped = r#"
