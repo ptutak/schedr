@@ -44,6 +44,7 @@ from schedr import (
     wait_for,
 )
 from schedr.connections import HTTP, SQL, SSH
+from schedr.event_triggers import TriggerFunction
 from schedr.types import Json, ProcessResult
 
 
@@ -535,3 +536,13 @@ with Dag("events_typed", trigger=on_paid(least=5)):
 
     printed: int = labelled(copies=2).on(int)
     shipped(dag_ctx.event.key, packed)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+# `@trigger.poke(batch=...)` (decision 352): a run reads the items gathered, `list[Event[T]]`.
+@trigger.poke(every=timedelta(minutes=1), batch=timedelta(minutes=10))
+async def found_files(after: str | None) -> list[Event[str]]:
+    return []
+
+
+# Its events' data is the items' list (`dag_ctx.event.data` itself is typed `Any` for now).
+batched: TriggerFunction[..., list[Event[str]]] = found_files

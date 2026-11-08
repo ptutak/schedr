@@ -124,3 +124,44 @@ async fn a_waiting_step_gets_the_first_since_its_run_started_and_a_trigger_reads
         .unwrap();
     assert_eq!(unpassed.map(|e| e.key), Some("o1".to_owned()));
 }
+
+#[tokio::test]
+async fn what_a_trigger_passed_behind_its_window_is_forgotten() {
+    // B186: `trigger_passed` was never pruned.
+    let db = db().await;
+    let data = json!(null);
+    let mut ids = Vec::new();
+    for (key, at) in [
+        ("o1", "2026-11-08T09:00:00Z"),
+        ("o2", "2026-11-08T10:00:00Z"),
+    ] {
+        let Posted::New(id) = db
+            .post_named_event(&event(key, &data), "anna", None, ts(at))
+            .await
+            .unwrap()
+        else {
+            panic!("new");
+        };
+        ids.push(id);
+    }
+    let crate::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite")
+    };
+    for id in &ids {
+        sqlx::query("INSERT INTO trigger_passed (dag_id, item) VALUES ('sync', ?)")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    let forgotten = db
+        .forget_passed_before("sync", "paid", ts("2026-11-08T09:30:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(forgotten, 1, "the one behind it only");
+    let left: Vec<String> = sqlx::query_scalar("SELECT item FROM trigger_passed")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert_eq!(left, [ids[1].clone()]);
+}

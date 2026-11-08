@@ -1034,3 +1034,55 @@ async fn a_manual_run_of_an_event_named_dag_keeps_its_data_as_given() {
     let event = world.db.run_event(&run.id).await.unwrap().unwrap();
     assert_eq!(event.data, serde_json::json!({"$dict": data}));
 }
+
+#[tokio::test]
+async fn an_item_of_a_batch_run_again_is_a_batch_of_it_alone() {
+    // The side agent's note on B188's fix: each item is stored as its own event, while the
+    // DAG's runs read a list of them.
+    let mut dag = serde_json::to_value(event_dag()).unwrap();
+    dag["trigger"]["task"]["mode"] = serde_json::json!("poke");
+    dag["trigger"]["task"]["every_ms"] = serde_json::json!(1000);
+    dag["trigger"]["task"]["batch_ms"] = serde_json::json!(60_000);
+    let mut world = world_of(serde_json::from_value(dag).unwrap()).await;
+    let active = world.db.active_dags().await.unwrap();
+    let new = schedr_db::runs::NewRun {
+        dag_id: &sync(),
+        dag_version_id: &active[0].version_id,
+        kind: schedr_model::RunKind::Event,
+        state: schedr_model::RunState::Queued,
+        planned_for: ts("2026-10-14T03:00:00Z"),
+        since: ts("2026-10-14T03:00:00Z"),
+        triggered_at: ts("2026-10-14T03:00:00Z"),
+        triggered_by: "trigger",
+        params: &schedr_db::runs::NO_PARAMS,
+        event: None,
+    };
+    let item = schedr_model::RunEvent {
+        key: "a".to_owned(),
+        data: Json::from(1),
+        at: Some(ts("2026-10-14T02:00:00Z")),
+    };
+    let raw =
+        serde_json::json!({"key": "a", "data": 1, "at": {"$datetime": "2026-10-14T02:00:00Z"}});
+    world
+        .db
+        .store_batch(
+            "0190a0a0-0000-7000-8000-0000000000c1",
+            &new,
+            "a",
+            &[(item, raw.clone())],
+        )
+        .await
+        .unwrap();
+    let again = Some(AskedEvent::Stored {
+        key: "a".to_owned(),
+    });
+    assert_eq!(decided(&mut world, &run_with(again)).await, Ok(()));
+    let runs = world.db.dag_runs(&sync(), None, 5).await.unwrap();
+    let manual = runs
+        .iter()
+        .find(|run| run.kind == schedr_model::RunKind::Manual)
+        .unwrap();
+    let event = world.db.run_event(&manual.id).await.unwrap().unwrap();
+    assert_eq!(event.data, serde_json::json!([raw]));
+}

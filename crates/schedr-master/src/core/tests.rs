@@ -3876,3 +3876,97 @@ async fn a_trigger_waiting_for_events_is_called_for_one_stored_behind_the_last_o
         "and each once"
     );
 }
+
+#[tokio::test]
+async fn only_named_events_are_kept_as_passed_and_a_removed_dag_s_are_forgotten() {
+    // B186: `RunOf` items were kept and never read; nothing was ever deleted.
+    let count = async |core: &MasterCore| -> i64 {
+        let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
+            unreachable!("the tests' database is SQLite")
+        };
+        sqlx::query_scalar("SELECT COUNT(*) FROM trigger_passed")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    let mut core = with_waiting_trigger(None).await;
+    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    core.handle("w1", returned(&assign), later(3))
+        .await
+        .unwrap();
+    assert_eq!(count(&core).await, 0, "a run of another DAG isn't kept");
+
+    let mut core = with_dag_of(&event_waiting_trigger_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    post(&core, "o-1", later(2), later(2)).await;
+    let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
+    core.handle("w1", returned(&assign), later(3))
+        .await
+        .unwrap();
+    assert_eq!(count(&core).await, 1, "a named event is");
+    core.db
+        .apply_dag_changes(
+            &[schedr_db::dags::DagChange::Remove {
+                dag_id: sync.clone(),
+            }],
+            later(4),
+        )
+        .await
+        .unwrap();
+    assert_eq!(count(&core).await, 0, "forgotten with its DAG");
+}
+
+#[tokio::test]
+async fn an_event_passed_isn_t_handed_again_after_a_late_one_and_the_pruning() {
+    // Codex's review of B186: passing a late event moved the cursor back, into a stretch whose
+    // passed rows were forgotten, and an event passed long ago came back.
+    let mut core = with_dag_of(&event_waiting_trigger_file()).await;
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    let call = async |core: &mut MasterCore, at: i64| -> Option<serde_json::Value> {
+        let assign = assign_of(&core.tick(later(at)).await.unwrap())?;
+        core.handle("w1", returned(&assign), later(at))
+            .await
+            .unwrap();
+        Some(handed_event(&assign)["key"].clone())
+    };
+    // Ticks a second apart (the worker's lease), the posts' times as they would be.
+    post(&core, "old", later(59), later(59)).await;
+    assert_eq!(call(&mut core, 2).await, Some(json!("old")));
+    post(&core, "latest", later(120), later(120)).await;
+    assert_eq!(call(&mut core, 3).await, Some(json!("latest")));
+    // Committed late: its time was taken before the one before it was stored.
+    post(&core, "late", later(118), later(118)).await;
+    assert_eq!(call(&mut core, 4).await, Some(json!("late")));
+    assert_eq!(call(&mut core, 5).await, None, "`old` stays passed");
+}
+
+#[tokio::test]
+async fn a_lookback_raised_after_the_pruning_hands_nothing_passed_again() {
+    // Grok's review of B186: a wider window reached what was passed and forgotten.
+    let mut core = with_dag_of(&event_waiting_trigger_file()).await;
+    core.settings.event_lookback = Duration::from_mins(30);
+    let sync = DagId::new("sync").unwrap();
+    core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
+    let call = async |core: &mut MasterCore, at: i64| -> Option<serde_json::Value> {
+        let assign = assign_of(&core.tick(later(at)).await.unwrap())?;
+        core.handle("w1", returned(&assign), later(at))
+            .await
+            .unwrap();
+        Some(handed_event(&assign)["key"].clone())
+    };
+    post(&core, "early", later(10), later(10)).await;
+    assert_eq!(call(&mut core, 2).await, Some(json!("early")));
+    post(&core, "an_hour_on", later(3610), later(3610)).await;
+    assert_eq!(call(&mut core, 3).await, Some(json!("an_hour_on")));
+    post(&core, "after", later(3620), later(3620)).await;
+    assert_eq!(
+        call(&mut core, 4).await,
+        Some(json!("after")),
+        "`early` forgotten here"
+    );
+    core.settings.event_lookback = Duration::from_hours(2);
+    assert_eq!(call(&mut core, 5).await, None, "`early` stays passed");
+}

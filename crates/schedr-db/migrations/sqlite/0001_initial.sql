@@ -188,7 +188,10 @@ CREATE TABLE triggers (
     -- `@trigger(wait_for=RunOf(...))`: the run its function was last given, not passed yet (its
     -- clean end, or a skip, moves the cursor to it).
     run_of_handed_run TEXT,
-    run_of_handed_at TEXT
+    run_of_handed_at TEXT,
+    -- `@trigger(wait_for=EventNamed(...))`: what it passed of the events posted before this is
+    -- forgotten (`trigger_passed`), so it reads none of them again, whatever its lookback (B186).
+    passed_floor TEXT
 );
 
 -- A wait step that got its host killed (decision 338): gone at its next success.

@@ -18,11 +18,19 @@ import types
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, is_typeddict
+from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin, is_typeddict
 from urllib.parse import quote
 
 from schedr._model import SecretRef, registry
-from schedr._serialization import CodecError, check_size, decode, decode_any, encode, models
+from schedr._serialization import (
+    CodecError,
+    check_size,
+    decode,
+    decode_any,
+    encode,
+    encoded_size,
+    models,
+)
 from schedr._serialization.annotations import (
     MAPPING_ORIGINS,
     SEQUENCE_ORIGINS,
@@ -733,15 +741,8 @@ def _begin(
     imported()
     opener = connection_opener(channel) if channel is not None else None
     adder = handle_adder(channel) if channel is not None else None
-    first = run.get("first_started")
     own = TaskValues(
-        task_id,
-        int(run.get("try_number", 1)),
-        run.get("map_index"),
-        secrets,
-        opener,
-        adder,
-        None if first is None else datetime.fromisoformat(first),
+        task_id, int(run.get("try_number", 1)), run.get("map_index"), secrets, opener, adder
     )
     return _Begun(function, arguments, hints, run_values(run, params_class), own, downstream)
 
@@ -769,12 +770,19 @@ async def execute_trigger(
     if isinstance(begun, dict):
         return begun
     # Slow to import; most tasks aren't triggers.
-    from schedr.runner.waiting import run_trigger  # noqa: PLC0415
+    from schedr.runner.waiting import Batch, run_trigger  # noqa: PLC0415
 
     limit: int = request["task"]["settings"]["max_output_size"]
     if request["task"].get("wait_for") is not None:
         return await _called_for_run(request, begun, channel, limit)
     hint = event_data_hint(begun.hints.get("return"), f"@trigger `{request['task']['id']}`")
+    batch_ms = request["task"].get("batch_ms")
+    batch = None
+    if isinstance(batch_ms, int):
+        # One event of the items gathered: its data the items themselves (decision 352).
+        hint = list[Event[hint]]  # type: ignore[valid-type]
+        item_hint = get_args(hint)[0]
+        batch = Batch(batch_ms / 1000, lambda item: _size(item, item_hint, limit), limit)
     try:
         with running(begun.values, begun.own):
             await run_trigger(
@@ -784,6 +792,7 @@ async def execute_trigger(
                 request["trigger"].get("after"),
                 lambda event: _tell_event(channel, event, hint, limit),
                 lambda error: channel.send({"type": "trigger_poked", "error": error}),
+                batch,
             )
     except CodecError as error:
         return failure(error, "event_refused", f"an event's data: {error.reason}")
@@ -846,6 +855,36 @@ def _called_for(run: object) -> str:
     return f"run {getattr(run, 'run_id', '?')}"
 
 
+def _size(item: Event[Any], hint: object, limit: int) -> int:
+    """An item's size in a batch, as stored (decision 352), with room for the agent's masking.
+
+    A secret masked grows only as a number (``12345`` becomes ``"****"``), by one byte at most;
+    a string never grows (Grok's review: a window filled to the limit went over it, refused
+    again on each restart). One that can't be stored at all is given as over ``limit``: it goes
+    alone, and fails when it is told, as one item would.
+    """
+    try:
+        data = encode(item, hint)
+    except CodecError:
+        return limit + 1
+    return encoded_size(data) + _numbers(data)
+
+
+def _numbers(data: object) -> int:
+    """How many numbers encoded data holds (``True`` and ``False`` aren't)."""
+    count = 0
+    stack = [data]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            stack.extend(cast("dict[str, object]", value).values())
+        elif isinstance(value, list):
+            stack.extend(cast("list[object]", value))
+        elif isinstance(value, int | float) and not isinstance(value, bool):
+            count += 1
+    return count
+
+
 async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: int) -> None:
     """Tells the agent what a trigger found, and waits until the master has it.
 
@@ -861,7 +900,9 @@ async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: i
     if event.at is not None:
         message["at"] = event.at.isoformat()
     # In a thread: the master may take long, and the others on this loop go on.
-    await asyncio.to_thread(channel.ask, message)
+    answer = await asyncio.to_thread(channel.ask, message)
+    if answer.get("type") == "event_refused":
+        raise CodecError("", str(answer.get("message", "")))
 
 
 def _raised(error: BaseException) -> dict[str, Any]:

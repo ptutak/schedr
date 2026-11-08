@@ -386,6 +386,42 @@ impl Scheduler {
         Ok(stored)
     }
 
+    /// Stores a batch a trigger found (decision 352): each item an event, a run for the new ones
+    /// only (B188), as [`Self::event_run`] does for one. Gives the run's ID, `None` when every
+    /// item was seen before.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::event_run`].
+    pub async fn batch_run(
+        &self,
+        active: &ActiveDag,
+        batch: &schedr_model::RunEvent,
+        items: &[(schedr_model::RunEvent, serde_json::Value)],
+        since: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<Option<String>, SchedulerError> {
+        let planned_for = batch.at.unwrap_or(now);
+        let times = RunTimes {
+            planned_for,
+            since: since
+                .filter(|since| *since <= planned_for)
+                .unwrap_or(planned_for),
+        };
+        let params = run_params(active, None)?;
+        let mut new = new_run(active, RunKind::Event, times, now, EVENT_USER, &params);
+        new.state = RunState::Queued;
+        let run_id = uuid::Uuid::now_v7().to_string();
+        let stored = self
+            .db
+            .store_batch(&run_id, &new, &batch.key, items)
+            .await?;
+        if stored.is_some() {
+            self.wakes.wake(&active.dag.id, WakeReason::RunQueued);
+        }
+        Ok(stored)
+    }
+
     /// Starts the DAG's `queued` runs that fit next to its `running` ones.
     async fn start_queued(
         &self,

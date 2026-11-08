@@ -279,6 +279,10 @@ pub enum TaskKind {
         /// DAG has ended, with it as `param`, rather than at once.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wait_for: Option<SensorWaitFor>,
+        /// `@trigger.poke(every=..., batch=...)` (decision 352): what its pokes return is
+        /// gathered for this many milliseconds from the first item, then sent as one event.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        batch_ms: Option<u64>,
     },
     /// `first_of` / `at_least` (decision 347): ended by the master, no process and no slot, as
     /// soon as enough of its upstream edges are taken. Its output is `{"$value": ..., "winner":

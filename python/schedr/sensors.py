@@ -6,12 +6,11 @@ with the ``TimedOut`` outcome (waiting in vain is an expected problem, not a fai
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import types
 import typing
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -33,7 +32,6 @@ from schedr._model import SensorKind, SensorMode, SensorWaitFor
 from schedr._secrets import SecretsArg
 from schedr._wait_rules import refused_in
 from schedr.connections import ConnectionsArg
-from schedr.context import current_task, dag_ctx
 from schedr.event_triggers import Event
 from schedr.named_events import EventNamed
 from schedr.run_of import RunOf, RunResult, call_limit_ms, run_parameter
@@ -457,113 +455,3 @@ class _Sensor:
 
 sensor: Final = _Sensor()
 """``@sensor`` and ``@sensor.poke``: wait steps."""
-
-
-# `delay` and `until` (M4.11g): plain wait steps, waiting in the watcher host like any other.
-
-_NAP = 60.0
-"""The longest single sleep: a clock set while it waits is seen within a minute."""
-
-_MAX_WAIT_ROOM = timedelta(minutes=1)
-"""What ``delay`` adds to its wait for its ``max_wait``, when it isn't given."""
-
-
-async def _sleep_until(end: datetime) -> datetime:
-    while (left := (end - datetime.now(UTC)).total_seconds()) > 0:
-        await asyncio.sleep(min(left, _NAP))
-    return datetime.now(UTC)
-
-
-def _after(start: datetime, wait: timedelta) -> datetime:
-    """``start + wait``, or past what a ``datetime`` holds, its farthest (Grok's review).
-
-    A wait that long ends at its ``max_wait``; one that far back at once.
-    """
-    try:
-        return start + wait
-    except OverflowError:
-        return (datetime.max if wait > timedelta(0) else datetime.min).replace(tzinfo=UTC)
-
-
-async def _delay(wait: timedelta) -> datetime:
-    if wait < timedelta(0):
-        raise ValueError(f"delay: `wait` can't be negative, got {wait}")
-    own = current_task()
-    began = (None if own is None else own.first_started) or datetime.now(UTC)
-    return await _sleep_until(_after(began, wait))
-
-
-async def _until(at: datetime | timedelta) -> datetime:
-    if isinstance(at, timedelta):
-        return await _sleep_until(_after(dag_ctx.run.planned_for, at))
-    if at.tzinfo is None:
-        raise ValueError(f"until: a moment has a time zone, got {at!r}")
-    return await _sleep_until(at)
-
-
-_DELAY = sensor(task_id="delay")(_delay)
-_UNTIL = sensor(task_id="until")(_until)
-
-
-def _free_id(base: str) -> str:
-    builder = _build.require_active(base)
-    task_id = builder.qualified(base)
-    number = 1
-    while task_id in builder.tasks:
-        number += 1
-        task_id = builder.qualified(f"{base}_{number}")
-    return task_id[len(builder.qualified("")) :]
-
-
-def delay(
-    wait: timedelta, *, max_wait: timedelta | None = None, task_id: str | None = None
-) -> _outcomes.Waited[datetime]:
-    """A wait step that waits ``wait`` from when it began: ``delay(timedelta(minutes=10))``.
-
-    It counts from its first try's start, so one tried again (its worker lost) waits only what
-    is left. Its value is the moment it ended.
-
-    Args:
-        wait: How long; a run parameter too.
-        max_wait: Ends it with ``TimedOut`` past it; by default ``wait`` and a minute for a
-            ``timedelta`` given here, else as for any wait step.
-        task_id: Its ID; ``delay``, numbered from the second on, if not given.
-
-    Returns:
-        The step's output: the moment it ended, or ``TimedOut``.
-
-    Raises:
-        TypeError: For a negative ``wait``.
-    """
-    if isinstance(wait, timedelta) and wait < timedelta(0):
-        raise TypeError(f"delay: `wait` can't be negative, got {wait}")
-    if max_wait is None and isinstance(wait, timedelta):
-        max_wait = wait + _MAX_WAIT_ROOM
-    step = _DELAY.override(task_id=task_id or _free_id("delay"), max_wait=max_wait)
-    return step(wait)
-
-
-def until(
-    at: datetime | timedelta, *, max_wait: timedelta | None = None, task_id: str | None = None
-) -> _outcomes.Waited[datetime]:
-    """A wait step that waits until a moment: ``until(timedelta(hours=2))`` after the run's.
-
-    A ``timedelta`` counts from the run's ``planned_for``, so a run caught up late, or one run
-    again, doesn't wait past it; a ``datetime`` (with a time zone) is that moment. One already
-    past ends at once. Its value is the moment it ended.
-
-    Args:
-        at: The moment, or how long after ``dag_ctx.run.planned_for``; a run parameter too.
-        max_wait: Ends it with ``TimedOut`` past it; as for any wait step by default.
-        task_id: Its ID; ``until``, numbered from the second on, if not given.
-
-    Returns:
-        The step's output: the moment it ended, or ``TimedOut``.
-
-    Raises:
-        TypeError: For a moment without a time zone.
-    """
-    if isinstance(at, datetime) and at.tzinfo is None:
-        raise TypeError(f"until: a moment has a time zone, got {at!r}")
-    step = _UNTIL.override(task_id=task_id or _free_id("until"), max_wait=max_wait)
-    return step(at)

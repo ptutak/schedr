@@ -214,9 +214,13 @@ impl Commander {
             None => return Ok(Ok(None)),
             Some(AskedEvent::Stored { key }) => {
                 let found = self.db.stored_event(dag_id.as_str(), key).await?;
+                let batches = self.db.stored_dag(dag_id).await?.is_some_and(|dag| {
+                    dag.current
+                        .is_some_and(|current| batches(&current.dag.trigger))
+                });
                 return Ok(found.map_or_else(
                     || Err(format!("no event `{key}` of DAG `{dag_id}`")),
-                    |event| Ok(Some(event)),
+                    |event| Ok(Some(if batches { one_batch(event) } else { event })),
                 ));
             }
             Some(AskedEvent::Given { key, data, at }) => (key, data, *at),
@@ -840,4 +844,27 @@ fn no_worker(worker_id: &str) -> Outcome {
 
 fn no_dag(dag_id: &DagId) -> Outcome {
     Outcome::Rejected(format!("no DAG `{dag_id}`"))
+}
+
+/// Whether a trigger batches what it finds (`@trigger.poke(batch=...)`, decision 352).
+fn batches(trigger: &schedr_model::Trigger) -> bool {
+    matches!(
+        trigger,
+        schedr_model::Trigger::Event { task, .. }
+            if matches!(task.kind, schedr_model::TaskKind::Sensor { batch_ms: Some(_), .. })
+    )
+}
+
+/// A batching trigger's item run again: a batch of it alone, as its runs read `list[Event[T]]`
+/// (each item is stored as its own event, B188).
+fn one_batch(item: schedr_model::RunEvent) -> schedr_model::RunEvent {
+    let at = item.at.map_or(
+        serde_json::Value::Null,
+        |at| serde_json::json!({"$datetime": at.to_string()}),
+    );
+    schedr_model::RunEvent {
+        data: serde_json::json!([{"key": item.key, "data": item.data, "at": at}]),
+        key: item.key,
+        at: None,
+    }
 }

@@ -243,6 +243,7 @@ class TriggerFunction[**P, R]:
         wait_for: RunOf | EventNamed | None = None,
         run_retries: int | None = None,
         timeout: timedelta | None = None,
+        batch: timedelta | None = None,
     ) -> None:
         """Wraps ``fn`` as a trigger.
 
@@ -257,6 +258,8 @@ class TriggerFunction[**P, R]:
                 before it is passed; ``None``: tried until ``schedr triggers skip`` passes it.
             timeout: With ``wait_for``, how long one call may take, 10 minutes by default; a call
                 over it is cancelled, failing as a raise does.
+            batch: ``@trigger.poke(batch=...)``: what the pokes return is gathered this long from
+                the first item, then sent as one event (decision 352).
 
         Raises:
             TypeError: If ``fn`` can't be a trigger.
@@ -264,6 +267,7 @@ class TriggerFunction[**P, R]:
         self.fn = fn
         self.task_id: str = getattr(fn, "__name__", "trigger")
         self._every = every
+        self.batch = batch
         self.wait_for = wait_for
         self.run_retries = run_retries
         # With `wait_for=`: the parameter the run is given as, and how long a call may take.
@@ -292,6 +296,14 @@ class TriggerFunction[**P, R]:
             )
         if every is not None and every <= timedelta(0):
             raise TypeError(f"{where}: `every` must be more than zero, got {every}")
+        if batch is not None and (
+            not isinstance(batch, timedelta)
+            or batch <= timedelta(0)
+            or batch % timedelta(milliseconds=1)
+        ):
+            raise TypeError(
+                f"{where}: `batch` is a timedelta above zero, in whole milliseconds, got {batch!r}"
+            )
         self._signature = inspect.signature(fn)
         if next(iter(self._signature.parameters), None) != AFTER:
             raise TypeError(
@@ -375,12 +387,19 @@ class TriggerFunction[**P, R]:
         return 0 if self._every is None else round(self._every / timedelta(milliseconds=1))
 
     def data_type(self) -> TypeDesc:
-        """The type of its events' data.
+        """The type of its events' data: with ``batch``, the list of the items gathered.
 
         Returns:
             What ``dag_ctx.event.data`` is.
         """
+        if self.batch is not None:
+            return describe(list[Event[self._data_hint]])  # type: ignore[name-defined]
         return describe(self._data_hint)
+
+    @property
+    def batch_ms(self) -> int | None:
+        """``batch`` in milliseconds, if it has one."""
+        return None if self.batch is None else self.batch // timedelta(milliseconds=1)
 
     def task_model(self, arguments: Mapping[str, object], queue: str | None) -> Task:
         """Its function as a task of kind ``sensor``, which isn't in the graph.
@@ -418,6 +437,7 @@ class TriggerFunction[**P, R]:
             else SensorWaitFor(
                 None, None, None, self.run_param, self.timeout_ms, event_name=wait_for.name
             ),
+            batch_ms=self.batch_ms,
         )
         settings = TaskSettings(timeout_ms=None)
         if queue is not None:
@@ -458,6 +478,14 @@ class _WaitForEventDecorator(typing.Protocol):
         fn: Callable[Concatenate[Event[T], P], Coroutine[object, object, Event[D] | None]],
         /,
     ) -> TriggerFunction[P, D]: ...
+
+
+class _BatchDecorator(typing.Protocol):
+    """What ``@trigger.poke(batch=...)`` gives: a run reads the items as ``list[Event[T]]``."""
+
+    def __call__[T, **P](
+        self, fn: Callable[P, Coroutine[object, object, Sequence[Event[T]]]], /
+    ) -> TriggerFunction[..., list[Event[T]]]: ...
 
 
 class _PokeDecorator(typing.Protocol):
@@ -549,14 +577,34 @@ class _Trigger:
 
         return made if fn is None else made(fn)
 
-    def poke(self, *, every: timedelta, **options: Unpack[TriggerOptions]) -> _PokeDecorator:
+    @overload
+    def poke(self, *, every: timedelta, **options: Unpack[TriggerOptions]) -> _PokeDecorator: ...
+    @overload
+    def poke(
+        self, *, every: timedelta, batch: timedelta, **options: Unpack[TriggerOptions]
+    ) -> _BatchDecorator: ...
+    def poke(
+        self,
+        *,
+        every: timedelta,
+        batch: timedelta | None = None,
+        **options: Unpack[TriggerOptions],
+    ) -> object:
         """Makes an ``async def`` function a trigger that schedr calls every ``every``.
 
         It returns the events it found, oldest first: ``-> list[Event[T]]``. An empty list leaves
         no trace. Each call is limited to ``every``, and calls never overlap.
 
+        With ``batch=``, what the pokes return is gathered from the first item for that long,
+        then sent as one event: its key the last item's (so ``after`` keeps its meaning), its
+        data the items themselves, ``list[Event[T]]``, as ``dag_ctx.event.data`` reads them. A
+        window with nothing starts no run; one near the trigger's `max_output_size` goes early.
+        Items not sent when the trigger is started again are found again from its bookmark,
+        which a poke that consumes what it reads can't (decision 352).
+
         Args:
             every: How often to call it.
+            batch: How long to gather items before sending them as one event.
             **options: As for ``@trigger``.
 
         Returns:
@@ -564,9 +612,9 @@ class _Trigger:
         """
 
         def made(function: Callable[..., object]) -> object:
-            return TriggerFunction(function, every, options)
+            return TriggerFunction(function, every, options, batch=batch)
 
-        return made  # type: ignore[return-value]  # the protocol says what it keeps
+        return made
 
 
 trigger = _Trigger()

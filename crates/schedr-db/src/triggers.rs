@@ -287,6 +287,75 @@ impl Database {
         .await
     }
 
+    /// Stores a batch a trigger found (`@trigger.poke(batch=...)`, decision 352), in one
+    /// transaction: each item as an event of its own; for the items whose keys weren't seen
+    /// before, `run`, its event their list as stored (`raw`), keyed by the last of them; and the
+    /// batch's `key`, its last item's, as the bookmark. Gives the run's ID, `None` when every item
+    /// was seen before (B188: a window ending with a repeat lost the new items before it).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn store_batch(
+        &self,
+        run_id: &str,
+        run: &NewRun<'_>,
+        key: &str,
+        items: &[(RunEvent, serde_json::Value)],
+    ) -> Result<Option<String>, DbError> {
+        const EVENT: &str = "INSERT INTO events (dag_id, key, data, at, received_at) \
+            VALUES ($1, $2, $3{json}, $4{ts}, $5{ts}) ON CONFLICT (dag_id, key) DO NOTHING";
+        const BOOKMARK: &str = "INSERT INTO triggers \
+            (dag_id, bookmark, last_planned_for, failures, last_event_at) \
+            VALUES ($1, $2, $3{ts}, 0, $4{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
+            bookmark = excluded.bookmark, failures = 0, last_error = NULL, \
+            last_event_at = excluded.last_event_at, \
+            last_planned_for = COALESCE(excluded.last_planned_for, triggers.last_planned_for)";
+        let dag_id = run.dag_id.as_str();
+        Box::pin(self.atomically(async {
+            let mut new = Vec::new();
+            for (item, raw) in items {
+                let stored = in_tx!(self, |tx, backend| {
+                    sqlx::query(sql(backend, EVENT))
+                        .bind(dag_id)
+                        .bind(&item.key)
+                        .bind(to_json(&item.data))
+                        .bind(item.at.map(db_time))
+                        .bind(db_time(run.triggered_at))
+                        .execute(&mut *tx)
+                        .await?
+                        .rows_affected()
+                }) == 1;
+                if stored {
+                    new.push((item, raw));
+                }
+            }
+            let started = new.last().map(|(last, _)| RunEvent {
+                key: last.key.clone(),
+                data: serde_json::Value::Array(new.iter().map(|(_, raw)| (*raw).clone()).collect()),
+                at: None,
+            });
+            if let Some(event) = &started {
+                let run = NewRun {
+                    event: Some(event),
+                    ..run.clone()
+                };
+                self.insert_run_as(run_id, &run).await?;
+            }
+            in_tx!(self, |tx, backend| {
+                sqlx::query(sql(backend, BOOKMARK))
+                    .bind(dag_id)
+                    .bind(key)
+                    .bind(started.is_some().then(|| db_time(run.planned_for)))
+                    .bind(db_time(run.triggered_at))
+                    .execute(&mut *tx)
+                    .await?;
+            });
+            Ok(started.map(|_| run_id.to_owned()))
+        }))
+        .await
+    }
+
     /// Says why a trigger isn't to run although its DAG wants it, and on what it stopped; `None`:
     /// it may run again.
     ///

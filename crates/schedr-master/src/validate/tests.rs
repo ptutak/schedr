@@ -489,6 +489,32 @@ fn paths_must_stay_inside_the_root() {
 }
 
 #[test]
+fn a_trigger_whose_events_cant_reach_the_master_is_refused() {
+    // Grok's review of M4.11f: a batch fills its window to the trigger's limit.
+    let dag = dag_with(&json!({
+        "trigger": {
+            "kind": "event",
+            "task": {
+                "id": "files", "kind": "sensor", "mode": "poke", "arguments": {},
+                "every_ms": 1000, "batch_ms": 60_000,
+                "settings": {
+                    "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                    "queue": "default", "max_output_size": 100_000_000u64
+                },
+                "output_type": {"type": "none"}
+            }
+        },
+        "tasks": [], "edges": []
+    }));
+    let problems = output_problems(&dag, LIMIT);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].starts_with("task `files`: max_output_size"),
+        "{problems:?}"
+    );
+}
+
+#[test]
 fn a_task_whose_output_cant_reach_the_master_is_refused() {
     let mut command = task("dump", &json!({}));
     command["kind"] = json!("command");
@@ -1257,5 +1283,47 @@ fn a_sensor_waiting_for_a_run_limits_a_call_to_above_zero() {
     assert_eq!(
         problems(&json!({"tasks": [wait], "edges": []})),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_batch_is_a_trigger_poke_s() {
+    let trigger = |mode: &str, batch: Json, idle: Option<u64>| {
+        let mut trigger = json!({
+            "kind": "event",
+            "task": {
+                "id": "files", "kind": "sensor", "mode": mode, "arguments": {},
+                "every_ms": 1000, "batch_ms": batch,
+                "settings": {
+                    "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                    "queue": "default", "max_output_size": 1_048_576
+                },
+                "output_type": {"type": "none"}
+            }
+        });
+        if mode == "loop" {
+            trigger["task"].as_object_mut().unwrap().remove("every_ms");
+        }
+        if let Some(idle) = idle {
+            trigger["restart_if_idle_ms"] = json!(idle);
+        }
+        problems(&json!({ "trigger": trigger }))
+    };
+    assert_eq!(
+        trigger("poke", json!(60_000), Some(120_000)),
+        Vec::<String>::new()
+    );
+    assert!(trigger("loop", json!(60_000), None)[0].contains("is for an @trigger.poke"));
+    assert!(trigger("poke", json!(0), None)[0].contains("more than zero"));
+    // A poke is never restarted as idle (Codex's review): any `restart_if_idle` goes.
+    assert_eq!(
+        trigger("poke", json!(60_000), Some(1_000)),
+        Vec::<String>::new()
+    );
+    let mut wait = sensor("poke", Some(1000), None);
+    wait["batch_ms"] = json!(1000);
+    assert!(
+        problems(&json!({"tasks": [wait], "edges": []}))[0]
+            .contains("a wait step ends with one value")
     );
 }

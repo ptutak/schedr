@@ -106,6 +106,47 @@ async fn a_new_key_starts_a_run_a_repeat_doesnt_and_either_is_the_bookmark() {
 }
 
 #[tokio::test]
+async fn a_batch_starts_a_run_of_its_new_items_only_and_its_last_key_is_the_bookmark() {
+    // B188: a window ending with a repeat lost the new items before it.
+    let (db, dag, version) = with_dag().await;
+    let items = |keys: &[&str]| -> Vec<(RunEvent, serde_json::Value)> {
+        keys.iter()
+            .map(|key| {
+                (
+                    event(key),
+                    json!({"key": key, "data": {"path": key}, "at": null}),
+                )
+            })
+            .collect()
+    };
+    let unused = event("unused");
+    let new_run = run(&dag, &version, &unused, "2026-10-14T03:00:00Z");
+    let store = async |id: &str, keys: &[&str]| {
+        db.store_batch(id, &new_run, keys.last().unwrap(), &items(keys))
+            .await
+            .unwrap()
+    };
+    let first = "0190a0a0-0000-7000-8000-0000000000b1";
+    assert_eq!(store(first, &["a", "b", "c"]).await.as_deref(), Some(first));
+    let second = "0190a0a0-0000-7000-8000-0000000000b2";
+    assert_eq!(store(second, &["d", "c"]).await.as_deref(), Some(second));
+    let read = db.run_event(second).await.unwrap().unwrap();
+    assert_eq!(read.key, "d", "keyed by its last new item");
+    assert_eq!(
+        read.data,
+        json!([{"key": "d", "data": {"path": "d"}, "at": null}])
+    );
+    assert_eq!(
+        db.triggers().await.unwrap()[0].bookmark.as_deref(),
+        Some("c"),
+        "the window's last key, so `after` goes on from it"
+    );
+    let third = "0190a0a0-0000-7000-8000-0000000000b3";
+    assert_eq!(store(third, &["b", "d"]).await, None, "nothing new: no run");
+    assert_eq!(db.run_event(third).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn only_the_run_of_a_trigger_it_names_is_ended() {
     let (db, dag, version) = with_dag().await;
     db.trigger_assigned(

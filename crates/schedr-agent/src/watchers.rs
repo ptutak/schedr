@@ -61,6 +61,8 @@ pub struct FoundEvent {
 /// Takes what a trigger says.
 #[derive(Clone)]
 pub struct EventSink {
+    /// Whether it batches (`@trigger.poke(batch=...)`): its data is a list of events.
+    pub batched: bool,
     /// What it found; the answer comes once the master has it.
     pub found: Arc<dyn Fn(FoundEvent) -> oneshot::Receiver<()> + Send + Sync>,
     /// How a poke's call ended: why it failed, if it did.
@@ -930,6 +932,11 @@ impl Answers {
         }
     }
 
+    /// Why an event can't be sent, if it can't: see [`secret_key`].
+    fn secret_key(&self, key: &str, data: &serde_json::Value, batched: bool) -> Option<String> {
+        secret_key(&self.secrets.as_ref()?.mask, key, data, batched)
+    }
+
     /// Takes what a watcher sent; gives back what isn't for it, which is the caller's.
     async fn serve(
         &mut self,
@@ -956,6 +963,13 @@ impl Answers {
             let Some(events) = &self.events else {
                 return None;
             };
+            if let Some(why) = self.secret_key(&key, &data, events.batched) {
+                let _ = host.outbox.send(AgentMessage::ToWatcher {
+                    watcher,
+                    message: Box::new(AgentMessage::EventRefused { message: why }),
+                });
+                return None;
+            }
             // What a run reads of it, and people see, as they would of an output.
             let (key, data) = match self.secrets.as_ref().map(|s| &s.mask) {
                 Some(mask) if !mask.is_empty() => (mask.mask_text(&key), mask.mask_json(&data)),
@@ -1702,4 +1716,24 @@ async fn cancelled(
             }
         }
     }
+}
+
+/// Why an event can't be sent: its key, or a batch item's, holds a secret the trigger read.
+/// Keys are stored and shown masked, so two would be one (Grok's review of M4.11f).
+fn secret_key(
+    mask: &MaskSet,
+    key: &str,
+    data: &serde_json::Value,
+    batched: bool,
+) -> Option<String> {
+    if mask.is_empty() {
+        return None;
+    }
+    let items = data.as_array().filter(|_| batched).into_iter().flatten();
+    let mut keys = std::iter::once(key).chain(items.filter_map(|item| item["key"].as_str()));
+    keys.any(|key| mask.mask_text(key) != key).then(|| {
+        "an event's key holds a secret the trigger read: keys are stored and shown masked, so \
+         keys differing only in it would be one event; keep secrets out of keys"
+            .to_owned()
+    })
 }

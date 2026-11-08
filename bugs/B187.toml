@@ -1,0 +1,17 @@
+title = "a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "TaskKind has no deny_unknown_fields and both ends are protocol 0.1: a worker of 0.1.0 under a newer master (the supported upgrade order) drops what it doesn't know, e.g. batch_ms, and runs a batched poke as one event per item, the run's data then not the list its tasks take"
+found = 2026-11-08
+suspected = false
+details = '''
+- **Found:** Grok's security review of M4.11f, by parsing DAG JSON with the fields of 0.1.0
+  (`batch_ms` dropped, the runner then telling one event per item).
+- **Cause:** `PROTOCOL_VERSION` is still 0.1, raised for nothing added in M4 (14 changes to the
+  proto since v0.1.0); the master assigns to any worker of an equal or lower minor; the model's
+  task JSON ignores fields it doesn't know.
+- **Fix proposed:** raise the protocol's minor at the next release, and have the master assign a
+  task, trigger or wait step using a newer feature only to workers of that minor or later (or
+  refuse such a DAG while an older worker serves its queue); a test with a worker saying 0.1.
+'''

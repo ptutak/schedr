@@ -629,6 +629,7 @@ impl Database {
             live_since = NULL, paused = (paused OR $2) WHERE dag_id = $3";
         const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL, \
             live_since = NULL WHERE dag_id = $2";
+        const FORGET_PASSED: &str = "DELETE FROM trigger_passed WHERE dag_id = $1";
         let now = db_time(now);
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for change in changes {
@@ -692,6 +693,11 @@ impl Database {
                     DagChange::Remove { dag_id } => {
                         sqlx::query(sql(backend, REMOVE))
                             .bind(&now)
+                            .bind(dag_id.as_str())
+                            .execute(&mut *tx)
+                            .await?;
+                        // What its trigger passed is read only while it is live (B186).
+                        sqlx::query(sql(backend, FORGET_PASSED))
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;

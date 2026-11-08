@@ -194,7 +194,6 @@ impl AttemptSpec {
             |what: &str, e: &dyn std::fmt::Display| InvalidAssignment(format!("{what}: {e}"));
         let task: Task =
             serde_json::from_slice(&assign.task_json).map_err(|e| invalid("task", &e))?;
-        let waits = matches!(task.kind, schedr_model::TaskKind::Sensor { .. });
         let run = assign
             .run
             .as_ref()
@@ -240,10 +239,6 @@ impl AttemptSpec {
                             .map_err(|e| invalid("run event", &e))?,
                     )
                 },
-                // On its first try, a wait step's start is now: kept with the request, so a host
-                // restarted in the same attempt counts from it too (Codex's review, M4.11g).
-                first_started: time(assign.first_started.as_ref())
-                    .or_else(|| waits.then(Timestamp::now)),
             },
             inputs,
             outcomes: assign

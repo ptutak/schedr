@@ -545,6 +545,8 @@ impl Database {
         .transpose()
     }
 
+    // A named event's cursor never moves back: one handed late, behind it, would reopen a stretch
+    // whose passed rows are forgotten (Codex's review of B186). A run's moves as before.
     /// Moves an `@trigger(wait_for=...)` of `dag` reading `source` past the run it was given:
     /// done with it, or passing it (`skipped`: why, kept as its last error). Its failures in a
     /// row start again. With `call`, ends that call in the same statement, so the call can't
@@ -562,21 +564,29 @@ impl Database {
         call: Option<&str>,
     ) -> Result<bool, DbError> {
         const PASS: &str = "UPDATE triggers SET run_of_source = $2, \
-            run_of_seen_at = run_of_handed_at, run_of_seen_run = run_of_handed_run, \
+            run_of_seen_at = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_at ELSE run_of_handed_at END, \
+            run_of_seen_run = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_run ELSE run_of_handed_run END, \
             run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL, \
             last_error = COALESCE($3, last_error) \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id IS NULL";
         const END_AND_PASS: &str = "UPDATE triggers SET run_of_source = $2, \
-            run_of_seen_at = run_of_handed_at, run_of_seen_run = run_of_handed_run, \
+            run_of_seen_at = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_at ELSE run_of_handed_at END, \
+            run_of_seen_run = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_run ELSE run_of_handed_run END, \
             run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL, \
             last_error = COALESCE($3, last_error), instance_id = NULL, worker_id = NULL, \
             dag_version_id = NULL, code_hash = NULL \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $4";
-        // Kept as passed in the same transaction, under the same conditions (decision 354).
+        // Kept as passed in the same transaction, under the same conditions (decision 354): a
+        // named event only, the one ever read back (B186).
         const KEEP: &str = "INSERT INTO trigger_passed (dag_id, item) \
-            SELECT dag_id, run_of_handed_run FROM triggers WHERE dag_id = $1 \
+            SELECT dag_id, run_of_handed_run FROM triggers t WHERE dag_id = $1 \
             AND run_of_handed_run IS NOT NULL AND ($2 IS NULL AND instance_id IS NULL \
-            OR instance_id = $2) ON CONFLICT (dag_id, item) DO NOTHING";
+            OR instance_id = $2) AND EXISTS (SELECT 1 FROM named_events e \
+            WHERE e.id = t.run_of_handed_run{uuid}) ON CONFLICT (dag_id, item) DO NOTHING";
         let passed = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, KEEP))
                 .bind(dag)
@@ -615,12 +625,16 @@ impl Database {
         call: &str,
     ) -> Result<bool, DbError> {
         const PASS: &str = "UPDATE triggers SET run_of_source = $2, \
-            run_of_seen_at = run_of_handed_at, run_of_seen_run = run_of_handed_run, \
+            run_of_seen_at = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_at ELSE run_of_handed_at END, \
+            run_of_seen_run = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_run ELSE run_of_handed_run END, \
             run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $3";
         const KEEP: &str = "INSERT INTO trigger_passed (dag_id, item) \
-            SELECT dag_id, run_of_handed_run FROM triggers WHERE dag_id = $1 \
+            SELECT dag_id, run_of_handed_run FROM triggers t WHERE dag_id = $1 \
             AND run_of_handed_run IS NOT NULL AND instance_id = $2 \
+            AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = t.run_of_handed_run{uuid}) \
             ON CONFLICT (dag_id, item) DO NOTHING";
         let passed = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, KEEP))

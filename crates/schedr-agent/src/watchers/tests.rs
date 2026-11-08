@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::*;
 
@@ -184,4 +185,28 @@ fn lost_hosts_are_told_until_their_code_is_old_and_counted_by_it_for_good() {
         code: "old,steady".to_owned(),
     };
     assert_eq!(hosts.metrics.hosts_lost.get_or_create(&old_code).get(), 2);
+}
+
+#[test]
+fn an_event_whose_key_holds_a_secret_is_refused() {
+    // Grok's review of M4.11f: keys masked alike were stored as one.
+    let mask = MaskSet::new(4);
+    mask.add("token", "tokenAAA-secret");
+    let batch = json!([
+        {"key": "acct-1", "data": 1, "at": null},
+        {"key": "acct-tokenAAA-secret", "data": 2, "at": null}
+    ]);
+    assert!(super::secret_key(&mask, "acct-tokenAAA-secret", &json!(1), false).is_some());
+    assert!(
+        super::secret_key(&mask, "acct-1", &batch, true).is_some(),
+        "an item's"
+    );
+    assert!(
+        super::secret_key(&mask, "acct-1", &batch, false).is_none(),
+        "data unbatched is only data"
+    );
+    assert!(super::secret_key(&mask, "acct-1", &json!(1), false).is_none());
+    assert!(
+        super::secret_key(&MaskSet::new(4), "acct-tokenAAA-secret", &json!(1), false).is_none()
+    );
 }

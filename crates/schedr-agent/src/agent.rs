@@ -2459,7 +2459,7 @@ impl<E: Executor> Agent<E> {
             return;
         }
         let instance_id = assign.instance_id.clone();
-        let sink = self.trigger_sink(&instance_id);
+        let sink = self.trigger_sink(&instance_id, batches(&spec.task));
         let start = schedr_model::runner::TriggerStart {
             after: assign.after.clone(),
         };
@@ -2525,12 +2525,13 @@ impl<E: Executor> Agent<E> {
     }
 
     /// Where a trigger's words go: to [`Self::trigger_done`].
-    fn trigger_sink(&self, instance_id: &str) -> crate::watchers::EventSink {
+    fn trigger_sink(&self, instance_id: &str, batched: bool) -> crate::watchers::EventSink {
         let done = self.done_tx.clone();
         let found = instance_id.to_owned();
         let poke_done = self.done_tx.clone();
         let poked = instance_id.to_owned();
         crate::watchers::EventSink {
+            batched,
             found: Arc::new(move |event| {
                 let (stored, answer) = tokio::sync::oneshot::channel();
                 let _ = done.send(Done::Trigger(TriggerDone::Found {
@@ -3966,4 +3967,15 @@ fn stopped_before_start(
         struck: false,
     };
     finished(&spec.attempt_id, &spec.task, &ran)
+}
+
+/// Whether a trigger's task batches what it finds (`@trigger.poke(batch=...)`, decision 352).
+fn batches(task: &schedr_model::Task) -> bool {
+    matches!(
+        task.kind,
+        schedr_model::TaskKind::Sensor {
+            batch_ms: Some(_),
+            ..
+        }
+    )
 }

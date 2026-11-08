@@ -18,28 +18,8 @@ A poke returns its value when ready, or `NOT_YET` while waiting: annotate it
 failure with the usual retries.
 
 `max_wait=` limits the wait. If omitted, `[sensors] default_max_wait` applies (24 hours by
-default), except for `delay` given a `timedelta` as described below; `max_wait` in `StepDefaults` sets it for a DAG or group, while `timeout` there is for tasks. When the wait expires, schedr
+default); `max_wait` in `StepDefaults` sets it for a DAG or group, while `timeout` there is for tasks. When the wait expires, schedr
 produces `TimedOut`: do not put it in the function's return type.
-
-## Waiting for a time
-
-Import `delay` and `until` from `schedr.sensors` for built-in wait steps:
-
-```{literalinclude} ../../examples/docs/wait_times.py
-:language: python
-:caption: examples/docs/wait_times.py
-```
-
-`delay(timedelta(...))` waits from its first try's start. If tried again, it waits only
-what is left. `until(timedelta(...))` waits until that duration after the run's
-`planned_for`; `until(datetime)` waits until that moment, which must have a time zone.
-A moment already past ends at once. A run parameter can supply either argument.
-
-Both steps return the moment they ended as a `datetime`; use `.on(datetime)` to pass it
-to a task. They produce `TimedOut` past `max_wait`. For `delay` given a `timedelta`,
-the default `max_wait` is that duration plus one minute; otherwise the usual wait step
-default applies. Their IDs are `delay` and `until`, numbered from the second call
-(`delay_2`, `until_2`, ...); set `task_id=` to choose one.
 
 ## What downstream tasks see
 

@@ -473,10 +473,6 @@ pub struct RunInfo {
     /// The event that started it, for a run of an event-triggered DAG.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<crate::trigger::RunEvent>,
-    /// When a wait step's first try started, for one tried again (`delay` counts from it);
-    /// `None` on its first try, and for other tasks.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_started: Option<jiff::Timestamp>,
 }
 
 /// A run of a DAG without parameters.
@@ -646,6 +642,12 @@ pub enum AgentMessage {
     },
     /// The master has what a trigger found: on to the next.
     EventStored,
+    /// Why what a trigger found isn't sent: a key holding a secret it read, which would be
+    /// stored masked (keys masked alike would be one; Grok's review of M4.11f).
+    EventRefused {
+        /// What went wrong.
+        message: String,
+    },
     /// Start a runner process (to the fork server).
     Fork(ForkRequest),
     /// The declaration a [`RunnerMessage::ScriptDeclaration`] asked for, checked.

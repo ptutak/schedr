@@ -53,7 +53,7 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B186: trigger_passed grows without bound, and each hand of a waiting trigger walks the lookback's passed rows | 6 | medium | likely | performance |
+| 1 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
 | 2 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
 | 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
 | 4 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
@@ -85,18 +85,17 @@ step touches their code or the user schedules them.
 | 30 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 | 31 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
 
-## B186: trigger_passed grows without bound, and each hand of a waiting trigger walks the lookback's passed rows
+## B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised
 
-- **Rating:** severity **medium**, probability **likely**, performance (score 6): Every item an @trigger(wait_for=...) passes (a run of another DAG, a named event) adds a row to trigger_passed that nothing deletes, even when the DAG is removed; the next hand reads a minute behind the last and skips the passed rows one by one.
-- **Found:** Grok's security review of M4.11e part 2 (by reading: no `DELETE` of
-  `trigger_passed` anywhere; no load was run).
-- **Where:** `pass_trigger_run` and `pass_trigger_run_stored` insert; `named_event_unpassed` is
-  the only reader, for rows within `SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK` (1 min) behind the
-  trigger's last item. `RunOf` items are inserted and never read.
-- **Fix proposed (M4.14, retention):** delete rows older than the lookback behind each trigger's
-  cursor (they are never read again), and a removed DAG's rows; stop inserting `RunOf` items.
-  A burst of one name within a minute still walks its passed rows: an index on
-  `(dag_id, item)` exists; measure before more.
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): TaskKind has no deny_unknown_fields and both ends are protocol 0.1: a worker of 0.1.0 under a newer master (the supported upgrade order) drops what it doesn't know, e.g. batch_ms, and runs a batched poke as one event per item, the run's data then not the list its tasks take.
+- **Found:** Grok's security review of M4.11f, by parsing DAG JSON with the fields of 0.1.0
+  (`batch_ms` dropped, the runner then telling one event per item).
+- **Cause:** `PROTOCOL_VERSION` is still 0.1, raised for nothing added in M4 (14 changes to the
+  proto since v0.1.0); the master assigns to any worker of an equal or lower minor; the model's
+  task JSON ignores fields it doesn't know.
+- **Fix proposed:** raise the protocol's minor at the next release, and have the master assign a
+  task, trigger or wait step using a newer feature only to workers of that minor or later (or
+  refuse such a DAG while an older worker serves its queue); a test with a worker saying 0.1.
 
 ## B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at
 

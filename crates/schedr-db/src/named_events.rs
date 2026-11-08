@@ -191,6 +191,61 @@ impl Database {
         found.map(row).transpose()
     }
 
+    /// Forgets what `dag_id`'s trigger passed of the events named `name` posted before `before`:
+    /// read back only from a lookback behind its last (B186). Gives how many.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn forget_passed_before(
+        &self,
+        dag_id: &str,
+        name: &str,
+        before: Timestamp,
+    ) -> Result<u64, DbError> {
+        // Its own few rows, each looked up by ID, not the name's whole history (Codex's review).
+        const FORGET: &str = "DELETE FROM trigger_passed WHERE dag_id = $1 AND EXISTS \
+            (SELECT 1 FROM named_events e WHERE e.id = trigger_passed.item{uuid} \
+            AND e.name = $2 AND e.posted_at < $3{ts})";
+        // Never read below again, however the lookback changes (Grok's review).
+        const FLOOR: &str = "UPDATE triggers SET passed_floor = $2{ts} WHERE dag_id = $1 \
+            AND (passed_floor IS NULL OR passed_floor < $2{ts})";
+        let forgotten = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, FLOOR))
+                .bind(dag_id)
+                .bind(db_time(before))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(sql(backend, FORGET))
+                .bind(dag_id)
+                .bind(name)
+                .bind(db_time(before))
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(forgotten)
+    }
+
+    /// Below what `dag_id`'s trigger no longer reads events: what it passed there is forgotten.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the time doesn't read.
+    pub async fn passed_floor(&self, dag_id: &str) -> Result<Option<Timestamp>, DbError> {
+        const FLOOR: &str = "SELECT {ts<}passed_floor{>ts} FROM triggers WHERE dag_id = $1";
+        let floor: Option<Option<String>> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, FLOOR))
+                .bind(dag_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        floor
+            .flatten()
+            .map(|at| parse_time("triggers.passed_floor", &at))
+            .transpose()
+    }
+
     /// The first event named `name` with `key` (any, if `None`) posted from `since` on, and
     /// strictly after `after` (a `(posted_at, id)` cursor: one a sensor's function said
     /// `NOT_YET` to) when given: what a step waiting in a run started at `since` gets (decision

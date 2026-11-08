@@ -2843,3 +2843,43 @@ fn a_sensor_waiting_for_another_dags_run_is_given_it_and_builds_on_its_output() 
         "{logs}"
     );
 }
+
+/// `load` is started by an `@trigger.poke(batch=...)`: what its pokes find within a window is one
+/// run, its data the list of them (decision 352).
+const BATCHED: &str = r#"
+from datetime import timedelta
+from schedr import Dag, Event, dag_ctx, task, trigger
+
+@trigger.poke(every=timedelta(milliseconds=200), batch=timedelta(seconds=2))
+async def files(after: str | None) -> list[Event[str]]:
+    number = 0 if after is None else int(after) + 1
+    return [Event(str(number), f"file-{number}")] if number < 3 else []
+
+@task
+def load(found: list[Event[str]]) -> None:
+    print("loaded", [event.data for event in found])
+
+with Dag("load", trigger=files()):
+    load(dag_ctx.event.data)
+"#;
+
+/// M4.11f: a poke's items gathered for `batch`, then one run with all of them.
+#[test]
+fn a_batched_poke_starts_one_run_per_window() {
+    let standalone = Standalone::start(&[("load.py", BATCHED)], None);
+    standalone.wait("DAG `load`", || standalone.dag_ids() == ["load"]);
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "load"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("a run of load", || standalone.runs("load").len() == 1);
+    let run = standalone.runs("load")[0]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    standalone.wait_for_state(&run, "success");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains("loaded ['file-0', 'file-1', 'file-2']"),
+        "{logs}"
+    );
+    assert_eq!(standalone.runs("load").len(), 1, "one window, one run");
+}

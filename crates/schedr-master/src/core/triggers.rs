@@ -653,14 +653,23 @@ impl MasterCore {
         let seen = self.db.run_of_seen(id, source).await?;
         let lookback =
             SignedDuration::try_from(self.settings.event_lookback).unwrap_or(SignedDuration::MAX);
+        // Never below what was forgotten (a lookback raised meanwhile; Grok's review).
+        let floor = self.db.passed_floor(id).await?;
         let since = seen
             .as_ref()
             .and_then(|seen| seen.at.checked_sub(lookback).ok())
-            .map_or(live, |from| from.max(live));
+            .map_or(live, |from| from.max(live))
+            .max(floor.unwrap_or(live));
         let found = self
             .db
             .named_event_unpassed(event.name.as_str(), id, since)
             .await?;
+        if found.is_some() {
+            // Once an event, not each round: what is behind the window is never read again.
+            self.db
+                .forget_passed_before(id, event.name.as_str(), since)
+                .await?;
+        }
         Ok(found.map(|found| {
             let value = crate::dispatch::event_value(&found);
             let next = RunOfSeen {
@@ -760,10 +769,29 @@ impl MasterCore {
                 return Ok(vec![cancel_trigger(worker_id, &event.instance_id)]);
             }
         };
-        let started = self
-            .scheduler
-            .event_run(&dag, &found, record.last_planned_for, now)
-            .await?;
+        let started = match batch_items(&found, &dag) {
+            None => {
+                self.scheduler
+                    .event_run(&dag, &found, record.last_planned_for, now)
+                    .await?
+            }
+            Some(Ok(items)) => {
+                self.scheduler
+                    .batch_run(&dag, &found, &items, record.last_planned_for, now)
+                    .await?
+            }
+            Some(Err(why)) => {
+                self.trigger_failed(
+                    &event.dag_id,
+                    &event.instance_id,
+                    record.failures,
+                    &why,
+                    now,
+                )
+                .await?;
+                return Ok(vec![cancel_trigger(worker_id, &event.instance_id)]);
+            }
+        };
         // Stored: done with the item its call was given (one dropped above is handed again).
         if let Some((wait, _)) = waits_for(&dag.dag) {
             self.db
@@ -1192,6 +1220,56 @@ fn event_of(event: &pb::TriggerEvent, dag: &ActiveDag) -> Result<RunEvent, Strin
         data,
         at: event.at.as_ref().and_then(crate::dispatch::time_of),
     })
+}
+
+/// A batch's items (`@trigger.poke(batch=...)`, decision 352), each read as an event and kept
+/// as stored, its `at` a tagged `datetime` or `null`; `None` for a trigger that doesn't batch.
+fn batch_items(
+    found: &RunEvent,
+    dag: &ActiveDag,
+) -> Option<Result<Vec<(RunEvent, serde_json::Value)>, String>> {
+    let Trigger::Event { task, .. } = &dag.dag.trigger else {
+        return None;
+    };
+    if !matches!(
+        task.kind,
+        TaskKind::Sensor {
+            batch_ms: Some(_),
+            ..
+        }
+    ) {
+        return None;
+    }
+    let refused = |why: &str| format!("event_refused: batch `{}`: {why}", found.key);
+    let Some(items) = found.data.as_array().filter(|items| !items.is_empty()) else {
+        return Some(Err(refused("its data isn't a list of events")));
+    };
+    Some(
+        items
+            .iter()
+            .map(|raw| {
+                let key = raw["key"]
+                    .as_str()
+                    .ok_or_else(|| refused("an item has no key"))?;
+                check_event_key(key).map_err(|why| refused(&why))?;
+                let at = match &raw["at"] {
+                    serde_json::Value::Null => None,
+                    tagged => Some(
+                        tagged["$datetime"]
+                            .as_str()
+                            .and_then(|at| at.parse::<Timestamp>().ok())
+                            .ok_or_else(|| refused("an item's `at` doesn't read"))?,
+                    ),
+                };
+                let event = RunEvent {
+                    key: key.to_owned(),
+                    data: raw.get("data").cloned().unwrap_or(serde_json::Value::Null),
+                    at,
+                };
+                Ok((event, raw.clone()))
+            })
+            .collect(),
+    )
 }
 
 /// A trigger's error as it is stored: short, and text a database takes.

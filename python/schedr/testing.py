@@ -55,6 +55,7 @@ from schedr.event_triggers import Event, EventTrigger, TriggerFunction, event_fo
 from schedr.outcomes import FAILED_NAME, TIMED_OUT_NAME, Failed, TimedOut
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.task import member_named
+from schedr.runner.waiting import Batch
 from schedr.runner.waiting import run_trigger as run_trigger_function
 from schedr.sensors import output_hint
 from schedr.types import Json, ProcessResult
@@ -110,7 +111,6 @@ def task_context(
     try_number: int = 1,
     map_index: int | None = None,
     event: Event[Any] | None = None,
-    first_started: datetime | None = None,
 ) -> Iterator[TestRunValues]:
     """Gives ``dag_ctx`` values inside the block, as while the runner calls a task.
 
@@ -136,8 +136,6 @@ def task_context(
         try_number: ``task_ctx.try_number``.
         map_index: ``task_ctx.map_index`` (``None``: an unmapped task).
         event: ``dag_ctx.event``: the event the run was started by.
-        first_started: When the step's first try started, for a wait step tried again
-            (``delay`` counts from it); ``None``: this is its first try.
 
     Yields:
         The values ``dag_ctx`` gives, and ``.handles``: what ``cleanup_handle`` registered.
@@ -175,7 +173,7 @@ def task_context(
     def add_handle(handle: object, _handle_type: str, _value: object) -> None:
         values.handles.append(handle)
 
-    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle, first_started)
+    own = TaskValues(task_id, try_number, map_index, reader, opener, add_handle)
     with running(values, own):
         yield values
 
@@ -578,6 +576,8 @@ def run_trigger(
     it inside ``task_context`` to give it secrets and connections. An
     ``@trigger(wait_for=...)`` is called once, for ``run``: ``run_trigger(on_orders(least=5),
     run=schedr.RunResult(...))`` gives the event it returned, as the master gets it, or none.
+    An ``@trigger.poke(batch=...)`` gives one event per poke that found items, its data their
+    list: the window isn't waited for.
 
     Args:
         trigger: The trigger with its arguments, or its function when it takes none.
@@ -631,11 +631,13 @@ def run_trigger(
             raise RuntimeError(f"a call of the poke failed: {error}")
 
     task = {} if called.function.every is None else {"every_ms": called.function.every_ms}
+    # With `batch=`, each poke's items are one event: the window isn't waited for here.
+    batch = None if called.function.batch is None else Batch(0.0, lambda _item: 0, sys.maxsize)
 
     async def go() -> None:
         async with asyncio.timeout(timeout.total_seconds()):
             await run_trigger_function(
-                called.function.fn, called.arguments, task, after, tell, poked
+                called.function.fn, called.arguments, task, after, tell, poked, batch
             )
 
     with contextlib.suppress(_EnoughError):

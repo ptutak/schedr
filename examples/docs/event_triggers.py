@@ -8,6 +8,7 @@ starts no run.
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from pathlib import Path
 
 from schedr import Dag, Data, Event, dag_ctx, task, trigger
@@ -44,3 +45,23 @@ def load(key: str, file: Arrived) -> str:
 
 with Dag("event_triggers", trigger=new_files(folder="/tmp/schedr-incoming")):
     load(dag_ctx.event.key, dag_ctx.event.data)  # pyright: ignore[reportAny]
+
+
+# ANCHOR: batch
+@trigger.poke(every=timedelta(seconds=5), batch=timedelta(minutes=1))
+async def batch_files(after: str | None, folder: str) -> list[Event[Arrived]]:
+    """Looks for files in name order without consuming them."""
+    place = Path(folder)
+    names = await asyncio.to_thread(_names, place, after)
+    return [
+        Event(name, Arrived(str(place / name), (place / name).stat().st_size)) for name in names
+    ]
+
+
+@task
+def load_batch(files: list[Event[Arrived]]) -> int:
+    """Counts the bytes in a batch."""
+    return sum(file.data.size for file in files)
+
+
+# ANCHOR_END: batch

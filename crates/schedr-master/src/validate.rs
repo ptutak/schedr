@@ -194,6 +194,14 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
             "trigger `{id}`: restart_if_idle must be more than zero"
         ));
     }
+    if let TaskKind::Sensor {
+        mode,
+        batch_ms: Some(batch),
+        ..
+    } = &task.kind
+    {
+        batch_problems(id, *mode, *batch, problems);
+    }
     trigger_wait_for_problems(
         dag,
         task,
@@ -286,6 +294,7 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
                 problems.push(format!("task `{id}`: connections=: `{name}`: {error}"));
             }
         }
+        problems.extend(batch_in_a_step(task));
         let mut in_text = kind_problems(task, problems);
         let mapped: Vec<&Value> = match &task.expand {
             Some(Expand::Product(over)) => over.iter().map(|m| &m.value).collect(),
@@ -380,35 +389,11 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
                 in_text.extend(value_templates(value));
             }
         }
-        TaskKind::Sensor {
-            arguments,
-            mode,
-            every_ms,
-            max_wait_ms,
-            wait_for,
-        } => {
+        TaskKind::Sensor { arguments, .. } => {
             for value in arguments.values() {
                 in_text.extend(value_templates(value));
             }
-            if let Some(wait_for) = wait_for {
-                sensor_wait_for_problems(task, *mode, arguments, wait_for, problems);
-            }
-            match (mode, every_ms) {
-                (SensorMode::Poke, None | Some(0)) => {
-                    problems.push(format!(
-                        "task `{id}`: a @sensor.poke needs `every` above zero"
-                    ));
-                }
-                (SensorMode::Loop, Some(_)) => {
-                    problems.push(format!("task `{id}`: only a @sensor.poke has `every`"));
-                }
-                _ => {}
-            }
-            if *max_wait_ms == Some(0) {
-                problems.push(format!(
-                    "task `{id}`: a wait step's `max_wait` must be above zero"
-                ));
-            }
+            sensor_problems(task, problems);
         }
         TaskKind::WaitFor {
             max_wait_ms,
@@ -469,6 +454,73 @@ fn sensor_wait_for_problems(
         problems.push(format!(
             "task `{id}`: a @sensor with `wait_for=` can't be mapped"
         ));
+    }
+}
+
+/// What a wait step (`@sensor`, `@sensor.poke`) can't be.
+fn sensor_problems(task: &Task, problems: &mut Vec<String>) {
+    let TaskKind::Sensor {
+        arguments,
+        mode,
+        every_ms,
+        max_wait_ms,
+        wait_for,
+        ..
+    } = &task.kind
+    else {
+        return;
+    };
+    let id = &task.id;
+    if let Some(wait_for) = wait_for {
+        sensor_wait_for_problems(task, *mode, arguments, wait_for, problems);
+    }
+    match (mode, every_ms) {
+        (SensorMode::Poke, None | Some(0)) => {
+            problems.push(format!(
+                "task `{id}`: a @sensor.poke needs `every` above zero"
+            ));
+        }
+        (SensorMode::Loop, Some(_)) => {
+            problems.push(format!("task `{id}`: only a @sensor.poke has `every`"));
+        }
+        _ => {}
+    }
+    if *max_wait_ms == Some(0) {
+        problems.push(format!(
+            "task `{id}`: a wait step's `max_wait` must be above zero"
+        ));
+    }
+}
+
+/// A DAG's task with `batch` (decision 352): it is a trigger's, a wait step ending with one value.
+fn batch_in_a_step(task: &Task) -> Option<String> {
+    matches!(
+        task.kind,
+        TaskKind::Sensor {
+            batch_ms: Some(_),
+            ..
+        }
+    )
+    .then(|| {
+        format!(
+            "task `{}`: `batch` is for an @trigger.poke, which starts runs: a wait step ends \
+             with one value",
+            task.id
+        )
+    })
+}
+
+/// What an `@trigger.poke(batch=...)` (decision 352) can't be: anything but a poke, or a window
+/// of nothing. (A poke is never restarted as idle, so `restart_if_idle` can't cut a window.)
+fn batch_problems(id: &TaskId, mode: SensorMode, batch: u64, problems: &mut Vec<String>) {
+    if mode != SensorMode::Poke {
+        problems.push(format!(
+            "trigger `{id}`: `batch` is for an @trigger.poke: an @trigger batches by yielding \
+             one event holding the group"
+        ));
+    }
+    if batch == 0 {
+        problems.push(format!("trigger `{id}`: `batch` must be more than zero"));
     }
 }
 
@@ -1229,8 +1281,14 @@ const RESULT_OVERHEAD: u64 = 64 * 1024;
 #[must_use]
 pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
     let limit = u64::try_from(max_message_size).unwrap_or(u64::MAX);
+    // A trigger's events go the same way, a batch filled to its limit (Grok's review).
+    let trigger = match &dag.trigger {
+        schedr_model::Trigger::Event { task, .. } => Some(task.as_ref()),
+        _ => None,
+    };
     dag.tasks
         .iter()
+        .chain(trigger)
         .filter_map(|task| {
             let streams = match task.kind {
                 TaskKind::Empty

@@ -374,6 +374,25 @@
         },
         {
           "additionalProperties": false,
+          "description": "Why what a trigger found isn't sent: a key holding a secret it read, which would be\nstored masked (keys masked alike would be one; Grok's review of M4.11f).",
+          "properties": {
+            "message": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "event_refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Start a runner process (to the fork server).",
           "properties": {
             "cwd": {
@@ -1669,14 +1688,6 @@
           ],
           "description": "The event that started it, for a run of an event-triggered DAG."
         },
-        "first_started": {
-          "description": "When a wait step's first try started, for one tried again (`delay` counts from it);\n`None` on its first try, and for other tasks.",
-          "format": "date-time",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "kind": {
           "$ref": "#/$defs/RunKind",
           "description": "The run's kind."
@@ -2732,6 +2743,15 @@
               "default": {},
               "description": "The arguments by parameter name.",
               "type": "object"
+            },
+            "batch_ms": {
+              "description": "`@trigger.poke(every=..., batch=...)` (decision 352): what its pokes return is\ngathered for this many milliseconds from the first item, then sent as one event.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "every_ms": {
               "description": "How often to call it (`Poke`), in milliseconds.",

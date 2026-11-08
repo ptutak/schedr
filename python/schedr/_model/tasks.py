@@ -221,6 +221,8 @@ class SensorKind:
         every_ms: How often to call it (``POKE``).
         max_wait_ms: How long it waits; ``None``: the worker's ``[sensors] default_max_wait``.
         wait_for: ``@sensor(wait_for=RunOf(...))``: the run it is called for (decision 353).
+        batch_ms: ``@trigger.poke(batch=...)``: what its pokes return is gathered this long from
+            the first item, then sent as one event (decision 352).
     """
 
     arguments: Mapping[str, Value] = field(default_factory=dict)
@@ -228,6 +230,7 @@ class SensorKind:
     every_ms: int | None = None
     max_wait_ms: int | None = None
     wait_for: SensorWaitFor | None = None
+    batch_ms: int | None = None
 
     def references(self) -> list[Reference]:
         """The arguments' references.
@@ -253,6 +256,8 @@ class SensorKind:
             result["max_wait_ms"] = self.max_wait_ms
         if self.wait_for is not None:
             result["wait_for"] = self.wait_for.to_json()
+        if self.batch_ms is not None:
+            result["batch_ms"] = self.batch_ms
         return result
 
 

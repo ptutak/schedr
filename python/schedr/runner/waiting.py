@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import sys
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from schedr.outcomes import TimedOut
@@ -258,29 +259,137 @@ async def _poked_trigger(
     after: str | None,
     tell: Callable[[Event[Any]], Awaitable[None]],
     poked: Callable[[str | None], None],
+    batch: Batch | None = None,
 ) -> None:
-    """Calls a poke every ``every`` seconds, for as long as it is left running."""
+    """Calls a poke every ``every`` seconds, for as long as it is left running.
+
+    With ``batch``, what it returns is gathered and told as one event per window (decision 352):
+    ``after`` moves on with the items gathered, so the next poke goes on from them, while the
+    master's bookmark moves only with a window sent.
+    """
     loop = asyncio.get_running_loop()
+    window = _Window(batch, tell)
     while True:
         called = loop.time()
-        error: str | None = None
-        found: object = ()
-        try:
-            call = cast("Coroutine[object, object, object]", function(after, **arguments))
-            ended, found = await _within(call, every)
-            if not ended:
-                raise PokeTooSlowError(  # as what it raises is, below
-                    f"a call took longer than `every` ({every:g} s): each call is limited to it, "
-                    "as calls never overlap. Make it faster, or poke less often"
-                )
-        except Exception as e:  # the author's: shown on its status, and the next call comes
-            error = f"{type(e).__name__}: {e}"
-        else:
-            for event in cast("Sequence[Event[Any]]", found):
-                await tell(event)
-                after = event.key
+        # What telling raises (the window sent meanwhile) isn't the poke's: it goes up.
+        found, error = await window.meanwhile(_poke_once(function, after, arguments, every))
+        for event in cast("Sequence[Event[Any]]", found):
+            await window.add(event)
+            after = event.key
         poked(error)
-        await asyncio.sleep(max(0.0, called + every - loop.time()))
+        await window.meanwhile(asyncio.sleep(max(0.0, called + every - loop.time())))
+
+
+async def _poke_once(
+    function: Callable[..., object],
+    after: str | None,
+    arguments: Mapping[str, object],
+    every: float,
+) -> tuple[object, str | None]:
+    """One call of a trigger's poke: what it found, or its error as shown on its status."""
+    try:
+        call = cast("Coroutine[object, object, object]", function(after, **arguments))
+        ended, found = await _within(call, every)
+        if not ended:
+            raise PokeTooSlowError(  # as what it raises is, below
+                f"a call took longer than `every` ({every:g} s): each call is limited to it, "
+                "as calls never overlap. Make it faster, or poke less often"
+            )
+    except Exception as e:  # the author's: shown on its status, and the next call comes
+        return (), f"{type(e).__name__}: {e}"
+    return found, None
+
+
+class _Window:
+    """A batched poke's open window: its items, its size, and when it ends (decision 352).
+
+    Without a batch, each item is told at once.
+    """
+
+    def __init__(self, batch: Batch | None, tell: Callable[[Event[Any]], Awaitable[None]]) -> None:
+        self._batch = batch
+        self._tell = tell
+        self._items: list[Event[Any]] = []
+        self._size = 2  # `[]`: a list is stored as compact JSON
+        self._ends = 0.0
+
+    async def add(self, event: Event[Any]) -> None:
+        """Gathers an item: one over the window's size goes to the next.
+
+        Raises:
+            TypeError: For an item without a key, as one told alone would (Grok's review: the
+                window it ended was lost with it).
+        """
+        batch = self._batch
+        if batch is None:
+            await self._tell(event)
+            return
+        if not event.key:
+            raise TypeError("an event's key must be a non-empty string, got ''")
+        loop = asyncio.get_running_loop()
+        # Each item sized once: the list's size is theirs, with its brackets and commas.
+        size = batch.size(event)
+        if self._items and self._size + 1 + size > batch.limit:
+            # Near its `max_output_size`: this window goes now.
+            await self.send()
+        if not self._items:
+            self._ends = loop.time() + batch.seconds
+        self._size += size + (1 if self._items else 0)
+        self._items.append(event)
+
+    async def send(self) -> None:
+        """Tells the window's items as one event, if it has any."""
+        if self._items:
+            items, self._items, self._size = self._items, [], 2
+            await self._tell(batched(items))
+
+    async def meanwhile[T](self, work: Coroutine[object, object, T]) -> T:
+        """Awaits ``work``, sending the window when it ends: a poke or a sleep doesn't hold it.
+
+        Returns:
+            What ``work`` gives.
+        """
+        running = asyncio.ensure_future(work)
+        try:
+            while self._items:
+                left = max(0.0, self._ends - asyncio.get_running_loop().time())
+                done, _ = await asyncio.wait({running}, timeout=left)
+                if not done or left == 0.0:
+                    # Ended meanwhile, or as it did: what it gives goes to the next window.
+                    await self.send()
+                if done:
+                    break
+            return await running
+        finally:
+            # Stopped meanwhile (the trigger cancelled): what it waited for stops too.
+            running.cancel()
+
+
+@dataclass(frozen=True, slots=True)
+class Batch:
+    """An ``@trigger.poke(batch=...)``'s window (decision 352).
+
+    Attributes:
+        seconds: How long it gathers from the first item.
+        size: An item's size as stored, in bytes; one that can't be stored is given as over
+            ``limit``, so it goes alone and fails when it is told, as it would unbatched.
+        limit: The most one event's data may take: its ``max_output_size``.
+    """
+
+    seconds: float
+    size: Callable[[Event[Any]], int]
+    limit: int
+
+
+def batched(items: list[Event[Any]]) -> Event[Any]:
+    """One event for a window's items: the last one's key, the items as its data (decision 352).
+
+    Returns:
+        The event to tell.
+    """
+    from schedr.event_triggers import Event  # noqa: PLC0415 (slow to import here)
+
+    return Event(items[-1].key, list(items))
 
 
 async def run_trigger(
@@ -290,6 +399,7 @@ async def run_trigger(
     after: str | None,
     tell: Callable[[Event[Any]], Awaitable[None]],
     poked: Callable[[str | None], None],
+    batch: Batch | None = None,
 ) -> None:
     """Calls a trigger's function, telling each event found; returns when a generator does.
 
@@ -300,10 +410,11 @@ async def run_trigger(
         after: The last key acted on.
         tell: Tells an event and waits until it is safe: the next one's order is kept.
         poked: Told how each call of a poke ended: why it failed, if it did.
+        batch: A poke's ``batch=`` window, if it has one.
     """
     every = task.get("every_ms")
     if isinstance(every, int):
-        await _poked_trigger(function, arguments, every / 1000, after, tell, poked)
+        await _poked_trigger(function, arguments, every / 1000, after, tell, poked, batch)
         return
     generator = cast("AsyncIterator[Event[Any]]", function(after, **arguments))
     async for event in generator:

@@ -448,7 +448,6 @@ impl Worker {
             outcomes: BTreeMap::new(),
             run: RunInfo {
                 event: None,
-                first_started: None,
                 params: json!({}),
                 dag_id: "sync".to_owned(),
                 run_id: "r1".to_owned(),

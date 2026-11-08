@@ -3127,7 +3127,7 @@ fn max_wait_sent(outgoing: &Outgoing) -> Option<u64> {
 }
 
 #[tokio::test]
-async fn its_time_runs_from_its_first_start_over_attempts_and_is_sent() {
+async fn its_time_runs_from_its_first_start_over_attempts() {
     let mut dag = sensor_dag();
     dag.tasks[0].settings.retries = 2;
     dag.tasks[0].settings.retry_delay_ms = 0;
@@ -3137,7 +3137,6 @@ async fn its_time_runs_from_its_first_start_over_attempts_and_is_sent() {
     let (mut dispatcher, _db, _) = with_run(dag).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     assert_eq!(max_wait_sent(&out[0]), Some(60_000), "nothing has run yet");
-    assert_eq!(assignment(&out[0]).first_started, None, "its own start");
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
@@ -3148,8 +3147,6 @@ async fn its_time_runs_from_its_first_start_over_attempts_and_is_sent() {
     dispatcher.finished("w1", &failed, at).await.unwrap();
     let out = dispatcher.step(at).await.unwrap();
     assert_eq!(max_wait_sent(&out[0]), Some(40_000));
-    // `delay` counts from it too (M4.11g).
-    assert_eq!(assignment(&out[0]).first_started, Some(proto_time(ts(NOW))));
 }
 
 #[tokio::test]

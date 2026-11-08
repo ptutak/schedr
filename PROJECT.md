@@ -7017,36 +7017,39 @@ failing_after = 5           # consecutive errors before TRIGGER_FAILING
   (`params.token`) showed in the step's queued reason, though the run's page hides that field: now `****`. Not
   fixed: a worker built before `returned_event` (only a development build: a released 0.1.0 worker can't run
   `wait_for` triggers); logged: B185 (a sensor's `NOT_YET` cursor has no lookback), B186 (`trigger_passed` never
-  pruned, for M4.14's retention). An event dated before the previous one (the user's, 2026-11-08,
+  pruned; fixed in M4.11f, the user's: only named events are kept, the rows behind the lookback are forgotten once an
+  event is handed, and a removed DAG's with it; Codex's review: a named event's cursor never moves back now, as one handed
+  late reopened a stretch whose rows were forgotten, and the pruning looks up the DAG's own rows, not the name's
+  history; Grok's security review: what was forgotten is now a floor the window never goes below, as a lookback
+  raised meanwhile handed passed or skipped events again (`triggers.passed_floor`); an event whose key, or a batch
+  item's, holds a secret the trigger read is refused by the agent (`EventRefused`), as keys masked alike were stored
+  as one). An event dated before the previous one (the user's, 2026-11-08,
   option A): its run's window is empty (`since` = `planned_for`), so no data is handled twice; a loader by window reads
   `dag_ctx.event` for it. Not chosen: no run, the status saying why (its data never handled); its window from the event
   dated just before it (overlapping windows, data handled twice).
-- **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; to be built in M4.11f):
+- **Batching is only for `@trigger.poke`, in Python** (decision 352, the user's, 2026-11-07; built in M4.11f):
   `@trigger.poke(every=..., batch=timedelta(...))`. A full `@trigger` or `@sensor` is the author's own code and can batch as
   it sees fit, by yielding one event holding the group, so they take no `batch=`. It is the special case of `@trigger`
   where the host gathers what the pokes return and sends one ordinary event when the window ends; the master, the
   database, the CLI and "Run again" don't change. Claude's, to check when it is built: the key is the last item's, so `after` keeps its
   meaning; the window starts at the first item and an empty one starts no run; a batch goes early near `max_output_size`;
-  `restart_if_idle` must be longer than `batch`; a restart finds the items again from the bookmark, which a poke that consumes
+  a restart finds the items again from the bookmark, which a poke that consumes
   what it reads can't. A run reads `dag_ctx.event.data` as `list[Event[T]]`, what the pokes returned (the user's): the same objects, each
   stored once. Not chosen: `list[T]` (the items' keys and times would be gone); `batch="50s"` (every other duration is a `timedelta`); `tuple[list[T], list[Event]]` (each item stored twice).
-- **`delay` and `until`: plain wait steps in Python** (decision 355, the user's, 2026-11-08; built in M4.11g): two
-  `@sensor`s schedr ships in `schedr.sensors`, no new step kind: `delay(timedelta(minutes=10))` waits that long from its
-  first try's start, `until(timedelta(hours=2))` until the run's `planned_for` plus that (a `datetime` with a time zone:
-  that moment); one past ends at once. A step tried again (its worker lost) waits only what is left: the master sends a wait
-  step's first try's start with each later assignment (`AssignTask.first_started`, the same moment its `max_wait` counts
-  from), the host gives it the step (`TaskValues.first_started`, not on `task_ctx`). They sleep at most a minute at a time, so
-  a clock set meanwhile is seen. Claude's, confirmed by the user (2026-11-08, all option A): their value is the moment they ended (a `datetime`); IDs `delay` and
-  `until`, numbered from the second on; a `delay` given a `timedelta` waits up to that and a minute (`max_wait`) unless told,
-  as a long delay would otherwise end `TimedOut` at the default; `until` keeps the usual default; a run parameter can give
-  either; they aren't in `schedr`'s top level (`until` is a common name); the first try's start isn't on `task_ctx`. Not chosen: a `None` value (a downstream task couldn't say when it was released); the usual `max_wait` for `delay` (a two-day delay would end `TimedOut` at 24 h); top-level names (`until` clashes); `task_ctx.first_started` (one more public field to keep). Codex's review: they gave their moment, not when they ended (now the end); a
-  first try's `delay` restarted its count when its host was restarted in the same attempt (the agent now sets a wait
-  step's first start itself on its first try, kept with the request); a negative wait from a run parameter wasn't
-  refused (now when it runs). Grok's security review: a wait past what a `datetime` holds (a parameter of millions
-  of days) raised and failed the attempt; now it ends at its `max_wait`, one before year 1 at once. Not fixed: a new
-  worker under a master without `first_started` (the upgrade order is master first). Kept for later: `by_deadline(a, b, at=...)` and
-  `first_of(..., cancel_rest=True)`; `approval(...)` goes to M6 (human in the loop); `none_of` dropped (a plain branch
-  does it).
+  Built (Claude's, as noted above, and): `batch_ms` on the trigger's sensor task, the host gathering; a batch's
+  event has no `at` of its own (planned for when it is sent); a window is sent when it ends even between two pokes;
+  one item over the limit alone fails as a single event does; `restart_if_idle` isn't checked against `batch` (Codex's
+  docs round: a poke is never restarted as idle; first built as a check, then removed); `schedr.testing.run_trigger` gives one event per poke that found items (the window
+  isn't waited for in a test). Codex's review: a window ending during a poke waited for it, and took its items
+  (now sent at its end, the poke going on, its items opening the next); each item made the whole batch encoded
+  again (now each sized once, the list's size kept: compact JSON, exact); the schemas, out of date; a test counting
+  pokes in a 45 ms window (now 300 ms). Grok's security review: a window ending with a repeat stored as one (the batch keyed by its
+  last item), the new items before it lost (B188; the user's, 2026-11-08, option A): each item is stored as an event
+  of its own, the run gets the new ones (none new: no run), keyed by its last new item, the bookmark the window's last
+  key; an item run again by its key is a batch of it alone. Not chosen: B (only ordered sources may batch, nothing
+  enforcing it), C (a hash of the keys as the key, the bookmark apart: repeats handled twice). Also fixed: room for
+  masking in each item's size (a masked number grows a byte), an empty key failing the trigger at once, the trigger's
+  `max_output_size` checked against `[grpc] max_message_size`. Logged: B187 (no protocol minor bump).
 - **A task starts after its upstream tasks end** (decision 345, the user's, 2026-11-07): no `run_if`
   starts one on the first of several. To act on the first, `first_of` (decision 347) is a node of its own,
   after which a task starts as usual. Not chosen: `RunIf.ANY_SUCCEEDED` (too many

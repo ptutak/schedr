@@ -852,6 +852,15 @@
               "description": "The arguments by parameter name.",
               "type": "object"
             },
+            "batch_ms": {
+              "description": "`@trigger.poke(every=..., batch=...)` (decision 352): what its pokes return is\ngathered for this many milliseconds from the first item, then sent as one event.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "every_ms": {
               "description": "How often to call it (`Poke`), in milliseconds.",
               "format": "uint64",
