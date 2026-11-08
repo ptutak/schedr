@@ -9619,7 +9619,12 @@ its configuration, not the content.
   not 30: one clean and a few builds already make 21 GiB (dev, coverage, docs), so 30 would
   clean and rebuild everything every few steps.
   Not chosen: cleaning on a schedule or by hand only (forgotten); `cargo-sweep` (a tool to
-  install, for the same effect).
+  install, for the same effect). Since 2026-11-08 (the user's, options A and D): the other
+  worktrees' `target/`s are cleaned past `WORKTREE_TARGET_MAX_GIB` (20), one whose build lock is
+  held left alone; and `[profile.dev] incremental = false`, the incremental cache having grown to
+  about half of each `target/` (a rebuild after a small change is slower). Not chosen: no debug
+  line tables (backtraces lose their lines); one `target/` shared by the worktrees (their
+  parallel builds would wait for each other and rebuild each other's crates).
 - **`make test-integration` builds the test binaries, runs `sync`, then starts Postgres and
   the tests** (B6): a rebuild writes about 3 GiB, 1 GiB of it still unflushed when the build
   ends, and Postgres's fsyncs on the same (WSL2) disk waited behind it for 7–8 s. Not chosen:

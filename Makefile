@@ -46,6 +46,8 @@ DOCS_PORT ?= 8765
 # than this (Cargo never deletes old
 # artifacts: every dependency or feature change leaves a copy of everything above it).
 TARGET_MAX_GIB ?= 50
+# The same for each other worktree of this repository (each has a target/ of its own).
+WORKTREE_TARGET_MAX_GIB ?= 20
 LLVM_COV_IGNORE := '(^|/)(tests|main)\.rs$$'
 
 setup:           ## Install dev tools, Python dev deps and pre-commit hooks
@@ -516,12 +518,24 @@ check:           ## Everything CI runs
 	@$(MAKE) --no-print-directory target-size
 	@$(MAKE) --no-print-directory pin-check fmt-check lint schema-check bugs-check third-party-check chart-check test test-integration
 
-target-size:     ## Clean target/ when it holds more than TARGET_MAX_GIB (default 50)
+target-size:     ## Clean target/ over TARGET_MAX_GIB (50), other worktrees' over WORKTREE_TARGET_MAX_GIB (20)
 	@size=$$(du -s --block-size=1G target 2>/dev/null | cut -f1); \
 	if [ "$${size:-0}" -gt $(TARGET_MAX_GIB) ]; then \
 		echo "target/ holds $$size GiB, over TARGET_MAX_GIB = $(TARGET_MAX_GIB): cargo clean"; \
 		cargo clean; \
 	fi
+	@: "a worktree building now (its build lock held) is left alone"; \
+	git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r tree; do \
+		[ -n "$$tree" ] && [ "$$tree" != "$$(pwd)" ] && [ -f "$$tree/Cargo.toml" ] || continue; \
+		size=$$(du -s --block-size=1G "$$tree/target" 2>/dev/null | cut -f1); \
+		[ "$${size:-0}" -gt $(WORKTREE_TARGET_MAX_GIB) ] || continue; \
+		lock="$$tree/target/debug/.cargo-lock"; \
+		if [ -e "$$lock" ] && ! flock -n "$$lock" true; then \
+			echo "$$tree/target holds $$size GiB but is building: left alone"; continue; \
+		fi; \
+		echo "$$tree/target holds $$size GiB, over $(WORKTREE_TARGET_MAX_GIB) GiB: cargo clean there"; \
+		cargo clean --manifest-path "$$tree/Cargo.toml"; \
+	done
 
 clean:           ## Remove build artifacts
 	cargo clean
