@@ -1,0 +1,13 @@
+title = "first_of doesn't cancel the tasks that didn't win"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "wait-steps"
+section = "first_of"
+summary = '''
+After `first_of` ends, the tasks that didn't win keep running, and one that fails still fails the
+run; there is no option to cancel them.
+'''
+history = "JOURNAL.md#D393"
+step = "n/a"
+code = []

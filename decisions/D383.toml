@@ -1,0 +1,13 @@
+title = "A slim image beside the full one"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "deployment"
+section = "Images"
+summary = '''
+Besides the full image (every connection type, D212, the default), 1.0.0 ships `schedr-slim`: Python
+and schedr without the database and SSH clients.
+'''
+history = "JOURNAL.md#D383"
+step = "R1.0a"
+code = []

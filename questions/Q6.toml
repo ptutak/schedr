@@ -1,6 +1,7 @@
 title = "Should each DAG root be able to choose its own Python interpreter?"
 asked = 2026-11-09
 topic = "task-processes"
-status = "open"  # open, decided (with decided_by), dropped
+status = "decided"
 proposal = "Allow a DAG root to select an interpreter under `[dags.roots]`; today `[dags] interpreter` applies to all roots."
-history = "PROJECT.md: Rust/Python integration"
+history = "archive/PROJECT.md: Rust/Python integration"
+decided_by = 385

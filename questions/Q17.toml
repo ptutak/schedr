@@ -1,6 +1,7 @@
 title = "Should operators support .partial() and .expand()?"
 asked = 2026-11-09
 topic = "python-api"
-status = "open"  # open, decided (with decided_by), dropped
+status = "decided"
 proposal = "Add .partial() and .expand() on operators when M5's BashOperator needs them. Today only @task functions map."
-history = "PROJECT.md: Native API"
+history = "archive/PROJECT.md: Native API"
+decided_by = 381

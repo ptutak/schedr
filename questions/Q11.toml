@@ -1,6 +1,7 @@
 title = "What encryption should LDAP connections require?"
 asked = 2026-11-09
 topic = "ui-cli"
-status = "open"
+status = "deferred"
 proposal = "Consider requiring TLS with plaintext only on loopback, or allowing plaintext with a flag and warning."
-history = "plan/M6.toml: notes; PROJECT.md: Roadmap"
+history = "plan/M6.toml: notes; archive/PROJECT.md: Roadmap"
+until = "M6"

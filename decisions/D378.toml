@@ -1,0 +1,14 @@
+title = "In tests a TriggerDagOperator starts a real run of a target in the tested path"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "Tests"
+summary = '''
+In `schedr dags test` and `run_dag`, a TriggerDagOperator starts the target's run on the local
+master when the target is in the path given (a DAG root); a target outside it fails the task with a
+hint to give its DAG root. There is no stub.
+'''
+history = "JOURNAL.md#D378"
+step = "M4.12a"
+code = []

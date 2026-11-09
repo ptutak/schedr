@@ -1,0 +1,13 @@
+title = "Notifications go by email and a generic webhook"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+Notification channels are email and a generic JSON webhook; there are no dedicated Slack or Teams
+channels.
+'''
+history = "JOURNAL.md#D391"
+step = "M4.13"
+code = []

@@ -14,3 +14,14 @@ Between them (the user, 2026-11-02): **most probably no release before 1.0.0**; 
 mainly to reserve the name on PyPI. Possibly **0.2.0 at the end of M4**. How long M4B takes
 is hard to tell: batching a turn's messages in one transaction needs much testing.
 '''
+
+[[steps]]
+id = "R1.0a"
+title = "A slim image"
+scope = '''
+(Q3): `ghcr.io/ptutak/schedr-slim`, Python and schedr without the database and SSH clients, built and pushed with the others; the full image stays the default (decision 212)
+'''
+done_when = '''
+the slim image is released with 1.0.0 and its smoke test runs a DAG without connections
+'''
+status = "planned"

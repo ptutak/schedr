@@ -1,0 +1,14 @@
+title = "A missing or conflicting target fails the operator, with its retries"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "TriggerDagOperator"
+summary = '''
+A TriggerDagOperator whose target DAG is missing or in an ID conflict when it runs fails with the
+reason, and the task's retries apply (the target's root may not be parsed yet). Invalid `params`
+still fail without retries.
+'''
+history = "JOURNAL.md#D379"
+step = "M4.12a"
+code = []

@@ -1,0 +1,13 @@
+title = "A calendar is an event trigger, not a built-in time trigger"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "python-api"
+section = "Calendars"
+summary = '''
+A business calendar is written as a Python event trigger (no catchup, no backfill); the master's
+schedules have no `exclude=` dates unless someone asks.
+'''
+history = "JOURNAL.md#D388"
+step = "n/a"
+code = []

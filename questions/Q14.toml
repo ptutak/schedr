@@ -1,6 +1,7 @@
 title = "Should the CLI obtain OIDC tokens through a login command?"
 asked = 2026-11-09
 topic = "ui-cli"
-status = "open"
+status = "deferred"
 proposal = "Consider a device-flow `schedr login` command."
-history = "PROJECT.md: Web UI and CLI"
+history = "archive/PROJECT.md: Web UI and CLI"
+until = "M6"

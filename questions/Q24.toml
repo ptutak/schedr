@@ -1,6 +1,7 @@
 title = "Should a new worker take triggers that are already running?"
 asked = 2026-11-09
 topic = "triggers"
-status = "open"  # open, decided (with decided_by), dropped
+status = "deferred"
 proposal = "A new worker does not take a trigger that is already running. Moving one from its bookmark was left for later."
-history = "PROJECT.md: Sensors and triggers"
+history = "archive/PROJECT.md: Sensors and triggers"
+until = "later"

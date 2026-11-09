@@ -438,6 +438,59 @@ def test_status_toml_refuses_unknown_fields(tmp_path: Path) -> None:
         module.views(load(tmp_path), module.Paths(tmp_path))
 
 
+def test_a_note_is_numbered_on_and_shown_on_the_decision_it_corrects(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    (tmp_path / "JOURNAL.md").write_text(
+        '# Journal\n\n### <a id="D1"></a>2026-11-08: a choice (decision 1)\n\nWhy.\n'
+    )
+    heading = module.new_note(tmp_path, "the branch deleted", "D1")
+    assert heading.endswith(": the branch deleted (note 1; corrects D1)")
+    assert module.new_note(tmp_path, "a finding").endswith(": a finding (note 2)")
+    entries = module.journal(tmp_path)
+    assert [(e.id, e.corrects) for e in entries] == [("D1", ""), ("N1", "D1"), ("N2", "")]
+    loaded = load(tmp_path)
+    current = " ".join(module.design_blocks(loaded, "runs", notes=entries)["current"].split())
+    assert "what holds. *Corrected by N1:* the branch deleted." in current
+    assert module.note_problems(loaded, tmp_path) == []
+    with pytest.raises(module.RecordError, match="corrects a decision"):
+        module.new_note(tmp_path, "x", "B5")
+
+
+def test_notes_out_of_order_or_correcting_nothing_are_refused(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    (tmp_path / "JOURNAL.md").write_text(
+        '### <a id="N2"></a>2026-11-09: skipped one (note 2)\n\n'
+        '### <a id="N3"></a>2026-11-09: wrong target (note 3; corrects D9)\n'
+    )
+    assert module.note_problems(load(tmp_path), tmp_path) == [
+        "JOURNAL.md: note N2 is out of order (expected N1)",
+        "JOURNAL.md: note N3 is out of order (expected N2)",
+        "JOURNAL.md: N3 corrects D9, which isn't a decision",
+    ]
+
+
+def test_a_deferred_question_waits_for_a_step_and_is_listed_apart(tmp_path: Path) -> None:
+    module = project(
+        tmp_path,
+        {1: decision()},
+        {
+            1: question(),
+            2: question(status="deferred", until='"S2"', title='"Later?"'),
+            3: question(status="deferred", until='"someday"'),
+        },
+    )
+    loaded = load(tmp_path)
+    text = module.render_decisions(loaded)
+    assert "## Deferred questions\n\n- Q2 (until S2, `runs`): Later?\n" in text
+    assert "| Q2 |" not in text
+    found = module.problems(loaded, tmp_path, [])
+    assert any("Q3: `until` is a step, a milestone" in p for p in found), found
+    assert "- Q2 (deferred until S2): Later?\n" in module.design_blocks(loaded, "runs")["questions"]
+    (tmp_path / "questions" / "Q2.toml").write_text(question(status="deferred"))
+    with pytest.raises(module.RecordError, match="`until` is given exactly"):
+        load(tmp_path)
+
+
 def test_a_section_is_one_line(tmp_path: Path) -> None:
     module = project(tmp_path, {1: decision(section="'''\ntwo\nlines\n'''")})
     with pytest.raises(module.RecordError, match="`section` is one line"):

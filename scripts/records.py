@@ -64,8 +64,9 @@ A question, `questions/Q<n>.toml`:
     title = "Should a non-leading master name the leader?"
     asked = 2026-11-02
     topic = "protocol"
-    status = "open"             # open, decided, dropped
+    status = "open"             # open, decided, deferred, dropped
     decided_by = 0              # with status "decided": the decision
+    until = "M6"                # with status "deferred": a step or milestone, "if asked", "later"
     proposal = "What is proposed now, one or two lines."
     history = "archive/PROJECT.md: Open questions"   # where it was raised
 
@@ -77,6 +78,8 @@ Usage:
     python3 scripts/records.py check               # validate; fail if anything generated is stale
     python3 scripts/records.py decision "<title>"  # a new decision's file; prints its path
     python3 scripts/records.py question "<title>"  # a new question's file; prints its path
+    python3 scripts/records.py note "<title>" [D<n>]  # a JOURNAL.md note (N<n>): an event, not a
+                                                   # choice; D<n> the decision it corrects
     python3 scripts/records.py affected [<since>]  # decisions whose code changed since <since>
                                                    # (default HEAD: the uncommitted changes)
     python3 scripts/records.py stale               # decisions whose code changed after `checked`
@@ -100,7 +103,9 @@ ROOT = Path(__file__).resolve().parent.parent
 BY = ("user", "claude")
 STATUS = ("active", "superseded", "dropped", "untraced")
 STEP_STATUS = ("planned", "done", "dropped")
-QUESTION_STATUS = ("open", "decided", "dropped")
+QUESTION_STATUS = ("open", "decided", "deferred", "dropped")
+# A deferred question waits for a step or milestone, or for someone to ask.
+UNTIL = ("if asked", "later")
 NO_STEP = ("later", "n/a")
 BUG = re.compile(r"B[1-9][0-9]*")
 NAME = re.compile(r"D([1-9][0-9]*)\.toml")
@@ -249,6 +254,7 @@ class Question:
     decided_by: int
     proposal: str
     history: str
+    until: str = ""
 
     @property
     def id(self) -> str:
@@ -566,7 +572,12 @@ def read_question(path: Path, known_topics: set[str]) -> Question:
         raise RecordError(f"{path.name}: a question's file is named `Q<number>.toml`")
     name = path.name
     data = parse(path)
-    fields(name, data, {"title", "asked", "topic", "status", "proposal", "history"}, {"decided_by"})
+    fields(
+        name,
+        data,
+        {"title", "asked", "topic", "status", "proposal", "history"},
+        {"decided_by", "until"},
+    )
     if data["status"] not in QUESTION_STATUS:
         raise RecordError(f"{name}: `status` is one of {', '.join(QUESTION_STATUS)}")
     if data["topic"] not in known_topics:
@@ -576,6 +587,9 @@ def read_question(path: Path, known_topics: set[str]) -> Question:
         raise RecordError(f"{name}: `decided_by` is a decision's number")
     if (data["status"] == "decided") != (decided_by > 0):
         raise RecordError(f"{name}: `decided_by` is given exactly when the status is `decided`")
+    until = data.get("until", "")
+    if not isinstance(until, str) or (data["status"] == "deferred") != bool(until.strip()):
+        raise RecordError(f"{name}: `until` is given exactly when the status is `deferred`")
     return Question(
         number=int(match[1]),
         title=text_field(name, data, "title"),
@@ -583,6 +597,7 @@ def read_question(path: Path, known_topics: set[str]) -> Question:
         topic=str(data["topic"]),
         status=str(data["status"]),
         decided_by=decided_by,
+        until=until.strip(),
         proposal=" ".join(text_field(name, data, "proposal").split()),
         history=text_field(name, data, "history"),
     )
@@ -651,6 +666,13 @@ def problems(records: Records, root: Path, files: list[Path]) -> list[str]:
     upto = max((d.number for d in records.decisions), default=0) + 1
     found += unknown_mentions(files, upto)
     found += unknown_names(records, files, root)
+    found += note_problems(records, root)
+    steps = {s.id for m in records.milestones for s in m.steps} | records.milestone_ids
+    found += [
+        f"{q.id}: `until` is a step, a milestone, or one of {', '.join(UNTIL)}; not `{q.until}`"
+        for q in records.questions
+        if q.status == "deferred" and q.until not in steps and q.until not in UNTIL
+    ]
     return found
 
 
@@ -892,6 +914,12 @@ def render_decisions(records: Records) -> str:
         )
     else:
         parts.append("None.\n")
+    deferred = [q for q in records.questions if q.status == "deferred"]
+    parts.append("\n## Deferred questions\n\n")
+    parts.append(
+        "".join(f"- {q.id} (until {q.until}, `{q.topic}`): {q.title}\n" for q in deferred)
+        or "None.\n"
+    )
     doubted = [d for d in records.decisions if d.status == "active" and d.unverified]
     parts.append("\n## Unverified claims\n\n")
     parts.append(
@@ -930,7 +958,10 @@ def with_block(page: str, block: str, content: str, name: str) -> str:
 
 
 def design_blocks(
-    records: Records, topic: str, places: dict[str, tuple[str, str]] | None = None
+    records: Records,
+    topic: str,
+    places: dict[str, tuple[str, str]] | None = None,
+    notes: list[Entry] | None = None,
 ) -> dict[str, str]:
     """A design page's generated blocks.
 
@@ -952,6 +983,9 @@ def design_blocks(
             state = records.state(d)
             note = "" if state.startswith("built") or state == "rule" else f", {state}"
             text = f"- **{d.title}** ({d.id}{note}): {' '.join(d.summary.split())}"
+            text += "".join(
+                f" *Corrected by {n.id}:* {n.title}." for n in notes or [] if n.corrects == d.id
+            )
             if d.unverified:
                 text += " *Not found in the code yet:* " + "; ".join(d.unverified) + "."
             current.append(textwrap.fill(text, 100, subsequent_indent="  ") + "\n")
@@ -978,8 +1012,10 @@ def design_blocks(
     )
     questions = "".join(
         f"- {q.id}: {q.title} Proposal: {q.proposal}\n"
+        if q.status == "open"
+        else f"- {q.id} (deferred until {q.until}): {q.title}\n"
         for q in records.questions
-        if q.topic == topic and q.status == "open"
+        if q.topic == topic and q.status in ("open", "deferred")
     )
     where: dict[str, set[str]] = {}
     for d in own:
@@ -1075,17 +1111,65 @@ def read_status(path: Path) -> StatusNotes:
 
 
 JOURNAL_ENTRY = re.compile(
-    r'^### <a id="(D[1-9][0-9]*)"></a>(\d{4}-\d{2}-\d{2}): (.*?)(?: \(decision \d+\))?$'
+    r'^### <a id="([DN][1-9][0-9]*)"></a>(\d{4}-\d{2}-\d{2}): (.*?)'
+    r"(?: \((?:decision|note) \d+(?:; corrects (D[1-9][0-9]*))?\))?$"
 )
+
+
+@dataclass(frozen=True)
+class Entry:
+    """A JOURNAL.md entry's heading: a decision (`D<n>`) or a note (`N<n>`)."""
+
+    id: str
+    date: str
+    title: str
+    corrects: str = ""
+
+
+def journal(root: Path) -> list[Entry]:
+    """JOURNAL.md's entries, in order."""
+    path = root / "JOURNAL.md"
+    lines = path.read_text().splitlines() if path.exists() else []
+    return [
+        Entry(m[1], m[2], m[3], m[4] or "") for line in lines if (m := JOURNAL_ENTRY.match(line))
+    ]
+
+
+def note_problems(records: Records, root: Path) -> list[str]:
+    """Notes numbered N1, N2, ... without gaps, each correcting a decision that exists."""
+    notes = [e for e in journal(root) if e.id.startswith("N")]
+    found = [
+        f"JOURNAL.md: note {e.id} is out of order (expected N{i})"
+        for i, e in enumerate(notes, 1)
+        if e.id != f"N{i}"
+    ]
+    known = {d.id for d in records.decisions}
+    found += [
+        f"JOURNAL.md: {e.id} corrects {e.corrects}, which isn't a decision"
+        for e in notes
+        if e.corrects and e.corrects not in known
+    ]
+    return found
+
+
+def new_note(root: Path, title: str, corrects: str = "") -> str:
+    """A note's heading appended to JOURNAL.md with the next number; its body is written after."""
+    if corrects and not ANCHOR_ID.fullmatch(corrects):
+        raise RecordError(f"a note corrects a decision (D<n>), not {corrects!r}")
+    number = sum(e.id.startswith("N") for e in journal(root)) + 1
+    today = datetime.date.today().isoformat()
+    tail = f"; corrects {corrects}" if corrects else ""
+    heading = f'### <a id="N{number}"></a>{today}: {title} (note {number}{tail})'
+    path = root / "JOURNAL.md"
+    path.write_text(path.read_text().rstrip("\n") + f"\n\n{heading}\n\n")
+    return heading
 
 
 def recent(records: Records, root: Path, count: int = 5) -> list[str]:
     """The latest journal entries and the latest steps done, one line each."""
-    journal = root / "JOURNAL.md"
     entries = [
-        f"- {m[1]} ({m[2]}): {m[3]}"
-        for line in (journal.read_text().splitlines() if journal.exists() else [])
-        if (m := JOURNAL_ENTRY.match(line))
+        f"- {e.id} ({e.date}): {e.title}" + (f" (corrects {e.corrects})" if e.corrects else "")
+        for e in journal(root)
     ]
     done = sorted(
         (s for m in records.milestones for s in m.steps if s.status == "done" and s.done),
@@ -1149,9 +1233,10 @@ def views(records: Records, paths: Paths) -> dict[Path, str]:
     if records.milestones:
         out[paths.root / "PLAN.md"] = render_plan(records, paths.plan / "README.md")
     places = anchor_places(paths.root)
+    notes = journal(paths.root)
     for topic, covered in sorted(covers(paths.design / "README.md").items()):
         page = paths.design / f"{topic}.md"
-        blocks = design_blocks(records, topic, places)
+        blocks = design_blocks(records, topic, places, notes)
         if page.exists() and begin("current") in page.read_text():
             # A page with hand-written parts (development.md): only its blocks are generated.
             text = page.read_text()
@@ -1243,6 +1328,8 @@ def run(argv: list[str], paths: Paths) -> bool:
         lines = stale(load(paths), paths.root)
         if lines:
             print("\n".join(lines))
+    elif command == "note" and len(args) in (1, 2) and args[0].strip():
+        print(new_note(paths.root, args[0].strip(), *args[1:]))
     elif command in ("decision", "question") and len(args) == 1 and args[0].strip():
         make = new_decision if command == "decision" else new_question
         folder = paths.decisions if command == "decision" else paths.questions

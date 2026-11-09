@@ -1,0 +1,15 @@
+title = "JOURNAL.md holds notes (N) beside decisions (D)"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "development"
+section = "Documents and records"
+summary = '''
+A journal entry is a decision (`D<n>`, with its TOML) or a note (`N<n>`, the entry alone): an event,
+a finding, or a correction of an earlier entry, which stays as written. `records.py note "<title>"
+[D<n>]` appends a note's heading; one correcting a decision shows on that decision's design page.
+Notes are numbered without gaps and listed in STATUS.md's Recent.
+'''
+history = "JOURNAL.md#D377"
+step = "n/a"
+code = ["scripts/records.py::new_note", "scripts/records.py::note_problems"]

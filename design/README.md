@@ -14,8 +14,7 @@ decisions whose `topic` (or `also`) is this one; never edit it, edit the decisio
   before changing the topic.
 
 A decision's `summary` is therefore written to be read there: what holds now, two to four sentences, names in
-code font. `development.md` is the one page with hand-written parts (the working rules); its generated parts
-sit between marker lines.
+code font. Working rules and this machine's notes are in `AI_SETUP.md` and `AI_INSTRUCTIONS.md`, not here.
 
 The other layers (see `AI_SETUP.md`, Project documents):
 

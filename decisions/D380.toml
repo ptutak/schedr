@@ -1,0 +1,14 @@
+title = "A waiting TriggerDagOperator doesn't count towards the DAG's limits"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "TriggerDagOperator"
+summary = '''
+A TriggerDagOperator holds no worker and no slot, and its attempt doesn't count towards
+`max_active_tasks`, `max_active` or `max_active_per_run`, as `wait_for` nodes don't. Replaces the
+earlier text that it counts as a running task.
+'''
+history = "JOURNAL.md#D380"
+step = "M4.12a"
+code = []

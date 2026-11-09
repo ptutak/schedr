@@ -1,6 +1,7 @@
 title = "Should database tables be partitioned by time?"
 asked = 2026-11-09
 topic = "state"
-status = "open"
+status = "deferred"
 proposal = "Consider partitioning tables by time later."
-history = "PROJECT.md: Retention"
+history = "archive/PROJECT.md: Retention"
+until = "M4B"

@@ -1,0 +1,13 @@
+title = "No OpenTelemetry"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "observability"
+section = "Metrics and logs"
+summary = '''
+schedr exposes Prometheus metrics and logs; it has no OpenTelemetry (no OTLP push, no traces across
+components).
+'''
+history = "JOURNAL.md#D386"
+step = "n/a"
+code = []

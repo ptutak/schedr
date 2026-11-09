@@ -1,6 +1,7 @@
 title = "Should a wait step support .expand()?"
 asked = 2026-11-09
 topic = "wait-steps"
-status = "open"  # open, decided (with decided_by), dropped
+status = "deferred"
 proposal = "A wait step cannot be mapped. `.expand()` is an error, because each instance could end its own way and `TimedOut` has no element-wise routing yet."
-history = "PROJECT.md: Sensors and triggers"
+history = "archive/PROJECT.md: Sensors and triggers"
+until = "M4.12c"

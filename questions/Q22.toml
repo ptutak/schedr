@@ -1,6 +1,7 @@
 title = "Should schedr ship a by_deadline wait?"
 asked = 2026-11-09
 topic = "wait-steps"
-status = "open"  # open, decided (with decided_by), dropped
+status = "decided"
 proposal = "`delay` and `until` are the built-in waits. `by_deadline(a, b, at=...)` was kept for later and is not shipped."
-history = "PROJECT.md#D355"
+history = "archive/PROJECT.md#D355"
+decided_by = 392

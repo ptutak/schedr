@@ -1,6 +1,7 @@
 title = "Should users be able to skip or set a task state from the UI and CLI?"
 asked = 2026-11-09
 topic = "ui-cli"
-status = "open"
+status = "deferred"
 proposal = "Consider a skip action in M6; decide downstream values, running and mapped tasks, and the audit record."
 history = "plan/M6.toml: M6 proposals"
+until = "M6"

@@ -1,0 +1,12 @@
+title = "No notification for a task running too long"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+Notifications have no long-running or SLA event; a task's `timeout` stops one that runs too long.
+'''
+history = "JOURNAL.md#D390"
+step = "M4.13"
+code = []

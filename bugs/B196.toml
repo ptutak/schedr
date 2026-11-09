@@ -1,0 +1,17 @@
+title = "a bad body's error would show an unknown enum value (unknown variant `…`)"
+severity = "low"
+probability = "rare"
+kind = "security"
+summary = "body_error hides quoted values and those serde backticks after integer, floating point, boolean and character; serde's unknown variant `x` names the sent value in backticks too, so a request body that gains an enum field would echo it"
+found = 2026-11-09
+suspected = true
+details = '''
+- **Found:** a side agent reading B194's fix (b1f3d25, `crates/schedr-api/src/routes.rs`,
+  `without_values`, `BACKTICKED_VALUES`). Not reachable today: no request body read through
+  `body_error` (TriggerRequest, PauseRequest, CheckConnectionsRequest, TestConnectionRequest,
+  PostEventRequest) has an enum field; checked by Claude.
+- **The design:** D134: bad bodies produce no value-bearing diagnostics.
+- **Fix proposed:** in the next review round of B194's fix: a test with a body whose field is an
+  enum given an unknown value, then hide the backticked value after `unknown variant ` too (keeping
+  the expected variants serde lists, which are names, not values).
+'''

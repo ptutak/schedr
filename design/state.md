@@ -63,7 +63,7 @@ None.
 
 ## Open
 
-- Q15: Should database tables be partitioned by time? Proposal: Consider partitioning tables by time later.
+- Q15 (deferred until M4B): Should database tables be partitioned by time?
 
 Details and edge cases, with the reasons; read them before changing this:
 

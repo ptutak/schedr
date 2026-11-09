@@ -6,25 +6,26 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-09)
 
 - **Milestone:** M4, Native API complete.
-- **Next step:** M4.12a, `TriggerDagOperator` (decisions D358, D359, D360, D361, D362, D365). Done when: a parent waits on a chained run and routes its `Failed`; a cycle fails; a restart starts no second run
-- **Then:** M4.12b, M4.13, M4.14, M4.15, M4B.1.
-- **Open questions:** 25 (`DECISIONS.md`).
-- **Open bugs:** 35; first: B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely), B40 (low/likely) (`BUGS.md`).
+- **Next step:** M4.12a, `TriggerDagOperator` (decisions D358, D359, D360, D361, D362, D365, D378, D379, D380). Done when: a parent waits on a chained run and routes its `Failed`; a cycle fails; a restart starts no second run
+- **Then:** M4.12b, M4.12c, M4.13, M4.14, M4.15.
+- **Open questions:** 0 (`DECISIONS.md`).
+- **Open bugs:** 36; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
 
 ## Recent
 
+- D396 (2026-11-09): B184 fixed in M4B
+- D395 (2026-11-09): M4B without a measuring step; 20 messages a turn
+- D377 (2026-11-09): notes in the journal
+- N1 (2026-11-09): the design drafts deleted (corrects D373)
 - D376 (2026-11-09): STATUS.md generated
-- D375 (2026-11-09): summaries follow the code
-- D374 (2026-11-09): claims nobody found in the code
-- D373 (2026-11-09): design pages generated from the decisions
-- D372 (2026-11-09): PROJECT.md moves to archive/
 - M4.11h (2026-11-08): `schedr.api`, Python access to the REST API
 - M4.11g (2026-11-08): `delay` and `until` wait steps
 - M4.11f (2026-11-08): `batch=` on `@trigger.poke`
 
 ## In progress
 
-- Next: M4.12a, `TriggerDagOperator`. B194 fixed (a bad request body's 400 showed values from it).
+- M4.12a, `TriggerDagOperator`: decisions 357-362, 365 and 378-380 (379: retried on a missing target; 380: not counted towards the limits); a master-ended node with attempts, the child run's ID recorded on the attempt first, then the run created with it.
+- For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).
 
 ## Waiting for the user
 

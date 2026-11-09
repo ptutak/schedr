@@ -1,0 +1,13 @@
+title = "A cycle through trigger=RunOf across DAGs isn't caught"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "triggers"
+section = "Cycles"
+summary = '''
+A cycle of DAGs started by `trigger=RunOf(...)` isn't detected (those runs have no parent chain to
+check); the docs warn about it. TriggerDagOperator's cycles are caught.
+'''
+history = "JOURNAL.md#D394"
+step = "n/a"
+code = []

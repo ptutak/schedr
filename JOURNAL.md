@@ -142,3 +142,78 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   the rules in force, colleagues' usage, the resume line).
 - **Not chosen:** generating colleagues' usage from the skills' `USAGE.md` (outside the
   repository: CI couldn't check it).
+
+### <a id="N1"></a>2026-11-09: the design drafts deleted (note 1; corrects D373)
+
+- D373's entry says the 20 hand-written design drafts were kept on the local branch
+  `design-drafts`. The user: "we don't need those"; the branch was deleted (it was never pushed).
+
+### <a id="D377"></a>2026-11-09: notes in the journal (decision 377)
+
+- **Question:** an event that isn't a choice (the design drafts' branch deleted, contradicting what
+  D373's entry says) had nowhere to go: the journal had only decisions, and its entries are never
+  rewritten.
+- **Chosen (the user's, A):** a second kind of entry, the note (`N<n>`, anchored like a decision,
+  no TOML): an event, a finding, or a correction of an earlier entry (`corrects D<n>` in its heading,
+  shown on that decision's design page). N1 is the first.
+- **Not chosen:** a third kind for corrections (rare; a note naming what it corrects covers it);
+  notes without numbers (nothing could link to one, and STATUS.md couldn't list them).
+
+### <a id="D378"></a><a id="D379"></a><a id="D380"></a><a id="D381"></a>2026-11-09: TriggerDagOperator: tests, a missing target, limits, mapping (decisions 378-381)
+
+- **Question:** what M4.12a still needed beyond decisions 357-362 and 365: what the operator does in
+  `dags test` and `run_dag`, a target missing when it runs, whether it counts towards the limits
+  (the earlier text: as a running task), and mapping.
+- **Chosen (the user's, all as recommended):** a real run when the target is in the path tested,
+  else the task fails with a hint (378); a missing or conflicting target fails with retries, as it
+  may not be parsed yet, invalid params still without (379); not counted towards the limits, as
+  `wait_for` nodes, though it has attempts for its retries (380); mapping first chosen, then left
+  to M4.12c once Claude found no operator is mappable yet (381).
+- **Not chosen:** a stub in tests (the target's behaviour untested); failing at once on a missing
+  target (a deploy in progress would fail runs); counting it (a long wait would block the DAG's
+  other tasks while holding nothing); mapping only this operator in M4.12a (operators would differ),
+  or all operators in it (a much larger step).
+
+### <a id="D382"></a><a id="D383"></a><a id="D384"></a><a id="D385"></a><a id="D386"></a><a id="D387"></a><a id="D388"></a><a id="D389"></a><a id="D390"></a><a id="D391"></a><a id="D392"></a><a id="D393"></a><a id="D394"></a>2026-11-09: the open questions answered (decisions 382-394)
+
+- **Question:** 25 questions were open, most of them ideas parked for later; the user went through
+  them one by one, Claude's recommendation first.
+- **Decided (the user's):** Q1, one leading master per deployment with standbys, scaled by more
+  deployments (D382); Q3, a slim image in 1.0.0 (D383, step R1.0a, against Claude's "full
+  image only"); Q5, oldest-ready-first stays (D384); Q6, a worker's interpreters serve all its
+  roots, another set is another worker (D385, the user's own answer); Q7, no OpenTelemetry
+  (D386); Q8, no isolation after host losses (D387); Q16, a calendar is an event trigger
+  (D388); Q18, no per-code retries (D389); Q19, no long-running notification (D390);
+  Q20, email and a webhook (D391); Q22, no `by_deadline` (D392); Q23, no `cancel_rest`
+  (D393); Q25, `trigger=RunOf` cycles uncaught, documented (D394). Q17 decided by D381
+  (operator mapping, M4.12c).
+- **Deferred** (status `deferred`, a new status with `until`): Q4, editable and shared limits, to
+  M6 (as D95 said; first answered "hidden env in M4B", then revisited in full); Q9-Q14 (LDAP, skip
+  or set a state, OIDC, `schedr login`) to M6; Q15, partitioning, to M4B; Q21, mapping wait steps,
+  to M4.12c; Q2, NetworkPolicies, if asked; Q24, a manual rebalancing of triggers (the user's idea),
+  later.
+
+### <a id="D395"></a>2026-11-09: M4B without a measuring step; 20 messages a turn (decision 395)
+
+- **Question:** M4B (a worker's turn of messages in one transaction, D54) started with a step to
+  measure per-turn timings and record a stress baseline (M4B.1).
+- **Chosen (the user's):** no measuring step (M4B.1 dropped); the design stays as planned, one
+  transaction for all of a turn's messages, and `MESSAGES_PER_TURN` goes from 10 to 20. The
+  throughput B184 lacks (500 wait steps ending at once recorded at about 22 a second) should come
+  as a side effect, not as the goal. (Claude first wrote this as "M4B is B184's fix"; corrected by
+  the user before it was committed.)
+- **Not chosen:** measuring first.
+
+### <a id="D396"></a>2026-11-09: B184 fixed in M4B (decision 396)
+
+- **Question:** would M4B (a turn in one transaction, 20 messages a turn) fix B184? Only the
+  commit (about 8 of the 15 ms a `Finished` costs on file SQLite) is shared by a turn; the
+  statements (about 7 ms) stay per message, and the agent's journal (about 5 ms a result) comes
+  next: roughly twice as fast, not enough to call it fixed. (The user had thought `Finished` writes
+  were batched already: a turn shares the core lock since B12, but each message is still its own
+  transaction.)
+- **Chosen (the user's, all four of Claude's additions):** set-based writes for a turn's
+  `Finished`s; each run read and settled once per turn; the agent's journal in groups; a target
+  (stress 23's 500 ends within 5 s on Postgres) and a unit test counting a turn's statements.
+  Steps M4B.4 and M4B.5.
+- **Not chosen:** the journal in groups as a step only if stress 23 still missed the target.

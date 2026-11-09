@@ -1,6 +1,7 @@
 title = "Should watcher steps be isolated after repeated host losses to identify the cause?"
 asked = 2026-11-09
 topic = "observability"
-status = "open"  # open, decided (with decided_by), dropped
+status = "decided"
 proposal = "Consider separate processes for wait steps after a host loss to identify the cause; today none is blamed."
-history = "PROJECT.md#D342"
+history = "archive/PROJECT.md#D342"
+decided_by = 387

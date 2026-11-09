@@ -4,7 +4,8 @@
 updated = 2026-11-09
 
 in_progress = [
-    "Next: M4.12a, `TriggerDagOperator`. B194 fixed (a bad request body's 400 showed values from it).",
+    "M4.12a, `TriggerDagOperator`: decisions 357-362, 365 and 378-380 (379: retried on a missing target; 380: not counted towards the limits); a master-ended node with attempts, the child run's ID recorded on the attempt first, then the run created with it.",
+    "For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).",
 ]
 
 waiting = []

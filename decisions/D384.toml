@@ -1,0 +1,13 @@
+title = "Assignment stays oldest-ready-first; no priorities between DAGs"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+summary = '''
+Eligible tasks are assigned oldest-ready-first. There are no task or DAG priorities and no fairness
+between DAGs.
+'''
+history = "JOURNAL.md#D384"
+step = "n/a"
+code = []

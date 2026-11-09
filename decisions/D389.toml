@@ -1,0 +1,13 @@
+title = "A command's retry doesn't depend on its exit code"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Retries"
+summary = '''
+A declared exit code is a success and isn't retried; any other code fails the attempt, retried as
+usual. There are no per-code retry rules.
+'''
+history = "JOURNAL.md#D389"
+step = "n/a"
+code = []

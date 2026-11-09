@@ -1,0 +1,14 @@
+title = "Operators are mapped in a later step, TriggerDagOperator with them"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "TriggerDagOperator"
+summary = '''
+No operator can be mapped yet (only `@task` functions have `.expand`); operator mapping, one design
+for every operator, is plan step M4.12c. Until then mapping a TriggerDagOperator is refused with a
+hint to create one per element in a `for` loop in the DAG file.
+'''
+history = "JOURNAL.md#D381"
+step = "M4.12c"
+code = []

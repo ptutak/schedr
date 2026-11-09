@@ -1,6 +1,7 @@
 title = "Should task assignment add priorities or fairness between DAGs?"
 asked = 2026-11-09
 topic = "assignment"
-status = "open"  # open, decided (with decided_by), dropped
+status = "decided"
 proposal = "Keep oldest-ready-first ordering for eligible tasks; priorities and inter-DAG fairness may come later."
-history = "PROJECT.md: Task assignment"
+history = "archive/PROJECT.md: Task assignment"
+decided_by = 384

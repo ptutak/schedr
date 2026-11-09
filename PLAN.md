@@ -180,9 +180,10 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.11g | `delay` and `until` wait steps | done 2026-11-08 | D355 |
 | M4.11h | `schedr.api`, Python access to the REST API | done 2026-11-08 | D356 |
 | M4.12 | Runs between and over time | planned |  |
-| M4.12a (part of M4.12) | `TriggerDagOperator` | **next** | D358, D359, D360, D361, D362, D365 |
+| M4.12a (part of M4.12) | `TriggerDagOperator` | **next** | D358, D359, D360, D361, D362, D365, D378, D379, D380 |
 | M4.12b (part of M4.12) | Backfill | planned | D363, D364 |
-| M4.13 | Notifications | planned |  |
+| M4.12c (part of M4.12) | Operator mapping | planned | D381 |
+| M4.13 | Notifications | planned | D390, D391 |
 | M4.14 | Retention | planned |  |
 | M4.15 | Per-task memory and upgrade rules | planned | D50 |
 
@@ -198,17 +199,23 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 ## M4B: Batched worker messages (a milestone after M4)
 
-**Done when:** A worker's turn of messages (up to `MESSAGES_PER_TURN`) is stored in **one transaction**: one lease check and one commit fsync per turn instead of one per message, a failed message undone alone, and the measured lock and commit time per turn lower than M4's. Scope, criteria and notes: `plan/M4B.toml`.
+**Done when:** A worker's turn of messages (up to `MESSAGES_PER_TURN`, raised from 10 to 20) is stored in **one transaction**: one lease check and one commit fsync per turn instead of one per message, a failed message undone alone; a turn's `Finished`s written together and each run read and settled once per turn; B184 fixed (500 ends recorded within 5 s on Postgres by stress 23). Scope, criteria and notes: `plan/M4B.toml`.
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
-| M4B.1 | Measure first | planned |  |
+| M4B.1 | Measure first | dropped |  |
 | M4B.2 | Savepoints in `schedr-db` | planned |  |
-| M4B.3 | Turns in one transaction | planned | D54 |
+| M4B.3 | Turns in one transaction | planned | D54, D395 |
+| M4B.4 | A turn's `Finished`s written together | planned |  |
+| M4B.5 | The agent's journal in groups | planned | D396 |
 
 ## 1.0.0: after M4B
 
 **Done when:** 1.0.0 is released once M4B is done; from then on the schema and the protocol change only additively. Scope, criteria and notes: `plan/1.0.0.toml`.
+
+| Step | Title | State | Decisions |
+|---|---|---|---|
+| R1.0a | A slim image | planned | D383 |
 
 ## M5: Airflow layer
 

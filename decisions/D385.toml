@@ -1,0 +1,13 @@
+title = "A worker's interpreters serve all its roots"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "task-processes"
+section = "Interpreters"
+summary = '''
+A worker has one set of interpreters for all its DAG roots, never one per root. Workers are cheap: a
+different set of interpreters is a different worker with its own queues.
+'''
+history = "JOURNAL.md#D385"
+step = "n/a"
+code = []

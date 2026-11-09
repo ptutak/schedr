@@ -1,6 +1,7 @@
 title = "How should LDAP find a person’s directory entry?"
 asked = 2026-11-09
 topic = "ui-cli"
-status = "open"
+status = "deferred"
 proposal = "Consider search then bind, a DN template, or both."
-history = "plan/M6.toml: notes; PROJECT.md: Roadmap"
+history = "plan/M6.toml: notes; archive/PROJECT.md: Roadmap"
+until = "M6"

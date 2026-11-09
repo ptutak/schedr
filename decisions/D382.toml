@@ -1,0 +1,13 @@
+title = "One leading master per deployment; scale by more deployments"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "components"
+section = "Roles"
+summary = '''
+A deployment has one leading master and standby masters ready to take over, as now. Scheduling is
+never sharded across leaders: more load means more deployments.
+'''
+history = "JOURNAL.md#D382"
+step = "n/a"
+code = []

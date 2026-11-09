@@ -894,6 +894,18 @@ status = "planned"
 part_of = "M4.12"
 
 [[steps]]
+id = "M4.12c"
+title = "Operator mapping"
+scope = '''
+(decision 381, Q21): `.partial()` and `.expand()` on every operator (command, script, empty, `TriggerDagOperator`), one design; whether wait steps map with them (Q21), with per-instance outcomes
+'''
+done_when = '''
+a mapped `TriggerDagOperator` starts a run per element and a mapped `CommandOperator` runs per element; the design decided first
+'''
+status = "planned"
+part_of = "M4.12"
+
+[[steps]]
 id = "M4.13"
 title = "Notifications"
 scope = '''

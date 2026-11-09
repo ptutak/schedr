@@ -53,41 +53,54 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
-| 2 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
-| 3 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 4 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 5 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 6 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
-| 7 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
-| 8 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 9 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 10 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 11 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 12 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 13 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 14 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 15 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 16 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 17 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 18 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 19 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 20 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 21 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
-| 22 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 23 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 24 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 25 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 26 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 27 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 28 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 29 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 30 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 31 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 32 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 33 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 34 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 35 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B196: a bad body's error would show an unknown enum value (unknown variant `…`) (Suspected) | 1 | low | rare | **security** |
+| 2 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
+| 3 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
+| 4 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
+| 5 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 6 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 7 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
+| 8 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
+| 9 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 10 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 11 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 12 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 13 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 14 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 15 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 16 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 17 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 18 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 19 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 20 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 21 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 22 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 23 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 24 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 25 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 26 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 27 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 28 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 29 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 30 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 31 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 32 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 33 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 34 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 35 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 36 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B196: a bad body's error would show an unknown enum value (unknown variant `…`) (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, security (score 1): body_error hides quoted values and those serde backticks after integer, floating point, boolean and character; serde's unknown variant `x` names the sent value in backticks too, so a request body that gains an enum field would echo it.
+- **Found:** a side agent reading B194's fix (b1f3d25, `crates/schedr-api/src/routes.rs`,
+  `without_values`, `BACKTICKED_VALUES`). Not reachable today: no request body read through
+  `body_error` (TriggerRequest, PauseRequest, CheckConnectionsRequest, TestConnectionRequest,
+  PostEventRequest) has an enum field; checked by Claude.
+- **The design:** D134: bad bodies produce no value-bearing diagnostics.
+- **Fix proposed:** in the next review round of B194's fix: a test with a body whose field is an
+  enum given an unknown value, then hide the backticked value after `unknown variant ` too (keeping
+  the expected variants serde lists, which are names, not values).
 
 ## B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected)
 
@@ -192,6 +205,9 @@ step touches their code or the user schedules them.
   message, then about one per ten.
 - **Why it matters:** a sensor's point is reacting soon; a burst of events (a shared file, a
   run many steps wait for) delays the last by tens of seconds.
+- **To be fixed in M4B** (decisions 395, D396, the user, 2026-11-09): a turn in one transaction,
+  its `Finished`s written together, each run settled once per turn, the agent's journal in groups
+  (M4B.4, M4B.5); fixed when stress 23 records its 500 ends within 5 s on Postgres.
 
 ## B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15)
 

@@ -1,0 +1,13 @@
+title = "Wait steps aren't isolated after host losses"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "observability"
+section = "Metrics and logs"
+summary = '''
+A lost watcher host blames none of its wait steps, and they aren't moved to processes of their own;
+`worker_watcher_hosts_lost` shows the losses, and this is reconsidered if they show up in real use.
+'''
+history = "JOURNAL.md#D387"
+step = "n/a"
+code = []

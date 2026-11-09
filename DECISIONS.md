@@ -5,33 +5,21 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ## Open questions
 
-| # | Asked | Topic | Question | Proposal |
-|---|---|---|---|---|
-| Q25 | 2026-11-09 | triggers | Should a cycle through trigger=RunOf across DAGs be caught? | A cycle through trigger=RunOf across DAGs stays uncaught. The cycle check is the chain of parent runs, which these runs do not have. |
-| Q24 | 2026-11-09 | triggers | Should a new worker take triggers that are already running? | A new worker does not take a trigger that is already running. Moving one from its bookmark was left for later. |
-| Q23 | 2026-11-09 | wait-steps | Should first_of cancel the tasks that did not win? | The tasks that do not win keep running, and one that fails still fails the run. `first_of(..., cancel_rest=True)` was kept for later. |
-| Q22 | 2026-11-09 | wait-steps | Should schedr ship a by_deadline wait? | `delay` and `until` are the built-in waits. `by_deadline(a, b, at=...)` was kept for later and is not shipped. |
-| Q21 | 2026-11-09 | wait-steps | Should a wait step support .expand()? | A wait step cannot be mapped. `.expand()` is an error, because each instance could end its own way and `TimedOut` has no element-wise routing yet. |
-| Q20 | 2026-11-09 | outcomes | Should Slack and Teams have their own notification channels? | Notifications, planned (M4.13), use email and a generic JSON webhook. Dedicated Slack and Teams channels with their own formatting may come later. |
-| Q19 | 2026-11-09 | outcomes | Should schedr notify when a task runs too long? | No SLA or long-running-task event for now. Notifications, planned (M4.13), do not include one. |
-| Q18 | 2026-11-09 | outcomes | Should a command's retry depend on its exit code? | A declared exit code is a success and is not retried. Any other code fails and is retried. Per-code retry, such as retry on 75 and never on 2, may come later. |
-| Q17 | 2026-11-09 | python-api | Should operators support .partial() and .expand()? | Add .partial() and .expand() on operators when M5's BashOperator needs them. Today only @task functions map. |
-| Q16 | 2026-11-09 | python-api | Should a calendar the master understands be a built-in time trigger? | A Python calendar can be an event trigger, with no catchup and no backfill. A data-only time trigger such as Cron(..., exclude=[...]) may come later. |
-| Q15 | 2026-11-09 | state | Should database tables be partitioned by time? | Consider partitioning tables by time later. |
-| Q14 | 2026-11-09 | ui-cli | Should the CLI obtain OIDC tokens through a login command? | Consider a device-flow `schedr login` command. |
-| Q13 | 2026-11-09 | ui-cli | Should schedr provide OIDC integration for deployments without a mesh? | Consider chart-managed oauth2-proxy or schedr validating OIDC tokens itself. |
-| Q12 | 2026-11-09 | ui-cli | Should users be able to skip or set a task state from the UI and CLI? | Consider a skip action in M6; decide downstream values, running and mapped tasks, and the audit record. |
-| Q11 | 2026-11-09 | ui-cli | What encryption should LDAP connections require? | Consider requiring TLS with plaintext only on loopback, or allowing plaintext with a flag and warning. |
-| Q10 | 2026-11-09 | ui-cli | Who may sign in through LDAP? | Consider an optional group restriction, a required group, or any valid account. |
-| Q9 | 2026-11-09 | ui-cli | How should LDAP find a person’s directory entry? | Consider search then bind, a DN template, or both. |
-| Q8 | 2026-11-09 | observability | Should watcher steps be isolated after repeated host losses to identify the cause? | Consider separate processes for wait steps after a host loss to identify the cause; today none is blamed. |
-| Q7 | 2026-11-09 | observability | Should schedr add OpenTelemetry traces across its components? | Consider OpenTelemetry OTLP push and traces of a run across components later. |
-| Q6 | 2026-11-09 | task-processes | Should each DAG root be able to choose its own Python interpreter? | Allow a DAG root to select an interpreter under `[dags.roots]`; today `[dags] interpreter` applies to all roots. |
-| Q5 | 2026-11-09 | assignment | Should task assignment add priorities or fairness between DAGs? | Keep oldest-ready-first ordering for eligible tasks; priorities and inter-DAG fairness may come later. |
-| Q4 | 2026-11-09 | assignment | Should concurrency limits be editable without a code change and shared across DAGs? | Consider API or CLI overrides for incidents and limits shared across DAGs in M6. |
-| Q3 | 2026-11-08 | deployment | Should schedr provide a slim image alongside the full base image? | Keep the full image as the default; add a slim image if someone needs it. |
-| Q2 | 2026-11-08 | deployment | Should the chart provide NetworkPolicies for clusters without a mesh? | The chart uses Istio policies today; NetworkPolicies could be added for clusters without a mesh. |
-| Q1 | 2026-11-08 | components | Should one deployment shard scheduling across multiple leading masters? | Measure one master on real Postgres first; if it cannot meet the load, consider sharding by DAG. |
+None.
+
+## Deferred questions
+
+- Q2 (until if asked, `deployment`): Should the chart provide NetworkPolicies for clusters without a mesh?
+- Q4 (until M6, `assignment`): Should concurrency limits be editable without a code change and shared across DAGs?
+- Q9 (until M6, `ui-cli`): How should LDAP find a person’s directory entry?
+- Q10 (until M6, `ui-cli`): Who may sign in through LDAP?
+- Q11 (until M6, `ui-cli`): What encryption should LDAP connections require?
+- Q12 (until M6, `ui-cli`): Should users be able to skip or set a task state from the UI and CLI?
+- Q13 (until M6, `ui-cli`): Should schedr provide OIDC integration for deployments without a mesh?
+- Q14 (until M6, `ui-cli`): Should the CLI obtain OIDC tokens through a login command?
+- Q15 (until M4B, `state`): Should database tables be partitioned by time?
+- Q21 (until M4.12c, `wait-steps`): Should a wait step support .expand()?
+- Q24 (until later, `triggers`): Should a new worker take triggers that are already running?
 
 ## Unverified claims
 
@@ -41,6 +29,26 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D396 | 2026-11-09 | user | planned (M4B.5) | workers | B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups |
+| D395 | 2026-11-09 | user | planned (M4B.3) | workers | M4B without a measuring step; 20 messages a turn |
+| D394 | 2026-11-09 | user | rule | triggers | A cycle through trigger=RunOf across DAGs isn't caught |
+| D393 | 2026-11-09 | user | rule | wait-steps | first_of doesn't cancel the tasks that didn't win |
+| D392 | 2026-11-09 | user | rule | wait-steps | No by_deadline wait |
+| D391 | 2026-11-09 | user | planned (M4.13) | outcomes | Notifications go by email and a generic webhook |
+| D390 | 2026-11-09 | user | planned (M4.13) | outcomes | No notification for a task running too long |
+| D389 | 2026-11-09 | user | rule | outcomes | A command's retry doesn't depend on its exit code |
+| D388 | 2026-11-09 | user | rule | python-api | A calendar is an event trigger, not a built-in time trigger |
+| D387 | 2026-11-09 | user | rule | observability | Wait steps aren't isolated after host losses |
+| D386 | 2026-11-09 | user | rule | observability | No OpenTelemetry |
+| D385 | 2026-11-09 | user | rule | task-processes | A worker's interpreters serve all its roots |
+| D384 | 2026-11-09 | user | rule | assignment | Assignment stays oldest-ready-first; no priorities between DAGs |
+| D383 | 2026-11-09 | user | planned (R1.0a) | deployment | A slim image beside the full one |
+| D382 | 2026-11-09 | user | rule | components | One leading master per deployment; scale by more deployments |
+| D381 | 2026-11-09 | user | planned (M4.12c) | chained-runs | Operators are mapped in a later step, TriggerDagOperator with them |
+| D380 | 2026-11-09 | user | planned (M4.12a) | chained-runs | A waiting TriggerDagOperator doesn't count towards the DAG's limits |
+| D379 | 2026-11-09 | user | planned (M4.12a) | chained-runs | A missing or conflicting target fails the operator, with its retries |
+| D378 | 2026-11-09 | user | planned (M4.12a) | chained-runs | In tests a TriggerDagOperator starts a real run of a target in the tested path |
+| D377 | 2026-11-09 | user | rule | development | JOURNAL.md holds notes (N) beside decisions (D) |
 | D376 | 2026-11-09 | user | rule | development | STATUS.md is generated from the records and status.toml |
 | D375 | 2026-11-09 | user | rule | development | Summaries follow the code: names checked, affected and stale decisions listed |
 | D374 | 2026-11-09 | user | rule | development | A decision lists the claims nobody found in the code (unverified) |
@@ -426,6 +434,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### assignment
 
+- D384: Assignment stays oldest-ready-first; no priorities between DAGs
 - D95: Concurrency limits cannot be overridden through the API or CLI
 - D89: Mapped instances each count toward concurrency limits
 - D88: The master keeps concurrency counts in memory
@@ -439,6 +448,10 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### chained-runs
 
+- D381: Operators are mapped in a later step, TriggerDagOperator with them
+- D380: A waiting TriggerDagOperator doesn't count towards the DAG's limits
+- D379: A missing or conflicting target fails the operator, with its retries
+- D378: In tests a TriggerDagOperator starts a real run of a target in the tested path
 - D365: Tasks start runs with `TriggerDagOperator`
 - D362: A triggered run accepts an optional `planned_for`
 - D361: An operator retry starts a new run only after failure
@@ -527,6 +540,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### components
 
+- D382: One leading master per deployment; scale by more deployments
 - D297: A master that is not leading is unready and refuses streams
 - D43: Task finishes and commands wake a scheduler round
 - D42: A recorded task finish wakes a scheduler round
@@ -591,10 +605,12 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### deployment
 
+- D383: A slim image beside the full one
 - D37: Deploy schedr ui by default in the distributed chart
 
 ### development
 
+- D377: JOURNAL.md holds notes (N) beside decisions (D)
 - D376: STATUS.md is generated from the records and status.toml
 - D375: Summaries follow the code: names checked, affected and stale decisions listed
 - D374: A decision lists the claims nobody found in the code (unverified)
@@ -638,6 +654,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### observability
 
+- D387: Wait steps aren't isolated after host losses
+- D386: No OpenTelemetry
 - D343: The UI shows watcher hosts and switched-off sensors
 - D129: Show node problems on the Deployments graph
 - D123: Record leader and standby masters with heartbeats
@@ -645,6 +663,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### outcomes
 
+- D391: Notifications go by email and a generic webhook
+- D390: No notification for a task running too long
+- D389: A command's retry doesn't depend on its exit code
 - D345: A task starts after all its upstream tasks end
 - D120: An outcome-filtered order edge from a mapped task counts each instance
 - D119: Mapped output outcome selection stays per element across a whole edge
@@ -662,6 +683,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### python-api
 
+- D388: A calendar is an event trigger, not a built-in time trigger
 - D118: Build mapped elements containing templates or dag_ctx per instance
 - D99: Shell-string commands take no placeholders
 - D97: Invalid group dependencies name where they were written
@@ -761,6 +783,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### task-processes
 
+- D385: A worker's interpreters serve all its roots
 - D213: Attempt timeouts include secret and connection reads
 - D116: A task's timeout counts from its launch
 - D100: A cancelled process group keeps its remaining grace period
@@ -780,6 +803,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### triggers
 
+- D394: A cycle through trigger=RunOf across DAGs isn't caught
 - D354: `EventNamed` waits for events posted through the API
 - D352: `@trigger.poke` batches events in Python
 - D350: Triggers have endpoints, manual event runs and test helpers
@@ -830,6 +854,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### wait-steps
 
+- D393: first_of doesn't cancel the tasks that didn't win
+- D392: No by_deadline wait
 - D355: `delay` and `until` are plain Python wait steps
 - D351: A graph groups `first_of` options in a box
 - D347: `first_of` and `at_least` select completed outcomes
@@ -851,6 +877,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D396: B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups
+- D395: M4B without a measuring step; 20 messages a turn
 - D333: Worker pass_env reaches parsing and the fork server
 - D281: An assignment cannot start after its worker lease expires
 - D280: A disconnected or frozen worker can cause a task to run twice

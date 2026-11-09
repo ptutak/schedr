@@ -1,6 +1,7 @@
 title = "Should schedr add OpenTelemetry traces across its components?"
 asked = 2026-11-09
 topic = "observability"
-status = "open"  # open, decided (with decided_by), dropped
+status = "decided"
 proposal = "Consider OpenTelemetry OTLP push and traces of a run across components later."
-history = "PROJECT.md: Observability"
+history = "archive/PROJECT.md: Observability"
+decided_by = 386

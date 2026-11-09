@@ -29,4 +29,7 @@ details = '''
   message, then about one per ten.
 - **Why it matters:** a sensor's point is reacting soon; a burst of events (a shared file, a
   run many steps wait for) delays the last by tens of seconds.
+- **To be fixed in M4B** (decisions 395, D396, the user, 2026-11-09): a turn in one transaction,
+  its `Finished`s written together, each run settled once per turn, the agent's journal in groups
+  (M4B.4, M4B.5); fixed when stress 23 records its 500 ends within 5 s on Postgres.
 '''

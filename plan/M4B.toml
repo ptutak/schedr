@@ -1,9 +1,19 @@
 title = "Batched worker messages (a milestone after M4)"
 order = 70
 done_when = '''
-A worker's turn of messages (up to `MESSAGES_PER_TURN`) is stored in **one transaction**: one lease check and one commit fsync per turn instead of one per message, a failed message undone alone, and the measured lock and commit time per turn lower than M4's.
+A worker's turn of messages (up to `MESSAGES_PER_TURN`, raised from 10 to 20) is stored in **one transaction**: one lease check and one commit fsync per turn instead of one per message, a failed message undone alone; a turn's `Finished`s written together and each run read and settled once per turn; B184 fixed (500 ends recorded within 5 s on Postgres by stress 23).
 '''
 notes = '''
+**No measuring step; 20 messages a turn** (the user, 2026-11-09, decision 395): the design
+stays as planned (one transaction for a turn's messages); `MESSAGES_PER_TURN` goes from 10 to
+20. The throughput B184 lacks (500 wait steps ending at once recorded at about 22 a second) is
+expected to come as a side effect, not the goal.
+
+**B184 fixed in M4B too** (the user, 2026-11-09, decision 396): on top of the turn's transaction,
+its `Finished`s written with set-based statements, each run read and settled once per turn, and
+the agent's journal written in groups; B184 counts as fixed when stress 23 records its 500 ends
+within 5 s on Postgres, with a unit test counting the statements of a turn.
+
 A milestone of its own between M4 and M5 (the user, 2026-11-01: renamed from "M4.5", which
 read as a step of M4, M4.5 being the agent channel there).
 
@@ -60,7 +70,7 @@ scope = '''
 per-turn timings (waiting for the core lock, handling, the commit) and the messages per turn as metrics; the assign-to-started gap split into its parts (Grok's 2026-10-28 investigation: rounds holding the lock); a stress baseline (scenario chosen with the user, run only with their go)
 '''
 done_when = "the baseline recorded"
-status = "planned"
+status = "dropped"
 
 [[steps]]
 id = "M4B.2"
@@ -75,9 +85,31 @@ status = "planned"
 id = "M4B.3"
 title = "Turns in one transaction"
 scope = '''
-the turn loop (`service.rs`) wrapped in one transaction, a savepoint and memory snapshot per message, the batch ended at `CodeVersionChanged`, `Draining` and `Deregister`, heartbeats and warnings after the commit; metrics, wakes and `arrivals` deferred to after the commit; the fallback when the commit fails; the read-back once per turn
+the turn loop (`service.rs`) wrapped in one transaction, `MESSAGES_PER_TURN` raised to 20, a savepoint and memory snapshot per message, the batch ended at `CodeVersionChanged`, `Draining` and `Deregister`, heartbeats and warnings after the commit; metrics, wakes and `arrivals` deferred to after the commit; the fallback when the commit fails; the read-back once per turn
 '''
 done_when = '''
-a failed message undone alone while the others are stored; a commit failure redone one by one; no metric counted twice; the baseline's measurements lower
+a failed message undone alone while the others are stored; a commit failure redone one by one; no metric counted twice; `MESSAGES_PER_TURN` 20
+'''
+status = "planned"
+
+[[steps]]
+id = "M4B.4"
+title = "A turn's `Finished`s written together"
+scope = '''
+(decision 396, B184; the message side of what M2.10b's T2 and B18 did for assignments: a round's assignments in one transaction, a run's instance updates in statements of up to 500 rows): the turn's attempts ended with one `UPDATE ... WHERE id IN (...)`, their outputs in one multi-row `INSERT`, their instances updated together; the turn's `Finished`s grouped by run, each run read (`run_tasks`) and settled (`advance`) once
+'''
+done_when = '''
+a unit test counts the statements of a turn of 20 `Finished`s: a few per turn, not about six per message; each run read once per turn
+'''
+status = "planned"
+
+[[steps]]
+id = "M4B.5"
+title = "The agent's journal in groups"
+scope = '''
+(decision 396, B184): results that arrive together written to the agent's journal with one fsync
+'''
+done_when = '''
+a burst of results costs one fsync per group; stress 23 records its 500 ends within 5 s on Postgres (B184 fixed)
 '''
 status = "planned"

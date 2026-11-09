@@ -1,0 +1,14 @@
+title = "M4B without a measuring step; 20 messages a turn"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+M4B is built as planned (D54: a worker's turn of messages in one transaction) without a measuring
+step first, and `MESSAGES_PER_TURN` goes from 10 to 20. B184's throughput (about 22 ends a second)
+is expected to improve as a side effect; it isn't the goal.
+'''
+history = "JOURNAL.md#D395"
+step = "M4B.3"
+code = []

@@ -123,6 +123,9 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 - **When I reject or question a proposal,** rework it; don't defend it. When I ask a question
   in the middle of a choice, answer it, then ask again.
 - **Record "Not chosen: …"** for alternatives that were seriously considered.
+- **What happened but wasn't chosen** (a branch deleted, a finding, a fact in an earlier entry
+  that changed) is a note: `python3 scripts/records.py note "<title>" [D<n>]` appends its
+  heading to `JOURNAL.md` (`N<n>`; `D<n>` the decision it corrects), then write its lines.
 - **Record each decision the moment it is taken** (the `project-docs` skill's routine): its
   `decisions/D<n>.toml` (`python3 scripts/records.py decision "<title>"`; its `step` the plan
   step that builds it), a dated entry in `JOURNAL.md` with the reasons and "Not chosen",
@@ -246,7 +249,7 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   a patch on a minor that already qualifies may move once it is 3 days old (ages in UTC
   calendar days; a yanked `x.y.0` still dates its minor). A yanked version in the lock moves
   to a version that meets the rule, forward if one exists, else back. Record a new library in
-  `design/development.md`, Libraries (need, choice, why, not chosen).
+  `AI_SETUP.md`, Libraries (need, choice, why, not chosen).
 - Rewrite `status.toml` at the end of each step or session (what's in progress, what waits for
   the user, the rules in force; never appended to) and `make records`: `STATUS.md` is generated
   from it and the records, so the next session can start from it.
