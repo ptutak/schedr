@@ -5,7 +5,7 @@ status = "active"
 topic = "workers"
 section = "Messages and transactions"
 summary = '''
-On top of a turn in one transaction (D54, D395), M4B writes a turn's `Finished`s with set-based
+With a turn's messages in groups (D397), M4B writes a turn's `Finished`s with set-based
 statements, reads and settles each run once per turn, and writes the agent's journal in groups.
 B184 counts as fixed when stress 23 records its 500 ends within 5 s on Postgres; a unit test
 counts a turn's statements.

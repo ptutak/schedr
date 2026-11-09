@@ -217,3 +217,21 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   (stress 23's 500 ends within 5 s on Postgres) and a unit test counting a turn's statements.
   Steps M4B.4 and M4B.5.
 - **Not chosen:** the journal in groups as a step only if stress 23 still missed the target.
+
+### <a id="D397"></a>2026-11-09: a turn's messages in groups, savepoints later (decision 397)
+
+- **Question:** M4B (D54) planned one transaction per turn with a savepoint and memory snapshot per
+  message. Is there a cheaper way to get most of the gain?
+- **Options:** A, as planned; B, the turn's `Finished`s (and `Started`s) each handled as one batch
+  operation in one transaction, failing back to one by one, as T2 does for assignments; C, the whole
+  turn in one transaction without savepoints (a bad message costs N+1); D, asynchronous commits
+  (unsafe: an ack for a result a crash can lose). Claude found that grouping only consecutive
+  messages makes tiny groups with short tasks, so a turn is reordered (`Started`s first; an
+  attempt's own order holds; batch-ending messages are barriers).
+- **Chosen (the user's):** B with the reordering first (M4B.3, M4B.2's savepoints dropped from it);
+  A on top of B later, a savepoint per group (M4B.6), only if stress or real traffic shows it
+  matters. 40 messages a turn (the user's; D395 had 20), a hidden setting, with a fallback of at
+  most 10 messages redone in a turn so the core lock is held no longer than today. Replaces D54's
+  design as the first step and D395's 20.
+- **Not chosen:** C (N+1 transactions on a bad message); D (unsafe); more than 40 by default (the
+  gain flattens, a fallback costs more).

@@ -199,15 +199,16 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 ## M4B: Batched worker messages (a milestone after M4)
 
-**Done when:** A worker's turn of messages (up to `MESSAGES_PER_TURN`, raised from 10 to 20) is stored in **one transaction**: one lease check and one commit fsync per turn instead of one per message, a failed message undone alone; a turn's `Finished`s written together and each run read and settled once per turn; B184 fixed (500 ends recorded within 5 s on Postgres by stress 23). Scope, criteria and notes: `plan/M4B.toml`.
+**Done when:** A worker's turn of messages (up to 40, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`) is stored as groups: its `Started`s, then its `Finished`s, each group one transaction with set-based statements and each run read and settled once, a failed group redone one by one; B184 fixed (500 ends recorded within 5 s on Postgres by stress 23). Scope, criteria and notes: `plan/M4B.toml`.
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
 | M4B.1 | Measure first | dropped |  |
-| M4B.2 | Savepoints in `schedr-db` | planned |  |
-| M4B.3 | Turns in one transaction | planned | D54, D395 |
+| M4B.2 | Savepoints in `schedr-db` | dropped |  |
+| M4B.3 | A turn's messages in groups | planned | D397 |
 | M4B.4 | A turn's `Finished`s written together | planned |  |
 | M4B.5 | The agent's journal in groups | planned | D396 |
+| M4B.6 | The turn in one transaction, savepoints per group | planned |  |
 
 ## 1.0.0: after M4B
 

@@ -1,13 +1,22 @@
 title = "Batched worker messages (a milestone after M4)"
 order = 70
 done_when = '''
-A worker's turn of messages (up to `MESSAGES_PER_TURN`, raised from 10 to 20) is stored in **one transaction**: one lease check and one commit fsync per turn instead of one per message, a failed message undone alone; a turn's `Finished`s written together and each run read and settled once per turn; B184 fixed (500 ends recorded within 5 s on Postgres by stress 23).
+A worker's turn of messages (up to 40, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`) is stored as groups: its `Started`s, then its `Finished`s, each group one transaction with set-based statements and each run read and settled once, a failed group redone one by one; B184 fixed (500 ends recorded within 5 s on Postgres by stress 23).
 '''
 notes = '''
 **No measuring step; 20 messages a turn** (the user, 2026-11-09, decision 395): the design
 stays as planned (one transaction for a turn's messages); `MESSAGES_PER_TURN` goes from 10 to
 20. The throughput B184 lacks (500 wait steps ending at once recorded at about 22 a second) is
 expected to come as a side effect, not the goal.
+
+**Groups first, savepoints later** (the user, 2026-11-09, decision 397, replacing decision 54's
+savepoint per message as the first step): a turn's messages reordered (`Started`s first, then
+`Finished`s; an attempt's own order holds, the batch-ending messages are barriers), each type a
+group handled as one batch operation in one transaction, as T2 does for assignments; a failed
+group restores its memory and is redone one by one (at most 10 in a turn, the rest the next
+turn). The turn in one transaction with a savepoint per group (decision 54's design) is M4B.6,
+built only if stress or real traffic shows the extra commits or fallbacks matter. 40 messages a
+turn, a hidden setting.
 
 **B184 fixed in M4B too** (the user, 2026-11-09, decision 396): on top of the turn's transaction,
 its `Finished`s written with set-based statements, each run read and settled once per turn, and
@@ -79,16 +88,16 @@ scope = '''
 `Database::savepoint` inside an open scope (Postgres and SQLite), `ROLLBACK TO` clearing the scope's `broken` mark, `RELEASE`; a failed statement behind a savepoint no longer voids the transaction
 '''
 done_when = "unit tests on both databases, including a failed statement undone alone"
-status = "planned"
+status = "dropped"
 
 [[steps]]
 id = "M4B.3"
-title = "Turns in one transaction"
+title = "A turn's messages in groups"
 scope = '''
-the turn loop (`service.rs`) wrapped in one transaction, `MESSAGES_PER_TURN` raised to 20, a savepoint and memory snapshot per message, the batch ended at `CodeVersionChanged`, `Draining` and `Deregister`, heartbeats and warnings after the commit; metrics, wakes and `arrivals` deferred to after the commit; the fallback when the commit fails; the read-back once per turn
+(decision 397): a turn reordered (`Started`s, then `Finished`s; `Rejected`, `CodeVersionChanged`, `Draining` and `Deregister` barriers, alone as today), each group one transaction (one lease check, one commit), its memory restored and its messages redone one by one when it fails (at most 10 in a turn); `MESSAGES_PER_TURN` 40 as `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`; heartbeats and warnings outside; metrics, wakes and `arrivals` after the commit; the read-back once per group
 '''
 done_when = '''
-a failed message undone alone while the others are stored; a commit failure redone one by one; no metric counted twice; `MESSAGES_PER_TURN` 20
+a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
 '''
 status = "planned"
 
@@ -111,5 +120,16 @@ scope = '''
 '''
 done_when = '''
 a burst of results costs one fsync per group; stress 23 records its 500 ends within 5 s on Postgres (B184 fixed)
+'''
+status = "planned"
+
+[[steps]]
+id = "M4B.6"
+title = "The turn in one transaction, savepoints per group"
+scope = '''
+(decisions 54, 397): only if stress or real traffic shows the extra commits or the group fallbacks matter: `Database::savepoint` (Postgres and SQLite), the turn in one transaction, a savepoint and memory snapshot per group, a failed group replayed inside the turn behind savepoints per message
+'''
+done_when = '''
+a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
 '''
 status = "planned"

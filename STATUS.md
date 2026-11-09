@@ -13,11 +13,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- D397 (2026-11-09): a turn's messages in groups, savepoints later
 - D396 (2026-11-09): B184 fixed in M4B
 - D395 (2026-11-09): M4B without a measuring step; 20 messages a turn
 - D377 (2026-11-09): notes in the journal
 - N1 (2026-11-09): the design drafts deleted (corrects D373)
-- D376 (2026-11-09): STATUS.md generated
 - M4.11h (2026-11-08): `schedr.api`, Python access to the REST API
 - M4.11g (2026-11-08): `delay` and `until` wait steps
 - M4.11f (2026-11-08): `batch=` on `@trigger.poke`

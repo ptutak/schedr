@@ -29,8 +29,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D397 | 2026-11-09 | user | planned (M4B.3) | workers | A turn's messages are stored in groups by type; savepoints later |
 | D396 | 2026-11-09 | user | planned (M4B.5) | workers | B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups |
-| D395 | 2026-11-09 | user | planned (M4B.3) | workers | M4B without a measuring step; 20 messages a turn |
+| D395 | 2026-11-09 | user | superseded by D397 | workers | M4B without a measuring step; 20 messages a turn |
 | D394 | 2026-11-09 | user | rule | triggers | A cycle through trigger=RunOf across DAGs isn't caught |
 | D393 | 2026-11-09 | user | rule | wait-steps | first_of doesn't cancel the tasks that didn't win |
 | D392 | 2026-11-09 | user | rule | wait-steps | No by_deadline wait |
@@ -371,7 +372,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D57 | 2026-10-29 | user | built M4.2a | python-api | Type checkers read task calls as their values |
 | D56 | 2026-10-29 | user | built M4.2b | python-api | Dependencies on groups use their roots and leaves |
 | D55 | 2026-10-28 | user | built M4.2a | outcomes | An unchosen branch edge counts as skipped |
-| D54 | 2026-10-28 | user | planned (M4B.3) | protocol | A worker message turn shares one transaction |
+| D54 | 2026-10-28 | user | superseded by D397 | protocol | A worker message turn shares one transaction |
 | D53 | 2026-10-28 | user | built M4.10 | connections | Connections provide sync and async clients and checks |
 | D52 | 2026-10-28 | user | rule | development | M4 uses small substeps and the revised review schedule |
 | D51 | 2026-10-28 | user | rule | development | M4 implementation follows dependency order |
@@ -679,7 +680,6 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 - D62: Parse results stream one file per message
 - D61: Oversized task results fail before they are sent
 - D58: The worker message size limit is configurable
-- D54: A worker message turn shares one transaction
 
 ### python-api
 
@@ -877,8 +877,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D397: A turn's messages are stored in groups by type; savepoints later
 - D396: B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups
-- D395: M4B without a measuring step; 20 messages a turn
 - D333: Worker pass_env reaches parsing and the fork server
 - D281: An assignment cannot start after its worker lease expires
 - D280: A disconnected or frozen worker can cause a task to run twice

@@ -1,7 +1,8 @@
 title = "A worker message turn shares one transaction"
 date = 2026-10-28
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 397
 topic = "protocol"
 section = "Messages and limits"
 summary = '''
