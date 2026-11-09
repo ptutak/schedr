@@ -60,18 +60,27 @@ impl Dispatcher {
                 .start_chained_attempt(&ready.instance_id, &child, now)
                 .await?;
         }
+        // The attempts as read once: one failed here may have cancelled its run's others, which
+        // the list doesn't show; they wait for the next round, which reads it (Codex's review).
+        let mut failed_runs = std::collections::BTreeSet::new();
         for attempt in self.db.chained_attempts().await? {
-            self.chained_step(&attempt, now, outgoing).await?;
+            if failed_runs.contains(&attempt.run_id) {
+                continue;
+            }
+            if self.chained_step(&attempt, now, outgoing).await? {
+                failed_runs.insert(attempt.run_id.clone());
+            }
         }
         Ok(())
     }
 
+    /// Moves one open attempt on; whether it failed it (its run may cancel its siblings).
     async fn chained_step(
         &mut self,
         attempt: &ChainedAttempt,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
-    ) -> Result<(), DispatchError> {
+    ) -> Result<bool, DispatchError> {
         let task = attempt.dag.task(&attempt.task_id).map(|t| &t.kind);
         let Some(TaskKind::TriggerDag {
             dag,
@@ -113,7 +122,7 @@ impl Dispatcher {
             })
             .await?;
             outgoing.extend(stops);
-            return Ok(());
+            return Ok(false);
         }
         let state = match attempt.chained_state {
             Some(state) => state,
@@ -141,9 +150,9 @@ impl Dispatcher {
             None
         };
         if let Some((end, output)) = ended {
-            self.end_chained(attempt, end, output, now).await?;
+            return self.end_chained(attempt, end, output, now).await;
         }
-        Ok(())
+        Ok(false)
     }
 
     /// How a waiting task ends with its run ended `state`: its value, the run's ID, on success;
@@ -170,13 +179,31 @@ impl Dispatcher {
 
     /// Creates the attempt's run, by its recorded ID; `Err` with why it can't be.
     async fn create_chained(
-        &self,
+        &mut self,
         attempt: &ChainedAttempt,
         target: &Target<'_>,
         now: Timestamp,
     ) -> Result<Result<(), Refusal>, DispatchError> {
         let context = Context::read(&self.db, attempt).await?;
+        // A mapped instance's own `params` or `planned_for`, from its element (decision 407).
+        let mut element = match self.element(attempt, &context, target).await? {
+            Ok(element) => element,
+            Err(why) => return Ok(Err((PARAMS_REFUSED, "ParamsRefused", why))),
+        };
         let mut params = serde_json::Map::new();
+        if let Some(given) = element.remove("params") {
+            let Json::Object(given) = given else {
+                let why = format!(
+                    "`params` of element {} is {}, not a dict",
+                    attempt.map_index,
+                    mapping::kind_of(&given)
+                );
+                return Ok(Err((PARAMS_REFUSED, "ParamsRefused", why)));
+            };
+            for (key, value) in given {
+                params.insert(key, schedr_model::params::shown(&value));
+            }
+        }
         for (key, value) in target.params {
             match self.resolve_here(attempt, &context, value).await? {
                 // Stored form (tagged) back to what a trigger gives (`--params`): the target's
@@ -190,9 +217,14 @@ impl Dispatcher {
                 }
             }
         }
-        let planned_for = match target.planned_for {
+        let planned = match (element.remove("planned_for"), target.planned_for) {
+            (Some(json), _) => Some(Ok(json)),
+            (None, Some(value)) => Some(self.resolve_here(attempt, &context, value).await?),
+            (None, None) => None,
+        };
+        let planned_for = match planned {
             None => attempt.planned_for,
-            Some(value) => match self.resolve_here(attempt, &context, value).await? {
+            Some(resolved) => match resolved {
                 Ok(json) => {
                     let Some(at) = timestamp_of(&json) else {
                         let why = format!(
@@ -248,6 +280,74 @@ impl Dispatcher {
         })
     }
 
+    /// A mapped instance's element (decision 407): `params` and `planned_for` by name, as a
+    /// worker's instance gets its arguments (`.expand_kwargs()` dicts spread); those written
+    /// with `dag_ctx` filled in here. Empty for an unmapped task; `Err` with why it can't be:
+    /// another name, or one `target` fixes.
+    async fn element(
+        &mut self,
+        attempt: &ChainedAttempt,
+        context: &Context,
+        target: &Target<'_>,
+    ) -> Result<Result<serde_json::Map<String, Json>, String>, DispatchError> {
+        let task = attempt.dag.task(&attempt.task_id);
+        let Some(task) = task.filter(|t| mapping::is_mapped(t) && attempt.map_index >= 0) else {
+            return Ok(Ok(serde_json::Map::new()));
+        };
+        let at = (task, attempt.map_index);
+        // The step's shared lists, as worker assignments use them: resolved once for all the
+        // instances (Codex's review).
+        let mut resolved = std::mem::take(&mut self.resolved);
+        let read =
+            mapping::inputs(&self.db, &attempt.dag, &attempt.run_id, at, &mut resolved).await;
+        self.resolved = resolved;
+        let inputs = match read {
+            Ok(inputs) => inputs,
+            Err(mapping::InputsError::Db(error)) => return Err(error.into()),
+            Err(mapping::InputsError::NotArguments(why)) => return Ok(Err(why)),
+        };
+        let mut element = inputs["$expand"].as_object().cloned().unwrap_or_default();
+        let stored = inputs.get("$expand_values").and_then(Json::as_object);
+        for (name, value) in stored.into_iter().flatten() {
+            let Ok(value) = serde_json::from_value::<Value>(value.clone()) else {
+                return Ok(Err(format!(
+                    "`{name}` of element {} doesn't read",
+                    attempt.map_index
+                )));
+            };
+            match self.resolve_here(attempt, context, &value).await? {
+                Ok(json) => {
+                    element.insert(name.clone(), json);
+                }
+                Err(why) => return Ok(Err(format!("`{name}`: {why}"))),
+            }
+        }
+        // An upstream output's dicts (`.expand_kwargs()`) aren't seen when the file loads: their
+        // names are checked here, as validation checks a list written in the DAG.
+        for name in element.keys() {
+            let fixed = match name.as_str() {
+                "params" => !target.params.is_empty(),
+                "planned_for" => target.planned_for.is_some(),
+                _ => {
+                    let why = format!(
+                        "element {} names `{name}`: a TriggerDagOperator maps `params` or \
+                         `planned_for`",
+                        attempt.map_index
+                    );
+                    return Ok(Err(why));
+                }
+            };
+            if fixed {
+                let why = format!(
+                    "element {} maps `{name}`, which `.partial()` fixes",
+                    attempt.map_index
+                );
+                return Ok(Err(why));
+            }
+        }
+        Ok(Ok(element))
+    }
+
     /// What `value` stands for in the attempt's run: its `dag_ctx` fields and parameters
     /// filled in, its upstream outputs read; `Err` with why it can't be (validation refuses
     /// templates and secrets).
@@ -271,14 +371,16 @@ impl Dispatcher {
         Ok(mapping::resolve(&filled, &sources))
     }
 
-    /// Ends a `TriggerDagOperator`'s attempt and moves its run on, in one transaction.
+    /// Ends a `TriggerDagOperator`'s attempt and moves its run on, in one transaction; whether
+    /// it failed it.
     async fn end_chained(
         &mut self,
         attempt: &ChainedAttempt,
         end: AttemptEnd,
         output: Option<Ended>,
         now: Timestamp,
-    ) -> Result<(), DispatchError> {
+    ) -> Result<bool, DispatchError> {
+        let failed = end.status == AttemptStatus::Failed;
         let (outcome, output) = output.map_or((None, None), |(o, v)| (Some(o.to_owned()), Some(v)));
         let result = AttemptResult {
             status: end.status,
@@ -304,7 +406,8 @@ impl Dispatcher {
             }
             Ok(())
         })
-        .await
+        .await?;
+        Ok(failed)
     }
 }
 

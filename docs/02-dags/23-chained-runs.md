@@ -54,8 +54,32 @@ A DAG gets automatic runs from its own trigger, or from other DAGs' operators wi
 manually, including a scheduled or `Chained` DAG. Pausing a `Chained` DAG makes operators
 fail until it is unpaused; manual runs remain available.
 
-Operators cannot be mapped yet. To start one run per item, create an operator per item in
-a `for` loop in the DAG file, giving each a distinct task ID.
+## Mapping chained runs
+
+Map a `TriggerDagOperator` to start one chained run per element. Fix the task ID,
+`dag`, `wait` and other shared options in `.partial()`, then map `params` or
+`planned_for` with `.expand()`:
+
+```{literalinclude} ../../examples/docs/mapped_chained.py
+:language: python
+:caption: examples/docs/mapped_chained.py
+```
+
+The list may be literal or an upstream output. `.expand(params=..., planned_for=...)`
+takes the cartesian product of the lists, the first argument written varying slowest.
+To pair values instead, use `.expand_kwargs([{"params": {...}, "planned_for": ...}, ...])`,
+also with a literal list or an upstream output. Only `params` and `planned_for` can be
+mapped; each argument is fixed in `.partial()` or mapped, never both.
+
+Each instance ends as a single operator does. The mapped task's `.output` is its values in
+element order: each run's ID, `Failed` or `TimedOut`. Unlike a single operator's `.output`,
+it is not narrowed to `.on(str)`: each element has its own outcome, as with a mapped
+`@task`. A following task takes `list[str | Failed | TimedOut]` and filters it, as above,
+or narrows the elements one by one. With `wait=False`, every element is an ID.
+
+An instance that fails without routing, after its retries, fails the run; the other instances
+and the runs they are waiting for are cancelled. `[mapping] max_instances` limits the number
+of instances, as for any mapped task ([Mapping](10-mapping.md)).
 
 ## Testing
 

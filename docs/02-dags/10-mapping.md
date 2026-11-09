@@ -144,4 +144,38 @@ limits](05-defaults.md#concurrency-limits)).
 - **In tests,** `run_dag(...).tasks["fetch"]` is the whole task (its `output` the list) and
   `tasks["fetch"][1]` an instance ([Testing a DAG](07-testing.md#run_dag)).
 
-`.partial()` and `.expand()` work on `@task` functions; operators can't be mapped yet.
+`.partial()` and `.expand()` work on `@task` functions and
+[`TriggerDagOperator`](23-chained-runs.md#mapping-chained-runs). `CommandOperator`,
+`ScriptOperator` and `EmptyOperator` cannot be mapped. Wait steps aren't mapped either.
+
+## Mapping a command or a script
+
+There are two ways to run a command or script per element. For many small calls, map a
+Python task that starts the process:
+
+```{literalinclude} ../../examples/docs/mapped_process.py
+:language: python
+:caption: examples/docs/mapped_process.py
+```
+
+A non-zero exit fails the task with `check=True`; catch the exception and return an outcome
+if the DAG should route it. The task's output is what the function returns, not a
+`ProcessResult`; without capture, stdout and stderr go to the task's log. The function
+builds its environment from the connections and secrets it declares, rather than using
+`env=` templates and connection variables. Run a script file by its path: a Python task's
+subprocess cannot use `ScriptOperator`'s `schedr.toml` jobs or `schedr.script`'s `dag_ctx`;
+pass the process what it needs as arguments.
+
+Alternatively, map a `TriggerDagOperator` to a target DAG with `trigger=Chained(by=[...])`
+and a dataclass for `params`. The target runs a `CommandOperator` or `ScriptOperator` on
+`dag_ctx.params`:
+
+```{literalinclude} ../../examples/docs/mapped_chained.py
+:language: python
+:caption: examples/docs/mapped_chained.py
+```
+
+This keeps the operator's `ProcessResult`, exit-code outcomes, `schedr.toml` jobs and
+`env=` templates. It costs a run per element and a second DAG with its params; use it when
+each call deserves its own run, retries and history. For a list known when the DAG file
+loads, a `for` loop can instead create one operator per element, each with a distinct ID.

@@ -313,3 +313,24 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
 - **Not chosen:** a backfill leaving out the fire times the scheduler will still create (misses a
   paused DAG unpaused later); only a successful run covering (a run still going would get a
   second one beside it); both runs, documented.
+
+### <a id="D406"></a><a id="D407"></a>2026-11-09: operator mapping (decisions 406, 407; Q21 deferred)
+
+- **Question:** M4.12c planned `.partial()`/`.expand()` on every operator, one design (decision
+  381), and whether wait steps map with them (Q21).
+- **Chosen (the user's):** 406, "We don't support Command, Script operators partial and expand"
+  ("the syntax on .expand and .partial for Scripts and Commands was too confusing to keep it"):
+  of the operators only `TriggerDagOperator` is mapped; `EmptyOperator` is refused too (nothing
+  to vary); Q21 stays deferred, wait steps unmapped ("not yet"). 407, a mapped
+  `TriggerDagOperator`, Airflow's form: `TriggerDagOperator.partial("fan", dag="region").expand(
+  params=regions)`, `planned_for=` and `.expand_kwargs()` too, over a literal list or an upstream
+  output: a chained run per element, each instance's outcome its own. This supersedes decision
+  381's `for`-loop hint. Its output (the user's): "consistent with what a single
+  TriggerOperator returns, just a list of those": each instance's value in element order (the
+  run's ID, or its `Failed` or `TimedOut`); not narrowed to `.on(str)` as a single one's
+  `.output` is, since each element has its own outcome (as for a mapped `@task`). Not chosen:
+  always a run ID; `None` for the instances that didn't succeed.
+- **Not chosen:** element references usable anywhere in a template (`schedr.element("path")`, a
+  new reference kind); mapping command and script operators (with shell lines limited to literal
+  strings); an `EmptyOperator` mapped over a list, a fan-out that only counts; mapping wait steps
+  now, with `TimedOut` routed per element.

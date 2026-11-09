@@ -164,7 +164,7 @@ None.
 
 ## Open
 
-- Q21 (deferred until M4.12c): Should a wait step support .expand()?
+- Q21 (deferred until M6): Should a wait step support .expand()?
 
 Details and edge cases, with the reasons; read them before changing this:
 

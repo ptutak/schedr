@@ -1379,16 +1379,72 @@ fn a_trigger_dag_is_checked(#[case] fields: Json, #[case] expected: &[&str]) {
     assert_eq!(found, expected);
 }
 
+#[rstest::rstest]
+#[case::params_over_a_list(
+    json!({}),
+    json!({"product": [{"name": "params", "value": {"literal": [{"day": 1}, {"day": 2}]}}]}),
+    &[]
+)]
+#[case::planned_for_over_an_output(
+    json!({}),
+    json!({"product": [{"name": "planned_for", "value": output_of("extract")}]}),
+    &[]
+)]
+#[case::kwargs_of_both(
+    json!({}),
+    json!({"kwargs": {"literal": [{"params": {}, "planned_for": {"$datetime": "2026-10-01T00:00:00Z"}}]}}),
+    &[]
+)]
+#[case::another_argument(
+    json!({}),
+    json!({"product": [{"name": "day", "value": {"literal": [1, 2]}}]}),
+    &["task `start`: a TriggerDagOperator maps `params` or `planned_for`, not `day` (`.expand()`)"]
+)]
+#[case::fixed_and_mapped(
+    json!({"params": {"day": {"literal": 1}}}),
+    json!({"kwargs": {"literal": [{"params": {"day": 2}}]}}),
+    &["task `start`: argument `params` is both fixed (`.partial()`) and mapped \
+       (`.expand_kwargs()`)"]
+)]
+#[case::mapped_twice(
+    json!({}),
+    json!({"product": [{"name": "params", "value": {"literal": []}},
+                       {"name": "params", "value": {"literal": []}}]}),
+    &["task `start`: argument `params` is mapped twice (`.expand()`)"]
+)]
+#[case::a_secret(
+    json!({}),
+    json!({"product": [{"name": "params", "value": {"list": [
+        {"ref": {"kind": "secret", "storage": "vault", "path": "a/b"}}]}}]}),
+    &["task `start`: what it maps over can't hold a secret: the master starts the runs and reads \
+       no secret and renders no template; pass the values from an upstream task"]
+)]
+fn a_mapped_trigger_dag_maps_params_or_planned_for(
+    #[case] fields: Json,
+    #[case] expand: Json,
+    #[case] expected: &[&str],
+) {
+    let mut start = starting(&fields);
+    start["expand"] = expand;
+    let found = problems(&json!({
+        "tasks": [task("extract", &json!({})), start],
+        "edges": [edge("extract", "start", "data")]
+    }));
+    assert_eq!(found, expected);
+}
+
 #[test]
-fn a_mapped_trigger_dag_is_refused_until_operators_map() {
-    let mut start = starting(&json!({}));
-    start["expand"] = json!({"product": [{"name": "day", "value": {"literal": [1, 2]}}]});
-    let found = problems(&json!({"tasks": [start], "edges": []}));
+fn of_the_operators_only_a_trigger_dag_is_mapped() {
+    let mut empty = task("nothing", &json!({}));
+    empty["kind"] = json!("empty");
+    empty.as_object_mut().unwrap().remove("arguments");
+    empty["output_type"] = json!({"type": "none"});
+    empty["expand"] = json!({"product": [{"name": "over", "value": {"literal": [1, 2]}}]});
+    let found = problems(&json!({"tasks": [empty], "edges": []}));
     assert_eq!(
         found,
         [
-            "task `start`: a TriggerDagOperator can't be mapped yet: create one per element in a \
-          `for` loop in the DAG file"
+            "task `nothing`: only a @task function or a TriggerDagOperator can be mapped (`.expand()`)"
         ]
     );
 }

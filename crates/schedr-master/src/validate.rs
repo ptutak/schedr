@@ -672,8 +672,8 @@ fn wait_for_problems(
     }
 }
 
-/// What a `TriggerDagOperator` (decisions 358-362, 381) can't be: mapped (operators map in
-/// M4.12c), waiting for no time, given `max_wait` without waiting, planned for a literal that
+/// What a `TriggerDagOperator` (decisions 358-362) can't be (mapped, see
+/// `trigger_dag_expand_problems`): waiting for no time, given `max_wait` without waiting, planned for a literal that
 /// isn't a time, or given what the master can't work out (it starts the run, not a runner): a
 /// text template or a secret.
 fn trigger_dag_problems(
@@ -703,12 +703,6 @@ fn trigger_dag_problems(
         problems.push(format!(
             "task `{id}`: `max_wait` is for `wait=True`; with `wait=False` it ends once the run \
              is created"
-        ));
-    }
-    if mapping::is_mapped(task) {
-        problems.push(format!(
-            "task `{id}`: a TriggerDagOperator can't be mapped yet: create one per element in a \
-             `for` loop in the DAG file"
         ));
     }
     if let Some(Value::Literal(literal)) = planned_for
@@ -841,17 +835,26 @@ fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
         let Some(expand) = &task.expand else {
             continue;
         };
+        if let TaskKind::TriggerDag {
+            params,
+            planned_for,
+            ..
+        } = &task.kind
+        {
+            let fixed = (!params.is_empty(), planned_for.is_some());
+            trigger_dag_expand_problems(task, expand, fixed, problems);
+            continue;
+        }
         let TaskKind::Python {
             arguments, branch, ..
         } = &task.kind
         else {
-            // A `TriggerDagOperator` says how to do without (decision 381).
-            if !matches!(task.kind, TaskKind::TriggerDag { .. }) {
-                problems.push(format!(
-                    "task `{}`: only a @task function can be mapped (`.expand()`)",
-                    task.id
-                ));
-            }
+            // Of the operators, only a TriggerDagOperator (decision 406).
+            problems.push(format!(
+                "task `{}`: only a @task function or a TriggerDagOperator can be mapped \
+                 (`.expand()`)",
+                task.id
+            ));
             continue;
         };
         if *branch {
@@ -861,26 +864,7 @@ fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
             ));
         }
         if let Expand::Kwargs(over) = expand {
-            // The names a list written in the DAG gives (an upstream output's are unknown).
-            let elements: Vec<Vec<&str>> = match over {
-                Value::Literal(serde_json::Value::Array(items)) => items
-                    .iter()
-                    .filter_map(serde_json::Value::as_object)
-                    .map(|item| item.keys().map(String::as_str).collect())
-                    .collect(),
-                Value::List(items) => items
-                    .iter()
-                    .filter_map(|item| match item {
-                        Value::Map(entries) => Some(entries.keys().map(String::as_str).collect()),
-                        Value::Literal(serde_json::Value::Object(entries)) => {
-                            Some(entries.keys().map(String::as_str).collect())
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let fixed: std::collections::BTreeSet<&str> = elements
+            let fixed: std::collections::BTreeSet<&str> = kwargs_names(over)
                 .into_iter()
                 .flatten()
                 .filter(|name| arguments.contains_key(*name))
@@ -913,6 +897,94 @@ fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
                     ));
                 }
             }
+        }
+    }
+}
+
+/// The names each dict of an `.expand_kwargs()` list written in the DAG gives (an upstream
+/// output's are unknown: none).
+fn kwargs_names(over: &Value) -> Vec<Vec<&str>> {
+    match over {
+        Value::Literal(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(serde_json::Value::as_object)
+            .map(|item| item.keys().map(String::as_str).collect())
+            .collect(),
+        Value::List(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Map(entries) => Some(entries.keys().map(String::as_str).collect()),
+                Value::Literal(serde_json::Value::Object(entries)) => {
+                    Some(entries.keys().map(String::as_str).collect())
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A mapped `TriggerDagOperator` (decision 407): it maps `params` or `planned_for`, each once,
+/// neither also fixed (`fixed`: whether `params` and `planned_for` are), over what the master can
+/// work out (no template, no secret).
+fn trigger_dag_expand_problems(
+    task: &Task,
+    expand: &Expand,
+    (params_fixed, planned_fixed): (bool, bool),
+    problems: &mut Vec<String>,
+) {
+    let id = &task.id;
+    let (names, values, how): (Vec<&str>, Vec<&Value>, &str) = match expand {
+        Expand::Product(over) => {
+            if over.is_empty() {
+                problems.push(format!("task `{id}`: `.expand()` names no argument"));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for name in over.iter().map(|m| m.name.as_str()) {
+                if !seen.insert(name) {
+                    problems.push(format!(
+                        "task `{id}`: argument `{name}` is mapped twice (`.expand()`)"
+                    ));
+                }
+            }
+            (
+                over.iter().map(|m| m.name.as_str()).collect(),
+                over.iter().map(|m| &m.value).collect(),
+                "`.expand()`",
+            )
+        }
+        Expand::Kwargs(over) => {
+            let mut names: Vec<&str> = kwargs_names(over).into_iter().flatten().collect();
+            names.sort_unstable();
+            names.dedup();
+            (names, vec![over], "`.expand_kwargs()`")
+        }
+    };
+    for name in names {
+        let fixed = match name {
+            "params" => params_fixed,
+            "planned_for" => planned_fixed,
+            _ => {
+                problems.push(format!(
+                    "task `{id}`: a TriggerDagOperator maps `params` or `planned_for`, not \
+                     `{name}` ({how})"
+                ));
+                continue;
+            }
+        };
+        if fixed {
+            problems.push(format!(
+                "task `{id}`: argument `{name}` is both fixed (`.partial()`) and mapped ({how})"
+            ));
+        }
+    }
+    for value in values {
+        if let Some(what) = not_for_the_master(value) {
+            problems.push(format!(
+                "task `{id}`: what it maps over can't hold {what}: the master starts the runs \
+                 and reads no secret and renders no template; pass the values from an upstream \
+                 task"
+            ));
         }
     }
 }

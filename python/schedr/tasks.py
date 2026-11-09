@@ -798,7 +798,7 @@ class TaskFunction[**P, R]:
                 upstream,
                 elementwise=True,
             )
-            _refuse_param_mapping(converted, f"{where}, `.expand_kwargs()`")
+            refuse_param_mapping(converted, f"{where}, `.expand_kwargs()`")
             return ExpandKwargs(converted)
         assert isinstance(value, dict)
         over = {
@@ -813,7 +813,7 @@ class TaskFunction[**P, R]:
             for name, values in value.items()
         }
         for name, converted in over.items():
-            _refuse_param_mapping(converted, f"{where}, mapped argument `{name}`")
+            refuse_param_mapping(converted, f"{where}, mapped argument `{name}`")
         return ExpandProduct(over)
 
     @staticmethod
@@ -1104,7 +1104,7 @@ class PartialTask[**P, R]:
             raise TypeError(f"{where}: {e}") from None
 
 
-def _refuse_param_mapping(converted: Value, where: str) -> None:
+def refuse_param_mapping(converted: Value, where: str) -> None:
     """Refuses mapping over the run's parameters: the number of instances would depend on them.
 
     Raises:

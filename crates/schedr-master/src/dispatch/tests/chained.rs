@@ -488,6 +488,182 @@ async fn dags_may_start_each_other_in_a_cycle() {
     );
 }
 
+/// Each instance of mapped `start` (by map index): its state and outcome.
+async fn instances_of(db: &Database, run_id: &str) -> Vec<(TaskInstanceState, Option<String>)> {
+    let run = db.run_tasks(run_id).await.unwrap().unwrap();
+    let mut found: Vec<_> = run
+        .instances
+        .iter()
+        .filter(|i| i.task_id == id("start") && i.map_index >= 0)
+        .map(|i| (i.map_index, i.state, i.outcome.clone()))
+        .collect();
+    found.sort_by_key(|(index, _, _)| *index);
+    found
+        .into_iter()
+        .map(|(_, state, outcome)| (state, outcome))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_mapped_trigger_dag_starts_a_run_per_element_each_ending_its_own_way() {
+    // Decision 407: `.expand(planned_for=[...])`, a run per element; one routed `Failed`.
+    let days = json!({"literal": [{"$datetime": "2026-10-19T00:00:00Z"},
+                                  {"$datetime": "2026-10-20T00:00:00Z"}]});
+    let mapped = json!({"expand": {"product": [{"name": "planned_for", "value": days}]}});
+    let (mut dispatcher, db, run_id) = chaining(chaining_dag(&mapped, true, 0)).await;
+    step(&mut dispatcher, ts(NOW)).await;
+    step(&mut dispatcher, later(1)).await;
+    let runs = children(&db, &run_id).await;
+    let mut planned: Vec<Timestamp> = runs.iter().map(|r| r.planned_for).collect();
+    planned.sort();
+    assert_eq!(
+        planned,
+        [ts("2026-10-19T00:00:00Z"), ts("2026-10-20T00:00:00Z")],
+        "one run per element, each for its own moment"
+    );
+    let by_day = |day: &str| {
+        runs.iter()
+            .find(|r| r.planned_for == ts(day))
+            .unwrap()
+            .id
+            .clone()
+    };
+    db.finish_run(&by_day("2026-10-19T00:00:00Z"), RunState::Success, later(2))
+        .await
+        .unwrap();
+    db.finish_run(&by_day("2026-10-20T00:00:00Z"), RunState::Failed, later(2))
+        .await
+        .unwrap();
+    step(&mut dispatcher, later(3)).await;
+    assert_eq!(
+        instances_of(&db, &run_id).await,
+        [
+            (TaskInstanceState::Success, Some("SUCCESS".to_owned())),
+            (TaskInstanceState::Success, Some("Failed".to_owned())),
+        ]
+    );
+    let results = db.instance_results(&run_id, &id("start")).await.unwrap();
+    assert_eq!(
+        results[0].output,
+        Some(json!(by_day("2026-10-19T00:00:00Z"))),
+        "each instance's value is its own run's ID"
+    );
+}
+
+#[tokio::test]
+async fn a_mapped_trigger_dag_s_element_the_target_refuses_fails_only_its_instance() {
+    // `orders` takes no params: a dict for one element is refused, the other has none.
+    let over = json!({"literal": [{"planned_for": {"$datetime": "2026-10-19T00:00:00Z"}},
+                                  {"params": {"region": "eu"}}]});
+    let mapped = json!({"expand": {"kwargs": over}});
+    let (mut dispatcher, db, run_id) = chaining(chaining_dag(&mapped, false, 0)).await;
+    step(&mut dispatcher, ts(NOW)).await;
+    step(&mut dispatcher, later(1)).await;
+    assert_eq!(children(&db, &run_id).await.len(), 1);
+    let states: Vec<TaskInstanceState> = instances_of(&db, &run_id)
+        .await
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    assert_eq!(
+        states,
+        [TaskInstanceState::Cancelled, TaskInstanceState::Failed],
+        "as with a mapped @task, the failed instance fails the run, which cancels the other"
+    );
+    let refused = db
+        .instance_attempts(&run_id, &id("start"), 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(refused.error_kind.as_deref(), Some(kinds::PARAMS_REFUSED));
+}
+
+/// `sync` with `extract` first, its output what `start` (with `fields`) maps over with
+/// `.expand_kwargs()`: a list known only when the run has it.
+fn fed_by_extract(fields: &Json) -> Dag {
+    let mut fields = fields.clone();
+    fields["expand"] = json!({"kwargs": {"ref": {"kind": "output", "task": "extract"}}});
+    let mut dag = serde_json::to_value(chaining_dag(&fields, false, 0)).unwrap();
+    dag["tasks"]
+        .as_array_mut()
+        .unwrap()
+        .push(task("extract", &json!({}), 0));
+    dag["edges"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from": "extract", "to": "start", "kind": "data"}));
+    serde_json::from_value(dag).unwrap()
+}
+
+/// Runs `extract` with `output`, then the rounds that expand `start` and start its runs.
+async fn extract_gives(dispatcher: &mut Dispatcher, output: &Json) {
+    let out = step(dispatcher, ts(NOW)).await;
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), ts(NOW))
+        .await
+        .unwrap();
+    let done = finished(&attempt, pb::AttemptStatus::Success, output);
+    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    step(dispatcher, later(1)).await;
+    step(dispatcher, later(2)).await;
+}
+
+#[tokio::test]
+async fn dicts_from_an_upstream_output_are_checked_when_each_run_is_created() {
+    // Codex's review: the names of an upstream output's dicts aren't known when the file loads.
+    for (fields, element, why) in [
+        (
+            json!({"params": {"x": {"literal": 1}}}),
+            json!({"params": {"x": 2}}),
+            "element 0 maps `params`, which `.partial()` fixes",
+        ),
+        (
+            json!({}),
+            json!({"dag": "other", "wait": false}),
+            "element 0 names `dag`: a TriggerDagOperator maps `params` or `planned_for`",
+        ),
+    ] {
+        let (mut dispatcher, db, run_id) = chaining(fed_by_extract(&fields)).await;
+        extract_gives(&mut dispatcher, &json!([element])).await;
+        assert_eq!(children(&db, &run_id).await.len(), 0, "{why}");
+        let attempt = db
+            .instance_attempts(&run_id, &id("start"), 0)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(attempt.error_kind.as_deref(), Some(kinds::PARAMS_REFUSED));
+        let summary = attempt.error_summary.unwrap_or_default();
+        assert!(summary.contains(why), "{summary}");
+    }
+}
+
+#[tokio::test]
+async fn an_instance_a_sibling_s_failure_cancelled_starts_no_run() {
+    // Codex's review: the refused element first, so its sibling is still in the round's list.
+    let over = json!({"literal": [{"params": {"region": "eu"}},
+                                  {"planned_for": {"$datetime": "2026-10-19T00:00:00Z"}}]});
+    let mapped = json!({"wait": false, "max_wait_ms": null, "expand": {"kwargs": over}});
+    let (mut dispatcher, db, run_id) = chaining(chaining_dag(&mapped, false, 0)).await;
+    step(&mut dispatcher, ts(NOW)).await;
+    step(&mut dispatcher, later(1)).await;
+    step(&mut dispatcher, later(2)).await;
+    assert_eq!(
+        children(&db, &run_id).await.len(),
+        0,
+        "the cancelled one started none"
+    );
+    let states: Vec<TaskInstanceState> = instances_of(&db, &run_id)
+        .await
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    assert_eq!(
+        states,
+        [TaskInstanceState::Failed, TaskInstanceState::Cancelled]
+    );
+}
+
 /// The round starting `start` and creating its run (decision 98).
 struct Chaining {
     dispatcher: Dispatcher,

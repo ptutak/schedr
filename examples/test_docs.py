@@ -129,8 +129,25 @@ def _check_sensors(dag_id: str, result: RunResult) -> None:
     )
 
 
+def _check_mapped_chained(dag_id: str, result: RunResult) -> None:
+    if dag_id == "mapped_regions":
+        ids = result.tasks["start_regions"].output
+        assert len(ids) == 2
+        assert all(isinstance(run_id, str) for run_id in ids)
+        assert result.tasks["successful_ids"].output == ids
+    else:
+        assert result.tasks["greet"].output.stdout == "hello eu"
+
+
+def _check_mapped_process(dag_id: str, result: RunResult) -> None:
+    del dag_id
+    assert result.tasks["run_command"].output == ["hello eu", "hello us"]
+
+
 EXAMPLE_CHECKS: dict[str, Callable[[str, RunResult], None]] = {
     "chained_runs.py": _check_chained,
+    "mapped_chained.py": _check_mapped_chained,
+    "mapped_process.py": _check_mapped_process,
     "sensors.py": _check_sensors,
 }
 """Each example's own checks, by file, beyond every task ending well."""

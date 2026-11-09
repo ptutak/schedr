@@ -1,0 +1,17 @@
+title = "A mapped TriggerDagOperator starts a run per element"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "TriggerDagOperator"
+summary = '''
+`TriggerDagOperator.partial("fan", dag="region", ...).expand(params=regions)` (or
+`planned_for=`, or `.expand_kwargs([{"params": ..., "planned_for": ...}])`), the list a literal or
+an upstream output, starts one chained run per element: each instance its own attempt and run, its
+value the run's ID, `Failed` or `TimedOut` per element; the task's output is the list of them. `dag`, `wait`, `max_wait` and the options
+stay fixed; an argument is fixed or mapped, never both.
+'''
+history = "JOURNAL.md#D407"
+step = "M4.12c"
+code = ["python/schedr/chained.py::PartialTriggerDag", "crates/schedr-master/src/validate.rs::trigger_dag_expand_problems", "crates/schedr-master/src/dispatch/chained.rs::element"]
+checked = 2026-11-09

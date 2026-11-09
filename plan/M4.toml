@@ -899,12 +899,13 @@ part_of = "M4.12"
 id = "M4.12c"
 title = "Operator mapping"
 scope = '''
-(decision 381, Q21): `.partial()` and `.expand()` on every operator (command, script, empty, `TriggerDagOperator`), one design; whether wait steps map with them (Q21), with per-instance outcomes
+(decisions 406, 407; Q21 deferred): `.partial()` and `.expand()`/`.expand_kwargs()` on `TriggerDagOperator` (`params`, `planned_for`), a chained run per element with per-instance outcomes; `CommandOperator`, `ScriptOperator`, `EmptyOperator` and wait steps refused
 '''
 done_when = '''
-a mapped `TriggerDagOperator` starts a run per element and a mapped `CommandOperator` runs per element; the design decided first
+a mapped `TriggerDagOperator` starts a run per element, over a literal list and an upstream output, and routes one element's `Failed`
 '''
-status = "planned"
+status = "done"
+done = 2026-11-09
 part_of = "M4.12"
 
 [[steps]]

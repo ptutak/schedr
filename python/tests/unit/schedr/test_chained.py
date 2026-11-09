@@ -1,5 +1,6 @@
 """`TriggerDagOperator`: what a DAG file says (decisions 357-362, 365)."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -7,7 +8,18 @@ from typing import Any
 
 import pytest
 
-from schedr import Chained, Dag, Failed, TimedOut, TriggerDagOperator, dag_ctx, task
+from schedr import (
+    Chained,
+    CommandOperator,
+    Dag,
+    EmptyOperator,
+    Failed,
+    ScriptOperator,
+    TimedOut,
+    TriggerDagOperator,
+    dag_ctx,
+    task,
+)
 from schedr._model import registry
 
 
@@ -165,3 +177,82 @@ def test_a_chained_dags_params_need_no_defaults() -> None:
     with Dag("dwh_load", trigger=Chained(), params=Load):
         day()
     assert _shown()["trigger"] == {"kind": "chained"}
+
+
+@task
+def regions() -> list[dict[str, str]]:
+    """The regions to report on."""
+    return [{"region": "eu"}, {"region": "us"}]
+
+
+@task
+def report_ids(run_ids: list[str]) -> int:
+    """Counts the started runs."""
+    return len(run_ids)
+
+
+def test_mapped_it_starts_a_run_per_element_of_params_or_planned_for() -> None:
+    days = [datetime(2026, 10, 19, tzinfo=UTC), datetime(2026, 10, 20, tzinfo=UTC)]
+    with Dag("sync"):
+        each = TriggerDagOperator.partial("each", dag="report", wait=False).expand(params=regions())
+        report_ids(each.output)
+        TriggerDagOperator.partial("daily", dag="report", params={"region": "eu"}).expand(
+            planned_for=days
+        )
+        TriggerDagOperator.partial("both", dag="report").expand_kwargs(
+            [{"params": {"region": "eu"}, "planned_for": days[0]}]
+        )
+    shown = _shown()
+    tasks = {t["id"]: t for t in shown["tasks"]}
+    assert tasks["each"]["expand"] == {
+        "product": [{"name": "params", "value": {"ref": {"kind": "output", "task": "regions"}}}]
+    }
+    assert "params" not in tasks["each"], "mapped, not fixed"
+    assert tasks["daily"]["params"] == {"region": {"literal": "eu"}}
+    assert tasks["daily"]["expand"]["product"][0]["name"] == "planned_for"
+    assert "kwargs" in tasks["both"]["expand"]
+    edges = {(e["from"], e["to"], e["kind"]) for e in shown["edges"]}
+    assert ("regions", "each", "data") in edges
+    assert ("each", "report_ids", "data") in edges, "the runs' IDs, a list"
+
+
+@pytest.mark.parametrize(
+    ("build", "error"),
+    [
+        (
+            lambda: TriggerDagOperator.partial("x", dag="report").expand(),
+            "`.expand()` needs `params=` or `planned_for=`",
+        ),
+        (
+            lambda: TriggerDagOperator.partial("x", dag="report").expand(dag=["a"]),
+            "`.expand()` maps `params` or `planned_for`, not `dag`",
+        ),
+        (
+            lambda: TriggerDagOperator.partial("x", dag="report", params={"a": 1}).expand(
+                params=[{"a": 2}]
+            ),
+            "`params` is both fixed (`.partial()`) and mapped (`.expand()`)",
+        ),
+        (
+            lambda: TriggerDagOperator.partial("x", dag="report").expand_kwargs([{"wait": False}]),
+            "`.expand_kwargs()` maps `params` or `planned_for`, not `wait`",
+        ),
+        (
+            lambda: TriggerDagOperator.partial("x", dag="report").expand_kwargs(["eu"]),
+            "every element must be a dict, not `str`",
+        ),
+        (
+            lambda: TriggerDagOperator.partial("x", dag="report").expand(params=["eu"]),
+            "mapped argument `params`",
+        ),
+    ],
+)
+def test_what_a_mapped_one_cant_be_is_refused(build: Callable[[], object], error: str) -> None:
+    with Dag("sync"), pytest.raises(TypeError, match=re.escape(error)):
+        build()
+    registry.take_defined()
+
+
+def test_other_operators_have_no_partial() -> None:
+    for operator in (CommandOperator, ScriptOperator, EmptyOperator):
+        assert not hasattr(operator, "partial"), operator

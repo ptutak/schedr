@@ -1,0 +1,17 @@
+title = "Of the operators, only a TriggerDagOperator is mapped"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "TriggerDagOperator"
+summary = '''
+`.partial()` and `.expand()` are on `@task` functions and on `TriggerDagOperator` only:
+`CommandOperator`, `ScriptOperator` and `EmptyOperator` can't be mapped. The official ways to run a
+command or script per element: a mapped `@task` starting the process, or a mapped
+`TriggerDagOperator` whose target DAG runs the operator on its params (a `for` loop in the DAG file
+for a list known when it loads). Wait steps aren't mapped either (Q21, deferred to M6).
+'''
+history = "JOURNAL.md#D406"
+step = "M4.12c"
+code = ["crates/schedr-master/src/validate.rs::expand_problems", "python/schedr/chained.py::partial"]
+checked = 2026-11-09

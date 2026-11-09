@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M4.12c, Operator mapping.
+**Next:** M4.12, Runs between and over time.
 
 ## M0: Foundations
 
@@ -179,10 +179,10 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.11f | `batch=` on `@trigger.poke` | done 2026-11-08 | D352 |
 | M4.11g | `delay` and `until` wait steps | done 2026-11-08 | D355 |
 | M4.11h | `schedr.api`, Python access to the REST API | done 2026-11-08 | D356 |
-| M4.12 | Runs between and over time | planned |  |
+| M4.12 | Runs between and over time | **next** |  |
 | M4.12a (part of M4.12) | `TriggerDagOperator` | done 2026-11-09 | D358, D359, D360, D361, D362, D365, D378, D379, D380, D398, D399 |
 | M4.12b (part of M4.12) | Backfill | done 2026-11-09 | D363, D364, D400, D401, D402, D403, D404, D405 |
-| M4.12c (part of M4.12) | Operator mapping | **next** | D381 |
+| M4.12c (part of M4.12) | Operator mapping | done 2026-11-09 | D406, D407 |
 | M4.13 | Notifications | planned | D390, D391 |
 | M4.14 | Retention | planned |  |
 | M4.15 | Per-task memory and upgrade rules | planned | D50 |

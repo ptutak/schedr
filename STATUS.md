@@ -6,7 +6,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-09)
 
 - **Milestone:** M4, Native API complete.
-- **Next step:** M4.12c, Operator mapping (decisions D381). Done when: a mapped `TriggerDagOperator` starts a run per element and a mapped `CommandOperator` runs per element; the design decided first
+- **Next step:** M4.12, Runs between and over time. Done when: a parent waits on a chained run; a backfill fills missing periods oldest first
 - **Then:** M4.13, M4.14, M4.15, M4B.3, M4B.4.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 38; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
@@ -18,13 +18,13 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D398 (2026-11-09): a TriggerDagOperator starts only a `Chained` DAG
 - D397 (2026-11-09): a turn's messages in groups, savepoints later
 - D396 (2026-11-09): B184 fixed in M4B
+- M4.12c (2026-11-09): Operator mapping
 - M4.12b (2026-11-09): Backfill
 - M4.12a (2026-11-09): `TriggerDagOperator`
-- M4.11h (2026-11-08): `schedr.api`, Python access to the REST API
 
 ## In progress
 
-- Order agreed with the user (2026-11-09): the rest of M4 (M4.12b done; next M4.12c operator mapping, its design decided first with Q21; then M4.13, M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
+- Order agreed with the user (2026-11-09): the rest of M4 (M4.12b and M4.12c done; next M4.13 notifications, then M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
 - For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).
 - B199 (a backfill over a DST change of a sub-minute cron holds the master up; medium/rare) logged by M4.12b's review: for the bug round.
 
@@ -43,7 +43,7 @@ Nothing.
 
 ## Colleagues
 
-Codex weekly 51% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Codex weekly 54% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
 Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:

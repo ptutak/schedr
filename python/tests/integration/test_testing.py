@@ -822,6 +822,54 @@ def test_a_trigger_dag_runs_its_target_from_the_path_tested(tmp_path: Path) -> N
     assert result.tasks["start"].attempts[0].exit_code is None, "no process ran it"
 
 
+MAPPED_TARGET = """
+from dataclasses import dataclass
+
+from schedr import Chained, CommandOperator, Dag, dag_ctx
+
+
+@dataclass
+class Part:
+    region: str
+
+
+with Dag("report", params=Part, trigger=Chained(by=["fan"])):
+    CommandOperator("export", command=["echo", "exported", dag_ctx.params.region])
+"""
+
+MAPPED_FAN = """
+from schedr import Dag, Failed, TimedOut, TriggerDagOperator, task
+
+
+@task
+def regions() -> list[dict[str, str]]:
+    return [{"region": "eu"}, {"region": "us"}]
+
+
+@task
+def count(run_ids: list[str | Failed | TimedOut]) -> int:
+    return len({r for r in run_ids if isinstance(r, str)})
+
+
+with Dag("fan"):
+    each = TriggerDagOperator.partial("each", dag="report").expand(params=regions())
+    count(each.output)
+"""
+
+
+def test_a_mapped_trigger_dag_runs_a_command_per_element(tmp_path: Path) -> None:
+    # Decision 407, and the way a command is mapped (decision 406): a run of a DAG running it
+    # per element.
+    (tmp_path / "mapped_report.py").write_text(MAPPED_TARGET)
+    (tmp_path / "mapped_fan.py").write_text(MAPPED_FAN)
+    result = run_dag(tmp_path, "fan", for_=FOR)
+    assert result.state == "success", result.tasks["each"]
+    instances = result.tasks["each"].instances
+    assert instances is not None, "mapped"
+    assert [i.state for i in instances] == ["success", "success"]
+    assert result.tasks["count"].output == 2, "two runs, each its own ID"
+
+
 def test_a_trigger_dag_whose_target_isnt_in_the_path_tested_fails_saying_so(
     tmp_path: Path,
 ) -> None:

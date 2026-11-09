@@ -18,7 +18,7 @@ None.
 - Q13 (until M6, `ui-cli`): Should schedr provide OIDC integration for deployments without a mesh?
 - Q14 (until M6, `ui-cli`): Should the CLI obtain OIDC tokens through a login command?
 - Q15 (until M4B, `state`): Should database tables be partitioned by time?
-- Q21 (until M4.12c, `wait-steps`): Should a wait step support .expand()?
+- Q21 (until M6, `wait-steps`): Should a wait step support .expand()?
 - Q24 (until later, `triggers`): Should a new worker take triggers that are already running?
 
 ## Unverified claims
@@ -29,6 +29,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D407 | 2026-11-09 | user | built M4.12c | chained-runs | A mapped TriggerDagOperator starts a run per element |
+| D406 | 2026-11-09 | user | built M4.12c | chained-runs | Of the operators, only a TriggerDagOperator is mapped |
 | D405 | 2026-11-09 | user | built M4.12b | runs | The scheduler skips fire times another run covers |
 | D404 | 2026-11-09 | user | built M4.12b | runs | A backfill works on any trigger with fire times |
 | D403 | 2026-11-09 | user | built M4.12b | runs | A backfill's progress shows on its runs and on the DAG page |
@@ -53,7 +55,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D384 | 2026-11-09 | user | rule | assignment | Assignment stays oldest-ready-first; no priorities between DAGs |
 | D383 | 2026-11-09 | user | planned (R1.0a) | deployment | A slim image beside the full one |
 | D382 | 2026-11-09 | user | rule | components | One leading master per deployment; scale by more deployments |
-| D381 | 2026-11-09 | user | planned (M4.12c) | chained-runs | Operators are mapped in a later step, TriggerDagOperator with them |
+| D381 | 2026-11-09 | user | superseded by D407 | chained-runs | Operators are mapped in a later step, TriggerDagOperator with them |
 | D380 | 2026-11-09 | user | built M4.12a | chained-runs | A waiting TriggerDagOperator doesn't count towards the DAG's limits |
 | D379 | 2026-11-09 | user | built M4.12a | chained-runs | A missing or conflicting target fails the operator, with its retries |
 | D378 | 2026-11-09 | user | built M4.12a | chained-runs | In tests a TriggerDagOperator starts a real run of a target in the tested path |
@@ -457,9 +459,10 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### chained-runs
 
+- D407: A mapped TriggerDagOperator starts a run per element
+- D406: Of the operators, only a TriggerDagOperator is mapped
 - D399: Cycles between DAGs are allowed; only a cycle inside a DAG is refused
 - D398: A TriggerDagOperator starts only a DAG with `trigger=Chained()`
-- D381: Operators are mapped in a later step, TriggerDagOperator with them
 - D380: A waiting TriggerDagOperator doesn't count towards the DAG's limits
 - D379: A missing or conflicting target fails the operator, with its retries
 - D378: In tests a TriggerDagOperator starts a real run of a target in the tested path
