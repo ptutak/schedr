@@ -154,3 +154,22 @@ async fn an_event_for_a_moment_ahead_is_refused() {
     let (status, _) = post(&app, &key, None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// A bad event's error shows none of its values, quoted or not (decision 134, B194).
+#[tokio::test]
+async fn a_bad_event_s_error_shows_none_of_its_values() {
+    let app = app(1 << 20).await;
+    for body in [
+        json!({"name": "deploy", "key": 31_415_926, "data": {}}),
+        json!({"name": "deploy", "key": "k", "data": {}, "at": "hunter2-not-a-time"}),
+        json!({"name": ["hunter2"], "key": "k", "data": {}}),
+    ] {
+        let (status, answer) = post(&app, &body, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let error = answer["error"].as_str().unwrap();
+        assert!(error.starts_with("the event: "), "{error}");
+        for value in ["31415926", "hunter2"] {
+            assert!(!error.contains(value), "{body}: {error}");
+        }
+    }
+}

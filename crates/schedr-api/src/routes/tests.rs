@@ -1596,6 +1596,27 @@ async fn a_bad_body_doesnt_quote_its_text() {
     assert!(!error.contains("hunter2"), "{error}");
 }
 
+/// A value that isn't a string is shown by serde in backticks (``integer `5` ``): a bad body
+/// doesn't show it either (B194).
+#[tokio::test]
+async fn a_bad_body_doesnt_show_a_value_that_isnt_a_string() {
+    let (app, _db, _run) = api().await;
+    for body in [
+        r#"{"params": 987654321}"#,
+        r#"{"event_key": 31415926}"#,
+        r#"{"event_key": 2718.2818}"#,
+        r#"{"event_key": false}"#,
+    ] {
+        let (status, answer) = send(&app, Method::POST, "/api/v1/dags/sync/runs", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let error = answer["error"].as_str().unwrap();
+        for value in ["987654321", "31415926", "2718.2818", "false"] {
+            assert!(!error.contains(value), "{body}: {error}");
+        }
+        assert!(error.starts_with("invalid body: invalid type: "), "{error}");
+    }
+}
+
 #[tokio::test]
 async fn params_with_nul_are_refused_before_any_command() {
     let (app, db, _run) = api().await;

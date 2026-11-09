@@ -67,8 +67,9 @@ pub async fn post_event(
     key: RequestKey,
     body: Bytes,
 ) -> Result<(StatusCode, Json<NamedEventView>), ApiError> {
-    let request: PostEventRequest = serde_json::from_slice(&body)
-        .map_err(|error| ApiError::BadRequest(format!("the event: {error}")))?;
+    let request: PostEventRequest = serde_json::from_slice(&body).map_err(|error| {
+        ApiError::BadRequest(format!("the event: {}", crate::routes::body_error(&error)))
+    })?;
     let name = EventName::new(&request.name)
         .map_err(|error| ApiError::BadRequest(format!("name: {error}")))?;
     check_event_key(&request.key).map_err(|why| ApiError::BadRequest(format!("key: {why}")))?;

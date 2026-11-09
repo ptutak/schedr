@@ -1519,12 +1519,35 @@ fn optional_body<T: Default + serde::de::DeserializeOwned>(body: &[u8]) -> Resul
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(T::default());
     }
-    serde_json::from_slice(body).map_err(|e| {
-        ApiError::BadRequest(format!(
-            "invalid body: {}",
-            schedr_config::masked::mask_text(&without_quoted(&e.to_string()))
-        ))
-    })
+    serde_json::from_slice(body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid body: {}", body_error(&e))))
+}
+
+/// Why a JSON body can't be read, without any value from it (decision 134): serde's message
+/// with the quoted and backticked values taken out, then masked as text.
+pub(crate) fn body_error(error: &serde_json::Error) -> String {
+    schedr_config::masked::mask_text(&without_values(&without_quoted(&error.to_string())))
+}
+
+/// The kinds serde shows a value of in backticks (``integer `5` ``, decision 134, B194);
+/// names it puts in backticks (``unknown field `x` ``) stay.
+const BACKTICKED_VALUES: [&str; 4] = ["integer `", "floating point `", "boolean `", "character `"];
+
+/// `text` with each value serde shows in backticks as `` `…` ``.
+fn without_values(text: &str) -> String {
+    let mut out = text.to_owned();
+    for kind in BACKTICKED_VALUES {
+        let mut from = 0;
+        while let Some(at) = out[from..].find(kind) {
+            let start = from + at + kind.len();
+            let Some(length) = out[start..].find('`') else {
+                break;
+            };
+            out.replace_range(start..start + length, "…");
+            from = start + '…'.len_utf8() + 1;
+        }
+    }
+    out
 }
 
 /// `text` with each double-quoted part (a value from the body, which may be a secret) as
