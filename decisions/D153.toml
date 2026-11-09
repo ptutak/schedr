@@ -11,5 +11,5 @@ for each release.
 '''
 history = "archive/PROJECT.md#D153"
 step = "R0.1"
-code = ["scripts/release.py"]
-checked = 2026-11-08
+code = ["scripts/release.py", ".github/workflows/release.yml::gh-action-pypi-publish"]
+checked = 2026-11-09

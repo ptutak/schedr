@@ -10,4 +10,5 @@ its PID and exit. It reaps the task only after the agent closes the status socke
 '''
 history = "archive/PROJECT.md#D13"
 step = "M2.5.3"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/runner/fork_server.py::_shim"]

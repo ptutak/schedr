@@ -1,0 +1,25 @@
+# STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
+# plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
+# session's end (never append): what's half-done, what waits for the user, the rules in force.
+updated = 2026-11-09
+
+in_progress = [
+    "Next: M4.12a, `TriggerDagOperator`. B194 fixed (a bad request body's 400 showed values from it).",
+]
+
+waiting = []
+
+rules = [
+    "Commits and pushes pre-accepted while nothing waits for the user's decision (M4.12).",
+    "One review per step: Codex (security in its prompt); Grok only when Codex can't run.",
+    "Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`.",
+    "Stress runs only nightly; never started by hand.",
+    "Before stating how something behaves, read the code or run it, and say which.",
+    "Work from a worktree reaches main through git only; read `git diff --cached --stat` before committing (D371).",
+]
+
+colleagues = """
+Codex weekly 42% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`."""
+
+resume = "claude --resume e45442ad-3ec7-4bce-9d45-b6191e505a11"

@@ -13,4 +13,5 @@ worker.
 history = "archive/PROJECT.md#D314"
 step = "M4.9c"
 also = ["assignment", "cleanup"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/attempt.rs::can_run_cleanup_script"]

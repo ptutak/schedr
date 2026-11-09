@@ -11,5 +11,5 @@ It commits or rolls back on exit; MySQL and MariaDB require with.
 history = "archive/PROJECT.md#D317"
 step = "M4.10"
 also = ["async-tasks"]
-code = ["python/schedr/connection_types.py"]
-checked = 2026-11-08
+code = ["python/schedr/connection_types.py::SQL", "python/schedr/connection_types.py::AsyncSqlConnection"]
+checked = 2026-11-09

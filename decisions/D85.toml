@@ -11,5 +11,5 @@ Indexing that result or using `.instances` accesses individual instance results.
 history = "archive/PROJECT.md#D85"
 step = "M4.3c"
 also = ["python-api"]
-code = ["python/schedr/testing.py"]
-checked = 2026-11-08
+code = ["python/schedr/testing.py::__getitem__"]
+checked = 2026-11-09

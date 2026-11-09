@@ -11,5 +11,5 @@ Each async attempt logs its loop, and schedr[uvloop] offers an installation extr
 history = "archive/PROJECT.md#D316"
 step = "M4.10"
 also = ["wait-steps"]
-code = ["python/schedr/runner/coroutines.py"]
-checked = 2026-11-08
+code = ["python/schedr/runner/coroutines.py::loop_factory"]
+checked = 2026-11-09

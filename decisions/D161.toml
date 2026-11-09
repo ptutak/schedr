@@ -10,5 +10,5 @@ Its images are tagged only `X.Y.ZrcN`.
 '''
 history = "archive/PROJECT.md#D161"
 step = "R0.1"
-code = ["scripts/release.py"]
-checked = 2026-11-08
+code = ["scripts/release.py::Release", "scripts/release.py::notes"]
+checked = 2026-11-09

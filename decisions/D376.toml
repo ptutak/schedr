@@ -1,0 +1,15 @@
+title = "STATUS.md is generated from the records and status.toml"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "development"
+section = "Documents and records"
+summary = '''
+`make records` writes `STATUS.md` whole: the next step, open questions and bugs, the latest
+journal entries and steps done, from the records; in progress, waiting for the user, the rules in
+force, colleagues' usage and the resume line from `status.toml`, rewritten at each step's or
+session's end.
+'''
+history = "JOURNAL.md#D376"
+step = "n/a"
+code = ["scripts/records.py::render_status", "scripts/records.py::read_status", "status.toml"]

@@ -11,5 +11,5 @@ An exception fails the test; a Generic connection renders its values.
 history = "archive/PROJECT.md#D198"
 step = "M4.7c"
 also = ["ui-cli"]
-code = ["crates/schedr-agent/src/connection_jobs.rs", "crates/schedr-model/src/runner.rs", "crates/schedr/src/cli.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/runner.rs", "crates/schedr/src/cli.rs", "crates/schedr-agent/src/connection_jobs.rs::test_spec", "crates/schedr-agent/src/connection_jobs.rs::test_report"]
+checked = 2026-11-09

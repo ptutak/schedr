@@ -6,10 +6,10 @@ topic = "observability"
 section = "Metrics and logs"
 summary = '''
 A waiting reason names the reached concurrency limit and its value.
-`master_tasks_waiting` labels these waits by the limit’s name.
+`schedr_tasks_waiting` labels these waits by the limit’s name.
 '''
 history = "archive/PROJECT.md#D91"
 step = "M4.4"
 also = ["assignment"]
-code = ["crates/schedr-master/src/limits.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/limits.rs::Reached"]
+checked = 2026-11-09

@@ -11,5 +11,5 @@ refuses unknown keys, validates values and stores them as tagged outputs; schedu
 history = "archive/PROJECT.md#D138"
 step = "M4.5a"
 also = ["runs", "python-api"]
-code = ["crates/schedr-agent/src/render.rs", "crates/schedr-db/src/runs.rs", "crates/schedr-master/src/params.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/render.rs", "crates/schedr-db/src/runs.rs", "crates/schedr-master/src/params.rs::run_params", "python/schedr/_params.py::declare"]
+checked = 2026-11-09

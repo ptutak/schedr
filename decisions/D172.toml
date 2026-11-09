@@ -11,5 +11,5 @@ A single storage is the default; standalone uses `db` when none is configured.
 history = "archive/PROJECT.md#D172"
 step = "M4.6c"
 also = ["configuration"]
-code = ["crates/schedr-config/src/loader.rs", "crates/schedr/src/secret_storage.rs"]
-checked = 2026-11-08
+code = ["crates/schedr/src/secret_storage.rs", "crates/schedr-config/src/loader.rs::check_secret_storage"]
+checked = 2026-11-09

@@ -11,5 +11,5 @@ Years and months remain refused.
 history = "archive/PROJECT.md#D139"
 step = "M4.5a"
 also = ["serialization"]
-code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs::duration_micros"]
+checked = 2026-11-09

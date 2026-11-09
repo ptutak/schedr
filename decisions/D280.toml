@@ -13,4 +13,4 @@ permitted overlaps as `tries_run_twice` and fail on all others. Tasks should be 
 history = "archive/PROJECT.md#D280"
 step = "M4.8z"
 also = ["cleanup"]
-checked = 2026-11-08
+checked = 2026-11-09

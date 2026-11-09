@@ -11,5 +11,5 @@ Parse jobs and tasks import from the read-only copy; unused older copies are rem
 history = "archive/PROJECT.md#D102"
 step = "M4.3e"
 also = ["task-processes"]
-code = ["crates/schedr-agent/src/agent.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/scan.rs::capture"]
+checked = 2026-11-09

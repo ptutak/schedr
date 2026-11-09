@@ -7,9 +7,10 @@ section = "What a job says"
 summary = '''
 Declared outcomes define successful exit codes without an operator enum. An outcomes
 enum replaces them and enables enum routing and .outcome. Without one, only declared
-DefaultOutcome.SUCCESS can be routed on; other .on selections and .outcome are parse
-errors.
+DefaultOutcome.SUCCESS can be routed on; other .on selections are parse errors, and so is
+.outcome unless SUCCESS is the only outcome declared.
 '''
 history = "archive/PROJECT.md#D311"
 step = "M4.9c"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/outcomes.py::from_declaration"]

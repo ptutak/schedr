@@ -11,5 +11,5 @@ The error names the host’s wait steps and a metric counts losses per code set.
 history = "archive/PROJECT.md#D342"
 step = "M4.11a3"
 also = ["observability"]
-code = ["crates/schedr-agent/src/watchers.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/watchers.rs::host_lost"]
+checked = 2026-11-09

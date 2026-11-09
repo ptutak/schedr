@@ -11,5 +11,5 @@ Other tasks are not stopped by this rule.
 history = "archive/PROJECT.md#D252"
 step = "M4.8b3"
 also = ["workers"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/status.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/status.rs", "crates/schedr-agent/src/agent.rs::NO_WORD", "crates/schedr-agent/src/agent.rs::cut_off"]
+checked = 2026-11-09

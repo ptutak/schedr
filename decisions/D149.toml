@@ -13,5 +13,5 @@ fields.
 history = "archive/PROJECT.md#D149"
 step = "M4.5c"
 also = ["task-context"]
-code = ["crates/schedr-api/src/views.rs", "crates/schedr-api/src/views/form.rs", "crates/schedr-ui/src/params_form.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-ui/src/params_form.rs", "crates/schedr-api/src/views/form.rs::ParamFieldView"]
+checked = 2026-11-09

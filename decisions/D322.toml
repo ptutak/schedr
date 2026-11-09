@@ -10,5 +10,5 @@ A call that runs out of that time is cancelled and fails with a clear message.
 '''
 history = "archive/PROJECT.md#D322"
 step = "M4.11a1"
-code = ["python/schedr/runner/waiting.py"]
-checked = 2026-11-08
+code = ["python/schedr/runner/waiting.py::PokeTooSlowError"]
+checked = 2026-11-09

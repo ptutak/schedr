@@ -11,4 +11,4 @@ A `WAITING_FOR_ANSWER` notification is sent through configured channels, with em
 history = "archive/PROJECT.md#D288"
 step = "M6"
 also = ["ui-cli"]
-checked = 2026-11-08
+checked = 2026-11-09

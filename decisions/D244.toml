@@ -11,5 +11,5 @@ It is shown as `unschedulable`.
 history = "archive/PROJECT.md#D244"
 step = "M4.8b2"
 also = ["assignment"]
-code = ["crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/dispatch.rs::NO_CLEANUP_WORKER"]
+checked = 2026-11-09

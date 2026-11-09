@@ -6,10 +6,10 @@ topic = "cleanup"
 section = "Resources"
 summary = '''
 A run that already ended SUCCESS keeps that state when a rest cleanup fails later.
-It is shown yellow with LATE_CLEANUP_FAILED; the failure is logged and counted.
+It is shown yellow with `late_cleanup_failed` (the UI says "late cleanup failed"); the failure is logged and counted.
 '''
 history = "archive/PROJECT.md#D309"
 step = "B169"
 also = ["runs", "observability"]
-code = ["crates/schedr-api/src/views.rs", "crates/schedr-db/src/runs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-db/src/runs.rs::mark_late_failure", "crates/schedr-db/src/reads.rs::late_failure"]
+checked = 2026-11-09

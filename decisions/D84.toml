@@ -11,5 +11,5 @@ The map index is `None` for an unmapped task.
 history = "archive/PROJECT.md#D84"
 step = "M4.3c"
 also = ["python-api"]
-code = ["python/schedr/context.py"]
-checked = 2026-11-08
+code = ["python/schedr/context.py::TaskValues"]
+checked = 2026-11-09

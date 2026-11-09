@@ -12,5 +12,5 @@ other keywords are DAG errors. Pydantic validators run when a task decodes value
 history = "archive/PROJECT.md#D133"
 step = "M4.5a"
 also = ["python-api"]
-code = ["crates/schedr-master/src/params.rs", "crates/schedr-master/src/scheduler.rs", "crates/schedr-api/src/views.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/scheduler.rs", "crates/schedr-api/src/views.rs", "crates/schedr-master/src/params.rs::validator", "crates/schedr-master/src/params.rs::keyword_problems"]
+checked = 2026-11-09

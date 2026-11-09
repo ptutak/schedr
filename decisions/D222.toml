@@ -10,6 +10,7 @@ A cleanup needing a secret declares it; resource values are masked as outputs.
 '''
 history = "archive/PROJECT.md#D222"
 step = "M4.8a"
+unverified = ["the log warning when handles are masked"]
 also = ["secrets", "serialization"]
-code = ["crates/schedr-agent/src/handles.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/handles.rs::add"]
+checked = 2026-11-09

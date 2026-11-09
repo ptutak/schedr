@@ -11,5 +11,5 @@ It refuses a nonempty directory and prints no secret values to the terminal.
 history = "archive/PROJECT.md#D170"
 step = "M4.6c"
 also = ["ui-cli"]
-code = ["crates/schedr/src/secrets.rs"]
-checked = 2026-11-08
+code = ["crates/schedr/src/secrets.rs::export"]
+checked = 2026-11-09

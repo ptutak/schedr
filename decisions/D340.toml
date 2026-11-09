@@ -11,5 +11,5 @@ Resources appear inside a run’s detail.
 history = "archive/PROJECT.md#D340"
 step = "M4.11a3"
 also = ["cleanup", "wait-steps"]
-code = ["crates/schedr-api/src/routes.rs", "crates/schedr/src/cli.rs"]
-checked = 2026-11-08
+code = ["crates/schedr/src/cli.rs", "crates/schedr-api/src/routes.rs::list_run_resources", "crates/schedr-api/src/routes.rs::list_switched_off_sensors"]
+checked = 2026-11-09

@@ -11,4 +11,5 @@ at step end is logged; host thread counts are shown as tied and untied, and as a
 history = "archive/PROJECT.md#D339"
 step = "M4.11a3"
 also = ["observability"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/runner/watchers.py::_warn_of_threads"]

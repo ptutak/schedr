@@ -11,4 +11,5 @@ Events are acknowledged after storage; the trigger resumes from its bookmark and
 history = "archive/PROJECT.md#D348"
 step = "M4.11b"
 also = ["wait-steps"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-master/src/core/triggers.rs::start_trigger"]

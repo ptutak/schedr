@@ -22,9 +22,9 @@ None.
 
 ## Where in code
 
-- `crates/schedr-model/src/connection.rs` (D53)
-- `python/schedr/_params.py` (D136)
-- `python/schedr/connections.py` (D53)
+- `crates/schedr-model/src/connection.rs::ConnectionDef` (D53)
+- `python/schedr/_params.py::declare` (D136)
+- `python/schedr/connections.py::TwoWayConnection` (D53)
 
 ## Open
 

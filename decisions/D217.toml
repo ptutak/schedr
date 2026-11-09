@@ -11,5 +11,5 @@ Their defaults are three retries and 30 seconds between retries.
 history = "archive/PROJECT.md#D217"
 step = "M4.8a"
 also = ["python-api"]
-code = ["crates/schedr-model/src/task.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/task.rs::DEFAULT_CLEANUP_RETRIES", "crates/schedr-model/src/task.rs::DEFAULT_CLEANUP_RETRY_DELAY_MS"]
+checked = 2026-11-09

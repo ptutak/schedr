@@ -13,5 +13,5 @@ mapping takes the edge.
 history = "archive/PROJECT.md#D120"
 step = "M4.3e"
 also = ["python-api"]
-code = ["crates/schedr-master/src/progress.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/progress.rs::edge_states"]
+checked = 2026-11-09

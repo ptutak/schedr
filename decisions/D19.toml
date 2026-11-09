@@ -11,5 +11,5 @@ After that the server stays disabled until restart; 0s disables retries.
 history = "archive/PROJECT.md#D19"
 step = "M2.5.4a"
 also = ["configuration"]
-code = ["crates/schedr-agent/src/fork.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/fork.rs::retried", "crates/schedr-config/src/config.rs::fork_server_import_retry"]
+checked = 2026-11-09

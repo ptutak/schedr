@@ -11,5 +11,5 @@ and reports skipped files.
 '''
 history = "archive/PROJECT.md#D305"
 step = "M4.9d"
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/scan.rs", "crates/schedr/src/local.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr/src/local.rs", "crates/schedr-agent/src/scan.rs::mentions_schedr", "crates/schedr-agent/src/scan.rs::DAG_FILE_MARK"]
+checked = 2026-11-09

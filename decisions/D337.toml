@@ -10,5 +10,5 @@ Calls still running at cancellation or step end are stopped; a stuck thread ends
 '''
 history = "archive/PROJECT.md#D337"
 step = "M4.11a2"
-code = ["crates/schedr-model/src/runner.rs", "python/schedr/runner/waiting.py", "python/schedr/runner/watchers.py"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/runner.rs", "python/schedr/runner/waiting.py", "python/schedr/runner/watchers.py::_ThreadCall"]
+checked = 2026-11-09

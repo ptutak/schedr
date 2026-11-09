@@ -12,5 +12,5 @@ services. Each row's Test opens the connection and runs its check, making a real
 history = "archive/PROJECT.md#D207"
 step = "M4.7e"
 also = ["ui-cli"]
-code = ["crates/schedr-ui/src/connections.rs", "crates/schedr-ui/src/pages.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/pages.rs", "crates/schedr-ui/src/connections.rs::check", "crates/schedr-ui/src/connections.rs::test"]
+checked = 2026-11-09

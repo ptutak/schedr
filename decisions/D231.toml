@@ -10,4 +10,4 @@ Each key has a doc comment describing its effect and when to change it.
 '''
 history = "archive/PROJECT.md#D231"
 step = "M4.8t"
-checked = 2026-11-08
+checked = 2026-11-09

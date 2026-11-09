@@ -11,5 +11,5 @@ errors.
 '''
 history = "archive/PROJECT.md#D296"
 step = "M4.9a"
-code = ["crates/schedr-agent/src/jobs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/jobs.rs::job_of"]
+checked = 2026-11-09

@@ -6,8 +6,9 @@ topic = "connections"
 section = "Demo"
 summary = '''
 The demo's HTTP server is pinned go-httpbin.
-Its `/bearer` checks tokens and `/headers` echoes the request headers.
+Its `/bearer` answers 200 for any bearer token and 401 without one; the demo's checks use it.
 '''
 history = "archive/PROJECT.md#D204"
 step = "M4.7d"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["examples/demo/compose.yaml::httpbin"]

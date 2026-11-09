@@ -11,4 +11,4 @@ It uses a retry.
 history = "archive/PROJECT.md#D257"
 step = "M4.8b3"
 also = ["workers", "outcomes"]
-checked = 2026-11-08
+checked = 2026-11-09

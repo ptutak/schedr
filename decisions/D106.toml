@@ -11,4 +11,5 @@ The error identifies the value at encoding time.
 history = "archive/PROJECT.md#D106"
 step = "M4.3e"
 also = ["outcomes"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/_serialization/codec.py::_text"]

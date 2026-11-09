@@ -12,5 +12,5 @@ retry succeeds. The failure message points to `cleanup_anywhere`.
 history = "archive/PROJECT.md#D220"
 step = "M4.8b2"
 also = ["workers", "runs"]
-code = ["crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/dispatch/tests.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/dispatch/tests.rs", "crates/schedr-master/src/dispatch.rs::end_lost"]
+checked = 2026-11-09

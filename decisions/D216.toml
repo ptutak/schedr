@@ -11,5 +11,5 @@ Its cleanup result is `not needed`.
 history = "archive/PROJECT.md#D216"
 step = "M4.8a"
 also = ["assignment", "outcomes"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-model/src/states.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/states.rs", "crates/schedr-agent/src/agent.rs::NotNeeded"]
+checked = 2026-11-09

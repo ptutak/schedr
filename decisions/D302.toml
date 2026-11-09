@@ -10,4 +10,5 @@ summary = '''
 '''
 history = "archive/PROJECT.md#D302"
 step = "M4.9b"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/operators.py::add_script"]

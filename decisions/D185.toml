@@ -10,4 +10,5 @@ MySQL, Mongo and OpenSSH run in integration containers and pinned CI service con
 '''
 history = "archive/PROJECT.md#D185"
 step = "M4.7b1"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/tests/integration/test_connection_types.py::test_commands_get_connections_as_their_tools_files"]

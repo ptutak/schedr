@@ -11,5 +11,5 @@ Peak RSS and context switches are null; unreadable usage is null.
 history = "archive/PROJECT.md#D18"
 step = "M2.5.4b"
 also = ["observability"]
-code = ["crates/schedr-agent/src/process.rs", "crates/schedr-agent/src/usage.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/process.rs", "crates/schedr-agent/src/usage.rs::zombie_usage"]
+checked = 2026-11-09

@@ -6,10 +6,10 @@ topic = "components"
 section = "Roles"
 summary = '''
 A paused or superseded master returns 503 from `/readyz` until it leads again. It refuses worker
-streams with `UNAVAILABLE`, including registrations that waited for its lock while it paused.
+streams with the gRPC status unavailable (`Status::unavailable`), including registrations that waited for its lock while it paused.
 '''
 history = "archive/PROJECT.md#D297"
 step = "M4.8z"
 also = ["workers", "observability"]
-code = ["crates/schedr-agent/src/jobs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-master/src/service.rs::NOT_LEADING", "crates/schedr/src/ops.rs::readyz"]
+checked = 2026-11-09

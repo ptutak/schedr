@@ -10,5 +10,5 @@ The reason is shown where a log would be.
 '''
 history = "archive/PROJECT.md#D276"
 step = "M4.8c2"
-code = ["crates/schedr-master/src/progress.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/progress.rs::EMPTY_CLEANUP"]
+checked = 2026-11-09

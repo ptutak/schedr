@@ -12,5 +12,5 @@ absent beyond D303’s grace; the recorded uses survive restarts.
 history = "archive/PROJECT.md#D304"
 step = "M4.9b"
 also = ["code-delivery", "protocol"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/jobs.rs", "crates/schedr-agent/src/parse.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-agent/src/parse.rs", "crates/schedr-agent/src/agent.rs::set_uses", "crates/schedr-master/src/core.rs::root_uses", "crates/schedr-proto/proto/schedr/protocol/v1/master.proto::RootUses"]
+checked = 2026-11-09

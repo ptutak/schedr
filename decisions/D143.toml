@@ -7,12 +7,12 @@ section = "Inside a command or a script"
 summary = '''
 Command-task processes inherit the datagram channel named by `SCHEDR_CTX_FD`; each caller passes one
 end of a fresh stream socket pair through `SCM_RIGHTS` and uses its own connection. It speaks
-length-prefixed JSON, beginning with protocol `hello`. The agent serves at most 64 connections until
-the attempt ends and rejects later calls; malformed descriptor messages are dropped and their
+length-prefixed JSON, beginning with protocol `hello`. The agent serves at most 64 connections open at
+once and refuses one more while they are; malformed descriptor messages are dropped and their
 descriptors closed. Linux and macOS are supported.
 '''
 history = "archive/PROJECT.md#D143"
 step = "M4.5b"
 also = ["protocol", "task-processes"]
-code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr-agent/src/ctx.rs::serve", "crates/schedr-agent/src/ctx.rs::MAX_CONNECTIONS"]
+checked = 2026-11-09

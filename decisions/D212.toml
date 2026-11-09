@@ -11,4 +11,5 @@ The base image includes every connection type's Python client and command-line t
 history = "archive/PROJECT.md#D212"
 step = "M4.7e"
 also = ["deployment"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["images/schedr/Dockerfile::mongodb-tools", "images/schedr/Dockerfile::openssh-client"]

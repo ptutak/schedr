@@ -10,5 +10,6 @@ The layout keeps unrelated tasks outside boxes and avoids overlaps.
 '''
 history = "archive/PROJECT.md#D65"
 step = "M4.2b"
-code = ["crates/schedr-ui/src/graph.rs"]
-checked = 2026-11-08
+unverified = ["the layout avoids overlaps"]
+code = ["crates/schedr-ui/src/graph.rs::group_boxes", "crates/schedr-ui/src/graph.rs::layout_grouped"]
+checked = 2026-11-09

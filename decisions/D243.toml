@@ -10,6 +10,7 @@ The old worker’s name remains in the log and error summary.
 '''
 history = "archive/PROJECT.md#D243"
 step = "M4.8b2"
+unverified = ["the old worker's name stays in the log"]
 also = ["workers"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-db/src/attempts.rs::move_cleanup"]
+checked = 2026-11-09

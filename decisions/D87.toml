@@ -11,5 +11,5 @@ Across-run `max_active_tasks` and `max_active` come from the current DAG version
 history = "archive/PROJECT.md#D87"
 step = "M4.4"
 also = ["python-api"]
-code = ["crates/schedr-master/src/limits.rs", "crates/schedr-model/src/task.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/task.rs", "crates/schedr-master/src/limits.rs::reached"]
+checked = 2026-11-09

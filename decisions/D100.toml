@@ -11,5 +11,5 @@ period, then are killed. The stop ends at once when the group is empty.
 history = "archive/PROJECT.md#D100"
 step = "M4.3e"
 also = ["workers"]
-code = ["crates/schedr-agent/src/supervise.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/supervise.rs::left_after_leader"]
+checked = 2026-11-09

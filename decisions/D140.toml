@@ -11,4 +11,5 @@ It is stored as `1`.
 history = "archive/PROJECT.md#D140"
 step = "M4.5a"
 also = ["serialization"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-model/src/params.rs::whole"]

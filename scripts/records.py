@@ -43,6 +43,7 @@ A decision, `decisions/D<n>.toml`:
     topic = "chained-runs"      # a topic of design/README.md
     also = ["runs"]             # optional: other topics whose design page lists it
     section = "Waiting"         # optional: the subheading of its topic's page it goes under
+    unverified = ["..."]        # optional: claims of the summary nobody found in the code yet
     summary = '''
     What holds, in two to four lines: the result, not the reasons.
     '''
@@ -76,6 +77,9 @@ Usage:
     python3 scripts/records.py check               # validate; fail if anything generated is stale
     python3 scripts/records.py decision "<title>"  # a new decision's file; prints its path
     python3 scripts/records.py question "<title>"  # a new question's file; prints its path
+    python3 scripts/records.py affected [<since>]  # decisions whose code changed since <since>
+                                                   # (default HEAD: the uncommitted changes)
+    python3 scripts/records.py stale               # decisions whose code changed after `checked`
 """
 
 from __future__ import annotations
@@ -218,6 +222,7 @@ class Decision:
     code: tuple[str, ...]
     checked: datetime.date | None = None
     section: str = ""
+    unverified: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -455,7 +460,7 @@ def read_decision(path: Path, known_topics: set[str]) -> Decision:
         name,
         data,
         {"title", "date", "by", "status", "topic", "summary", "history"},
-        {"superseded_by", "step", "also", "section", "code", "checked"},
+        {"superseded_by", "step", "also", "section", "code", "checked", "unverified"},
     )
     if data["by"] not in BY:
         raise RecordError(f"{name}: `by` is one of {', '.join(BY)}")
@@ -496,6 +501,7 @@ def read_decision(path: Path, known_topics: set[str]) -> Decision:
         code=tuple(string_list(name, data, "code")),
         checked=date_field(name, data, "checked", required=False),
         section=section_of(name, data),
+        unverified=tuple(string_list(name, data, "unverified")),
     )
 
 
@@ -644,7 +650,110 @@ def problems(records: Records, root: Path, files: list[Path]) -> list[str]:
             found.append(f'{d.id}: {target[1]} has no anchor <a id="{target[2]}"></a>')
     upto = max((d.number for d in records.decisions), default=0) + 1
     found += unknown_mentions(files, upto)
+    found += unknown_names(records, files, root)
     return found
+
+
+# Where the documents are, not the code: a name found only there isn't in the code.
+DOCUMENTS = ("decisions/", "design/", "docs/", "plan/", "questions/", "bugs/", "archive/")
+CODE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+
+
+def unknown_names(records: Records, files: list[Path], root: Path) -> list[str]:
+    """Names in code font in a built or rule decision's summary that no code file has.
+
+    A summary's `names` are the identifiers inside its backticks; each must be a word of some
+    tracked file outside the documents (decisions, design, docs, plan, ...) and the root's
+    Markdown. One listed in the decision's `unverified` is let through.
+    """
+    words: set[str] = set()
+    # The script itself names the records' fields.
+    for path in [*files, *(root / "scripts" / name for name in OWN_FILES)]:
+        if not path.is_file():
+            continue
+        name = path.relative_to(root).as_posix()
+        if name.startswith(DOCUMENTS) or ("/" not in name and name.endswith(".md")):
+            continue
+        try:
+            words.update(CODE_NAME.findall(path.read_text(encoding="utf-8")))
+        except UNREADABLE:
+            continue
+    found = []
+    for d in records.decisions:
+        state = records.state(d)
+        if d.status != "active" or not (state.startswith("built") or state == "rule"):
+            continue
+        allowed = set(CODE_NAME.findall(" ".join(d.unverified)))
+        quoted = " ".join(re.findall(r"`([^`]+)`", d.summary))
+        missing = sorted({w for w in CODE_NAME.findall(quoted) if not known(w, words)} - allowed)
+        if missing:
+            found.append(
+                f"{d.id}: its summary names {', '.join(f'`{w}`' for w in missing)}, not in the"
+                " code: correct it, or list the claim in `unverified`"
+            )
+    return found
+
+
+def known(name: str, words: set[str]) -> bool:
+    """`name` is a word of the code, or an environment variable built from words of it.
+
+    `SCHEDR_HIDDEN__WEBSERVER__REFRESH_INTERVAL` is assembled from its sections' names, so each
+    part after the prefix is looked for in lower case.
+    """
+    if name in words:
+        return True
+    prefix, *parts = name.split("__")
+    return (
+        bool(parts)
+        and prefix in words | {"SCHEDR_HIDDEN", "SCHEDR_CONFIG"}
+        and all(part.lower() in words for part in parts)
+    )
+
+
+def changed_files(root: Path, since: str) -> set[str]:
+    """The files changed since `since` (a commit or range), the working tree included."""
+    listed = subprocess.run(
+        ["git", "diff", "--name-only", since], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.split()
+    return set(listed)
+
+
+def affected(records: Records, changed: set[str]) -> list[str]:
+    """The active decisions whose `code` names a changed file: their summaries to re-read."""
+    lines = []
+    for d in records.decisions:
+        hits = [e for e in d.code if e.partition("::")[0] in changed]
+        if d.status == "active" and hits:
+            lines.append(f"{d.id} ({records.state(d)}): {d.title} [{', '.join(hits)}]")
+    return lines
+
+
+def last_change(root: Path, path: str) -> datetime.date | None:
+    """The date of the last commit that changed `path`."""
+    out = subprocess.run(
+        ["git", "log", "-1", "--format=%cs", "--", path],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return datetime.date.fromisoformat(out) if out else None
+
+
+def stale(records: Records, root: Path) -> list[str]:
+    """Active decisions whose code changed after they were `checked`, or never checked."""
+    lines = []
+    for d in records.decisions:
+        if d.status != "active" or records.state(d) in ("rule",) or not d.code:
+            continue
+        paths = sorted({e.partition("::")[0] for e in d.code})
+        if d.checked is None:
+            lines.append(f"{d.id}: never checked [{', '.join(paths)}]")
+            continue
+        later = [p for p in paths if (when := last_change(root, p)) and when > d.checked]
+        if later:
+            lines.append(f"{d.id}: checked {d.checked}, changed since [{', '.join(later)}]")
+    return lines
 
 
 def code_problem(decision: str, entry: str, root: Path) -> str:
@@ -783,6 +892,15 @@ def render_decisions(records: Records) -> str:
         )
     else:
         parts.append("None.\n")
+    doubted = [d for d in records.decisions if d.status == "active" and d.unverified]
+    parts.append("\n## Unverified claims\n\n")
+    parts.append(
+        "Active decisions with a claim nobody found in the code yet (`unverified`): "
+        + ", ".join(d.id for d in doubted)
+        + ".\n"
+        if doubted
+        else "None.\n"
+    )
     parts.append(
         "\n## Every decision\n\n"
         "| # | Date | By | State | Topic | Title |\n|---|---|---|---|---|---|\n"
@@ -834,6 +952,8 @@ def design_blocks(
             state = records.state(d)
             note = "" if state.startswith("built") or state == "rule" else f", {state}"
             text = f"- **{d.title}** ({d.id}{note}): {' '.join(d.summary.split())}"
+            if d.unverified:
+                text += " *Not found in the code yet:* " + "; ".join(d.unverified) + "."
             current.append(textwrap.fill(text, 100, subsequent_indent="  ") + "\n")
         current.append("\n")
     others = [d for d in records.decisions if d.topic != topic and topic in d.also]
@@ -918,6 +1038,94 @@ def status_block(records: Records, root: Path) -> str:
     return "".join(lines)
 
 
+@dataclass(frozen=True)
+class StatusNotes:
+    """`status.toml`: what only the agent knows; the rest of STATUS.md comes from the records."""
+
+    updated: datetime.date
+    in_progress: tuple[str, ...]
+    waiting: tuple[str, ...]
+    rules: tuple[str, ...]
+    colleagues: str
+    resume: str
+
+
+def read_status(path: Path) -> StatusNotes:
+    """`status.toml`, checked."""
+    try:
+        data = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as error:
+        raise RecordError(f"status.toml: {error}") from error
+    allowed = {"updated", "in_progress", "waiting", "rules", "colleagues", "resume"}
+    if unknown := sorted(set(data) - allowed):
+        raise RecordError(f"status.toml: unknown fields {unknown}")
+    colleagues, resume = data.get("colleagues", ""), data.get("resume", "")
+    if not isinstance(colleagues, str) or not isinstance(resume, str):
+        raise RecordError("status.toml: `colleagues` and `resume` are text")
+    updated = date_field("status.toml", data, "updated", required=True)
+    assert updated is not None  # required
+    return StatusNotes(
+        updated=updated,
+        in_progress=tuple(string_list("status.toml", data, "in_progress")),
+        waiting=tuple(string_list("status.toml", data, "waiting")),
+        rules=tuple(string_list("status.toml", data, "rules")),
+        colleagues=colleagues.strip(),
+        resume=resume.strip(),
+    )
+
+
+JOURNAL_ENTRY = re.compile(
+    r'^### <a id="(D[1-9][0-9]*)"></a>(\d{4}-\d{2}-\d{2}): (.*?)(?: \(decision \d+\))?$'
+)
+
+
+def recent(records: Records, root: Path, count: int = 5) -> list[str]:
+    """The latest journal entries and the latest steps done, one line each."""
+    journal = root / "JOURNAL.md"
+    entries = [
+        f"- {m[1]} ({m[2]}): {m[3]}"
+        for line in (journal.read_text().splitlines() if journal.exists() else [])
+        if (m := JOURNAL_ENTRY.match(line))
+    ]
+    done = sorted(
+        (s for m in records.milestones for s in m.steps if s.status == "done" and s.done),
+        key=lambda s: (s.done, s.id),
+    )
+    steps = [f"- {s.id} ({s.done}): {s.title}" for s in done[-3:]]
+    return [*reversed(entries[-count:]), *reversed(steps)]
+
+
+def bullets(items: tuple[str, ...]) -> str:
+    """Markdown items, or "Nothing."."""
+    return "".join(f"- {item}\n" for item in items) if items else "Nothing.\n"
+
+
+def render_status(records: Records, root: Path, notes: StatusNotes) -> str:
+    """STATUS.md, whole: the records' state, then `status.toml`'s notes."""
+    parts = [
+        generated("plan/, decisions/, questions/, bugs/, JOURNAL.md and status.toml"),
+        "# Status\n\n",
+        "Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md`"
+        " and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md`"
+        " before D367). The notes below come from `status.toml`: edit that, then `make records`.\n",
+        f"\n## Now ({notes.updated})\n\n",
+        status_block(records, root),
+        "\n## Recent\n\n",
+        "".join(f"{line}\n" for line in recent(records, root)) or "Nothing yet.\n",
+        "\n## In progress\n\n",
+        bullets(notes.in_progress),
+        "\n## Waiting for the user\n\n",
+        bullets(notes.waiting),
+        "\n## Rules in force\n\n",
+        bullets(notes.rules),
+    ]
+    if notes.colleagues:
+        parts.append(f"\n## Colleagues\n\n{notes.colleagues}\n")
+    if notes.resume:
+        parts.append(f"\nResume this session with:\n\n{notes.resume}\n")
+    return "".join(parts)
+
+
 def bugs_module(root: Path) -> ModuleType | None:
     """`scripts/bugs.py`, if the project has one."""
     path = root / "scripts" / "bugs.py"
@@ -953,7 +1161,10 @@ def views(records: Records, paths: Paths) -> dict[Path, str]:
         else:
             out[page] = generated_page(topic, covered, blocks)
     status = paths.root / "STATUS.md"
-    if status.exists() and records.milestones:
+    hand = paths.root / "status.toml"
+    if hand.exists() and records.milestones:
+        out[status] = render_status(records, paths.root, read_status(hand))
+    elif status.exists() and records.milestones:
         out[status] = with_block(
             status.read_text(), "status", status_block(records, paths.root), "STATUS.md"
         )
@@ -1003,28 +1214,48 @@ def new_question(folder: Path, title: str) -> Path:
 REPOSITORY = Paths()
 
 
+def check(paths: Paths) -> None:
+    """Fail on any problem in the records or a stale generated view."""
+    records = load(paths)
+    found = problems(records, paths.root, tracked(paths.root))
+    found += [
+        f"{p.relative_to(paths.root)} is out of date: run `make records`"
+        for p, text in views(records, paths).items()
+        if not p.exists() or p.read_text() != text
+    ]
+    if found:
+        raise RecordError("\n  ".join(["records:", *found]))
+
+
+def run(argv: list[str], paths: Paths) -> bool:
+    """Run the command `argv` names; whether it was one."""
+    command, args = (argv[1], argv[2:]) if len(argv) > 1 else ("", [])
+    if command == "render" and not args:
+        for path, text in views(load(paths), paths).items():
+            path.write_text(text)
+    elif command == "check" and not args:
+        check(paths)
+    elif command == "affected" and len(args) <= 1:
+        lines = affected(load(paths), changed_files(paths.root, *args or ["HEAD"]))
+        if lines:
+            print("\n".join(lines))
+    elif command == "stale" and not args:
+        lines = stale(load(paths), paths.root)
+        if lines:
+            print("\n".join(lines))
+    elif command in ("decision", "question") and len(args) == 1 and args[0].strip():
+        make = new_decision if command == "decision" else new_question
+        folder = paths.decisions if command == "decision" else paths.questions
+        print(make(folder, args[0].strip()).relative_to(paths.root))
+    else:
+        return False
+    return True
+
+
 def main(argv: list[str], paths: Paths = REPOSITORY) -> int:
-    """`render`, `check`, `decision <title>` or `question <title>`."""
+    """`render`, `check`, `affected`, `stale`, `decision <title>` or `question <title>`."""
     try:
-        if argv[1:] == ["render"]:
-            for path, text in views(load(paths), paths).items():
-                path.write_text(text)
-            return 0
-        if argv[1:] == ["check"]:
-            records = load(paths)
-            found = problems(records, paths.root, tracked(paths.root))
-            found += [
-                f"{p.relative_to(paths.root)} is out of date: run `make records`"
-                for p, text in views(records, paths).items()
-                if not p.exists() or p.read_text() != text
-            ]
-            if found:
-                raise RecordError("\n  ".join(["records:", *found]))
-            return 0
-        if argv[1:2] in (["decision"], ["question"]) and len(argv[2:]) == 1 and argv[2].strip():
-            make = new_decision if argv[1] == "decision" else new_question
-            folder = paths.decisions if argv[1] == "decision" else paths.questions
-            print(make(folder, argv[2].strip()).relative_to(paths.root))
+        if run(argv, paths):
             return 0
     except RecordError as error:
         print(f"error: {error}", file=sys.stderr)

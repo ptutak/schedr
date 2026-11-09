@@ -11,5 +11,5 @@ The integer limit also applies to Literal integers and timedelta microseconds.
 history = "archive/PROJECT.md#D105"
 step = "M4.3e"
 also = ["python-api"]
-code = ["python/schedr/_serialization/codec.py"]
-checked = 2026-11-08
+code = ["python/schedr/_serialization/codec.py::INTEGERS"]
+checked = 2026-11-09

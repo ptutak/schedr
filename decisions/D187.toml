@@ -11,5 +11,5 @@ A server without TLS requires an explicit `sslmode=disable`.
 '''
 history = "archive/PROJECT.md#D187"
 step = "M4.7b1"
-code = ["python/schedr/connection_types.py"]
-checked = 2026-11-08
+code = ["python/schedr/connection_types.py::_sslmode", "python/schedr/connection_types.py::_postgres"]
+checked = 2026-11-09

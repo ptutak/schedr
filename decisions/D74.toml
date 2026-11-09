@@ -11,5 +11,5 @@ Expansion creates runnable instances numbered `0..N-1`, each with its own retrie
 history = "archive/PROJECT.md#D74"
 step = "M4.3b"
 also = ["state", "assignment"]
-code = ["crates/schedr-db/src/instances.rs", "crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-db/src/instances.rs", "crates/schedr-master/src/progress.rs::Instances", "crates/schedr-master/src/mapping.rs::coordinates"]
+checked = 2026-11-09

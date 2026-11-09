@@ -11,5 +11,5 @@ The cleanup of a task stopped after disconnection waits for the master’s answe
 history = "archive/PROJECT.md#D253"
 step = "M4.8b3"
 also = ["workers", "protocol"]
-code = ["crates/schedr-agent/src/attempt.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/attempt.rs::CleanupGate"]
+checked = 2026-11-09

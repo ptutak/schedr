@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D226"
 step = "M4.8c1"
 also = ["connections", "secrets"]
 code = ["python/schedr/resources.py"]
-checked = 2026-11-08
+checked = 2026-11-09

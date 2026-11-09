@@ -6,10 +6,11 @@ topic = "cleanup"
 section = "Journal and handles"
 summary = '''
 An attempt's handles may total at most 1 MiB.
-Exceeding the limit fails the attempt and names the limit.
+A handle over the limit is refused with an error naming the limit; the master only warns when
+handles don't fit its message.
 '''
 history = "archive/PROJECT.md#D228"
 step = "M4.8a"
 also = ["task-context"]
-code = ["crates/schedr-agent/src/handles.rs", "crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/dispatch.rs", "crates/schedr-agent/src/handles.rs::MAX_HANDLES_SIZE"]
+checked = 2026-11-09

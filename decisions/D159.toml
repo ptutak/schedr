@@ -11,5 +11,5 @@ If they changed, triggering is refused and the page must be reloaded; secret def
 history = "archive/PROJECT.md#D159"
 step = "M4.5c"
 also = ["task-context"]
-code = ["crates/schedr-ui/src/params_form.rs", "crates/schedr-ui/src/params_form/tests.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/params_form/tests.rs", "crates/schedr-ui/src/params_form.rs::fingerprint"]
+checked = 2026-11-09

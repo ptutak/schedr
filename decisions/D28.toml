@@ -11,5 +11,5 @@ The UI and standalone serve it at `/docs` when the configured directory exists.
 history = "archive/PROJECT.md#D28"
 step = "M3.1"
 also = ["development"]
-code = ["crates/schedr-ui/src/docs.rs", "scripts/docs-dist.sh"]
-checked = 2026-11-08
+code = ["scripts/docs-dist.sh", "crates/schedr-ui/src/docs.rs::resolve"]
+checked = 2026-11-09

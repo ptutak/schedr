@@ -11,5 +11,5 @@ A downstream list is assembled on read in map-index order, with `None` for skipp
 history = "archive/PROJECT.md#D77"
 step = "M4.3b"
 also = ["serialization", "state"]
-code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/mapping.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/mapping.rs::Sources"]
+checked = 2026-11-09

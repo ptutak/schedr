@@ -11,5 +11,5 @@ Imports from sibling files still work; the internal selection is not configurabl
 history = "archive/PROJECT.md#D117"
 step = "M4.3e"
 also = ["code-delivery"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/roots.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/roots.rs::only"]
+checked = 2026-11-09

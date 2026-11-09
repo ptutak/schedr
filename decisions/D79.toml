@@ -11,5 +11,5 @@ This determines map-index and gather order; DAG JSON preserves `product` order.
 history = "archive/PROJECT.md#D79"
 step = "M4.3b"
 also = ["serialization"]
-code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-model/src/task.rs", "python/schedr/_model/tasks.py"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/task.rs", "python/schedr/_model/tasks.py::ExpandProduct", "crates/schedr-master/src/mapping.rs::coordinates"]
+checked = 2026-11-09

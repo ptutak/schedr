@@ -13,4 +13,4 @@ outside, while `CodeVersionChanged`, `Draining` and `Deregister` end the batch a
 history = "archive/PROJECT.md#D54"
 step = "M4B.3"
 also = ["state", "workers"]
-checked = 2026-11-08
+checked = 2026-11-09

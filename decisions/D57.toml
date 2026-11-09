@@ -14,5 +14,7 @@ loading-time checks.
 '''
 history = "archive/PROJECT.md#D57"
 step = "M4.2a"
+unverified = ["context fields are typed as values"]
 also = ["task-context", "testing-dags"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/outcomes.py::Data"]

@@ -11,5 +11,5 @@ A file defining either ID receives an import error explaining why.
 history = "archive/PROJECT.md#D127"
 step = "M4.4b"
 also = ["python-api"]
-code = ["crates/schedr-model/src/ids.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/ids.rs::DotSegment"]
+checked = 2026-11-09

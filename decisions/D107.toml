@@ -10,4 +10,4 @@ The master logs a warning; a stored version belonging to the remaining file is k
 '''
 history = "archive/PROJECT.md#D107"
 step = "M4.3e"
-checked = 2026-11-08
+checked = 2026-11-09

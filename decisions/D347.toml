@@ -14,5 +14,5 @@ downstream results.
 history = "archive/PROJECT.md#D347"
 step = "M4.11c"
 also = ["outcomes", "python-api"]
-code = ["crates/schedr-master/src/validate.rs", "crates/schedr-model/src/task.rs", "python/schedr/first_of.py"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/task.rs", "crates/schedr-master/src/validate.rs::first_of_problems", "python/schedr/first_of.py::first_of"]
+checked = 2026-11-09

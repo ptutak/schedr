@@ -11,4 +11,4 @@ When ready it waits on the master for an answer, without running Python or occup
 history = "archive/PROJECT.md#D283"
 step = "M6"
 also = ["assignment"]
-checked = 2026-11-08
+checked = 2026-11-09

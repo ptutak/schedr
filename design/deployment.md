@@ -37,17 +37,25 @@ None.
 
 ## Where in code
 
-- `charts/schedr/values.yaml` (D37, D40, D41)
+- `Makefile::docs-dist` (D29)
+- `Makefile::server-image` (D29)
+- `charts/schedr/values.yaml` (D37, D40)
+- `charts/schedr/values.yaml::auth` (D41)
 - `crates/schedr-agent/src/agent.rs` (D122)
-- `crates/schedr-api/src/auth.rs` (D36)
+- `crates/schedr-api/src/auth.rs::read_ui_token` (D36)
 - `crates/schedr-api/src/routes.rs` (D122)
 - `crates/schedr-client/src/lib.rs` (D36)
 - `crates/schedr-config/src/config.rs` (D36)
-- `crates/schedr-config/src/masked.rs` (D122)
-- `crates/schedr-db/migrations/postgres/0001_initial.sql` (D123)
-- `crates/schedr-db/migrations/sqlite/0001_initial.sql` (D123)
-- `crates/schedr-ui/src/deployments.rs` (D121, D128)
-- `crates/schedr-ui/src/lib.rs` (D21)
+- `crates/schedr-config/src/config.rs::ui_port_in_mesh` (D40)
+- `crates/schedr-config/src/loader.rs::hidden_timings` (D233)
+- `crates/schedr-config/src/masked.rs::masked` (D122)
+- `crates/schedr-db/migrations/postgres/0001_initial.sql::masters` (D123)
+- `crates/schedr-db/migrations/sqlite/0001_initial.sql::masters` (D123)
+- `crates/schedr-ui/src/deployments.rs::graph` (D121, D128)
+- `crates/schedr-ui/src/deployments.rs::lay_out` (D128)
+- `crates/schedr-ui/src/lib.rs::router` (D21)
+- `images/schedr/Dockerfile::mongodb-tools` (D212)
+- `images/schedr/Dockerfile::openssh-client` (D212)
 - `scripts/release.py` (D156, D157)
 
 ## Open

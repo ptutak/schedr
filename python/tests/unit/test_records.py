@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -324,6 +325,116 @@ def test_a_hand_page_missing_a_block_is_refused(tmp_path: Path) -> None:
     marker = module.begin("current") + module.end("current")
     (tmp_path / "design" / "runs.md").write_text(f"# Runs\n\n{marker}")
     with pytest.raises(module.RecordError, match="marker lines of `decisions`"):
+        module.views(load(tmp_path), module.Paths(tmp_path))
+
+
+def test_unverified_claims_are_shown_on_the_page_and_counted(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision(unverified='["it retries"]'), 2: decision()})
+    loaded = load(tmp_path)
+    current = module.design_blocks(loaded, "runs")["current"]
+    assert "what holds. *Not found in the code yet:* it retries." in " ".join(current.split())
+    assert "## Unverified claims\n\nActive decisions with a claim" in module.render_decisions(
+        loaded
+    )
+    assert ": D1.\n" in module.render_decisions(loaded)
+
+
+def test_a_summary_naming_something_not_in_the_code_is_refused(tmp_path: Path) -> None:
+    module = project(
+        tmp_path,
+        {
+            1: decision(summary="'''\nUses `run_dag` and `gone_name`.\n'''"),
+            # Planned: not built yet, so its names needn't exist.
+            2: decision(step='"S2"', summary="'''\nAdds `later_name`.\n'''"),
+            3: decision(summary="'''\nSays `odd_name`.\n'''", unverified='["odd_name works"]'),
+            4: decision(summary="'''\nSet `SCHEDR_HIDDEN__WEBSERVER__REFRESH`.\n'''"),
+        },
+    )
+    code = tmp_path / "a.py"
+    code.write_text("def run_dag(): ...\nwebserver = refresh = 1\n")
+    (tmp_path / "design" / "notes.md").write_text("gone_name\n")
+    found = module.unknown_names(load(tmp_path), [code, tmp_path / "design" / "notes.md"], tmp_path)
+    assert found == [
+        "D1: its summary names `gone_name`, not in the code: correct it, or list the claim in"
+        " `unverified`"
+    ]
+
+
+def git_repository(tmp_path: Path) -> None:
+    """`tmp_path` as a git repository with one commit of what it holds."""
+    for command in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "first"],
+    ):
+        subprocess.run(["git", *command], cwd=tmp_path, check=True)
+
+
+def test_affected_lists_the_decisions_whose_code_changed(tmp_path: Path) -> None:
+    module = project(
+        tmp_path,
+        {
+            1: decision(code='["a.rs::run"]'),
+            2: decision(code='["b.rs"]'),
+            3: decision(status="dropped", code='["a.rs"]'),
+        },
+    )
+    (tmp_path / "a.rs").write_text("fn run() {}\n")
+    (tmp_path / "b.rs").write_text("\n")
+    git_repository(tmp_path)
+    (tmp_path / "a.rs").write_text("fn run() { todo!() }\n")
+    changed = module.changed_files(tmp_path, "HEAD")
+    assert changed == {"a.rs"}
+    assert module.affected(load(tmp_path), changed) == ["D1 (built S1): a title [a.rs::run]"]
+
+
+def test_stale_lists_decisions_changed_after_their_check(tmp_path: Path) -> None:
+    module = project(
+        tmp_path,
+        {
+            1: decision(code='["a.rs"]', checked="2000-01-01"),
+            2: decision(code='["a.rs"]', checked="2999-01-01"),
+            3: decision(code='["a.rs"]'),
+            4: decision(),
+        },
+    )
+    (tmp_path / "a.rs").write_text("\n")
+    git_repository(tmp_path)
+    assert module.stale(load(tmp_path), tmp_path) == [
+        "D1: checked 2000-01-01, changed since [a.rs]",
+        "D3: never checked [a.rs]",
+    ]
+
+
+STATUS_NOTES = """updated = 2026-11-09
+in_progress = ["half of S2"]
+rules = ["ask first"]
+colleagues = "Codex 10%."
+resume = "claude --resume x"
+"""
+
+
+def test_status_md_is_written_whole_from_the_records_and_status_toml(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision(step='"S2"')}, {1: question()})
+    (tmp_path / "status.toml").write_text(STATUS_NOTES)
+    (tmp_path / "JOURNAL.md").write_text(
+        '# Journal\n\n### <a id="D1"></a>2026-11-08: the first choice (decision 1)\n'
+    )
+    text = module.views(load(tmp_path), module.Paths(tmp_path))[tmp_path / "STATUS.md"]
+    assert "## Now (2026-11-09)\n\n- **Milestone:** M1, First.\n" in text
+    assert (
+        "## Recent\n\n- D1 (2026-11-08): the first choice\n- S1 (2026-11-01): Built one\n" in text
+    )
+    assert "## In progress\n\n- half of S2\n" in text
+    assert "## Waiting for the user\n\nNothing.\n" in text
+    assert "## Rules in force\n\n- ask first\n" in text
+    assert text.endswith("Codex 10%.\n\nResume this session with:\n\nclaude --resume x\n")
+
+
+def test_status_toml_refuses_unknown_fields(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    (tmp_path / "status.toml").write_text(STATUS_NOTES + 'mood = "good"\n')
+    with pytest.raises(module.RecordError, match="unknown fields"):
         module.views(load(tmp_path), module.Paths(tmp_path))
 
 

@@ -11,5 +11,5 @@ JSON without NUL is written unchanged.
 history = "archive/PROJECT.md#D114"
 step = "M4.3e"
 also = ["serialization"]
-code = ["crates/schedr-db/src/query.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-db/src/query.rs::without_nul"]
+checked = 2026-11-09

@@ -10,4 +10,5 @@ One federated `schedr ui` shows both deployments.
 '''
 history = "archive/PROJECT.md#D203"
 step = "M4.7d"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["examples/demo/compose.yaml::dev", "examples/demo/compose.yaml::prod"]

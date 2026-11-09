@@ -73,20 +73,31 @@ step touches their code or the user schedules them.
 | 18 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 19 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
 | 20 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 21 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 22 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 23 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 24 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 25 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 26 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 27 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 28 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 29 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 30 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 31 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 32 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 33 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 34 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 21 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 22 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 23 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 24 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 25 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 26 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 27 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 28 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 29 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 30 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 31 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 32 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 33 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 34 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 35 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, correctness (score 1): D308: an unassigned move is adopted back by the returning original worker; the take-back (core.rs, attempts.rs) compares only moved_from, so after two moves a worker the cleanup passed through, not its origin, could take it back; whether that can happen is not shown yet.
+- **Found:** a Sonnet agent checking D308's summary; not confirmed by Claude: the take-back in
+  `crates/schedr-master/src/core.rs` (around 1505) and `crates/schedr-db/src/attempts.rs`
+  (around 610) checks `moved_from == worker`; only `rest_owed_by` uses `cleanup_origin`.
+- **The design:** D308: the returning worker cleans handles the master never received.
+- **Next:** decide whether a second move keeps `moved_from` at the origin; if not, a test with a
+  cleanup moved twice, then compare with `cleanup_origin`.
 
 ## B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected)
 

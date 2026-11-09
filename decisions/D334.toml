@@ -13,5 +13,5 @@ obtain run values from `dag_ctx` and `task_ctx` and use absolute paths.
 history = "archive/PROJECT.md#D334"
 step = "M4.11a2"
 also = ["workers"]
-code = ["crates/schedr-agent/src/watchers.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/watchers.rs::WatcherHosts"]
+checked = 2026-11-09

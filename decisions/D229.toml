@@ -13,5 +13,5 @@ completed work. The cleanup moves when `cleanup_anywhere` permits it; otherwise 
 history = "archive/PROJECT.md#D229"
 step = "M4.8b2"
 also = ["protocol", "outcomes", "workers"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs", "crates/schedr-agent/src/agent.rs::kept_cleanup"]
+checked = 2026-11-09

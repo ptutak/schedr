@@ -11,5 +11,5 @@ Waits match events posted since run creation; triggers start at most one run per
 history = "archive/PROJECT.md#D354"
 step = "M4.11e"
 also = ["wait-steps"]
-code = ["crates/schedr-api/src/named_events.rs", "crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs", "crates/schedr-api/src/named_events.rs::post_event", "crates/schedr-master/src/core/triggers.rs::event_named_pass"]
+checked = 2026-11-09

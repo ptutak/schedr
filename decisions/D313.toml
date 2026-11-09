@@ -7,11 +7,11 @@ section = "What a job says"
 summary = '''
 ScriptOperator and ScriptResource cleanup settings override the declaration, then DAG defaults; the
 declared cleanup script cannot change, and cleanup_* without a declared cleanup is a parse error.
-cleanup_script options override declaration settings, then cleanup defaults: three tries, 30 seconds and
-the setup’s queue.
+cleanup_script options override declaration settings, then cleanup defaults: three retries, 30 seconds
+between them, no timeout, and the setup’s queue.
 '''
 history = "archive/PROJECT.md#D313"
 step = "M4.9c"
 also = ["cleanup"]
-code = ["python/schedr/resources.py"]
-checked = 2026-11-08
+code = ["python/schedr/operators.py::_declared_cleanup", "python/schedr/resources.py::DEFAULT_CLEANUP_RETRIES"]
+checked = 2026-11-09

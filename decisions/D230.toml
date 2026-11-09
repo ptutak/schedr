@@ -11,4 +11,4 @@ There is no flag to skip the wait; independent slow cleanup can be a resource's.
 history = "archive/PROJECT.md#D230"
 step = "M4.8a"
 also = ["outcomes"]
-checked = 2026-11-08
+checked = 2026-11-09

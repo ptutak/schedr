@@ -10,5 +10,5 @@ The error says notifications are not available yet.
 '''
 history = "archive/PROJECT.md#D298"
 step = "M4.9a"
-code = ["crates/schedr-agent/src/jobs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/jobs.rs::check_known"]
+checked = 2026-11-09

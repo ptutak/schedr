@@ -8,6 +8,7 @@ decisions whose `topic` (or `also`) is this one; never edit it, edit the decisio
   built, its state ("planned (M4.12a)"); then the other topics' decisions naming this one in `also`.
 - **Replaced:** the superseded, dropped and untraced decisions.
 - **Where in code:** the decisions' `code` (a path or `path::symbol`, checked to exist).
+  A claim of a summary nobody found in the code yet is listed in its `unverified` and shown after it.
 - **Open:** the questions not decided yet, with the current proposal.
 - **Details:** the archive/PROJECT.md sections and JOURNAL.md entries the decisions' anchors are in; read them
   before changing the topic.
@@ -20,7 +21,7 @@ The other layers (see `AI_SETUP.md`, Project documents):
 
 | File | Answers | Written |
 |---|---|---|
-| `STATUS.md` | where things stand, what's next | rewritten each session |
+| `STATUS.md` | where things stand, what's next | generated; its notes in `status.toml`, rewritten each session |
 | `design/<topic>.md` | how a part works now | generated from the decisions |
 | `decisions/D<n>.toml`, `DECISIONS.md` | what was decided, whether it holds, where its reasons are | one file per decision; `DECISIONS.md` generated |
 | `archive/PROJECT.md` | how the project got here, and why, up to D366 | by topic; left as it is, with an anchor at each decision |

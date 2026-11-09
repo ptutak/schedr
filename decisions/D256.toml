@@ -11,5 +11,5 @@ The default total is 40 seconds, and the deadline is stored with the attempt.
 history = "archive/PROJECT.md#D256"
 step = "M4.8b3"
 also = ["workers", "configuration"]
-code = ["crates/schedr-config/src/config.rs", "crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-config/src/config.rs::cleanup_move_wait", "crates/schedr-master/src/dispatch.rs::cleanup_move_wait"]
+checked = 2026-11-09

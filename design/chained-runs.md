@@ -50,6 +50,8 @@ None.
 - `crates/schedr-agent/src/agent.rs` (D353)
 - `crates/schedr-api/src/routes.rs` (D353)
 - `crates/schedr-api/src/views.rs` (D353)
+- `crates/schedr-db/src/run_of.rs::runs_of` (D353)
+- `python/schedr/run_of.py::RunOf` (D353)
 
 ## Open
 

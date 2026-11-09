@@ -11,5 +11,5 @@ highlighting the winner. Where a box cannot be drawn, options have separate dash
 history = "archive/PROJECT.md#D351"
 step = "M4.11c"
 also = ["ui-cli"]
-code = ["crates/schedr-ui/src/runs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/runs.rs::first_of_nodes"]
+checked = 2026-11-09

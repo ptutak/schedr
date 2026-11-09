@@ -12,5 +12,5 @@ original task/group edges and draw the users’ link to the cleanup dashed.
 history = "archive/PROJECT.md#D272"
 step = "M4.8e"
 also = ["cleanup"]
-code = ["crates/schedr-model/src/dag.rs", "crates/schedr-ui/src/runs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/runs.rs::resource_edges", "crates/schedr-model/src/dag.rs::blocking"]
+checked = 2026-11-09

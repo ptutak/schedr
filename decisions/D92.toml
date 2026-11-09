@@ -5,10 +5,12 @@ status = "active"
 topic = "development"
 section = "Testing"
 summary = '''
-An integration test samples active counts with many tasks and tight limits.
+An integration test logs each task's start and end and checks the most running at once against
+tight limits (`most_at_once`).
 M4.4 also writes a stress scenario to run when the user next runs the stress suite.
 '''
 history = "archive/PROJECT.md#D92"
 step = "M4.4"
 also = ["assignment"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/tests/integration/test_testing.py::most_at_once"]

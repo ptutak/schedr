@@ -11,4 +11,4 @@ The DAG can route it with `.on(Failed)`; otherwise the operator task fails.
 history = "archive/PROJECT.md#D359"
 step = "M4.12a"
 also = ["outcomes"]
-checked = 2026-11-08
+checked = 2026-11-09

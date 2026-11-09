@@ -11,5 +11,5 @@ A value inherited from `StepDefaults` does not produce this warning.
 history = "archive/PROJECT.md#D90"
 step = "M4.4"
 also = ["assignment", "testing-dags"]
-code = ["crates/schedr-master/src/limits.rs", "python/schedr/_build.py"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/limits.rs", "python/schedr/_build.py::hint_unmapped_per_run"]
+checked = 2026-11-09

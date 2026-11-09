@@ -11,4 +11,5 @@ Outside a task it uses HTTP; local DAG tests use their standalone master and dat
 history = "archive/PROJECT.md#D356"
 step = "M4.11h"
 also = ["triggers", "ui-cli"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/api.py::_script_caller", "python/schedr/script.py::call_api"]

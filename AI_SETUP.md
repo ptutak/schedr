@@ -21,7 +21,7 @@ names and versions to the project; keep the principles. How to work with the use
 
 ```
 README.md               # what it is, how to install and run
-STATUS.md               # where things stand, what's next (rewritten each session; see Project documents)
+STATUS.md               # where things stand, what's next (generated; its notes in status.toml)
 PLAN.md                 # milestones and steps
 design/<topic>.md       # how each part works now; design/README.md lists the topics
 decisions/D<n>.toml     # one file per decision; DECISIONS.md generated from them
@@ -355,7 +355,7 @@ question has one small file that answers it, so an agent reads little and never 
 
 | File | Answers | Written |
 |---|---|---|
-| `STATUS.md` | where things stand, what waits for the user | rewritten at each step's or session's end, at most 60 lines; its top block (milestone, next step, open questions, bugs) generated |
+| `STATUS.md` | where things stand, what waits for the user | generated from the records (next step, open questions, bugs, recent decisions and steps) and `status.toml` (in progress, waiting, rules, colleagues: rewritten at each step's or session's end) |
 | `design/<topic>.md` | how a part works **now**, an index into the decisions and the code (for the agent; the reader's docs are `docs/`) | generated whole from the decisions |
 | `decisions/D<n>.toml` | what was decided, whether it holds, the step that builds it, its anchor in `archive/PROJECT.md` | one file per decision; `DECISIONS.md` generated, one line each |
 | `questions/Q<n>.toml` | what is not decided yet, with the current proposal | one file per question; shown in `DECISIONS.md` and the topic's page |

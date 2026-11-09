@@ -10,4 +10,5 @@ Mongo login uses the URI's `authSource`, then its path database, then `admin`.
 '''
 history = "archive/PROJECT.md#D206"
 step = "M4.7d"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/connection_env.rs::mongo", "python/schedr/connection_types.py::Mongo"]

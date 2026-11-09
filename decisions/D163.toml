@@ -11,5 +11,5 @@ checks the committed version rather than rewriting it.
 '''
 history = "archive/PROJECT.md#D163"
 step = "R0.1"
-code = ["crates/schedr-model/src/runner.rs", "crates/schedr-model/src/runner/tests.rs", "scripts/release.py"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/runner.rs", "crates/schedr-model/src/runner/tests.rs", "scripts/release.py::check", "scripts/release.py::parse_tag"]
+checked = 2026-11-09

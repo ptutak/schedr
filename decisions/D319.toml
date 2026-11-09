@@ -10,5 +10,5 @@ Its type is the function’s return type, including None; wrapped functions reta
 '''
 history = "archive/PROJECT.md#D319"
 step = "M4.10"
-code = ["python/schedr/tasks.py", "python/schedr/resources.py"]
-checked = 2026-11-08
+code = ["python/schedr/resources.py", "python/schedr/tasks.py::_declaring_while"]
+checked = 2026-11-09

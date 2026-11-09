@@ -11,5 +11,5 @@ The distributed chart enforces these pairs and defaults UI auth to webserver aut
 history = "archive/PROJECT.md#D41"
 step = "M3.6"
 also = ["deployment"]
-code = ["charts/schedr/values.yaml"]
-checked = 2026-11-08
+code = ["charts/schedr/values.yaml::auth"]
+checked = 2026-11-09

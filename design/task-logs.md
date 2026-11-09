@@ -23,11 +23,13 @@ None.
 
 ## Where in code
 
-- `crates/schedr-api/src/routes.rs` (D131)
+- `crates/schedr-api/src/logs.rs::masked_lines` (D131)
+- `crates/schedr-api/src/routes.rs::shown` (D131)
 - `crates/schedr-api/src/views.rs` (D131)
-- `crates/schedr-config/src/masked.rs` (D131)
-- `crates/schedr-ui/src/assets.rs` (D175)
-- `crates/schedr-ui/src/live.rs` (D23, D175)
+- `crates/schedr-config/src/masked.rs::mask_data` (D131)
+- `crates/schedr-ui/src/assets.rs::LIVE` (D175)
+- `crates/schedr-ui/src/live.rs::TAIL_INTERVAL` (D175)
+- `crates/schedr-ui/src/live.rs::tail` (D23)
 
 ## Open
 

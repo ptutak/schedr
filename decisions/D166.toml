@@ -10,4 +10,4 @@ Release rehearsals and main do not deploy it.
 '''
 history = "archive/PROJECT.md#D166"
 step = "R0.3"
-checked = 2026-11-08
+checked = 2026-11-09

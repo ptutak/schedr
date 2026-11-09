@@ -13,5 +13,5 @@ require a new protocol.
 history = "archive/PROJECT.md#D148"
 step = "M4.5b"
 also = ["protocol"]
-code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "python/schedr/script.py"]
-checked = 2026-11-08
+code = ["python/schedr/script.py", "crates/schedr-agent/src/ctx.rs::converse", "crates/schedr-model/src/ctx.rs::CTX_PROTOCOL"]
+checked = 2026-11-09

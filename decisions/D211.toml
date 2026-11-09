@@ -11,5 +11,5 @@ summary = '''
 history = "archive/PROJECT.md#D211"
 step = "M4.7e"
 also = ["ui-cli"]
-code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-ui/src/connections.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-api/src/routes.rs::list_connections", "crates/schedr-ui/src/connections.rs::groups"]
+checked = 2026-11-09

@@ -15,4 +15,5 @@ run yellow.
 history = "archive/PROJECT.md#D308"
 step = "B169"
 also = ["workers", "protocol"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-master/src/core.rs::take_back"]

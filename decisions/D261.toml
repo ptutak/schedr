@@ -7,10 +7,11 @@ section = "Resources"
 summary = '''
 A resource’s cleanup is the visible task `<resource>.cleanup`, using ordinary attempts, retries, logs,
 dispatch and lost-worker handling. It retains its execution kind; `Dag.resources` identifies its
-cleanup role. Resource state is derived from setup and cleanup tasks, without a `resource_instances`
-table.
+cleanup role. Resource state is derived from setup and cleanup tasks, without a table of resource
+instances.
 '''
 history = "archive/PROJECT.md#D261"
 step = "M4.8c2"
 also = ["state"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-model/src/dag.rs::resource_of_cleanup"]

@@ -5,11 +5,11 @@ status = "active"
 topic = "connections"
 section = "UI"
 summary = '''
-The DAG page calls `POST /api/v1/connections/check` for the root.
-It shows the DAG's connections from the answer.
+The DAG page shows the DAG's connections from `GET /api/v1/connections` (the parsed roots'
+connections, from the database); its Check all sends `POST /api/v1/connections/check` for the root.
 '''
 history = "archive/PROJECT.md#D208"
 step = "M4.7e"
 also = ["ui-cli"]
-code = ["crates/schedr-ui/src/connections.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/connections.rs::list", "crates/schedr-api/src/routes.rs::list_connections"]
+checked = 2026-11-09

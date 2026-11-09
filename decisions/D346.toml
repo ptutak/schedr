@@ -6,9 +6,11 @@ topic = "cleanup"
 section = "Moving and disconnection"
 summary = '''
 The agent does not stop a running cleanup at the drain deadline.
-A cleanup timeout that exceeds termination grace is warned once at worker start or per task.
+A cleanup timeout that, with the drain's terminate and report periods, doesn't fit the grace is
+warned once at worker start (the default) or per task (its own).
 '''
 history = "archive/PROJECT.md#D346"
 step = "M4.11a4"
 also = ["workers", "configuration"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/agent.rs::drain_running"]

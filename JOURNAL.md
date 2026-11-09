@@ -105,3 +105,40 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
 - **Not chosen:** hand-written Current pages checked against the decisions (the first drafts: 20
   pages, already drifting; kept on the local branch `design-drafts`); a hand-written Overview per
   page (15 lines each: drifts again, and the reader doesn't read these pages).
+
+### <a id="D374"></a>2026-11-09: claims nobody found in the code (decision 374)
+
+- **Question:** 13 Sonnet agents checked every active decision's summary against the code; 22
+  summaries were wrong (corrected), two pointed at code problems, and 13 claims nobody could find
+  in the code. How are they kept, so they aren't lost?
+- **Chosen (the user's, Claude's recommendation):** the code problems are bugs (B194, B195); the
+  claims go in a decision's optional `unverified` list, shown on its design page after the summary
+  and listed in DECISIONS.md, cleared when someone confirms or corrects them.
+- **Not chosen:** a decision status such as `doubtful` (a status is about the whole decision; one
+  unchecked sentence would mark a checked decision doubtful).
+
+### <a id="D375"></a>2026-11-09: summaries follow the code (decision 375)
+
+- **Question:** the check of all 326 summaries against the code found 22 wrong: mostly a name that
+  isn't in the code (`master_tasks_waiting`), or code that moved on without its decision (D43, D228,
+  D250). What keeps that from happening again?
+- **Chosen (the user's, all four of Claude's proposals):** `records-check` refuses a built summary
+  naming in code font what no code file has; `records.py affected` lists the decisions a change
+  touches, re-read before each step's commit; 401 `path::symbol` entries proposed by Sonnet agents
+  (each symbol checked to be in its file; the ones the agents called loose dropped; a spot check of
+  20 found 18 right, one loose, one wrong and corrected); every verified decision `checked` today,
+  and `records.py stale` lists those whose code changed since. A summary names a key and leaves its
+  value to the reference pages.
+- **Not chosen:** generating defaults and limits into the summaries (the reference pages already
+  have them).
+
+### <a id="D376"></a>2026-11-09: STATUS.md generated (decision 376)
+
+- **Question:** STATUS.md's hand-written part restated what the records already hold (what was
+  done, the next step) and drifted: it still called the design pages "next" after they were built.
+- **Chosen (the user's):** STATUS.md is written whole by `make records`: the next step, open
+  questions, bugs, the latest JOURNAL.md entries and steps done come from the records; only what
+  the records can't show is written by hand, in `status.toml` (in progress, waiting for the user,
+  the rules in force, colleagues' usage, the resume line).
+- **Not chosen:** generating colleagues' usage from the skills' `USAGE.md` (outside the
+  repository: CI couldn't check it).

@@ -11,5 +11,5 @@ Each following task applies its own run_if; the branch's own edges remain choice
 history = "archive/PROJECT.md#D94"
 step = "M4.3c"
 also = ["outcomes"]
-code = ["crates/schedr-master/src/validate.rs", "python/schedr/_build.py"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/validate.rs", "python/schedr/_build.py::make_group_dependencies"]
+checked = 2026-11-09

@@ -1,0 +1,15 @@
+title = "a moved cleanup's take-back checks the worker it last moved from, not its origin"
+severity = "low"
+probability = "rare"
+kind = "correctness"
+summary = "D308: an unassigned move is adopted back by the returning original worker; the take-back (core.rs, attempts.rs) compares only moved_from, so after two moves a worker the cleanup passed through, not its origin, could take it back; whether that can happen is not shown yet"
+found = 2026-11-09
+suspected = true
+details = '''
+- **Found:** a Sonnet agent checking D308's summary; not confirmed by Claude: the take-back in
+  `crates/schedr-master/src/core.rs` (around 1505) and `crates/schedr-db/src/attempts.rs`
+  (around 610) checks `moved_from == worker`; only `rest_owed_by` uses `cleanup_origin`.
+- **The design:** D308: the returning worker cleans handles the master never received.
+- **Next:** decide whether a second move keeps `moved_from` at the origin; if not, a test with a
+  cleanup moved twice, then compare with `cleanup_origin`.
+'''

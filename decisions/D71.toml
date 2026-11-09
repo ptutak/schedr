@@ -10,4 +10,5 @@ Per-instance operations use `?map_index=N`; unmapped tasks use index -1.
 '''
 history = "archive/PROJECT.md#D71"
 step = "M4.3c"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-api/src/routes.rs::instance_of"]

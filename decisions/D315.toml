@@ -11,4 +11,5 @@ Sync calls remain available and block the event loop while waiting.
 history = "archive/PROJECT.md#D315"
 step = "M4.10"
 also = ["async-tasks"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/context.py::asecret", "python/schedr/context.py::acleanup_handle"]

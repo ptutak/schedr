@@ -10,6 +10,7 @@ from the declaration. Workers run scripts at the script root hash expected by th
 '''
 history = "archive/PROJECT.md#D294"
 step = "M4.9b"
+unverified = ["scheduling keys are updated from the declaration"]
 also = ["code-delivery"]
-code = ["crates/schedr-agent/src/jobs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-agent/src/agent.rs::set_uses", "crates/schedr-agent/src/agent.rs::report_changes"]
+checked = 2026-11-09

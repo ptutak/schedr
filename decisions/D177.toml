@@ -11,5 +11,5 @@ It is typed as `str`.
 history = "archive/PROJECT.md#D177"
 step = "M4.6e"
 also = ["python-api"]
-code = ["python/schedr/_templates.py"]
-checked = 2026-11-08
+code = ["python/schedr/_templates.py::text"]
+checked = 2026-11-09

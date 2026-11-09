@@ -11,4 +11,5 @@ The key is 32 random bytes encoded as base64; rotation is not built now.
 history = "archive/PROJECT.md#D169"
 step = "M4.6c"
 also = ["configuration"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr/src/secrets.rs::NewKey"]

@@ -11,4 +11,4 @@ A file that fails to import defines none; the master clears its reported connect
 history = "archive/PROJECT.md#D182"
 step = "M4.7a"
 also = ["code-delivery"]
-checked = 2026-11-08
+checked = 2026-11-09

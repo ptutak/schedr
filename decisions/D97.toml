@@ -11,4 +11,5 @@ The error is reported at the end of the DAG block and names the dependency's loc
 history = "archive/PROJECT.md#D97"
 step = "M4.3c"
 also = ["testing-dags"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/_build.py::make_group_dependencies"]

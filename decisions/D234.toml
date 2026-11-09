@@ -10,4 +10,5 @@ A zero hidden timing is refused.
 '''
 history = "archive/PROJECT.md#D234"
 step = "M4.8t"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-config/src/loader.rs::hidden_timings"]

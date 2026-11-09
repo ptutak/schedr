@@ -11,5 +11,5 @@ M4.5 accepts a dataclass or a Pydantic model for parameters.
 history = "archive/PROJECT.md#D136"
 step = "M5"
 also = ["task-context"]
-code = ["python/schedr/_params.py"]
-checked = 2026-11-08
+code = ["python/schedr/_params.py::declare"]
+checked = 2026-11-09

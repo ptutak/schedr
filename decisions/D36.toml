@@ -12,5 +12,5 @@ token otherwise, or an in-process call from standalone’s own UI.
 history = "archive/PROJECT.md#D36"
 step = "M3.6"
 also = ["deployment"]
-code = ["crates/schedr-api/src/auth.rs", "crates/schedr-client/src/lib.rs", "crates/schedr-config/src/config.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-client/src/lib.rs", "crates/schedr-config/src/config.rs", "crates/schedr-api/src/auth.rs::read_ui_token"]
+checked = 2026-11-09

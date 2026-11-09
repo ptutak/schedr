@@ -11,4 +11,4 @@ Python import behavior applies, and dots in file or folder names are refused.
 history = "archive/PROJECT.md#D326"
 step = "M4.11L"
 code = ["crates/schedr-agent/src/parse.rs", "crates/schedr/src/local.rs", "python/schedr/runner/parse.py"]
-checked = 2026-11-08
+checked = 2026-11-09

@@ -13,5 +13,5 @@ setups use a token.
 history = "archive/PROJECT.md#D40"
 step = "M3.6"
 also = ["deployment"]
-code = ["charts/schedr/values.yaml"]
-checked = 2026-11-08
+code = ["charts/schedr/values.yaml", "crates/schedr-config/src/config.rs::ui_port_in_mesh"]
+checked = 2026-11-09

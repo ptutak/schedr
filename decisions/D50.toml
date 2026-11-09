@@ -12,4 +12,4 @@ limited command; a fork-server child sets its own limit before running user code
 history = "archive/PROJECT.md#D50"
 step = "M4.15"
 also = ["task-processes"]
-checked = 2026-11-08
+checked = 2026-11-09

@@ -13,4 +13,5 @@ memory budget.
 history = "archive/PROJECT.md#D332"
 step = "M4.11L"
 also = ["code-delivery"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-config/src/config.rs::parse_concurrency", "crates/schedr-agent/src/parse.rs::available_parallelism"]

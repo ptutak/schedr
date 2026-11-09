@@ -11,5 +11,5 @@ It accepts fractions of a second, including Pydantic timedelta values.
 history = "archive/PROJECT.md#D141"
 step = "M4.5a"
 also = ["serialization"]
-code = ["crates/schedr-master/src/params.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/params.rs::is_duration"]
+checked = 2026-11-09

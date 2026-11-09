@@ -13,6 +13,7 @@ import errors.
 '''
 history = "archive/PROJECT.md#D129"
 step = "M4.4b"
+unverified = ["offline workers are grey"]
 also = ["ui-cli", "workers"]
-code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/src/nodes.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/routes.rs", "crates/schedr-db/src/nodes.rs::NodeProblem", "crates/schedr-api/src/views.rs::ProblemView"]
+checked = 2026-11-09

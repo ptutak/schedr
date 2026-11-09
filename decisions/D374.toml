@@ -1,0 +1,15 @@
+title = "A decision lists the claims nobody found in the code (unverified)"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "development"
+section = "Documents and records"
+summary = '''
+A decision's optional `unverified` lists claims of its summary nobody found in the code yet; its
+design page shows them after the summary and DECISIONS.md lists those decisions. Whoever next works
+on that code checks them: the claim is confirmed (removed from the list) or the summary corrected.
+A defect found in the code is a bug in `bugs/`, not a decision's state.
+'''
+history = "JOURNAL.md#D374"
+step = "n/a"
+code = ["scripts/records.py::render_decisions"]

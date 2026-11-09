@@ -12,5 +12,5 @@ produces a singleton batch.
 '''
 history = "archive/PROJECT.md#D352"
 step = "M4.11f"
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-db/src/triggers.rs", "crates/schedr-master/src/core/triggers.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/core/triggers.rs::batch_items", "crates/schedr-db/src/triggers.rs::store_batch"]
+checked = 2026-11-09

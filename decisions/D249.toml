@@ -11,4 +11,4 @@ Outside Kubernetes, the agent waits for it.
 history = "archive/PROJECT.md#D249"
 step = "M4.8b"
 also = ["workers"]
-checked = 2026-11-08
+checked = 2026-11-09

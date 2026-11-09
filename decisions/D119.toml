@@ -11,5 +11,5 @@ After the whole upstream finishes, instances with other outcomes or skips are sk
 history = "archive/PROJECT.md#D119"
 step = "M4.3e"
 also = ["python-api"]
-code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/mapping.rs::narrows_per_element", "crates/schedr-master/src/progress.rs::instance_taken"]
+checked = 2026-11-09

@@ -12,4 +12,4 @@ Kubernetes the agent waits for it.
 history = "archive/PROJECT.md#D219"
 step = "M4.8b"
 also = ["workers", "runs"]
-checked = 2026-11-08
+checked = 2026-11-09

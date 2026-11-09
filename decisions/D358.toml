@@ -11,4 +11,4 @@ The target’s output can be read with a `RunOf` sensor or the API.
 history = "archive/PROJECT.md#D358"
 step = "M4.12a"
 also = ["runs"]
-checked = 2026-11-08
+checked = 2026-11-09

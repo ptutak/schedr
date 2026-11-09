@@ -10,5 +10,5 @@ The resulting text is masked as a secret.
 '''
 history = "archive/PROJECT.md#D171"
 step = "M4.6d"
-code = ["crates/schedr-agent/src/vault.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/vault.rs::text"]
+checked = 2026-11-09

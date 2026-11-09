@@ -12,5 +12,5 @@ tasks continue; library imports receive the library.
 '''
 history = "archive/PROJECT.md#D328"
 step = "M4.11L"
-code = ["python/schedr/runner/parse.py", "python/schedr/runner/sources.py"]
-checked = 2026-11-08
+code = ["python/schedr/runner/parse.py", "python/schedr/runner/sources.py::NameGuard"]
+checked = 2026-11-09

@@ -11,4 +11,5 @@ Mongo and HTTP support both; SSH is sync only and Generic gives a dict.
 history = "archive/PROJECT.md#D318"
 step = "M4.10"
 also = ["async-tasks"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/connections.py::TwoWayConnection", "python/schedr/connection_types.py::Generic"]

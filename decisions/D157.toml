@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D157"
 step = "R0.1"
 also = ["deployment"]
 code = ["scripts/release.py"]
-checked = 2026-11-08
+checked = 2026-11-09

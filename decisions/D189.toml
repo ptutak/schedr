@@ -10,5 +10,5 @@ The URI can explicitly disable TLS or specify TLS options; `ca_cert` supplies a 
 '''
 history = "archive/PROJECT.md#D189"
 step = "M4.7b1"
-code = ["python/schedr/connection_types.py"]
-checked = 2026-11-08
+code = ["python/schedr/connection_types.py::_mongo_tls"]
+checked = 2026-11-09

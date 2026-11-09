@@ -5,10 +5,11 @@ status = "active"
 topic = "ui-cli"
 section = "REST API and CLI"
 summary = '''
-Attempts, logs and retry require an instance index for a mapped task; cancel can target one instance
-or the whole task. Index -1 means the whole task, and an out-of-range index returns 400.
+Attempts, logs and retry require an instance index for a mapped task (none or -1 returns 400);
+cancel and output take one instance or the whole task (none or -1). An out-of-range index returns
+400.
 '''
 history = "archive/PROJECT.md#D82"
 step = "M4.3c"
-code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs", "crates/schedr-api/src/routes.rs::instance_of"]
+checked = 2026-11-09

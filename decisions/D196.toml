@@ -12,5 +12,5 @@ sslmode=require.
 '''
 history = "archive/PROJECT.md#D196"
 step = "M4.7b2"
-code = ["python/schedr/connection_types.py"]
-checked = 2026-11-08
+code = ["python/schedr/connection_types.py::_mysql", "python/schedr/connection_types.py::_scheme"]
+checked = 2026-11-09

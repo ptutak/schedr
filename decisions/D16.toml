@@ -11,4 +11,4 @@ It uses the task’s preloaded or bare fork server, with spawn as fallback; down
 history = "archive/PROJECT.md#D16"
 step = "M4.8a"
 also = ["task-processes", "outcomes"]
-checked = 2026-11-08
+checked = 2026-11-09

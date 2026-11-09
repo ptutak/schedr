@@ -11,5 +11,5 @@ Workers parsing DAGs need the script roots those DAGs use.
 history = "archive/PROJECT.md#D295"
 step = "M4.9b"
 also = ["code-delivery"]
-code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-model/src/runner.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/jobs.rs::lookup", "crates/schedr-model/src/runner.rs::ScriptDeclaration"]
+checked = 2026-11-09

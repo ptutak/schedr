@@ -11,5 +11,5 @@ if the new host can prepare it; otherwise it stays on old code. Full-control sen
 history = "archive/PROJECT.md#D335"
 step = "M4.11a2"
 also = ["code-delivery"]
-code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/watchers.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/watchers.rs::begin_move"]
+checked = 2026-11-09

@@ -11,5 +11,5 @@ Values can be passed in an argument list or through env; :raw is removed.
 history = "archive/PROJECT.md#D99"
 step = "M4.3e"
 also = ["task-processes"]
-code = ["crates/schedr-agent/src/render.rs", "crates/schedr-master/src/validate.rs", "python/schedr/_model/tasks.py"]
-checked = 2026-11-08
+code = ["python/schedr/_model/tasks.py", "crates/schedr-master/src/validate.rs::shell_problems", "crates/schedr-agent/src/render.rs::ShellPlaceholder"]
+checked = 2026-11-09

@@ -11,4 +11,5 @@ The SDK and the master both enforce the limit.
 history = "archive/PROJECT.md#D181"
 step = "M4.7a"
 also = ["code-delivery"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/connections.py::MAX_CONNECTION_SIZE", "crates/schedr-model/src/connection.rs::MAX_CONNECTION_SIZE", "crates/schedr-master/src/validate.rs::MAX_CONNECTION_SIZE"]

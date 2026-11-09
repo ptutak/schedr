@@ -10,6 +10,7 @@ Documentation shows how to map them to tool-specific environment variables.
 '''
 history = "archive/PROJECT.md#D192"
 step = "M4.7b2"
+unverified = ["the documentation shows how to map the variables to tools"]
 also = ["task-context"]
-code = ["crates/schedr-agent/src/connection_env.rs", "crates/schedr-agent/src/secrets.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/secrets.rs", "crates/schedr-agent/src/connection_env.rs::view", "crates/schedr-agent/src/connection_env.rs::own"]
+checked = 2026-11-09

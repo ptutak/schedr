@@ -13,5 +13,5 @@ no such barrier.
 history = "archive/PROJECT.md#D266"
 step = "M4.8c1"
 also = ["outcomes"]
-code = ["crates/schedr-model/src/dag.rs", "python/schedr/_build.py", "python/schedr/_model/dag.py"]
-checked = 2026-11-08
+code = ["python/schedr/_model/dag.py", "python/schedr/_build.py::wait_for_cleanups", "crates/schedr-model/src/dag.rs::blocking"]
+checked = 2026-11-09

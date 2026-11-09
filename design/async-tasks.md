@@ -34,12 +34,20 @@ None.
 ## Where in code
 
 - `crates/schedr-agent/src/agent.rs` (D174)
-- `crates/schedr-model/src/connection.rs` (D53)
-- `python/schedr/connection_types.py` (D317)
-- `python/schedr/connections.py` (D53)
+- `crates/schedr-agent/src/connection_jobs.rs::check` (D174)
+- `crates/schedr-master/src/dispatch.rs::set_connections` (D174)
+- `crates/schedr-model/src/connection.rs::ConnectionDef` (D53)
+- `python/schedr/connection_types.py::AsyncSqlConnection` (D317)
+- `python/schedr/connection_types.py::Generic` (D318)
+- `python/schedr/connection_types.py::SQL` (D317)
+- `python/schedr/connections.py::TwoWayConnection` (D53, D318)
+- `python/schedr/context.py::acleanup_handle` (D315)
+- `python/schedr/context.py::asecret` (D315)
 - `python/schedr/resources.py` (D319)
-- `python/schedr/runner/coroutines.py` (D49, D316)
-- `python/schedr/tasks.py` (D49, D319)
+- `python/schedr/runner/coroutines.py::loop_factory` (D316)
+- `python/schedr/runner/coroutines.py::run_coroutine` (D49)
+- `python/schedr/tasks.py::_declaring_while` (D319)
+- `python/schedr/tasks.py::is_async` (D49)
 
 ## Open
 

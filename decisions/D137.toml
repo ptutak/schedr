@@ -11,5 +11,5 @@ They are not checked again when it starts.
 history = "archive/PROJECT.md#D137"
 step = "M4.5a"
 also = ["runs"]
-code = ["python/schedr/_params.py"]
-checked = 2026-11-08
+code = ["python/schedr/_params.py", "crates/schedr-master/src/params.rs::run_params"]
+checked = 2026-11-09

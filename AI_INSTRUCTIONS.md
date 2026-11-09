@@ -133,7 +133,15 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   `status = "done"`, its date and commit, and turns "planned" into the present in its
   decisions' summaries. `make records-check` catches a decision named but not recorded, a missing anchor, a
   stale generated view.
-- **Generated views are indexes:** `DECISIONS.md`, `PLAN.md`, `STATUS.md`'s block and the
+- **Summaries follow the code:** before a step's commit, `python3 scripts/records.py affected`
+  lists the decisions whose `code` the change touches: re-read each summary against the change,
+  correct it, and set `checked` to the day. `records.py stale` lists those whose code changed after
+  `checked` (a cheap re-check at each milestone). `make records-check` fails when a built
+  decision's summary names, in code font, something the code doesn't have. A summary names a
+  config key or a metric and leaves its default or value to the reference pages; a claim nobody
+  found in the code goes in `unverified`. A `code` entry is `path::symbol` where one place decides
+  it; one found to be wrong is corrected when it is followed.
+- **Generated views are indexes:** `DECISIONS.md`, `PLAN.md`, `STATUS.md` and the
   design pages' lists say in one line per item where the details are; read the record (the
   TOML, the anchor) before relying on it.
 - **A decision's summary is an index, not the decision:** before building options or code on
@@ -239,5 +247,6 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   calendar days; a yanked `x.y.0` still dates its minor). A yanked version in the lock moves
   to a version that meets the rule, forward if one exists, else back. Record a new library in
   `design/development.md`, Libraries (need, choice, why, not chosen).
-- Rewrite `STATUS.md` at the end of each step or session (at most 60 lines), so the next
-  session can start from it.
+- Rewrite `status.toml` at the end of each step or session (what's in progress, what waits for
+  the user, the rules in force; never appended to) and `make records`: `STATUS.md` is generated
+  from it and the records, so the next session can start from it.

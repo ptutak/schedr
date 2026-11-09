@@ -12,4 +12,4 @@ to `[worker] resource_cleanup_timeout`, 30 minutes per try.
 history = "archive/PROJECT.md#D235"
 step = "M4.8f"
 also = ["cleanup", "workers"]
-checked = 2026-11-08
+checked = 2026-11-09

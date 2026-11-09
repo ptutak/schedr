@@ -14,5 +14,5 @@ masked outputs.
 history = "archive/PROJECT.md#D131"
 step = "M4.4b"
 also = ["task-logs", "outcomes"]
-code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-config/src/masked.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-api/src/views.rs", "crates/schedr-api/src/routes.rs::shown", "crates/schedr-api/src/logs.rs::masked_lines", "crates/schedr-config/src/masked.rs::mask_data"]
+checked = 2026-11-09

@@ -13,5 +13,5 @@ its slot, and let the worker send Finished.
 history = "archive/PROJECT.md#D115"
 step = "M4.3e"
 also = ["protocol", "state"]
-code = ["crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/dispatch.rs::RESULT_NOT_STORED", "crates/schedr-db/src/database.rs::is_data_fault"]
+checked = 2026-11-09

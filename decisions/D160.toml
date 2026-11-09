@@ -11,4 +11,4 @@ It publishes the wheels produced by that CI run.
 history = "archive/PROJECT.md#D160"
 step = "R0.1"
 code = ["scripts/release.py"]
-checked = 2026-11-08
+checked = 2026-11-09

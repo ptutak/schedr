@@ -13,5 +13,5 @@ strictly into the supplied class. Inside a Python task, its existing context val
 history = "archive/PROJECT.md#D145"
 step = "M4.5b"
 also = ["python-api"]
-code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs", "python/schedr/script.py::load", "python/schedr/script.py::_values"]
+checked = 2026-11-09

@@ -13,5 +13,5 @@ not detected as a switch.
 history = "archive/PROJECT.md#D113"
 step = "M4.3e"
 also = ["assignment"]
-code = ["crates/schedr-master/src/discovery.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/discovery.rs::record_switch"]
+checked = 2026-11-09

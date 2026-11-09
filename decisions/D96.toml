@@ -6,11 +6,11 @@ topic = "ui-cli"
 section = "Pages and live updates"
 summary = '''
 The DAG page shows each configured concurrency limit and its current count.
-The counts are the open attempts in the database (`active_counts`), shown beside the waiting
-reasons.
+The counts are the open attempts in the database (`active_counts`); a reached limit says the rest
+wait.
 '''
 history = "archive/PROJECT.md#D96"
 step = "M4.4"
 also = ["assignment"]
-code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-ui/src/pages.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/pages.rs", "crates/schedr-db/src/attempts.rs::active_counts", "crates/schedr-api/src/views.rs::LimitView"]
+checked = 2026-11-09

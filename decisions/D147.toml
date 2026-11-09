@@ -13,5 +13,5 @@ descriptor.
 history = "archive/PROJECT.md#D147"
 step = "M4.5b"
 also = ["development"]
-code = ["crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/ctx.rs", "crates/schedr-fd/src/lib.rs::inherited_datagram", "crates/schedr-fd/Cargo.toml::unsafe_code"]
+checked = 2026-11-09

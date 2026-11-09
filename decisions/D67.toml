@@ -11,5 +11,5 @@ A navigation count and DAG-list notice load after the page.
 history = "archive/PROJECT.md#D67"
 step = "M4.2c"
 also = ["code-delivery"]
-code = ["crates/schedr-ui/src/imports.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/imports.rs::list"]
+checked = 2026-11-09

@@ -11,5 +11,5 @@ Parameter values print in the JSON form accepted by `--params`.
 history = "archive/PROJECT.md#D144"
 step = "M4.5b"
 also = ["ui-cli"]
-code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr/src/ctx.rs::run_dag_ctx", "crates/schedr-model/src/ctx.rs::CtxRequest"]
+checked = 2026-11-09

@@ -33,10 +33,17 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 | Q2 | 2026-11-08 | deployment | Should the chart provide NetworkPolicies for clusters without a mesh? | The chart uses Istio policies today; NetworkPolicies could be added for clusters without a mesh. |
 | Q1 | 2026-11-08 | components | Should one deployment shard scheduling across multiple leading masters? | Measure one master on real Postgres first; if it cannot meet the load, consider sharding by DAG. |
 
+## Unverified claims
+
+Active decisions with a claim nobody found in the code yet (`unverified`): D57, D65, D66, D129, D192, D221, D222, D242, D243, D245, D262, D294, D303.
+
 ## Every decision
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D376 | 2026-11-09 | user | rule | development | STATUS.md is generated from the records and status.toml |
+| D375 | 2026-11-09 | user | rule | development | Summaries follow the code: names checked, affected and stale decisions listed |
+| D374 | 2026-11-09 | user | rule | development | A decision lists the claims nobody found in the code (unverified) |
 | D373 | 2026-11-09 | user | rule | development | Design pages are generated whole from the decisions |
 | D372 | 2026-11-09 | user | rule | development | PROJECT.md lives in archive/ |
 | D371 | 2026-11-08 | user | rule | development | Work reaches main through git; undone-check guards recent commits |
@@ -367,7 +374,7 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 | D46 | 2026-10-28 | user | untraced | ui-cli | LDAP group restriction remains undecided |
 | D45 | 2026-10-28 | user | untraced | ui-cli | LDAP entry lookup remains undecided |
 | D44 | 2026-10-28 | user | untraced | development | No recorded decision found |
-| D43 | 2026-10-28 | user | built M3.6 | components | Only task finishes wake a scheduler round |
+| D43 | 2026-10-28 | user | built M3.6 | components | Task finishes and commands wake a scheduler round |
 | D42 | 2026-10-28 | user | built M3.6 | components | A recorded task finish wakes a scheduler round |
 | D41 | 2026-10-28 | user | built M3.6 | ui-cli | The UI and API use compatible sign-in modes |
 | D40 | 2026-10-28 | user | built M3.6 | ui-cli | UI proof follows the deployment TLS mode |
@@ -521,7 +528,7 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 ### components
 
 - D297: A master that is not leading is unready and refuses streams
-- D43: Only task finishes wake a scheduler round
+- D43: Task finishes and commands wake a scheduler round
 - D42: A recorded task finish wakes a scheduler round
 - D21: The federated UI is a separate schedr ui role
 
@@ -588,6 +595,9 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ### development
 
+- D376: STATUS.md is generated from the records and status.toml
+- D375: Summaries follow the code: names checked, affected and stale decisions listed
+- D374: A decision lists the claims nobody found in the code (unverified)
 - D373: Design pages are generated whole from the decisions
 - D372: PROJECT.md lives in archive/
 - D371: Work reaches main through git; undone-check guards recent commits

@@ -45,12 +45,24 @@ None.
 
 - `crates/schedr-agent/src/agent.rs` (D352, D353)
 - `crates/schedr-agent/src/attempt.rs` (D338)
-- `crates/schedr-api/src/named_events.rs` (D354)
+- `crates/schedr-api/src/named_events.rs::post_event` (D354)
 - `crates/schedr-api/src/routes.rs` (D338, D353)
+- `crates/schedr-api/src/routes.rs::restart_trigger` (D350)
 - `crates/schedr-api/src/views.rs` (D338, D353, D354)
 - `crates/schedr-client/src/lib.rs` (D354)
-- `crates/schedr-db/src/triggers.rs` (D352)
-- `crates/schedr-master/src/core/triggers.rs` (D352)
+- `crates/schedr-config/src/config.rs::switch_off_after` (D338)
+- `crates/schedr-db/src/run_of.rs::runs_of` (D353)
+- `crates/schedr-db/src/triggers.rs::store_batch` (D352)
+- `crates/schedr-master/src/core/triggers.rs::batch_items` (D352)
+- `crates/schedr-master/src/core/triggers.rs::event_named_pass` (D354)
+- `crates/schedr-master/src/core/triggers.rs::idle_too_long` (D349)
+- `crates/schedr-master/src/core/triggers.rs::start_trigger` (D348)
+- `crates/schedr-master/src/core/triggers.rs::trigger_failed` (D349)
+- `crates/schedr-master/src/dispatch.rs::count_strike` (D338)
+- `python/schedr/api.py::_script_caller` (D356)
+- `python/schedr/run_of.py::RunOf` (D353)
+- `python/schedr/script.py::call_api` (D356)
+- `python/schedr/testing.py::run_trigger` (D350)
 
 ## Open
 

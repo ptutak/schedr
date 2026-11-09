@@ -10,4 +10,5 @@ The URL contains no password and can be passed directly to psql.
 '''
 history = "archive/PROJECT.md#D197"
 step = "M4.7b2"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/connection_env.rs::sql", "crates/schedr-agent/src/connection_env.rs::pgpass_field"]

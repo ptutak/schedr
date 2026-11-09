@@ -11,5 +11,5 @@ The whole-task `-1` row does not count.
 history = "archive/PROJECT.md#D89"
 step = "M4.4"
 also = ["python-api"]
-code = ["crates/schedr-master/src/limits.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/limits.rs::of_task"]
+checked = 2026-11-09

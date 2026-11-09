@@ -11,5 +11,5 @@ A ScriptResource setup retains its declared cleanup for a partly failed setup.
 history = "archive/PROJECT.md#D312"
 step = "M4.9c"
 also = ["cleanup"]
-code = ["python/schedr/operators.py"]
-checked = 2026-11-08
+code = ["python/schedr/operators.py::_refuse_for_resource"]
+checked = 2026-11-09

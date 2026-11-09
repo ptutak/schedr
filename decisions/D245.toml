@@ -10,5 +10,7 @@ A cleanup function missing from that code fails the cleanup.
 '''
 history = "archive/PROJECT.md#D245"
 step = "M4.8b2"
+unverified = ["a cleanup function missing from that code fails the cleanup"]
 also = ["code-delivery"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/agent.rs::moved_cleanup"]

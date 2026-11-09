@@ -12,5 +12,5 @@ standalones through their JSON APIs. It can deploy alone from the chart; standal
 history = "archive/PROJECT.md#D21"
 step = "M3.6"
 also = ["ui-cli", "deployment"]
-code = ["crates/schedr-ui/src/lib.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/lib.rs::router"]
+checked = 2026-11-09

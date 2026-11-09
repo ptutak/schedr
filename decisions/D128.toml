@@ -15,5 +15,5 @@ removed.
 history = "archive/PROJECT.md#D128"
 step = "M4.4b"
 also = ["deployment", "configuration"]
-code = ["crates/schedr-ui/src/deployments.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/deployments.rs::graph", "crates/schedr-ui/src/deployments.rs::lay_out"]
+checked = 2026-11-09

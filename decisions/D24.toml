@@ -10,4 +10,5 @@ UI POST actions require matching `Origin` or `Sec-Fetch-Site` information.
 '''
 history = "archive/PROJECT.md#D24"
 step = "M3.5"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-ui/src/actions.rs::same_origin"]

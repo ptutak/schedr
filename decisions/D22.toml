@@ -10,5 +10,5 @@ The layout performs layering, crossing reduction and x-placement.
 '''
 history = "archive/PROJECT.md#D22"
 step = "M3.2b"
-code = ["crates/schedr-ui/src/graph.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/graph.rs::reduce_crossings", "crates/schedr-ui/src/graph.rs::layered"]
+checked = 2026-11-09

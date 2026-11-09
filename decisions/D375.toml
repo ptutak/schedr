@@ -1,0 +1,15 @@
+title = "Summaries follow the code: names checked, affected and stale decisions listed"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "development"
+section = "Documents and records"
+summary = '''
+`make records-check` fails when a built or rule decision's summary names in code font a word no code
+file has (unless the claim is in `unverified`). `records.py affected [<since>]` lists the decisions
+whose `code` a change touches, re-read before each step's commit; `records.py stale` those whose code
+changed after `checked`. `code` entries are `path::symbol`; a summary names keys, not their values.
+'''
+history = "JOURNAL.md#D375"
+step = "n/a"
+code = ["scripts/records.py::unknown_names", "scripts/records.py::affected", "scripts/records.py::stale"]

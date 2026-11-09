@@ -10,5 +10,5 @@ The master validates group membership, parents and cycles.
 '''
 history = "archive/PROJECT.md#D64"
 step = "M4.2b"
-code = ["crates/schedr-master/src/validate.rs", "crates/schedr-model/src/dag.rs", "crates/schedr-model/src/task.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-model/src/task.rs", "crates/schedr-master/src/validate.rs::group_problems", "crates/schedr-model/src/dag.rs::Group"]
+checked = 2026-11-09

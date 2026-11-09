@@ -12,5 +12,5 @@ Every master operation that writes must have this test.
 history = "archive/PROJECT.md#D98"
 step = "M4.3e"
 also = ["state"]
-code = ["crates/schedr-db/src/database.rs", "crates/schedr-db/src/faults.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-db/src/database.rs", "crates/schedr-db/src/faults.rs", "crates/schedr-master/src/faults.rs::fail_each_write"]
+checked = 2026-11-09

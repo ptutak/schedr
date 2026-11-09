@@ -10,5 +10,5 @@ are attached to the GitHub Release. Each wheel has provenance attestation; there
 '''
 history = "archive/PROJECT.md#D155"
 step = "R0.1"
-code = ["scripts/release.py"]
-checked = 2026-11-08
+code = ["scripts/release.py::notes", "scripts/release.py::wheels"]
+checked = 2026-11-09

@@ -14,5 +14,5 @@ bearing diagnostics; invalid dataclass defaults also omit their type.
 history = "archive/PROJECT.md#D134"
 step = "M4.5a"
 also = ["secrets"]
-code = ["crates/schedr-api/src/routes.rs", "crates/schedr-master/src/params.rs", "crates/schedr-ui/src/params_form.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/params.rs", "crates/schedr-ui/src/params_form.rs", "crates/schedr-model/src/params.rs::shown", "crates/schedr-api/src/routes.rs::mask_data"]
+checked = 2026-11-09

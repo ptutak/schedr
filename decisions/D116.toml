@@ -13,4 +13,5 @@ before hello stops the runner and ends the attempt accordingly.
 history = "archive/PROJECT.md#D116"
 step = "M4.3e"
 also = ["assignment"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/launch.rs::deadline"]

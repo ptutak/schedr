@@ -10,4 +10,5 @@ The complete output is available for download.
 '''
 history = "archive/PROJECT.md#D33"
 step = "M3.2b"
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-ui/src/runs.rs::OUTPUT_TAIL"]

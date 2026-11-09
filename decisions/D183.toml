@@ -11,4 +11,4 @@ This works in loops and under aliases.
 history = "archive/PROJECT.md#D183"
 step = "M4.7b1"
 code = ["python/schedr/connection_types.py"]
-checked = 2026-11-08
+checked = 2026-11-09

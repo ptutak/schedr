@@ -6,10 +6,11 @@ topic = "cleanup"
 section = "Journal and handles"
 summary = '''
 The agent logs when `cleanup_timeout` does not fit the grace period.
-It warns at assignment, once per task.
+The default `[worker] cleanup_timeout` is warned about once at the worker's start; a task's own
+`cleanup_timeout` at assignment, once per task.
 '''
 history = "archive/PROJECT.md#D250"
 step = "M4.8b"
 also = ["workers", "configuration"]
-code = ["crates/schedr-agent/src/agent.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/agent.rs::warned_room"]
+checked = 2026-11-09

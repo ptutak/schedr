@@ -12,5 +12,5 @@ variables.
 '''
 history = "archive/PROJECT.md#D194"
 step = "M4.7b2"
-code = ["crates/schedr-agent/src/connection_env.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/connection_env.rs::mongo"]
+checked = 2026-11-09

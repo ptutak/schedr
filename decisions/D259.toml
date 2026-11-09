@@ -10,5 +10,5 @@ Both parts always exist.
 '''
 history = "archive/PROJECT.md#D259"
 step = "M4.8c1"
-code = ["crates/schedr-model/src/dag.rs", "python/schedr/_model/dag.py", "python/schedr/operators.py"]
-checked = 2026-11-08
+code = ["python/schedr/_model/dag.py", "python/schedr/operators.py", "crates/schedr-model/src/dag.rs::Resource"]
+checked = 2026-11-09

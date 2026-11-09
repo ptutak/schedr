@@ -11,5 +11,5 @@ Calling it twice is a parse error.
 history = "archive/PROJECT.md#D223"
 step = "M4.8c1"
 also = ["python-api"]
-code = ["python/schedr/_build.py"]
-checked = 2026-11-08
+code = ["python/schedr/_build.py::refuse_second_setup"]
+checked = 2026-11-09

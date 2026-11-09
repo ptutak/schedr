@@ -11,4 +11,4 @@ The published wheel is installed and smoke-tested; final tags publish to PyPI.
 history = "archive/PROJECT.md#D158"
 step = "R0.1"
 code = ["scripts/release.py"]
-checked = 2026-11-08
+checked = 2026-11-09

@@ -11,5 +11,5 @@ Bursts coalesce into one wake, and a woken round starts at least 50 ms after the
 history = "archive/PROJECT.md#D42"
 step = "M3.6"
 also = ["assignment"]
-code = ["crates/schedr-master/src/service.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/service.rs::ROUND_GAP"]
+checked = 2026-11-09

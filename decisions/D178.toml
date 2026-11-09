@@ -11,4 +11,5 @@ It also accepts whole-secret and key placeholders.
 history = "archive/PROJECT.md#D178"
 step = "M4.6e"
 also = ["python-api"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["python/schedr/_secrets.py::declared"]

@@ -11,4 +11,5 @@ The log file keeps the original bytes.
 history = "archive/PROJECT.md#D110"
 step = "M4.3e"
 also = ["task-processes"]
-checked = 2026-11-08
+checked = 2026-11-09
+code = ["crates/schedr-agent/src/output.rs::text"]

@@ -12,5 +12,5 @@ is refused at parse time.
 history = "archive/PROJECT.md#D135"
 step = "M4.5a"
 also = ["python-api"]
-code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs", "python/schedr/_params.py"]
-checked = 2026-11-08
+code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs::MAX_PARAMS_BYTES", "python/schedr/_params.py::MAX_PARAMS_BYTES"]
+checked = 2026-11-09

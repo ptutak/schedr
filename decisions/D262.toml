@@ -12,6 +12,7 @@ successor links remain visible. Lists show one row in two parts.
 '''
 history = "archive/PROJECT.md#D262"
 step = "M4.8e"
+unverified = ["the caps keep their graph-row heights"]
 also = ["cleanup"]
-code = ["crates/schedr-ui/src/runs.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-ui/src/runs.rs::cap_of", "crates/schedr-ui/src/runs.rs::rails_of"]
+checked = 2026-11-09

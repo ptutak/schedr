@@ -11,5 +11,5 @@ CAs for every client; a self-made certificate needs sslmode=require.
 '''
 history = "archive/PROJECT.md#D195"
 step = "M4.7b2"
-code = ["crates/schedr-agent/src/connection_env.rs"]
-checked = 2026-11-08
+code = ["crates/schedr-agent/src/connection_env.rs::mysql"]
+checked = 2026-11-09
