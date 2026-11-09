@@ -11,7 +11,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use schedr_db::commands::PendingCommand;
 use schedr_db::{Database, DbError};
-use schedr_model::commands::AskedEvent;
+use schedr_model::commands::{AskedEvent, BackfillRequest};
 use schedr_model::commands::{
     CONNECTION_CHECK_TIMEOUT_MS, Command, CommandStatus, ConnectionJobResult, ConnectionsResult,
     JobState, MAX_CONNECTION_TEST_MS,
@@ -25,6 +25,7 @@ use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
 use crate::execution::{ExecutionError, TaskCancel, TaskRetry};
 use crate::metrics::{CommandLabels, MasterMetrics};
 use crate::quiet::WakeReason;
+use crate::scheduler::backfill::BackfillAsk;
 use crate::scheduler::{Scheduler, SchedulerError};
 
 /// The most commands a round applies (about 8 ms each in stress runs): a burst (101 triggers
@@ -93,6 +94,8 @@ enum Outcome {
 pub struct Commander {
     db: Database,
     metrics: MasterMetrics,
+    /// The most fire times a backfill's range may have (`[backfill] max_runs`).
+    backfill_max_runs: u32,
 }
 
 impl Commander {
@@ -102,7 +105,16 @@ impl Commander {
         Self {
             db,
             metrics: MasterMetrics::default(),
+            backfill_max_runs: crate::scheduler::backfill::DEFAULT_MAX_RUNS,
         }
+    }
+
+    /// Refuses a backfill whose range has more than `max_runs` fire times (`[backfill]
+    /// max_runs`).
+    #[must_use]
+    pub const fn with_backfill_max_runs(mut self, max_runs: u32) -> Self {
+        self.backfill_max_runs = max_runs;
+        self
     }
 
     /// Counts decisions and their latency in `metrics`.
@@ -382,24 +394,16 @@ impl Commander {
                 self.trigger(pending, scheduler, dag_id, requested, now)
                     .await
             }
+            Command::Backfill(request) => self.backfill(pending, scheduler, request, now).await,
+            Command::CancelBackfill { backfill_id } => {
+                self.cancel_backfill(pending, backfill_id, (dispatcher, outgoing), now)
+                    .await
+            }
             Command::RestartTrigger { dag_id } => self.restart_trigger(dag_id).await,
             Command::SkipTriggerRun { dag_id } => self.skip_trigger_run(dag_id, pending).await,
             Command::CancelRun { run_id } => {
-                let Some(run) = self.db.run_tasks(run_id).await? else {
-                    return Ok(Outcome::Rejected(format!("no run `{run_id}`")));
-                };
-                if run.state.is_final() {
-                    if pending.applying && run.state == RunState::Cancelled {
-                        // Cancelled by this command before its decision was stored.
-                        return Ok(Outcome::Applied(json!({"stopping_attempts": 0})));
-                    }
-                    return Ok(Outcome::Rejected(format!(
-                        "run `{run_id}` already finished ({})",
-                        run.state
-                    )));
-                }
-                let stopping = cancel(dispatcher, run_id, outgoing, now).await?;
-                Ok(Outcome::Applied(json!({"stopping_attempts": stopping})))
+                self.cancel_run(pending, run_id, (dispatcher, outgoing), now)
+                    .await
             }
             Command::PauseDag {
                 dag_id,
@@ -702,6 +706,101 @@ impl Commander {
             Err(SchedulerError::Db(error)) => Err(error.into()),
             Err(error) => Ok(Outcome::Rejected(error.to_string())),
         }
+    }
+
+    /// `backfill`: created with the command's ID, so applied again after its round failed it
+    /// answers what it created then.
+    async fn backfill(
+        &self,
+        pending: &PendingCommand,
+        scheduler: &Scheduler,
+        request: &BackfillRequest,
+        now: Timestamp,
+    ) -> Result<Outcome, CommandError> {
+        let dag_id = &request.dag_id;
+        let ask = BackfillAsk {
+            from: request.from,
+            to: request.to,
+            all: request.all,
+            params: request.params.as_ref(),
+            dry_run: request.dry_run,
+        };
+        if pending.applying
+            && let Some(done) = self.db.backfill(&pending.id).await?
+        {
+            return Ok(Outcome::Applied(json!({
+                "backfill_id": done.id,
+                "fire_times": done.fire_times,
+                "created": done.created_runs,
+                "skipped": done.fire_times.saturating_sub(done.created_runs),
+                "dry_run": false,
+            })));
+        }
+        let by = (pending.requested_by.as_str(), self.backfill_max_runs);
+        match scheduler.backfill(&pending.id, dag_id, ask, by, now).await {
+            Ok(count) => Ok(Outcome::Applied(json!({
+                "backfill_id": count.backfill_id,
+                "fire_times": count.fire_times,
+                "created": count.created,
+                "skipped": count.skipped,
+                "dry_run": ask.dry_run,
+            }))),
+            Err(SchedulerError::Db(error)) => Err(error.into()),
+            Err(error) => Ok(Outcome::Rejected(error.to_string())),
+        }
+    }
+
+    /// `cancel_run`: applied again, a run this command cancelled before its decision was stored
+    /// is its own work.
+    async fn cancel_run(
+        &self,
+        pending: &PendingCommand,
+        run_id: &str,
+        (dispatcher, outgoing): (&mut Dispatcher, &mut Vec<Outgoing>),
+        now: Timestamp,
+    ) -> Result<Outcome, CommandError> {
+        let Some(run) = self.db.run_tasks(run_id).await? else {
+            return Ok(Outcome::Rejected(format!("no run `{run_id}`")));
+        };
+        if run.state.is_final() {
+            if pending.applying && run.state == RunState::Cancelled {
+                // Cancelled by this command before its decision was stored.
+                return Ok(Outcome::Applied(json!({"stopping_attempts": 0})));
+            }
+            return Ok(Outcome::Rejected(format!(
+                "run `{run_id}` already finished ({})",
+                run.state
+            )));
+        }
+        let stopping = cancel(dispatcher, run_id, outgoing, now).await?;
+        Ok(Outcome::Applied(json!({"stopping_attempts": stopping})))
+    }
+
+    /// `cancel_backfill` (decision 402): its queued and running runs cancelled, as `cancel_run`
+    /// cancels one; applied again, those cancelled then are finished now.
+    async fn cancel_backfill(
+        &self,
+        pending: &PendingCommand,
+        backfill_id: &str,
+        (dispatcher, outgoing): (&mut Dispatcher, &mut Vec<Outgoing>),
+        now: Timestamp,
+    ) -> Result<Outcome, CommandError> {
+        let Some(backfill) = self.db.backfill(backfill_id).await? else {
+            return Ok(Outcome::Rejected(format!("no backfill `{backfill_id}`")));
+        };
+        let runs = self.db.unfinished_backfill_runs(&backfill.id).await?;
+        if runs.is_empty() && !pending.applying {
+            return Ok(Outcome::Rejected(format!(
+                "backfill `{backfill_id}` has no queued or running run left"
+            )));
+        }
+        let mut stopping = 0;
+        for run_id in &runs {
+            stopping += cancel(dispatcher, run_id, outgoing, now).await?;
+        }
+        Ok(Outcome::Applied(
+            json!({"cancelled_runs": runs, "stopping_attempts": stopping}),
+        ))
     }
 
     /// `resume_worker`. Applied again after its round failed, a worker found not drained was

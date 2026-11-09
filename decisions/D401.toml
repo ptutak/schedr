@@ -1,0 +1,14 @@
+title = "A backfill's runs start on a paused DAG"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "runs"
+section = "Backfill"
+summary = '''
+A backfill is a person's request, as a manual run is: its runs start on a paused DAG, waiting only
+for `max_active_runs`. Pausing switches off the DAG's trigger only (decision 398).
+'''
+history = "JOURNAL.md#D401"
+step = "M4.12b"
+code = ["crates/schedr-master/src/scheduler/backfill.rs::store"]
+checked = 2026-11-09

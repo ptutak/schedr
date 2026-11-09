@@ -13,6 +13,8 @@
 //! - **Queued runs** (manual, chained, event, backfill) take the places left: manual, chained
 //!   and event runs first, then backfill, oldest first within each.
 
+use std::collections::BTreeSet;
+
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::runs::QueuedRun;
 use schedr_model::{Dag, RunKind};
@@ -139,6 +141,20 @@ impl Plan<'_> {
         running: u32,
         now: Timestamp,
     ) -> Vec<RunTimes> {
+        self.scheduled_runs_except(last_scheduled, running, now, &BTreeSet::new())
+    }
+
+    /// As [`Self::scheduled_runs`], leaving out the fire times in `covered`: those with a
+    /// successful, queued or running run of another kind (a backfill's, a manual one), which
+    /// get no scheduled run and take no place. With `catchup` the ones after them follow.
+    #[must_use]
+    pub fn scheduled_runs_except(
+        &self,
+        last_scheduled: Option<Timestamp>,
+        running: u32,
+        now: Timestamp,
+        covered: &BTreeSet<Timestamp>,
+    ) -> Vec<RunTimes> {
         let free = self.free_places(running).min(MAX_RUNS_PER_PASS);
         if free == 0 {
             return Vec::new();
@@ -154,13 +170,15 @@ impl Plan<'_> {
             };
             let mut next = from;
             while let Some(t) = next.filter(|t| *t <= upper && due.len() < free) {
-                due.push(t);
+                if !covered.contains(&t) {
+                    due.push(t);
+                }
                 next = self.fire_times.next_after(t);
             }
         } else if let Some(latest) = self
             .fire_times
             .last_at_or_before(upper)
-            .filter(|t| after(*t))
+            .filter(|t| after(*t) && !covered.contains(t))
         {
             due.push(latest);
         }
@@ -192,7 +210,14 @@ pub fn manual_planned_for(requested: Option<Timestamp>, now: Timestamp) -> Times
 #[must_use]
 pub fn runs_to_start(queued: &[QueuedRun], free: usize) -> Vec<&QueuedRun> {
     let mut ordered: Vec<&QueuedRun> = queued.iter().collect();
-    ordered.sort_by_key(|run| (priority(run.kind), run.triggered_at, run.id.clone()));
+    ordered.sort_by_key(|run| {
+        (
+            priority(run.kind),
+            run.triggered_at,
+            run.planned_for,
+            run.id.clone(),
+        )
+    });
     ordered.truncate(free);
     ordered
 }

@@ -11,9 +11,12 @@
   {% else %}
   {% call confirm::action("Trigger", "Trigger a run of " ~ row.dag_id ~ "?", "A manual run, for the moment given (now if none).", actions ~ "/trigger", "trigger", page.base, params_html) %}{% endcall %}
   {% endif %}
+  {% if row.fire_times() && row.held.is_none() %}
+  {% call confirm::action("Backfill", "Backfill " ~ row.dag_id ~ "?", "A run for each fire time of the range that has no successful, queued or running run, oldest first, after its other runs; they start even while it is paused.", actions ~ "/backfill", "backfill", page.base, backfill_params_html) %}{% endcall %}
+  {% endif %}
   {% if row.paused %}
   {% call confirm::action("Unpause", "Unpause " ~ row.dag_id ~ "?", "Its trigger starts its runs again.", actions ~ "/unpause", "", page.base) %}{% endcall %}
-  {% else if row.manual_only %}
+  {% else if row.manual_only() %}
   <button type="button" class="action" disabled title="It has no trigger: only manual runs, which pausing doesn't stop">Pause</button>
   {% else %}
   {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "Its trigger starts no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
@@ -111,6 +114,28 @@
 {% else if !connections_unavailable.is_empty() %}
 <h2>Connections</h2>
 <div class="banner warning">Unavailable: {{ connections_unavailable }}</div>
+{% endif %}
+{% if !backfills.is_empty() %}
+<h2>Backfills</h2>
+<table class="list backfills">
+  <thead><tr><th>Backfill</th><th>From</th><th>To</th><th>Runs</th><th>By</th><th>Created</th><th></th></tr></thead>
+  <tbody>
+  {% for backfill in backfills %}
+    <tr>
+      <td class="mono">{{ backfill.backfill_id }}</td>
+      <td class="time">{{ backfill.from }}</td>
+      <td class="time">{{ backfill.to }}</td>
+      <td>{{ backfill.runs }} <span class="dim">{{ backfill.of }}</span></td>
+      <td>{{ backfill.requested_by }}</td>
+      <td class="time">{{ backfill.created_at }}</td>
+      <td>{% if !backfill.cancel.is_empty() %}{% call confirm::action("Cancel", "Cancel backfill " ~ backfill.backfill_id ~ "?", "Its queued and running runs are cancelled; those that finished stay as they are.", backfill.cancel, "", page.base) %}{% endcall %}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else if !backfills_unavailable.is_empty() %}
+<h2>Backfills</h2>
+<div class="banner warning">Unavailable: {{ backfills_unavailable }}</div>
 {% endif %}
 <h2>Runs <a class="more" href="{{ runs_href }}">all runs of this DAG</a></h2>
 {% if runs.is_empty() %}

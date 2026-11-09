@@ -4,8 +4,9 @@
 updated = 2026-11-09
 
 in_progress = [
-    "Order agreed with the user (2026-11-09): the rest of M4 (M4.12b backfill, M4.12c operator mapping, M4.13, M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.",
+    "Order agreed with the user (2026-11-09): the rest of M4 (M4.12b done; next M4.12c operator mapping, its design decided first with Q21; then M4.13, M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.",
     "For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).",
+    "B199 (a backfill over a DST change of a sub-minute cron holds the master up; medium/rare) logged by M4.12b's review: for the bug round.",
 ]
 
 waiting = []
@@ -20,7 +21,7 @@ rules = [
 ]
 
 colleagues = """
-Codex weekly 48% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Codex weekly 51% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
 Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`."""
 
 resume = "claude --resume e45442ad-3ec7-4bce-9d45-b6191e505a11"

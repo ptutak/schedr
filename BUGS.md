@@ -59,37 +59,52 @@ step touches their code or the user schedules them.
 | 4 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
 | 5 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
 | 6 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 7 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
-| 8 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
-| 9 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 10 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 11 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 12 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 13 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 14 | B197: watcher tests fail under a full parallel run, pass alone (Suspected) | 2 | low | possible | tests |
-| 15 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 16 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 17 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 18 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 19 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 20 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 21 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 22 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 23 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
-| 24 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 25 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 26 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 27 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 28 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 29 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 30 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 31 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 32 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 33 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 34 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 35 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 36 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 37 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 7 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
+| 8 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
+| 9 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
+| 10 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 11 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 12 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 13 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 14 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 15 | B197: watcher tests fail under a full parallel run, pass alone (Suspected) | 2 | low | possible | tests |
+| 16 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 17 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 18 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 19 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 20 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 21 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 22 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 23 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 24 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 25 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 26 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 27 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 28 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 29 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 30 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 31 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 32 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 33 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 34 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 35 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 36 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 37 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 38 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up
+
+- **Rating:** severity **medium**, probability **rare**, performance (score 2): each fire time near an offset change walks hours of wall-clock matches; a 1000-run backfill (or its dry run) of a per-second cron over one blocks the master core for minutes.
+- **Found:** 2026-11-09, by Codex's review of M4.12b, measured: a dry run of
+  `Cron("* * * * * *", tz="Europe/Warsaw")` from `2026-10-25T00:59:00Z` to `01:15:39Z`
+  (1000 fire times) took 119 s in a debug build (12 ms in UTC). `fire_times_in`
+  (`crates/schedr-master/src/scheduler/backfill.rs`) calls `FireTimes::next_after` per fire
+  time; near an offset change `walk_after` (`crates/schedr-master/src/fire_times.rs`) walks
+  every match from `MARGIN` (3 h) before the moment, about 21600 for a per-second cron, under
+  the core's lock. A per-minute cron walks about 360 per lookup: fine.
+- **A fix:** enumerate a range's fire times in one walk (`FireTimes::between`: every match
+  from `from - MARGIN` to `to + MARGIN`, their moments by the same rules, sorted, deduped,
+  stopping past `max`), so the work is the range's matches, not matches times fire times.
 
 ## B197: watcher tests fail under a full parallel run, pass alone (Suspected)
 

@@ -66,6 +66,59 @@ pub struct Ui<T> {
     pub host: String,
 }
 
+/// The actions' routes (POSTs, see `actions`).
+fn action_routes<T: Transport + Send + Sync + 'static>() -> Router<Arc<Ui<T>>> {
+    Router::new()
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger/restart",
+            post(actions::restart_trigger::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger/skip",
+            post(actions::skip_trigger_run::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger/run-event",
+            post(actions::run_event::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/sensors/{sensor}/switch-on",
+            post(actions::switch_on::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/pause",
+            post(actions::pause::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/unpause",
+            post(actions::unpause::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger",
+            post(actions::trigger::<T>),
+        )
+        .route(
+            "/d/{deployment}/runs/{run}/cancel",
+            post(actions::cancel_run::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/backfill",
+            post(actions::backfill::<T>),
+        )
+        .route(
+            "/d/{deployment}/backfills/{backfill}/cancel",
+            post(actions::cancel_backfill::<T>),
+        )
+        .route(
+            "/d/{deployment}/runs/{run}/tasks/{task}/{action}",
+            post(actions::task::<T>),
+        )
+        .route(
+            "/d/{deployment}/workers/{worker}/{action}",
+            post(actions::worker::<T>),
+        )
+}
+
 /// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
 /// `/d/<deployment>/runs/<run>` (and its tasks' panels and log tails), `/deployments`,
 /// `/workers`, `/connections` (and its checks and tests), the
@@ -106,46 +159,7 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         .route("/import-errors/count", get(imports::nav_count::<T>))
         .route("/import-errors/notice", get(imports::notice::<T>))
         .route("/time", get(actions::time))
-        .route(
-            "/d/{deployment}/dags/{dag}/trigger/restart",
-            post(actions::restart_trigger::<T>),
-        )
-        .route(
-            "/d/{deployment}/dags/{dag}/trigger/skip",
-            post(actions::skip_trigger_run::<T>),
-        )
-        .route(
-            "/d/{deployment}/dags/{dag}/trigger/run-event",
-            post(actions::run_event::<T>),
-        )
-        .route(
-            "/d/{deployment}/dags/{dag}/sensors/{sensor}/switch-on",
-            post(actions::switch_on::<T>),
-        )
-        .route(
-            "/d/{deployment}/dags/{dag}/pause",
-            post(actions::pause::<T>),
-        )
-        .route(
-            "/d/{deployment}/dags/{dag}/unpause",
-            post(actions::unpause::<T>),
-        )
-        .route(
-            "/d/{deployment}/dags/{dag}/trigger",
-            post(actions::trigger::<T>),
-        )
-        .route(
-            "/d/{deployment}/runs/{run}/cancel",
-            post(actions::cancel_run::<T>),
-        )
-        .route(
-            "/d/{deployment}/runs/{run}/tasks/{task}/{action}",
-            post(actions::task::<T>),
-        )
-        .route(
-            "/d/{deployment}/workers/{worker}/{action}",
-            post(actions::worker::<T>),
-        )
+        .merge(action_routes::<T>())
         .route(
             "/d/{deployment}/commands/{command}",
             get(actions::command::<T>),

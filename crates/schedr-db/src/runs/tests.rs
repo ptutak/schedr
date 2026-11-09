@@ -67,6 +67,7 @@ fn run<'a>(
         triggered_at: ts(planned_for),
         triggered_by: "scheduler",
         parent_run_id: None,
+        backfill_id: None,
     }
 }
 
@@ -243,11 +244,13 @@ async fn queued_runs_wait_until_started() {
                 id: earlier.clone(),
                 kind: RunKind::Manual,
                 triggered_at: ts("2026-10-15T03:00:00Z"),
+                planned_for: ts("2026-10-15T03:00:00Z"),
             },
             QueuedRun {
                 id: later,
                 kind: RunKind::Backfill,
                 triggered_at: ts("2026-10-16T03:00:00Z"),
+                planned_for: ts("2026-10-16T03:00:00Z"),
             },
         ]
     );

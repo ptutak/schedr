@@ -32,6 +32,30 @@ pub enum AskedEvent {
     },
 }
 
+/// A backfill asked for: a `backfill` run per fire time from `from` to `to` (now if not given)
+/// with no successful, queued or running run, or every one with `all`; with `dry_run`, only
+/// counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackfillRequest {
+    /// The DAG.
+    pub dag_id: DagId,
+    /// The range's first moment.
+    pub from: Timestamp,
+    /// Its last moment; now if not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Timestamp>,
+    /// A run for every fire time (`--all`).
+    #[serde(default)]
+    pub all: bool,
+    /// Values for the runs' parameters, over the DAG's defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Count only, creating nothing (`--dry-run`).
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 /// An action asked for by a person.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -49,6 +73,14 @@ pub enum Command {
         /// The event it brings, for a DAG a trigger starts.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         event: Option<AskedEvent>,
+    },
+    /// Create a backfill (`schedr runs backfill`, decisions 363, 364, 400-404).
+    Backfill(BackfillRequest),
+    /// Cancel a backfill's queued and running runs (`schedr runs cancel --backfill`,
+    /// decision 402); its finished runs stay.
+    CancelBackfill {
+        /// The backfill.
+        backfill_id: String,
     },
     /// Start a DAG's trigger again from its bookmark, whatever stopped it (`schedr triggers restart`).
     RestartTrigger {
@@ -261,6 +293,8 @@ impl Command {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::TriggerRun { .. } => "trigger_run",
+            Self::Backfill(_) => "backfill",
+            Self::CancelBackfill { .. } => "cancel_backfill",
             Self::CancelRun { .. } => "cancel_run",
             Self::PauseDag { .. } => "pause_dag",
             Self::UnpauseDag { .. } => "unpause_dag",

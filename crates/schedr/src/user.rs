@@ -9,8 +9,8 @@ use std::io::Write;
 
 use jiff::tz::TimeZone;
 use schedr_api::views::{
-    AttemptView, CheckConnectionsRequest, CommandView, DagView, PostEventRequest, RunDetail,
-    RunView, TaskView, TestConnectionRequest, TriggerRequest, TriggerView, WorkerView,
+    AttemptView, BackfillRequest, CheckConnectionsRequest, CommandView, DagView, PostEventRequest,
+    RunDetail, RunView, TaskView, TestConnectionRequest, TriggerRequest, TriggerView, WorkerView,
 };
 
 use crate::app::AppError;
@@ -19,7 +19,7 @@ use crate::cli::{
     SensorsCommand, TasksCommand, TriggersCommand, WorkersCommand,
 };
 use crate::client::{Client, TaskAction, Transport, WorkerAction};
-use crate::times::{parse_for, show, show_short, trigger_text};
+use crate::times::{parse_for, parse_time_flag, show, show_short, trigger_text};
 use schedr_model::commands::{ConnectionsResult, JobState, MAX_CONNECTION_TEST_MS, SecretState};
 
 #[cfg(test)]
@@ -661,7 +661,7 @@ fn worker_row(worker: &WorkerView, local: &TimeZone) -> Vec<String> {
 /// # Errors
 ///
 /// [`AppError::Client`] as for [`run_dags`], [`AppError::BadArgument`] for a `--for` that
-/// doesn't read, [`AppError::NotImplemented`] for parameters and backfills (milestone M4).
+/// doesn't read.
 pub async fn run_runs<T: Transport>(
     command: &RunsCommand,
     client: &Client<T>,
@@ -738,7 +738,8 @@ pub async fn run_runs<T: Transport>(
         }
         RunsCommand::Cancel { run_id, backfill } => {
             let Some(run_id) = run_id.as_deref().filter(|_| backfill.is_none()) else {
-                return Err(not_yet("runs cancel --backfill", "M4"));
+                let backfill = backfill.as_deref().unwrap_or_default();
+                return cancel_backfill(client, output, backfill, out).await;
             };
             let command = client
                 .wait(client.send_command(|| client.cancel(run_id)).await?)
@@ -755,9 +756,102 @@ pub async fn run_runs<T: Transport>(
                 &format!("cancelling run {run_id} ({stopping} running task(s) being stopped)"),
             )?;
         }
-        RunsCommand::Backfill { .. } => return Err(not_yet("runs backfill", "M4")),
+        RunsCommand::Backfill { .. } => return backfill(command, client, output, out, err).await,
     }
     Ok(())
+}
+
+/// `schedr runs backfill`: waits for the master's decision, then says what it created, or
+/// would (decision 363).
+async fn backfill<T: Transport>(
+    command: &RunsCommand,
+    client: &Client<T>,
+    output: &Output,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<(), AppError> {
+    let RunsCommand::Backfill {
+        dag,
+        from,
+        to,
+        all,
+        params,
+        params_json,
+        dry_run,
+    } = command
+    else {
+        return Ok(());
+    };
+    let moment = |flag: &str, text: &str, err: &mut dyn Write| {
+        let parsed = parse_time_flag(flag, text).map_err(AppError::BadArgument)?;
+        if let Some(warning) = parsed.warning {
+            writeln!(err, "{warning}")?;
+        }
+        Ok::<_, AppError>(parsed.at)
+    };
+    let request = BackfillRequest {
+        from: moment("--from", from, err)?,
+        to: to
+            .as_deref()
+            .map(|to| moment("--to", to, err))
+            .transpose()?,
+        all: *all,
+        params: given_params(params, params_json.as_deref())?,
+        dry_run: *dry_run,
+    };
+    let command = client
+        .wait(
+            client
+                .send_command(|| client.backfill(dag, &request))
+                .await?,
+        )
+        .await?;
+    let result = command.result.clone().unwrap_or_default();
+    let count = |key: &str| result[key].as_u64().unwrap_or(0);
+    let (times, created, skipped) = (count("fire_times"), count("created"), count("skipped"));
+    let message = match result["backfill_id"].as_str() {
+        _ if *dry_run => format!(
+            "{times} fire time(s), {skipped} with a successful, queued or running run: \
+             would create {created} run(s) (dry run)"
+        ),
+        Some(id) => format!(
+            "backfill {id} of {dag}: {times} fire time(s), {skipped} skipped, \
+             {created} run(s) created"
+        ),
+        None => format!(
+            "nothing to backfill: each of the {times} fire time(s) has a successful, queued \
+             or running run (--all runs them again)"
+        ),
+    };
+    done(out, output, &command, &message)
+}
+
+/// `schedr runs cancel --backfill`: its queued and running runs (decision 402).
+async fn cancel_backfill<T: Transport>(
+    client: &Client<T>,
+    output: &Output,
+    backfill: &str,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let command = client
+        .wait(
+            client
+                .send_command(|| client.cancel_backfill(backfill))
+                .await?,
+        )
+        .await?;
+    let result = command.result.clone().unwrap_or_default();
+    let count = |key: &str| result[key].as_u64().unwrap_or(0);
+    done(
+        out,
+        output,
+        &command,
+        &format!(
+            "cancelling backfill {backfill}: {} run(s) ({} running task(s) being stopped)",
+            result["cancelled_runs"].as_array().map_or(0, Vec::len),
+            count("stopping_attempts")
+        ),
+    )
 }
 
 /// `schedr tasks cancel` and `retry`: each waits for the master's decision; `logs`,
@@ -906,7 +1000,7 @@ fn print_run(detail: &RunDetail, local: &TimeZone, out: &mut impl Write) -> Resu
         "run {} of {} ({}) for {}: {}",
         run.run_id,
         run.dag_id,
-        run.kind,
+        run.kind_label(),
         show(run.planned_for, local),
         run_state(run)
     )?;
@@ -1100,10 +1194,6 @@ pub fn given_params(
     Ok(Some(params))
 }
 
-const fn not_yet(command: &'static str, milestone: &'static str) -> AppError {
-    AppError::NotImplemented { command, milestone }
-}
-
 fn dag_rows(dags: &[DagView], local: &TimeZone) -> Vec<Vec<String>> {
     dags.iter()
         .map(|dag| {
@@ -1144,7 +1234,7 @@ fn run_state(run: &RunView) -> String {
 fn run_row(run: &RunView, local: &TimeZone) -> Vec<String> {
     vec![
         run.run_id.clone(),
-        run.kind.clone(),
+        run.kind_label(),
         run_state(run),
         show(run.planned_for, local),
         run.triggered_by.clone(),

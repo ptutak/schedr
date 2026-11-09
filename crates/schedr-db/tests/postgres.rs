@@ -156,6 +156,7 @@ fn run<'a>(version: &'a str, kind: RunKind, state: RunState, planned_for: &str) 
         triggered_at: ts(planned_for),
         triggered_by: "anna",
         parent_run_id: None,
+        backfill_id: None,
     }
 }
 
@@ -2045,4 +2046,98 @@ async fn posted_events_are_stored_once_per_request_key_and_read_in_order_on_post
         .unwrap();
     assert_eq!(any.map(|e| e.posted_at), Some(later));
     assert_eq!(db.named_events(None, 10).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_backfill_its_runs_and_the_times_covered_are_stored_on_postgres() {
+    let (db, version) = with_dag().await;
+    let backfill_id = "01a1c0a0-0000-7000-8000-000000000001";
+    let backfill = schedr_db::backfills::NewBackfill {
+        id: backfill_id,
+        dag_id: &sync(),
+        range_from: ts("2026-10-01T00:00:00Z"),
+        range_to: ts("2026-10-04T00:00:00Z"),
+        all_fire_times: true,
+        requested_by: "anna",
+        created_at: ts(NOW),
+        fire_times: 3,
+        created_runs: 2,
+    };
+    assert!(db.insert_backfill(&backfill).await.unwrap());
+    assert!(!db.insert_backfill(&backfill).await.unwrap(), "stored once");
+    let mut ids = Vec::new();
+    // Created at once, the later one first: still placed by `planned_for`.
+    for at in ["2026-10-03T01:00:00Z", "2026-10-02T01:00:00Z"] {
+        let new = NewRun {
+            backfill_id: Some(backfill_id),
+            triggered_at: ts(NOW),
+            ..run(&version, RunKind::Backfill, RunState::Queued, at)
+        };
+        ids.push(db.insert_run(&new).await.unwrap().unwrap());
+    }
+    db.insert_run(&run(
+        &version,
+        RunKind::Manual,
+        RunState::Running,
+        "2026-10-01T01:00:00Z",
+    ))
+    .await
+    .unwrap()
+    .unwrap();
+    db.finish_run(&ids[0], RunState::Success, ts(NOW))
+        .await
+        .unwrap();
+    let stored = db.backfill(backfill_id).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            stored.all_fire_times,
+            stored.fire_times,
+            stored.created_runs
+        ),
+        (true, 3, 2)
+    );
+    let mut runs = stored.runs.clone();
+    runs.sort_by_key(|(state, _)| state.to_string());
+    assert_eq!(runs, [(RunState::Queued, 1), (RunState::Success, 1)]);
+    assert_eq!(db.dag_backfills(&sync(), 5).await.unwrap(), [stored]);
+    assert_eq!(
+        db.unfinished_backfill_runs(backfill_id).await.unwrap(),
+        [ids[1].clone()]
+    );
+    let place = |run: &str| {
+        let db = db.clone();
+        let run = run.to_owned();
+        async move {
+            let place = db
+                .run_record(&run)
+                .await
+                .unwrap()
+                .unwrap()
+                .backfill
+                .unwrap();
+            (place.index, place.total)
+        }
+    };
+    assert_eq!(
+        (place(&ids[1]).await, place(&ids[0]).await),
+        ((1, 2), (2, 2))
+    );
+    let queued = db.queued_runs(&sync()).await.unwrap();
+    assert_eq!(queued[0].planned_for, ts("2026-10-02T01:00:00Z"));
+    let covered = db
+        .covered_times(
+            &sync(),
+            ts("2026-10-01T00:00:00Z"),
+            ts("2026-10-04T00:00:00Z"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        covered.into_iter().collect::<Vec<_>>(),
+        [
+            ts("2026-10-01T01:00:00Z"),
+            ts("2026-10-02T01:00:00Z"),
+            ts("2026-10-03T01:00:00Z")
+        ]
+    );
 }

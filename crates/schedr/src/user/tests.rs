@@ -10,6 +10,7 @@ use schedr_db::dags::{DagChange, NewParse};
 use schedr_master::commands::Commander;
 use schedr_master::dispatch::{DEFAULT_CANCEL_GRACE, Dispatcher};
 use schedr_master::scheduler::Scheduler;
+use schedr_model::DagId;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tower::ServiceExt;
@@ -176,6 +177,7 @@ async fn store_events(db: &Database, keys: &[&str]) {
             params: &params,
             event: Some(&event),
             parent_run_id: None,
+            backfill_id: None,
         };
         let run_id = format!("01a00000-0000-7000-8000-00000000000{i}");
         db.store_event(&run_id, &new, &event).await.unwrap();
@@ -378,8 +380,92 @@ async fn runs_are_listed_and_cancelled() {
     );
 }
 
+fn backfill(to: &str, dry_run: bool) -> RunsCommand {
+    RunsCommand::Backfill {
+        dag: "sync".to_owned(),
+        from: "2026-10-15T00:00:00Z".to_owned(),
+        to: Some(to.to_owned()),
+        all: false,
+        params: vec![],
+        params_json: None,
+        dry_run,
+    }
+}
+
 #[tokio::test]
-async fn later_features_and_bad_arguments_are_errors() {
+async fn a_backfill_counts_creates_and_is_cancelled() {
+    let client = world(false).await;
+    let (out, err) = runs(&client, backfill("2026-10-17T12:00:00Z", true), &text()).await;
+    assert_eq!(err, "");
+    assert_eq!(
+        out,
+        "3 fire time(s), 0 with a successful, queued or running run: would create 3 run(s) \
+         (dry run)\n"
+    );
+    let stored = client
+        .transport()
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 0, "a dry run creates nothing");
+
+    let (out, _) = runs(&client, backfill("2026-10-17T12:00:00Z", false), &text()).await;
+    let id = out
+        .strip_prefix("backfill ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        out,
+        format!("backfill {id} of sync: 3 fire time(s), 0 skipped, 3 run(s) created\n")
+    );
+    // A paused DAG's backfill starts (decision 401), oldest first, one at a time here.
+    let (out, _) = runs(
+        &client,
+        RunsCommand::List {
+            dag: "sync".to_owned(),
+            planned_for: None,
+        },
+        &text(),
+    )
+    .await;
+    assert!(
+        out.contains("backfill 1/3  running  2026-10-15 01:00 UTC"),
+        "{out}"
+    );
+    assert!(
+        out.contains("backfill 3/3  queued   2026-10-17 01:00 UTC"),
+        "{out}"
+    );
+
+    let (out, _) = runs(&client, backfill("2026-10-17T12:00:00Z", false), &text()).await;
+    assert_eq!(
+        out,
+        "nothing to backfill: each of the 3 fire time(s) has a successful, queued or running \
+         run (--all runs them again)\n"
+    );
+
+    let cancel = RunsCommand::Cancel {
+        run_id: None,
+        backfill: Some(id.clone()),
+    };
+    let (out, _) = runs(&client, cancel.clone(), &text()).await;
+    assert_eq!(
+        out,
+        format!("cancelling backfill {id}: 3 run(s) (0 running task(s) being stopped)\n")
+    );
+    let error = run_runs(&cancel, &client, &text(), &mut Vec::new(), &mut Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!("rejected: backfill `{id}` has no queued or running run left")
+    );
+}
+
+#[tokio::test]
+async fn bad_arguments_are_errors() {
     let client = world(false).await;
     let cases = [
         (
@@ -413,17 +499,20 @@ async fn later_features_and_bad_arguments_are_errors() {
                 run_id: None,
                 backfill: Some("b1".to_owned()),
             },
-            "`schedr runs cancel --backfill` isn't implemented yet (milestone M4)",
+            "`b1` isn't a backfill ID",
         ),
         (
             RunsCommand::Backfill {
                 dag: "sync".to_owned(),
                 from: "2026-10-01".to_owned(),
-                to: None,
+                to: Some("soon".to_owned()),
                 all: false,
                 params: vec![],
+                params_json: None,
+                dry_run: false,
             },
-            "`schedr runs backfill` isn't implemented yet (milestone M4)",
+            "`--to soon` isn't a date or a date-time \
+             (e.g. 2026-10-15T03:00, 2026-10-15T03:00+02:00, 2026-10-15)",
         ),
         (
             RunsCommand::List {

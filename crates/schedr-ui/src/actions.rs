@@ -1,6 +1,7 @@
 //! Actions (M3.4): pause and unpause a DAG, trigger a run, cancel a run or a task, retry a
-//! task, drain and resume a worker. Each is a POST from a confirmation dialog of our own (35A),
-//! sent on as the API's command; the answer is a fragment showing the command, which reads it
+//! task, drain and resume a worker, create and cancel a backfill (M4.12b). Each is a POST
+//! from a confirmation dialog of our own (35A), sent on as the API's command; the answer is a
+//! fragment showing the command, which reads it
 //! again every second until the master has decided (applied, or rejected with its reason).
 //!
 //! A POST is taken only from the UI's own pages (24A): `Sec-Fetch-Site: same-origin` (or
@@ -15,8 +16,8 @@ use axum::Form;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use schedr_api::views::{CommandView, TriggerRequest};
-use schedr_client::times::parse_for;
+use schedr_api::views::{BackfillRequest, CommandView, TriggerRequest};
+use schedr_client::times::{parse_for, parse_time_flag};
 use schedr_client::{Client, ClientError, TaskAction, Transport, WorkerAction, path_segment};
 use serde::Deserialize;
 
@@ -41,6 +42,8 @@ struct CommandFragment {
     poll: String,
     /// A link the result points to (a triggered run's page), with its label.
     link: Option<(String, String)>,
+    /// What the result says, after the link (a backfill's counts); empty for most.
+    note: String,
     poll_ms: u32,
     /// The command's ID, whatever its state; empty when it couldn't be sent.
     command_id: String,
@@ -196,6 +199,91 @@ pub async fn trigger<T: Transport>(
         Action::Trigger {
             dag_id: &dag_id,
             request: &request,
+        },
+    )
+    .await
+}
+
+/// `POST /d/<deployment>/dags/<dag>/backfill` (decisions 363, 403): the form's `from` and `to`
+/// (`--for`'s forms; `to` empty: now), `all` and `dry_run` (checked boxes) and its run
+/// parameters, read as the trigger's are.
+pub async fn backfill<T: Transport>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, dag_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Form(form): Form<Vec<(String, String)>>,
+) -> Response {
+    let what = format!("Backfill {dag_id}");
+    let field = |name: &str| {
+        form.iter()
+            .find(|(k, _)| k == name)
+            .map_or("", |(_, v)| v.trim())
+    };
+    let from = match parse_time_flag("--from", field("from")) {
+        Ok(at) => at.at,
+        Err(_) if field("from").is_empty() => {
+            return not_sent(what, "give the range's first moment (From)");
+        }
+        Err(message) => return not_sent(what, &message),
+    };
+    let to = match field("to") {
+        "" => None,
+        text => match parse_time_flag("--to", text) {
+            Ok(at) => Some(at.at),
+            Err(message) => return not_sent(what, &message),
+        },
+    };
+    let mut params = None;
+    if form.iter().any(|(k, _)| k == "params")
+        && let Some(at) = ui.deployments.iter().find(|d| d.name == deployment)
+    {
+        let fields = match at.client.dag(&dag_id).await {
+            Ok(dag) => dag.params,
+            Err(error) => return not_sent(what, &error.to_string()),
+        };
+        params = match params_form::values(&fields, &form) {
+            Ok(values) => values,
+            Err(message) => return not_sent(what, &message),
+        };
+    }
+    let request = BackfillRequest {
+        from,
+        to,
+        all: !field("all").is_empty(),
+        params,
+        dry_run: !field("dry_run").is_empty(),
+    };
+    let what = if request.dry_run {
+        format!("Count a backfill of {dag_id}")
+    } else {
+        what
+    };
+    act(
+        &ui,
+        &headers,
+        &deployment,
+        what,
+        Action::Backfill {
+            dag_id: &dag_id,
+            request: &request,
+        },
+    )
+    .await
+}
+
+/// `POST /d/<deployment>/backfills/<backfill>/cancel` (decision 402).
+pub async fn cancel_backfill<T: Transport>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, backfill_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    act(
+        &ui,
+        &headers,
+        &deployment,
+        format!("Cancel backfill {backfill_id}"),
+        Action::CancelBackfill {
+            backfill_id: &backfill_id,
         },
     )
     .await
@@ -391,6 +479,7 @@ pub async fn command<T: Transport>(
             status: "pending".to_owned(),
             reason: format!("can't read it now ({error}); trying again"),
             link: None,
+            note: String::new(),
             poll_ms: POLL_MS,
             command_id,
         }),
@@ -455,6 +544,7 @@ async fn act<T: Transport>(
             reason: error.to_string(),
             poll: String::new(),
             link: None,
+            note: String::new(),
             poll_ms: POLL_MS,
             command_id: String::new(),
         }),
@@ -481,6 +571,13 @@ enum Action<'a> {
     },
     CancelRun {
         run_id: &'a str,
+    },
+    Backfill {
+        dag_id: &'a str,
+        request: &'a BackfillRequest,
+    },
+    CancelBackfill {
+        backfill_id: &'a str,
     },
     Task {
         run_id: &'a str,
@@ -510,6 +607,8 @@ impl Action<'_> {
             Self::RestartTrigger { dag_id } => client.restart_trigger(dag_id).await,
             Self::SkipTriggerRun { dag_id } => client.skip_trigger_run(dag_id).await,
             Self::CancelRun { run_id } => client.cancel(run_id).await,
+            Self::Backfill { dag_id, request } => client.backfill(dag_id, request).await,
+            Self::CancelBackfill { backfill_id } => client.cancel_backfill(backfill_id).await,
             Self::Task {
                 run_id,
                 task,
@@ -549,15 +648,37 @@ fn shown<T>(
                 format!("run {run_id}"),
             )
         });
+    let note = command
+        .result
+        .as_ref()
+        .filter(|_| command.status == "applied" && command.kind == "backfill")
+        .map(backfill_note)
+        .unwrap_or_default();
     definite(fragment(&CommandFragment {
         what,
         status: command.status.clone(),
         reason: command.reason.clone().unwrap_or_default(),
         poll,
         link,
+        note,
         poll_ms: POLL_MS,
         command_id: command.command_id.clone(),
     }))
+}
+
+/// A backfill's result as people read it: `4 fire time(s), 1 skipped, 3 run(s) created`.
+fn backfill_note(result: &serde_json::Value) -> String {
+    let count = |key: &str| result[key].as_u64().unwrap_or(0);
+    let (times, created, skipped) = (count("fire_times"), count("created"), count("skipped"));
+    if result["dry_run"] == true {
+        format!("{times} fire time(s), {skipped} skipped: would create {created} run(s)")
+    } else if created == 0 {
+        format!(
+            "nothing to do: each of the {times} fire time(s) has a successful, queued or running run"
+        )
+    } else {
+        format!("{times} fire time(s), {skipped} skipped, {created} run(s) created")
+    }
 }
 
 /// Where a pending command's fragment reads it again.
@@ -579,6 +700,7 @@ fn not_sent(what: String, reason: &str) -> Response {
         reason: reason.to_owned(),
         poll: String::new(),
         link: None,
+        note: String::new(),
         poll_ms: POLL_MS,
         command_id: String::new(),
     })
@@ -592,6 +714,7 @@ fn failed(what: String, reason: &str) -> Response {
         reason: reason.to_owned(),
         poll: String::new(),
         link: None,
+        note: String::new(),
         poll_ms: POLL_MS,
         command_id: String::new(),
     }))

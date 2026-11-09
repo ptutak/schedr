@@ -154,6 +154,173 @@
         ],
         "type": "object"
       },
+      "BackfillList": {
+        "description": "A DAG's backfills, newest first.",
+        "properties": {
+          "backfills": {
+            "description": "The backfills.",
+            "items": {
+              "$ref": "#/components/schemas/BackfillView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "backfills"
+        ],
+        "type": "object"
+      },
+      "BackfillRequest": {
+        "additionalProperties": false,
+        "description": "A backfill to create (`schedr runs backfill`, decisions 363, 364, 400-404): a run per fire\ntime of `[from, to]` with no successful, queued or running run, oldest first.",
+        "properties": {
+          "all": {
+            "description": "A run for every fire time of the range, not only the missing ones (`--all`).",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "description": "Count only: the command's result says what would be created, and nothing is.",
+            "type": "boolean"
+          },
+          "from": {
+            "description": "The range's first moment (inclusive).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "params": {
+            "description": "Values for every run's parameters, as JSON, over the DAG's defaults; checked once.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "to": {
+            "description": "Its last moment (inclusive); now if not given, and a later one ends at now.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "from"
+        ],
+        "type": "object"
+      },
+      "BackfillRunCounts": {
+        "description": "A backfill's runs by state.",
+        "properties": {
+          "cancelled": {
+            "description": "Cancelled.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "description": "Failed.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queued": {
+            "description": "Waiting for `max_active_runs`, behind the other kinds of runs.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running": {
+            "description": "Running.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "success": {
+            "description": "Succeeded.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "running",
+          "success",
+          "failed",
+          "cancelled"
+        ],
+        "type": "object"
+      },
+      "BackfillView": {
+        "description": "A backfill (decision 403).",
+        "properties": {
+          "all": {
+            "description": "Whether every fire time got a run (`--all`).",
+            "type": "boolean"
+          },
+          "backfill_id": {
+            "description": "Its ID (the command's that created it).",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_runs": {
+            "description": "How many of them got a run; the others were skipped.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dag_id": {
+            "description": "Its DAG.",
+            "type": "string"
+          },
+          "fire_times": {
+            "description": "The fire times of its range.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from": {
+            "description": "The range's first moment.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "requested_by": {
+            "description": "Who asked for it.",
+            "type": "string"
+          },
+          "runs": {
+            "$ref": "#/components/schemas/BackfillRunCounts",
+            "description": "Its runs by state."
+          },
+          "to": {
+            "description": "Its last moment (now, when it was asked for one later).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "unfinished": {
+            "description": "Whether some of its runs are queued or running: what cancelling it would cancel.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "backfill_id",
+          "dag_id",
+          "from",
+          "to",
+          "all",
+          "requested_by",
+          "created_at",
+          "fire_times",
+          "created_runs",
+          "runs",
+          "unfinished"
+        ],
+        "type": "object"
+      },
       "CheckConnectionsRequest": {
         "additionalProperties": false,
         "description": "Connections to check on a worker (`schedr connections check`).",
@@ -1154,6 +1321,33 @@
         ],
         "type": "object"
       },
+      "RunBackfillView": {
+        "description": "A backfill run's backfill and its place among the backfill's runs, oldest first.",
+        "properties": {
+          "backfill_id": {
+            "description": "The backfill's ID.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Its place, from 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "description": "How many runs the backfill has.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backfill_id",
+          "index",
+          "total"
+        ],
+        "type": "object"
+      },
       "RunDetail": {
         "description": "A run with its tasks.",
         "properties": {
@@ -1213,6 +1407,17 @@
       "RunView": {
         "description": "A run.",
         "properties": {
+          "backfill": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunBackfillView",
+                "description": "Its backfill and its place in it, for a `backfill` run (`backfill 3/31`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "dag_id": {
             "description": "The DAG.",
             "type": "string"
@@ -1237,7 +1442,7 @@
             ]
           },
           "parent_run_id": {
-            "description": "The run whose `TriggerDagOperator` started it, for a `chained` run.",
+            "description": "The run whose `TriggerDagOperator` started it, for a `chained` run, or whose success\nstarted it, for a run of a `RunOf` trigger.",
             "type": [
               "string",
               "null"
@@ -1937,6 +2142,107 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/backfills/{backfill_id}": {
+      "get": {
+        "operationId": "get_backfill",
+        "parameters": [
+          {
+            "description": "The backfill's ID",
+            "in": "path",
+            "name": "backfill_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackfillView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A backfill, with its runs by state (`schedr runs backfill` prints its ID).",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/backfills/{backfill_id}/cancel": {
+      "post": {
+        "operationId": "cancel_backfill",
+        "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The backfill's ID",
+            "in": "path",
+            "name": "backfill_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel a backfill (`schedr runs cancel --backfill`, decision 402): its queued and running\nruns; the finished ones stay as they are. Applied by the master; poll the command.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/api/v1/changes": {
       "get": {
         "operationId": "events",
@@ -2188,6 +2494,106 @@
         "summary": "One DAG.",
         "tags": [
           "dags"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/backfills": {
+      "get": {
+        "operationId": "list_dag_backfills",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackfillList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A DAG's backfills, newest first (the 50 newest), with their runs by state (decision 403).",
+        "tags": [
+          "runs"
+        ]
+      },
+      "post": {
+        "operationId": "create_backfill",
+        "parameters": [
+          {
+            "description": "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackfillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a backfill (`schedr runs backfill`, decisions 363, 364, 400-404): a run per fire time\nof the range with no successful, queued or running run (every one with `all`), oldest first,\nbehind the other kinds of runs. Applied by the master; the command's result has the counts\nand the backfill's ID (its own).",
+        "tags": [
+          "runs"
         ]
       }
     },

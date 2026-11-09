@@ -279,3 +279,37 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
 - **Not chosen:** a chain check per creation path (incomplete: events close any loop); a
   run-flood guard (a hidden limit on queued runs, or a metric for long chains), which can come
   later if runaway loops are seen, without forbidding cycles.
+
+### <a id="D400"></a><a id="D401"></a><a id="D402"></a><a id="D403"></a><a id="D404"></a>2026-11-09: backfill's open points (decisions 400-404)
+
+- **Question:** before M4.12b, four points the archive's backfill design (Runs: manual runs,
+  backfill and pausing; decisions 363, 364) leaves open.
+- **Chosen (the user's, all as recommended):** 400, a fire time whose run is queued or running is
+  skipped too, not only a succeeded one (the archive counted only successes, so a day still going
+  would get a second run); 401, a backfill's runs start on a paused DAG, as manual runs do
+  (pausing switches the trigger off, decision 398); 402, `runs cancel --backfill` cancels its
+  queued and running runs, finished ones stay; 403, the run's label says `backfill 3/31` and the
+  DAG page lists its backfills with counts by state and a Cancel button.
+- **Not chosen:** 400, a second run behind one still going; 401, refused while paused, or created
+  and held until unpause; 402, only the queued ones; 403, the label only, progress through the API
+  and CLI.
+- **404 (the user's, asked which triggers):** any trigger with fire times: `Cron`, `Every`, and
+  `Once` too, though it gives one run ("no need to make an exception"). Not chosen: `Cron` only;
+  refusing `Once` in favour of `runs trigger --for`.
+
+### <a id="D405"></a>2026-11-09: the scheduler skips fire times another run covers (decision 405)
+
+- **Question:** Codex's review of M4.12b found a scheduled run and a backfill run for one fire
+  time: D400 keeps a backfill off a fire time that has a run, but the scheduler looked only at
+  earlier scheduled runs. An unpaused DAG's latest fire time backfilled before the pass reached
+  it got a second, scheduled run; a paused DAG with `catchup` backfilled, then unpaused, would
+  have run its backfilled days again.
+- **Chosen (the user's):** the scheduler creates no scheduled run for a fire time with a
+  successful, queued or running run of any kind, D400's rule the other way. Covered fire times
+  are left out before the free places are counted, so a catch-up isn't held up behind one; the
+  covered times are read only when a run is due. A covering run that fails later leaves its day
+  without a scheduled run (the scheduler has moved on): "the user will have to rerun manually
+  failed runs, the rule stays." A manual run for a fire time stands in for its scheduled run too.
+- **Not chosen:** a backfill leaving out the fire times the scheduler will still create (misses a
+  paused DAG unpaused later); only a successful run covering (a run still going would get a
+  second one beside it); both runs, documented.

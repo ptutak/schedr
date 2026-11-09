@@ -60,6 +60,11 @@ last run is for the last fire time at or before `end`. `end` need not be a fire 
 | `False` (the default) | Only the most recent fire time after the last scheduled run, from `start` up to now and not after `end`. A fire time that finds the DAG already at `max_active_runs` is missed. When a place frees, the fire time that is the most recent one then is created. |
 | `True` | Every such fire time, earliest first. One round creates at most 10 for a DAG; the rest wait for later rounds. `max_active_runs` still caps how many run at once, and the ones that do not fit wait. |
 
+The scheduler skips a fire time that already has a successful, queued or running run of
+any kind. With `catchup`, it continues to later fire times. If a covering run fails later,
+rerun that period by hand. [Backfill](#backfill) fills a past range on demand; `catchup`
+is the scheduler creating its own missed runs.
+
 `schedr dags test` is a manual run, so `start`, `end` and a `Once` in the future do not
 stop it. The rules for the run's window are below.
 
@@ -105,6 +110,33 @@ run still starts. A paused `Chained` DAG refuses operators until unpaused. For
 
 After unpause, `catchup` applies to the fire times that passed. With it off, only the
 latest one is created. With it on, the missed ones are created in order.
+
+## Backfill
+
+A backfill creates a `backfill` run for each fire time in a past range, each covering one
+schedule period. `--from` and `--to` are inclusive; `--to` defaults to now, and a later
+value ends at now. `start` and `end` do not limit the range. The trigger must have fire
+times: `Cron` (including its presets), `Every` or `Once`. `None`, `Chained()`, event
+triggers, `RunOf` and `EventNamed` have none, so a backfill is refused.
+
+By default, a fire time with a successful, queued or running run of any kind is skipped.
+`--all` creates a run for every fire time. Runs start oldest first, after the other kinds
+of runs, within `max_active_runs`. They start even when the DAG is paused; a held DAG
+refuses the backfill.
+
+```text
+$ schedr runs backfill report --from 2026-10-01T00:00:00Z --to 2026-10-03T00:00:00Z
+backfill 01900000-0000-7000-8000-000000000001 of report: 3 fire time(s), 1 skipped, 2 run(s) created
+```
+
+This example assumes a daily midnight schedule and one covered fire time. Use `--dry-run`
+to count without creating anything. Supply `-p key=value` (or `-p key:=json`) or
+`--params` with a JSON object for every run; the parameters are checked once before the
+runs are created. `[backfill] max_runs` limits the number of fire times in the range,
+including skipped ones, to 1000 by default. Split a bigger range.
+
+`schedr runs cancel --backfill <id>` cancels its queued and running runs; finished runs
+stay as they are.
 
 ## Daylight saving
 

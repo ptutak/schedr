@@ -89,6 +89,7 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         ended_at: None,
         late_failure: None,
         parent_run_id: None,
+        backfill: None,
     };
     let view = RunView::from(&run);
     assert_eq!(

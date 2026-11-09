@@ -28,12 +28,13 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, masked_lines};
 use crate::state::ApiState;
 use crate::views::{
-    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
-    DagList, DagView, DeploymentView, ErrorBody, EventList, EventView, ImportErrorList,
-    ImportErrorView, InstanceQuery, LimitView, LogChunk, LogQuery, MasterView, NodeView,
-    OutputView, ParamFieldView, PauseRequest, ProblemView, ResourceList, ResourceView, RunDetail,
-    RunList, RunView, RunsQuery, SensorList, SensorView, TaskView, TestConnectionRequest,
-    TriggerList, TriggerRequest, TriggerView, WorkerList, WorkerNodeView, WorkerView,
+    AllRunsQuery, AttemptList, BackfillList, BackfillRequest, BackfillView,
+    CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagView,
+    DeploymentView, ErrorBody, EventList, EventView, ImportErrorList, ImportErrorView,
+    InstanceQuery, LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView,
+    PauseRequest, ProblemView, ResourceList, ResourceView, RunDetail, RunList, RunView, RunsQuery,
+    SensorList, SensorView, TaskView, TestConnectionRequest, TriggerList, TriggerRequest,
+    TriggerView, WorkerList, WorkerNodeView, WorkerView,
 };
 
 #[cfg(test)]
@@ -415,15 +416,7 @@ pub async fn trigger_run(
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
     let request: TriggerRequest = optional_body(&body)?;
-    // Refused here: the command's storage would replace it (decision 114), and the master
-    // would see other values than those given.
-    if let Some(params) = &request.params
-        && schedr_model::params::nul_at(&serde_json::Value::Object(params.clone())).is_some()
-    {
-        return Err(ApiError::BadRequest(
-            "params: text containing NUL (\\u0000) can't be stored".to_owned(),
-        ));
-    }
+    refuse_nul(request.params.as_ref())?;
     let event = asked_event(&request)?;
     submit(
         &state,
@@ -437,6 +430,108 @@ pub async fn trigger_run(
         },
     )
     .await
+}
+
+/// Create a backfill (`schedr runs backfill`, decisions 363, 364, 400-404): a run per fire time
+/// of the range with no successful, queued or running run (every one with `all`), oldest first,
+/// behind the other kinds of runs. Applied by the master; the command's result has the counts
+/// and the backfill's ID (its own).
+#[utoipa::path(post, path = "/api/v1/dags/{dag_id}/backfills", tag = "runs",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("dag_id" = String, Path, description = "The DAG's ID")),
+    request_body(content = BackfillRequest),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn create_backfill(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+    body: Bytes,
+) -> Accepted {
+    let dag_id = parse_dag_id(&dag_id)?;
+    let request: BackfillRequest = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid body: {}", body_error(&e))))?;
+    refuse_nul(request.params.as_ref())?;
+    submit(
+        &state,
+        &user,
+        key,
+        Command::Backfill(schedr_model::commands::BackfillRequest {
+            dag_id,
+            from: request.from,
+            to: request.to,
+            all: request.all,
+            params: request.params,
+            dry_run: request.dry_run,
+        }),
+    )
+    .await
+}
+
+/// How many backfills a DAG's list shows: its newest.
+const DAG_BACKFILLS: u32 = 50;
+
+/// A DAG's backfills, newest first (the 50 newest), with their runs by state (decision 403).
+#[utoipa::path(get, path = "/api/v1/dags/{dag_id}/backfills", tag = "runs",
+    params(("dag_id" = String, Path, description = "The DAG's ID")),
+    responses((status = 200, body = BackfillList), (status = 404, body = ErrorBody)))]
+pub async fn list_dag_backfills(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+) -> ApiResult<BackfillList> {
+    let dag_id = parse_dag_id(&dag_id)?;
+    known_dag(&state, &dag_id).await?;
+    let backfills = state.db.dag_backfills(&dag_id, DAG_BACKFILLS).await?;
+    Ok(Json(BackfillList {
+        backfills: backfills.iter().map(BackfillView::from).collect(),
+    }))
+}
+
+/// A backfill, with its runs by state (`schedr runs backfill` prints its ID).
+#[utoipa::path(get, path = "/api/v1/backfills/{backfill_id}", tag = "runs",
+    params(("backfill_id" = String, Path, description = "The backfill's ID")),
+    responses((status = 200, body = BackfillView), (status = 400, body = ErrorBody),
+        (status = 404, body = ErrorBody)))]
+pub async fn get_backfill(
+    State(state): State<ApiState>,
+    Path(backfill_id): Path<String>,
+) -> ApiResult<BackfillView> {
+    let backfill_id = parse_uuid(&backfill_id, "backfill")?;
+    let backfill = state
+        .db
+        .backfill(&backfill_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no backfill `{backfill_id}`")))?;
+    Ok(Json(BackfillView::from(&backfill)))
+}
+
+/// Cancel a backfill (`schedr runs cancel --backfill`, decision 402): its queued and running
+/// runs; the finished ones stay as they are. Applied by the master; poll the command.
+#[utoipa::path(post, path = "/api/v1/backfills/{backfill_id}/cancel", tag = "runs",
+    params(("Idempotency-Key" = Option<String>, Header, description = "A key of the client's for this request: sent again with it, it is the command stored the first time (B140)"),
+        ("backfill_id" = String, Path, description = "The backfill's ID")),
+    responses((status = 202, body = CommandView), (status = 400, body = ErrorBody)))]
+pub async fn cancel_backfill(
+    State(state): State<ApiState>,
+    Path(backfill_id): Path<String>,
+    Extension(user): Extension<User>,
+    key: RequestKey,
+) -> Accepted {
+    let backfill_id = parse_uuid(&backfill_id, "backfill")?;
+    submit(&state, &user, key, Command::CancelBackfill { backfill_id }).await
+}
+
+/// Parameters with a NUL in some text, refused here: the command's storage would replace it
+/// (decision 114), and the master would see other values than those given.
+fn refuse_nul(params: Option<&serde_json::Map<String, serde_json::Value>>) -> Result<(), ApiError> {
+    if let Some(params) = params
+        && schedr_model::params::nul_at(&serde_json::Value::Object(params.clone())).is_some()
+    {
+        return Err(ApiError::BadRequest(
+            "params: text containing NUL (\\u0000) can't be stored".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// The event a manual run asks for; what can't be stored is refused here, as params are.

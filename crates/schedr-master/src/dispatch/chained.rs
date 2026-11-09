@@ -242,7 +242,8 @@ impl Dispatcher {
             Err(
                 error @ (SchedulerError::NeedsEvent(_)
                 | SchedulerError::NoEventTrigger(_)
-                | SchedulerError::NotChained { .. }),
+                | SchedulerError::NotChained { .. }
+                | SchedulerError::Backfill { .. }),
             ) => Err((TARGET_REFUSED, "TargetRefused", error.to_string())),
         })
     }

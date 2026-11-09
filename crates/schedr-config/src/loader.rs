@@ -91,6 +91,9 @@ pub enum ConfigError {
     /// (the message names the table).
     #[error("{0}")]
     SecretStorage(String),
+    /// `[backfill] max_runs` is zero.
+    #[error("[backfill] max_runs must be at least 1")]
+    NoBackfillRuns,
     /// `[mapping] max_instances` is zero.
     #[error("[mapping] max_instances must be at least 1")]
     NoInstances,
@@ -207,6 +210,9 @@ pub fn load(
     }
     if config.mapping.max_instances == 0 {
         return Err(ConfigError::NoInstances);
+    }
+    if config.backfill.max_runs == 0 {
+        return Err(ConfigError::NoBackfillRuns);
     }
     check_not_zero(&config)?;
     check_secret_storage(&config.secret_storage)?;

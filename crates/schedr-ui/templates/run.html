@@ -22,7 +22,7 @@
 {% endif %}
 <dl class="facts">
   <dt>For</dt><dd>{{ planned_for }}</dd>
-  <dt>Kind</dt><dd>{{ run.kind }}</dd>
+  <dt>Kind</dt><dd>{{ kind }}</dd>
   <dt>Triggered</dt><dd>{{ triggered_at }} by {% if parent_href.is_empty() %}{{ run.triggered_by }}{% else %}<a class="mono" href="{{ parent_href }}">run {{ run.triggered_by }}</a>{% endif %}</dd>
   {% if !started_at.is_empty() %}<dt>Started</dt><dd>{{ started_at }}</dd>{% endif %}
   {% if !ended_at.is_empty() %}<dt>Ended</dt><dd>{{ ended_at }}</dd>{% endif %}

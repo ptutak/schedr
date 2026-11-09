@@ -1,0 +1,15 @@
+title = "A backfill skips fire times with a successful or unfinished run"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "runs"
+section = "Backfill"
+summary = '''
+By default a backfill creates a run only for a fire time with no successful, queued or running run
+for that `planned_for` (of any kind), so a day isn't run twice at once; `--all` creates one for
+every fire time.
+'''
+history = "JOURNAL.md#D400"
+step = "M4.12b"
+code = ["crates/schedr-db/src/backfills.rs::covered_times", "crates/schedr-master/src/scheduler/backfill.rs::backfill"]
+checked = 2026-11-09

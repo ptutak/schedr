@@ -79,6 +79,7 @@ async fn add_run(db: &Database, version: &str, planned_for: &str, state: RunStat
         triggered_at: ts(planned_for),
         triggered_by: "anna",
         parent_run_id: None,
+        backfill_id: None,
     })
     .await
     .unwrap()
@@ -174,6 +175,7 @@ async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
             triggered_at: ts("2026-10-16T03:00:00Z"),
             triggered_by: "anna",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()
@@ -232,6 +234,7 @@ async fn runs_triggered_together_are_paged_by_id_none_skipped() {
             triggered_at: ts(together),
             triggered_by: "scheduler",
             parent_run_id: None,
+            backfill_id: None,
         };
         created.push(db.insert_run(&run).await.unwrap().unwrap());
     }

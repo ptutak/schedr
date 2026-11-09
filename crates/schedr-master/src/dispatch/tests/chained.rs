@@ -445,6 +445,7 @@ async fn dags_may_start_each_other_in_a_cycle() {
             triggered_at: ts(NOW),
             triggered_by: "anna",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()
@@ -473,6 +474,7 @@ async fn dags_may_start_each_other_in_a_cycle() {
             triggered_at: ts(NOW),
             triggered_by: &parent,
             parent_run_id: Some(&parent),
+            backfill_id: None,
         })
         .await
         .unwrap()

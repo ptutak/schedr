@@ -134,6 +134,58 @@ async fn with_catchup_missed_fire_times_run_in_order() {
 }
 
 #[tokio::test]
+async fn a_fire_time_a_backfill_or_manual_run_covers_gets_no_scheduled_run() {
+    // Codex's case: the latest fire time backfilled (or run by hand) before the pass reaches
+    // it, with a place free: no second run of the same period.
+    let (scheduler, db) = scheduler_with(dag(&json!({"max_active_runs": 2}))).await;
+    db.set_paused(&sync(), false).await.unwrap();
+    let now = ts("2026-10-21T08:00:00Z");
+    scheduler
+        .trigger(&sync(), Some(ts("2026-10-21T03:00:00Z")), "anna", now)
+        .await
+        .unwrap();
+    assert_eq!(
+        planned(&scheduler.pass(now).await.unwrap()),
+        Vec::<String>::new()
+    );
+    // A failed one doesn't cover it.
+    execute(&db, "UPDATE runs SET state = 'failed'").await;
+    assert_eq!(
+        planned(&scheduler.pass(now).await.unwrap()),
+        ["2026-10-21T03:00:00Z"]
+    );
+}
+
+#[tokio::test]
+async fn with_catchup_covered_fire_times_are_passed_over_taking_no_place() {
+    // A paused DAG backfilled, then unpaused: catch-up runs only the days not run already,
+    // and one place (`max_active_runs=1`) isn't held up by the covered ones.
+    let (scheduler, db) = scheduler_with(dag(&json!({"trigger": {
+        "kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": true,
+        "start": "2026-10-01T00:00:00Z"
+    }})))
+    .await;
+    let now = ts("2026-10-04T08:00:00Z");
+    for day in ["2026-10-01T03:00:00Z", "2026-10-02T03:00:00Z"] {
+        scheduler
+            .trigger(&sync(), Some(ts(day)), "anna", now)
+            .await
+            .unwrap();
+        execute(&db, "UPDATE runs SET state = 'success'").await;
+    }
+    db.set_paused(&sync(), false).await.unwrap();
+    assert_eq!(
+        planned(&scheduler.pass(now).await.unwrap()),
+        ["2026-10-03T03:00:00Z"]
+    );
+    execute(&db, "UPDATE runs SET state = 'success'").await;
+    assert_eq!(
+        planned(&scheduler.pass(now).await.unwrap()),
+        ["2026-10-04T03:00:00Z"]
+    );
+}
+
+#[tokio::test]
 async fn manual_runs_of_a_paused_dag_run_and_wait_for_a_place() {
     let (scheduler, db) = scheduler_with(dag(&json!({}))).await;
     let now = ts("2026-10-21T08:00:00Z");

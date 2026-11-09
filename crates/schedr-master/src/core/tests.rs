@@ -2878,6 +2878,7 @@ async fn orders_succeeded(core: &MasterCore, planned_for: Timestamp, ended: Time
             triggered_at: planned_for,
             triggered_by: "anna",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()

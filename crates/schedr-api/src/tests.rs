@@ -73,6 +73,8 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
     assert_eq!(
         paths,
         [
+            "/api/v1/backfills/{backfill_id}",
+            "/api/v1/backfills/{backfill_id}/cancel",
             "/api/v1/changes",
             "/api/v1/commands/{command_id}",
             "/api/v1/connections",
@@ -80,6 +82,7 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
             "/api/v1/connections/{name}/test",
             "/api/v1/dags",
             "/api/v1/dags/{dag_id}",
+            "/api/v1/dags/{dag_id}/backfills",
             "/api/v1/dags/{dag_id}/pause",
             "/api/v1/dags/{dag_id}/runs",
             "/api/v1/dags/{dag_id}/sensors/{sensor}/switch-on",

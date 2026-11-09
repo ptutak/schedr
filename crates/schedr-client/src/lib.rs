@@ -10,10 +10,11 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptList, CheckConnectionsRequest, CommandList, CommandView, ConnectionList,
-    DagList, DagView, DeploymentView, EventList, ImportErrorList, LogChunk, NamedEventList,
-    NamedEventView, OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList,
-    SensorList, TestConnectionRequest, TriggerList, TriggerRequest, TriggerView, WorkerList,
+    AllRunsQuery, AttemptList, BackfillList, BackfillRequest, BackfillView,
+    CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagView,
+    DeploymentView, EventList, ImportErrorList, LogChunk, NamedEventList, NamedEventView,
+    OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList, SensorList,
+    TestConnectionRequest, TriggerList, TriggerRequest, TriggerView, WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -1148,6 +1149,67 @@ impl<T: Transport> Client<T> {
             Method::Post,
             format!("/api/v1/dags/{}/runs", path(dag)),
             Some(body),
+        )
+        .await
+    }
+
+    /// `POST /api/v1/dags/{dag}/backfills`: the command (`schedr runs backfill`).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn backfill(
+        &self,
+        dag: &str,
+        request: &BackfillRequest,
+    ) -> Result<CommandView, ClientError> {
+        let body = to_body(request)?;
+        self.call(
+            Method::Post,
+            format!("/api/v1/dags/{}/backfills", path(dag)),
+            Some(body),
+        )
+        .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/backfills`: its newest backfills.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn dag_backfills(&self, dag: &str) -> Result<BackfillList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/backfills", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/backfills/{backfill}`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn get_backfill(&self, backfill_id: &str) -> Result<BackfillView, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/backfills/{}", path(backfill_id)),
+            None,
+        )
+        .await
+    }
+
+    /// `POST /api/v1/backfills/{backfill}/cancel`: the command (`schedr runs cancel --backfill`).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn cancel_backfill(&self, backfill_id: &str) -> Result<CommandView, ClientError> {
+        self.call(
+            Method::Post,
+            format!("/api/v1/backfills/{}/cancel", path(backfill_id)),
+            None,
         )
         .await
     }

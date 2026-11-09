@@ -149,7 +149,7 @@ pub struct RunRow {
     pub run_id: String,
     /// Its DAG.
     pub dag_id: String,
-    /// `scheduled`, `manual`, ...
+    /// `scheduled`, `manual`, ...; a backfill's run with its place, `backfill 3/31`.
     pub kind: String,
     /// Its state (also its CSS class).
     pub state: String,
@@ -312,7 +312,7 @@ pub fn run_row<T>(page: &Page, deployment: &Deployment<T>, run: &RunView) -> Run
         dag_href: format!("{at}/dags/{}", path_segment(&run.dag_id)),
         run_id: run.run_id.clone(),
         dag_id: run.dag_id.clone(),
-        kind: run.kind.clone(),
+        kind: run.kind_label(),
         state: run.state.clone(),
         planned_for: page.time(&run.planned_for),
         triggered_at: page.time(&run.triggered_at),
@@ -587,6 +587,8 @@ struct RunPage {
     dag_href: String,
     runs_href: String,
     run: RunView,
+    /// Its kind as people read it ([`RunView::kind_label`]).
+    kind: String,
     planned_for: String,
     triggered_at: String,
     /// The page of the run that started it (a `chained` run); empty for another.
@@ -708,6 +710,7 @@ pub async fn run<T: Transport>(
                 .map(|t| page.time(&t))
                 .unwrap_or_default(),
             summary: summary(&detail.run.state, &whole),
+            kind: detail.run.kind_label(),
             late: late_of(&detail.run),
             run_href: run_href.clone(),
             code_hashes: detail.code_hashes,

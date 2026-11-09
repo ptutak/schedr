@@ -2,7 +2,8 @@
     will happen; Confirm posts the form with htmx and the command's fragment goes to the top of
     the page's results (#action-results). `fields`: the form's own fields, by kind: "" none,
     "pause" (also cancel its runs), "trigger" (the moment, shown in both zones as it is typed;
-    `base` is the pages' prefix; `extra`: the run parameters' inputs, rendered). `target` and
+    `base` is the pages' prefix; `extra`: the run parameters' inputs, rendered), "backfill"
+    (its range, all, dry run; `extra` as for "trigger"). `target` and
     `swap`: where the answer goes instead (a connection test's: its row's result cell). The dialog closes on its form's own answer only (a request
     from inside it, the moment's preview, bubbles up to the form too), and the preview swaps
     its own way (it would inherit the form's). The live parts around a dialog pass nothing on
@@ -22,6 +23,13 @@
       hx-get="{{ base }}/time" hx-trigger="input changed delay:300ms" hx-target="next .moment" hx-swap="innerHTML" hx-sync="this:replace"></label>
     <p class="moment dim">Now.</p>
     <p class="dim">A date-time with its offset (<code>2026-10-15T03:00:00+02:00</code>), one without (read as UTC), or a date (midnight UTC).</p>
+    {{ extra|safe }}
+    {% else if fields == "backfill" %}
+    <label class="field">From <input name="from" placeholder="2026-10-01" size="28" autocomplete="off" required></label>
+    <label class="field">To <input name="to" placeholder="now" size="28" autocomplete="off"></label>
+    <p class="dim">Both included, each a date-time with its offset, one without (read as UTC), or a date (midnight UTC); a range ending later than now ends now.</p>
+    <label class="check"><input type="checkbox" name="all"> Every fire time, also those with a successful, queued or running run</label>
+    <label class="check"><input type="checkbox" name="dry_run"> Only count them: create nothing</label>
     {{ extra|safe }}
     {% endif %}
     <div class="buttons">

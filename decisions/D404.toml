@@ -1,0 +1,15 @@
+title = "A backfill works on any trigger with fire times"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "runs"
+section = "Backfill"
+summary = '''
+A backfill takes a DAG whose trigger has fire times: `Cron` (its presets included), `Every` and
+`Once` (a single run). A DAG with `trigger=None`, `Chained()`, an event trigger, `RunOf` or
+`EventNamed` has none, and a backfill of it is refused.
+'''
+history = "JOURNAL.md#D404"
+step = "M4.12b"
+code = ["crates/schedr-master/src/scheduler/backfill.rs::backfill"]
+checked = 2026-11-09

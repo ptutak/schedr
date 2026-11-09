@@ -87,6 +87,8 @@ pub struct Settings {
     pub max_message_size: usize,
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub max_instances: usize,
+    /// The most fire times a backfill's range may have (`[backfill] max_runs`).
+    pub backfill_max_runs: u32,
     /// The most records of one kind, and characters of each text, kept of what a worker
     /// reports (wait step hosts, warnings; B183).
     pub worker_report: ReportLimits,
@@ -157,6 +159,7 @@ impl Default for Settings {
             quiet: QuietSettings::default(),
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             max_instances: crate::execution::DEFAULT_MAX_INSTANCES,
+            backfill_max_runs: crate::scheduler::backfill::DEFAULT_MAX_RUNS,
             worker_report: ReportLimits::default(),
         }
     }
@@ -489,7 +492,8 @@ impl MasterCore {
             discovery,
             dispatcher,
             scheduler,
-            commander: Commander::new(db.clone()),
+            commander: Commander::new(db.clone())
+                .with_backfill_max_runs(settings.backfill_max_runs),
             connections: BTreeMap::new(),
             arrivals,
             metrics: MasterMetrics::default(),

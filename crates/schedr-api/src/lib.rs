@@ -49,6 +49,10 @@ pub use state::ApiState;
         routes::switch_on_trigger,
         routes::list_runs,
         routes::trigger_run,
+        routes::create_backfill,
+        routes::list_dag_backfills,
+        routes::get_backfill,
+        routes::cancel_backfill,
         routes::list_all_runs,
         routes::get_run,
         routes::get_run_dag,
@@ -125,6 +129,22 @@ pub fn openapi_json() -> serde_json::Value {
     serde_json::to_value(ApiDoc::openapi()).expect("the OpenAPI description serializes")
 }
 
+/// The routes cancelling runs and creating backfills (`schedr runs cancel`, `schedr runs
+/// backfill`).
+fn run_control_routes() -> Router<ApiState> {
+    Router::new()
+        .route("/api/v1/runs/{run_id}/cancel", post(routes::cancel_run))
+        .route(
+            "/api/v1/dags/{dag_id}/backfills",
+            get(routes::list_dag_backfills).post(routes::create_backfill),
+        )
+        .route("/api/v1/backfills/{backfill_id}", get(routes::get_backfill))
+        .route(
+            "/api/v1/backfills/{backfill_id}/cancel",
+            post(routes::cancel_backfill),
+        )
+}
+
 /// The routes of `schedr triggers`.
 fn trigger_routes() -> Router<ApiState> {
     Router::new()
@@ -182,7 +202,6 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/runs/{run_id}/tasks/{task_id}/output",
             get(routes::get_output),
         )
-        .route("/api/v1/runs/{run_id}/cancel", post(routes::cancel_run))
         .route(
             "/api/v1/runs/{run_id}/resources",
             get(routes::list_run_resources),
@@ -192,6 +211,7 @@ pub fn router(state: ApiState) -> Router {
             get(routes::get_run_resource),
         )
         .merge(trigger_routes())
+        .merge(run_control_routes())
         .route(
             "/api/v1/sensors/switched-off",
             get(routes::list_switched_off_sensors),

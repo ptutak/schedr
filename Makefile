@@ -131,8 +131,9 @@ test: test-rust test-python  ## Run all unit tests
 test-integration: ## Run integration tests (real processes, the binary; Postgres, Vault, MySQL, MariaDB, Mongo and an SSH server in containers)
 	@set -e; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)' --no-run; \
-	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6)"; \
-	sync; \
+	: "the build's writes reach the disk before the tests start, or Postgres's fsyncs wait behind them (B6);"; \
+	: "this filesystem only (the build's and the containers' disk): a plain sync waits on every mount, /mnt/c too"; \
+	sync -f .; \
 	name=schedr-test-pg-$$$$; vault=schedr-test-vault-$$$$; \
 	mysql=schedr-test-mysql-$$$$; mariadb=schedr-test-mariadb-$$$$; \
 	mongo=schedr-test-mongo-$$$$; sshd=schedr-test-ssh-$$$$; \
@@ -357,7 +358,7 @@ STRESS ?=
 stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<filter>)
 	@set -e; \
 	cargo nextest run -p schedr --test stress --no-run; \
-	sync; \
+	sync -f .; \
 	net=schedr-stress-$$$$; pg=schedr-stress-pg-$$$$; bouncer=schedr-stress-bouncer-$$$$; \
 	$(CONTAINER) network create $$net >/dev/null; \
 	trap '$(CONTAINER) rm -f '$$pg' '$$bouncer' >/dev/null; $(CONTAINER) network rm '$$net' >/dev/null' EXIT; \

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use jiff::Timestamp;
 use schedr_config::masked::mask_text;
+use schedr_db::backfills::BackfillRecord;
 use schedr_db::commands::CommandRecord;
 use schedr_db::dags::StoredDag;
 use schedr_db::reads::{AttemptRecord, InstanceRecord, RunRecord};
@@ -217,9 +218,36 @@ pub struct RunView {
     /// A `success` that learnt of a failure after its end, shown yellow (decision 309): why,
     /// `late_cleanup_failed` for now.
     pub late_failure: Option<String>,
-    /// The run whose `TriggerDagOperator` started it, for a `chained` run.
+    /// The run whose `TriggerDagOperator` started it, for a `chained` run, or whose success
+    /// started it, for a run of a `RunOf` trigger.
     #[serde(default)]
     pub parent_run_id: Option<String>,
+    /// Its backfill and its place in it, for a `backfill` run (`backfill 3/31`).
+    #[serde(default)]
+    pub backfill: Option<RunBackfillView>,
+}
+
+/// A backfill run's backfill and its place among the backfill's runs, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RunBackfillView {
+    /// The backfill's ID.
+    pub backfill_id: String,
+    /// Its place, from 1.
+    pub index: u32,
+    /// How many runs the backfill has.
+    pub total: u32,
+}
+
+impl RunView {
+    /// Its kind as people read it: a backfill's run with its place among the backfill's runs,
+    /// oldest first (`backfill 3/31`, decision 403).
+    #[must_use]
+    pub fn kind_label(&self) -> String {
+        match &self.backfill {
+            Some(place) => format!("{} {}/{}", self.kind, place.index, place.total),
+            None => self.kind.clone(),
+        }
+    }
 }
 
 impl From<&RunRecord> for RunView {
@@ -237,6 +265,11 @@ impl From<&RunRecord> for RunView {
             ended_at: run.ended_at,
             late_failure: run.late_failure.clone(),
             parent_run_id: run.parent_run_id.clone(),
+            backfill: run.backfill.as_ref().map(|b| RunBackfillView {
+                backfill_id: b.id.clone(),
+                index: b.index,
+                total: b.total,
+            }),
         }
     }
 }
@@ -613,6 +646,106 @@ pub struct TriggerRequest {
     /// And when it happened; the run's moment otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_at: Option<Timestamp>,
+}
+
+/// A backfill to create (`schedr runs backfill`, decisions 363, 364, 400-404): a run per fire
+/// time of `[from, to]` with no successful, queued or running run, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackfillRequest {
+    /// The range's first moment (inclusive).
+    pub from: Timestamp,
+    /// Its last moment (inclusive); now if not given, and a later one ends at now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Timestamp>,
+    /// A run for every fire time of the range, not only the missing ones (`--all`).
+    #[serde(default)]
+    pub all: bool,
+    /// Values for every run's parameters, as JSON, over the DAG's defaults; checked once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Count only: the command's result says what would be created, and nothing is.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// A backfill's runs by state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BackfillRunCounts {
+    /// Waiting for `max_active_runs`, behind the other kinds of runs.
+    pub queued: u32,
+    /// Running.
+    pub running: u32,
+    /// Succeeded.
+    pub success: u32,
+    /// Failed.
+    pub failed: u32,
+    /// Cancelled.
+    pub cancelled: u32,
+}
+
+/// A backfill (decision 403).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BackfillView {
+    /// Its ID (the command's that created it).
+    pub backfill_id: String,
+    /// Its DAG.
+    pub dag_id: String,
+    /// The range's first moment.
+    pub from: Timestamp,
+    /// Its last moment (now, when it was asked for one later).
+    pub to: Timestamp,
+    /// Whether every fire time got a run (`--all`).
+    pub all: bool,
+    /// Who asked for it.
+    pub requested_by: String,
+    /// When.
+    pub created_at: Timestamp,
+    /// The fire times of its range.
+    pub fire_times: u32,
+    /// How many of them got a run; the others were skipped.
+    pub created_runs: u32,
+    /// Its runs by state.
+    pub runs: BackfillRunCounts,
+    /// Whether some of its runs are queued or running: what cancelling it would cancel.
+    pub unfinished: bool,
+}
+
+impl From<&BackfillRecord> for BackfillView {
+    fn from(backfill: &BackfillRecord) -> Self {
+        let mut runs = BackfillRunCounts::default();
+        for (state, count) in &backfill.runs {
+            let slot = match state {
+                RunState::Queued => &mut runs.queued,
+                RunState::Running => &mut runs.running,
+                RunState::Success => &mut runs.success,
+                RunState::Failed => &mut runs.failed,
+                RunState::Cancelled => &mut runs.cancelled,
+            };
+            *slot += count;
+        }
+        Self {
+            backfill_id: backfill.id.clone(),
+            dag_id: backfill.dag_id.to_string(),
+            from: backfill.range_from,
+            to: backfill.range_to,
+            all: backfill.all_fire_times,
+            requested_by: backfill.requested_by.clone(),
+            created_at: backfill.created_at,
+            fire_times: backfill.fire_times,
+            created_runs: backfill.created_runs,
+            runs,
+            unfinished: backfill.unfinished(),
+        }
+    }
+}
+
+/// A DAG's backfills, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BackfillList {
+    /// The backfills.
+    pub backfills: Vec<BackfillView>,
 }
 
 /// A DAG's trigger.

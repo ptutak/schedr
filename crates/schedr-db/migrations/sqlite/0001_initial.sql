@@ -216,6 +216,23 @@ CREATE TABLE dag_versions (
     UNIQUE (dag_id, parse_result_id)
 );
 
+-- A backfill (decisions 363, 364, 400-404): one run per fire time of its range missing a
+-- successful, queued or running run (every fire time with `all_fire_times`), its runs created
+-- together with it. Its ID is the command's that asked for it, so a round redone finds it.
+CREATE TABLE backfills (
+    id             TEXT PRIMARY KEY,
+    dag_id         TEXT NOT NULL REFERENCES dags (dag_id),
+    range_from     TEXT NOT NULL,
+    range_to       TEXT NOT NULL,
+    all_fire_times INTEGER NOT NULL CHECK (all_fire_times IN (0, 1)),
+    requested_by   TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    -- How many fire times the range has, and of them how many got a run.
+    fire_times     INTEGER NOT NULL,
+    created_runs   INTEGER NOT NULL
+);
+CREATE INDEX backfills_by_dag ON backfills (dag_id, created_at);
+
 CREATE TABLE runs (
     id             TEXT PRIMARY KEY,
     dag_id         TEXT NOT NULL REFERENCES dags (dag_id),
@@ -227,7 +244,7 @@ CREATE TABLE runs (
     triggered_at   TEXT NOT NULL,
     triggered_by   TEXT NOT NULL,
     parent_run_id  TEXT REFERENCES runs (id),
-    backfill_id    TEXT,
+    backfill_id    TEXT REFERENCES backfills (id),
     params         TEXT NOT NULL DEFAULT '{}',
     started_at     TEXT,
     ended_at       TEXT,
@@ -245,6 +262,7 @@ CREATE TABLE runs (
 -- A master that crashes after creating a scheduled run can't create it twice.
 CREATE UNIQUE INDEX runs_scheduled_once ON runs (dag_id, planned_for) WHERE kind = 'scheduled';
 CREATE INDEX runs_by_dag ON runs (dag_id, planned_for);
+CREATE INDEX runs_by_backfill ON runs (backfill_id, planned_for) WHERE backfill_id IS NOT NULL;
 -- A `wait_for` of a run: the first to end after it started (decision 353).
 CREATE INDEX runs_ended ON runs (dag_id, ended_at) WHERE ended_at IS NOT NULL;
 CREATE INDEX runs_unfinished ON runs (state) WHERE state IN ('queued', 'running');

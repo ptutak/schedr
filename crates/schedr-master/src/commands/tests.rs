@@ -8,6 +8,8 @@ use sqlx::AssertSqlSafe;
 use super::*;
 use crate::dispatch::DEFAULT_CANCEL_GRACE;
 
+mod backfill;
+
 fn ts(text: &str) -> Timestamp {
     text.parse().unwrap()
 }
@@ -1057,6 +1059,7 @@ async fn an_item_of_a_batch_run_again_is_a_batch_of_it_alone() {
         params: &schedr_db::runs::NO_PARAMS,
         event: None,
         parent_run_id: None,
+        backfill_id: None,
     };
     let item = schedr_model::RunEvent {
         key: "a".to_owned(),

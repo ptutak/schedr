@@ -84,6 +84,7 @@ async fn with_run(dag: Dag) -> (Dispatcher, Database, String) {
             triggered_at: ts(NOW),
             triggered_by: "scheduler",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()
@@ -2427,6 +2428,7 @@ async fn another_run(db: &Database) -> String {
         triggered_at: ts(NOW),
         triggered_by: "scheduler",
         parent_run_id: None,
+        backfill_id: None,
     })
     .await
     .unwrap()
@@ -3417,6 +3419,7 @@ async fn orders_run(
             triggered_at: ts(NOW),
             triggered_by: "anna",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()

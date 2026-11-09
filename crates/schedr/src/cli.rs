@@ -364,18 +364,24 @@ pub enum RunsCommand {
     Backfill {
         /// The DAG's ID.
         dag: String,
-        /// The first fire time (inclusive; UTC without an offset).
+        /// The range's first moment (inclusive; UTC without an offset).
         #[arg(long, value_name = "TIME")]
         from: String,
-        /// The last fire time (inclusive); default: now.
+        /// Its last moment (inclusive); default: now, and a later one ends at now.
         #[arg(long, value_name = "TIME")]
         to: Option<String>,
-        /// Also fire times that already have a successful run.
+        /// A run for every fire time, also those with a successful, queued or running run.
         #[arg(long)]
         all: bool,
-        /// A run parameter: `key=value` or `key:=json`.
+        /// A run parameter, for every run: `key=value` or `key:=json`.
         #[arg(short = 'p', long = "param", value_name = "FIELD")]
         params: Vec<String>,
+        /// All run parameters as one JSON object.
+        #[arg(long = "params", value_name = "JSON", conflicts_with = "params")]
+        params_json: Option<String>,
+        /// Only count the fire times and the runs it would create.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

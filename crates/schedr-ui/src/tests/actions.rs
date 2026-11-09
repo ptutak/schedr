@@ -273,23 +273,27 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
     assert_eq!(
         texts(&html, ".actions > button.action"),
-        ["Trigger", "Pause"]
+        ["Trigger", "Backfill", "Pause"]
     );
     // Inside the live part, so the buttons follow the DAG's state; the part passes nothing on
     // (its `hx-select` would empty the dialogs' answers).
     assert_eq!(
         texts(&html, "#live .actions > button.action"),
-        ["Trigger", "Pause"]
+        ["Trigger", "Backfill", "Pause"]
     );
     assert_eq!(attrs(&html, "#live", "hx-disinherit"), ["*"]);
     assert_eq!(
         attrs(&html, ".actions dialog form", "hx-post"),
-        ["/d/etl/dags/sync/trigger", "/d/etl/dags/sync/pause"]
+        [
+            "/d/etl/dags/sync/trigger",
+            "/d/etl/dags/sync/backfill",
+            "/d/etl/dags/sync/pause"
+        ]
     );
     // The results go to the top of the page's list; the trigger's moment is previewed.
     assert_eq!(
         attrs(&html, ".actions dialog form", "hx-target"),
-        ["#action-results"; 2]
+        ["#action-results"; 3]
     );
     assert_eq!(texts(&html, "#action-results").len(), 1);
     assert_eq!(attrs(&html, "dialog input[name=for]", "hx-get"), ["/time"]);
@@ -315,11 +319,11 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
     // One submit at a time (a double click would trigger twice).
     assert_eq!(
         attrs(&html, ".actions dialog form", "hx-sync"),
-        ["this:drop"; 2]
+        ["this:drop"; 3]
     );
     assert_eq!(
         attrs(&html, ".actions dialog form", "hx-disabled-elt"),
-        ["find button[type=submit]"; 2]
+        ["find button[type=submit]"; 3]
     );
     // Its live part waits while a dialog is open.
     assert_eq!(
@@ -335,13 +339,14 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
     assert_eq!(
         texts(&html, ".actions > button.action"),
-        ["Trigger", "Unpause"]
+        ["Trigger", "Backfill", "Unpause"]
     );
 }
 
 #[tokio::test]
-async fn a_dag_without_a_trigger_has_nothing_to_pause() {
-    let mut manual = etl();
+async fn a_dag_without_a_trigger_has_nothing_to_pause_nor_to_backfill() {
+    // Its backfills from before its trigger changed are still listed, to be cancelled.
+    let mut manual = with_backfill();
     let mut sync = dag("sync", false);
     sync["trigger"] = json!({"kind": "none"});
     manual
@@ -360,8 +365,123 @@ async fn a_dag_without_a_trigger_has_nothing_to_pause() {
     assert_eq!(
         attrs(&html, ".actions dialog form", "hx-post"),
         ["/d/etl/dags/sync/trigger"],
-        "no pause dialog"
+        "no pause dialog, no backfill one"
     );
+    assert_eq!(
+        attrs(&html, "table.backfills dialog form", "hx-post"),
+        [format!("/d/etl/backfills/{BACKFILL}/cancel")]
+    );
+}
+
+const BACKFILL: &str = "01a1c0a0-0000-7000-8000-000000000001";
+
+/// DAG `sync` with backfill [`BACKFILL`] half done and its last run queued.
+fn with_backfill() -> Scripted {
+    let mut etl = etl();
+    let id = BACKFILL;
+    etl.answers.insert(
+        "/api/v1/dags/sync/backfills".to_owned(),
+        (
+            200,
+            json!({"backfills": [{
+                "backfill_id": id, "dag_id": "sync", "from": "2026-10-01T00:00:00Z",
+                "to": "2026-10-04T00:00:00Z", "all": false, "requested_by": "anna",
+                "created_at": "2026-10-15T01:00:00Z", "fire_times": 4, "created_runs": 3,
+                "runs": {"queued": 1, "running": 1, "success": 1, "failed": 0, "cancelled": 0},
+                "unfinished": true
+            }]}),
+        ),
+    );
+    let mut backfilled = run("r3", "queued");
+    backfilled["kind"] = json!("backfill");
+    backfilled["backfill"] = json!({"backfill_id": id, "index": 3, "total": 3});
+    etl.answers.insert(
+        "/api/v1/dags/sync/runs".to_owned(),
+        (200, json!({"runs": [backfilled]})),
+    );
+    etl
+}
+
+#[tokio::test]
+async fn a_dag_page_lists_its_backfills_with_their_progress() {
+    let id = BACKFILL;
+    let app = ui(vec![deployment("etl", with_backfill())]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    let row = texts(&html, "table.backfills tbody tr td");
+    assert_eq!(row[0], id);
+    assert_eq!(
+        row[3],
+        "1 success · 1 running · 1 queued of 4 fire time(s), 1 skipped"
+    );
+    assert_eq!(row[4], "anna");
+    assert_eq!(
+        attrs(&html, "table.backfills dialog form", "hx-post"),
+        [format!("/d/etl/backfills/{id}/cancel")]
+    );
+    assert!(
+        texts(&html, "table.runs td").contains(&"backfill 3/3".to_owned()),
+        "{html}"
+    );
+    assert_eq!(attrs(&html, "dialog input[name=from]", "required"), [""]);
+}
+
+#[tokio::test]
+async fn a_backfill_is_asked_for_and_cancelled_from_the_dag_page() {
+    let id = BACKFILL;
+    let etl = with_backfill();
+    let sent = etl.sent.clone();
+    let mut asked = etl;
+    asked.answers.insert(
+        "/api/v1/dags/sync/backfills".to_owned(),
+        (
+            202,
+            command(
+                "c1",
+                "backfill",
+                "applied",
+                None,
+                &json!({"backfill_id": id, "fire_times": 4, "created": 3, "skipped": 1,
+                        "dry_run": false}),
+            ),
+        ),
+    );
+    asked.answers.insert(
+        format!("/api/v1/backfills/{id}/cancel"),
+        (
+            202,
+            command("c2", "cancel_backfill", "applied", None, &json!({})),
+        ),
+    );
+    let app = ui(vec![deployment("etl", asked)]);
+    let form = "from=2026-10-01&to=2026-10-04T00%3A00%3A00Z&all=on";
+    let (_, html) = post(&app, "/d/etl/dags/sync/backfill", form, &[SAME]).await;
+    assert_eq!(
+        texts(&html, ".command"),
+        ["Backfill sync: applied: 4 fire time(s), 1 skipped, 3 run(s) created."]
+    );
+    let bodies = sent_to(&sent, "/api/v1/dags/sync/backfills");
+    assert_eq!(
+        bodies,
+        [
+            json!({"from": "2026-10-01T00:00:00Z", "to": "2026-10-04T00:00:00Z", "all": true,
+                "dry_run": false})
+        ]
+    );
+    let (_, html) = post(&app, &format!("/d/etl/backfills/{id}/cancel"), "", &[SAME]).await;
+    assert_eq!(
+        texts(&html, ".command"),
+        [format!("Cancel backfill {id}: applied.")]
+    );
+    // A range without its start, or one that doesn't read, is never sent.
+    for form in ["from=", "from=soon", "from=2026-10-01&to=later"] {
+        let (_, html) = post(&app, "/d/etl/dags/sync/backfill", form, &[SAME]).await;
+        assert_eq!(
+            attrs(&html, ".command", "class"),
+            ["command failed"],
+            "{form}"
+        );
+    }
+    assert_eq!(sent_to(&sent, "/api/v1/dags/sync/backfills").len(), 1);
 }
 
 #[tokio::test]
@@ -769,12 +889,18 @@ fn fingerprint() -> String {
     crate::params_form::fingerprint(&fields)
 }
 
+/// The trigger dialog's form.
+const TRIGGER: &str = "form[hx-post='/d/etl/dags/sync/trigger']";
+
 #[tokio::test]
 async fn the_trigger_dialog_has_an_input_per_param_with_its_default() {
     let app = ui(vec![deployment("etl", with_params())]);
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
-    assert_eq!(attrs(&html, "input[name=params]", "value"), [fingerprint()]);
-    let names = attrs(&html, "dialog fieldset.params [name]", "name");
+    assert_eq!(
+        attrs(&html, &format!("{TRIGGER} input[name=params]"), "value"),
+        [fingerprint()]
+    );
+    let names = attrs(&html, &format!("{TRIGGER} fieldset.params [name]"), "name");
     assert_eq!(
         names,
         [
@@ -789,31 +915,98 @@ async fn the_trigger_dialog_has_an_input_per_param_with_its_default() {
             "p:api_token"
         ]
     );
-    assert_eq!(attrs(&html, "input[name='p:region']", "required"), [""]);
-    assert_eq!(attrs(&html, "input[name='p:rows']", "value"), ["10"]);
-    assert_eq!(attrs(&html, "input[name='p:rows']", "type"), ["number"]);
-    assert_eq!(attrs(&html, "input[name='p:day']", "type"), ["date"]);
-    assert_eq!(attrs(&html, "input[name='none:day']", "checked"), [""]);
     assert_eq!(
-        attrs(&html, "select[name='p:mode'] option", "value"),
+        attrs(
+            &html,
+            &format!("{TRIGGER} input[name='p:region']"),
+            "required"
+        ),
+        [""]
+    );
+    assert_eq!(
+        attrs(&html, &format!("{TRIGGER} input[name='p:rows']"), "value"),
+        ["10"]
+    );
+    assert_eq!(
+        attrs(&html, &format!("{TRIGGER} input[name='p:rows']"), "type"),
+        ["number"]
+    );
+    assert_eq!(
+        attrs(&html, &format!("{TRIGGER} input[name='p:day']"), "type"),
+        ["date"]
+    );
+    assert_eq!(
+        attrs(
+            &html,
+            &format!("{TRIGGER} input[name='none:day']"),
+            "checked"
+        ),
+        [""]
+    );
+    assert_eq!(
+        attrs(
+            &html,
+            &format!("{TRIGGER} select[name='p:mode'] option"),
+            "value"
+        ),
         ["\"fast\"", "2"]
     );
     assert_eq!(
-        attrs(&html, "select[name='p:mode'] option[selected]", "value"),
+        attrs(
+            &html,
+            &format!("{TRIGGER} select[name='p:mode'] option[selected]"),
+            "value"
+        ),
         ["\"fast\""]
     );
-    assert_eq!(texts(&html, "textarea[name='p:tags']"), ["[\n  \"a\"\n]"]);
+    assert_eq!(
+        texts(&html, &format!("{TRIGGER} textarea[name='p:tags']")),
+        ["[\n  \"a\"\n]"]
+    );
     // A secret one: an empty password input (decision 150).
     assert_eq!(
-        attrs(&html, "input[name='p:api_token']", "type"),
+        attrs(
+            &html,
+            &format!("{TRIGGER} input[name='p:api_token']"),
+            "type"
+        ),
         ["password"]
     );
-    assert_eq!(attrs(&html, "input[name='p:api_token']", "value"), [""]);
     assert_eq!(
-        attrs(&html, "input[name='p:api_token']", "placeholder"),
+        attrs(
+            &html,
+            &format!("{TRIGGER} input[name='p:api_token']"),
+            "value"
+        ),
+        [""]
+    );
+    assert_eq!(
+        attrs(
+            &html,
+            &format!("{TRIGGER} input[name='p:api_token']"),
+            "placeholder"
+        ),
         ["leave empty for the default"]
     );
-    assert_eq!(attrs(&html, "input[name='p:full']", "type"), ["password"]);
+    assert_eq!(
+        attrs(&html, &format!("{TRIGGER} input[name='p:full']"), "type"),
+        ["password"]
+    );
+}
+
+#[tokio::test]
+async fn the_backfill_dialog_takes_the_same_params_and_a_dag_without_any_has_none() {
+    let app = ui(vec![deployment("etl", with_params())]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    // The backfill dialog takes the trigger's, for every run (decision 363).
+    assert_eq!(
+        attrs(
+            &html,
+            "form[hx-post='/d/etl/dags/sync/backfill'] [name^='p:']",
+            "name"
+        ),
+        attrs(&html, &format!("{TRIGGER} [name^='p:']"), "name")
+    );
     // A DAG without params has none.
     let app = ui(vec![deployment("etl", etl())]);
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;

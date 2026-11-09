@@ -28,6 +28,15 @@ pub struct ForTime {
 ///
 /// A message naming the accepted forms.
 pub fn parse_for(text: &str) -> Result<ForTime, String> {
+    parse_time_flag("--for", text)
+}
+
+/// Reads a moment given as `flag` (`--from`, `--to`) as [`parse_for`] reads `--for`.
+///
+/// # Errors
+///
+/// A message naming the flag and the accepted forms.
+pub fn parse_time_flag(flag: &str, text: &str) -> Result<ForTime, String> {
     if let Ok(at) = text.parse::<Timestamp>() {
         return Ok(ForTime { at, warning: None });
     }
@@ -39,7 +48,7 @@ pub fn parse_for(text: &str) -> Result<ForTime, String> {
         })
         .map_err(|_| {
             format!(
-                "`--for {text}` isn't a date or a date-time \
+                "`{flag} {text}` isn't a date or a date-time \
                  (e.g. 2026-10-15T03:00, 2026-10-15T03:00+02:00, 2026-10-15)"
             )
         })?;

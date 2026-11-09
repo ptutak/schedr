@@ -393,6 +393,8 @@ pub struct Config {
     pub master: MasterSection,
     /// `[mapping]`: mapped tasks (`.expand()`).
     pub mapping: MappingSection,
+    /// `[backfill]`: backfills (`schedr runs backfill`).
+    pub backfill: BackfillSection,
     /// `[webserver]`: the REST API (and later the UI).
     pub webserver: WebserverSection,
     /// `[ui]`: the web UI (`schedr ui`, and the one `schedr standalone` serves).
@@ -725,6 +727,24 @@ impl Default for MappingSection {
         Self {
             max_instances: 1024,
         }
+    }
+}
+
+/// `[backfill]`: backfills, a run per fire time of a range (`schedr runs backfill`, decisions
+/// 363, 400-404).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackfillSection {
+    /// The most fire times one backfill's range may have, those already run included (so
+    /// it is also the most runs it creates); a bigger range is refused, saying to split it.
+    /// At least 1.
+    pub max_runs: u32,
+}
+
+impl Default for BackfillSection {
+    /// 1000 runs: a year of a daily DAG, a month of an hourly one.
+    fn default() -> Self {
+        Self { max_runs: 1000 }
     }
 }
 

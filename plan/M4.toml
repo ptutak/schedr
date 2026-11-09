@@ -886,12 +886,13 @@ part_of = "M4.12"
 id = "M4.12b"
 title = "Backfill"
 scope = '''
-(decisions 363, 364): `schedr runs backfill` (`--from`/`--to`, `--all`, `-p`, `--dry-run`), `[backfill] max_runs`, `POST /api/v1/dags/{id}/backfills` and `GET /api/v1/backfills/{id}`, `runs cancel --backfill`, oldest first behind the other kinds; the UI's form and "backfill 3/31"
+(decisions 363, 364, 400-404): `schedr runs backfill` (`--from`/`--to`, `--all`, `-p`, `--dry-run`), `[backfill] max_runs`, `POST /api/v1/dags/{id}/backfills` and `GET /api/v1/backfills/{id}`, `runs cancel --backfill`, oldest first behind the other kinds; the UI's form and "backfill 3/31"
 '''
 done_when = '''
 a backfill fills the missing periods oldest first, skips the succeeded ones, and is cancelled as one
 '''
-status = "planned"
+status = "done"
+done = 2026-11-09
 part_of = "M4.12"
 
 [[steps]]

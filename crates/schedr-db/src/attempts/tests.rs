@@ -74,6 +74,7 @@ async fn with_run() -> (Database, String) {
             triggered_at: ts(NOW),
             triggered_by: "anna",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()

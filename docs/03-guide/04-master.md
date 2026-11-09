@@ -64,6 +64,10 @@ and holds up the workers' messages and the lease:
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than `[master] parse_job_timeout` (10 minutes by default) to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for the [worker lease](14-timings.md#fixed-timings) (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one. |
 
+A backfill command creates the backfill and all its queued runs at once, in one
+transaction. They start oldest first as places free, after other kinds of queued runs and
+within `max_active_runs`; they can start while the DAG is paused.
+
 The named-event trigger pass reads events of the DAG's name from one minute before the
 newest event it acted on, bounded by when the DAG became live. The lookback
 (`SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK`) covers posts whose time was recorded before a

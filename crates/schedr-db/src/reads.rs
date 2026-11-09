@@ -55,8 +55,23 @@ pub struct RunRecord {
     pub ended_at: Option<Timestamp>,
     /// Why it turned a yellow success after its end (decision 309): `late_cleanup_failed`.
     pub late_failure: Option<String>,
-    /// The run whose `TriggerDagOperator` started it (a `chained` run).
+    /// The run whose `TriggerDagOperator` started it (a `chained` run), or whose success started
+    /// it (a `RunOf` trigger's).
     pub parent_run_id: Option<String>,
+    /// Its backfill and its place in it (a `backfill` run).
+    pub backfill: Option<BackfillPlace>,
+}
+
+/// A backfill run's backfill, and its place among the backfill's runs, oldest first
+/// (`backfill 3/31`, decision 403).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillPlace {
+    /// The backfill's ID.
+    pub id: String,
+    /// Its place, from 1.
+    pub index: u32,
+    /// How many runs the backfill has.
+    pub total: u32,
 }
 
 /// A task instance, as shown.
@@ -163,6 +178,9 @@ type RunRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
+    i64,
+    i64,
 );
 
 type InstanceRow = (
@@ -208,16 +226,25 @@ type AttemptRow = (
 
 const RUN_COLUMNS_ONE: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
-    {ts<}ended_at{>ts}, late_failure, parent_run_id{text} FROM runs WHERE id = $1{uuid}";
+    {ts<}ended_at{>ts}, late_failure, parent_run_id{text}, backfill_id{text}, \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id \
+     AND (b.planned_for < runs.planned_for OR (b.planned_for = runs.planned_for AND b.id <= runs.id))), \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id) FROM runs WHERE id = $1{uuid}";
 
 const RUN_COLUMNS_OF_DAG: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
-    {ts<}ended_at{>ts}, late_failure, parent_run_id{text} FROM runs WHERE dag_id = $1 AND ($2{ts} IS NULL OR planned_for = $2{ts}) \
+    {ts<}ended_at{>ts}, late_failure, parent_run_id{text}, backfill_id{text}, \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id \
+     AND (b.planned_for < runs.planned_for OR (b.planned_for = runs.planned_for AND b.id <= runs.id))), \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id) FROM runs WHERE dag_id = $1 AND ($2{ts} IS NULL OR planned_for = $2{ts}) \
     ORDER BY planned_for DESC, triggered_at DESC, id DESC LIMIT $3";
 
 const RUNS_FILTERED: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
-    {ts<}ended_at{>ts}, late_failure, parent_run_id{text} FROM runs WHERE ($1 IS NULL OR dag_id = $1) \
+    {ts<}ended_at{>ts}, late_failure, parent_run_id{text}, backfill_id{text}, \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id \
+     AND (b.planned_for < runs.planned_for OR (b.planned_for = runs.planned_for AND b.id <= runs.id))), \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id) FROM runs WHERE ($1 IS NULL OR dag_id = $1) \
     AND ($2 IS NULL OR state = $2) AND ($3{ts} IS NULL OR triggered_at < $3{ts} \
     OR ($5{uuid} IS NOT NULL AND triggered_at = $3{ts} AND id < $5{uuid})) \
     ORDER BY triggered_at DESC, runs.id DESC LIMIT $4";
@@ -610,6 +637,9 @@ fn run_record(row: RunRow) -> Result<RunRecord, DbError> {
         ended,
         late_failure,
         parent_run_id,
+        backfill_id,
+        backfill_index,
+        backfill_total,
     ) = row;
     Ok(RunRecord {
         id,
@@ -627,6 +657,11 @@ fn run_record(row: RunRow) -> Result<RunRecord, DbError> {
         ended_at: optional_time("runs.ended_at", ended)?,
         late_failure,
         parent_run_id,
+        backfill: backfill_id.map(|id| BackfillPlace {
+            id,
+            index: u32::try_from(backfill_index).unwrap_or(0),
+            total: u32::try_from(backfill_total).unwrap_or(0),
+        }),
     })
 }
 

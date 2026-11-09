@@ -1,0 +1,19 @@
+title = "a backfill over a daylight-saving change of a sub-minute cron holds the master up"
+severity = "medium"
+probability = "rare"
+kind = "performance"
+summary = "each fire time near an offset change walks hours of wall-clock matches; a 1000-run backfill (or its dry run) of a per-second cron over one blocks the master core for minutes"
+found = 2026-11-09
+suspected = false
+details = '''
+- **Found:** 2026-11-09, by Codex's review of M4.12b, measured: a dry run of
+  `Cron("* * * * * *", tz="Europe/Warsaw")` from `2026-10-25T00:59:00Z` to `01:15:39Z`
+  (1000 fire times) took 119 s in a debug build (12 ms in UTC). `fire_times_in`
+  (`crates/schedr-master/src/scheduler/backfill.rs`) calls `FireTimes::next_after` per fire
+  time; near an offset change `walk_after` (`crates/schedr-master/src/fire_times.rs`) walks
+  every match from `MARGIN` (3 h) before the moment, about 21600 for a per-second cron, under
+  the core's lock. A per-minute cron walks about 360 per lookup: fine.
+- **A fix:** enumerate a range's fire times in one walk (`FireTimes::between`: every match
+  from `from - MARGIN` to `to + MARGIN`, their moments by the same rules, sorted, deduped,
+  stopping past `max`), so the work is the range's matches, not matches times fire times.
+'''

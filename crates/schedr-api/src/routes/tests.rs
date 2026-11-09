@@ -127,6 +127,7 @@ async fn api_of(
             triggered_at: ts(NOW),
             triggered_by: "anna",
             parent_run_id: None,
+            backfill_id: None,
         })
         .await
         .unwrap()
@@ -331,6 +332,159 @@ async fn bad_bodies_and_ids_are_rejected_before_any_command() {
         )
     );
     assert_eq!(db.pending_commands(100).await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn a_backfill_is_asked_for_read_listed_and_cancelled() {
+    let (app, db, _) = api().await;
+    let ask = r#"{"from": "2026-10-01T00:00:00Z", "to": "2026-10-05T00:00:00Z", "all": true,
+                  "params": {"region": "us"}, "dry_run": true}"#;
+    let (status, body) = send(&app, Method::POST, "/api/v1/dags/sync/backfills", ask).await;
+    assert_eq!(
+        (status, &body["kind"]),
+        (StatusCode::ACCEPTED, &json!("backfill"))
+    );
+    let id = "01a1c0a0-0000-7000-8000-000000000001";
+    let (status, body) = send(
+        &app,
+        Method::POST,
+        &format!("/api/v1/backfills/{}/cancel", id.to_ascii_uppercase()),
+        "",
+    )
+    .await;
+    assert_eq!(
+        (status, &body["kind"]),
+        (StatusCode::ACCEPTED, &json!("cancel_backfill"))
+    );
+    let commands: Vec<_> = db
+        .pending_commands(10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.command.unwrap())
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            Command::Backfill(schedr_model::commands::BackfillRequest {
+                dag_id: DagId::new("sync").unwrap(),
+                from: ts("2026-10-01T00:00:00Z"),
+                to: Some(ts("2026-10-05T00:00:00Z")),
+                all: true,
+                params: json!({"region": "us"}).as_object().cloned(),
+                dry_run: true,
+            }),
+            Command::CancelBackfill {
+                backfill_id: id.to_owned()
+            },
+        ]
+    );
+
+    let dag_id = DagId::new("sync").unwrap();
+    db.insert_backfill(&schedr_db::backfills::NewBackfill {
+        id,
+        dag_id: &dag_id,
+        range_from: ts("2026-10-01T00:00:00Z"),
+        range_to: ts("2026-10-05T00:00:00Z"),
+        all_fire_times: false,
+        requested_by: "anna",
+        created_at: ts(NOW),
+        fire_times: 4,
+        created_runs: 1,
+    })
+    .await
+    .unwrap();
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    let run_id = db
+        .insert_run(&NewRun {
+            params: &schedr_db::runs::NO_PARAMS,
+            event: None,
+            dag_id: &dag_id,
+            dag_version_id: &version,
+            kind: RunKind::Backfill,
+            state: RunState::Queued,
+            planned_for: ts("2026-10-02T03:00:00Z"),
+            since: ts("2026-10-01T03:00:00Z"),
+            triggered_at: ts(NOW),
+            triggered_by: "anna",
+            parent_run_id: None,
+            backfill_id: Some(id),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let view = json!({
+        "backfill_id": id, "dag_id": "sync", "from": "2026-10-01T00:00:00Z",
+        "to": "2026-10-05T00:00:00Z", "all": false, "requested_by": "anna", "created_at": NOW,
+        "fire_times": 4, "created_runs": 1,
+        "runs": {"queued": 1, "running": 0, "success": 0, "failed": 0, "cancelled": 0},
+        "unfinished": true
+    });
+    assert_eq!(
+        get(&app, &format!("/api/v1/backfills/{id}")).await,
+        (StatusCode::OK, view.clone())
+    );
+    assert_eq!(
+        get(&app, "/api/v1/dags/sync/backfills").await,
+        (StatusCode::OK, json!({"backfills": [view]}))
+    );
+    let (_, run) = get(&app, &format!("/api/v1/runs/{run_id}")).await;
+    assert_eq!(
+        run["run"]["backfill"],
+        json!({"backfill_id": id, "index": 1, "total": 1})
+    );
+}
+
+#[tokio::test]
+async fn backfill_requests_that_dont_read_are_rejected_before_any_command() {
+    let (app, db, _) = api().await;
+    let post = |body: &'static str| {
+        let app = app.clone();
+        async move { send(&app, Method::POST, "/api/v1/dags/sync/backfills", body).await }
+    };
+    for body in [
+        "",
+        r#"{"to": "2026-10-05T00:00:00Z"}"#,
+        r#"{"from": "2026-10-01T00:00:00Z", "max": 3}"#,
+        r#"{"from": "yesterday"}"#,
+    ] {
+        let (status, error) = post(body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("invalid body: "),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        post(r#"{"from": "2026-10-01T00:00:00Z", "params": {"a": "x\u0000"}}"#).await,
+        (
+            StatusCode::BAD_REQUEST,
+            json!({"error": "params: text containing NUL (\\u0000) can't be stored"})
+        )
+    );
+    assert_eq!(
+        send(&app, Method::POST, "/api/v1/backfills/nope/cancel", "").await,
+        (
+            StatusCode::BAD_REQUEST,
+            json!({"error": "`nope` isn't a backfill ID"})
+        )
+    );
+    assert_eq!(db.pending_commands(10).await.unwrap(), []);
+    let ghost = "01a1c0a0-0000-7000-8000-00000000ffff";
+    assert_eq!(
+        get(&app, &format!("/api/v1/backfills/{ghost}")).await,
+        (
+            StatusCode::NOT_FOUND,
+            json!({"error": format!("no backfill `{ghost}`")})
+        )
+    );
+    assert_eq!(
+        get(&app, "/api/v1/dags/ghost/backfills").await,
+        (StatusCode::NOT_FOUND, json!({"error": "no DAG `ghost`"}))
+    );
 }
 
 #[tokio::test]
@@ -1795,6 +1949,7 @@ async fn a_triggers_events_are_masked_as_outputs_are_and_paged() {
             params: &params,
             event: Some(&event),
             parent_run_id: None,
+            backfill_id: None,
         };
         let id = format!("01a00000-0000-7000-8000-00000000000{i}");
         db.store_event(&id, &new, &event).await.unwrap();

@@ -25,6 +25,9 @@ use crate::quiet::{QuietDags, QuietSettings, Round, Visit, Visited, WakeReason, 
 /// The most scheduled runs a round creates for one DAG: a DAG catching up after a long pause
 /// goes over a few rounds, the earliest first (B18).
 pub const SCHEDULED_PER_ROUND: usize = 10;
+
+pub mod backfill;
+
 #[cfg(test)]
 mod tests;
 
@@ -84,6 +87,14 @@ pub enum SchedulerError {
          (`schedr dags unpause {0}`)"
     )]
     ChainedPaused(DagId),
+    /// A backfill that can't be created (decisions 363, 404).
+    #[error("DAG `{dag_id}`: no backfill: {why}")]
+    Backfill {
+        /// The DAG.
+        dag_id: DagId,
+        /// Why not.
+        why: String,
+    },
     /// A manual run's time isn't allowed.
     #[error(transparent)]
     ManualRun(#[from] ManualRunError),
@@ -246,12 +257,9 @@ impl Scheduler {
             let held = active.held.as_ref();
             if !active.paused && held.is_none() {
                 let last = overview.last_scheduled(&active.dag.id);
+                let due = self.due_runs(&plan, last, running, now).await?;
                 // At most so many a DAG a round: a long catch-up goes over a few (B18).
-                for times in plan
-                    .scheduled_runs(last, running, now)
-                    .into_iter()
-                    .take(SCHEDULED_PER_ROUND)
-                {
+                for times in due.into_iter().take(SCHEDULED_PER_ROUND) {
                     // The defaults, checked when the DAG was validated.
                     let params = match run_params(&active, None) {
                         Ok(params) => params,
@@ -521,6 +529,30 @@ impl Scheduler {
     }
 
     /// Starts the DAG's `queued` runs that fit next to its `running` ones.
+    /// The scheduled runs `plan` has due at `now`, leaving out the fire times a run of another
+    /// kind covers (succeeded, queued or running: a backfill's, a manual one), so a period
+    /// isn't run twice; read only when something is due.
+    async fn due_runs(
+        &self,
+        plan: &Plan<'_>,
+        last: Option<Timestamp>,
+        running: u32,
+        now: Timestamp,
+    ) -> Result<Vec<RunTimes>, SchedulerError> {
+        let due = plan.scheduled_runs(last, running, now);
+        let Some(first) = due.first() else {
+            return Ok(due);
+        };
+        let covered = self
+            .db
+            .covered_times(&plan.dag.id, first.planned_for, now)
+            .await?;
+        if covered.is_empty() {
+            return Ok(due);
+        }
+        Ok(plan.scheduled_runs_except(last, running, now, &covered))
+    }
+
     async fn start_queued(
         &self,
         queued: &[QueuedRun],
@@ -582,5 +614,6 @@ fn new_run<'a>(
         params,
         event: None,
         parent_run_id: None,
+        backfill_id: None,
     }
 }

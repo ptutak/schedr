@@ -1,0 +1,14 @@
+title = "Cancelling a backfill cancels its queued and running runs"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "runs"
+section = "Backfill"
+summary = '''
+`schedr runs cancel --backfill <id>` cancels every unfinished run of the backfill: queued ones at
+once, running ones stopped as `schedr runs cancel` stops a run. Finished runs stay as they are.
+'''
+history = "JOURNAL.md#D402"
+step = "M4.12b"
+code = ["crates/schedr-master/src/commands.rs::cancel_backfill", "crates/schedr-db/src/backfills.rs::unfinished_backfill_runs"]
+checked = 2026-11-09

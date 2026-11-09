@@ -6,7 +6,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use schedr_api::views::{DagView, LocationView, SensorView};
+use schedr_api::views::{BackfillView, DagView, LocationView, SensorView};
 use schedr_client::times::trigger_text;
 use schedr_client::{ClientError, Transport, path_segment};
 
@@ -14,6 +14,31 @@ use crate::page::Page;
 use crate::params_form::TriggerParams;
 use crate::runs::{RunRow, run_row};
 use crate::{Deployment, Ui};
+
+/// What starts a DAG's runs, as its pages need it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Starts {
+    /// No trigger (`trigger=None`): only manual runs, nothing to pause.
+    ManualOnly,
+    /// A trigger with fire times (`Cron`, `Every`, `Once`): it can be backfilled (decision 404).
+    FireTimes,
+    /// Another trigger: events, other DAGs.
+    Other,
+}
+
+impl DagRow {
+    /// Whether it has no trigger: only manual runs, nothing to pause.
+    #[must_use]
+    pub fn manual_only(&self) -> bool {
+        self.starts == Starts::ManualOnly
+    }
+
+    /// Whether its trigger has fire times: it can be backfilled.
+    #[must_use]
+    pub fn fire_times(&self) -> bool {
+        self.starts == Starts::FireTimes
+    }
+}
 
 /// A DAG's row in the list.
 #[derive(Debug, Clone)]
@@ -26,8 +51,8 @@ pub struct DagRow {
     pub dag_id: String,
     /// Whether it is paused.
     pub paused: bool,
-    /// Whether it has no trigger (`trigger=None`): only manual runs, nothing to pause.
-    pub manual_only: bool,
+    /// What starts its runs.
+    pub starts: Starts,
     /// Its trigger as people write it (`0 3 * * * (Europe/Warsaw)`, `every 1h`, `-`).
     pub schedule: String,
     /// Its tags.
@@ -268,6 +293,103 @@ struct DagPage {
     switched_off_unavailable: String,
     /// Its trigger, for a DAG a trigger starts.
     trigger: Option<TriggerPanel>,
+    /// The backfill dialog's run parameters, rendered (empty: it takes none).
+    backfill_params_html: String,
+    /// Its newest backfills (decision 403).
+    backfills: Vec<BackfillRow>,
+    /// Why they can't be shown now (empty: they can).
+    backfills_unavailable: String,
+}
+
+/// The trigger dialog's run parameters (with an event's fields, for a DAG a trigger starts)
+/// and the backfill dialog's, rendered.
+fn dialog_params(dag: &DagView) -> Result<(String, String), askama::Error> {
+    let params = TriggerParams::of(&dag.params).render()?;
+    let trigger = if takes_event(dag) {
+        format!("{params}{EVENT_FIELDS}")
+    } else {
+        params.clone()
+    };
+    Ok((trigger, params))
+}
+
+/// The DAG's newest backfills, or why they can't be shown now: whatever its trigger is now (one
+/// made before it changed can still be cancelled).
+async fn backfill_rows<T: Transport>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    row: &DagRow,
+) -> (Vec<BackfillRow>, String) {
+    match deployment.client.dag_backfills(&row.dag_id).await {
+        Ok(list) => (
+            list.backfills
+                .iter()
+                .map(|b| BackfillRow::of(page, deployment, b))
+                .collect(),
+            String::new(),
+        ),
+        // A webserver without backfills (404) has none to show.
+        Err(ClientError::Server { status: 404, .. }) => (Vec::new(), String::new()),
+        Err(error) => (Vec::new(), error.to_string()),
+    }
+}
+
+/// A backfill as the DAG page lists it (decision 403).
+struct BackfillRow {
+    backfill_id: String,
+    /// Its range, as people read it.
+    from: String,
+    to: String,
+    requested_by: String,
+    created_at: String,
+    /// Its runs by state, the empty ones left out: `2 success · 1 running · 3 queued`.
+    runs: String,
+    /// Its fire times and what was skipped: `of 7 fire times, 1 skipped`.
+    of: String,
+    /// Where its Cancel is posted; empty once none of its runs is queued or running.
+    cancel: String,
+}
+
+impl BackfillRow {
+    fn of<T>(page: &Page, deployment: &Deployment<T>, backfill: &BackfillView) -> Self {
+        let counts = &backfill.runs;
+        let runs = [
+            (counts.success, "success"),
+            (counts.running, "running"),
+            (counts.queued, "queued"),
+            (counts.failed, "failed"),
+            (counts.cancelled, "cancelled"),
+        ]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, state)| format!("{n} {state}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+        let skipped = backfill.fire_times.saturating_sub(backfill.created_runs);
+        Self {
+            backfill_id: backfill.backfill_id.clone(),
+            from: page.time(&backfill.from),
+            to: page.time(&backfill.to),
+            requested_by: backfill.requested_by.clone(),
+            created_at: page.time(&backfill.created_at),
+            runs,
+            of: format!(
+                "of {} fire time(s), {skipped} skipped{}",
+                backfill.fire_times,
+                if backfill.all { " (all)" } else { "" }
+            ),
+            cancel: if backfill.unfinished {
+                format!(
+                    "{}/d/{}/backfills/{}/cancel",
+                    page.base,
+                    path_segment(&deployment.name),
+                    path_segment(&backfill.backfill_id)
+                )
+            } else {
+                String::new()
+            },
+        }
+    }
 }
 
 /// A concurrency limit as the DAG page shows it.
@@ -446,8 +568,9 @@ pub async fn dag<T: Transport>(
     let (switched_off, switched_off_unavailable) =
         switched_off_in(&page, deployment, &dag.dag_id).await;
     let trigger = dag_trigger_panel(&page, deployment, &dag).await;
-    let params_html = match TriggerParams::of(&dag.params).render() {
-        Ok(html) if takes_event(&dag) => format!("{html}{EVENT_FIELDS}"),
+    let row = dag_row(&page, deployment, &dag);
+    let (backfills, backfills_unavailable) = backfill_rows(&page, deployment, &row).await;
+    let (params_html, backfill_params_html) = match dialog_params(&dag) {
         Ok(html) => html,
         Err(error) => {
             return error_page(
@@ -460,6 +583,9 @@ pub async fn dag<T: Transport>(
     };
     render(
         &DagPage {
+            backfill_params_html,
+            backfills,
+            backfills_unavailable,
             params_html,
             limits: dag.limits.iter().map(LimitRow::of).collect(),
             warnings: dag.warnings.clone(),
@@ -468,7 +594,7 @@ pub async fn dag<T: Transport>(
             switched_off,
             switched_off_unavailable,
             trigger,
-            row: dag_row(&page, deployment, &dag),
+            row,
             description: dag.description.clone().unwrap_or_default(),
             deployment: deployment.name.clone(),
             several: ui.deployments.len() > 1,
@@ -546,10 +672,11 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
         ),
         dag_id: dag.dag_id.clone(),
         paused: dag.paused,
-        manual_only: dag
-            .trigger
-            .as_ref()
-            .is_none_or(|t| t["kind"].as_str() == Some("none")),
+        starts: match dag.trigger.as_ref().and_then(|t| t["kind"].as_str()) {
+            None | Some("none") => Starts::ManualOnly,
+            Some("cron" | "every" | "once") => Starts::FireTimes,
+            Some(_) => Starts::Other,
+        },
         schedule: dag.trigger.as_ref().map_or_else(
             || "-".to_owned(),
             |t| trigger_text(t, page.zone.as_ref().unwrap_or(&utc)),

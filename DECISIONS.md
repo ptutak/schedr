@@ -29,6 +29,12 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D405 | 2026-11-09 | user | built M4.12b | runs | The scheduler skips fire times another run covers |
+| D404 | 2026-11-09 | user | built M4.12b | runs | A backfill works on any trigger with fire times |
+| D403 | 2026-11-09 | user | built M4.12b | runs | A backfill's progress shows on its runs and on the DAG page |
+| D402 | 2026-11-09 | user | built M4.12b | runs | Cancelling a backfill cancels its queued and running runs |
+| D401 | 2026-11-09 | user | built M4.12b | runs | A backfill's runs start on a paused DAG |
+| D400 | 2026-11-09 | user | built M4.12b | runs | A backfill skips fire times with a successful or unfinished run |
 | D399 | 2026-11-09 | user | built M4.12a | chained-runs | Cycles between DAGs are allowed; only a cycle inside a DAG is refused |
 | D398 | 2026-11-09 | user | built M4.12a | chained-runs | A TriggerDagOperator starts only a DAG with `trigger=Chained()` |
 | D397 | 2026-11-09 | user | planned (M4B.3) | workers | A turn's messages are stored in groups by type; savepoints later |
@@ -64,8 +70,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D367 | 2026-11-08 | user | rule | development | The project's documents: STATUS, design topics, a file per decision, archive/PROJECT.md as history |
 | D366 | 2026-11-08 | user | dropped | testing-dags | A fake for API calls in local runs was dropped |
 | D365 | 2026-11-08 | user | built M4.12a | chained-runs | Tasks start runs with `TriggerDagOperator` |
-| D364 | 2026-11-08 | user | planned (M4.12b) | runs | Backfill runs are ordered oldest first |
-| D363 | 2026-11-08 | user | planned (M4.12b) | runs | Backfill has an API, CLI dry runs and UI progress |
+| D364 | 2026-11-08 | user | built M4.12b | runs | Backfill runs are ordered oldest first |
+| D363 | 2026-11-08 | user | built M4.12b | runs | Backfill has an API, CLI dry runs and UI progress |
 | D362 | 2026-11-08 | user | built M4.12a | chained-runs | A triggered run accepts an optional `planned_for` |
 | D361 | 2026-11-08 | user | built M4.12a | chained-runs | An operator retry starts a new run only after failure |
 | D360 | 2026-11-08 | user | built M4.12a | chained-runs | `max_wait` times out without cancelling the target run |
@@ -704,6 +710,12 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### runs
 
+- D405: The scheduler skips fire times another run covers
+- D404: A backfill works on any trigger with fire times
+- D403: A backfill's progress shows on its runs and on the DAG page
+- D402: Cancelling a backfill cancels its queued and running runs
+- D401: A backfill's runs start on a paused DAG
+- D400: A backfill skips fire times with a successful or unfinished run
 - D364: Backfill runs are ordered oldest first
 - D363: Backfill has an API, CLI dry runs and UI progress
 

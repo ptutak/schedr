@@ -9,7 +9,10 @@ when another DAG's run or task succeeds; the new run carries an event identifyin
 carries that event. An `@trigger(wait_for=...)` can inspect each matching run or posted
 event before returning an event to start a run; the master hands one item per call. A
 [`TriggerDagOperator`](../02-dags/23-chained-runs.md) starts a `chained` run linked to
-its parent run.
+its parent run. A [backfill](../02-dags/04-schedules.md#backfill) creates `backfill`
+runs for a range of fire times. The scheduler skips a fire time covered by a successful,
+queued or running run of any kind, including a manual or backfill run; this also applies
+to `catchup`. If the covering run later fails, rerun that period by hand.
 
 ```mermaid
 sequenceDiagram

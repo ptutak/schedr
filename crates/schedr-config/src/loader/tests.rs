@@ -449,6 +449,20 @@ fn mapping_max_instances_is_read_and_must_be_positive() {
 }
 
 #[test]
+fn backfill_max_runs_is_read_and_must_be_positive() {
+    assert_eq!(load(None, &env(&[]), &[]).unwrap().backfill.max_runs, 1000);
+    let set = load(Some(file("[backfill]\nmax_runs = 50\n")), &env(&[]), &[]).unwrap();
+    assert_eq!(set.backfill.max_runs, 50);
+    let zero = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__BACKFILL__MAX_RUNS", "0")]),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(zero, ConfigError::NoBackfillRuns);
+}
+
+#[test]
 fn secret_storages_are_tables_by_name() {
     let toml = r#"
 [secret_storage]

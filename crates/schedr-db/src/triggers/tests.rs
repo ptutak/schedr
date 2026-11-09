@@ -54,6 +54,7 @@ fn run<'a>(dag: &'a DagId, version: &'a str, event: &'a RunEvent, at: &str) -> N
         params: &crate::runs::NO_PARAMS,
         event: Some(event),
         parent_run_id: None,
+        backfill_id: None,
     }
 }
 
@@ -206,6 +207,7 @@ async fn events_are_listed_newest_first_a_page_at_a_time_ties_included() {
             params: &params,
             event: Some(&event),
             parent_run_id: None,
+            backfill_id: None,
         };
         let id = format!("01a00000-0000-7000-8000-00000000000{i}");
         db.store_event(&id, &run, &event).await.unwrap();

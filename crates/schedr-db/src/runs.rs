@@ -72,8 +72,11 @@ pub struct NewRun<'a> {
     pub params: &'a serde_json::Value,
     /// The event that started it.
     pub event: Option<&'a schedr_model::RunEvent>,
-    /// The run whose `TriggerDagOperator` started it (a `chained` run).
+    /// The run whose `TriggerDagOperator` started it (a `chained` run), or whose success started
+    /// it (a `RunOf` trigger's).
     pub parent_run_id: Option<&'a str>,
+    /// The backfill it belongs to (a `backfill` run).
+    pub backfill_id: Option<&'a str>,
 }
 
 /// The parameters of a run of a DAG that takes none.
@@ -89,6 +92,8 @@ pub struct QueuedRun {
     pub kind: RunKind,
     /// When it was created.
     pub triggered_at: Timestamp,
+    /// The moment it is for (a backfill's runs, created at once, start oldest first).
+    pub planned_for: Timestamp,
 }
 
 /// What the scheduler needs of every DAG's runs, read at once for a whole round
@@ -236,9 +241,9 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const INSERT: &str = "INSERT INTO runs \
             (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
-             triggered_by, started_at, params, event, parent_run_id) \
+             triggered_by, started_at, params, event, parent_run_id, backfill_id) \
             VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}, \
-             $11{json}, $12{json}, $13{uuid}) ON CONFLICT DO NOTHING";
+             $11{json}, $12{json}, $13{uuid}, $14{uuid}) ON CONFLICT DO NOTHING";
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
         let inserted = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, INSERT))
@@ -255,6 +260,7 @@ impl Database {
                 .bind(run.params.to_string())
                 .bind(run.event.map(crate::query::to_json))
                 .bind(run.parent_run_id)
+                .bind(run.backfill_id)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -344,20 +350,22 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or a stored value doesn't read.
     pub async fn queued_runs(&self, dag_id: &DagId) -> Result<Vec<QueuedRun>, DbError> {
-        const QUEUED: &str = "SELECT id{text}, kind, {ts<}triggered_at{>ts} FROM runs \
-            WHERE dag_id = $1 AND state = 'queued' ORDER BY triggered_at, id";
-        let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
+        const QUEUED: &str = "SELECT id{text}, kind, {ts<}triggered_at{>ts}, \
+            {ts<}planned_for{>ts} FROM runs \
+            WHERE dag_id = $1 AND state = 'queued' ORDER BY triggered_at, planned_for, id";
+        let rows: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, QUEUED))
                 .bind(dag_id.as_str())
                 .fetch_all(pool)
                 .await?
         });
         rows.into_iter()
-            .map(|(id, kind, triggered_at)| {
+            .map(|(id, kind, triggered_at, planned_for)| {
                 Ok(QueuedRun {
                     id,
                     kind: from_name("runs.kind", kind)?,
                     triggered_at: parse_time("runs.triggered_at", &triggered_at)?,
+                    planned_for: parse_time("runs.planned_for", &planned_for)?,
                 })
             })
             .collect()
@@ -400,7 +408,7 @@ impl Database {
         type Rows = (
             Vec<(String, i64)>,
             Vec<(String, Option<String>)>,
-            Vec<(String, String, String, String)>,
+            Vec<(String, String, String, String, String)>,
         );
         let among = among("dag_id", dags.len());
         let running = format!(
@@ -408,8 +416,9 @@ impl Database {
         );
         let last = last_scheduled_query(dags.len());
         let queued = format!(
-            "SELECT dag_id, id{{text}}, kind, {{ts<}}triggered_at{{>ts}} FROM runs \
-             WHERE state = 'queued'{among} ORDER BY dag_id, triggered_at, id"
+            "SELECT dag_id, id{{text}}, kind, {{ts<}}triggered_at{{>ts}}, \
+             {{ts<}}planned_for{{>ts}} FROM runs \
+             WHERE state = 'queued'{among} ORDER BY dag_id, triggered_at, planned_for, id"
         );
         // One connection, one time limit, for all three.
         let (running, last, queued): Rows = on_pool!(self, |pool, backend| {
@@ -439,11 +448,12 @@ impl Database {
                 .last_scheduled
                 .insert(dag, parse_time("runs.planned_for", &at)?);
         }
-        for (dag, id, kind, triggered_at) in queued {
+        for (dag, id, kind, triggered_at, planned_for) in queued {
             overview.queued.entry(dag).or_default().push(QueuedRun {
                 id,
                 kind: from_name("runs.kind", kind)?,
                 triggered_at: parse_time("runs.triggered_at", &triggered_at)?,
+                planned_for: parse_time("runs.planned_for", &planned_for)?,
             });
         }
         Ok(())
