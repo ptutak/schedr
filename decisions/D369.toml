@@ -11,3 +11,4 @@ Each decision's main passage starts with <a id="D<n>"></a>; its history is "arch
 history = "JOURNAL.md#D369"
 step = "n/a"
 code = ["scripts/records.py"]
+checked = 2026-11-09

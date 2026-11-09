@@ -66,6 +66,7 @@ fn run<'a>(
         since: ts("2026-10-14T03:00:00Z"),
         triggered_at: ts(planned_for),
         triggered_by: "scheduler",
+        parent_run_id: None,
     }
 }
 

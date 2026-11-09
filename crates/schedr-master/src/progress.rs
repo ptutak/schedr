@@ -41,8 +41,9 @@ mod tests;
 /// Error kinds of failures certain to repeat: never retried. A secret that doesn't exist or
 /// isn't permitted, and what the same inputs always do again. (`secret_unavailable`, a secret
 /// storage that is down, and `import_failed` / `task_not_found`, which new code can fix, are
-/// retried.)
-pub const NOT_RETRIED_ERRORS: [&str; 11] = [
+/// retried.) A `TriggerDagOperator`'s parameters refused, or a target that takes no such run
+/// (decisions 379, 398); a missing, held or paused target is retried.
+pub const NOT_RETRIED_ERRORS: [&str; 13] = [
     schedr_model::runner::SWITCHED_OFF,
     schedr_model::runner::BLOCKED_EVENT_LOOP,
     "secret_not_found",
@@ -54,6 +55,8 @@ pub const NOT_RETRIED_ERRORS: [&str; 11] = [
     "output_not_serializable",
     "output_too_large",
     "result_not_stored",
+    crate::dispatch::chained::PARAMS_REFUSED,
+    crate::dispatch::chained::TARGET_REFUSED,
 ];
 
 /// What a task's upstream tasks decide for it.

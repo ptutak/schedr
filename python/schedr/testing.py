@@ -32,6 +32,7 @@ from schedr._model import (
     PythonKind,
     SecretRef,
     SensorKind,
+    TriggerDagKind,
     WaitForEventKind,
     WaitForKind,
     registry,
@@ -549,8 +550,8 @@ class _OutputTypes:
     def _annotation(
         entry: registry.DefinedDag, task_id: str, kind: object, outcome: str | None
     ) -> object:
-        if isinstance(kind, WaitForKind | WaitForEventKind):
-            value = str if isinstance(kind, WaitForKind) else Event[Json]
+        if isinstance(kind, WaitForKind | WaitForEventKind | TriggerDagKind):
+            value = Event[Json] if isinstance(kind, WaitForEventKind) else str
             named = {TIMED_OUT_NAME: TimedOut, FAILED_NAME: Failed}
             return named.get(outcome or "", value)
         if isinstance(kind, SensorKind):

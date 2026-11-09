@@ -298,6 +298,7 @@ async fn check_path(
     if path.is_dir() {
         // A whole root: what its tasks declare in `connections=` is checked against its own.
         files = schedr_master::validate::connection_problems(files);
+        files = schedr_master::validate::target_problems(files);
         files.retain(|file| !root.unselected.contains(&file.path));
     }
     let version = match against {
@@ -1207,6 +1208,7 @@ async fn drive(
         Duration::from_secs(60),
     );
     let location = wait_for_dag(&client, dag).await?;
+    unpause_chained(&client).await?;
     let request = TriggerRequest {
         planned_for: test.planned_for,
         params: test.params.clone(),
@@ -1273,6 +1275,28 @@ async fn drive(
 }
 
 /// Waits until the local master has stored `dag`; returns the file that defines it.
+/// Unpauses the `trigger=Chained()` DAGs of the path tested (a new DAG is stored paused), so a
+/// `TriggerDagOperator` starts a real run of a target there (decisions 378, 398); only other
+/// DAGs start them, so nothing else runs. The others stay paused: their triggers don't fire.
+async fn unpause_chained(client: &Client<HttpTransport>) -> Result<(), AppError> {
+    for found in client.dags().await?.dags {
+        let chained = found
+            .trigger
+            .as_ref()
+            .is_some_and(|t| t["kind"].as_str() == Some("chained"));
+        if chained && found.paused {
+            client
+                .wait(
+                    client
+                        .send_command(|| client.set_paused(&found.dag_id, false, false))
+                        .await?,
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 async fn wait_for_dag(
     client: &Client<HttpTransport>,
     dag: &str,

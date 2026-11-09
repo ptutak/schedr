@@ -13,3 +13,4 @@ the reader's documentation is `docs/`. Only `development.md` keeps hand-written 
 history = "JOURNAL.md#D373"
 step = "n/a"
 code = ["scripts/records.py::design_blocks", "scripts/records.py::generated_page"]
+checked = 2026-11-09

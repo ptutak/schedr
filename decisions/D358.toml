@@ -12,3 +12,4 @@ history = "archive/PROJECT.md#D358"
 step = "M4.12a"
 also = ["runs"]
 checked = 2026-11-09
+code = ["crates/schedr-master/src/dispatch/chained.rs::chained_step", "python/schedr/chained.py::TriggerDagOperator"]

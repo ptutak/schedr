@@ -22,16 +22,16 @@ and the defaults. `schedr dags check` and the master both check that schema
 no parameters. Giving it some is refused: ``the DAG takes no parameters (it declares no
 `params=`)``.
 
-A DAG with a trigger needs a default on every field. `Cron`, `Every` and `Once` all count:
-their scheduled runs use the defaults. The import fails with
+A DAG with a trigger other than `Chained()` needs a default on every field. `Cron`, `Every`
+and `Once` all count: their scheduled runs use the defaults. The import fails with
 
 ```
 DAG `report`: params: `ReportParams.name` has no default, but the DAG has a trigger: its scheduled runs use the defaults; give every field a default
 ```
 
 The master's wording of the same rule is ``params: `name` has no default, but the DAG has
-a schedule (its runs use the defaults)``. A DAG with `trigger=None` may leave fields
-required. A manual run then has to supply them.
+a schedule (its runs use the defaults)``. A DAG with `trigger=None` or `Chained()` may
+leave fields required. A manual run or operator must then supply them.
 
 `field(default_factory=...)` runs once, when the file is imported, and that value is the
 default. A Pydantic default is read with `model_construct`, so a default that breaks a

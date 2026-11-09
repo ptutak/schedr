@@ -25,6 +25,7 @@ from schedr._model import (
     validate_dag_id,
 )
 from schedr._serialization.describe import describe
+from schedr.chained import Chained
 from schedr.event_triggers import EventTrigger, TriggerFunction
 from schedr.outcomes import RunIf
 from schedr.runner.sources import IMPORTING
@@ -157,8 +158,9 @@ class Dag:
             )
         if trigger is not None and not isinstance(trigger, Trigger):
             raise TypeError(
-                "trigger must be Cron(...), Every(...), Once(...), RunOf(...), a @trigger "
-                f"function called with its arguments, or None, got {type(trigger).__name__}"
+                "trigger must be Cron(...), Every(...), Once(...), RunOf(...), Chained(...), "
+                "a @trigger function called with its arguments, or None, got "
+                f"{type(trigger).__name__}"
             )
         if isinstance(tags, str):
             raise TypeError("tags must be a list of strings, not a string")
@@ -178,7 +180,12 @@ class Dag:
         self._params = (
             None
             if params is None
-            else _params.declare(params, self.dag_id, scheduled=trigger is not None)
+            # A chained run takes its operator's params (decision 398): no default needed.
+            else _params.declare(
+                params,
+                self.dag_id,
+                scheduled=trigger is not None and not isinstance(trigger, Chained),
+            )
         )
         self._filename = sys._getframe(1).f_code.co_filename
         self._location = registry.location_for(self._filename)
@@ -319,7 +326,11 @@ class Dag:
         since = DagCtxRef(DagCtxField.SINCE)
         for task in builder.tasks.values():
             if since in task.references():
-                what = "no trigger" if self.trigger is None else "a Once trigger"
+                what = (
+                    "no trigger"
+                    if self.trigger is None
+                    else f"a {type(self.trigger).__name__} trigger"
+                )
                 raise ValueError(
                     f"DAG `{self.dag_id}` has {what}, so its first run has no previous fire "
                     f"time, but task `{task.id}` uses dag_ctx.run.since: set initial_since="

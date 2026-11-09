@@ -13,7 +13,7 @@ use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::task::{CleanupRun, Task, WaitSource};
 use schedr_model::value::DagCtxField;
 use schedr_model::{
-    CommandLine, Dag, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl,
+    CommandLine, Dag, DagId, EdgeKind, Expand, Reference, ResourceRole, SchedrVersion, SecretDecl,
     SensorMode, TaskId, TaskKind, Template, TemplatePart, TypeDesc, Value,
 };
 
@@ -76,7 +76,11 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
         }
     }
     if let Some(params) = &dag.params {
-        let scheduled = !matches!(dag.trigger, schedr_model::Trigger::None);
+        // A chained run takes its operator's params: no field needs a default.
+        let scheduled = !matches!(
+            dag.trigger,
+            schedr_model::Trigger::None | schedr_model::Trigger::Chained { .. }
+        );
         problems.extend(crate::params::problems(params, scheduled));
     }
     group_problems(dag, &mut problems);
@@ -125,6 +129,23 @@ fn run_of_trigger_problems(
     }
 }
 
+/// A `trigger=Chained(by=[...])` (decision 398) names at least one DAG, and not itself (a
+/// DAG can't start a run of its own).
+fn chained_trigger_problems(dag: &Dag, by: &[DagId], problems: &mut Vec<String>) {
+    if by.is_empty() {
+        problems.push(format!(
+            "DAG `{}`: `Chained(by=[])` names no DAG to start it; `Chained()` is any DAG",
+            dag.id
+        ));
+    }
+    if by.contains(&dag.id) {
+        problems.push(format!(
+            "DAG `{}`: `Chained(by=...)` names the DAG itself, which can't start its own runs",
+            dag.id
+        ));
+    }
+}
+
 /// A `RunOf`'s lag over [`schedr_model::task::MAX_LAG_MS`] either way.
 fn lag_problem(run_of: &schedr_model::task::RunOf) -> Option<String> {
     run_of
@@ -146,6 +167,9 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
         if let schedr_model::Trigger::RunOf { run_of } = &dag.trigger {
             run_of_trigger_problems(dag, run_of, problems);
             return;
+        }
+        if let schedr_model::Trigger::Chained { by: Some(by) } = &dag.trigger {
+            chained_trigger_problems(dag, by, problems);
         }
         if let schedr_model::Trigger::EventNamed { event } = &dag.trigger {
             if event.key.is_some() {
@@ -266,6 +290,9 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         (TaskKind::WaitFor { .. } | TaskKind::WaitForEvent { .. }, _) => {
             Some(format!("task `{id}`: wait_for has nothing to clean up"))
         }
+        (TaskKind::TriggerDag { .. }, _) => Some(format!(
+            "task `{id}`: a TriggerDagOperator has nothing to clean up"
+        )),
         (TaskKind::Script { .. }, _) => {
             Some(format!("task `{id}`: a script's cleanup is a script"))
         }
@@ -295,6 +322,14 @@ fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {
             }
         }
         problems.extend(batch_in_a_step(task));
+        if let TaskKind::TriggerDag { dag: target, .. } = &task.kind
+            && target == &dag.id
+        {
+            problems.push(format!(
+                "task `{id}`: a TriggerDagOperator can't start a run of its own DAG `{target}` (a \
+                 cycle)"
+            ));
+        }
         let mut in_text = kind_problems(task, problems);
         let mapped: Vec<&Value> = match &task.expand {
             Some(Expand::Product(over)) => over.iter().map(|m| &m.value).collect(),
@@ -402,6 +437,19 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
         TaskKind::WaitForEvent { event, max_wait_ms } => {
             wait_for_event_problems(task, event, *max_wait_ms, problems);
         }
+        TaskKind::TriggerDag {
+            params,
+            max_wait_ms,
+            wait,
+            planned_for,
+            ..
+        } => trigger_dag_problems(
+            task,
+            (*max_wait_ms, *wait),
+            params,
+            planned_for.as_ref(),
+            problems,
+        ),
         TaskKind::Empty | TaskKind::FirstOf { .. } => {}
     }
     in_text
@@ -624,6 +672,69 @@ fn wait_for_problems(
     }
 }
 
+/// What a `TriggerDagOperator` (decisions 358-362, 381) can't be: mapped (operators map in
+/// M4.12c), waiting for no time, given `max_wait` without waiting, planned for a literal that
+/// isn't a time, or given what the master can't work out (it starts the run, not a runner): a
+/// text template or a secret.
+fn trigger_dag_problems(
+    task: &Task,
+    (max_wait_ms, wait): (Option<u64>, bool),
+    params: &BTreeMap<String, Value>,
+    planned_for: Option<&Value>,
+    problems: &mut Vec<String>,
+) {
+    let id = &task.id;
+    let named = params
+        .iter()
+        .map(|(key, value)| (format!("`params[{key:?}]`"), value))
+        .chain(planned_for.map(|value| ("`planned_for`".to_owned(), value)));
+    for (name, value) in named {
+        if let Some(what) = not_for_the_master(value) {
+            problems.push(format!(
+                "task `{id}`: {name} can't be {what}: the master starts the run and reads no \
+                 secret and renders no template; pass the value from an upstream task"
+            ));
+        }
+    }
+    if max_wait_ms == Some(0) {
+        problems.push(format!("task `{id}`: `max_wait` must be above zero"));
+    }
+    if max_wait_ms.is_some() && !wait {
+        problems.push(format!(
+            "task `{id}`: `max_wait` is for `wait=True`; with `wait=False` it ends once the run \
+             is created"
+        ));
+    }
+    if mapping::is_mapped(task) {
+        problems.push(format!(
+            "task `{id}`: a TriggerDagOperator can't be mapped yet: create one per element in a \
+             `for` loop in the DAG file"
+        ));
+    }
+    if let Some(Value::Literal(literal)) = planned_for
+        && literal
+            .get("$datetime")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|text| text.parse::<jiff::Timestamp>().is_err())
+    {
+        problems.push(format!(
+            "task `{id}`: `planned_for` is a datetime with an offset or a reference, not \
+             {literal}"
+        ));
+    }
+}
+
+/// What in `value` the master can't work out, if anything: a text template or a secret.
+fn not_for_the_master(value: &Value) -> Option<&'static str> {
+    match value {
+        Value::Template(_) => Some("a text template"),
+        Value::Ref(schedr_model::value::Reference::Secret(_)) => Some("a secret"),
+        Value::List(items) => items.iter().find_map(not_for_the_master),
+        Value::Map(entries) => entries.values().find_map(not_for_the_master),
+        Value::Literal(_) | Value::Ref(_) => None,
+    }
+}
+
 /// What a `wait_for(EventNamed(...))` (decision 354) can't be: mapped, waiting for no time, or
 /// keyed by what isn't a string the master can work out for the run (a literal string, the
 /// run's params, its ID, its DAG, its own event's key, an upstream output).
@@ -734,10 +845,13 @@ fn expand_problems(dag: &Dag, problems: &mut Vec<String>) {
             arguments, branch, ..
         } = &task.kind
         else {
-            problems.push(format!(
-                "task `{}`: only a @task function can be mapped (`.expand()`)",
-                task.id
-            ));
+            // A `TriggerDagOperator` says how to do without (decision 381).
+            if !matches!(task.kind, TaskKind::TriggerDag { .. }) {
+                problems.push(format!(
+                    "task `{}`: only a @task function can be mapped (`.expand()`)",
+                    task.id
+                ));
+            }
             continue;
         };
         if *branch {
@@ -1272,6 +1386,56 @@ pub fn connection_problems(files: Vec<ParsedFile>) -> Vec<ParsedFile> {
         .collect()
 }
 
+/// Each `TriggerDagOperator` checked against its target, over a whole root's files, for
+/// `schedr dags check` only (decision 398): a target in the root that doesn't let its DAG start
+/// it (not `trigger=Chained()`, or `Chained(by=...)` not naming it) makes the operator's file
+/// fail; a target no file defines is a warning (it may be in a root not parsed yet, decision
+/// 379). The master doesn't: one DAG's edit would stop another's file loading; its task fails
+/// when it runs instead.
+#[must_use]
+pub fn target_problems(files: Vec<ParsedFile>) -> Vec<ParsedFile> {
+    let triggers: BTreeMap<DagId, schedr_model::Trigger> = files
+        .iter()
+        .flat_map(|f| f.dags.iter().map(|d| (d.id.clone(), d.trigger.clone())))
+        .collect();
+    files
+        .into_iter()
+        .map(|mut file| {
+            let mut problems = Vec::new();
+            for dag in &file.dags {
+                for task in &dag.tasks {
+                    let TaskKind::TriggerDag { dag: target, .. } = &task.kind else {
+                        continue;
+                    };
+                    let at = format!("DAG `{}`, task `{}`", dag.id, task.id);
+                    match triggers.get(target) {
+                        None => file.warnings.push(format!(
+                            "{at}: no DAG `{target}` in this root; if it is in another, it runs \
+                             once that root is parsed, else the task fails"
+                        )),
+                        Some(trigger) if !trigger.chained_from(&dag.id) => problems.push(format!(
+                            "{at}: DAG `{target}` isn't started by this DAG: a TriggerDagOperator \
+                             starts only a DAG with `trigger=Chained()` (or `Chained(by=[...])` \
+                             naming `{}`)",
+                            dag.id
+                        )),
+                        Some(_) => {}
+                    }
+                }
+            }
+            if !problems.is_empty() {
+                file.dags.clear();
+                file.error = Some(ErrorSummary {
+                    exception: INVALID_DAG_EXCEPTION.to_owned(),
+                    message: problems.join("\n"),
+                    traceback: String::new(),
+                });
+            }
+            file
+        })
+        .collect()
+}
+
 /// Room a worker's `Finished` needs besides the output (ids, the summary, framing).
 const RESULT_OVERHEAD: u64 = 64 * 1024;
 
@@ -1294,7 +1458,8 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
                 TaskKind::Empty
                 | TaskKind::FirstOf { .. }
                 | TaskKind::WaitFor { .. }
-                | TaskKind::WaitForEvent { .. } => {
+                | TaskKind::WaitForEvent { .. }
+                | TaskKind::TriggerDag { .. } => {
                     return None;
                 }
                 TaskKind::Command { .. } | TaskKind::Script { .. } => 2,

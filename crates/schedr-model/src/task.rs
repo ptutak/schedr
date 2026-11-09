@@ -312,6 +312,27 @@ pub enum TaskKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_wait_ms: Option<u64>,
     },
+    /// `TriggerDagOperator` (decisions 357-362, 365, 378-381): starts a `chained` run of another
+    /// DAG, carried out by the master with no process and no slot. Its value is the started
+    /// run's ID; with `wait` it ends when that run has: `Failed` when the run didn't succeed,
+    /// `TimedOut` after `max_wait`.
+    TriggerDag {
+        /// The DAG to start a run of.
+        dag: crate::DagId,
+        /// The run's parameters, over the target's defaults: literals or references, resolved by
+        /// the master and checked against the target's schema when the task runs.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, Value>,
+        /// The run's `planned_for`, a datetime or a reference; `None`: the parent run's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        planned_for: Option<Value>,
+        /// Whether it waits for the run to end (the default) or ends once the run is created.
+        #[serde(default = "default_wait")]
+        wait: bool,
+        /// How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_wait_ms: Option<u64>,
+    },
     /// An inline command, run by the agent.
     Command {
         /// The command line.
@@ -353,6 +374,11 @@ pub enum TaskKind {
     },
     /// An `EmptyOperator`: completed by the master, no process.
     Empty,
+}
+
+/// `TriggerDagOperator`'s `wait` when not given: it waits.
+const fn default_wait() -> bool {
+    true
 }
 
 /// A command's or a script's part in a resource, for `schedr task-ctx resource set|get`.
@@ -575,6 +601,15 @@ impl Task {
             TaskKind::WaitForEvent { event, .. } => {
                 event.key.iter().flat_map(Value::references).collect()
             }
+            TaskKind::TriggerDag {
+                params,
+                planned_for,
+                ..
+            } => params
+                .values()
+                .chain(planned_for)
+                .flat_map(Value::references)
+                .collect(),
             TaskKind::Empty | TaskKind::FirstOf { .. } | TaskKind::WaitFor { .. } => Vec::new(),
         }
     }

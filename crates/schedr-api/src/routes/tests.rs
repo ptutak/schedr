@@ -126,6 +126,7 @@ async fn api_of(
             since: ts("2026-10-14T03:00:00Z"),
             triggered_at: ts(NOW),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()
@@ -1793,6 +1794,7 @@ async fn a_triggers_events_are_masked_as_outputs_are_and_paged() {
             triggered_by: "trigger",
             params: &params,
             event: Some(&event),
+            parent_run_id: None,
         };
         let id = format!("01a00000-0000-7000-8000-00000000000{i}");
         db.store_event(&id, &new, &event).await.unwrap();

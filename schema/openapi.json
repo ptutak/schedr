@@ -29,6 +29,13 @@
             "description": "Its ID.",
             "type": "string"
           },
+          "chained_run_id": {
+            "description": "The run a `TriggerDagOperator`'s attempt started (no worker runs it).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cleanup": {
             "oneOf": [
               {
@@ -1224,6 +1231,13 @@
           },
           "late_failure": {
             "description": "A `success` that learnt of a failure after its end, shown yellow (decision 309): why,\n`late_cleanup_failed` for now.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_run_id": {
+            "description": "The run whose `TriggerDagOperator` started it, for a `chained` run.",
             "type": [
               "string",
               "null"

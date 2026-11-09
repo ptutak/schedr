@@ -58,6 +58,32 @@ pub enum SchedulerError {
     /// A run brings an event, and no event trigger starts the DAG's runs.
     #[error("DAG `{0}`: no event trigger starts its runs, so its tasks read no event")]
     NoEventTrigger(DagId),
+    /// A `TriggerDagOperator`'s target isn't started by other DAGs, or not by this one
+    /// (decision 398).
+    #[error(
+        "DAG `{dag_id}` can't be started by a TriggerDagOperator of `{by}`: {}",
+        if *chained {
+            "its `trigger=Chained(by=[...])` doesn't name that DAG"
+        } else {
+            "only a DAG with `trigger=Chained()` is started by other DAGs (its own trigger, or \
+             none, says how it runs)"
+        }
+    )]
+    NotChained {
+        /// The target.
+        dag_id: DagId,
+        /// The DAG whose operator would start it.
+        by: DagId,
+        /// Whether it is `Chained`, naming other DAGs.
+        chained: bool,
+    },
+    /// A `TriggerDagOperator`'s target is paused: its trigger, `Chained`, is switched off, as a
+    /// schedule is (decision 398).
+    #[error(
+        "DAG `{0}` is paused, so no TriggerDagOperator starts its runs until it is resumed \
+         (`schedr dags unpause {0}`)"
+    )]
+    ChainedPaused(DagId),
     /// A manual run's time isn't allowed.
     #[error(transparent)]
     ManualRun(#[from] ManualRunError),
@@ -303,6 +329,60 @@ impl Scheduler {
         user: &str,
         now: Timestamp,
     ) -> Result<CreatedRun, SchedulerError> {
+        self.create_run(
+            run_id,
+            dag_id,
+            requested,
+            (params, event),
+            (RunKind::Manual, user, None),
+            now,
+        )
+        .await
+    }
+
+    /// Creates a `chained` run of `dag_id` (a `TriggerDagOperator`'s, decisions 357-362): as a
+    /// manual run, with its ID given, `parent_run_id` as its parent and `triggered_by`, if the
+    /// DAG is `trigger=Chained()` letting `parent_dag` start it, and not paused (decision 398).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::trigger_as`].
+    pub async fn trigger_chained(
+        &self,
+        run_id: &str,
+        dag_id: &DagId,
+        planned_for: Timestamp,
+        params: Option<&serde_json::Map<String, serde_json::Value>>,
+        (parent_run_id, parent_dag): (&str, &DagId),
+        now: Timestamp,
+    ) -> Result<CreatedRun, SchedulerError> {
+        self.create_run(
+            Some(run_id),
+            dag_id,
+            Some(planned_for),
+            (params, None),
+            (
+                RunKind::Chained,
+                parent_run_id,
+                Some((parent_run_id, parent_dag)),
+            ),
+            now,
+        )
+        .await
+    }
+
+    async fn create_run(
+        &self,
+        run_id: Option<&str>,
+        dag_id: &DagId,
+        requested: Option<Timestamp>,
+        (params, event): (
+            Option<&serde_json::Map<String, serde_json::Value>>,
+            Option<&schedr_model::RunEvent>,
+        ),
+        (kind, user, parent): (RunKind, &str, Option<(&str, &DagId)>),
+        now: Timestamp,
+    ) -> Result<CreatedRun, SchedulerError> {
         let active = self
             .db
             .active_dags()
@@ -315,6 +395,18 @@ impl Scheduler {
                 dag_id: dag_id.clone(),
                 held,
             });
+        }
+        if let Some((_, by)) = parent {
+            if !active.dag.trigger.chained_from(by) {
+                return Err(SchedulerError::NotChained {
+                    dag_id: dag_id.clone(),
+                    by: by.clone(),
+                    chained: matches!(active.dag.trigger, schedr_model::Trigger::Chained { .. }),
+                });
+            }
+            if active.paused {
+                return Err(SchedulerError::ChainedPaused(dag_id.clone()));
+            }
         }
         if active.dag.trigger.brings_event() != event.is_some() {
             return Err(if event.is_some() {
@@ -337,9 +429,10 @@ impl Scheduler {
         let nearest = self.db.nearest_earlier_run(dag_id, planned_for).await?;
         let times = plan.manual_times(requested, now, nearest)?;
         let params = run_params(&active, params)?;
-        let mut new = new_run(&active, RunKind::Manual, times, now, user, &params);
+        let mut new = new_run(&active, kind, times, now, user, &params);
         new.state = RunState::Queued;
         new.event = event;
+        new.parent_run_id = parent.map(|(run, _)| run);
         self.wakes.wake(dag_id, WakeReason::RunQueued);
         // Only scheduled runs are unique per `planned_for`: a manual one is stored unless a
         // run with its given ID is there already, and then that one is it.
@@ -348,7 +441,7 @@ impl Scheduler {
         let running = self.db.running_count(dag_id).await?;
         let queued = self.db.queued_runs(dag_id).await?;
         self.start_queued(&queued, &plan, running, now).await?;
-        Ok(created(&active, run_id, RunKind::Manual, times))
+        Ok(created(&active, run_id, kind, times))
     }
 
     /// Stores what a DAG's trigger found: a key not seen before queues a run, as a manual one
@@ -378,6 +471,11 @@ impl Scheduler {
         let mut new = new_run(active, RunKind::Event, times, now, EVENT_USER, &params);
         new.state = RunState::Queued;
         new.event = Some(event);
+        // A `RunOf` trigger's run was caused by the run it names (its event's key): its parent,
+        // linked both ways as a chained run is.
+        if active.dag.trigger.is_run_of() {
+            new.parent_run_id = Some(&event.key);
+        }
         let run_id = uuid::Uuid::now_v7().to_string();
         let stored = self.db.store_event(&run_id, &new, event).await?;
         if stored.is_some() {
@@ -483,5 +581,6 @@ fn new_run<'a>(
         triggered_by: by,
         params,
         event: None,
+        parent_run_id: None,
     }
 }

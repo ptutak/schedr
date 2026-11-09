@@ -56,6 +56,7 @@ use crate::metrics::{MasterMetrics, ReasonLabels};
 use crate::quiet::Wakes;
 use crate::workers::{Needs, Workers};
 
+pub(crate) mod chained;
 mod event_wait;
 pub(crate) use event_wait::event_value;
 #[cfg(test)]
@@ -259,6 +260,8 @@ impl DispatchError {
 pub struct Dispatcher {
     db: Database,
     execution: Execution,
+    /// Creates the runs `TriggerDagOperator`s start (the core's, shared, once set).
+    scheduler: crate::scheduler::Scheduler,
     workers: Workers,
     cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
@@ -349,6 +352,7 @@ impl Dispatcher {
     pub fn new(db: Database, cancel_grace: Duration) -> Self {
         Self {
             execution: Execution::new(db.clone()),
+            scheduler: crate::scheduler::Scheduler::new(db.clone()),
             db,
             workers: Workers::new(),
             cancel_grace,
@@ -392,6 +396,12 @@ impl Dispatcher {
     pub const fn with_switch_off_after(mut self, times: u32) -> Self {
         self.switch_off_after = times;
         self
+    }
+
+    /// Creates the runs `TriggerDagOperator`s start with `scheduler` (the core's, sharing its
+    /// wakes), not one of its own.
+    pub fn set_scheduler(&mut self, scheduler: crate::scheduler::Scheduler) {
+        self.scheduler = scheduler;
     }
 
     /// Counts assignments, rejections, ended attempts, waiting tasks and finished runs in
@@ -850,13 +860,17 @@ impl Dispatcher {
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
-        let (waits, mut ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = self
+        let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = self
             .db
             .ready_instances(now)
             .await?
             .into_iter()
             .filter(|r| !self.set_aside.contains_key(&r.instance_id))
             .partition(|r| r.dag.task(&r.task_id).is_some_and(waits_for_a_run));
+        let (chained, mut ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
+            .into_iter()
+            .partition(|r| r.dag.task(&r.task_id).is_some_and(starts_a_run));
+        self.chained_into(now, &chained, outgoing).await?;
         self.handing.clear();
         // The `@sensor(wait_for=...)`s whose run has come are assigned with the others.
         ready.extend(self.wait_for_runs(now, &waits).await?);
@@ -3242,6 +3256,11 @@ fn task_specific(error: &DispatchError) -> bool {
 
 /// Whether a task waits for another DAG's run before anything runs it: a `wait_for` node, or an
 /// `@sensor(wait_for=...)` (decision 353).
+/// Whether a task is a `TriggerDagOperator`, which the master carries out (decision 361).
+const fn starts_a_run(task: &schedr_model::Task) -> bool {
+    matches!(task.kind, TaskKind::TriggerDag { .. })
+}
+
 fn waits_for_a_run(task: &schedr_model::Task) -> bool {
     matches!(
         task.kind,

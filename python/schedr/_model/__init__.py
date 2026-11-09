@@ -33,11 +33,13 @@ from schedr._model.tasks import (
     TaskCleanup,
     TaskKind,
     TaskSettings,
+    TriggerDagKind,
     WaitForEventKind,
     WaitForKind,
 )
 from schedr._model.timestamps import format_timestamp, parse_moment
 from schedr._model.trigger import (
+    ChainedTrigger,
     CronTrigger,
     EventNamedTrigger,
     EveryTrigger,
@@ -83,6 +85,7 @@ from schedr._model.version import SchedrVersion
 
 __all__ = [
     "ArgvCommand",
+    "ChainedTrigger",
     "CleanupScript",
     "CommandKind",
     "CommandLine",
@@ -143,6 +146,7 @@ __all__ = [
     "TemplateRef",
     "TemplateValue",
     "Trigger",
+    "TriggerDagKind",
     "TupleType",
     "TypeDesc",
     "TypedDictType",

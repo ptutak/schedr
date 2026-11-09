@@ -72,6 +72,7 @@ async fn with_run(state: RunState) -> (Database, String) {
             since: ts("2026-10-20T08:00:00Z"),
             triggered_at: ts("2026-10-21T08:00:00Z"),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()

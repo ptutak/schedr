@@ -11,4 +11,5 @@ earlier text that it counts as a running task.
 '''
 history = "JOURNAL.md#D380"
 step = "M4.12a"
-code = []
+code = ["crates/schedr-db/src/attempts.rs::ACTIVE_ATTEMPTS"]
+checked = 2026-11-09

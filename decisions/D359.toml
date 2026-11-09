@@ -12,3 +12,4 @@ history = "archive/PROJECT.md#D359"
 step = "M4.12a"
 also = ["outcomes"]
 checked = 2026-11-09
+code = ["crates/schedr-master/src/dispatch/chained.rs::run_ended"]

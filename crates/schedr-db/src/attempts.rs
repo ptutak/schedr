@@ -36,6 +36,39 @@ pub struct Unschedulable {
     pub since: Timestamp,
 }
 
+/// An open `TriggerDagOperator` attempt (see [`Database::chained_attempts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainedAttempt {
+    /// The attempt's ID.
+    pub id: String,
+    /// Its task instance's ID.
+    pub instance_id: String,
+    /// The run it belongs to (the parent of the run it starts).
+    pub run_id: String,
+    /// Its task.
+    pub task_id: TaskId,
+    /// Its instance (-1: the whole task).
+    pub map_index: i32,
+    /// When it started.
+    pub started_at: Timestamp,
+    /// The run it starts.
+    pub chained_run_id: String,
+    /// That run's state; `None` while it isn't created.
+    pub chained_state: Option<schedr_model::RunState>,
+    /// When that run ended, if it has.
+    pub chained_ended_at: Option<Timestamp>,
+    /// The parent run's DAG.
+    pub dag: Arc<Dag>,
+    /// Whether the parent run, or this task of it, is being cancelled.
+    pub cancel_requested: bool,
+    /// The parent run's kind.
+    pub run_kind: RunKind,
+    /// The parent run's `planned_for`.
+    pub planned_for: Timestamp,
+    /// The parent run's `since`.
+    pub since: Timestamp,
+}
+
 /// A queued task instance of a running run, ready to be assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadyInstance {
@@ -227,21 +260,24 @@ const OPEN_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
     t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
-    WHERE a.status IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
+    WHERE a.status IS NULL AND a.chained_run_id IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
     ORDER BY a.assigned_at, a.id";
 const UNSTARTED_CLEANUPS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
     t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
-    WHERE a.status IS NULL AND a.moved_at < $1{ts} ORDER BY a.moved_at LIMIT $2";
+    WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.moved_at < $1{ts} \
+    ORDER BY a.moved_at LIMIT $2";
 const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.task_id \
     FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
-    JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL ORDER BY a.id";
+    JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL AND a.chained_run_id IS NULL \
+    ORDER BY a.id";
 const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
     t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
-    WHERE a.status IS NULL AND a.started_at IS NULL AND a.assigned_at < $1{ts} \
+    WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.started_at IS NULL \
+    AND a.assigned_at < $1{ts} \
     ORDER BY a.assigned_at, a.id LIMIT $2";
 
 impl Database {
@@ -336,6 +372,123 @@ impl Database {
             }
         });
         Ok(try_number.map(|n| (id, u32::try_from(n).unwrap_or(0))))
+    }
+
+    /// Starts a `TriggerDagOperator`'s attempt (decisions 361, 380): the queued instance becomes
+    /// `running` with a new attempt that no worker runs, started at once, recording the run it
+    /// starts (`chained_run_id`) before that run is created. Returns the attempt's ID and try
+    /// number; `None` if the instance isn't queued any more.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails (nothing is stored then).
+    pub async fn start_chained_attempt(
+        &self,
+        instance_id: &str,
+        chained_run_id: &str,
+        now: Timestamp,
+    ) -> Result<Option<(String, u32)>, DbError> {
+        const CLAIM: &str = "UPDATE task_instances SET state = 'running', \
+            try_number = try_number + 1, ready_at = NULL, queued_reason = NULL, updated_at = $1{ts} \
+            WHERE id = $2{uuid} AND state = 'queued'";
+        const TRY: &str = "SELECT try_number FROM task_instances WHERE id = $1{uuid}";
+        const INSERT: &str = "INSERT INTO attempts \
+            (id, task_instance_id, try_number, assigned_at, started_at, chained_run_id) \
+            VALUES ($1{uuid}, $2{uuid}, $3, $4{ts}, $4{ts}, $5{uuid})";
+        let id = Uuid::now_v7().to_string();
+        let now = db_time(now);
+        let try_number: Option<i32> = in_tx!(self, |tx, backend| {
+            let claimed = sqlx::query(sql(backend, CLAIM))
+                .bind(&now)
+                .bind(instance_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            if claimed == 1 {
+                let try_number: i32 = sqlx::query_scalar(sql(backend, TRY))
+                    .bind(instance_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                sqlx::query(sql(backend, INSERT))
+                    .bind(&id)
+                    .bind(instance_id)
+                    .bind(try_number)
+                    .bind(&now)
+                    .bind(chained_run_id)
+                    .execute(&mut *tx)
+                    .await?;
+                Some(try_number)
+            } else {
+                None
+            }
+        });
+        Ok(try_number.map(|n| (id, u32::try_from(n).unwrap_or(0))))
+    }
+
+    /// The `TriggerDagOperator` attempts still open (decision 361), each with the run it
+    /// started (`None` while that run isn't created yet: a master stopped in between) and its
+    /// parent run's state.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a row doesn't read.
+    pub async fn chained_attempts(&self) -> Result<Vec<ChainedAttempt>, DbError> {
+        const OPEN: &str = "SELECT a.id{text}, t.id{text}, t.run_id{text}, t.task_id, \
+            t.map_index, {ts<}a.assigned_at{>ts}, a.chained_run_id{text}, c.state, \
+            r.dag_version_id{text}, \
+            (r.cancel_requested_at IS NOT NULL OR t.cancel_requested_at IS NOT NULL), \
+            r.kind, {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, {ts<}c.ended_at{>ts} \
+            FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+            JOIN runs r ON r.id = t.run_id LEFT JOIN runs c ON c.id = a.chained_run_id \
+            WHERE a.status IS NULL AND a.chained_run_id IS NOT NULL ORDER BY a.assigned_at, a.id";
+        type Row = (
+            String,
+            String,
+            String,
+            String,
+            i32,
+            String,
+            String,
+            Option<String>,
+            String,
+            bool,
+            String,
+            String,
+            String,
+            Option<String>,
+        );
+        let rows: Vec<Row> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, OPEN)).fetch_all(pool).await?
+        });
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let (id, instance_id, run_id, task_id, map_index, at, chained, state, version, cancel) = (
+                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9,
+            );
+            found.push(ChainedAttempt {
+                id,
+                instance_id,
+                run_id,
+                task_id: TaskId::new(&task_id).map_err(|e| DbError::InvalidData {
+                    what: "task_instances.task_id",
+                    reason: e.to_string(),
+                })?,
+                map_index,
+                started_at: parse_time("attempts.assigned_at", &at)?,
+                chained_run_id: chained,
+                chained_state: state.map(|s| from_name("runs.state", s)).transpose()?,
+                dag: self.dag_version(&version).await?,
+                cancel_requested: cancel,
+                run_kind: from_name("runs.kind", row.10)?,
+                planned_for: parse_time("runs.planned_for", &row.11)?,
+                since: parse_time("runs.since", &row.12)?,
+                chained_ended_at: row
+                    .13
+                    .map(|at| parse_time("runs.ended_at", &at))
+                    .transpose()?,
+            });
+        }
+        Ok(found)
     }
 
     /// Takes back an assignment the worker rejected: the attempt is deleted (a rejection is
@@ -750,10 +903,11 @@ impl Database {
             JOIN runs r ON r.id = t.run_id \
             JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
-            WHERE a.status IS NULL AND a.worker_id IS NULL AND a.cleanup_not_before <= $1{ts} \
+            WHERE a.status IS NULL AND a.worker_id IS NULL AND a.chained_run_id IS NULL \
+            AND a.cleanup_not_before <= $1{ts} \
             ORDER BY a.assigned_at, a.id";
         const IDS: &str = "SELECT a.id{text}, a.task_instance_id{text} FROM attempts a \
-            WHERE a.status IS NULL AND a.worker_id IS NULL";
+            WHERE a.status IS NULL AND a.worker_id IS NULL AND a.chained_run_id IS NULL";
         let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WAITING))
                 .bind(db_time(now))
@@ -815,7 +969,8 @@ impl Database {
     ) -> Result<Vec<(String, TaskId, u32)>, DbError> {
         const COUNTS: &str = "SELECT t.run_id{text}, t.task_id, COUNT(*) \
             FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
-            JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL AND r.dag_id = $1 \
+            JOIN runs r ON r.id = t.run_id WHERE a.status IS NULL AND a.chained_run_id IS NULL \
+            AND r.dag_id = $1 \
             GROUP BY t.run_id, t.task_id ORDER BY t.run_id, t.task_id";
         let rows: Vec<(String, String, i64)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, COUNTS))

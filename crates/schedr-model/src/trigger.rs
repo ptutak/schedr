@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
 
-/// What starts runs of a DAG besides people (and other DAGs).
+/// What starts runs of a DAG besides people.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Trigger {
-    /// Nothing: manual runs only.
+    /// Nothing: manual runs only (the DAG is switched off but for those).
     None,
     /// A cron expression (5 or 6 fields, or a preset such as `@daily`) evaluated in a time zone.
     Cron {
@@ -82,6 +82,13 @@ pub enum Trigger {
         /// Which runs.
         run_of: crate::task::RunOf,
     },
+    /// `trigger=Chained()` (decision 398): only other DAGs' `TriggerDagOperator`s start its
+    /// runs (and people, by hand); the scheduler never does.
+    Chained {
+        /// The DAGs whose operators may start it; `None`: any DAG. Never empty.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<Vec<crate::DagId>>,
+    },
     /// `trigger=EventNamed(...)` (decision 354): a run per event of that name posted through the
     /// API while this DAG is live, keyed by the event's key, planned for its `at`.
     EventNamed {
@@ -145,6 +152,23 @@ impl Trigger {
         matches!(self, Self::None)
     }
 
+    /// Whether `dag` may start its runs with a `TriggerDagOperator` (decision 398): it is
+    /// `Chained`, for any DAG or one of those it names.
+    #[must_use]
+    pub fn chained_from(&self, dag: &crate::DagId) -> bool {
+        match self {
+            Self::Chained { by: None } => true,
+            Self::Chained { by: Some(by) } => by.contains(dag),
+            _ => false,
+        }
+    }
+
+    /// Whether another DAG's runs start its runs (`trigger=RunOf(...)`).
+    #[must_use]
+    pub const fn is_run_of(&self) -> bool {
+        matches!(self, Self::RunOf { .. })
+    }
+
     /// Whether events start its runs: it has no fire times.
     #[must_use]
     pub const fn is_event(&self) -> bool {
@@ -168,6 +192,7 @@ impl Trigger {
         match self {
             Self::Cron { catchup, .. } | Self::Every { catchup, .. } => *catchup,
             Self::None
+            | Self::Chained { .. }
             | Self::Once { .. }
             | Self::Event { .. }
             | Self::RunOf { .. }
@@ -183,7 +208,11 @@ impl Trigger {
             Self::Cron { start, .. } | Self::Every { start, .. } | Self::Event { start, .. } => {
                 *start
             }
-            Self::None | Self::Once { .. } | Self::RunOf { .. } | Self::EventNamed { .. } => None,
+            Self::None
+            | Self::Chained { .. }
+            | Self::Once { .. }
+            | Self::RunOf { .. }
+            | Self::EventNamed { .. } => None,
         }
     }
 
@@ -192,7 +221,11 @@ impl Trigger {
     pub const fn end(&self) -> Option<Timestamp> {
         match self {
             Self::Cron { end, .. } | Self::Every { end, .. } | Self::Event { end, .. } => *end,
-            Self::None | Self::Once { .. } | Self::RunOf { .. } | Self::EventNamed { .. } => None,
+            Self::None
+            | Self::Chained { .. }
+            | Self::Once { .. }
+            | Self::RunOf { .. }
+            | Self::EventNamed { .. } => None,
         }
     }
 }

@@ -2877,6 +2877,7 @@ async fn orders_succeeded(core: &MasterCore, planned_for: Timestamp, ended: Time
             since: planned_for,
             triggered_at: planned_for,
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()
@@ -2917,11 +2918,14 @@ async fn a_dag_started_by_runs_of_another_starts_once_for_each_that_succeeds_whi
     core.tick(later(1)).await.unwrap();
     core.tick(later(2)).await.unwrap();
     assert_eq!(sync_runs(&core).await.len(), 0);
-    orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(3)).await;
+    let theirs = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(3)).await;
     core.tick(later(4)).await.unwrap();
     core.tick(later(5)).await.unwrap();
     let runs = sync_runs(&core).await;
     assert_eq!(runs.len(), 1, "once, however many passes see it");
+    // The run that started it is its parent, linked both ways.
+    let started = core.db.dag_runs(&sync, None, 1).await.unwrap().remove(0);
+    assert_eq!(started.parent_run_id.as_deref(), Some(theirs.as_str()));
     assert_eq!(
         runs[0].0,
         ts("2026-10-21T01:00:00Z"),

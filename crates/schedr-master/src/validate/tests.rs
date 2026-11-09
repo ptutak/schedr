@@ -1327,3 +1327,134 @@ fn a_batch_is_a_trigger_poke_s() {
             .contains("a wait step ends with one value")
     );
 }
+
+/// `start`, a `TriggerDagOperator` of `orders`, with `fields` over it.
+fn starting(fields: &Json) -> Json {
+    let mut start = task("start", &json!({}));
+    start.as_object_mut().unwrap().remove("arguments");
+    start["kind"] = json!("trigger_dag");
+    start["dag"] = json!("orders");
+    start["output_type"] = json!({"type": "str"});
+    for (key, value) in fields.as_object().unwrap() {
+        start[key] = value.clone();
+    }
+    start
+}
+
+#[rstest::rstest]
+#[case::a_valid_one(json!({"params": {"day": output_of("extract")}}), &[])]
+#[case::no_time_to_wait(
+    json!({"max_wait_ms": 0}),
+    &["task `start`: `max_wait` must be above zero"]
+)]
+#[case::max_wait_without_waiting(
+    json!({"wait": false, "max_wait_ms": 1_000}),
+    &["task `start`: `max_wait` is for `wait=True`; with `wait=False` it ends once the run is \
+       created"]
+)]
+#[case::its_own_dag(
+    json!({"dag": "sync"}),
+    &["task `start`: a TriggerDagOperator can't start a run of its own DAG `sync` (a cycle)"]
+)]
+#[case::planned_for_not_a_time(
+    json!({"planned_for": {"literal": "2026-10-21"}}),
+    &["task `start`: `planned_for` is a datetime with an offset or a reference, not \
+       \"2026-10-21\""]
+)]
+#[case::a_template(
+    json!({"params": {"day": {"template": [{"text": "day-"}, output_of("extract")]}}}),
+    &["task `start`: `params[\"day\"]` can't be a text template: the master starts the run and \
+       reads no secret and renders no template; pass the value from an upstream task"]
+)]
+#[case::a_secret(
+    json!({"planned_for": {"ref": {"kind": "secret", "storage": "vault", "path": "a/b"}}}),
+    &["task `start`: `planned_for` can't be a secret: the master starts the run and reads no \
+       secret and renders no template; pass the value from an upstream task"]
+)]
+fn a_trigger_dag_is_checked(#[case] fields: Json, #[case] expected: &[&str]) {
+    let found = problems(&json!({
+        "tasks": [task("extract", &json!({})), starting(&fields)],
+        "edges": [edge("extract", "start", "data")]
+    }));
+    assert_eq!(found, expected);
+}
+
+#[test]
+fn a_mapped_trigger_dag_is_refused_until_operators_map() {
+    let mut start = starting(&json!({}));
+    start["expand"] = json!({"product": [{"name": "day", "value": {"literal": [1, 2]}}]});
+    let found = problems(&json!({"tasks": [start], "edges": []}));
+    assert_eq!(
+        found,
+        [
+            "task `start`: a TriggerDagOperator can't be mapped yet: create one per element in a \
+          `for` loop in the DAG file"
+        ]
+    );
+}
+
+/// A root of `sync.py` (whose `start` starts `orders`) and, unless `None`, `orders.py` with
+/// `trigger`.
+fn chaining_root(trigger: Option<Json>) -> Vec<ParsedFile> {
+    let sync = dag_with(&json!({"tasks": [starting(&json!({}))], "edges": []}));
+    let mut files = vec![file("sync.py", vec![sync])];
+    if let Some(trigger) = trigger {
+        let mut orders = dag_with(&json!({"trigger": trigger}));
+        orders.id = DagId::new("orders").unwrap();
+        orders.location.path = "orders.py".to_owned();
+        files.push(file("orders.py", vec![orders]));
+    }
+    target_problems(files)
+}
+
+#[test]
+fn a_target_no_file_of_the_root_defines_is_a_warning() {
+    let found = chaining_root(None);
+    assert_eq!(
+        found[0].warnings,
+        [
+            "DAG `sync`, task `start`: no DAG `orders` in this root; if it is in another, it runs \
+          once that root is parsed, else the task fails"
+        ]
+    );
+    assert_eq!(found[0].dags.len(), 1, "still valid");
+}
+
+#[rstest::rstest]
+#[case::any_dag(json!({"kind": "chained"}), true)]
+#[case::named(json!({"kind": "chained", "by": ["sync"]}), true)]
+#[case::not_named(json!({"kind": "chained", "by": ["other"]}), false)]
+#[case::no_trigger(json!({"kind": "none"}), false)]
+#[case::a_schedule(json!({"kind": "once", "at": "2026-11-01T00:00:00Z"}), false)]
+fn only_a_chained_target_naming_the_dag_if_any_may_be_started(
+    #[case] trigger: Json,
+    #[case] allowed: bool,
+) {
+    let found = chaining_root(Some(trigger));
+    assert!(found.iter().all(|f| f.warnings.is_empty()));
+    if allowed {
+        assert_eq!(found[0].error, None);
+    } else {
+        let error = found[0].error.as_ref().unwrap();
+        assert_eq!(
+            error.message,
+            "DAG `sync`, task `start`: DAG `orders` isn't started by this DAG: a \
+             TriggerDagOperator starts only a DAG with `trigger=Chained()` (or \
+             `Chained(by=[...])` naming `sync`)"
+        );
+        assert_eq!(found[0].dags, [], "the file fails, as the task would");
+    }
+}
+
+#[rstest::rstest]
+#[case::empty(json!([]), "DAG `sync`: `Chained(by=[])` names no DAG to start it; `Chained()` is any DAG")]
+#[case::itself(
+    json!(["sync"]),
+    "DAG `sync`: `Chained(by=...)` names the DAG itself, which can't start its own runs"
+)]
+fn a_chained_trigger_names_other_dags(#[case] by: Json, #[case] expected: &str) {
+    assert_eq!(
+        problems(&json!({"trigger": {"kind": "chained", "by": by}})),
+        [expected]
+    );
+}

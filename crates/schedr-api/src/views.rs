@@ -217,6 +217,9 @@ pub struct RunView {
     /// A `success` that learnt of a failure after its end, shown yellow (decision 309): why,
     /// `late_cleanup_failed` for now.
     pub late_failure: Option<String>,
+    /// The run whose `TriggerDagOperator` started it, for a `chained` run.
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
 }
 
 impl From<&RunRecord> for RunView {
@@ -233,6 +236,7 @@ impl From<&RunRecord> for RunView {
             started_at: run.started_at,
             ended_at: run.ended_at,
             late_failure: run.late_failure.clone(),
+            parent_run_id: run.parent_run_id.clone(),
         }
     }
 }
@@ -418,6 +422,9 @@ pub struct AttemptView {
     /// Its cleanup; none for a task without one.
     #[serde(default)]
     pub cleanup: Option<CleanupView>,
+    /// The run a `TriggerDagOperator`'s attempt started (no worker runs it).
+    #[serde(default)]
+    pub chained_run_id: Option<String>,
 }
 
 /// An attempt's cleanup.
@@ -516,6 +523,7 @@ impl From<&AttemptRecord> for AttemptView {
                     .map(|h| shown_handle(h))
                     .collect(),
             }),
+            chained_run_id: attempt.chained_run_id.clone(),
         }
     }
 }

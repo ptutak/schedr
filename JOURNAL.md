@@ -235,3 +235,47 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   design as the first step and D395's 20.
 - **Not chosen:** C (N+1 transactions on a bad message); D (unsafe); more than 40 by default (the
   gain flattens, a fallback costs more).
+
+### <a id="D398"></a>2026-11-09: a TriggerDagOperator starts only a `Chained` DAG (decision 398)
+
+- **Question:** a side agent noticed that a TriggerDagOperator can't start a DAG whose runs come
+  from events: each such run needs an event, and the operator gives none, so the task failed when
+  it ran, with no warning before. What should happen?
+- **Options:** A, refuse at run time and warn in `dags check`; B, the operator passes an event
+  (`event_key=`, `event_data=`); C, chained runs exempt from the event rule; D, a target with any
+  trigger refused.
+- **Chosen (the user's):** "We allow only one way of triggering dags - period." A DAG is started by
+  its own trigger (schedule, event, `RunOf`) or by other DAGs' TriggerDagOperators, never both; it
+  says the second with `trigger=Chained()`, any DAG, or `Chained(by=[...])`, those named (`by=[]`
+  is an error). `trigger=None` means manual runs only, the DAG otherwise off (its Pause is greyed
+  out in the UI); manual runs are a fallback and for testing, allowed on every DAG. A target that
+  isn't `Chained`, or whose `by` leaves the DAG out, fails the task when it runs, not retried; a
+  paused `Chained` target fails it too, with retries (pausing switches its trigger off, as for a
+  schedule; Claude's choice of retries: resuming fixes it). `schedr dags check` fails the
+  operator's file when its target in the root refuses it (the user's); the master's parse
+  doesn't (the user's, option A of a side agent's note: one DAG's edit would stop another DAG's
+  file loading, all its DAGs held). A `Chained` DAG's params need no defaults (its runs take the
+  operator's); `schedr dags test` unpauses the `Chained` DAGs of the path tested, so D378's real
+  run happens (a new DAG is stored paused). It also removes a chained run landing on the same
+  `planned_for` as one of the target's scheduled runs.
+- **Not chosen:** A (the event problem only); B (a second way to start an event DAG); C (its tasks
+  would fail reading `dag_ctx.event`); the check in the master's parse too. Differs from Airflow,
+  whose `TriggerDagRunOperator` starts any DAG: a `schedule=None` DAG it starts becomes
+  `trigger=Chained()`; one started both ways is split or started by hand.
+
+### <a id="D399"></a>2026-11-09: cycles between DAGs allowed, inside a DAG refused (decision 399)
+
+- **Question:** the archive's text had a TriggerDagOperator fail when its target was already in
+  the chain of parent runs (a cycle), and Codex's review of M4.12a found that check bypassed by a
+  `RunOf` trigger in the loop (Claude made `RunOf` runs record their parent so the check followed
+  it, and logged a loop of two `RunOf` triggers as B198). Should cycles between DAGs be stopped?
+- **Chosen (the user's):** no. "We allow cycles between dags, but we prevent cycles inside a
+  dag." A cycle can always be built from events (a task posting an event its own DAG's
+  `EventNamed` trigger takes), so a check across DAGs can't be complete in practice, and some
+  loops are wanted ("the next batch until none is left"). The operator's chain check (with its
+  limit of 64 runs) is removed before release, and B198 is no bug. Inside a DAG a cycle stays an
+  error at load: tasks depending on each other, an operator naming its own DAG,
+  `Chained(by=...)` naming itself. `RunOf` runs keep recording their parent, for the UI's links.
+- **Not chosen:** a chain check per creation path (incomplete: events close any loop); a
+  run-flood guard (a hidden limit on queued runs, or a metric for long chains), which can come
+  later if runaway loops are seen, without forbidding cycles.

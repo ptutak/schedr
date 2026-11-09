@@ -12,3 +12,4 @@ history = "archive/PROJECT.md#D365"
 step = "M4.12a"
 also = ["task-context"]
 checked = 2026-11-09
+code = ["python/schedr/chained.py::TriggerDagOperator"]

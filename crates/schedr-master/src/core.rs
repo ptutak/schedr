@@ -483,10 +483,12 @@ impl MasterCore {
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
         dispatcher.set_max_instances(settings.max_instances);
+        let scheduler = Scheduler::with_quiet(db.clone(), settings.quiet, wakes);
+        dispatcher.set_scheduler(scheduler.clone());
         Self {
             discovery,
             dispatcher,
-            scheduler: Scheduler::with_quiet(db.clone(), settings.quiet, wakes),
+            scheduler,
             commander: Commander::new(db.clone()),
             connections: BTreeMap::new(),
             arrivals,

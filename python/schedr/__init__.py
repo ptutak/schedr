@@ -8,6 +8,7 @@ from importlib.metadata import version
 
 from schedr._secrets import SecretPrefix, secrets
 from schedr._templates import text
+from schedr.chained import Chained, TriggerDagOperator
 from schedr.connections import (
     AsyncConnection,
     Connection,
@@ -49,6 +50,7 @@ __all__ = [
     "WEEKLY",
     "YEARLY",
     "AsyncConnection",
+    "Chained",
     "Chosen",
     "CommandOperator",
     "CommandResource",
@@ -88,6 +90,7 @@ __all__ = [
     "Task",
     "TimedOut",
     "Trigger",
+    "TriggerDagOperator",
     "TriggerFunction",
     "TypingHint",
     "Waited",

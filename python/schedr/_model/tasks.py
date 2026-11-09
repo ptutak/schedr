@@ -428,6 +428,53 @@ class WaitForKind:
 
 
 @dataclass(frozen=True, slots=True)
+class TriggerDagKind:
+    """``TriggerDagOperator``: starts a run of another DAG, carried out by the master.
+
+    Decisions 357-362 and 365: the run is ``chained`` to this one; its ID is the value.
+
+    Attributes:
+        dag: The DAG to start a run of.
+        params: Its parameters, literals or references, checked against its schema when it runs.
+        planned_for: The run's ``planned_for`` (a datetime or a reference); ``None``: this run's.
+        wait: Whether it waits for the run to end.
+        max_wait_ms: How long it waits; ``None``: the master's ``[sensors] default_max_wait``.
+    """
+
+    dag: str
+    params: Mapping[str, Value] = field(default_factory=dict)
+    planned_for: Value | None = None
+    wait: bool = True
+    max_wait_ms: int | None = None
+
+    def references(self) -> list[Reference]:
+        """The references of its parameters and its ``planned_for``.
+
+        Returns:
+            Each of them, in order.
+        """
+        found = [ref for key in sorted(self.params) for ref in self.params[key].references()]
+        return found + ([] if self.planned_for is None else self.planned_for.references())
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind as DAG JSON.
+
+        Returns:
+            ``{"kind": "trigger_dag", "dag": ...}``, with what is set.
+        """
+        result: dict[str, Any] = {"kind": "trigger_dag", "dag": self.dag}
+        if self.params:
+            result["params"] = {key: self.params[key].to_json() for key in sorted(self.params)}
+        if self.planned_for is not None:
+            result["planned_for"] = self.planned_for.to_json()
+        if not self.wait:
+            result["wait"] = False
+        if self.max_wait_ms is not None:
+            result["max_wait_ms"] = self.max_wait_ms
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class WaitForEventKind:
     """``wait_for(EventNamed(...))``: waits for an event posted, ended by the master.
 
@@ -606,6 +653,7 @@ type TaskKind = (
     | FirstOfKind
     | WaitForKind
     | WaitForEventKind
+    | TriggerDagKind
 )
 """Any task kind."""
 

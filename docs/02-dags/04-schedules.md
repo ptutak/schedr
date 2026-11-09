@@ -15,6 +15,7 @@ and called inside each block.
 | `DAILY`, `HOURLY`, `WEEKLY`, `MONTHLY`, `YEARLY` | The presets below, in UTC. `.override(tz="Europe/Warsaw")` returns a new trigger; `DAILY` is unchanged. |
 | `Every(timedelta(hours=1))` | A fixed interval of real time, UTC. Daylight-saving changes do not move it. |
 | `Once("2026-12-24T23:00", tz="Europe/Warsaw")` | That one moment. |
+| `Chained()` | Runs started by other DAGs' operators; see [Starting another DAG](23-chained-runs.md). |
 | `None` | Manual runs only. |
 
 Event triggers are [Sensors and triggers](../_generated/08-history/project/07-python-api-structure.md#sensors-and-triggers).
@@ -99,7 +100,8 @@ finish.
 A new DAG is stored paused, and so is a DAG that was removed and comes back.
 `schedr dags unpause <id>` lets the scheduler create runs. `schedr dags pause <id>` stops
 only that: fire times pass with no scheduled run, runs already going finish, and a manual
-run still starts.
+run still starts. A paused `Chained` DAG refuses operators until unpaused. For
+`trigger=None`, the UI greys out Pause: it has only manual runs.
 
 After unpause, `catchup` applies to the fire times that passed. With it off, only the
 latest one is created. With it on, the missed ones are created in order.

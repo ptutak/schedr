@@ -88,6 +88,7 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         started_at: None,
         ended_at: None,
         late_failure: None,
+        parent_run_id: None,
     };
     let view = RunView::from(&run);
     assert_eq!(
@@ -146,6 +147,7 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         }),
         core_dumped: true,
         cleanup: schedr_db::reads::CleanupRecord::default(),
+        chained_run_id: None,
     });
     assert_eq!(
         serde_json::to_value(attempt.usage).unwrap(),
@@ -287,5 +289,6 @@ fn sample_attempt() -> AttemptRecord {
         usage: None,
         core_dumped: false,
         cleanup: schedr_db::reads::CleanupRecord::default(),
+        chained_run_id: None,
     }
 }

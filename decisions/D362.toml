@@ -12,3 +12,4 @@ history = "archive/PROJECT.md#D362"
 step = "M4.12a"
 also = ["airflow"]
 checked = 2026-11-09
+code = ["crates/schedr-master/src/dispatch/chained.rs::create_chained", "python/schedr/chained.py::TriggerDagOperator"]

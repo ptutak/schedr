@@ -26,6 +26,8 @@ pub struct DagRow {
     pub dag_id: String,
     /// Whether it is paused.
     pub paused: bool,
+    /// Whether it has no trigger (`trigger=None`): only manual runs, nothing to pause.
+    pub manual_only: bool,
     /// Its trigger as people write it (`0 3 * * * (Europe/Warsaw)`, `every 1h`, `-`).
     pub schedule: String,
     /// Its tags.
@@ -544,6 +546,10 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
         ),
         dag_id: dag.dag_id.clone(),
         paused: dag.paused,
+        manual_only: dag
+            .trigger
+            .as_ref()
+            .is_none_or(|t| t["kind"].as_str() == Some("none")),
         schedule: dag.trigger.as_ref().map_or_else(
             || "-".to_owned(),
             |t| trigger_text(t, page.zone.as_ref().unwrap_or(&utc)),

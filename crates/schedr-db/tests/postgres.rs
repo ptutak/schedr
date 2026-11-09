@@ -155,6 +155,7 @@ fn run<'a>(version: &'a str, kind: RunKind, state: RunState, planned_for: &str) 
         since: ts("2026-10-20T01:00:00Z"),
         triggered_at: ts(planned_for),
         triggered_by: "anna",
+        parent_run_id: None,
     }
 }
 

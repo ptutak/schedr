@@ -340,6 +340,31 @@ async fn a_dag_can_be_triggered_and_paused_from_its_page() {
 }
 
 #[tokio::test]
+async fn a_dag_without_a_trigger_has_nothing_to_pause() {
+    let mut manual = etl();
+    let mut sync = dag("sync", false);
+    sync["trigger"] = json!({"kind": "none"});
+    manual
+        .answers
+        .insert("/api/v1/dags/sync".to_owned(), (200, sync));
+    let app = ui(vec![deployment("etl", manual)]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(
+        texts(&html, ".actions > button.action"),
+        ["Trigger", "Pause"]
+    );
+    assert_eq!(
+        attrs(&html, ".actions > button.action[disabled]", "title"),
+        ["It has no trigger: only manual runs, which pausing doesn't stop"]
+    );
+    assert_eq!(
+        attrs(&html, ".actions dialog form", "hx-post"),
+        ["/d/etl/dags/sync/trigger"],
+        "no pause dialog"
+    );
+}
+
+#[tokio::test]
 async fn a_run_and_its_tasks_offer_what_their_state_allows() {
     let mut etl = etl();
     etl.answers.insert(

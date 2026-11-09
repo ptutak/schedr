@@ -135,4 +135,4 @@ Subclassing `CommandOperator`, `EmptyOperator` or `Trigger` outside `schedr` is 
 `ScriptOperator` is
 [Native API](../_generated/08-history/project/07-python-api-structure.md#native-api).
 `TriggerDagOperator` is
-[Dependencies between DAGs](../_generated/08-history/project/07-python-api-structure.md#dependencies-between-dags).
+[Starting another DAG](23-chained-runs.md).

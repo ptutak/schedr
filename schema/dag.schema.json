@@ -982,6 +982,56 @@
           "type": "object"
         },
         {
+          "description": "`TriggerDagOperator` (decisions 357-362, 365, 378-381): starts a `chained` run of another\nDAG, carried out by the master with no process and no slot. Its value is the started\nrun's ID; with `wait` it ends when that run has: `Failed` when the run didn't succeed,\n`TimedOut` after `max_wait`.",
+          "properties": {
+            "dag": {
+              "$ref": "#/$defs/DagId",
+              "description": "The DAG to start a run of."
+            },
+            "kind": {
+              "const": "trigger_dag",
+              "type": "string"
+            },
+            "max_wait_ms": {
+              "description": "How long it waits, in milliseconds; `None`: the master's `[sensors] default_max_wait`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "params": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              },
+              "description": "The run's parameters, over the target's defaults: literals or references, resolved by\nthe master and checked against the target's schema when the task runs.",
+              "type": "object"
+            },
+            "planned_for": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Value"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The run's `planned_for`, a datetime or a reference; `None`: the parent run's."
+            },
+            "wait": {
+              "default": true,
+              "description": "Whether it waits for the run to end (the default) or ends once the run is created.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "dag"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An inline command, run by the agent.",
           "properties": {
             "command": {
@@ -1492,11 +1542,11 @@
       "type": "object"
     },
     "Trigger": {
-      "description": "What starts runs of a DAG besides people (and other DAGs).",
+      "description": "What starts runs of a DAG besides people.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Nothing: manual runs only.",
+          "description": "Nothing: manual runs only (the DAG is switched off but for those).",
           "properties": {
             "kind": {
               "const": "none",
@@ -1690,6 +1740,30 @@
           "required": [
             "kind",
             "run_of"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`trigger=Chained()` (decision 398): only other DAGs' `TriggerDagOperator`s start its\nruns (and people, by hand); the scheduler never does.",
+          "properties": {
+            "by": {
+              "description": "The DAGs whose operators may start it; `None`: any DAG. Never empty.",
+              "items": {
+                "$ref": "#/$defs/DagId"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "chained",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
           ],
           "type": "object"
         },

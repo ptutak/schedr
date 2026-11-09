@@ -90,6 +90,15 @@ pub(crate) async fn half_done(db: &Database, run_id: &str, dispatcher: &Dispatch
         .into_iter()
         .filter(|a| a.run_id == run_id)
         .collect();
+    // A `TriggerDagOperator`'s attempt is open too, with no worker and no slot.
+    let chained: Vec<String> = db
+        .chained_attempts()
+        .await
+        .expect("the attempts read")
+        .into_iter()
+        .filter(|a| a.run_id == run_id)
+        .map(|a| a.instance_id)
+        .collect();
     let mapped: BTreeSet<&TaskId> = run
         .dag
         .tasks
@@ -102,7 +111,8 @@ pub(crate) async fn half_done(db: &Database, run_id: &str, dispatcher: &Dispatch
         if instance.map_index == -1 && mapped.contains(&instance.task_id) {
             continue;
         }
-        let attempts = open.iter().filter(|a| a.instance_id == instance.id).count();
+        let attempts = open.iter().filter(|a| a.instance_id == instance.id).count()
+            + chained.iter().filter(|a| **a == instance.id).count();
         let active = matches!(instance.state, S::Running | S::CleaningUp);
         let name = if instance.map_index >= 0 {
             format!("`{}[{}]`", instance.task_id, instance.map_index)

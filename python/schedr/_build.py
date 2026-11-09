@@ -49,6 +49,7 @@ from schedr._model import (
     Template,
     TemplateRef,
     TemplateValue,
+    TriggerDagKind,
     TypeDesc,
     UnionType,
     Value,
@@ -631,7 +632,7 @@ class DagBuilder:
         if resolved.uses:
             self.uses[task_id] = resolved.uses
         settings = resolved.settings()
-        if isinstance(kind, SensorKind | WaitForKind | WaitForEventKind):
+        if isinstance(kind, SensorKind | WaitForKind | WaitForEventKind | TriggerDagKind):
             # `timeout` is a limit on a task's work; it waits `max_wait`, then ends `TimedOut`.
             settings = replace(settings, timeout_ms=None)
             if resolved.max_wait is not None:

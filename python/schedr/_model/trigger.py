@@ -118,6 +118,27 @@ class OnceTrigger:
 
 
 @dataclass(frozen=True, slots=True)
+class ChainedTrigger:
+    """Only other DAGs' ``TriggerDagOperator`` tasks start its runs (decision 398).
+
+    Attributes:
+        by: The DAGs whose operators may start it; ``None``: any DAG.
+    """
+
+    by: tuple[str, ...] | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        """The trigger as DAG JSON.
+
+        Returns:
+            ``{"kind": "chained"}``, with ``by`` when it names DAGs.
+        """
+        if self.by is None:
+            return {"kind": "chained"}
+        return {"kind": "chained", "by": list(self.by)}
+
+
+@dataclass(frozen=True, slots=True)
 class EventTrigger:
     """A ``@trigger`` function: its events start runs.
 
@@ -210,6 +231,7 @@ type Trigger = (
     | CronTrigger
     | EveryTrigger
     | OnceTrigger
+    | ChainedTrigger
     | EventTrigger
     | RunOfTrigger
     | EventNamedTrigger

@@ -11,4 +11,5 @@ hint to create one per element in a `for` loop in the DAG file.
 '''
 history = "JOURNAL.md#D381"
 step = "M4.12c"
-code = []
+code = ["crates/schedr-master/src/validate.rs::trigger_dag_problems"]
+checked = 2026-11-09

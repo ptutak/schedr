@@ -577,6 +577,13 @@ def test_new_records_take_the_next_number(tmp_path: Path) -> None:
     assert (tmp_path / "questions" / "next-id").read_text() == "Q2\n"
 
 
+def test_an_option_given_as_a_title_makes_no_record(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    assert module.main(["records.py", "decision", "--help"], module.Paths(tmp_path)) == 2
+    assert not (tmp_path / "decisions" / "D2.toml").exists()
+    assert module.main(["records.py", "question", "-h"], module.Paths(tmp_path)) == 2
+
+
 def test_the_topics_are_read_from_the_design_readme(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     readme.write_text(README)

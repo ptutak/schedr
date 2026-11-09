@@ -29,6 +29,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D399 | 2026-11-09 | user | built M4.12a | chained-runs | Cycles between DAGs are allowed; only a cycle inside a DAG is refused |
+| D398 | 2026-11-09 | user | built M4.12a | chained-runs | A TriggerDagOperator starts only a DAG with `trigger=Chained()` |
 | D397 | 2026-11-09 | user | planned (M4B.3) | workers | A turn's messages are stored in groups by type; savepoints later |
 | D396 | 2026-11-09 | user | planned (M4B.5) | workers | B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups |
 | D395 | 2026-11-09 | user | superseded by D397 | workers | M4B without a measuring step; 20 messages a turn |
@@ -46,9 +48,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D383 | 2026-11-09 | user | planned (R1.0a) | deployment | A slim image beside the full one |
 | D382 | 2026-11-09 | user | rule | components | One leading master per deployment; scale by more deployments |
 | D381 | 2026-11-09 | user | planned (M4.12c) | chained-runs | Operators are mapped in a later step, TriggerDagOperator with them |
-| D380 | 2026-11-09 | user | planned (M4.12a) | chained-runs | A waiting TriggerDagOperator doesn't count towards the DAG's limits |
-| D379 | 2026-11-09 | user | planned (M4.12a) | chained-runs | A missing or conflicting target fails the operator, with its retries |
-| D378 | 2026-11-09 | user | planned (M4.12a) | chained-runs | In tests a TriggerDagOperator starts a real run of a target in the tested path |
+| D380 | 2026-11-09 | user | built M4.12a | chained-runs | A waiting TriggerDagOperator doesn't count towards the DAG's limits |
+| D379 | 2026-11-09 | user | built M4.12a | chained-runs | A missing or conflicting target fails the operator, with its retries |
+| D378 | 2026-11-09 | user | built M4.12a | chained-runs | In tests a TriggerDagOperator starts a real run of a target in the tested path |
 | D377 | 2026-11-09 | user | rule | development | JOURNAL.md holds notes (N) beside decisions (D) |
 | D376 | 2026-11-09 | user | rule | development | STATUS.md is generated from the records and status.toml |
 | D375 | 2026-11-09 | user | rule | development | Summaries follow the code: names checked, affected and stale decisions listed |
@@ -61,14 +63,14 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D368 | 2026-11-08 | user | rule | development | One source for each record; every other view generated |
 | D367 | 2026-11-08 | user | rule | development | The project's documents: STATUS, design topics, a file per decision, archive/PROJECT.md as history |
 | D366 | 2026-11-08 | user | dropped | testing-dags | A fake for API calls in local runs was dropped |
-| D365 | 2026-11-08 | user | planned (M4.12a) | chained-runs | Tasks start runs with `TriggerDagOperator` |
+| D365 | 2026-11-08 | user | built M4.12a | chained-runs | Tasks start runs with `TriggerDagOperator` |
 | D364 | 2026-11-08 | user | planned (M4.12b) | runs | Backfill runs are ordered oldest first |
 | D363 | 2026-11-08 | user | planned (M4.12b) | runs | Backfill has an API, CLI dry runs and UI progress |
-| D362 | 2026-11-08 | user | planned (M4.12a) | chained-runs | A triggered run accepts an optional `planned_for` |
-| D361 | 2026-11-08 | user | planned (M4.12a) | chained-runs | An operator retry starts a new run only after failure |
-| D360 | 2026-11-08 | user | planned (M4.12a) | chained-runs | `max_wait` times out without cancelling the target run |
-| D359 | 2026-11-08 | user | planned (M4.12a) | chained-runs | A failed target gives a routable `Failed` outcome |
-| D358 | 2026-11-08 | user | planned (M4.12a) | chained-runs | `TriggerDagOperator` gives the target run’s ID |
+| D362 | 2026-11-08 | user | built M4.12a | chained-runs | A triggered run accepts an optional `planned_for` |
+| D361 | 2026-11-08 | user | built M4.12a | chained-runs | An operator retry starts a new run only after failure |
+| D360 | 2026-11-08 | user | built M4.12a | chained-runs | `max_wait` times out without cancelling the target run |
+| D359 | 2026-11-08 | user | built M4.12a | chained-runs | A failed target gives a routable `Failed` outcome |
+| D358 | 2026-11-08 | user | built M4.12a | chained-runs | `TriggerDagOperator` gives the target run’s ID |
 | D357 | 2026-11-08 | user | rule | chained-runs | Build the trigger operator and backfill in two parts |
 | D356 | 2026-11-08 | user | built M4.11h | task-context | Tasks call schedr’s REST API through their agent |
 | D355 | 2026-11-08 | user | built M4.11g | wait-steps | `delay` and `until` are plain Python wait steps |
@@ -449,6 +451,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### chained-runs
 
+- D399: Cycles between DAGs are allowed; only a cycle inside a DAG is refused
+- D398: A TriggerDagOperator starts only a DAG with `trigger=Chained()`
 - D381: Operators are mapped in a later step, TriggerDagOperator with them
 - D380: A waiting TriggerDagOperator doesn't count towards the DAG's limits
 - D379: A missing or conflicting target fails the operator, with its retries

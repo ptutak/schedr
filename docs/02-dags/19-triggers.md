@@ -1,5 +1,8 @@
 # Event triggers
 
+To start a DAG from a task in another DAG, use [`Chained` and
+`TriggerDagOperator`](23-chained-runs.md). A DAG with `trigger=None` has manual runs only.
+
 An event trigger watches for things outside a run and starts a DAG run for each new event it sends.
 Unlike a [wait step](18-sensors.md), it belongs to the DAG, not to a run. Here file names
 carry their time, so sorting them lets the trigger resume after its last file. An outside

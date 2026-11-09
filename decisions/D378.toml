@@ -7,8 +7,9 @@ section = "Tests"
 summary = '''
 In `schedr dags test` and `run_dag`, a TriggerDagOperator starts the target's run on the local
 master when the target is in the path given (a DAG root); a target outside it fails the task with a
-hint to give its DAG root. There is no stub.
+hint that its DAG file must be in the path tested. There is no stub.
 '''
 history = "JOURNAL.md#D378"
 step = "M4.12a"
-code = []
+code = ["crates/schedr-master/src/dispatch/chained.rs::TARGET_MISSING", "python/tests/integration/test_testing.py::test_a_trigger_dag_runs_its_target_from_the_path_tested"]
+checked = 2026-11-09

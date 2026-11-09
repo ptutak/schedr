@@ -13,3 +13,4 @@ A defect found in the code is a bug in `bugs/`, not a decision's state.
 history = "JOURNAL.md#D374"
 step = "n/a"
 code = ["scripts/records.py::render_decisions"]
+checked = 2026-11-09

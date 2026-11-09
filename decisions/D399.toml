@@ -1,0 +1,17 @@
+title = "Cycles between DAGs are allowed; only a cycle inside a DAG is refused"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "chained-runs"
+section = "TriggerDagOperator"
+summary = '''
+DAGs may start each other in a cycle, through TriggerDagOperators, `RunOf` triggers or events: no
+check follows the chain of parent runs. Inside a DAG a cycle is refused when its file loads: its
+tasks depending on each other, a TriggerDagOperator naming its own DAG, `Chained(by=...)` naming
+it. A run started by a `RunOf` trigger records the run that started it as its parent, linked both
+ways in the UI as a chained run is.
+'''
+history = "JOURNAL.md#D399"
+step = "M4.12a"
+code = ["crates/schedr-master/src/validate.rs::chained_trigger_problems", "crates/schedr-master/src/scheduler.rs::event_run"]
+checked = 2026-11-09

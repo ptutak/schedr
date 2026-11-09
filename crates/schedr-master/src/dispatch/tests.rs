@@ -83,6 +83,7 @@ async fn with_run(dag: Dag) -> (Dispatcher, Database, String) {
             since: ts("2026-10-20T08:00:00Z"),
             triggered_at: ts(NOW),
             triggered_by: "scheduler",
+            parent_run_id: None,
         })
         .await
         .unwrap()
@@ -2042,6 +2043,8 @@ async fn a_read_back_checks_through_its_window_and_stops_when_it_sees_the_work()
     assert_eq!(started.elapsed(), Duration::from_secs(3));
 }
 
+mod chained;
+
 /// The fault-injection harness's scenarios (decision 98): each master operation that writes,
 /// run with each of its writes failing, must leave nothing half-done.
 mod faults {
@@ -2423,6 +2426,7 @@ async fn another_run(db: &Database) -> String {
         since: ts(NOW),
         triggered_at: ts(NOW),
         triggered_by: "scheduler",
+        parent_run_id: None,
     })
     .await
     .unwrap()
@@ -3412,6 +3416,7 @@ async fn orders_run(
             since: planned_for,
             triggered_at: ts(NOW),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()

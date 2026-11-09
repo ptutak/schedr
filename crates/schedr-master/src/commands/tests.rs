@@ -1056,6 +1056,7 @@ async fn an_item_of_a_batch_run_again_is_a_batch_of_it_alone() {
         triggered_by: "trigger",
         params: &schedr_db::runs::NO_PARAMS,
         event: None,
+        parent_run_id: None,
     };
     let item = schedr_model::RunEvent {
         key: "a".to_owned(),

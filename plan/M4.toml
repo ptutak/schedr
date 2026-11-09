@@ -873,12 +873,13 @@ status = "planned"
 id = "M4.12a"
 title = "`TriggerDagOperator`"
 scope = '''
-(decisions 357-362, 365; the user's, 2026-11-08): a `trigger_dag` task the master runs; a `chained` run planned for the parent's `planned_for` or `planned_for=`, queued with manual runs' priority, run even if paused; `wait=True` gives the run's ID, `Failed` (routable, cancelled too) or `TimedOut` past `max_wait`, the target left running; a retry starts a new run only after a failure, created in the task's transaction; cancelling the parent cancels a waited run; a cycle in the chain of parents fails the task; `params=` with references, checked against the target's schema; the Airflow mapping (`logical_date`).
+(decisions 357-362, 365, 378-381, 398, 399; the user's, 2026-11-08/09): a `trigger_dag` task the master runs; a `chained` run planned for the parent's `planned_for` or `planned_for=`, queued with manual runs' priority; only a target with `trigger=Chained()` (`by=`), not paused (decision 398); `wait=True` gives the run's ID, `Failed` (routable, cancelled too) or `TimedOut` past `max_wait`, the target left running; a retry starts a new run only after a failure, its ID recorded on the task's attempt before it is created; cancelling the parent cancels a waited run; cycles between DAGs allowed (decision 399); `params=` with references, checked against the target's schema; the Airflow mapping (`logical_date`).
 '''
 done_when = '''
-a parent waits on a chained run and routes its `Failed`; a cycle fails; a restart starts no second run
+a parent waits on a chained run and routes its `Failed`; a restart starts no second run
 '''
-status = "planned"
+status = "done"
+done = 2026-11-09
 part_of = "M4.12"
 
 [[steps]]

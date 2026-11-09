@@ -32,7 +32,7 @@
       <tr>
         <td>{{ attempt.try_number }}</td>
         <td><span class="state {{ attempt.status }}">{{ attempt.status }}</span>{% if !attempt.start_method.is_empty() %} <span class="dim">{{ attempt.start_method }}</span>{% endif %}</td>
-        <td class="mono">{{ attempt.worker }}</td>
+        <td class="mono">{% match attempt.chained %}{% when Some with ((run, href)) %}<a href="{{ href }}" title="the run it started">run {{ run }}</a>{% when None %}{{ attempt.worker }}{% endmatch %}</td>
         <td>{{ attempt.duration }}</td>
         <td>{{ attempt.memory }}</td>
         <td class="lines">{{ attempt.started_at }}</td>

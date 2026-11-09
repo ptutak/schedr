@@ -81,6 +81,7 @@ impl FireTimes {
         match trigger {
             // Events start its runs: it has no fire times.
             Trigger::None
+            | Trigger::Chained { .. }
             | Trigger::Event { .. }
             | Trigger::RunOf { .. }
             | Trigger::EventNamed { .. } => Ok(Self::None),

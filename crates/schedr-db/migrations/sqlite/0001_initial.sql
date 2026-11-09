@@ -331,6 +331,9 @@ CREATE TABLE attempts (
     -- The task's result (a protobuf `Finished`), kept from its process's end until the attempt
     -- ends: a worker lost during the cleanup doesn't lose it (decision 229).
     task_result       BLOB,
+    -- A `TriggerDagOperator`'s attempt (decisions 361, 380): the run it starts, recorded before
+    -- that run is created with this ID, so a master restarting creates it once; no worker.
+    chained_run_id    TEXT,
     -- How many times its cleanup moved to another worker (`cleanup_anywhere`, decision 247);
     -- `worker_id` is NULL while it waits for one.
     cleanup_moves     INTEGER NOT NULL DEFAULT 0,

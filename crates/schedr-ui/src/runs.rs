@@ -332,6 +332,14 @@ fn run_href_of(page: &Page, deployment: &str, run_id: &str) -> String {
     format!("{}/d/{deployment}/runs/{run_id}", page.base)
 }
 
+/// The page of the run that started `run` (a `chained` run); empty for another.
+fn parent_href(page: &Page, deployment: &str, run: &RunView) -> String {
+    run.parent_run_id
+        .as_ref()
+        .map(|parent| run_href_of(page, deployment, parent))
+        .unwrap_or_default()
+}
+
 /// Why `run` is a yellow success (decision 309), as people read it; empty if it isn't.
 fn late_of(run: &RunView) -> String {
     run.late_failure
@@ -581,6 +589,8 @@ struct RunPage {
     run: RunView,
     planned_for: String,
     triggered_at: String,
+    /// The page of the run that started it (a `chained` run); empty for another.
+    parent_href: String,
     started_at: String,
     ended_at: String,
     /// Why a `success` is yellow (decision 309), as people read it; empty if it isn't.
@@ -686,6 +696,7 @@ pub async fn run<T: Transport>(
             ),
             planned_for: page.time(&detail.run.planned_for),
             triggered_at: page.time(&detail.run.triggered_at),
+            parent_href: parent_href(&page, &deployment.name, &detail.run),
             started_at: detail
                 .run
                 .started_at
@@ -1880,6 +1891,8 @@ pub struct AttemptRow {
     pub status: String,
     /// The worker it ran on.
     pub worker: String,
+    /// The run a `TriggerDagOperator`'s attempt started, and its page.
+    pub chained: Option<(String, String)>,
     /// `spawn` or `fork`.
     pub start_method: String,
     /// How long it ran.
@@ -2211,7 +2224,7 @@ async fn task_panel<T: Transport>(
                 attempts
                     .attempts
                     .iter()
-                    .map(|a| attempt_row(page, a))
+                    .map(|a| attempt_row(page, &deployment.name, a))
                     .collect(),
             )
         }
@@ -2499,7 +2512,7 @@ pub async fn output_download<T: Transport>(
     }
 }
 
-fn attempt_row(page: &Page, attempt: &AttemptView) -> AttemptRow {
+fn attempt_row(page: &Page, deployment: &str, attempt: &AttemptView) -> AttemptRow {
     let summary = attempt.error_summary.as_ref();
     let exception = summary
         .and_then(|s| {
@@ -2524,6 +2537,10 @@ fn attempt_row(page: &Page, attempt: &AttemptView) -> AttemptRow {
             .clone()
             .unwrap_or_else(|| "running".to_owned()),
         worker: attempt.worker_id.clone().unwrap_or_default(),
+        chained: attempt
+            .chained_run_id
+            .as_ref()
+            .map(|run| (run.clone(), run_href_of(page, deployment, run))),
         start_method: attempt.start_method.clone().unwrap_or_default(),
         duration: attempt.duration_ms.map(duration).unwrap_or_default(),
         memory: attempt.peak_memory_bytes.map(bytes).unwrap_or_default(),

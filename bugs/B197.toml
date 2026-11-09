@@ -1,0 +1,21 @@
+title = "watcher tests fail under a full parallel run, pass alone"
+severity = "low"
+probability = "possible"
+kind = "tests"
+summary = "schedr-agent's watchers test a_poke_whose_new_host_died_goes_on_on_its_code failed after 5.8 s in a parallel run of five crates' tests, and passed alone three times (12 s each): likely a timing it depends on under load"
+found = 2026-11-09
+suspected = true
+details = '''
+- **Found:** by Claude in M4.12a, running `cargo nextest run -p schedr-master -p schedr-db
+  -p schedr-api -p schedr-model -p schedr-agent` with `SCHEDR_TEST_PYTHON` set (1842 of 1843
+  passed). The failure's output wasn't kept. M4.12a changes only a match arm in the agent.
+- **Test:** `crates/schedr-agent/tests/watchers.rs::a_poke_whose_new_host_died_goes_on_on_its_code`
+  (M4.11a2, decisions 334-339).
+- **Again, later the same day:** in a parallel run of eight crates (2409 tests),
+  `schedr-agent::watchers a_slow_import_isnt_a_blocked_loop` failed (`BlockedEventLoop`: no
+  `await` within `[watchers] block_limit` 0.3 s) and `schedr::standalone
+  a_poke_renamed_in_new_code_finishes_its_run_on_a_real_worker` took 71 s and failed; both passed
+  alone (3.6 s, 3.4 s). A 0.3 s block limit is tight on a loaded machine.
+- **Next:** rerun it under load (`--test-threads` high, or beside a full run) to catch its message,
+  then find the timing it assumes.
+'''

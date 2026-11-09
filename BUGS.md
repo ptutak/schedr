@@ -66,29 +66,46 @@ step touches their code or the user schedules them.
 | 11 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
 | 12 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
 | 13 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 14 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 15 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 16 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 17 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 18 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 19 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 20 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 21 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 22 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
-| 23 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 24 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 25 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 26 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 27 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 28 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 29 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 30 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 31 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 32 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 33 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 34 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 35 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 36 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 14 | B197: watcher tests fail under a full parallel run, pass alone (Suspected) | 2 | low | possible | tests |
+| 15 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 16 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 17 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 18 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 19 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 20 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 21 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 22 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 23 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 24 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 25 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 26 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 27 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 28 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 29 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 30 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 31 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 32 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 33 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 34 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 35 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 36 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 37 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B197: watcher tests fail under a full parallel run, pass alone (Suspected)
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): schedr-agent's watchers test a_poke_whose_new_host_died_goes_on_on_its_code failed after 5.8 s in a parallel run of five crates' tests, and passed alone three times (12 s each): likely a timing it depends on under load.
+- **Found:** by Claude in M4.12a, running `cargo nextest run -p schedr-master -p schedr-db
+  -p schedr-api -p schedr-model -p schedr-agent` with `SCHEDR_TEST_PYTHON` set (1842 of 1843
+  passed). The failure's output wasn't kept. M4.12a changes only a match arm in the agent.
+- **Test:** `crates/schedr-agent/tests/watchers.rs::a_poke_whose_new_host_died_goes_on_on_its_code`
+  (M4.11a2, decisions 334-339).
+- **Again, later the same day:** in a parallel run of eight crates (2409 tests),
+  `schedr-agent::watchers a_slow_import_isnt_a_blocked_loop` failed (`BlockedEventLoop`: no
+  `await` within `[watchers] block_limit` 0.3 s) and `schedr::standalone
+  a_poke_renamed_in_new_code_finishes_its_run_on_a_real_worker` took 71 s and failed; both passed
+  alone (3.6 s, 3.4 s). A 0.3 s block limit is tight on a loaded machine.
+- **Next:** rerun it under load (`--test-threads` high, or beside a full run) to catch its message,
+  then find the timing it assumes.
 
 ## B196: a bad body's error would show an unknown enum value (unknown variant `…`) (Suspected)
 

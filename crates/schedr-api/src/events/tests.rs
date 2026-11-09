@@ -110,6 +110,7 @@ async fn a_change_arrives_as_its_event() {
             since: ts("2026-10-01T00:00:00Z"),
             triggered_at: ts("2026-10-14T03:00:00Z"),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()
@@ -181,6 +182,7 @@ async fn with_the_switch_off_pages_are_refreshed_and_turning_it_on_is_followed()
             since: ts("2026-10-01T00:00:00Z"),
             triggered_at: ts("2026-10-14T03:00:00Z"),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()

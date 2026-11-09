@@ -25,7 +25,7 @@ pub const NOT_YET_OUTCOME: &str = "NotYet";
 pub const FAILED: &str = "Failed";
 
 /// A wait step's outcome when its time ran out.
-const TIMED_OUT: &str = "TimedOut";
+pub const TIMED_OUT: &str = "TimedOut";
 
 /// How a `wait_for` step ends.
 #[derive(Debug, Clone, PartialEq, Eq)]

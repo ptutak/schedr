@@ -12,9 +12,11 @@
   {% call confirm::action("Trigger", "Trigger a run of " ~ row.dag_id ~ "?", "A manual run, for the moment given (now if none).", actions ~ "/trigger", "trigger", page.base, params_html) %}{% endcall %}
   {% endif %}
   {% if row.paused %}
-  {% call confirm::action("Unpause", "Unpause " ~ row.dag_id ~ "?", "The scheduler creates its runs again.", actions ~ "/unpause", "", page.base) %}{% endcall %}
+  {% call confirm::action("Unpause", "Unpause " ~ row.dag_id ~ "?", "Its trigger starts its runs again.", actions ~ "/unpause", "", page.base) %}{% endcall %}
+  {% else if row.manual_only %}
+  <button type="button" class="action" disabled title="It has no trigger: only manual runs, which pausing doesn't stop">Pause</button>
   {% else %}
-  {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "The scheduler creates no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
+  {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "Its trigger starts no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
   {% endif %}
 </div>
 <h1>{{ row.dag_id }} {% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}{% if row.held.is_some() %} <span class="badge warning">held</span>{% endif %}</h1>

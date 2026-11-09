@@ -6,25 +6,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-09)
 
 - **Milestone:** M4, Native API complete.
-- **Next step:** M4.12a, `TriggerDagOperator` (decisions D358, D359, D360, D361, D362, D365, D378, D379, D380). Done when: a parent waits on a chained run and routes its `Failed`; a cycle fails; a restart starts no second run
-- **Then:** M4.12b, M4.12c, M4.13, M4.14, M4.15.
+- **Next step:** M4.12b, Backfill (decisions D363, D364). Done when: a backfill fills the missing periods oldest first, skips the succeeded ones, and is cancelled as one
+- **Then:** M4.12c, M4.13, M4.14, M4.15, M4B.3.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 36; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
+- **Open bugs:** 37; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
 
 ## Recent
 
+- D399 (2026-11-09): cycles between DAGs allowed, inside a DAG refused
+- D398 (2026-11-09): a TriggerDagOperator starts only a `Chained` DAG
 - D397 (2026-11-09): a turn's messages in groups, savepoints later
 - D396 (2026-11-09): B184 fixed in M4B
 - D395 (2026-11-09): M4B without a measuring step; 20 messages a turn
-- D377 (2026-11-09): notes in the journal
-- N1 (2026-11-09): the design drafts deleted (corrects D373)
+- M4.12a (2026-11-09): `TriggerDagOperator`
 - M4.11h (2026-11-08): `schedr.api`, Python access to the REST API
 - M4.11g (2026-11-08): `delay` and `until` wait steps
-- M4.11f (2026-11-08): `batch=` on `@trigger.poke`
 
 ## In progress
 
-- M4.12a, `TriggerDagOperator`: decisions 357-362, 365 and 378-380 (379: retried on a missing target; 380: not counted towards the limits); a master-ended node with attempts, the child run's ID recorded on the attempt first, then the run created with it.
+- Order agreed with the user (2026-11-09): the rest of M4 (M4.12b backfill, M4.12c operator mapping, M4.13, M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
 - For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).
 
 ## Waiting for the user
@@ -42,7 +42,7 @@ Nothing.
 
 ## Colleagues
 
-Codex weekly 42% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Codex weekly 48% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
 Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:

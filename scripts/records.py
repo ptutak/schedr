@@ -1331,6 +1331,9 @@ def run(argv: list[str], paths: Paths) -> bool:
     elif command == "note" and len(args) in (1, 2) and args[0].strip():
         print(new_note(paths.root, args[0].strip(), *args[1:]))
     elif command in ("decision", "question") and len(args) == 1 and args[0].strip():
+        # An option (`--help`) is no title: it would make a record named after it.
+        if args[0].strip().startswith("-"):
+            return False
         make = new_decision if command == "decision" else new_question
         folder = paths.decisions if command == "decision" else paths.questions
         print(make(folder, args[0].strip()).relative_to(paths.root))

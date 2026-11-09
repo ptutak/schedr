@@ -752,3 +752,86 @@ def test_a_command_resource_reports_its_value_to_users_and_cleanup(tmp_path: Pat
     assert result.tasks["use_silent"].state == "upstream_failed"
     assert result.tasks["silent.cleanup"].state != "success"
     assert result.state == "failed"
+
+
+CHAINED_TARGET = """
+from dataclasses import dataclass
+from datetime import datetime
+
+from schedr import Chained, Dag, dag_ctx, task
+
+
+@dataclass
+class Load:
+    region: str
+    at: datetime
+    extra: dict[str, str]
+
+
+@task
+def load(region: str, at: datetime, extra: dict[str, str]) -> str:
+    # Each as the operator gave it (Codex's review of M4.12a: tagged values went through twice).
+    assert isinstance(at, datetime) and at.tzinfo is not None, repr(at)
+    assert extra == {"$date": "kept as written"}, repr(extra)
+    return f"loaded {region}"
+
+
+with Dag("orders", params=Load, trigger=Chained(by=["sync"])):
+    load(dag_ctx.params.region, dag_ctx.params.at, dag_ctx.params.extra)
+"""
+
+CHAINED = """
+from datetime import UTC, datetime
+
+from schedr import Dag, TriggerDagOperator, task
+
+
+@task
+def region() -> str:
+    return "eu"
+
+
+@task
+def started(run_id: str) -> str:
+    return run_id
+
+
+with Dag("sync"):
+    start = TriggerDagOperator(
+        "start",
+        dag="orders",
+        params={
+            "region": region(),
+            "at": datetime(2026, 10, 15, 3, tzinfo=UTC),
+            "extra": {"$date": "kept as written"},
+        },
+    )
+    started(start.output)
+"""
+
+
+def test_a_trigger_dag_runs_its_target_from_the_path_tested(tmp_path: Path) -> None:
+    # Decision 378: the target in the path tested runs for real, in the same standalone.
+    (tmp_path / "chained_orders.py").write_text(CHAINED_TARGET)
+    (tmp_path / "chained_sync.py").write_text(CHAINED)
+    result = run_dag(tmp_path, "sync", for_=FOR)
+    assert result.state == "success", result.tasks["start"].attempts
+    run_id = result.tasks["start"].output
+    assert isinstance(run_id, str)
+    assert result.tasks["started"].output == run_id
+    assert result.tasks["start"].attempts[0].exit_code is None, "no process ran it"
+
+
+def test_a_trigger_dag_whose_target_isnt_in_the_path_tested_fails_saying_so(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "chained_orders.py").write_text(CHAINED_TARGET)
+    (tmp_path / "chained_sync.py").write_text(CHAINED)
+    result = run_dag(tmp_path / "chained_sync.py", "sync", for_=FOR)
+    assert result.state == "failed"
+    start = result.tasks["start"]
+    assert start.state == "failed"
+    (attempt,) = start.attempts
+    assert attempt.error_kind == "chained_target_missing"
+    assert attempt.error is not None
+    assert "must be in the path tested" in attempt.error["message"]

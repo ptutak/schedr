@@ -87,6 +87,7 @@ async fn with_run(dag: Dag, state: RunState) -> (Execution, Database, String) {
             since: ts(NOW),
             triggered_at: ts(NOW),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()
@@ -598,6 +599,7 @@ async fn a_round_creates_at_most_so_many_instances_a_run_whole() {
             since: ts(NOW),
             triggered_at: ts(NOW),
             triggered_by: "anna",
+            parent_run_id: None,
         })
         .await
         .unwrap()

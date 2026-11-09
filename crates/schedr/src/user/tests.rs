@@ -175,6 +175,7 @@ async fn store_events(db: &Database, keys: &[&str]) {
             triggered_by: "trigger",
             params: &params,
             event: Some(&event),
+            parent_run_id: None,
         };
         let run_id = format!("01a00000-0000-7000-8000-00000000000{i}");
         db.store_event(&run_id, &new, &event).await.unwrap();

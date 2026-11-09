@@ -153,6 +153,13 @@ pub fn trigger_text(trigger: &serde_json::Value, local: &TimeZone) -> String {
                 None => format!("after {dag}"),
             }
         }
+        Some("chained") => match trigger["by"].as_array() {
+            Some(by) => {
+                let names: Vec<&str> = by.iter().filter_map(serde_json::Value::as_str).collect();
+                format!("chained from {}", names.join(", "))
+            }
+            None => "chained".to_owned(),
+        },
         Some("event") => format!(
             "@trigger {}",
             trigger["task"]["id"].as_str().unwrap_or_default()

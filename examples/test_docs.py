@@ -4,7 +4,7 @@ import http.server
 import importlib
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,7 +14,7 @@ from jsonschema import Draft202012Validator
 
 from schedr import Event, TimedOut
 from schedr._model import registry
-from schedr.testing import run_dag
+from schedr.testing import RunResult, run_dag
 
 HERE = Path(__file__).parent
 ROOT = HERE.parent
@@ -102,6 +102,40 @@ def test_example_dag_json_matches_the_schema(path: Path) -> None:
         VALIDATOR.validate(dag.to_json())
 
 
+def _check_chained(dag_id: str, result: RunResult) -> None:
+    """`chained_report` reports the run it started; `chained_load` runs alone too."""
+    if dag_id == "chained_report":
+        run_id = result.tasks["start_load"].output
+        assert isinstance(run_id, str)
+        assert result.tasks["report"].output == f"load run {run_id} succeeded"
+    else:
+        assert result.tasks["load"].output == "loaded eu"
+
+
+def _check_sensors(dag_id: str, result: RunResult) -> None:
+    """The sensors' outcomes, and `first_of` taking the one that came first."""
+    del dag_id
+    assert result.tasks["sees_slow_task"].output == "Task slow_task success"
+    assert result.tasks["sees_absent_task"].outcome == "TimedOut"
+    assert result.tasks["full_report"].output == (
+        "sees_slow_task: Task slow_task success; sees_absent_task: timed out"
+    )
+    assert result.tasks["first_of"].output == {
+        "$value": "Task slow_task success",
+        "winner": "sees_slow_task",
+    }
+    assert result.tasks["fast_report"].output == (
+        "sees_slow_task came first: Task slow_task success"
+    )
+
+
+EXAMPLE_CHECKS: dict[str, Callable[[str, RunResult], None]] = {
+    "chained_runs.py": _check_chained,
+    "sensors.py": _check_sensors,
+}
+"""Each example's own checks, by file, beyond every task ending well."""
+
+
 @pytest.mark.parametrize("path", DOC_EXAMPLES, ids=lambda path: path.name)
 def test_doc_example_runs(path: Path, run_api: str) -> None:
     connections = {"schedr_api": {"base_url": run_api}} if path.name == "sensors.py" else None
@@ -121,19 +155,8 @@ def test_doc_example_runs(path: Path, run_api: str) -> None:
             if task.state not in {"success", "skipped"}
         ]
         assert ended == [], dag.id
-        if path.name == "sensors.py":
-            assert result.tasks["sees_slow_task"].output == "Task slow_task success"
-            assert result.tasks["sees_absent_task"].outcome == "TimedOut"
-            assert result.tasks["full_report"].output == (
-                "sees_slow_task: Task slow_task success; sees_absent_task: timed out"
-            )
-            assert result.tasks["first_of"].output == {
-                "$value": "Task slow_task success",
-                "winner": "sees_slow_task",
-            }
-            assert result.tasks["fast_report"].output == (
-                "sees_slow_task came first: Task slow_task success"
-            )
+        if check := EXAMPLE_CHECKS.get(path.name):
+            check(dag.id, result)
         if path.name == "first_of.py":
             assert result.tasks["price"].output in {
                 "cached prices from from_cache",

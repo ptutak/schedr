@@ -1563,3 +1563,72 @@ async fn a_task_given_to_two_nodes_keeps_a_dashed_line_to_each() {
         "{classes:?}"
     );
 }
+
+/// Run `c1` of `orders`, started by run `r2`'s `start`, a `TriggerDagOperator` whose attempt
+/// started it.
+fn chained_runs() -> Vec<(&'static str, u16, Value)> {
+    let mut child = run_at("c1", "orders", "running", 1);
+    child["kind"] = json!("chained");
+    child["triggered_by"] = json!("r2");
+    child["parent_run_id"] = json!("r2");
+    let mut started = attempt(1, None);
+    started["worker_id"] = Value::Null;
+    started["exit_code"] = Value::Null;
+    started["error_kind"] = Value::Null;
+    started["error_summary"] = Value::Null;
+    started["chained_run_id"] = json!("c1");
+    vec![
+        (
+            "/api/v1/runs/c1",
+            200,
+            json!({"run": child, "tasks": [], "code_hashes": []}),
+        ),
+        (
+            "/api/v1/runs/c1/dag",
+            200,
+            json!({"id": "orders", "tasks": [], "edges": []}),
+        ),
+        ("/api/v1/runs/c1/commands", 200, json!({"commands": []})),
+        (
+            "/api/v1/runs/r2",
+            200,
+            json!({
+                "run": run_at("r2", "sync", "running", 1),
+                "tasks": [task("start", "running", None, None)],
+                "code_hashes": []
+            }),
+        ),
+        (
+            "/api/v1/runs/r2/dag",
+            200,
+            json!({"id": "sync", "tasks": [{"id": "start"}], "edges": []}),
+        ),
+        ("/api/v1/runs/r2/commands", 200, json!({"commands": []})),
+        (
+            "/api/v1/runs/r2/tasks/start/attempts",
+            200,
+            json!({"attempts": [started]}),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn a_chained_run_and_the_attempt_that_started_it_link_each_other() {
+    let app = ui(vec![deployment("etl", scripted(&chained_runs()))]);
+    let (status, page) = get(&app, "/d/etl/runs/c1", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(texts(&page, ".facts a.mono"), ["run r2"]);
+    assert_eq!(attrs(&page, ".facts a.mono", "href"), ["/d/etl/runs/r2"]);
+    let (status, html) = get(
+        &app,
+        "/d/etl/runs/r2/tasks/start",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(texts(&html, "table.attempts td a"), ["run c1"]);
+    assert_eq!(
+        attrs(&html, "table.attempts td a", "href"),
+        ["/d/etl/runs/c1"]
+    );
+}

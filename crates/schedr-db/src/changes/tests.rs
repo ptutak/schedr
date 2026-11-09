@@ -76,6 +76,7 @@ async fn add_run(db: &Database, version: &str, planned_for: &str) -> String {
         since: ts("2026-10-01T00:00:00Z"),
         triggered_at: ts(planned_for),
         triggered_by: "anna",
+        parent_run_id: None,
     })
     .await
     .unwrap()
