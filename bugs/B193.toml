@@ -1,0 +1,18 @@
+title = "a DAG in an ID conflict still has its queued tasks assigned"
+severity = "medium"
+probability = "rare"
+kind = "correctness"
+summary = "The design says that while a DAG ID is in conflict no tasks are assigned and tasks not yet started wait until it is resolved; ready_instances doesn't look at dags.conflict, so a conflicting DAG's runs in progress go on assigning tasks"
+found = 2026-11-09
+suspected = true
+details = '''
+- **Found:** Grok writing `design/code-delivery.md`; checked by Claude by reading the code, not
+  reproduced yet: `ready_instances` (`crates/schedr-db/src/attempts.rs`) filters on the task's
+  and run's states only; the conflict stops new runs (`runs.rs`: `conflict IS NULL` when
+  triggering) but not assignment.
+- **The design:** `archive/PROJECT.md`, DAG ID conflicts: "no new runs are created and no tasks are
+  assigned ... tasks not yet started wait until the conflict is resolved" (decision 107).
+- **Fix proposed:** skip a conflicting DAG's queued tasks in `ready_instances` (they stay queued
+  with the reason, "waiting: DAG ID conflict"), assigned again once the conflict is resolved; a
+  test with two files defining one DAG ID while a run has a queued task.
+'''

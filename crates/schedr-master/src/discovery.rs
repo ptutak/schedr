@@ -5,10 +5,10 @@
 //! different hashes for a root (git-sync not everywhere yet): its **current** parse is that of
 //! the **newest code** an alive worker reports, newest meaning the hash workers **switched to
 //! most recently** (recorded in the database, so a master restart decides the same). A switch
-//! is a worker moving **away from the current hash**: a revert to earlier content is one, so
-//! it is newest, but a lagging worker catching up through older revisions (or reporting older
-//! code again) isn't, and changes nothing. A hash never seen before is newest when first
-//! reported. Workers on a hash newer than the current one (its parse on its way) may run the
+//! is a worker moving to **new code** (a hash not recorded yet) or **reverting** (to a hash
+//! recorded before the one it left), judged by its own move, not by the current hash (decision
+//! 113): a lagging worker catching up to a hash recorded later isn't one, and changes nothing.
+//! A hash never seen before is newest when first reported. Workers on a hash newer than the current one (its parse on its way) may run the
 //! root's tasks too: they have newer code still. Of that hash's parses, the one of the newest schedr version an alive worker
 //! reporting it has is used (so after an upgrade the new parse takes over once stored). A
 //! root no alive worker reports keeps its current parse.

@@ -1,0 +1,20 @@
+title = "a removed DAG's queued tasks are still dispatched, not cancelled"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = "The design says a removed DAG's runs finish their running attempts and cancel tasks not started; removal only sets dags.removed_at, and ready_instances keeps assigning the runs' queued tasks, which run on a worker still on the run's code and fail elsewhere as dag_file_missing"
+found = 2026-11-09
+suspected = true
+details = '''
+- **Found:** Grok writing `design/code-delivery.md` (the docs restructuring); checked by Claude by
+  reading the code, not reproduced yet: `DagChange::Remove` (`crates/schedr-db/src/dags.rs`) runs
+  only `UPDATE dags SET removed_at = ...` and forgets the trigger's passed events;
+  `ready_instances` (`crates/schedr-db/src/attempts.rs`) selects queued tasks of running runs with
+  no look at the DAG's removal. `dispatch/tests.rs` shows such a task failing on newer code ("DAG
+  `sync` was removed ... after this run started"), so it fails or runs depending on the worker.
+- **The design:** `archive/PROJECT.md`, DAG code delivery, "Runs in progress: attempts already
+  running finish; tasks not started yet are cancelled".
+- **Fix proposed:** on removal, cancel the DAG's running runs' tasks not started (as a cancel
+  command would, cleanups still running), in the same transaction; a test removing a DAG with a
+  queued task and a running one.
+'''
