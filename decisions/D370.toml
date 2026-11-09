@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "development"
+section = "Documents and records"
 summary = '''
 New decisions are dated entries in JOURNAL.md with their anchors; archive/PROJECT.md keeps its own text up to
 decision 366 and gains nothing but anchors.

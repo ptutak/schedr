@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 A cleanup may move up to `retries + 1` times; another worker loss after that
 allowance ends it `worker_lost`. An assignment that never reaches `Started` returns

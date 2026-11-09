@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Branches and groups"
 summary = '''
 DAG JSON records a top-level `groups` list and each task’s optional innermost group.
 The master validates group membership, parents and cycles.

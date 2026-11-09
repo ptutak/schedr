@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Mapping"
 summary = '''
 The master sends each instance’s resolved elements under $expand and mapped-upstream element
 outcomes under $expand_outcomes; task JSON is shared. The mapped list is not additionally sent

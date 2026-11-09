@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "claude"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 ISO 8601 durations may use weeks, each a fixed seven days.
 Years and months remain refused.

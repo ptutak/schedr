@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "observability"
+section = "Metrics and logs"
 summary = '''
 A waiting reason names the reached concurrency limit and its value.
 `master_tasks_waiting` labels these waits by the limit’s name.

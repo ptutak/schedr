@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Access and authentication"
 summary = '''
 The UI forwards the person’s name; webservers trust it only from a proven UI. Proof is mTLS with the
 UI certificate name on the dedicated port in app mode, the guarded mesh port where enabled, a shared

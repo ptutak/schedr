@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 A connection is defined when its module loads outside a DAG.
 Run-specific values go through task arguments or `dag_ctx` read inside the task.

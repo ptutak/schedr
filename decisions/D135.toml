@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 A run's parameters, including defaults, may occupy at most 64 KiB as JSON.
 An oversized set is refused at trigger time; a DAG with oversized defaults

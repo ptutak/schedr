@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 Register reports journal handle counts. If cleanup_anywhere moved from the original worker and its
 journal exceeds the master's contiguous prefix, an unassigned move is adopted back, dropping its

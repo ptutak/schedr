@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Actions and parameters"
 summary = '''
 The webserver stores one command per Idempotency-Key and person, returns it for the same request,
 and answers 422 for another command under that key. The CLI creates a key per command; the UI

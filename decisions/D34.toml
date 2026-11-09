@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 Live events identify the changed run, DAG or workers; the UI re-renders from the API.
 Postgres uses NOTIFY and the SQLite webserver polls about once a second.

@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 Shown parameters are masked like task outputs; tasks receive originals. Refusals never quote
 parameter or schema values, mask names, and omit even the keyword beneath secret-named fields. The

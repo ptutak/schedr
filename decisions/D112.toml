@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Stored values"
 summary = '''
 Structured arguments containing references are built recursively as the parameter’s type. A union
 uses the first fitting member of the same shape; when only one member has that shape, its literals

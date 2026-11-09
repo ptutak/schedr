@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "workers"
+section = "Identity and connection"
 summary = '''
 Transient database errors end the stream. A refused Finished becomes an acknowledged, non-retried
 result_not_stored failure, retaining duration and usage; other data-fault messages are logged and

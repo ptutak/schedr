@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 The worker stops the task at the lease; the master waits the cancel grace plus the hidden cleanup move wait.
 The default total is 40 seconds, and the deadline is stored with the attempt.

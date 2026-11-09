@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "outcomes"
+section = "Mapped tasks"
 summary = '''
 A mapped task’s output is stored per instance.
 A downstream list is assembled on read in map-index order, with `None` for skipped instances.

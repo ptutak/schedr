@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "secrets"
+section = "Storage and keys"
 summary = '''
 `schedr secrets export --to DIR` writes each secret to `DIR/<path>.json` with mode 0600.
 It refuses a nonempty directory and prints no secret values to the terminal.

@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Access and authentication"
 summary = '''
 Rust Askama templates render HTML and htmx supplies interactive partial updates.
 Assets are embedded in the binary and require no JavaScript build.

@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 The attempt row moves to the new worker for the cleanup.
 The old worker’s name remains in the log and error summary.

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 With `blocking=True`, draw downstream order edges from the cleanup cap and omit
 redundant user order edges; retain user data edges. With `blocking=False`, retain

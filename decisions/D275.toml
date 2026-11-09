@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 Resource state comes from the states of its setup and cleanup tasks.
 It includes waiting for users, cleaning up, cleaned, cleanup failed, not needed and cleanup cancelled.

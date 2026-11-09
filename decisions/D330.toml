@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "Local checks"
 summary = '''
 dags check reads the same filtered copy as dags test and workers.
 Files excluded by .schedrignore are unavailable for imports.

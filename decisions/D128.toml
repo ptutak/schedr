@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 `/deployments` is one graph containing the UI and framed deployments, grouping nodes by process in
 standalone. Links show HTTP from UI to webserver, the database from webserver to masters, and gRPC

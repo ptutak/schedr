@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "outcomes"
+section = "Mapped tasks"
 summary = '''
 An .on(...) selection on a mapped output checks each element even when another use makes the edge whole.
 After the whole upstream finishes, instances with other outcomes or skips are skipped.

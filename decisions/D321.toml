@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step is"
 summary = '''
 The max_wait clock starts at the instance’s first start and continues across retries and moves.
 A wait that runs out of time ends with TimedOut, including while waiting to run again.

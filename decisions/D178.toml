@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "secrets"
+section = "Using secrets"
 summary = '''
 `secrets=` accepts plain path or path-and-key strings.
 It also accepts whole-secret and key placeholders.

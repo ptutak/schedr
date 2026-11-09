@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "task-context"
+section = "`dag_ctx` and `task_ctx`"
 summary = '''
 Async tasks can await task_ctx.asecret, task_ctx.asecret_value and acleanup_handle.
 Sync calls remain available and block the event loop while waiting.

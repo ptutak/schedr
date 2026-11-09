@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 While a cleanup waits to move, its previous worker’s cleanup result is stored and the pending
 move dropped. Its journaled `Finished` receives `Continue` so the result is sent again. On the

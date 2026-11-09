@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "secrets"
+section = "Masking"
 summary = '''
 The webserver masks log text and output texts, names and fields named by secret words when shown.
 Log parts use whole lines and 64 KiB of preceding masking context; UI and CLI use 1 MiB parts, with

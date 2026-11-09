@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "testing-dags"
+section = "run_dag"
 summary = '''
 `run_dag` exposes `TaskResult.output` as `object`, so a test narrows it before using fields.
 `output_json` uses the `Json` type.

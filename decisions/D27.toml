@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "development"
+section = "Testing"
 summary = '''
 A Python Playwright suite checks the theme, zone cookie, htmx swap and live updates.
 `make test-ui` and a CI job run it outside `make check`.

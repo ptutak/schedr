@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "From a DAG"
 summary = '''
 ScriptResource and cleanup_script reject declarations with outcomes; cleanup_script also rejects cleanup.
 A ScriptResource setup retains its declared cleanup for a partly failed setup.

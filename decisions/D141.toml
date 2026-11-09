@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "claude"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 The master checks `format: duration` itself as ISO 8601.
 It accepts fractions of a second, including Pydantic timedelta values.

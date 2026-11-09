@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "chained-runs"
+section = "TriggerDagOperator"
 summary = '''
 A failed, cancelled or skipped target gives `Failed`, including its state.
 The DAG can route it with `.on(Failed)`; otherwise the operator task fails.

@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Inside a command or a script"
 summary = '''
 `schedr dag-ctx` provides `params get` and `run get`, each with optional `--field`.
 Parameter values print in the JSON form accepted by `--params`.

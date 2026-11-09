@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step may start"
 summary = '''
 `asyncio.to_thread` calls run in their wait step’s context and are tracked.
 Calls still running at cancellation or step end are stopped; a stuck thread ends with its host.

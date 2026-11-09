@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Typing"
 summary = '''
 DAG calls produce runtime references but are typed as their declared values; data-free calls use
 handle types, and context fields are typed as values. `schedr.Data` and `schedr.pydantic.Model`

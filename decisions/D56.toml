@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Branches and groups"
 summary = '''
 `x >> group` links to its roots and `group >> y` links from its leaves, computed from all edges once
 the whole DAG is written. Dependencies on empty or cyclic groups fail parsing when the DAG block

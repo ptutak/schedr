@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "Nodes the master ends"
 summary = '''
 Master-ended `first_of` yields the first taken edge's value; `at_least(n, ...)` yields the first n
 values in completion order, with `with_winner=True` also supplying IDs. `first_of` is skipped if all

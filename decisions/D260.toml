@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 Without a declared cleanup, a resource gets an empty cleanup in the graph and run. The master completes it
 without an attempt, process or worker, recording the explanation in the task’s reason where a log would

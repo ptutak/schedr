@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "workers"
+section = "Identity and connection"
 summary = '''
 On database trouble, undo the failed message’s effects and end the worker stream; the worker
 registers again with its roots and journal. Under D115, data faults keep the stream open: a refused

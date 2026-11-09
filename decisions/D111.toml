@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Pydantic"
 summary = '''
 The runner validates stored model data with model_validate_json.
 Schedr tags in the data are first written in Pydantic's JSON representation.

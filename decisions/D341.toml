@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "claude"
 status = "active"
 topic = "wait-steps"
+section = "The 30-second rule"
 summary = '''
 A step responsible for a blocked loop, stuck thread or ignored cancellation is blamed.
 Other watchers restart in the same attempt; unidentifiable host loss uses retries.

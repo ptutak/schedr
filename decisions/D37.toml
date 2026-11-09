@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "deployment"
+section = "Size and ports"
 summary = '''
 The distributed chart deploys one UI replica and a Service on port 8082.
 Its default deployment is the release’s webserver; no Ingress is created.

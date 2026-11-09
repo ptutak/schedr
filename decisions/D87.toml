@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "assignment"
+section = "Limits and mapped tasks"
 summary = '''
 `max_active_per_run` comes from each run’s own DAG version.
 Across-run `max_active_tasks` and `max_active` come from the current DAG version.

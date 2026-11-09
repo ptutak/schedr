@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "human-in-the-loop"
+section = "Approvals and questions"
 summary = '''
 `approve` and `ask` declare an `ask` task with its question, answer schema, approvers and timeout.
 When ready it waits on the master for an answer, without running Python or occupying a worker or watcher slot.

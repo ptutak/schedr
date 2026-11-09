@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 Tasks and operators declare connections with `connections=`; the agent renders only those declared.
 A missing declared name warns on the DAG, fails `dags check`, and fails the attempt before code runs.

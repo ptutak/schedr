@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Access and authentication"
 summary = '''
 Images include the built Sphinx site under `/usr/share/schedr/docs`.
 The UI and standalone serve it at `/docs` when the configured directory exists.

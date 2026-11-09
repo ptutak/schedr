@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "chained-runs"
+section = "TriggerDagOperator"
 summary = '''
 Tasks start runs with `TriggerDagOperator`.
 The task routes of `schedr.api` remain limited to events.

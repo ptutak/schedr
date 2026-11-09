@@ -10,7 +10,7 @@ are in `JOURNAL.md` (`archive/PROJECT.md` before D367); earlier hand-offs in `ar
 - **Milestone:** M4, Native API complete.
 - **Next step:** M4.12a, `TriggerDagOperator` (decisions D358, D359, D360, D361, D362, D365). Done when: a parent waits on a chained run and routes its `Failed`; a cycle fails; a restart starts no second run
 - **Then:** M4.12b, M4.13, M4.14, M4.15, M4B.1.
-- **Open questions:** 0 (`DECISIONS.md`).
+- **Open questions:** 25 (`DECISIONS.md`).
 - **Open bugs:** 34; first: B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely), B40 (low/likely) (`BUGS.md`).
 <!-- end of status -->
 

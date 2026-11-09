@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "secrets"
+section = "Storage and keys"
 summary = '''
 Startup refuses several storages without `[secret_storage] default`.
 A single storage is the default; standalone uses `db` when none is configured.

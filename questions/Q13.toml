@@ -1,0 +1,6 @@
+title = "Should schedr provide OIDC integration for deployments without a mesh?"
+asked = 2026-11-09
+topic = "ui-cli"
+status = "open"
+proposal = "Consider chart-managed oauth2-proxy or schedr validating OIDC tokens itself."
+history = "PROJECT.md#D39"

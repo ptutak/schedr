@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "async-tasks"
+section = "Async tasks"
 summary = '''
 await task.fn(...) calls the coroutine with the task’s declarations in force.
 Its type is the function’s return type, including None; wrapped functions retain their kind.

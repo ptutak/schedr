@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "secrets"
+section = "Masking"
 summary = '''
 The agent masks secret values in attempt outputs and error summaries before they leave the worker.
 Downstream tasks receive `****`; masking writes a warning naming the secret and replacement count.

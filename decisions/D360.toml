@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "chained-runs"
+section = "TriggerDagOperator"
 summary = '''
 When the operator’s `max_wait` expires it yields `TimedOut`.
 The target run continues.

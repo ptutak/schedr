@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 A `cleanup_anywhere` cleanup waits when no worker can take it and is shown as `unschedulable`.
 The task's retry waits too.

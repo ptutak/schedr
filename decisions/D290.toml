@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "UI"
 summary = '''
 The run graph places resource setups and cleanups in lanes in a Resources box to the left of tasks.
 They remain at their corresponding row heights, with lines in a separate channel crossing only between rows.

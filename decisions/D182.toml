@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 A file that imports but has an invalid DAG still defines its connections for the root.
 A file that fails to import defines none; the master clears its reported connections.

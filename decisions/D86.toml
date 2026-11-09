@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "REST API and CLI"
 summary = '''
 Task logs, attempts, output, cancel and retry accept `--map-index N`.
 `runs show` and `dags test` list instances after the task row as `fetch[0]`, `fetch[1]`, and so on.

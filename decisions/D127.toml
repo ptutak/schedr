@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "When a file fails"
 summary = '''
 DAG IDs cannot be `.` or `..`.
 A file defining either ID receives an import error explaining why.

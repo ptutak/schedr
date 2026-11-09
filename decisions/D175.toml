@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 A SharedWorker distributes the deployments' changes to live pages, with replay or refresh.
 Without SharedWorker each page has its own stream, released after 10 seconds hidden.

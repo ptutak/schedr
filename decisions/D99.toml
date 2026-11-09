@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Values the API records"
 summary = '''
 A shell-string command cannot contain placeholders; the DAG loader, master and agent refuse them.
 Values can be passed in an argument list or through env; :raw is removed.

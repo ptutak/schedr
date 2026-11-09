@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "REST API and CLI"
 summary = '''
 Without `?map_index`, the API returns the gathered list, with `None` for skipped instances.
 With an index it returns that instance’s output and outcome.

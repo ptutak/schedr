@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Actions and parameters"
 summary = '''
 Actions use an HTML dialog describing what will happen.
 The inline result shows pending, applied or rejected with the master’s reason.

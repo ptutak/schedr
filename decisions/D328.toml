@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "Imports"
 summary = '''
 A top-level name duplicated across roots or colliding with a standard, installed or preloaded
 library fails the conflicting file and root files importing it, with an explanation. Checks occur at

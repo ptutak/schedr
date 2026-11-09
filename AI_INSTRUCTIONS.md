@@ -126,11 +126,12 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 - **Record each decision the moment it is taken** (the `project-docs` skill's routine): its
   `decisions/D<n>.toml` (`python3 scripts/records.py decision "<title>"`; its `step` the plan
   step that builds it), a dated entry in `JOURNAL.md` with the reasons and "Not chosen",
-  starting with the decision's anchor (`<a id="D<n>"></a>`), and the topic's "Current" in
-  `design/<topic>.md`; a replaced one marked `superseded`. Built or planned is never written by
+  starting with the decision's anchor (`<a id="D<n>"></a>`), and its `section` of the topic's
+  page (`make records` regenerates the page's Current from the summaries); a replaced one marked
+  `superseded`. Built or planned is never written by
   hand: it is the step's status in `plan/`. The commit that finishes a step sets the step's
-  `status = "done"`, its date and commit, and turns "planned" into the present in the design
-  pages. `make records-check` catches a decision named but not recorded, a missing anchor, a
+  `status = "done"`, its date and commit, and turns "planned" into the present in its
+  decisions' summaries. `make records-check` catches a decision named but not recorded, a missing anchor, a
   stale generated view.
 - **Generated views are indexes:** `DECISIONS.md`, `PLAN.md`, `STATUS.md`'s block and the
   design pages' lists say in one line per item where the details are; read the record (the

@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "chained-runs"
+section = "Building it"
 summary = '''
 M4.12a builds `TriggerDagOperator`.
 M4.12b builds backfill.

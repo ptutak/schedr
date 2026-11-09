@@ -87,3 +87,21 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   notes, the AI files); what records history as it happened (`history/`, CHANGELOG.md, the
   journal's entries) left as written.
 - **Not chosen:** keeping it at the root (it reads as current; the first file a newcomer opens).
+
+### <a id="D373"></a>2026-11-09: design pages generated from the decisions (decision 373)
+
+- **Question:** the design pages' Current was written by hand from the decisions' summaries, and
+  restated them: two texts to keep in step, which drift. Can more of the page be generated?
+- **Chosen (the user's):** each decision gets an optional `section` (the subheading it goes under);
+  `scripts/records.py` writes each topic page whole: Current (the topic's active decisions'
+  summaries by section, the state shown unless built, then the other topics' decisions naming it in
+  `also`), Replaced (superseded, dropped, untraced), the code list (`path` or `path::symbol`, the
+  symbol checked to be in the file), Open, and Details (the archive/PROJECT.md sections and
+  JOURNAL.md entries the anchors are in). The pages are for the agent, an index into the decisions
+  and the code; the reader's documentation is `docs/` (the user: "this is only for you"). A summary
+  is now written to be read on its page. The sections came from the drafted pages' subheadings (a
+  script) and, for topics without a page, were grouped by Claude. `development.md` keeps its
+  hand-written working rules, with generated blocks.
+- **Not chosen:** hand-written Current pages checked against the decisions (the first drafts: 20
+  pages, already drifting; kept on the local branch `design-drafts`); a hand-written Overview per
+  page (15 lines each: drifts again, and the reader doesn't read these pages).

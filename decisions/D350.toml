@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "user"
 status = "active"
 topic = "triggers"
+section = "Manual runs, CLI and tests"
 summary = '''
 Trigger API and CLI endpoints show, restart and switch on triggers and list events.
 Manual runs supply an event; test helpers and the DAG page expose trigger events.

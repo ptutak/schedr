@@ -1,0 +1,15 @@
+title = "Design pages are generated whole from the decisions"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "development"
+section = "Documents and records"
+summary = '''
+A decision has an optional `section`; `make records` writes each design page whole: Current (the
+active decisions' summaries by section, with their state unless built), Replaced, code (a path or
+`path::symbol`, checked), Open and Details (the anchors' sections). The pages are for the agent;
+the reader's documentation is `docs/`. Only `development.md` keeps hand-written rules.
+'''
+history = "JOURNAL.md#D373"
+step = "n/a"
+code = ["scripts/records.py::design_blocks", "scripts/records.py::generated_page"]

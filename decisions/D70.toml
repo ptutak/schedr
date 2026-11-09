@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Mapping"
 summary = '''
 An element-wise mapped-output lane expands after its upstream expands; instance i waits for upstream
 instance i. Other edges, an explicit order edge, or another reference to that upstream make it a

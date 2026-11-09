@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "What a job says"
 summary = '''
 Declared outcomes define successful exit codes without an operator enum. An outcomes
 enum replaces them and enables enum routing and .outcome. Without one, only declared

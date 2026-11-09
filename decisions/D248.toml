@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Journal and handles"
 summary = '''
 A cleanup recovered from the journal starts on the master’s `Continue` response to `Register`.
 A master outage delays it.

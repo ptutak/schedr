@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "What a job says"
 summary = '''
 Job parameter types come from string, integer, float, boolean, date, offset-free datetime in the
 job’s timezone, homogeneous-list, or nested-table defaults. Empty/mixed lists, empty tables and

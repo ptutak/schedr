@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Pydantic"
 summary = '''
 Pydantic model descriptors store JSON Schema: serialization schemas with all fields required for
 outputs, validation schemas for parameters. Python compares these with model, dataclass and plain

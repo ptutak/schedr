@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 SQL and Mongo accept separate user/password values passed to drivers as keywords. URL t-string
 substitutions are percent-encoded, and their encoded forms are masked. Structural values such as a whole

@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "task-context"
+section = "`dag_ctx` and `task_ctx`"
 summary = '''
 `task_ctx` exposes `task_id`, `try_number` and `map_index` while a task runs.
 The map index is `None` for an unmapped task.

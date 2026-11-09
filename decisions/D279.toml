@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 `schedr tasks cancel` and the panel cancel a waiting resource cleanup immediately or stop a running
 one; cancelling its run keeps it. The resource becomes `cleanup_cancelled`, or `not_needed` if its

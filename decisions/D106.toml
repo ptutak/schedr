@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Stored values"
 summary = '''
 The runner fails an attempt when an output string or dictionary key contains NUL.
 The error identifies the value at encoding time.

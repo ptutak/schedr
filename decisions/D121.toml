@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 The page is named Deployments, matching the UI and its deployments configuration.
 It shows the deployments available to the UI.

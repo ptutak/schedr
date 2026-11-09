@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Commands"
 summary = '''
 Connection secrets go to the tool's file and prefixed script variables, masked in logs.
 Passwords are moved out of URL variables into the files.

@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "REST API and CLI"
 summary = '''
 A run’s tasks include rows for mapped instances, identified by `map_index`.
 Per-instance operations use `?map_index=N`; unmapped tasks use index -1.

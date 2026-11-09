@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "development"
+section = "Testing"
 summary = '''
 A test hook fails the Nth database write; `fail_each_write` repeats an operation from fresh state
 for each write. A shared consistency check compares the database with itself and master memory.

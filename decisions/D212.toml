@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 The base image includes every connection type's Python client and command-line tools.
 `schedr[connections]` installs all Python clients outside the image.

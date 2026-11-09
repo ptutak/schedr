@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 After a worker lease without word from the master, the worker stops its tasks with `cleanup_anywhere`.
 Other tasks are not stopped by this rule.

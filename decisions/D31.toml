@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 Task details load in a panel beside the graph using htmx.
 A task query parameter opens the same panel on a link or reload.

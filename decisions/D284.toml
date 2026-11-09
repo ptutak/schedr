@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "human-in-the-loop"
+section = "Approvals and questions"
 summary = '''
 `approve` produces a yes-or-no answer; `ask` accepts a `Literal`, `Enum`, dataclass or pydantic model.
 The answer is the step's output and the master validates it against its schema.

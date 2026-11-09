@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "outcomes"
+section = "Routing"
 summary = '''
 A branch returns downstream task handles; each unchosen selection edge counts as skipped.
 The target’s trigger rule considers its other edges, and an empty selection is allowed.

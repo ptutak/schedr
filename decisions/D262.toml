@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 Setup and cleanup are named, coloured caps in a left-hand Resources box, one lane per resource,
 retaining their graph-row heights. Shared-group users get two summary lines; otherwise links reach

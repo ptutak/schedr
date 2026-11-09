@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 Database change notifications default on, including standalone. `[database] change_notifications` is
 applied by `schedr db migrate` or startup `--migrate`, holding the lease, never by a running master.

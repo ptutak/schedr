@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A run keeps its `max_active_runs` slot until ordinary task and resource cleanups end,
 including resource cleanups with `blocking=False`. A late rest cleanup under D308 can

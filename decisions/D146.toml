@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Inside a command or a script"
 summary = '''
 Command tasks and their child processes inherit the context channel.
 Python tasks use their own `dag_ctx`; a closed inherited descriptor is reported.

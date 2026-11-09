@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Lifecycle"
 summary = '''
 Cancellation leaves a running per-task cleanup running until it finishes or reaches
 `cleanup_timeout`. During drain it may continue until the pod is killed; outside

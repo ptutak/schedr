@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 SQL URLs, MySQL option files, Mongo URIs and SSH configs carry verifying defaults.
 Curl's config names the CA file when one is supplied.

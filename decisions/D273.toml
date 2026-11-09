@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 A cleanup waits while a user is `unschedulable`, until the user finishes or is cancelled. The DAG's
 `unschedulable_timeout` may fail the user and release cleanup; the default is unlimited, and the

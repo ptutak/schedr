@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "development"
+section = "Working in steps"
 summary = '''
 The Deployments page is scheduled for M4.4b, after M4.4 and before 1.0.0.
 The schema and protocol can still be edited in place.

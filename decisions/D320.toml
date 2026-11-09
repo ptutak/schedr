@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "The watcher host"
 summary = '''
 A watcher host holds one interpreter and set of root copies; new code uses a new host. Pokes move
 between calls after successful preparation, preserving deadline and retries, or remain on old code

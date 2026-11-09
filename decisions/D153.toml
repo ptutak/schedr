@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 `.github/workflows/release.yml` uses Trusted Publishing through SHA-pinned
 `pypa/gh-action-pypi-publish`; the `pypi` environment requires the user’s approval

@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "observability"
+section = "Operational views"
 summary = '''
 Warnings colour nodes yellow and errors red; panels list current problems. Unreachable webservers
 are errors and version mismatches warnings; masters report current problems in heartbeats. Lost

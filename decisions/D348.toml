@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "claude"
 status = "active"
 topic = "triggers"
+section = "One trigger"
 summary = '''
 A trigger runs on a watcher slot as a hidden sensor, without a graph node or attempt.
 Events are acknowledged after storage; the trigger resumes from its bookmark and restarts on code changes.

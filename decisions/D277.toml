@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A cancelled run still runs the cleanup of each resource set up, including retries.
 It ends `cancelled`, or `failed` if a cleanup fails; a cleanup can itself be cancelled under D279.

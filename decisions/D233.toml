@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Timings and limits"
 summary = '''
 `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing at startup.
 Each setting is warned about; unknown names and invalid durations stop startup.

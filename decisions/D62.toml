@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "protocol"
+section = "Messages and limits"
 summary = '''
 `UploadParseResult` streams a header followed by one message per file.
 An oversized file is uploaded as `ParseResultTooLarge`; uploads run independently of heartbeats.

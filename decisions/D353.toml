@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "user"
 status = "active"
 topic = "chained-runs"
+section = "Waiting for runs"
 summary = '''
 `RunOf` selects another DAG's run or task; lagged waits use this run's `planned_for` minus lag and
 choose the newest matching run by `triggered_at`. The master-ended node yields a run ID or

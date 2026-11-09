@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "The 30-second rule"
 summary = '''
 Crashes and memory kills blame no wait step and switch none off; each lost attempt uses a retry.
 The error names the host’s wait steps and a metric counts losses per code set.

@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "task-logs"
+section = "Reading logs"
 summary = '''
 The server reads new log bytes from the worker’s range endpoint using `from`.
 Since D175 the browser requests each part while the attempt runs.

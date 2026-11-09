@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "Script roots"
 summary = '''
 The Rust agent checks every `schedr.toml` key and builds standalone jobs as one-task DAGs; Python does not
 read TOML. During parsing, `ScriptOperator` requests checked declarations over the runner socket. Outside

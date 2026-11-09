@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Actions and parameters"
 summary = '''
 An optional parameter field has a `none` checkbox beside its input.
 An empty string remains a value for an optional string.

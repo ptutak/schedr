@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "Conflicts"
 summary = '''
 When the stored version belongs to the removed file, a conflict remains until the remaining file imports.
 The master logs a warning; a stored version belonging to the remaining file is kept.

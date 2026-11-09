@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Building it"
 summary = '''
 M4.8a covers same-worker cleanup; M4.8b/b2/b3 cover recovery, moved cleanups and
 network cuts. M4.8c1/c2 cover Python-resource parsing and execution; M4.8d command

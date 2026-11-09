@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "workers"
+section = "Identity and connection"
 summary = '''
 An offline worker is grey and dashed; stale warnings and import errors do not colour it.
 A lost worker remains an error and a disconnected worker a warning.

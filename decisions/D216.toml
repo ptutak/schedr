@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Lifecycle"
 summary = '''
 A rejected attempt, missing secret, or timeout during reads can leave the process unstarted.
 Its cleanup result is `not needed`.

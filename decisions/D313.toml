@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "What a job says"
 summary = '''
 ScriptOperator and ScriptResource cleanup settings override the declaration, then DAG defaults; the
 declared cleanup script cannot change, and cleanup_* without a declared cleanup is a parse error.

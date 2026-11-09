@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Timings and limits"
 summary = '''
 [dags] parse_concurrency defaults to 4 concurrent spawned or forked parses, capped at the
 cores the agent may use; 1 parses sequentially. dags check uses it and forks when the

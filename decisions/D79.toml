@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Mapping"
 summary = '''
 In expansion over several lists, the first argument written varies slowest.
 This determines map-index and gather order; DAG JSON preserves `product` order.

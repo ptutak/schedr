@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 An Import errors page sits beside DAGs, Runs and Workers and merges deployments.
 A navigation count and DAG-list notice load after the page.

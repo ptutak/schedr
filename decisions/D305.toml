@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "What is parsed"
 summary = '''
 Python files containing the exact bytes `schedr` are parsed; other files are shipped and hashed but
 skipped. Unreadable files are parsed to report the error; `schedr dags check` follows the same rule

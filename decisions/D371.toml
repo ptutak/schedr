@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "development"
+section = "Documents and records"
 summary = '''
 No worktree's files are copied over main: merge, rebase or cherry-pick; colleagues' record edits go in
 field by field. make undone-check and CI fail on a change removing over 20 lines the last 10 commits

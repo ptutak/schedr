@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Demo"
 summary = '''
 The demo has its own commit after M4.7c.
 It shows `schedr connections check` and `test`.

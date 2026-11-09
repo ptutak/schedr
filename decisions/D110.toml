@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Stored values"
 summary = '''
 The agent replaces NUL in ProcessResult stdout and stderr with U+FFFD.
 The log file keeps the original bytes.

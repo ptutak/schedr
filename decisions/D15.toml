@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Starting Python"
 summary = '''
 Before exiting, a forked task waits for non-daemon threads and runs its own exit handlers.
 Inherited server handlers are cleared; logging shutdown and task finalizers are retained.

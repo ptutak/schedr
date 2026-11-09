@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Timings and limits"
 summary = '''
 Public timings that cannot work at zero are rejected during configuration load.
 Timings where zero has a defined meaning remain allowed.

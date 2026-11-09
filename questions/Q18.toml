@@ -1,0 +1,6 @@
+title = "Should a command's retry depend on its exit code?"
+asked = 2026-11-09
+topic = "outcomes"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "A declared exit code is a success and is not retried. Any other code fails and is retried. Per-code retry, such as retry on 75 and never on 2, may come later."
+history = "PROJECT.md: Outcomes, failures and joins"

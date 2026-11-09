@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Demo"
 summary = '''
 Dev and prod use the same DAG folder and separate secrets for their databases and users.
 One federated `schedr ui` shows both deployments.

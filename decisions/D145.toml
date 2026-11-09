@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Inside a command or a script"
 summary = '''
 In a command-task script, `schedr.script.dag_ctx` loads context on first read using one connection
 and two requests. Stored forms decode to native dates, timedeltas and tuples; object fields become

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "claude"
 status = "active"
 topic = "scripts"
+section = "What a job says"
 summary = '''
 A worker missing a task cleanup’s interpreter or script rejects the task with rejection 3 or 5.
 Cleanup scripts use their task’s environment and working directory. Moved or recovered cleanups

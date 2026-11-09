@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Building it"
 summary = '''
 M4.7b1 builds the five typed connections, Python clients, checks and extras.
 M4.7b2 builds command variables and files, including JSON and custom connections.

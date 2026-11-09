@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 The runs list merges deployments and shows a Deployment column when needed.
 A shared cursor pages the list and filters apply to each deployment.

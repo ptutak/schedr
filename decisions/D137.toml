@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 A queued run keeps the values validated against the version on which it was created.
 They are not checked again when it starts.

@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Actions and parameters"
 summary = '''
 The trigger form carries a fingerprint of the fields and defaults it displayed.
 If they changed, triggering is refused and the page must be reloaded; secret defaults are excluded.

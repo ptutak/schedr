@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 The server draws the DAG graph as SVG using its own layered layout.
 The layout performs layering, crossing reduction and x-placement.

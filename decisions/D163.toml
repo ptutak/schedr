@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 Commit the version before tagging: Cargo uses `X.Y.Z-rcN`, the tag `vX.Y.ZrcN`, and
 the wheel and runner comparison `X.Y.ZrcN`, without a dot after `rc`. The workflow

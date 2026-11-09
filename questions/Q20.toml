@@ -1,0 +1,6 @@
+title = "Should Slack and Teams have their own notification channels?"
+asked = 2026-11-09
+topic = "outcomes"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "Notifications, planned (M4.13), use email and a generic JSON webhook. Dedicated Slack and Teams channels with their own formatting may come later."
+history = "PROJECT.md: Outcomes, failures and joins"

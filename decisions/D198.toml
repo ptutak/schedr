@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Checks and tests"
 summary = '''
 A connection without a check is opened and closed by `connections test`.
 An exception fails the test; a Generic connection renders its values.

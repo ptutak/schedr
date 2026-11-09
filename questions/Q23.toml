@@ -1,0 +1,6 @@
+title = "Should first_of cancel the tasks that did not win?"
+asked = 2026-11-09
+topic = "wait-steps"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "The tasks that do not win keep running, and one that fails still fails the run. `first_of(..., cancel_rest=True)` was kept for later."
+history = "PROJECT.md#D355"

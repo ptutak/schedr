@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Checks and tests"
 summary = '''
 Connection tests run beside tasks without using a task slot.
 Each worker runs one connection test at a time.

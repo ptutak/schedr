@@ -1,0 +1,6 @@
+title = "Who may sign in through LDAP?"
+asked = 2026-11-09
+topic = "ui-cli"
+status = "open"
+proposal = "Consider an optional group restriction, a required group, or any valid account."
+history = "plan/M6.toml: notes; PROJECT.md: Roadmap"

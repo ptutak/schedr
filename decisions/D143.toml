@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Inside a command or a script"
 summary = '''
 Command-task processes inherit the datagram channel named by `SCHEDR_CTX_FD`; each caller passes one
 end of a fresh stream socket pair through `SCM_RIGHTS` and uses its own connection. It speaks

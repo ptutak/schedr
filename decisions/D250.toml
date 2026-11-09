@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Journal and handles"
 summary = '''
 The agent logs when `cleanup_timeout` does not fit the grace period.
 It warns at assignment, once per task.

@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 A final release tag deploys its documentation site.
 Release rehearsals and main do not deploy it.

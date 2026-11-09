@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Checks and tests"
 summary = '''
 Check and test select a connected, active worker matching the root's current parse hash. Automatic
 selection uses fewest attempts, then name; --worker selects an eligible worker. Draining and drained

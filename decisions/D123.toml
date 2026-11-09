@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "observability"
+section = "Operational views"
 summary = '''
 Each running master heartbeats a masters table row with its role and configuration.
 A master that stops reporting ages out.

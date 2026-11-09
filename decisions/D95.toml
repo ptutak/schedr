@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "assignment"
+section = "Limits and mapped tasks"
 summary = '''
 Changing a concurrency limit without a code change has no API or CLI override.
 Limits shared across DAGs are a proposal for M6.

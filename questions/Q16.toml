@@ -1,0 +1,6 @@
+title = "Should a calendar the master understands be a built-in time trigger?"
+asked = 2026-11-09
+topic = "python-api"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "A Python calendar can be an event trigger, with no catchup and no backfill. A data-only time trigger such as Cron(..., exclude=[...]) may come later."
+history = "PROJECT.md: Native API"

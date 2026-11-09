@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step is"
 summary = '''
 Each poke call is limited to every and calls do not overlap.
 A call that runs out of that time is cancelled and fails with a clear message.

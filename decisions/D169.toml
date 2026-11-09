@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "secrets"
+section = "Storage and keys"
 summary = '''
 `schedr secrets new-key` prints a new `SCHEDR_SECRET_KEY`.
 The key is 32 random bytes encoded as base64; rotation is not built now.

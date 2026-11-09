@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Journal and handles"
 summary = '''
 An attempt's handles may total at most 1 MiB.
 Exceeding the limit fails the attempt and names the limit.

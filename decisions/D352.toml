@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "user"
 status = "active"
 topic = "triggers"
+section = "`@trigger` and `@trigger.poke`"
 summary = '''
 `@trigger.poke(batch=...)` gathers a window in Python and stores each item individually. One run
 receives only its new items as `list[Event[T]]`, keyed by the last new item; no new items means no

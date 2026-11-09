@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step is"
 summary = '''
 Wait steps accept applicable task options, using max_wait instead of timeout, and
 excluding cleanup and its settings, preload and fresh_process. Cleanup options cause

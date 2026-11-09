@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Checks and tests"
 summary = '''
 A connection test defaults to a 60-second timeout, adjustable with --timeout. Time
 counts from arrival at the worker, including queueing and secret reads. The test

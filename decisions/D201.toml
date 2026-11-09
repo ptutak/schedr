@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Commands"
 summary = '''
 Files default under /dev/shm/schedr-<uid>/<data hash>/<worker>/; [worker] connection_dir overrides this,
 with the data directory the fallback. Startup refuses unsafe paths; the private directories must be real,

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "workers"
+section = "Identity and connection"
 summary = '''
 The agent closes a stream silent for the worker lease and ignores messages arriving after it. The
 master takes back unstarted assignments only after the lease; input fetches and first registration

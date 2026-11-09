@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Timings and limits"
 summary = '''
 A new value is a public key when deployment determines its right value; otherwise it is hidden.
 A binary constant requires a really good reason.

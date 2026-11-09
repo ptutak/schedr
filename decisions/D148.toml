@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Inside a command or a script"
 summary = '''
 The agent accepts context protocol 1 regardless of schedr version; `hello` supplies both, and
 incompatible-protocol refusals name both versions. Within a protocol, new requests and fields are allowed:

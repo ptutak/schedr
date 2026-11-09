@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Lifecycle"
 summary = '''
 An empty cleanup has no attempt; its message goes in the task's reason.
 The reason is shown where a log would be.

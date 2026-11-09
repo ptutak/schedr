@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 Connection clients are optional extras; SQL uses psycopg 3/PyMySQL, and SSH requires known hosts
 unless explicitly disabled. HTTP supports bearer/basic authentication, headers, CA and client

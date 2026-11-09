@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 A moved cleanup uses its task’s queue ahead of waiting tasks.
 It is not held by limits.

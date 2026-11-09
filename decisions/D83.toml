@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 A mapped task has one graph node labeled with its instance count and counts by state.
 Its panel lists instances with their attempts, logs and outputs.

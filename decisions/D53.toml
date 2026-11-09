@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 Connections use generator functions with secret/literal arguments and missing-secret defaults; tasks
 must declare what they open, and test doubles are supported. `connections check` renders without

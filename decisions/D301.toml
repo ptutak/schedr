@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "From a DAG"
 summary = '''
 The agent folds the hashes of script roots used by the last parse into the reported DAG root hash.
 A script change causes a new DAG root hash and re-parse; tasks use the parsed versions of both roots.

@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "workers"
+section = "Memory and environment"
 summary = '''
 Planned (M4.15), not built: an internal `schedr task-exec` sets the data limit before executing a
 limited command; a fork-server child sets its own limit before running user code. Until then the

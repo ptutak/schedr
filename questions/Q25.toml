@@ -1,0 +1,6 @@
+title = "Should a cycle through trigger=RunOf across DAGs be caught?"
+asked = 2026-11-09
+topic = "triggers"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "A cycle through trigger=RunOf across DAGs stays uncaught. The cycle check is the chain of parent runs, which these runs do not have."
+history = "PROJECT.md#D353"

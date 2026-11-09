@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "Nodes the master ends"
 summary = '''
 The graph draws `first_of` options in one box with a dashed edge to the node,
 highlighting the winner. Where a box cannot be drawn, options have separate dashed edges.

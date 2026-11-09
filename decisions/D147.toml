@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Unsafe code"
 summary = '''
 Only `schedr-fd` relaxes `unsafe_code` from `forbid` to `deny`, permitting its single unsafe site through
 `#[expect]`; every other crate retains `forbid`. It borrows the inherited descriptor solely to duplicate it

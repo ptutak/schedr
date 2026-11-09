@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "airflow"
+section = "Airflow API"
 summary = '''
 Airflow Param comes with the Airflow compatibility work.
 M4.5 accepts a dataclass or a Pydantic model for parameters.

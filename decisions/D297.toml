@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "components"
+section = "Roles"
 summary = '''
 A paused or superseded master returns 503 from `/readyz` until it leads again. It refuses worker
 streams with `UNAVAILABLE`, including registrations that waited for its lock while it paused.

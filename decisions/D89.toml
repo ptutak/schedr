@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "assignment"
+section = "Limits and mapped tasks"
 summary = '''
 Each mapped instance counts toward all three task concurrency limits.
 The whole-task `-1` row does not count.

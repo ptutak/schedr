@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "REST API and CLI"
 summary = '''
 Attempts, logs and retry require an instance index for a mapped task; cancel can target one instance
 or the whole task. Index -1 means the whole task, and an out-of-range index returns 400.

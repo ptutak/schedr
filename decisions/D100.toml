@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Commands and supervision"
 summary = '''
 If the main process exits during cancellation, remaining group members keep the rest of the grace
 period, then are killed. The stop ends at once when the group is empty.

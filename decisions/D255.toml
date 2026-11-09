@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 A cleanup under way when the master becomes unavailable keeps running.
 It may overlap a cleanup moved to another worker; the docs say so.

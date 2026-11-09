@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Sources and validation"
 summary = '''
 Removed configuration keys: `tick_interval`, `heartbeat_interval`, `lease_timeout`, `lease_period`,
 `read_back_window`, `read_back_interval`, `query_timeout`, `loop_stall_timeout`, `set_aside`,

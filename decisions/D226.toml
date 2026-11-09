@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 Resource cleanup inherits its setup's secrets and connections and may add its own.
 Its queue defaults to the setup's; a static resource has only its own declarations.

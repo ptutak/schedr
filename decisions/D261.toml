@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A resource’s cleanup is the visible task `<resource>.cleanup`, using ordinary attempts, retries, logs,
 dispatch and lost-worker handling. It retains its execution kind; `Dag.resources` identifies its

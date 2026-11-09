@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A paused DAG continues to run resource cleanups.
 Pausing stops new work while existing resources are freed.

@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "runs"
+section = "Backfill"
 summary = '''
 Backfill runs are always ordered oldest first;
 no newest-first ordering is offered.

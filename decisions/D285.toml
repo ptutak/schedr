@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "human-in-the-loop"
+section = "Approvals and questions"
 summary = '''
 A no answer ends an approval with `Rejected`.
 `.on(Rejected)` branches on it, while tasks downstream through plain `>>` are skipped.

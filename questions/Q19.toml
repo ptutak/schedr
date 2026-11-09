@@ -1,0 +1,6 @@
+title = "Should schedr notify when a task runs too long?"
+asked = 2026-11-09
+topic = "outcomes"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "No SLA or long-running-task event for now. Notifications, planned (M4.13), do not include one."
+history = "PROJECT.md: Outcomes, failures and joins"

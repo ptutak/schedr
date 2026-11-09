@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Checks and tests"
 summary = '''
 HTTP is tested against a local server and Postgres in a test container.
 MySQL, Mongo and OpenSSH run in integration containers and pinned CI service containers.

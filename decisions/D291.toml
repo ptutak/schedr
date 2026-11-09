@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "UI"
 summary = '''
 Shared-group users get one setup-to-group line and one group-to-cleanup line; otherwise lines
 connect first and last users. Other lines and the rail appear on hover or selection, each user has a

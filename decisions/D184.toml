@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Commands"
 summary = '''
 A `CommandOperator` connection dict supplies prefixed variables and agent-written files at startup.
 The list form allows `task-ctx connection NAME --env P` to supply them at runtime.

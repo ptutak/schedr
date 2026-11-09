@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Stored values"
 summary = '''
 Floats round-trip to the same bits; integers outside -2**63 through 2**64 - 1 fail where written.
 The integer limit also applies to Literal integers and timedelta microseconds.

@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "development"
+section = "Documentation"
 summary = '''
 The wheel and image CI job waits for the strict documentation build.
 `make image` and `make server-image` build the docs first.

@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 Typed connections take the name as the first argument, as in `HTTP('billing_api', ...)`.
 This works in loops and under aliases.

@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "protocol"
+section = "Messages and limits"
 summary = '''
 `[grpc] max_message_size` limits worker messages, defaults to 64 MiB and ranges from 4 MiB to 1 GiB.
 The master announces it to workers in `Registered`.

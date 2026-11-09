@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "testing-dags"
+section = "run_dag"
 summary = '''
 `result.tasks["fetch"]` represents the whole task and its output is the gathered list.
 Indexing that result or using `.instances` accesses individual instance results.

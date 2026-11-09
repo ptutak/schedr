@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Timings and limits"
 summary = '''
 Timings whose right values depend on the deployment are public keys.
 Each key has a doc comment describing its effect and when to change it.

@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "Local checks"
 summary = '''
 Checking a named file or folder within a configured root retains its module path and other roots.
 A named file that a worker does not receive is an error.

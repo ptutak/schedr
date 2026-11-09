@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "protocol"
+section = "Messages and limits"
 summary = '''
 Planned for M4B: eligible messages in one worker turn share a transaction, with a savepoint and
 memory snapshot per message. A failed message is undone alone; a failed commit restores the turn and

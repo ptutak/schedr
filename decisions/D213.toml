@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Commands and supervision"
 summary = '''
 The attempt timeout includes secret and connection reads and runner or command
 startup. The process receives only the remaining time. If reads exhaust it, no

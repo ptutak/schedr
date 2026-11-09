@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "What is parsed"
 summary = '''
 Each parse_files row records the worker_id and parsed_at for that file.
 A retry records its own worker and time.

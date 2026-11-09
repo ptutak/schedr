@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "Building it"
 summary = '''
 M4.9a delivers script roots, TOML checking and standalone jobs; M4.9b delivers script tasks and
 `ScriptOperator`. M4.9c delivers params, outcomes and script cleanup and resource support; each step

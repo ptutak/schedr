@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "claude"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 A whole number written with a fraction, such as `1.0`, fits an `int` field.
 It is stored as `1`.

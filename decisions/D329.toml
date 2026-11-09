@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "What is parsed"
 summary = '''
 The module running a DAG’s with block owns it, including when a helper function builds it.
 An imported module owns its own DAG, and the file must mention schedr.

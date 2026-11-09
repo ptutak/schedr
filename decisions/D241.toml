@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Hidden timings"
 summary = '''
 The production gauge-refresh limit is half of `loop_stall_timeout`.
 Migration-connection timings remain fixed, without `query_timeout`; client,

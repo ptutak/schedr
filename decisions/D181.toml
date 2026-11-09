@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Defining connections"
 summary = '''
 A file defining connection values larger than 1 MiB fails to import.
 The SDK and the master both enforce the limit.

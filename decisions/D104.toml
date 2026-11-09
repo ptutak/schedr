@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Stored values"
 summary = '''
 A user dict whose sole key is a serialization tag is stored inside a $dict escape.
 Output paths and literal dictionaries containing references pass through the escape.

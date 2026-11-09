@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 SQL accepts mariadb:// through PyMySQL as it does mysql://. MariaDB 11.8 integration and CI
 tests cover login, TLS modes and both vendors' clients. Documentation states that MariaDB

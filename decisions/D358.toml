@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "chained-runs"
+section = "TriggerDagOperator"
 summary = '''
 The operator’s value is the target run’s ID, whether or not `wait=True`.
 The target’s output can be read with a `RunOf` sensor or the API.

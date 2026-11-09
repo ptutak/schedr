@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "runs"
+section = "Backfill"
 summary = '''
 POST /api/v1/dags/{id}/backfills returns the backfill ID and created/skipped run counts;
 GET /api/v1/backfills/{id} returns run counts by state.

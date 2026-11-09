@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Runner and channel"
 summary = '''
 The shim reports core dumps and process usage with the exit status.
 If usage cannot be read, it reports null and still reports the exit.

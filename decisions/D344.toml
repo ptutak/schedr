@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step is"
 summary = '''
 A running wait step pulses unless reduced motion is requested; a failed one is red.
 A timeout is grey and says `TimedOut`, and the run stays successful.

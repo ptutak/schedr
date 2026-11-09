@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "components"
+section = "Roles"
 summary = '''
 `schedr ui` is a separate role federating any mix of distributed deployments and SQLite or Postgres
 standalones through their JSON APIs. It can deploy alone from the chart; standalones can run with

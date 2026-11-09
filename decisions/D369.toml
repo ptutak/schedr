@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "development"
+section = "Documents and records"
 summary = '''
 Each decision's main passage starts with <a id="D<n>"></a>; its history is "archive/PROJECT.md#D<n>" or
 "JOURNAL.md#D<n>"; records-check fails on a missing anchor.

@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "workers"
+section = "Memory and environment"
 summary = '''
 Tasks run as the agent's user and can act as their worker; sender checks guard against confused workers.
 Teams that must be kept apart use separate schedr deployments.

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "From a DAG"
 summary = '''
 A parsing worker reports an import error naming a script root it lacks.
 Workers parsing DAGs need the script roots those DAGs use.

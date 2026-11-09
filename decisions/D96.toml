@@ -3,9 +3,11 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 The DAG page shows each configured concurrency limit and its current count.
-The counts come from the master and appear beside the waiting reasons.
+The counts are the open attempts in the database (`active_counts`), shown beside the waiting
+reasons.
 '''
 history = "archive/PROJECT.md#D96"
 step = "M4.4"

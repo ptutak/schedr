@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Journal and handles"
 summary = '''
 The task result is reported when its process ends and retained while the instance is `cleaning_up`;
 `Finished` settles the cleanup and attempt. Worker loss preserves that result without rerunning

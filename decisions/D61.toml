@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "protocol"
+section = "Messages and limits"
 summary = '''
 DAG loading rejects task output limits that cannot fit in a worker message.
 An oversized finished result becomes an unretried `output_too_large` failure before journalling.

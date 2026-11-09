@@ -3,6 +3,7 @@ date = 2026-11-07
 by = "claude"
 status = "active"
 topic = "triggers"
+section = "`@trigger` and `@trigger.poke`"
 summary = '''
 Poke errors retain the bookmark; returned generators stop until code or version changes.
 Queue limits and idle restarts govern running triggers, whose strikes and consecutive errors persist.

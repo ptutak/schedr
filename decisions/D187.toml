@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 SQL uses libpq `sslmode` vocabulary for Postgres and MySQL, defaulting to `verify-full`.
 Both accept a PEM `ca_cert` or use system CAs; MySQL URL keys outside this vocabulary are refused.

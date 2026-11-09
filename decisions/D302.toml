@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "From a DAG"
 summary = '''
 `args` replaces the declared list; `env` merges variables with the operator's values winning.
 `secrets` adds to the declared secrets.

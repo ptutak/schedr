@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Building it"
 summary = '''
 M3 builds empty tabs and panels for resources, cleanup, outcomes and mapped tasks.
 M4 fills those views as the features are built.

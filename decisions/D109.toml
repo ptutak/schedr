@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "workers"
+section = "Drain"
 summary = '''
 A resume command is applied once; a failed search for its parse jobs is retried each round.
 Retries stop when the search succeeds or the worker is drained again.

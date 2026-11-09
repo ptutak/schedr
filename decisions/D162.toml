@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 Final release images receive `X.Y.Z` and `X.Y` tags.
 They do not receive a `latest` tag.

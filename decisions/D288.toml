@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "human-in-the-loop"
+section = "Approvals and questions"
 summary = '''
 The UI has a Waiting for you list, badge and task-panel answer form; the CLI provides `schedr runs answer`.
 A `WAITING_FOR_ANSWER` notification is sent through configured channels, with email linking to the task.

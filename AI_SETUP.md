@@ -356,7 +356,7 @@ question has one small file that answers it, so an agent reads little and never 
 | File | Answers | Written |
 |---|---|---|
 | `STATUS.md` | where things stand, what waits for the user | rewritten at each step's or session's end, at most 60 lines; its top block (milestone, next step, open questions, bugs) generated |
-| `design/<topic>.md` | how a part works **now** (Current, Decisions, Where in code, Open) | Current by hand, at most ~300 lines; the lists of decisions, code and open questions generated |
+| `design/<topic>.md` | how a part works **now**, an index into the decisions and the code (for the agent; the reader's docs are `docs/`) | generated whole from the decisions |
 | `decisions/D<n>.toml` | what was decided, whether it holds, the step that builds it, its anchor in `archive/PROJECT.md` | one file per decision; `DECISIONS.md` generated, one line each |
 | `questions/Q<n>.toml` | what is not decided yet, with the current proposal | one file per question; shown in `DECISIONS.md` and the topic's page |
 | `plan/<milestone>.toml` | milestones and steps in order, each with its scope, "done when" and status | edited; `PLAN.md` generated, one line per step; "next" is the first planned step |
@@ -369,10 +369,10 @@ question has one small file that answers it, so an agent reads little and never 
   otherwise both hold is generated from one.
 - **A decision** is recorded the moment it is taken, in one change: its TOML
   (`scripts/records.py decision "<title>"`), a dated entry in `JOURNAL.md` (the options, the
-  choice, why, "Not chosen") starting with its anchor, and the topic's "Current". `make records` writes
+  choice, why, "Not chosen") starting with its anchor, and its `section`. `make records` writes
   every generated view; `make records-check` (in `make check` and CI) fails on an invalid
   record, a gap in the numbers, a decision named anywhere but not recorded, a missing anchor, a
-  step not in the plan, an active decision's code path gone, or a stale view.
+  step not in the plan, an active decision's code path or symbol gone, or a stale view.
 - **Bugs:** open bugs with stable IDs (B1, B2, …, never reused), one TOML file each,
   `bugs/B<n>.toml`: a title, a rating (severity critical/high/medium/low × probability
   likely/possible/rare, and a kind: security, data, correctness, reliability, performance,

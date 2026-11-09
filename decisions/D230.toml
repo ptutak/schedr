@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Lifecycle"
 summary = '''
 Downstream tasks wait for per-task cleanup.
 There is no flag to skip the wait; independent slow cleanup can be a resource's.

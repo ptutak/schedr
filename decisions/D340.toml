@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "REST API and CLI"
 summary = '''
 Sensors and resources have endpoints of their own.
 Resources appear inside a run’s detail.

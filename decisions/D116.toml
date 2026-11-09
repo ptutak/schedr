@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Commands and supervision"
 summary = '''
 Timeout covers the whole attempt: secret and connection reads, runner or command startup, fork-
 server waits and request sending. The process receives only the remaining budget; exhaustion before

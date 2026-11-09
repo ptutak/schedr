@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "testing-dags"
+section = "run_dag"
 summary = '''
 When dags test selects a file, its directory is the root but only that file is parsed.
 Imports from sibling files still work; the internal selection is not configurable.

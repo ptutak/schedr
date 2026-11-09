@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Mapping"
 summary = '''
 The master counts mapped elements containing t-strings or dag_ctx and sends them in stored form.
 Each instance's runner builds its element with the referenced outputs.

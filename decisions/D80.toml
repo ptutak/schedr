@@ -3,6 +3,7 @@ date = 2026-10-30
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "REST API and CLI"
 summary = '''
 The run’s task list includes the whole mapped task’s `-1` row, its instance count and any failure reason.
 Its instance rows follow in map-index order.

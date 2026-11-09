@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Access and authentication"
 summary = '''
 Distributed app mode uses mTLS on the webserver’s UI port. Mesh proof uses that port over HTTP with
 `ui_port_in_mesh`, Istio authorization, a UI account shared with no other role, and a DENY policy

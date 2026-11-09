@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "outcomes"
+section = "Mapped tasks"
 summary = '''
 An exhausted instance failure or lane-upstream failure immediately ends the mapped task and cancels
 its other instances. Running instances are stopped; late results are ignored and their outputs are

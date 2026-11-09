@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "workers"
+section = "Memory and environment"
 summary = '''
 Parsing and the fork server receive all of [worker] pass_env, as tasks do. DAG code
 can read these variables at parse time. pass_env must not contain secrets; parse

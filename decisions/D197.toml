@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Commands"
 summary = '''
 The prefixed Postgres URL includes `passfile` pointing to the generated `.pgpass`.
 The URL contains no password and can be passed directly to psql.

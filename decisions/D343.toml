@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "observability"
+section = "Metrics and logs"
 summary = '''
 The Workers page and metrics show each host’s code hash, wait steps, threads, memory and losses.
 The DAG page lists switched-off sensors with switch-on; the DAGs list shows their count.

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "What a job says"
 summary = '''
 A job declaration containing `notify` produces an import error naming the job.
 The error says notifications are not available yet.

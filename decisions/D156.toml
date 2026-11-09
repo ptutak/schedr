@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 Until 1.0.0, the initial schema and protocol are edited in place.
 Upgrading from 0.1 to 0.2 requires a fresh database; release notes and README say so.

@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "task-context"
+section = "`dag_ctx` and `task_ctx`"
 summary = '''
 `schedr.api` sends allowed task and trigger requests through the agent to the master’s API.
 Outside a task it uses HTTP; local DAG tests use their standalone master and database.

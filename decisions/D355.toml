@@ -3,6 +3,7 @@ date = 2026-11-08
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "`delay` and `until`"
 summary = '''
 `delay` waits from the first try’s start; `until` waits for a planned-time offset or aware datetime.
 Both return the moment they end, and retries of `delay` wait only the remaining time.

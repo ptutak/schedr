@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "The 30-second rule"
 summary = '''
 Consecutive blocking strikes switch off a sensor or trigger after `[watchers] switch_off_after`.
 Success clears strikes; a command or new code switches it on, with one chance for new code.

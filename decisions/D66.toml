@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 The API shows failed files of each root’s recorded current parse, including root, hash, per-file
 worker/time, exception, message and traceback. Their DAGs retain their last good version; non-

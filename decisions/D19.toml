@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Starting Python"
 summary = '''
 Preload import failures are retried with backoff for `[worker] fork_server_import_retry`, default 20 minutes.
 After that the server stays disabled until restart; 0s disables retries.

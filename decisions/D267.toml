@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A resource is shared by DAGs that import it, with its cleanup attached to the resource.
 A different cleanup requires a different resource.

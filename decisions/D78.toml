@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "state"
+section = "Stored state"
 summary = '''
 `task_instances` has a nullable `reason` for failure without an attempt.
 It records failures such as exceeding `max_instances` or expanding a value that is not a list.

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "workers"
+section = "Identity and connection"
 summary = '''
 A disconnected worker stops only `cleanup_anywhere` tasks at its lease; other tasks may overlap
 retries elsewhere until reconnect. A frozen worker may permit any task to overlap, including

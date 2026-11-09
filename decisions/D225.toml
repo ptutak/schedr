@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A resource's cleanup goes ahead of waiting tasks and is not held by DAG limits.
 It still needs a worker slot.

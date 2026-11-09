@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 The release workflow calls all of CI on the release tag.
 It publishes the wheels produced by that CI run.

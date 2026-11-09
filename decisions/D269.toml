@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 A connection opens and closes in a generator within one process.
 A resource has separate setup and cleanup functions in separate tasks.

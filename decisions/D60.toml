@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "serialization"
+section = "Pydantic"
 summary = '''
 Pydantic date/datetime/duration text and schedr’s corresponding tagged types fit each other both
 ways; the runner converts through Pydantic’s parsing and JSON validation. Plain strings do not fit

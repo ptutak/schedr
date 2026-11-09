@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "claude"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 DAG JSON carries the parameter type, JSON Schema and defaults. The master fills defaults,
 refuses unknown keys, validates values and stores them as tagged outputs; scheduled runs use defaults.

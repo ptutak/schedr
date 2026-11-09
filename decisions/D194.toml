@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Commands"
 summary = '''
 Commands get <PREFIX>_TOOLS_CONFIG, a 0600 YAML file containing a URI with the user but
 no password, and a separate password, for Mongo's database tools. <PREFIX>_URI names no

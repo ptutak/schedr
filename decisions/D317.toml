@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 async with on a PostgreSQL URL opens psycopg’s AsyncConnection with the same TLS rules.
 It commits or rolls back on exit; MySQL and MariaDB require with.

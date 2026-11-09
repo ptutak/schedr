@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "python-api"
+section = "Mapping"
 summary = '''
 Fixed arguments remain in `arguments`, while `expand` describes the values that vary.
 `product` is an ordered list of named values and `kwargs` contains a list of dictionaries.

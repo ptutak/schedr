@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step may start"
 summary = '''
 At DAG definition, process and thread creation in the author's code, including its own helpers and
 classes, is rejected. Runtime process creation is refused in inherited step contexts, except for the

@@ -3,6 +3,7 @@ date = 2026-11-01
 by = "user"
 status = "active"
 topic = "task-context"
+section = "Parameters"
 summary = '''
 The master validates values with jsonschema, with formats checked and remote references disabled.
 DAG validation accepts only supported schema keywords and formats, annotations and local references;

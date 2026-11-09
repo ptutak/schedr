@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "development"
+section = "Working in steps"
 summary = '''
 M4 is split into small substeps, each committed after Claude’s own review and mutation-checked
 tests. Reviews follow the revised session/whole-repository schedule, with later M4 reviews to be

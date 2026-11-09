@@ -1,0 +1,6 @@
+title = "Should one deployment shard scheduling across multiple leading masters?"
+asked = 2026-11-08
+topic = "components"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "Measure one master on real Postgres first; if it cannot meet the load, consider sharding by DAG."
+history = "PROJECT.md#D21"

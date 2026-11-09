@@ -3,6 +3,7 @@ date = 2026-11-03
 by = "user"
 status = "active"
 topic = "connections"
+section = "Python clients"
 summary = '''
 Mongo login uses the URI's `authSource`, then its path database, then `admin`.
 `database=` selects only the database the task gets, in Python and tools' files.

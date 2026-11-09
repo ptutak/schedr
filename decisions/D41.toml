@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Access and authentication"
 summary = '''
 The UI and webserver use the same auth mode, or the webserver uses `none`.
 The distributed chart enforces these pairs and defaults UI auth to webserver auth.

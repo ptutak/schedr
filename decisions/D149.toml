@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Actions and parameters"
 summary = '''
 The webserver builds `params` form descriptors for a single DAG view; the UI does not
 interpret JSON Schema. Fields describe their name, kind, requiredness, nullability,

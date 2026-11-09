@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Lifecycle"
 summary = '''
 Cleanup runs after the task ends, including when it is killed.
 It uses the task’s preloaded or bare fork server, with spawn as fallback; downstream tasks wait.

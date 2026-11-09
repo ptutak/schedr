@@ -3,6 +3,7 @@ date = 2026-11-04
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Lifecycle"
 summary = '''
 `cleanup_retries` and `cleanup_retry_delay` are available on tasks and in `StepDefaults`.
 Their defaults are three retries and 30 seconds between retries.

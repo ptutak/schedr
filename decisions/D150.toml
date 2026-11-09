@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Actions and parameters"
 summary = '''
 A field is secret when its name contains a secret word or its default or a choice contains a secret. It
 uses an empty password input, with defaults and choices withheld from the browser. Its default is excluded

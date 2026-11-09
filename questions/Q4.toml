@@ -1,0 +1,6 @@
+title = "Should concurrency limits be editable without a code change and shared across DAGs?"
+asked = 2026-11-09
+topic = "assignment"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "Consider API or CLI overrides for incidents and limits shared across DAGs in M6."
+history = "PROJECT.md#D95; plan/M6.toml: Ideas logged for M6"

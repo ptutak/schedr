@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Pages and live updates"
 summary = '''
 The import errors view reports errors; parse warnings such as `TypingHint` remain in `dags check`.
 Warnings are not uploaded for this view.

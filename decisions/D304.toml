@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "Script roots"
 summary = '''
 Parsed files persist requested script roots, including missing ones. At registration
 and on changes, the master sends each DAG root’s current uses, excluding script roots

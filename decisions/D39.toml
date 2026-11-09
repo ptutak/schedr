@@ -3,6 +3,7 @@ date = 2026-10-28
 by = "user"
 status = "active"
 topic = "ui-cli"
+section = "Access and authentication"
 summary = '''
 schedr keeps no user database, user management UI, admin role or sessions. People remain with the
 organisation’s identity provider; Basic auth retains its users file for labs and single machines. A

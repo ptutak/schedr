@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Moving and disconnection"
 summary = '''
 A worker caps its reconnect backoff at half the lease the master gave it.
 A restarted master gives each worker a fresh lease from its start.

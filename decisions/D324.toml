@@ -3,6 +3,7 @@ date = 2026-11-06
 by = "user"
 status = "active"
 topic = "wait-steps"
+section = "What a wait step is"
 summary = '''
 A wait call reads as Waited[T], containing its value or TimedOut; passing it directly to a parameter accepting
 only T is rejected. Select the value with .on(T), the timeout with .on(TimedOut), or accept both explicitly.

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "scripts"
+section = "Script roots"
 summary = '''
 A script root and a DAG root with the same name cause a startup error naming both paths.
 `[scripts.roots]` can rename a script root.

@@ -3,6 +3,7 @@ date = 2026-10-29
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "What is parsed"
 summary = '''
 Non-transient file errors hold every DAG of that file, including InvalidDag, InvalidPath and
 ParseResultTooLarge; these rejections are not retried. Held DAGs create no runs, reject manual

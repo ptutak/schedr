@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "Roots and the scan"
 summary = '''
 The agent copies scanned root files into its data directory and hashes the copied bytes.
 Parse jobs and tasks import from the read-only copy; unused older copies are removed and bytecode is not used.

@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "cleanup"
+section = "Resources"
 summary = '''
 By default, group successors wait for cleanups of resources set up in that group, unless a successor or its
 descendants use the resource. Blocking cleanup failure makes successors `upstream_failed`. With

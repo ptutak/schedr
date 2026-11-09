@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "code-delivery"
+section = "Versions"
 summary = '''
 A worker’s move to an unseen hash or one recorded before the hash it left makes that hash newest;
 moving to a later-recorded hash is catching up. Compare with the worker’s previous report, including

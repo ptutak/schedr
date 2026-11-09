@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Starting Python"
 summary = '''
 A disabled fork server is not retried for threads after preload or a version mismatch.
 The log reports failures and the disabled metric stays visible.

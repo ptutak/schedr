@@ -1,0 +1,6 @@
+title = "Should schedr provide a slim image alongside the full base image?"
+asked = 2026-11-08
+topic = "deployment"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = "Keep the full image as the default; add a slim image if someone needs it."
+history = "PROJECT.md#D212"

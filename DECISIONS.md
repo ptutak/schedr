@@ -5,12 +5,39 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ## Open questions
 
-None.
+| # | Asked | Topic | Question | Proposal |
+|---|---|---|---|---|
+| Q25 | 2026-11-09 | triggers | Should a cycle through trigger=RunOf across DAGs be caught? | A cycle through trigger=RunOf across DAGs stays uncaught. The cycle check is the chain of parent runs, which these runs do not have. |
+| Q24 | 2026-11-09 | triggers | Should a new worker take triggers that are already running? | A new worker does not take a trigger that is already running. Moving one from its bookmark was left for later. |
+| Q23 | 2026-11-09 | wait-steps | Should first_of cancel the tasks that did not win? | The tasks that do not win keep running, and one that fails still fails the run. `first_of(..., cancel_rest=True)` was kept for later. |
+| Q22 | 2026-11-09 | wait-steps | Should schedr ship a by_deadline wait? | `delay` and `until` are the built-in waits. `by_deadline(a, b, at=...)` was kept for later and is not shipped. |
+| Q21 | 2026-11-09 | wait-steps | Should a wait step support .expand()? | A wait step cannot be mapped. `.expand()` is an error, because each instance could end its own way and `TimedOut` has no element-wise routing yet. |
+| Q20 | 2026-11-09 | outcomes | Should Slack and Teams have their own notification channels? | Notifications, planned (M4.13), use email and a generic JSON webhook. Dedicated Slack and Teams channels with their own formatting may come later. |
+| Q19 | 2026-11-09 | outcomes | Should schedr notify when a task runs too long? | No SLA or long-running-task event for now. Notifications, planned (M4.13), do not include one. |
+| Q18 | 2026-11-09 | outcomes | Should a command's retry depend on its exit code? | A declared exit code is a success and is not retried. Any other code fails and is retried. Per-code retry, such as retry on 75 and never on 2, may come later. |
+| Q17 | 2026-11-09 | python-api | Should operators support .partial() and .expand()? | Add .partial() and .expand() on operators when M5's BashOperator needs them. Today only @task functions map. |
+| Q16 | 2026-11-09 | python-api | Should a calendar the master understands be a built-in time trigger? | A Python calendar can be an event trigger, with no catchup and no backfill. A data-only time trigger such as Cron(..., exclude=[...]) may come later. |
+| Q15 | 2026-11-09 | state | Should database tables be partitioned by time? | Consider partitioning tables by time later. |
+| Q14 | 2026-11-09 | ui-cli | Should the CLI obtain OIDC tokens through a login command? | Consider a device-flow `schedr login` command. |
+| Q13 | 2026-11-09 | ui-cli | Should schedr provide OIDC integration for deployments without a mesh? | Consider chart-managed oauth2-proxy or schedr validating OIDC tokens itself. |
+| Q12 | 2026-11-09 | ui-cli | Should users be able to skip or set a task state from the UI and CLI? | Consider a skip action in M6; decide downstream values, running and mapped tasks, and the audit record. |
+| Q11 | 2026-11-09 | ui-cli | What encryption should LDAP connections require? | Consider requiring TLS with plaintext only on loopback, or allowing plaintext with a flag and warning. |
+| Q10 | 2026-11-09 | ui-cli | Who may sign in through LDAP? | Consider an optional group restriction, a required group, or any valid account. |
+| Q9 | 2026-11-09 | ui-cli | How should LDAP find a person’s directory entry? | Consider search then bind, a DN template, or both. |
+| Q8 | 2026-11-09 | observability | Should watcher steps be isolated after repeated host losses to identify the cause? | Consider separate processes for wait steps after a host loss to identify the cause; today none is blamed. |
+| Q7 | 2026-11-09 | observability | Should schedr add OpenTelemetry traces across its components? | Consider OpenTelemetry OTLP push and traces of a run across components later. |
+| Q6 | 2026-11-09 | task-processes | Should each DAG root be able to choose its own Python interpreter? | Allow a DAG root to select an interpreter under `[dags.roots]`; today `[dags] interpreter` applies to all roots. |
+| Q5 | 2026-11-09 | assignment | Should task assignment add priorities or fairness between DAGs? | Keep oldest-ready-first ordering for eligible tasks; priorities and inter-DAG fairness may come later. |
+| Q4 | 2026-11-09 | assignment | Should concurrency limits be editable without a code change and shared across DAGs? | Consider API or CLI overrides for incidents and limits shared across DAGs in M6. |
+| Q3 | 2026-11-08 | deployment | Should schedr provide a slim image alongside the full base image? | Keep the full image as the default; add a slim image if someone needs it. |
+| Q2 | 2026-11-08 | deployment | Should the chart provide NetworkPolicies for clusters without a mesh? | The chart uses Istio policies today; NetworkPolicies could be added for clusters without a mesh. |
+| Q1 | 2026-11-08 | components | Should one deployment shard scheduling across multiple leading masters? | Measure one master on real Postgres first; if it cannot meet the load, consider sharding by DAG. |
 
 ## Every decision
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D373 | 2026-11-09 | user | rule | development | Design pages are generated whole from the decisions |
 | D372 | 2026-11-09 | user | rule | development | PROJECT.md lives in archive/ |
 | D371 | 2026-11-08 | user | rule | development | Work reaches main through git; undone-check guards recent commits |
 | D370 | 2026-11-08 | user | rule | development | JOURNAL.md holds decisions from 2026-11-08 on; archive/PROJECT.md is left as it is |
@@ -561,6 +588,7 @@ None.
 
 ### development
 
+- D373: Design pages are generated whole from the decisions
 - D372: PROJECT.md lives in archive/
 - D371: Work reaches main through git; undone-check guards recent commits
 - D370: JOURNAL.md holds decisions from 2026-11-08 on; archive/PROJECT.md is left as it is

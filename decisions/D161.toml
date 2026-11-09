@@ -3,6 +3,7 @@ date = 2026-11-02
 by = "user"
 status = "active"
 topic = "development"
+section = "Releases"
 summary = '''
 A release candidate publishes to TestPyPI and creates a GitHub pre-release.
 Its images are tagged only `X.Y.ZrcN`.

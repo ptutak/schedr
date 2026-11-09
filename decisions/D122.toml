@@ -3,6 +3,7 @@ date = 2026-10-31
 by = "user"
 status = "active"
 topic = "configuration"
+section = "Effective configuration"
 summary = '''
 Each node supplies its own effective configuration for the API and Deployments page.
 The node masks secrets before its configuration leaves the process.

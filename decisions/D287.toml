@@ -3,6 +3,7 @@ date = 2026-11-05
 by = "user"
 status = "active"
 topic = "human-in-the-loop"
+section = "Approvals and questions"
 summary = '''
 An ask step uses its `timeout`, or `[ask] default_timeout` when absent.
 The default is seven days; expiration produces `TimedOut`.

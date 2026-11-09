@@ -3,6 +3,7 @@ date = 2026-10-27
 by = "user"
 status = "active"
 topic = "task-processes"
+section = "Starting Python"
 summary = '''
 M2.5.4 is split in two; M2.5.4a builds the agent side of the fork server.
 It starts and supervises fork servers and handles fork requests and fallback.
