@@ -7,7 +7,7 @@ summary = '''
 The UI and webserver use the same auth mode, or the webserver uses `none`.
 The distributed chart enforces these pairs and defaults UI auth to webserver auth.
 '''
-history = "PROJECT.md#D41"
+history = "archive/PROJECT.md#D41"
 step = "M3.6"
 also = ["deployment"]
 code = ["charts/schedr/values.yaml"]

@@ -9,7 +9,7 @@ only T is rejected. Select the value with .on(T), the timeout with .on(TimedOut)
 Plain >> selects the value; failed waits propagate upstream_failed, with ordinary run_if rules for untaken
 edges.
 '''
-history = "PROJECT.md#D324"
+history = "archive/PROJECT.md#D324"
 step = "M4.11a1"
 also = ["outcomes"]
 code = ["python/schedr/_build.py", "python/schedr/outcomes.py", "python/schedr/runner/task.py"]

@@ -7,7 +7,7 @@ summary = '''
 Final release images receive `X.Y.Z` and `X.Y` tags.
 They do not receive a `latest` tag.
 '''
-history = "PROJECT.md#D162"
+history = "archive/PROJECT.md#D162"
 step = "R0.1"
 code = ["scripts/release.py"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 A task can use its worker's Vault login and access its role's allowed paths.
 Teams kept apart use separate deployments; a federated UI can show them together.
 '''
-history = "PROJECT.md#D173"
+history = "archive/PROJECT.md#D173"
 step = "n/a"
 also = ["deployment", "workers"]
 checked = 2026-11-08

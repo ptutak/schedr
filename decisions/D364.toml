@@ -7,6 +7,6 @@ summary = '''
 Backfill runs are always ordered oldest first;
 no newest-first ordering is offered.
 '''
-history = "PROJECT.md#D364"
+history = "archive/PROJECT.md#D364"
 step = "M4.12b"
 checked = 2026-11-08

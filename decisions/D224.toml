@@ -7,7 +7,7 @@ summary = '''
 `.expand` on a setup is a parse error.
 A setup cannot be expanded into resource instances.
 '''
-history = "PROJECT.md#D224"
+history = "archive/PROJECT.md#D224"
 step = "M4.8c1"
 also = ["python-api"]
 checked = 2026-11-08

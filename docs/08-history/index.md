@@ -1,7 +1,7 @@
 # History
 
 How schedr got here, and why: the journal (`JOURNAL.md`, each decision since 2026-11-08 with its
-question, options, reasons and "Not chosen"), and before it the design log (`PROJECT.md`, by
+question, options, reasons and "Not chosen"), and before it the design log (`archive/PROJECT.md`, by
 topic, up to decision 366). A decision's anchor (`D213`) leads to its passage.
 
 ```{toctree}

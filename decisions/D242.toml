@@ -7,7 +7,7 @@ summary = '''
 `cleanup add` returns once the handle is journaled and sent.
 Handles are sent again on reconnect; a pod lost in the gap loses the handle for `cleanup_anywhere`.
 '''
-history = "PROJECT.md#D242"
+history = "archive/PROJECT.md#D242"
 step = "M4.8b"
 also = ["workers", "protocol"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-proto/proto/schedr/protocol/v1/master.proto"]

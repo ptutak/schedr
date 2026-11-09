@@ -268,8 +268,8 @@ pub fn run_kind_from_proto(name: &str) -> Result<RunKind, ConversionError> {
     }
 }
 
-/// How the master reacts to a rejection (see PROJECT.md, Task rejections). A rejection never
-/// uses up a retry.
+/// How the master reacts to a rejection (see archive/PROJECT.md, Task rejections). A rejection
+/// never uses up a retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RejectReaction {
     /// A momentary condition: requeue at once, any worker.

@@ -3,7 +3,7 @@
 //!
 //! Every change is stored as it is decided, a new run's preparation in one transaction (B79).
 //! Assigning tasks to workers and the messages of the
-//! protocol use these operations (see PROJECT.md, Task assignment).
+//! protocol use these operations (see archive/PROJECT.md, Task assignment).
 
 use std::collections::{BTreeMap, BTreeSet};
 

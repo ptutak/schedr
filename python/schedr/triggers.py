@@ -5,7 +5,7 @@
 moment. A DAG without a trigger (``trigger=None``) has manual runs only. The others share
 ``Trigger`` too: a ``@trigger`` function called with its arguments (``schedr.event_triggers``)
 starts a run per event, ``RunOf`` (``schedr.run_of``) one per run of another DAG that succeeds.
-See PROJECT.md, Native API.
+See archive/PROJECT.md, Native API.
 """
 
 import dataclasses

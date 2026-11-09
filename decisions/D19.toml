@@ -7,7 +7,7 @@ summary = '''
 Preload import failures are retried with backoff for `[worker] fork_server_import_retry`, default 20 minutes.
 After that the server stays disabled until restart; 0s disables retries.
 '''
-history = "PROJECT.md#D19"
+history = "archive/PROJECT.md#D19"
 step = "M2.5.4a"
 also = ["configuration"]
 code = ["crates/schedr-agent/src/fork.rs"]

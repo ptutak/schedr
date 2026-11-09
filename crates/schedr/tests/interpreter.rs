@@ -1,5 +1,5 @@
-//! Which Python the local commands run (PROJECT.md, Configuration: built-in interpreter): the
-//! real binary finding a project venv or resolving a pyenv shim, and saying what went wrong
+//! Which Python the local commands run (archive/PROJECT.md, Configuration: built-in interpreter):
+//! the real binary finding a project venv or resolving a pyenv shim, and saying what went wrong
 //! when the interpreter can't run the runner.
 //!
 //! Needs `SCHEDR_TEST_PYTHON` (a Python with `schedr` installed); `make test-integration`

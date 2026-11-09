@@ -7,6 +7,6 @@ summary = '''
 When the operator’s `max_wait` expires it yields `TimedOut`.
 The target run continues.
 '''
-history = "PROJECT.md#D360"
+history = "archive/PROJECT.md#D360"
 step = "M4.12a"
 checked = 2026-11-08

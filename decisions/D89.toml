@@ -7,7 +7,7 @@ summary = '''
 Each mapped instance counts toward all three task concurrency limits.
 The whole-task `-1` row does not count.
 '''
-history = "PROJECT.md#D89"
+history = "archive/PROJECT.md#D89"
 step = "M4.4"
 also = ["python-api"]
 code = ["crates/schedr-master/src/limits.rs"]

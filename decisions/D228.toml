@@ -7,7 +7,7 @@ summary = '''
 An attempt's handles may total at most 1 MiB.
 Exceeding the limit fails the attempt and names the limit.
 '''
-history = "PROJECT.md#D228"
+history = "archive/PROJECT.md#D228"
 step = "M4.8a"
 also = ["task-context"]
 code = ["crates/schedr-agent/src/handles.rs", "crates/schedr-master/src/dispatch.rs"]

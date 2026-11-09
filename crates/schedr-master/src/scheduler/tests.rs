@@ -358,7 +358,7 @@ async fn a_dag_catching_up_gets_at_most_so_many_runs_a_round() {
     );
 }
 
-/// The comparison test's DAGs (PROJECT.md, "Quiet DAGs"): each kind of trigger, some quiet
+/// The comparison test's DAGs (archive/PROJECT.md, "Quiet DAGs"): each kind of trigger, some quiet
 /// most of the time.
 fn timeline_dags() -> Vec<Dag> {
     let cron = |expression: &str, catchup: bool, start: &str| {

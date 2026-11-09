@@ -1,7 +1,7 @@
 """The runner as a real process: ``python -m schedr.runner`` with an inherited socket.
 
 The agent's side is played here: a socket pair, one end passed to the child as
-``SCHEDR_AGENT_FD``, the protocol spoken on the other (see PROJECT.md, Rust/Python
+``SCHEDR_AGENT_FD``, the protocol spoken on the other (see archive/PROJECT.md, Rust/Python
 integration).
 """
 

@@ -7,7 +7,7 @@ summary = '''
 The distributed chart deploys one UI replica and a Service on port 8082.
 Its default deployment is the release’s webserver; no Ingress is created.
 '''
-history = "PROJECT.md#D37"
+history = "archive/PROJECT.md#D37"
 step = "M3.6"
 also = ["components", "ui-cli"]
 code = ["charts/schedr/values.yaml"]

@@ -11,7 +11,7 @@ cleanup_from. The marked rest merges once, never as the whole cleanup: failed or
 otherwise ok wins, and tries and time add. Failure fails an open run or marks an already successful
 run yellow.
 '''
-history = "PROJECT.md#D308"
+history = "archive/PROJECT.md#D308"
 step = "B169"
 also = ["workers", "protocol"]
 checked = 2026-11-08

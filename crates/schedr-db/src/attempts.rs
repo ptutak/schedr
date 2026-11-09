@@ -3,7 +3,7 @@
 //! An assignment is stored **before** `AssignTask` is sent: the task instance becomes
 //! `running` and its try number goes up, in one transaction that only succeeds while it is
 //! `queued` (two passes can't assign it twice). An attempt's first end wins: delivery is at
-//! least once, so a repeated `Finished` changes nothing (see PROJECT.md, Task assignment).
+//! least once, so a repeated `Finished` changes nothing (see archive/PROJECT.md, Task assignment).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

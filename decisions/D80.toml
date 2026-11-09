@@ -7,7 +7,7 @@ summary = '''
 The run’s task list includes the whole mapped task’s `-1` row, its instance count and any failure reason.
 Its instance rows follow in map-index order.
 '''
-history = "PROJECT.md#D80"
+history = "archive/PROJECT.md#D80"
 step = "M4.3c"
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 An optional parameter field has a `none` checkbox beside its input.
 An empty string remains a value for an optional string.
 '''
-history = "PROJECT.md#D151"
+history = "archive/PROJECT.md#D151"
 step = "M4.5c"
 also = ["task-context"]
 code = ["crates/schedr-api/src/views/form.rs", "crates/schedr-ui/src/params_form.rs", "crates/schedr-ui/templates/trigger_params.html"]

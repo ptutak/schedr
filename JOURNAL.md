@@ -3,7 +3,7 @@
 How schedr's design goes on from 2026-11-08: dated entries, newest last, appended and never
 rewritten. Each decision taken has an entry with the question, the options, the choice, why and
 "Not chosen", and its anchor (`<a id="D<n>"></a>`), which its file `decisions/D<n>.toml` points
-to. The history up to decision 366 is `PROJECT.md`, organized by topic and left as it is.
+to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic and left as it is.
 ### <a id="D367"></a>2026-11-08: how the project keeps its documents (decision 367)
 
 - **Question:** the agent kept making wrong assumptions as the project grew (PROJECT.md 776 KB, about
@@ -77,3 +77,13 @@ to. The history up to decision 366 is `PROJECT.md`, organized by topic and left 
   whole history found no other lost work.
 - **Not chosen:** comparing with the last commit only (a copy over a main two commits ahead would
   pass); a review of the re-applied M4.11g (the user: it was reviewed when built).
+
+### <a id="D372"></a>2026-11-09: PROJECT.md moves to archive/ (decision 372)
+
+- **Question:** with JOURNAL.md holding every decision since 2026-11-08 and the design pages
+  saying how schedr works now, where does the old design log belong?
+- **Chosen (the user's):** `archive/PROJECT.md`, moved with `git mv` (its history follows it), its
+  text unchanged; every pointer to it rewritten (decisions' `history`, code comments, docs, plan
+  notes, the AI files); what records history as it happened (`history/`, CHANGELOG.md, the
+  journal's entries) left as written.
+- **Not chosen:** keeping it at the root (it reads as current; the first file a newcomer opens).

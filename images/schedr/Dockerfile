@@ -1,4 +1,4 @@
-# The schedr base image (see PROJECT.md, Components and roles: production path): the binary,
+# The schedr base image (see archive/PROJECT.md, Components and roles: production path): the binary,
 # Python, the `schedr` package, a set of libraries for tasks (requirements.in: API calls,
 # data, networking, every connection type's client) and the command-line clients a command
 # uses its connections with, running `schedr standalone` by default. More libraries go in an
@@ -13,7 +13,7 @@
 # none, so it is compiled here, its C extensions required (PYMONGO_C_EXT_MUST_BUILD: without
 # them it would fall back to pure Python, with only a warning), with the pinned build tools
 # (no build isolation: nothing unpinned fetched).
-# python:3.14.8-alpine3.24, created 2026-10-01 (PROJECT.md, CI supply-chain pins).
+# python:3.14.8-alpine3.24, created 2026-10-01 (archive/PROJECT.md, CI supply-chain pins).
 FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS builder
 RUN apk add --no-cache build-base
 COPY images/schedr/requirements.txt images/schedr/build-requirements.txt /tmp/

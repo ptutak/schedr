@@ -1,4 +1,4 @@
-"""Tests of the example DAG of PROJECT.md: plain calls of its tasks, and one whole run."""
+"""Tests of the example DAG of archive/PROJECT.md: plain calls of its tasks, and one whole run."""
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,4 +29,4 @@ def test_a_whole_run() -> None:
 def test_the_example_is_the_one_in_project_md() -> None:
     example = (HERE / "sync.py").read_text()
     code = example[example.index("from datetime") :]
-    assert f"```python\n{code}```" in (HERE.parent / "PROJECT.md").read_text()
+    assert f"```python\n{code}```" in (HERE.parent / "archive/PROJECT.md").read_text()

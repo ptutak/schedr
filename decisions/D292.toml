@@ -8,7 +8,7 @@ M4.9a delivers script roots, TOML checking and standalone jobs; M4.9b delivers s
 `ScriptOperator`. M4.9c delivers params, outcomes and script cleanup and resource support; each step
 is reviewed and documented.
 '''
-history = "PROJECT.md#D292"
+history = "archive/PROJECT.md#D292"
 step = "n/a"
 code = ["crates/schedr-agent/src/jobs.rs"]
 checked = 2026-11-08

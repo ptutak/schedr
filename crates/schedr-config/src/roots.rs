@@ -1,7 +1,7 @@
 //! Path lists (`SCHEDR_DAG_PATH`, `SCHEDR_SCRIPT_PATH`) and the roots made from them.
 //!
 //! Every entry of a path list is a root, named after its last path component unless renamed
-//! (see PROJECT.md, DAG roots and Plain script delivery: script roots). Paths are compared
+//! (see archive/PROJECT.md, DAG roots and Plain script delivery: script roots). Paths are compared
 //! lexically: the configuration is checked without touching the filesystem.
 
 use std::collections::BTreeMap;

@@ -1,6 +1,6 @@
 //! The two database backends and their migrations.
 //!
-//! Production uses Postgres, local development SQLite (see PROJECT.md, State storage). Each
+//! Production uses Postgres, local development SQLite (see archive/PROJECT.md, State storage). Each
 //! backend has its own migration files because column types differ (`TIMESTAMPTZ` / `UUID` /
 //! `JSONB` in Postgres, text in SQLite); both sets always have the same versions.
 

@@ -1,4 +1,4 @@
-title = "The project's documents: STATUS, design topics, a file per decision, PROJECT.md as history"
+title = "The project's documents: STATUS, design topics, a file per decision, archive/PROJECT.md as history"
 date = 2026-11-08
 by = "user"
 status = "active"
@@ -6,7 +6,7 @@ topic = "development"
 summary = '''
 `STATUS.md` (rewritten, at most 60 lines) says where things stand; `design/<topic>.md` how each part
 works now; `decisions/D<n>.toml` one file per decision, indexed by the generated `DECISIONS.md`.
-PROJECT.md is the history up to D366; later decisions are in JOURNAL.md (D370). The layout lives on
+archive/PROJECT.md is the history up to D366; later decisions are in JOURNAL.md (D370). The layout lives on
 in the `project-docs` skill.
 '''
 history = "JOURNAL.md#D367"

@@ -7,7 +7,7 @@ summary = '''
 ISO 8601 durations may use weeks, each a fixed seven days.
 Years and months remain refused.
 '''
-history = "PROJECT.md#D139"
+history = "archive/PROJECT.md#D139"
 step = "M4.5a"
 also = ["serialization"]
 code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs"]

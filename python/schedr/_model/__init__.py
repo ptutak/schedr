@@ -1,7 +1,7 @@
 """Private builder API: the DAG JSON model as Python types.
 
 These types mirror the Rust crate ``schedr-model``, which is the reference for every shape
-(see PROJECT.md, Rust/Python integration: shared model and schemas). Each type's
+(see archive/PROJECT.md, Rust/Python integration: shared model and schemas). Each type's
 ``to_json()`` produces exactly the JSON the Rust types accept; tests validate it against the
 committed ``schema/dag.schema.json``.
 

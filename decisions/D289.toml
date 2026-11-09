@@ -7,6 +7,6 @@ summary = '''
 Each answer records who answered, when, what they answered and an optional comment in the command log.
 The task panel shows the record; an answer is final.
 '''
-history = "PROJECT.md#D289"
+history = "archive/PROJECT.md#D289"
 step = "M6"
 checked = 2026-11-08

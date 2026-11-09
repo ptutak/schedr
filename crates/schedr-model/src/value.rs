@@ -1,8 +1,8 @@
 //! Values in DAG JSON: references, templates and task arguments.
 //!
-//! Python records everything the DAG body declared as plain data: literal values, references
-//! to upstream outputs or the run's context, and t-strings as literal text plus references
-//! (see PROJECT.md, Airflow compatibility, Scope: Templating). The agent and the runner fill
+//! Python records everything the DAG body declared as plain data: literal values, references to
+//! upstream outputs or the run's context, and t-strings as literal text plus references (see
+//! archive/PROJECT.md, Airflow compatibility, Scope: Templating). The agent and the runner fill
 //! them in at run time.
 
 use std::collections::BTreeMap;
@@ -84,7 +84,7 @@ pub enum Reference {
         path: Vec<PathElem>,
     },
     /// A secret from a secret storage (`secrets['etl/db']['password']`), fetched by the agent
-    /// that runs the task, never by the master (see PROJECT.md, Secret storage).
+    /// that runs the task, never by the master (see archive/PROJECT.md, Secret storage).
     Secret(SecretName),
 }
 

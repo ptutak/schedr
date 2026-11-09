@@ -1,5 +1,5 @@
 //! The watcher hosts: a worker's wait steps, as coroutines in one long-lived process per code
-//! set (decision 320; see PROJECT.md, Sensors and triggers).
+//! set (decision 320; see archive/PROJECT.md, Sensors and triggers).
 //!
 //! A host is started for the first wait step of an interpreter and set of root copies, and
 //! stopped when its last one ends, so new code gets a new host while the old one finishes. All

@@ -1,4 +1,4 @@
-//! mTLS on schedr's internal links (see PROJECT.md, Master–worker protocol: `tls.mode`).
+//! mTLS on schedr's internal links (see archive/PROJECT.md, Master–worker protocol: `tls.mode`).
 //!
 //! In `app` mode every role has a certificate and a key, and trusts one CA: the master serves
 //! gRPC with its certificate and asks workers for theirs, a worker serves its log endpoint the

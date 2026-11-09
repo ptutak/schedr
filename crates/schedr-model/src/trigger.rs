@@ -1,7 +1,7 @@
 //! A DAG's trigger, as stored in DAG JSON: what starts its runs.
 //!
 //! Cron expressions and time zone names are validated by the master when it stores a DAG;
-//! here they are plain data (see PROJECT.md, Native API: triggers are typed objects).
+//! here they are plain data (see archive/PROJECT.md, Native API: triggers are typed objects).
 
 use jiff::Timestamp;
 use schemars::JsonSchema;

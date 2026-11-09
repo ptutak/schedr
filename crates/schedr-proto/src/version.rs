@@ -1,7 +1,7 @@
 //! The protocol version and the master's acceptance rule.
 //!
 //! The master accepts workers with the **same major** and an **equal or lower minor**
-//! version; upgrade order is master first, then workers (see PROJECT.md, Master–worker
+//! version; upgrade order is master first, then workers (see archive/PROJECT.md, Master–worker
 //! protocol).
 
 use crate::pb::ProtocolVersion;

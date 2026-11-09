@@ -2,7 +2,7 @@ title = "Distributed"
 order = 30
 done_when = "Runs on OpenShift with 2 workers and survives killing the master or a worker."
 notes = '''
-**Goal (PROJECT.md, Roadmap):** schedr runs on OpenShift with 2 workers and survives killing
+**Goal (archive/PROJECT.md, Roadmap):** schedr runs on OpenShift with 2 workers and survives killing
 the master or a worker. M1 built the pieces in single-worker form (the gRPC protocol and
 `Register`, the worker registry with spread, change detection and hashing, the journal in
 memory); M2 splits the roles and makes every failure path real. Each step brings unit and
@@ -164,7 +164,7 @@ part_of = "2.9"
 id = "2.10"
 title = "Standalone for production"
 scope = '''
-(see PROJECT.md, Components and roles: production path): working through any connection pooler (PgBouncer in any mode): a `master_lease` row for one master per database (a second waits as a standby; standalone and `schedr master`; SQLite too), the query limit enforced by schedr instead of `SET statement_timeout`, sqlx's statement cache off, polling as the command guarantee; the master's writes fenced by the lease in the database (a write's start one message on Postgres); migrations by the lease holder (`schedr db migrate [--wait]`, the chart's init container; standalone only with `--migrate`); `[worker] memory_reserve` (10 % worker, 25 % standalone, measured); an image with the DAGs' libraries on top of schedr's; a Helm chart with a standalone mode (one pod, SQLite on a volume or Postgres from a Secret, probes, `terminationGracePeriodSeconds` matched)
+(see archive/PROJECT.md, Components and roles: production path): working through any connection pooler (PgBouncer in any mode): a `master_lease` row for one master per database (a second waits as a standby; standalone and `schedr master`; SQLite too), the query limit enforced by schedr instead of `SET statement_timeout`, sqlx's statement cache off, polling as the command guarantee; the master's writes fenced by the lease in the database (a write's start one message on Postgres); migrations by the lease holder (`schedr db migrate [--wait]`, the chart's init container; standalone only with `--migrate`); `[worker] memory_reserve` (10 % worker, 25 % standalone, measured); an image with the DAGs' libraries on top of schedr's; a Helm chart with a standalone mode (one pod, SQLite on a volume or Postgres from a Secret, probes, `terminationGracePeriodSeconds` matched)
 '''
 done_when = '''
 tests: a second master waits and takes over; the chart's standalone mode installs on kind / k3d, on SQLite and on Postgres
@@ -176,7 +176,7 @@ done = 2026-10-24
 id = "2.10b"
 title = "Stress suite"
 scope = '''
-(see PROJECT.md, Testing: the stress suite): `crates/schedr/tests/stress/` on the role tests' harness (moved to `tests/support/`), 13 scenarios (throughput, command bursts, worker churn, master failover, the database stalled, through PgBouncer, rolling restart, code churn, standalone on SQLite, soak, heavy output, the memory watchdog, Python tasks), invariants from the database and the tasks' marks, reports in `target/stress/`; `make stress` (`STRESS_PROFILE`, `STRESS`); nightly in CI (`stress.yml`)
+(see archive/PROJECT.md, Testing: the stress suite): `crates/schedr/tests/stress/` on the role tests' harness (moved to `tests/support/`), 13 scenarios (throughput, command bursts, worker churn, master failover, the database stalled, through PgBouncer, rolling restart, code churn, standalone on SQLite, soak, heavy output, the memory watchdog, Python tasks), invariants from the database and the tasks' marks, reports in `target/stress/`; `make stress` (`STRESS_PROFILE`, `STRESS`); nightly in CI (`stress.yml`)
 '''
 done_when = "the suite passes locally (`quick`); bugs it finds go to BUGS.md"
 status = "done"
@@ -188,7 +188,7 @@ part_of = "2.10"
 id = "2.11a"
 title = "Standalone inside an Istio mesh"
 scope = '''
-(see PROJECT.md, Components and roles: "Standalone inside an Istio mesh"): `serviceAccount` (an existing one reused), `migration: initContainer \| onStart`, the `istio` values (sidecar settings for drains, VirtualService, RequestAuthentication, AuthorizationPolicy listing every port, PeerAuthentication, ServiceEntries); Swagger UI at `/api/v1/docs/` (always on; open without a token in the mesh; working behind a path prefix with `X-Forwarded-Prefix`) and an optional bearer token in the OpenAPI description; the database from a Secret's user and password (`database.postgres`, the switch from SQLite one upgrade); `vault` (the Vault Secrets Operator); DAGs from a folder (`charts/schedr/dags-values.sh` → `dags.files`, a ConfigMap root) and git-sync's credentials; the base image's libraries for tasks (API calls, Polars, networking, pymongo built from source); fixes B19
+(see archive/PROJECT.md, Components and roles: "Standalone inside an Istio mesh"): `serviceAccount` (an existing one reused), `migration: initContainer \| onStart`, the `istio` values (sidecar settings for drains, VirtualService, RequestAuthentication, AuthorizationPolicy listing every port, PeerAuthentication, ServiceEntries); Swagger UI at `/api/v1/docs/` (always on; open without a token in the mesh; working behind a path prefix with `X-Forwarded-Prefix`) and an optional bearer token in the OpenAPI description; the database from a Secret's user and password (`database.postgres`, the switch from SQLite one upgrade); `vault` (the Vault Secrets Operator); DAGs from a folder (`charts/schedr/dags-values.sh` → `dags.files`, a ConfigMap root) and git-sync's credentials; the base image's libraries for tasks (API calls, Polars, networking, pymongo built from source); fixes B19
 '''
 done_when = '''
 `make chart-check`; `scripts/kind-standalone.sh` and `scripts/kind-mesh.sh` pass on kind (the latter with Istio, `REGISTRY_ONLY`)

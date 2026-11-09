@@ -1,4 +1,5 @@
-//! Leading: one master per database (see PROJECT.md, Components and roles: production path).
+//! Leading: one master per database (see archive/PROJECT.md, Components and roles: production
+//! path).
 //!
 //! A master takes the database's lease before it starts (a second one waits as a standby),
 //! renews it every third of [`Leadership::period`], and leads only while its last renewal is

@@ -7,7 +7,7 @@ summary = '''
 A shell-string command cannot contain placeholders; the DAG loader, master and agent refuse them.
 Values can be passed in an argument list or through env; :raw is removed.
 '''
-history = "PROJECT.md#D99"
+history = "archive/PROJECT.md#D99"
 step = "M4.3e"
 also = ["task-processes"]
 code = ["crates/schedr-agent/src/render.rs", "crates/schedr-master/src/validate.rs", "python/schedr/_model/tasks.py"]

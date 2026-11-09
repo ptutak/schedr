@@ -5,7 +5,7 @@
 //!
 //! On Postgres a new command also sends a notification on [`COMMANDS_CHANNEL`], so the master
 //! picks it up at once ([`Database::command_notifications`]); polling stays the fallback, and
-//! the only way on SQLite (see PROJECT.md, Web UI and CLI).
+//! the only way on SQLite (see archive/PROJECT.md, Web UI and CLI).
 
 use std::time::Duration;
 

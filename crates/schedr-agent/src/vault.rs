@@ -1,8 +1,8 @@
-//! The Vault secret storage (see PROJECT.md, Secret storage): KV v2 reads of a mount, with a
-//! token from the environment or Vault's Kubernetes auth (the pod's service-account token).
-//! The agent's own token is renewed before it expires; with Kubernetes auth, an expired or
-//! refused one is replaced by logging in again, once per read. Values that aren't strings
-//! are read as their JSON text (decision 171).
+//! The Vault secret storage (see archive/PROJECT.md, Secret storage): KV v2 reads of a mount, with
+//! a token from the environment or Vault's Kubernetes auth (the pod's service-account token). The
+//! agent's own token is renewed before it expires; with Kubernetes auth, an expired or refused one
+//! is replaced by logging in again, once per read. Values that aren't strings are read as their
+//! JSON text (decision 171).
 //!
 //! A token never reaches a log, an error or a `Debug` print.
 

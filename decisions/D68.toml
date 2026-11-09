@@ -7,7 +7,7 @@ summary = '''
 The import errors view reports errors; parse warnings such as `TypingHint` remain in `dags check`.
 Warnings are not uploaded for this view.
 '''
-history = "PROJECT.md#D68"
+history = "archive/PROJECT.md#D68"
 step = "M4.2c"
 also = ["testing-dags", "code-delivery"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 The agent does not stop a running cleanup at the drain deadline.
 A cleanup timeout that exceeds termination grace is warned once at worker start or per task.
 '''
-history = "PROJECT.md#D346"
+history = "archive/PROJECT.md#D346"
 step = "M4.11a4"
 also = ["workers", "configuration"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 The trigger form carries a fingerprint of the fields and defaults it displayed.
 If they changed, triggering is refused and the page must be reloaded; secret defaults are excluded.
 '''
-history = "PROJECT.md#D159"
+history = "archive/PROJECT.md#D159"
 step = "M4.5c"
 also = ["task-context"]
 code = ["crates/schedr-ui/src/params_form.rs", "crates/schedr-ui/src/params_form/tests.rs"]

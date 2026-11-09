@@ -1,6 +1,6 @@
 //! Run kinds and the states of runs, task instances and attempts.
 //!
-//! See PROJECT.md: Task assignment (run states, task instance states, attempt statuses) and
+//! See archive/PROJECT.md: Task assignment (run states, task instance states, attempt statuses) and
 //! Runs: manual runs, backfill and pausing (run kinds).
 
 use std::fmt;
@@ -66,7 +66,7 @@ pub enum CleanupResult {
 }
 
 impl CleanupResult {
-    /// Whether it fails the run (see PROJECT.md, Run result).
+    /// Whether it fails the run (see archive/PROJECT.md, Run result).
     #[must_use]
     pub const fn fails_the_run(self) -> bool {
         matches!(self, Self::Failed | Self::WorkerLost)
@@ -134,7 +134,7 @@ pub enum AttemptStatus {
     AssignmentExpired,
 }
 
-/// A worker's state as the master sees it (see PROJECT.md, Worker lifecycle).
+/// A worker's state as the master sees it (see archive/PROJECT.md, Worker lifecycle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerState {
@@ -173,7 +173,7 @@ pub enum RetryRule {
 }
 
 impl AttemptStatus {
-    /// What happens after an attempt with this status (see PROJECT.md, Task assignment:
+    /// What happens after an attempt with this status (see archive/PROJECT.md, Task assignment:
     /// retries are decided by the master).
     #[must_use]
     pub const fn retry_rule(self) -> RetryRule {

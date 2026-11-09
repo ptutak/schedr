@@ -2,7 +2,7 @@
 //!
 //! A scheduled run is unique per (DAG, `planned_for`) (a partial unique index), so a master
 //! that crashes after creating one can't create it twice; manual, backfill, chained and event runs
-//! are exempt (see PROJECT.md, Runs: manual runs, backfill and pausing).
+//! are exempt (see archive/PROJECT.md, Runs: manual runs, backfill and pausing).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -373,8 +373,9 @@ impl Database {
         Ok(overview)
     }
 
-    /// As [`Self::run_overview`], for `dags` only (a round visiting some DAGs, see PROJECT.md,
-    /// "Quiet DAGs"): its cost follows them, not every DAG. Nothing for no DAGs.
+    /// As [`Self::run_overview`], for `dags` only (a round visiting some DAGs, see
+    /// archive/PROJECT.md, "Quiet DAGs"): its cost follows them, not every DAG. Nothing for no
+    /// DAGs.
     ///
     /// # Errors
     ///

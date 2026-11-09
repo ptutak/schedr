@@ -1,4 +1,4 @@
-//! `[secret_storage]` made into the agent's storages, per role (see PROJECT.md, Secret
+//! `[secret_storage]` made into the agent's storages, per role (see archive/PROJECT.md, Secret
 //! storage): standalone always has the `db` storage (its default when nothing else is
 //! configured); a worker in a distributed deployment has only what is configured (Vault), and
 //! never `db` (it has no database connection, and a secret never passes through the master).

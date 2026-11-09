@@ -7,7 +7,7 @@ summary = '''
 A resource's cleanup goes ahead of waiting tasks and is not held by DAG limits.
 It still needs a worker slot.
 '''
-history = "PROJECT.md#D225"
+history = "archive/PROJECT.md#D225"
 step = "M4.8c2"
 also = ["assignment"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]

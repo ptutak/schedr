@@ -1,5 +1,5 @@
-//! The reference pages of the documentation, generated from the code so they can't go stale
-//! (see PROJECT.md, Repository and tooling: Documentation): the configuration (from its JSON
+//! The reference pages of the documentation, generated from the code so they can't go stale (see
+//! archive/PROJECT.md, Repository and tooling: Documentation): the configuration (from its JSON
 //! Schema), the command line (from clap), the metrics (from each role's list) and the REST API
 //! (from its OpenAPI description).
 //!

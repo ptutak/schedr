@@ -11,7 +11,7 @@ on, each step brings its own.
 
 
 **M1 is done** when a new user can `pip install` the wheel, write the example DAG from
-PROJECT.md (Native API), run `schedr dags test` on it, start `schedr standalone`, unpause the
+archive/PROJECT.md (Native API), run `schedr dags test` on it, start `schedr standalone`, unpause the
 DAG, trigger a run with `schedr runs trigger --for ...`, and see it succeed with
 `schedr runs list`.
 
@@ -171,7 +171,7 @@ commits = ["339f54f"]
 id = "1.14"
 title = "`schedr standalone`"
 scope = "all roles in one process, SQLite, gRPC on localhost"
-done_when = "the end-to-end example from PROJECT.md runs"
+done_when = "the end-to-end example from archive/PROJECT.md runs"
 status = "done"
 done = 2026-10-22
 commits = ["a47e9f6", "95b5c22", "4767d69"]

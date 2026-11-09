@@ -1,5 +1,5 @@
 //! `schedr standalone`: every role in one process, on localhost, with SQLite by default (see
-//! PROJECT.md, Master–worker protocol: standalone uses the same gRPC protocol).
+//! archive/PROJECT.md, Master–worker protocol: standalone uses the same gRPC protocol).
 //!
 //! The master's gRPC service, the REST API, the master's loop and one worker agent with its log
 //! endpoint run side by side; the agent talks to the master over gRPC on localhost like any
@@ -9,7 +9,7 @@
 //! own, `schedr db migrate`). When the master fails (another took the lease over), the whole
 //! process ends, its tasks interrupted: restarted, it waits as a standby.
 //!
-//! In one pod (for testing on a cluster, see PROJECT.md): `--listen 0.0.0.0` opens the REST
+//! In one pod (for testing on a cluster, see archive/PROJECT.md): `--listen 0.0.0.0` opens the REST
 //! API to a Service, SIGTERM stops it cleanly, and a lock in the data directory refuses a
 //! second standalone on the same data (two pods on one volume would schedule every run twice).
 

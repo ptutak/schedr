@@ -229,7 +229,7 @@ jobs:
         env:
           SCHEDR_BIN: ${{ github.workspace }}/target/debug/schedr
 
-  # The documentation site (see PROJECT.md, Repository and tooling: Documentation); fails on
+  # The documentation site (see archive/PROJECT.md, Repository and tooling: Documentation); fails on
   # any warning.
   docs:
     runs-on: ubuntu-latest
@@ -252,12 +252,12 @@ jobs:
           name: docs-site
           path: site
 
-  # The wheels: the `schedr` binary plus the pure-Python package (see PROJECT.md, Packaging and
-  # releases). Linux x86_64 as manylinux (glibc) and musllinux (Alpine, e.g. the standalone
-  # image in examples/kubernetes). Linux aarch64 manylinux and macOS arm64 are the matrix
-  # job below. scripts/build-wheel.sh builds every wheel (digest-pinned images; no
-  # maturin-action). The smoke test is PLAN.md's "M1 is done": install, `dags test`, and a
-  # run in `schedr standalone` through the CLI.
+  # The wheels: the `schedr` binary plus the pure-Python package (see archive/PROJECT.md, Packaging
+  # and releases). Linux x86_64 as manylinux (glibc) and musllinux (Alpine, e.g. the standalone
+  # image in examples/kubernetes). Linux aarch64 manylinux and macOS arm64 are the matrix job below.
+  # scripts/build-wheel.sh builds every wheel (digest-pinned images; no maturin-action). The smoke
+  # test is PLAN.md's "M1 is done": install, `dags test`, and a run in `schedr standalone` through
+  # the CLI.
   wheel:
     runs-on: ubuntu-latest
     # The images carry the documentation the docs job built (served at /docs).

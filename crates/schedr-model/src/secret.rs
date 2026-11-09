@@ -1,5 +1,5 @@
 //! Secrets in DAG JSON: which secret a reference names, and the secrets a task declares
-//! (see PROJECT.md, Secret storage).
+//! (see archive/PROJECT.md, Secret storage).
 //!
 //! A secret is `path#key` in a storage, like a Vault KV v2 secret's key; `path` alone is the
 //! whole secret (every key). The storage is named, or left out for the default one. Only the

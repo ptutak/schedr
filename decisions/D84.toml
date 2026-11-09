@@ -7,7 +7,7 @@ summary = '''
 `task_ctx` exposes `task_id`, `try_number` and `map_index` while a task runs.
 The map index is `None` for an unmapped task.
 '''
-history = "PROJECT.md#D84"
+history = "archive/PROJECT.md#D84"
 step = "M4.3c"
 also = ["python-api"]
 code = ["python/schedr/context.py"]

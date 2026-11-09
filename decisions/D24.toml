@@ -7,6 +7,6 @@ summary = '''
 Basic authentication uses the browser’s credentials and proxy-header authentication uses the proxy’s session.
 UI POST actions require matching `Origin` or `Sec-Fetch-Site` information.
 '''
-history = "PROJECT.md#D24"
+history = "archive/PROJECT.md#D24"
 step = "M3.5"
 checked = 2026-11-08

@@ -7,6 +7,6 @@ summary = '''
 Actions use an HTML dialog describing what will happen.
 The inline result shows pending, applied or rejected with the master’s reason.
 '''
-history = "PROJECT.md#D35"
+history = "archive/PROJECT.md#D35"
 step = "M3.4"
 checked = 2026-11-08

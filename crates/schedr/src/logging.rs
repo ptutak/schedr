@@ -1,5 +1,5 @@
-//! schedr's own logs (see PROJECT.md, Observability): stdout, JSON in pods and readable text
-//! in a terminal, with `RUST_LOG`-style level filters.
+//! schedr's own logs (see archive/PROJECT.md, Observability): stdout, JSON in pods and readable
+//! text in a terminal, with `RUST_LOG`-style level filters.
 
 use schedr_config::{LogFormat, LogSection};
 use tracing_subscriber::EnvFilter;

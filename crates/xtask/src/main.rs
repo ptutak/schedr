@@ -67,7 +67,7 @@ fn main() -> ExitCode {
                 .collect();
             design.sort();
             let files = docs_sources(&DocsInputs {
-                project: read("PROJECT.md"),
+                project: read("archive/PROJECT.md"),
                 journal: read("JOURNAL.md"),
                 decisions: read("DECISIONS.md"),
                 readme: read("README.md"),

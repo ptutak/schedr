@@ -1,6 +1,6 @@
 //! Type descriptors: the type of a task's output, as recorded in DAG JSON.
 //!
-//! The Python runner derives them from the return annotation at parse time (see PROJECT.md,
+//! The Python runner derives them from the return annotation at parse time (see archive/PROJECT.md,
 //! Output serialization). The master uses them to check output references and paths without
 //! running Python.
 

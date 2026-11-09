@@ -1,9 +1,9 @@
 //! One attempt on the worker, from `AssignTask` to `Finished`: what to run and how it ended.
 //!
 //! Pure: [`AttemptSpec::from_assign`] reads the assignment, [`plan`] decides how to run it (a
-//! Python task through the runner, a command rendered here) or why not (a rejection, or a
-//! failure such as a reference that can't be rendered), and [`finished`] turns how the process
-//! ended into the `Finished` message (see PROJECT.md, Task assignment). Starting processes is
+//! Python task through the runner, a command rendered here) or why not (a rejection, or a failure
+//! such as a reference that can't be rendered), and [`finished`] turns how the process ended into
+//! the `Finished` message (see archive/PROJECT.md, Task assignment). Starting processes is
 //! [`crate::launch`]'s job.
 
 use std::collections::BTreeMap;

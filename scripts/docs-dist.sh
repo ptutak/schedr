@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The documentation the images serve at /docs (PROJECT.md, Web UI: decision 28A): the built
+# The documentation the images serve at /docs (archive/PROJECT.md, Web UI: decision 28A): the built
 # site (`make docs`, or the CI's docs artifact) without the Rust API reference (for schedr's
 # developers) and Sphinx's `_sources` copies, into dist/docs for the images' build.
 # Usage: scripts/docs-dist.sh [<site directory>]   (default: site)

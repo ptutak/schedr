@@ -10,6 +10,6 @@ creates one when the dialog opens and retains it in the tab until delivery is de
 most three attempts using that key after missing answers or server failures; the UI says unresolved
 delivery ‘may have arrived’.
 '''
-history = "PROJECT.md#D126"
+history = "archive/PROJECT.md#D126"
 step = "M4.4"
 checked = 2026-11-08

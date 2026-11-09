@@ -9,7 +9,7 @@ library fails the conflicting file and root files importing it, with an explanat
 compile time, including inside functions, independently of process start method. Other files and
 tasks continue; library imports receive the library.
 '''
-history = "PROJECT.md#D328"
+history = "archive/PROJECT.md#D328"
 step = "M4.11L"
 code = ["python/schedr/runner/parse.py", "python/schedr/runner/sources.py"]
 checked = 2026-11-08

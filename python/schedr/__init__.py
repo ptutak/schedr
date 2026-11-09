@@ -1,7 +1,7 @@
 """Python API for the schedr scheduler.
 
 Define DAGs with ``with Dag(...)``, Python tasks with ``@task``, and other tasks with the
-operators; pass outputs between tasks as arguments (see PROJECT.md, Native API).
+operators; pass outputs between tasks as arguments (see archive/PROJECT.md, Native API).
 """
 
 from importlib.metadata import version

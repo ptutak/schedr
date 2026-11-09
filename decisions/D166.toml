@@ -7,6 +7,6 @@ summary = '''
 A final release tag deploys its documentation site.
 Release rehearsals and main do not deploy it.
 '''
-history = "PROJECT.md#D166"
+history = "archive/PROJECT.md#D166"
 step = "R0.3"
 checked = 2026-11-08

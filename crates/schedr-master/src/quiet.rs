@@ -1,4 +1,4 @@
-//! Quiet DAGs (see PROJECT.md, "Quiet DAGs"): which DAGs a scheduler round visits.
+//! Quiet DAGs (see archive/PROJECT.md, "Quiet DAGs"): which DAGs a scheduler round visits.
 //!
 //! **Busy** DAGs (a run in progress, a fire time coming up, or active not long ago) are visited
 //! every round, as before. A DAG with nothing in progress for `quiet_dag_after` (or found idle

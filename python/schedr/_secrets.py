@@ -1,13 +1,12 @@
 """Secrets in the DAG body: ``secrets['etl/db']['password']`` and ``SecretPrefix(...)``.
 
-A secret is named, never read, in the DAG file: ``secrets['etl/db']['password']`` is a
-placeholder, filled in by the worker agent that runs the task (in an argument, a t-string or
-``env``), and ``secrets=[...]`` declares the secrets a task reads on demand (``schedr
-task-ctx secret get``, ``task_ctx.secret(...)``). A placeholder is typed as the value it
-stands for (decision 176): ``secrets['etl/db']`` as the whole secret, ``dict[str, str]``;
-``['password']``, ``.get('password', '')`` and ``secrets.value('etl/db#password')`` as one
-value, ``str``. Misuse in the DAG body is refused when the file loads. See PROJECT.md, Secret
-storage.
+A secret is named, never read, in the DAG file: ``secrets['etl/db']['password']`` is a placeholder,
+filled in by the worker agent that runs the task (in an argument, a t-string or ``env``), and
+``secrets=[...]`` declares the secrets a task reads on demand (``schedr task-ctx secret get``,
+``task_ctx.secret(...)``). A placeholder is typed as the value it stands for (decision 176):
+``secrets['etl/db']`` as the whole secret, ``dict[str, str]``; ``['password']``, ``.get('password',
+'')`` and ``secrets.value('etl/db#password')`` as one value, ``str``. Misuse in the DAG body is
+refused when the file loads. See archive/PROJECT.md, Secret storage.
 """
 
 from collections.abc import Iterable, Iterator

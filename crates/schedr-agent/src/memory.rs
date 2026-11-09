@@ -1,4 +1,4 @@
-//! The memory watchdog (see PROJECT.md, Worker memory protection and crash recovery): every
+//! The memory watchdog (see archive/PROJECT.md, Worker memory protection and crash recovery): every
 //! task shares the pod's memory, and the kernel's out-of-memory killer would take every task
 //! and the agent with it, so the agent measures each task and kills only the one over its
 //! budget.

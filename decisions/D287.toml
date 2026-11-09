@@ -7,6 +7,6 @@ summary = '''
 An ask step uses its `timeout`, or `[ask] default_timeout` when absent.
 The default is seven days; expiration produces `TimedOut`.
 '''
-history = "PROJECT.md#D287"
+history = "archive/PROJECT.md#D287"
 step = "M6"
 checked = 2026-11-08

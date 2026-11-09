@@ -10,7 +10,7 @@ edges are not taken, or becomes `upstream_failed` if an edge failed and none can
 Losers continue; a failed loser still fails the run without changing the completed node or its
 downstream results.
 '''
-history = "PROJECT.md#D347"
+history = "archive/PROJECT.md#D347"
 step = "M4.11c"
 also = ["outcomes", "python-api"]
 code = ["crates/schedr-master/src/validate.rs", "crates/schedr-model/src/task.rs", "python/schedr/first_of.py"]

@@ -1,6 +1,6 @@
 //! The cleanup handles an attempt registers: what its cleanup needs that only existed in the
-//! attempt (see PROJECT.md, Per-task cleanup). Masked as outputs are (decision 222), at most
-//! [`MAX_HANDLES_SIZE`] in all (decision 228).
+//! attempt (see archive/PROJECT.md, Per-task cleanup). Masked as outputs are (decision 222), at
+//! most [`MAX_HANDLES_SIZE`] in all (decision 228).
 
 use std::sync::{Arc, Mutex, PoisonError};
 

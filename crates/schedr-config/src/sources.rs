@@ -1,5 +1,5 @@
 //! Where configuration comes from: the file, `SCHEDR_CONFIG__*` environment variables, the
-//! short aliases, and command-line flags (see PROJECT.md, Configuration).
+//! short aliases, and command-line flags (see archive/PROJECT.md, Configuration).
 //!
 //! Every source is a `figment` provider whose metadata names the exact origin of a value
 //! (the file, `SCHEDR_CONFIG__OPS__PORT`, `SCHEDR_DAG_PATH`, `--ops-port`), so error messages

@@ -16,7 +16,7 @@ use crate::database::DbError;
 /// `$backend` to its [`Backend`], once per backend (the queries are the same text, typed per
 /// driver), within the database's query limit: past it, the enclosing function returns
 /// [`DbError::QueryTimeout`] (the query is cut off here, whatever pooler is between; see
-/// PROJECT.md, production path). Inside [`Database::atomically`] on this database the
+/// archive/PROJECT.md, production path). Inside [`Database::atomically`] on this database the
 /// connection is that transaction's, so the work reads its own writes; otherwise one from the
 /// pool. For reads: writes go through [`in_tx`]. A body using `$pool` twice reborrows it
 /// (`&mut *pool`).

@@ -4,7 +4,7 @@ done_when = '''
 A person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests.
 '''
 notes = '''
-Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in PROJECT.md): a sign-in mode
+Postponed from after M3 to M6 (the user, 2026-10-28; the roadmap in archive/PROJECT.md): a sign-in mode
 of its own, `[*.auth] mode = "ldap"`, checking HTTP Basic credentials against the
 organisation's directory (a bind), for deployments without Istio and Keycloak (decision 39: no
 users of schedr's own). Decisions laid out on 2026-10-28, to take when M6 starts:
@@ -46,7 +46,7 @@ Ideas logged for M6, not decided:
   cover it; "mark success" would need an output schedr can't invent), whether a running task
   can be skipped, a mapped task's instances, and the command log recording who and why.
 - **Human in the loop** (the user, 2026-11-05: built in M6, after 1.0.0; designed, decisions
-  283-289, PROJECT.md "Human in the loop"): `approve(...)` and `ask(...)`, a wait step the
+  283-289, archive/PROJECT.md "Human in the loop"): `approve(...)` and `ask(...)`, a wait step the
   master holds (no worker slot), the answer typed and checked, `Rejected` and `TimedOut`
   outcomes, `approvers=` and `four_eyes=`, an email with a link to the UI, each answer in the
   command log; the docs show a `@sensor.poke` for answers kept in other systems.

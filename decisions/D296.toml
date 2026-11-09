@@ -8,7 +8,7 @@ A declaration without a schedule is not a standalone DAG or listed among DAGs; i
 script operators and resources. Only `script` and `interpreter` are required, and DAG-level keys are
 errors.
 '''
-history = "PROJECT.md#D296"
+history = "archive/PROJECT.md#D296"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 A connection opens and closes in a generator within one process.
 A resource has separate setup and cleanup functions in separate tasks.
 '''
-history = "PROJECT.md#D269"
+history = "archive/PROJECT.md#D269"
 step = "M4.8c1"
 also = ["connections"]
 checked = 2026-11-08

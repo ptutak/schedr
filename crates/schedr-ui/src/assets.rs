@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 /// The stylesheet: light and dark themes as CSS variables (see `assets/style.css`).
 pub const STYLE: &str = include_str!("../assets/style.css");
 
-/// htmx, vendored (see PROJECT.md, Libraries): its version in its path, so it is cached for
+/// htmx, vendored (see archive/PROJECT.md, Libraries): its version in its path, so it is cached for
 /// good.
 pub const HTMX: &str = include_str!("../assets/htmx.min.js");
 

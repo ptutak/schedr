@@ -7,7 +7,7 @@ summary = '''
 A cleanup under way when the master becomes unavailable keeps running.
 It may overlap a cleanup moved to another worker; the docs say so.
 '''
-history = "PROJECT.md#D255"
+history = "archive/PROJECT.md#D255"
 step = "M4.8b3"
 also = ["workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/dispatch.rs"]

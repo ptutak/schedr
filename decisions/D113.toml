@@ -9,7 +9,7 @@ moving to a later-recorded hash is catching up. Compare with the worker’s prev
 across reconnects. An unseen hash is newest on first report; a revert while the master was down is
 not detected as a switch.
 '''
-history = "PROJECT.md#D113"
+history = "archive/PROJECT.md#D113"
 step = "M4.3e"
 also = ["assignment"]
 code = ["crates/schedr-master/src/discovery.rs"]

@@ -1,6 +1,6 @@
 """Outcomes: which kind of success a task had, and what routes on it (``.on(...)``).
 
-Every task has an outcome enum (see PROJECT.md, Task results and outcomes):
+Every task has an outcome enum (see archive/PROJECT.md, Task results and outcomes):
 
 - ``DefaultOutcome`` (``SUCCESS``) for an ordinary return type, an empty task and a command
   without ``outcomes=``;

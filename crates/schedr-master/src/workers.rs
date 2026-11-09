@@ -1,5 +1,5 @@
 //! The workers the master knows, their queues and slots, and the choice of a worker for a
-//! task (see PROJECT.md, Task assignment).
+//! task (see archive/PROJECT.md, Task assignment).
 //!
 //! **Spread:** among the active workers serving the task's queue with a free slot, the one
 //! with the most free slots; ties go to the least recently assigned, then the worker ID. A
@@ -8,7 +8,7 @@
 //!
 //! **Eligible** workers also have the task's root at its current hash (only the newest code
 //! runs) and a schedr version at least that of the parse the task's DAG version came from
-//! (see PROJECT.md, Code versions and change detection, and Upgrades and compatibility).
+//! (see archive/PROJECT.md, Code versions and change detection, and Upgrades and compatibility).
 
 use std::collections::{BTreeMap, BTreeSet};
 

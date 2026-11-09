@@ -7,7 +7,7 @@ summary = '''
 Consecutive blocking strikes switch off a sensor or trigger after `[watchers] switch_off_after`.
 Success clears strikes; a command or new code switches it on, with one chance for new code.
 '''
-history = "PROJECT.md#D338"
+history = "archive/PROJECT.md#D338"
 step = "M4.11a3"
 also = ["triggers", "configuration"]
 code = ["crates/schedr-agent/src/attempt.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs"]

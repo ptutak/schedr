@@ -7,6 +7,6 @@ summary = '''
 `args` replaces the declared list; `env` merges variables with the operator's values winning.
 `secrets` adds to the declared secrets.
 '''
-history = "PROJECT.md#D302"
+history = "archive/PROJECT.md#D302"
 step = "M4.9b"
 checked = 2026-11-08

@@ -7,6 +7,6 @@ summary = '''
 Dev and prod use the same DAG folder and separate secrets for their databases and users.
 One federated `schedr ui` shows both deployments.
 '''
-history = "PROJECT.md#D203"
+history = "archive/PROJECT.md#D203"
 step = "M4.7d"
 checked = 2026-11-08

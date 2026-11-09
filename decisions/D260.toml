@@ -9,7 +9,7 @@ without an attempt, process or worker, recording the explanation in the task’s
 appear. A repeated declaration from the same source replaces the first; one from another source is a parse
 error.
 '''
-history = "PROJECT.md#D260"
+history = "archive/PROJECT.md#D260"
 step = "M4.8c2"
 code = ["python/schedr/resources.py"]
 checked = 2026-11-08

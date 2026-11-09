@@ -7,6 +7,6 @@ summary = '''
 A cleanup retains its own kind, such as `python` or `empty`.
 Its role comes from `Dag.resources` and is shown as cleanup of its resource.
 '''
-history = "PROJECT.md#D274"
+history = "archive/PROJECT.md#D274"
 step = "M4.8c2"
 checked = 2026-11-08

@@ -9,7 +9,7 @@ with the data directory the fallback. Startup refuses unsafe paths; the private 
 user-owned, mode 0700. Startup sweeps old files except directories belonging to processes it could not
 stop.
 '''
-history = "PROJECT.md#D201"
+history = "archive/PROJECT.md#D201"
 step = "M4.7b2"
 also = ["workers", "configuration"]
 code = ["crates/schedr-agent/src/connection_env.rs", "crates/schedr/src/roles.rs"]

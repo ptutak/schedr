@@ -1,7 +1,7 @@
 //! Messages between the worker agent and the Python runner (`python -m schedr.runner`).
 //!
 //! They travel over the runner's inherited socket (`SCHEDR_AGENT_FD`), each one as a 4-byte
-//! big-endian length followed by that many bytes of UTF-8 JSON (see PROJECT.md, Rust/Python
+//! big-endian length followed by that many bytes of UTF-8 JSON (see archive/PROJECT.md, Rust/Python
 //! integration: the agent <-> runner channel). Every message is an object tagged by `type`.
 
 use schemars::JsonSchema;
@@ -715,7 +715,7 @@ pub enum AgentMessage {
 }
 
 /// Whether the agent accepts a runner: the versions must be equal (the binary and the
-/// Python package are released together, see PROJECT.md, Packaging and releases). The
+/// Python package are released together, see archive/PROJECT.md, Packaging and releases). The
 /// agent's Cargo version is compared as the Python package writes it: a release candidate
 /// `0.1.0-rc1` is the package's `0.1.0rc1` (decision 163).
 ///

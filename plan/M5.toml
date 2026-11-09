@@ -1,8 +1,8 @@
 title = "Airflow layer"
 order = 80
-done_when = "Not set yet (PROJECT.md, Roadmap)."
+done_when = "Not set yet (archive/PROJECT.md, Roadmap)."
 notes = '''
 Thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation,
 `xcom_pull`; the placeholder and macro design (deferred until the first version works); the
-migration tool. After M4B (PROJECT.md, Roadmap; Airflow compatibility).
+migration tool. After M4B (archive/PROJECT.md, Roadmap; Airflow compatibility).
 '''

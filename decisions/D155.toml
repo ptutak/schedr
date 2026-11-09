@@ -7,7 +7,7 @@ summary = '''
 Release notes come from the version section of `CHANGELOG.md`; wheels and `SHA256SUMS`
 are attached to the GitHub Release. Each wheel has provenance attestation; there is no sdist.
 '''
-history = "PROJECT.md#D155"
+history = "archive/PROJECT.md#D155"
 step = "R0.1"
 code = ["scripts/release.py"]
 checked = 2026-11-08

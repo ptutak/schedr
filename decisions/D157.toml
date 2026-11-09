@@ -9,7 +9,7 @@ Releases push x86_64 images from the musllinux wheel to
 the repository; its default images use `appVersion`, checked against the release
 version.
 '''
-history = "PROJECT.md#D157"
+history = "archive/PROJECT.md#D157"
 step = "R0.1"
 also = ["deployment"]
 code = ["scripts/release.py"]

@@ -23,7 +23,8 @@ schedr-client = { path = "crates/schedr-client" }
 schedr-ui = { path = "crates/schedr-ui" }
 schedr-tls = { path = "crates/schedr-tls" }
 
-# Third-party crates: versions live here only (see PROJECT.md, Repository and tooling: Libraries).
+# Third-party crates: versions live here only (see archive/PROJECT.md, Repository and tooling:
+# Libraries).
 askama = "0.16.1"
 axum = "0.8.9"
 hyper-util = { version = "0.1.21", features = ["tokio"] }
@@ -68,7 +69,7 @@ utoipa-swagger-ui = { version = "10.0.2", default-features = false, features = [
 uuid = { version = "1.28.0", features = ["v7"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
 
-# Test-only crates (see PROJECT.md, Repository and tooling: Testing).
+# Test-only crates (see archive/PROJECT.md, Repository and tooling: Testing).
 http-body-util = "0.1.5"
 insta = { version = "1.49.0", features = ["json"] }
 pretty_assertions = "1.4.1"
@@ -91,7 +92,7 @@ pedantic = { level = "warn", priority = -1 }
 
 # Debug builds (and test builds, which inherit them) keep only line tables: backtraces still
 # name functions and `file:line`, but debuggers see no locals; set
-# CARGO_PROFILE_DEV_DEBUG=full for a debugging session (see PROJECT.md, Repository and
+# CARGO_PROFILE_DEV_DEBUG=full for a debugging session (see archive/PROJECT.md, Repository and
 # tooling: Rust).
 [profile.dev]
 debug = "line-tables-only"

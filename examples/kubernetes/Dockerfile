@@ -1,4 +1,4 @@
-# Your image: the schedr base image plus your DAGs' libraries (see PROJECT.md, Components and
+# Your image: the schedr base image plus your DAGs' libraries (see archive/PROJECT.md, Components and
 # roles: production path). Build the base first (`make image`), then from this directory:
 #   podman build --build-arg SCHEDR=schedr:0.1.0 -t my-schedr:1 .
 #

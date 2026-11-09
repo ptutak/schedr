@@ -1,0 +1,12 @@
+title = "PROJECT.md lives in archive/"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "development"
+summary = '''
+The design log up to D366 is `archive/PROJECT.md`, unchanged but for its anchors; pointers name
+that path; JOURNAL.md and the design pages are the current documents.
+'''
+history = "JOURNAL.md#D372"
+step = "n/a"
+code = ["archive/PROJECT.md"]

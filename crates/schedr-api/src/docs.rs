@@ -1,4 +1,5 @@
-//! The API's description and Swagger UI over it (see PROJECT.md, Web UI and CLI: Swagger UI).
+//! The API's description and Swagger UI over it (see archive/PROJECT.md, Web UI and CLI: Swagger
+//! UI).
 //!
 //! Both work behind a gateway that serves schedr under a path prefix and rewrites it away
 //! (Istio's `rewrite` with an `X-Forwarded-Prefix` header): Swagger UI's page refers to the

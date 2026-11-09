@@ -1,7 +1,7 @@
 //! The DAG list worked out from the current parse of each root.
 //!
 //! Given the current parse of every root and the stored DAGs, [`plan`] decides what changes
-//! (see PROJECT.md, DAG code delivery and DAG ID conflicts):
+//! (see archive/PROJECT.md, DAG code delivery and DAG ID conflicts):
 //!
 //! - a DAG defined in **one place** gets the parse's version as its current one; a **new**
 //!   DAG is stored paused, and so is a removed DAG that **comes back**;

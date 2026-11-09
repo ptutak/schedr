@@ -1,5 +1,5 @@
 //! The worker agent's main loop: one control stream to the master, attempts and parse jobs,
-//! heartbeats and code watching (see PROJECT.md, Worker lifecycle and Task assignment).
+//! heartbeats and code watching (see archive/PROJECT.md, Worker lifecycle and Task assignment).
 //!
 //! - **Connecting:** the agent waits for each root's first content hash (it settles too),
 //!   registers with them and with the attempts it still runs or hasn't had acknowledged, then

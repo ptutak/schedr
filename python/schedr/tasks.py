@@ -3,7 +3,7 @@
 Inside ``with Dag(...)``, calling a ``@task`` function records a task and returns an
 ``Output``: passing it to another task (as an argument, at any depth in lists and dicts)
 creates the dependency. ``>>`` adds order-only dependencies. Outside a DAG, a ``@task``
-function is the plain function, so it can be unit-tested directly (see PROJECT.md, Native
+function is the plain function, so it can be unit-tested directly (see archive/PROJECT.md, Native
 API and Testing DAGs).
 """
 

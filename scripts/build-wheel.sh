@@ -6,9 +6,9 @@
 #   scripts/build-wheel.sh musllinux-x86_64
 #   scripts/build-wheel.sh macos-arm64
 #
-# Linux builds run in a digest-pinned image. The container tool is $CONTAINER, else podman
-# when it is installed, else docker (podman locally, docker in CI). macOS builds on the
-# host with the same rustup-init (aarch64-apple-darwin). See PROJECT.md, Packaging and releases.
+# Linux builds run in a digest-pinned image. The container tool is $CONTAINER, else podman when it
+# is installed, else docker (podman locally, docker in CI). macOS builds on the host with the same
+# rustup-init (aarch64-apple-darwin). See archive/PROJECT.md, Packaging and releases.
 
 set -euo pipefail
 

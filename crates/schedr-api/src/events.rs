@@ -1,6 +1,6 @@
 //! `GET /api/v1/changes`: what changed, as server-sent events, for the UI's live pages (see
-//! PROJECT.md, Web UI: 34A). Only what changed, never the new state: a client reads that from
-//! the other endpoints.
+//! archive/PROJECT.md, Web UI: 34A). Only what changed, never the new state: a client reads that
+//! from the other endpoints.
 //!
 //! Events: `run` (`{"run_id", "dag_id"}`: the run, its tasks or attempts), `dag`
 //! (`{"dag_id"}`), `workers` (`{}`), and `refresh` (`{}`: anything may have changed, when

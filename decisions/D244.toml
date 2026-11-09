@@ -7,7 +7,7 @@ summary = '''
 The instance remains `cleaning_up` with reason “no worker for the cleanup”.
 It is shown as `unschedulable`.
 '''
-history = "PROJECT.md#D244"
+history = "archive/PROJECT.md#D244"
 step = "M4.8b2"
 also = ["assignment"]
 code = ["crates/schedr-master/src/dispatch.rs"]

@@ -1,5 +1,5 @@
-//! What changed, for the UI's live pages (see PROJECT.md, Web UI: 34A): which run, which DAG,
-//! or the workers. Only what changed, never the new state: the UI reads that from the API.
+//! What changed, for the UI's live pages (see archive/PROJECT.md, Web UI: 34A): which run, which
+//! DAG, or the workers. Only what changed, never the new state: the UI reads that from the API.
 //!
 //! The writes signal it themselves (triggers in the migrations): on Postgres a notification on
 //! [`CHANGES_CHANNEL`] when the writing transaction commits, read through a listening

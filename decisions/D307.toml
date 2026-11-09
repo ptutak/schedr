@@ -7,7 +7,7 @@ summary = '''
 A worker caps its reconnect backoff at half the lease the master gave it.
 A restarted master gives each worker a fresh lease from its start.
 '''
-history = "PROJECT.md#D307"
+history = "archive/PROJECT.md#D307"
 step = "B168"
 also = ["workers"]
 checked = 2026-11-08

@@ -9,7 +9,7 @@ Only `schedr-fd` relaxes `unsafe_code` from `forbid` to `deny`, permitting its s
 close-on-exec, then validates the copy as a Unix datagram socket. It never owns or closes the inherited
 descriptor.
 '''
-history = "PROJECT.md#D147"
+history = "archive/PROJECT.md#D147"
 step = "M4.5b"
 also = ["development"]
 code = ["crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs"]

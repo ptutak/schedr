@@ -7,7 +7,7 @@ summary = '''
 The operator’s value is the target run’s ID, whether or not `wait=True`.
 The target’s output can be read with a `RunOf` sensor or the API.
 '''
-history = "PROJECT.md#D358"
+history = "archive/PROJECT.md#D358"
 step = "M4.12a"
 also = ["runs"]
 checked = 2026-11-08

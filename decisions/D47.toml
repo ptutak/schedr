@@ -7,5 +7,5 @@ summary = '''
 D47 is the pending M6 question of LDAP transport encryption: require TLS, allowing plaintext only on
 loopback, or permit plaintext with a flag and warning. No answer is recorded.
 '''
-history = "PROJECT.md: Roadmap; plan/M6.toml: notes"
+history = "archive/PROJECT.md: Roadmap; plan/M6.toml: notes"
 checked = 2026-11-08

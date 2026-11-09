@@ -1,5 +1,5 @@
 //! The command-line interface: the server roles, `db`, the user CLI and the in-task CLI
-//! (see PROJECT.md, Web UI and CLI; In-task CLI).
+//! (see archive/PROJECT.md, Web UI and CLI; In-task CLI).
 
 use std::path::PathBuf;
 
@@ -181,7 +181,7 @@ pub enum DbCommand {
     Status,
 }
 
-/// `schedr secrets ...`: the `db` secret storage (see PROJECT.md, Secret storage). Only
+/// `schedr secrets ...`: the `db` secret storage (see archive/PROJECT.md, Secret storage). Only
 /// `get` prints a value.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum SecretsCommand {
@@ -752,7 +752,7 @@ pub enum GetCommand {
 }
 
 impl Command {
-    /// The milestone in which this command starts working (see PROJECT.md, Roadmap), or
+    /// The milestone in which this command starts working (see archive/PROJECT.md, Roadmap), or
     /// `None` if it works already.
     #[must_use]
     pub const fn milestone(&self) -> Option<&'static str> {

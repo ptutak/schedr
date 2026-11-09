@@ -13,7 +13,8 @@ fn field(name: &str, ty: TypeDesc, required: bool) -> Field {
     }
 }
 
-/// `ReportParams` of PROJECT.md: region, full, day, limits, plus a window, a pair and a map.
+/// `ReportParams` of archive/PROJECT.md: region, full, day, limits, plus a window, a pair and a
+/// map.
 fn report() -> TypeDesc {
     TypeDesc::Dataclass {
         name: "ReportParams".to_owned(),

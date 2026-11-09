@@ -3,7 +3,7 @@
 //!
 //! Human output is aligned columns with times in UTC and local time; `--json` prints the API's
 //! JSON (UTC only). Actions wait for the master's decision and print the result, or fail with
-//! the master's reason (see PROJECT.md, Web UI and CLI).
+//! the master's reason (see archive/PROJECT.md, Web UI and CLI).
 
 use std::io::Write;
 

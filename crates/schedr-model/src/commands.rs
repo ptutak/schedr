@@ -1,6 +1,6 @@
 //! Commands: actions a person asks for (UI, CLI, API), written by the webserver as command
 //! rows and applied by the master, which stays the only writer of scheduling state (see
-//! PROJECT.md, Web UI and CLI: how the webserver gets state).
+//! archive/PROJECT.md, Web UI and CLI: how the webserver gets state).
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-//! Concurrency limits (see PROJECT.md, Native API: Concurrency limits, decisions 87-91):
+//! Concurrency limits (see archive/PROJECT.md, Native API: Concurrency limits, decisions 87-91):
 //! `max_active_tasks` on a DAG, `max_active` and `max_active_per_run` on a task.
 //!
 //! The master counts the open attempts (assigned and not yet started, running, cleaning up) in

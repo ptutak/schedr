@@ -1,5 +1,5 @@
 //! The master's protocol logic, apart from any transport: registering workers, their messages,
-//! disconnects, the periodic tick, parse uploads and inputs (see PROJECT.md, Master–worker
+//! disconnects, the periodic tick, parse uploads and inputs (see archive/PROJECT.md, Master–worker
 //! protocol and Worker lifecycle).
 //!
 //! The gRPC service ([`crate::service`]) only moves messages between workers' streams and

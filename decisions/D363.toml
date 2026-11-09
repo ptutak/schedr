@@ -9,6 +9,6 @@ GET /api/v1/backfills/{id} returns run counts by state.
 `schedr runs backfill --dry-run` counts without creating runs.
 The DAG page has a Backfill form and displays progress.
 '''
-history = "PROJECT.md#D363"
+history = "archive/PROJECT.md#D363"
 step = "M4.12b"
 checked = 2026-11-08

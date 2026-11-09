@@ -1,4 +1,4 @@
-"""Task groups: ``with group("load") as load:`` (see PROJECT.md, Native API: task groups).
+"""Task groups: ``with group("load") as load:`` (see archive/PROJECT.md, Native API: task groups).
 
 A group organises tasks while the DAG is written; it isn't something that runs. Its tasks'
 IDs get its name as a prefix (``load.extract``), they take its ``defaults`` and ``run_if``

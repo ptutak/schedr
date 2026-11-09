@@ -9,7 +9,7 @@ retaining their graph-row heights. Shared-group users get two summary lines; oth
 first and last users. Remaining user links and the rail appear on hover or selection; cleanup-to-
 successor links remain visible. Lists show one row in two parts.
 '''
-history = "PROJECT.md#D262"
+history = "archive/PROJECT.md#D262"
 step = "M4.8e"
 also = ["cleanup"]
 code = ["crates/schedr-ui/src/runs.rs"]

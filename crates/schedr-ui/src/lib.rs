@@ -1,4 +1,5 @@
-//! The web UI: server-rendered HTML pages over webservers' REST APIs (see PROJECT.md, Web UI).
+//! The web UI: server-rendered HTML pages over webservers' REST APIs (see archive/PROJECT.md, Web
+//! UI).
 //!
 //! It is `schedr ui`, a role of its own talking only to webservers' JSON APIs (decision 21B),
 //! one per deployment in its list (one the common case); `schedr standalone` serves it too,

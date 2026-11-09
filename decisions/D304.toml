@@ -8,7 +8,7 @@ Parsed files persist requested script roots, including missing ones. At registra
 and on changes, the master sends each DAG root’s current uses, excluding script roots
 absent beyond D303’s grace; the recorded uses survive restarts.
 '''
-history = "PROJECT.md#D304"
+history = "archive/PROJECT.md#D304"
 step = "M4.9b"
 also = ["code-delivery", "protocol"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/jobs.rs", "crates/schedr-agent/src/parse.rs"]

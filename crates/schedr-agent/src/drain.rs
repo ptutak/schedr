@@ -1,5 +1,5 @@
 //! Draining the worker on shutdown (SIGTERM): what happens when, decided apart from the agent
-//! so it is tested with plain instants (see PROJECT.md, Worker lifecycle: drain).
+//! so it is tested with plain instants (see archive/PROJECT.md, Worker lifecycle: drain).
 //!
 //! - The running attempts get until the **termination grace period** minus the drain's
 //!   terminate and report periods ([`DrainPeriods`]); whatever still runs then gets SIGTERM,
@@ -112,7 +112,7 @@ impl Drain {
     }
 
     /// Whether an attempt whose cleanup needs `room` must be stopped now, leaving that room
-    /// for one try of it (see PROJECT.md, Per-task cleanup).
+    /// for one try of it (see archive/PROJECT.md, Per-task cleanup).
     #[must_use]
     pub fn stop_due(&self, now: Instant, room: Duration) -> bool {
         now.checked_add(room)

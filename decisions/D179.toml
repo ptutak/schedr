@@ -7,7 +7,7 @@ summary = '''
 Tasks and operators declare connections with `connections=`; the agent renders only those declared.
 A missing declared name warns on the DAG, fails `dags check`, and fails the attempt before code runs.
 '''
-history = "PROJECT.md#D179"
+history = "archive/PROJECT.md#D179"
 step = "M4.7a"
 also = ["python-api", "task-context"]
 code = ["crates/schedr-agent/src/secrets.rs", "crates/schedr-api/src/views.rs"]

@@ -7,7 +7,7 @@ summary = '''
 Every task has a `map_index = -1` row; for a mapped task it represents the task as a whole.
 Expansion creates runnable instances numbered `0..N-1`, each with its own retries and cancellation.
 '''
-history = "PROJECT.md#D74"
+history = "archive/PROJECT.md#D74"
 step = "M4.3b"
 also = ["state", "assignment"]
 code = ["crates/schedr-db/src/instances.rs", "crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs"]

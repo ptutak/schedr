@@ -7,7 +7,7 @@ summary = '''
 A running wait step pulses unless reduced motion is requested; a failed one is red.
 A timeout is grey and says `TimedOut`, and the run stays successful.
 '''
-history = "PROJECT.md#D344"
+history = "archive/PROJECT.md#D344"
 step = "M4.11a4"
 also = ["ui-cli", "outcomes"]
 checked = 2026-11-08

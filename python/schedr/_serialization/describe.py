@@ -1,6 +1,6 @@
 """Turning annotations into type descriptors (DAG JSON ``TypeDesc``), at parse time.
 
-This is the parse-time guarantee that an output can be serialized (see PROJECT.md, Output
+This is the parse-time guarantee that an output can be serialized (see archive/PROJECT.md, Output
 serialization): any type outside the supported set is an import error naming the part.
 """
 

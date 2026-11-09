@@ -1,4 +1,5 @@
-//! The environment of a task process: clean by default (see PROJECT.md, Worker environment).
+//! The environment of a task process: clean by default (see archive/PROJECT.md, Worker
+//! environment).
 //!
 //! A task gets only a small allow-list of the agent's variables, those listed in
 //! `[worker] pass_env`, the task's own `env`, and the `SCHEDR_*` run variables. The agent's

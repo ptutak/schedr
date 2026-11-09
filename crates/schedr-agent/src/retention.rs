@@ -1,4 +1,4 @@
-//! Log retention on the worker (see PROJECT.md, Task logs): logs older than
+//! Log retention on the worker (see archive/PROJECT.md, Task logs): logs older than
 //! `[worker] log_retention` (30 days by default) are deleted, and beyond `[worker]
 //! log_max_size` (no limit by default) the oldest go first. A log whose attempt is in the
 //! journal (running, or its result not yet acknowledged) is never deleted, though it counts

@@ -3,7 +3,7 @@
 //!
 //! A runner gets its channel to the agent as an **inherited, already connected socket**
 //! (`SCHEDR_AGENT_FD`), not a path to connect to: no socket file, no directory, no path-length
-//! limit, and no other process can connect (see PROJECT.md, Rust/Python integration).
+//! limit, and no other process can connect (see archive/PROJECT.md, Rust/Python integration).
 //!
 //! The thin operating-system layer under [`crate::agent`], like [`crate::process`]: exercised
 //! by the integration tests (`tests/runner.rs`); the decisions around it are unit-tested in

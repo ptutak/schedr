@@ -8,7 +8,7 @@ A cancelled run still runs the cleanup of each resource set up, including retrie
 It ends `cancelled`, or `failed` if a cleanup fails; a cleanup can itself be cancelled under D279.
 Cleanups ignore task concurrency limits.
 '''
-history = "PROJECT.md#D277"
+history = "archive/PROJECT.md#D277"
 step = "M4.8c2"
 also = ["runs"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-db/src/instances.rs", "crates/schedr-master/src/progress.rs"]

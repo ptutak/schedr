@@ -7,7 +7,7 @@
 //! `planned_for`, so a pass repeated after a crash creates nothing twice.
 //!
 //! Which DAGs a pass looks at is [`QuietDags`]'s choice: every DAG, or the busy ones and the
-//! quiet ones woken (see PROJECT.md, "Quiet DAGs").
+//! quiet ones woken (see archive/PROJECT.md, "Quiet DAGs").
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

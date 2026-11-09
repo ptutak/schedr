@@ -10,7 +10,7 @@ certificates. Connections are registered per root; checks and tests run on worke
 injects client objects, while `run_dag` supplies arguments to the real connection function; async
 connections come with M4.10.
 '''
-history = "PROJECT.md#D174"
+history = "archive/PROJECT.md#D174"
 step = "M4.7c"
 also = ["task-context", "testing-dags", "async-tasks"]
 code = ["crates/schedr-agent/src/agent.rs"]

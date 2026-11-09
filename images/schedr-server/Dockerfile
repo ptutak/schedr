@@ -1,4 +1,4 @@
-# The schedr server image (see PROJECT.md, Components and roles: the distributed chart): the
+# The schedr server image (see archive/PROJECT.md, Components and roles: the distributed chart): the
 # binary only, for `schedr master` and `schedr webserver`, which never run user code: no
 # Python. Workers use the base image (images/schedr/Dockerfile), which has Python and the
 # libraries for tasks.
@@ -6,7 +6,7 @@
 # The binary is the musllinux wheel's (statically linked: no second build). `make
 # server-image` builds the wheel into dist/ and this image from it. From the repository root:
 #   podman build -f images/schedr-server/Dockerfile -t schedr-server:0.1.0 .
-# alpine:3.24, created 2026-10-21 (a rebuild of the chosen tag; PROJECT.md, CI supply-chain pins).
+# alpine:3.24, created 2026-10-21 (a rebuild of the chosen tag; archive/PROJECT.md, CI supply-chain pins).
 FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS wheel
 COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
 RUN cd /tmp && unzip -q schedr-*.whl 'schedr-*.data/scripts/schedr' \

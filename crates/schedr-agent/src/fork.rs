@@ -1,4 +1,4 @@
-//! The fork servers, agent side (see PROJECT.md, How Python tasks are started: the fork
+//! The fork servers, agent side (see archive/PROJECT.md, How Python tasks are started: the fork
 //! server): started with the worker, two per interpreter (one preloading the configured
 //! libraries, a bare one), each restarted with backoff when it dies; a Python task or a parse
 //! job asks the preloaded one to fork its runner, then the bare one, and is spawned when

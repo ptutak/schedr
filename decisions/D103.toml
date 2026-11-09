@@ -8,6 +8,6 @@ summary = '''
 A root's code depends only on that root and installed packages.
 Shared code is installed as a package or kept in each root.
 '''
-history = "PROJECT.md#D103"
+history = "archive/PROJECT.md#D103"
 step = "n/a"
 checked = 2026-11-08

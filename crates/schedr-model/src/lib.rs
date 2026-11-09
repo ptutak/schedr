@@ -1,8 +1,8 @@
 //! Shared model of schedr: DAG JSON, run and task states, and the JSON Schema generated from them.
 //!
 //! These Rust types are the reference for every shape that crosses a process boundary (see
-//! PROJECT.md, Rust/Python integration: shared model and schemas). The Python package writes
-//! DAG JSON by hand-written code that is validated against the schema generated from here.
+//! archive/PROJECT.md, Rust/Python integration: shared model and schemas). The Python package
+//! writes DAG JSON by hand-written code that is validated against the schema generated from here.
 
 pub mod beat;
 pub mod commands;

@@ -1,6 +1,6 @@
 name: Release
 
-# A pushed tag releases (decisions 153-163, PROJECT.md: Packaging and releases):
+# A pushed tag releases (decisions 153-163, archive/PROJECT.md: Packaging and releases):
 #   vX.Y.Z     PyPI (environment `pypi`, approved by the maintainer), a GitHub Release, the
 #              images tagged X.Y.Z and X.Y, the docs on GitHub Pages
 #   vX.Y.ZrcN  the rehearsal: TestPyPI (environment `testpypi`), a GitHub pre-release, the

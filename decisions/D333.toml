@@ -8,7 +8,7 @@ Parsing and the fork server receive all of [worker] pass_env, as tasks do. DAG c
 can read these variables at parse time. pass_env must not contain secrets; parse
 tracebacks are not masked.
 '''
-history = "PROJECT.md#D333"
+history = "archive/PROJECT.md#D333"
 step = "M4.11L"
 also = ["code-delivery"]
 checked = 2026-11-08

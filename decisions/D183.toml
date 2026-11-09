@@ -7,7 +7,7 @@ summary = '''
 Typed connections take the name as the first argument, as in `HTTP('billing_api', ...)`.
 This works in loops and under aliases.
 '''
-history = "PROJECT.md#D183"
+history = "archive/PROJECT.md#D183"
 step = "M4.7b1"
 code = ["python/schedr/connection_types.py"]
 checked = 2026-11-08

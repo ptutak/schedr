@@ -8,7 +8,7 @@ With `blocking=True`, draw downstream order edges from the cleanup cap and omit
 redundant user order edges; retain user data edges. With `blocking=False`, retain
 original task/group edges and draw the users’ link to the cleanup dashed.
 '''
-history = "PROJECT.md#D272"
+history = "archive/PROJECT.md#D272"
 step = "M4.8e"
 also = ["cleanup"]
 code = ["crates/schedr-model/src/dag.rs", "crates/schedr-ui/src/runs.rs"]

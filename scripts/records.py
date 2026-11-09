@@ -45,7 +45,7 @@ A decision, `decisions/D<n>.toml`:
     summary = '''
     What holds, in two to four lines: the result, not the reasons.
     '''
-    history = "JOURNAL.md#D372"  # its anchor: <a id="D372"></a> (PROJECT.md up to D366)
+    history = "JOURNAL.md#D372"  # its anchor: <a id="D372"></a> (archive/PROJECT.md up to D366)
     step = "M4.12a"             # the plan step that builds it; a milestone ("M6": planned there,
                                 # no step yet); a bug ("B160": built by its fix, once bugs/ has no
                                 # file for it); "later"; "n/a" (a rule or a process, not code).
@@ -64,7 +64,7 @@ A question, `questions/Q<n>.toml`:
     status = "open"             # open, decided, dropped
     decided_by = 0              # with status "decided": the decision
     proposal = "What is proposed now, one or two lines."
-    history = "PROJECT.md: Open questions"   # where it was raised
+    history = "archive/PROJECT.md: Open questions"   # where it was raised
 
 `decisions/next-id` and `questions/next-id` hold the next free numbers; every number below has a
 file, and every "decision N" written in the repository is below it.
@@ -100,9 +100,9 @@ NAME = re.compile(r"D([1-9][0-9]*)\.toml")
 QUESTION_NAME = re.compile(r"Q([1-9][0-9]*)\.toml")
 TOPIC_ROW = re.compile(r"^\| `([a-z0-9-]+)` \|", re.MULTILINE)
 ANCHOR = re.compile(r'<a id="(D[1-9][0-9]*)"></a>')
-HISTORY_ANCHOR = re.compile(r"((?:PROJECT|JOURNAL)\.md)#(D[1-9][0-9]*)")
+HISTORY_ANCHOR = re.compile(r"((?:archive/PROJECT|JOURNAL)\.md)#(D[1-9][0-9]*)")
 # The history up to decision 366, and the journal from 2026-11-08 on (decision 370).
-HISTORIES = ("PROJECT.md", "JOURNAL.md")
+HISTORIES = ("archive/PROJECT.md", "JOURNAL.md")
 # "decision 12", "decisions 326-333", "decisions 87, 88 and 90"; a year (2026) isn't one.
 DASH = "[-\u2013]"  # a hyphen or an en dash
 MENTION = re.compile(rf"[Dd]ecisions? ((?:\d+[A-Za-z']*(?:\s*{DASH}\s*\d+)?(?:,\s*|\s+and\s+)?)+)")
@@ -113,7 +113,7 @@ WIDEST_RANGE = 40
 FIRST_YEAR = 1900
 OWN_FILES = ("records.py", "test_records.py")
 # What the mention check reads: text the project writes (not generated files nor history).
-SKIPPED = ("target/", "site/", "docs/_generated/", "history/", "decisions/", "DECISIONS.md")
+SKIPPED = ("target/", "site/", "docs/_generated/", "archive/", "decisions/", "DECISIONS.md")
 SUFFIXES = (".md", ".rs", ".py", ".toml", ".sql", ".proto", ".yml", ".yaml", ".sh", ".html")
 # A file the mention check can't read is skipped (a tuple: older Pythons run this script).
 UNREADABLE = (OSError, UnicodeDecodeError)
@@ -693,7 +693,7 @@ def render_decisions(records: Records) -> str:
         generated("decisions/ and questions/"),
         "# Decisions\n\n",
         "One line per decision; the file `decisions/D<n>.toml` has its summary, and its `history` "
-        "is its anchor in PROJECT.md (to D366) or JOURNAL.md, where its reasons are. "
+        "is its anchor in archive/PROJECT.md (to D366) or JOURNAL.md, where its reasons are. "
         "How each topic works now: "
         "`design/<topic>.md`. Built or planned: the step's state in `PLAN.md`.\n",
     ]

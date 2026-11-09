@@ -7,7 +7,7 @@ summary = '''
 Hidden timings include Vault renewal waits, a stopped group’s poll, and connection-test cancel grace.
 They also include listeners’ retry after a failed accept.
 '''
-history = "PROJECT.md#D240"
+history = "archive/PROJECT.md#D240"
 step = "M4.8u"
 also = ["workers", "secrets", "connections"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 A paused DAG continues to run resource cleanups.
 Pausing stops new work while existing resources are freed.
 '''
-history = "PROJECT.md#D264"
+history = "archive/PROJECT.md#D264"
 step = "M4.8c2"
 also = ["runs"]
 checked = 2026-11-08

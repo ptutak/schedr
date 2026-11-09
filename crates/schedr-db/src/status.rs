@@ -1,8 +1,8 @@
 //! Whether a database's schema fits this build of schedr.
 //!
-//! `schedr db migrate` applies the migrations; the master refuses to start against an
-//! outdated schema (see PROJECT.md, State storage). A database migrated by a **newer** schedr
-//! is still usable: within a major version schema changes are additive, so an older master or
+//! `schedr db migrate` applies the migrations; the master refuses to start against an outdated
+//! schema (see archive/PROJECT.md, State storage). A database migrated by a **newer** schedr is
+//! still usable: within a major version schema changes are additive, so an older master or
 //! webserver keeps working during a rolling upgrade (see Upgrades and compatibility).
 
 #[cfg(test)]

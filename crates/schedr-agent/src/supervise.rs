@@ -1,5 +1,5 @@
 //! Supervising a task process: waiting for it, its timeout, cancellation, and stopping it
-//! with SIGTERM, then SIGKILL after the grace time (see PROJECT.md, Master–worker protocol:
+//! with SIGTERM, then SIGKILL after the grace time (see archive/PROJECT.md, Master–worker protocol:
 //! cancellation).
 //!
 //! The logic works on the [`Process`] trait, so it is tested with a fake process and a

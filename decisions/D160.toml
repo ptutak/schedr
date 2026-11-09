@@ -7,7 +7,7 @@ summary = '''
 The release workflow calls all of CI on the release tag.
 It publishes the wheels produced by that CI run.
 '''
-history = "PROJECT.md#D160"
+history = "archive/PROJECT.md#D160"
 step = "R0.1"
 code = ["scripts/release.py"]
 checked = 2026-11-08

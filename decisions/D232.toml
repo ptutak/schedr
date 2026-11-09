@@ -11,6 +11,6 @@ Removed configuration keys: `tick_interval`, `heartbeat_interval`, `lease_timeou
 `handshake_timeout`. Setting one in a file or through `SCHEDR_CONFIG__*` fails as an unknown key;
 there is no migration.
 '''
-history = "PROJECT.md#D232"
+history = "archive/PROJECT.md#D232"
 step = "M4.8t"
 checked = 2026-11-08

@@ -1,6 +1,6 @@
 //! What each metric is, for the code that registers it and for the metrics reference in the
-//! documentation (see PROJECT.md, Observability): one list per role, so the name and help text
-//! are written once, and a test per role checks the type and labels against a scrape.
+//! documentation (see archive/PROJECT.md, Observability): one list per role, so the name and help
+//! text are written once, and a test per role checks the type and labels against a scrape.
 
 use std::fmt;
 

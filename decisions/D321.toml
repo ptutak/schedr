@@ -7,7 +7,7 @@ summary = '''
 The max_wait clock starts at the instance’s first start and continues across retries and moves.
 A wait that runs out of time ends with TimedOut, including while waiting to run again.
 '''
-history = "PROJECT.md#D321"
+history = "archive/PROJECT.md#D321"
 step = "M4.11a4"
 also = ["assignment"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs"]

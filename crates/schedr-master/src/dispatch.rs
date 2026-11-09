@@ -1,5 +1,5 @@
-//! Giving tasks to workers and handling what workers report about them (see PROJECT.md, Task
-//! assignment and Task rejections).
+//! Giving tasks to workers and handling what workers report about them (see archive/PROJECT.md,
+//! Task assignment and Task rejections).
 //!
 //! - **Assign:** ready tasks, oldest ready first, each to the worker chosen by [`Workers::pick`];
 //!   the assignment is stored before `AssignTask` is sent.
@@ -2044,7 +2044,7 @@ impl Dispatcher {
 
     /// A worker's agent restarted (a new incarnation): the attempts it had started and doesn't
     /// report in its journal end `lost` with a `WorkerRestarted` error summary, each using a
-    /// retry, as for a lost worker (the crash may have been the task's own; see PROJECT.md,
+    /// retry, as for a lost worker (the crash may have been the task's own; see archive/PROJECT.md,
     /// Worker lifecycle). Attempts it hadn't started yet are left to expire without using a
     /// retry. Returns how many ended.
     ///

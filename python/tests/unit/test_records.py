@@ -37,7 +37,7 @@ def decision(status: str = "active", topic: str = "runs", **extra: str) -> str:
         "status": f'"{status}"',
         "topic": f'"{topic}"',
         "summary": "'''\nwhat holds.\n'''",
-        "history": '"PROJECT.md: Runs"',
+        "history": '"archive/PROJECT.md: Runs"',
         "step": '"S1"',
         **extra,
     }
@@ -52,7 +52,7 @@ def question(status: str = "open", **extra: str) -> str:
         "topic": '"runs"',
         "status": f'"{status}"',
         "proposal": '"this way"',
-        "history": '"PROJECT.md: Open questions"',
+        "history": '"archive/PROJECT.md: Open questions"',
         **extra,
     }
     return "".join(f"{key} = {value}\n" for key, value in fields.items())
@@ -258,7 +258,7 @@ def page(module: ModuleType, title: str) -> str:
         f"## {block}\n\n{module.begin(block)}stale\n{module.end(block)}\n"
         for block in ("decisions", "code", "questions")
     )
-    return f"# {title}\n\n## Current\n\nHand-written.\n\n{blocks}Details: PROJECT.md.\n"
+    return f"# {title}\n\n## Current\n\nHand-written.\n\n{blocks}Details: archive/PROJECT.md.\n"
 
 
 def test_a_design_pages_blocks_are_generated_between_markers(tmp_path: Path) -> None:
@@ -285,7 +285,7 @@ def test_a_design_pages_blocks_are_generated_between_markers(tmp_path: Path) -> 
     assert module.begin("code") + "- `a.rs` (D1, D3)\n" + module.end("code") in text
     assert "- Q1: Which way? Proposal: this way\n" in text
     assert "Hand-written." in text
-    assert text.endswith("Details: PROJECT.md.\n")
+    assert text.endswith("Details: archive/PROJECT.md.\n")
 
 
 def test_a_design_page_without_markers_is_refused(tmp_path: Path) -> None:
@@ -311,19 +311,20 @@ def test_check_finds_missing_code_and_anchors(tmp_path: Path) -> None:
     module = project(
         tmp_path,
         {
-            1: decision(code='["here.rs", "gone.rs"]', history='"PROJECT.md#D1"'),
+            1: decision(code='["here.rs", "gone.rs"]', history='"archive/PROJECT.md#D1"'),
             # A dropped decision's code may be gone.
-            2: decision(status="dropped", code='["gone.rs"]', history='"PROJECT.md#D2"'),
+            2: decision(status="dropped", code='["gone.rs"]', history='"archive/PROJECT.md#D2"'),
             3: decision(history='"JOURNAL.md#D3"'),
             4: decision(history='"JOURNAL.md#D4"'),
         },
     )
     (tmp_path / "here.rs").write_text("")
-    (tmp_path / "PROJECT.md").write_text('- <a id="D2"></a>**Two:** text.\n')
+    (tmp_path / "archive").mkdir()
+    (tmp_path / "archive/PROJECT.md").write_text('- <a id="D2"></a>**Two:** text.\n')
     (tmp_path / "JOURNAL.md").write_text('### <a id="D3"></a>2026-11-08: three\n')
     module_problems = module.problems(load(tmp_path), tmp_path, [])
     assert "D1: gone.rs doesn't exist" in module_problems
-    assert 'D1: PROJECT.md has no anchor <a id="D1"></a>' in module_problems
+    assert 'D1: archive/PROJECT.md has no anchor <a id="D1"></a>' in module_problems
     assert 'D4: JOURNAL.md has no anchor <a id="D4"></a>' in module_problems
     assert not any(p.startswith(("D2", "D3")) for p in module_problems)
 

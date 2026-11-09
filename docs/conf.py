@@ -1,11 +1,11 @@
 """Sphinx configuration for the schedr documentation site.
 
-The pages from repository files (README, PLAN, the PROJECT.md chapters, the Rust crate list)
+The pages from repository files (README, PLAN, the archive/PROJECT.md chapters, the Rust crate list)
 and the reference pages from the code (configuration, CLI, metrics, REST API) are generated
 into ``_generated/`` by ``cargo xtask docs-sources`` (``make docs``); Writing DAGs
 (``02-dags/``) and the guide (``03-guide/``) are written by hand. Files are numbered by the
 site's sections, in both trees. Only this file and the index pages here are specific to
-Sphinx (see PROJECT.md, Repository and tooling: Documentation).
+Sphinx (see archive/PROJECT.md, Repository and tooling: Documentation).
 """
 
 from importlib.metadata import version as _version

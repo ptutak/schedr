@@ -7,7 +7,7 @@ summary = '''
 `schedr.text(t'...')` marks a t-string passed where a Python task takes a string.
 It is typed as `str`.
 '''
-history = "PROJECT.md#D177"
+history = "archive/PROJECT.md#D177"
 step = "M4.6e"
 also = ["python-api"]
 code = ["python/schedr/_templates.py"]

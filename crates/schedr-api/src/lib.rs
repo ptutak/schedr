@@ -2,7 +2,7 @@
 //!
 //! So far the REST API subset the CLI needs (`/api/v1`: DAGs, runs, tasks, attempts and their
 //! logs, commands, workers), with version headers, a generated OpenAPI description and Swagger UI
-//! over it at `/api/v1/docs` (see PROJECT.md, Web UI and CLI). Reads come straight from the
+//! over it at `/api/v1/docs` (see archive/PROJECT.md, Web UI and CLI). Reads come straight from the
 //! database; actions are command rows the master applies.
 
 use axum::Router;

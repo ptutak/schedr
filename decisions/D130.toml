@@ -7,7 +7,7 @@ summary = '''
 An offline worker is grey and dashed; stale warnings and import errors do not colour it.
 A lost worker remains an error and a disconnected worker a warning.
 '''
-history = "PROJECT.md#D130"
+history = "archive/PROJECT.md#D130"
 step = "M4.4b"
 also = ["ui-cli", "observability"]
 code = ["crates/schedr-api/src/routes.rs"]

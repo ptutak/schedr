@@ -25,9 +25,9 @@ STATUS.md               # where things stand, what's next (rewritten each sessio
 PLAN.md                 # milestones and steps
 design/<topic>.md       # how each part works now; design/README.md lists the topics
 decisions/D<n>.toml     # one file per decision; DECISIONS.md generated from them
-PROJECT.md              # the history: how the project got here, and why (dated entries appended)
+JOURNAL.md              # the history: each decision's question, options, reasons (dated entries appended)
+archive/                # read only: a migrated project's old log (schedr: PROJECT.md) and old hand-offs
 BUGS.md                 # open bugs, generated from bugs/ (one TOML file per bug)
-history/                # old hand-offs, archived unchanged
 AI_SETUP.md, AI_INSTRUCTIONS.md   # the skills (grok, codex, project-docs) live in ~/.claude/skills, not here
 Makefile                # every task has a target; `make help` lists them
 .pre-commit-config.yaml
@@ -161,7 +161,7 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
   configurable port). Nothing generated is committed.
 - **Sphinx** with **MyST** (Markdown pages), **Furo** (theme), **autodoc** + **autosummary**
   + **napoleon** (the Python API from docstrings); **rustdoc** copied under `rust/`.
-- Long Markdown documents (e.g. `PROJECT.md`) stay one file in the repository; a small
+- Long Markdown documents (e.g. `JOURNAL.md`) stay one file in the repository; a small
   generator splits them into pages at build time.
 - **Four kinds of pages:**
   - **Writing DAGs** (`docs/02-dags/`, written by hand, committed): how to define a DAG with
@@ -176,7 +176,8 @@ A Python-only project drops the Rust parts (and vice versa); everything else sta
     configuration (from its JSON Schema, doc comments included), the CLI (from the argument
     parser), the API (from its OpenAPI description), the metrics (from a list per component
     that the code registers from, checked by a test against a scrape).
-  - **The design log and plan** (`PROJECT.md`, `PLAN.md`), split into pages at build time.
+  - **The design and its history** (`design/`, `DECISIONS.md`, `JOURNAL.md`, a migrated project's
+    `archive/PROJECT.md` split into pages at build time) and the plan (`PLAN.md`).
 - **Files numbered in the site's order:** each section gets its number (a folder when it has
   several pages, `docs/03-guide/`; a file when one, `06-plan.md`), and the pages in a folder
   too (`03-guide/04-master.md`, two digits); generated pages use the same numbers. A page
@@ -225,7 +226,7 @@ Separate jobs. The ones that run on this machine each have a make target:
 - `wheel-native`: Linux aarch64 manylinux and macOS arm64, one matrix, shown as
   `wheel-linux-aarch64` and `wheel-macos-arm64`. The same script and smoke test on native
   runners. No local make target (this machine is x86_64, and there is no Mac). See
-  `PROJECT.md`, Packaging and releases.
+  `archive/PROJECT.md`, Packaging and releases.
 - **Releases** (`.github/workflows/release.yml`; schedr's release decisions): a pushed tag runs all of
   CI (`ci.yml` is also a `workflow_call`), then checks and attests the four wheels, publishes
   them with Trusted Publishing, installs the published one from the index and smoke-tests
@@ -253,7 +254,7 @@ Separate jobs. The ones that run on this machine each have a make target:
   until the package is linked to the repository (its settings show "Inherited access");
   re-run then (it happened to both images with 0.1.0rc1, 2026-11-02). A new package is
   private: set it public.
-- **Supply-chain pins** (see `PROJECT.md`, CI supply-chain pins): every `uses:` is a
+- **Supply-chain pins** (see `archive/PROJECT.md`, CI supply-chain pins): every `uses:` is a
   40-character commit SHA (a local `./` action and `docker://image@sha256:<64 hex>` are
   allowed), with the version in a comment; `dtolnay/rust-toolchain` sets `toolchain:`;
   maturin (hashed requirements, for the wheels and the sdist), uv (version plus the
@@ -269,13 +270,13 @@ Separate jobs. The ones that run on this machine each have a make target:
   calendar days; a yanked `x.y.0` still dates its minor.
 - **A yanked version** in the lock moves to a version that meets the rule: forward when one
   exists, otherwise back to the newest earlier one that meets it and isn't yanked.
-- Each dependency is listed in `PROJECT.md` (a "Libraries" table: need, choice, why, and what
-  wasn't chosen).
+- Each dependency is listed in `design/development.md`'s Libraries table (need, choice, why, and
+  what wasn't chosen); schedr's older ones are in `archive/PROJECT.md`, Libraries.
 - **A change to `Cargo.lock`** (a crate added, removed or bumped) changes the binary's
   licences: `make third-party` writes `LICENSE-THIRD-PARTY` again (`make check` and CI fail
   until it is current).
 - **GitHub Actions and the tools they download** follow the same age rule. The pins, and
-  how to bump one (the age check, the changelog, the commit SHA), are in `PROJECT.md`,
+  how to bump one (the age check, the changelog, the commit SHA), are in `archive/PROJECT.md`,
   CI supply-chain pins.
 
 ## Configuration and secrets
@@ -356,11 +357,11 @@ question has one small file that answers it, so an agent reads little and never 
 |---|---|---|
 | `STATUS.md` | where things stand, what waits for the user | rewritten at each step's or session's end, at most 60 lines; its top block (milestone, next step, open questions, bugs) generated |
 | `design/<topic>.md` | how a part works **now** (Current, Decisions, Where in code, Open) | Current by hand, at most ~300 lines; the lists of decisions, code and open questions generated |
-| `decisions/D<n>.toml` | what was decided, whether it holds, the step that builds it, its anchor in `PROJECT.md` | one file per decision; `DECISIONS.md` generated, one line each |
+| `decisions/D<n>.toml` | what was decided, whether it holds, the step that builds it, its anchor in `archive/PROJECT.md` | one file per decision; `DECISIONS.md` generated, one line each |
 | `questions/Q<n>.toml` | what is not decided yet, with the current proposal | one file per question; shown in `DECISIONS.md` and the topic's page |
 | `plan/<milestone>.toml` | milestones and steps in order, each with its scope, "done when" and status | edited; `PLAN.md` generated, one line per step; "next" is the first planned step |
 | `JOURNAL.md` | how the project goes on and **why**: each decision's question, options, choice, reasons and "Not chosen" | dated entries appended, never rewritten, each starting with its anchor `<a id="D<n>"></a>` |
-| `PROJECT.md` (an older project's log) | the history before the journal | left as it is: only anchors added, the same way |
+| `archive/PROJECT.md` (only in a migrated project) | the history before the journal | read only: moved to `archive/`, nothing written there but anchors; a new project has none |
 | `bugs/`, `BUGS.md` | open bugs, ranked | one TOML per bug, generated `BUGS.md` (below) |
 
 - **Generated views are indexes:** one line per item, saying where the details are; the

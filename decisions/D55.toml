@@ -7,7 +7,7 @@ summary = '''
 A branch returns downstream task handles; each unchosen selection edge counts as skipped.
 The target’s trigger rule considers its other edges, and an empty selection is allowed.
 '''
-history = "PROJECT.md#D55"
+history = "archive/PROJECT.md#D55"
 step = "M4.2a"
 also = ["python-api"]
 checked = 2026-11-08

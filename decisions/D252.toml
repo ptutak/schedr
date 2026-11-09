@@ -7,7 +7,7 @@ summary = '''
 After a worker lease without word from the master, the worker stops its tasks with `cleanup_anywhere`.
 Other tasks are not stopped by this rule.
 '''
-history = "PROJECT.md#D252"
+history = "archive/PROJECT.md#D252"
 step = "M4.8b3"
 also = ["workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/status.rs"]

@@ -8,7 +8,7 @@ The UI forwards the person’s name; webservers trust it only from a proven UI. 
 UI certificate name on the dedicated port in app mode, the guarded mesh port where enabled, a shared
 token otherwise, or an in-process call from standalone’s own UI.
 '''
-history = "PROJECT.md#D36"
+history = "archive/PROJECT.md#D36"
 step = "M3.6"
 also = ["deployment"]
 code = ["crates/schedr-api/src/auth.rs", "crates/schedr-client/src/lib.rs", "crates/schedr-config/src/config.rs"]

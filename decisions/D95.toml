@@ -7,7 +7,7 @@ summary = '''
 Changing a concurrency limit without a code change has no API or CLI override.
 Limits shared across DAGs are a proposal for M6.
 '''
-history = "PROJECT.md#D95"
+history = "archive/PROJECT.md#D95"
 step = "n/a"
 also = ["ui-cli"]
 checked = 2026-11-08

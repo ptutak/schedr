@@ -41,7 +41,7 @@ pub enum AppError {
     NotImplemented {
         /// The command's name.
         command: &'static str,
-        /// The milestone that brings it (PROJECT.md, Roadmap).
+        /// The milestone that brings it (archive/PROJECT.md, Roadmap).
         milestone: &'static str,
     },
     /// Talking to the schedr server failed, or the master rejected the command.

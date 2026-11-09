@@ -1,10 +1,10 @@
-title = "Decisions point to anchors in PROJECT.md and JOURNAL.md"
+title = "Decisions point to anchors in archive/PROJECT.md and JOURNAL.md"
 date = 2026-11-08
 by = "user"
 status = "active"
 topic = "development"
 summary = '''
-Each decision's main passage starts with <a id="D<n>"></a>; its history is "PROJECT.md#D<n>" or
+Each decision's main passage starts with <a id="D<n>"></a>; its history is "archive/PROJECT.md#D<n>" or
 "JOURNAL.md#D<n>"; records-check fails on a missing anchor.
 '''
 history = "JOURNAL.md#D369"

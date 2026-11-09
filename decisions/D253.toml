@@ -7,7 +7,7 @@ summary = '''
 The cleanup of a task stopped after disconnection waits for the master’s answer.
 `Continue` runs it and `Kill` drops it.
 '''
-history = "PROJECT.md#D253"
+history = "archive/PROJECT.md#D253"
 step = "M4.8b3"
 also = ["workers", "protocol"]
 code = ["crates/schedr-agent/src/attempt.rs"]

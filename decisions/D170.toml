@@ -7,7 +7,7 @@ summary = '''
 `schedr secrets export --to DIR` writes each secret to `DIR/<path>.json` with mode 0600.
 It refuses a nonempty directory and prints no secret values to the terminal.
 '''
-history = "PROJECT.md#D170"
+history = "archive/PROJECT.md#D170"
 step = "M4.6c"
 also = ["ui-cli"]
 code = ["crates/schedr/src/secrets.rs"]

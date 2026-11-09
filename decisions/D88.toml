@@ -7,7 +7,7 @@ summary = '''
 The master counts running, cleaning-up and assigned-not-started instances per DAG and task.
 It rebuilds counts from the database at startup and checks them on assignment.
 '''
-history = "PROJECT.md#D88"
+history = "archive/PROJECT.md#D88"
 step = "M4.4"
 also = ["state"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/faults.rs"]

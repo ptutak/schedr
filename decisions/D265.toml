@@ -7,6 +7,6 @@ summary = '''
 M4.8c1 covers the Python API, model and parse rules; M4.8c2 covers master state, cleanup and run result.
 A resource with no users gets a parse warning and cleans up immediately after setup.
 '''
-history = "PROJECT.md#D265"
+history = "archive/PROJECT.md#D265"
 step = "n/a"
 checked = 2026-11-08

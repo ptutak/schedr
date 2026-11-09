@@ -7,7 +7,7 @@ summary = '''
 `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing at startup.
 Each setting is warned about; unknown names and invalid durations stop startup.
 '''
-history = "PROJECT.md#D233"
+history = "archive/PROJECT.md#D233"
 step = "M4.8t"
 also = ["deployment"]
 checked = 2026-11-08

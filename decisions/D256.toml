@@ -7,7 +7,7 @@ summary = '''
 The worker stops the task at the lease; the master waits the cancel grace plus the hidden cleanup move wait.
 The default total is 40 seconds, and the deadline is stored with the attempt.
 '''
-history = "PROJECT.md#D256"
+history = "archive/PROJECT.md#D256"
 step = "M4.8b3"
 also = ["workers", "configuration"]
 code = ["crates/schedr-config/src/config.rs", "crates/schedr-master/src/dispatch.rs"]

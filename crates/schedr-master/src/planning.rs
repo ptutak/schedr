@@ -1,5 +1,5 @@
-//! The rules for run times and new runs (see PROJECT.md, Native API: run time semantics, and
-//! Runs: manual runs, backfill and pausing).
+//! The rules for run times and new runs (see archive/PROJECT.md, Native API: run time semantics,
+//! and Runs: manual runs, backfill and pausing).
 //!
 //! - A run on a **fire time** covers one schedule period: `since` is the previous fire time,
 //!   or `initial_since` on the DAG's first fire time at or after `start`.

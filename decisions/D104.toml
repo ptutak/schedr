@@ -7,7 +7,7 @@ summary = '''
 A user dict whose sole key is a serialization tag is stored inside a $dict escape.
 Output paths and literal dictionaries containing references pass through the escape.
 '''
-history = "PROJECT.md#D104"
+history = "archive/PROJECT.md#D104"
 step = "M4.3e"
 code = ["python/schedr/_serialization/codec.py"]
 checked = 2026-11-08

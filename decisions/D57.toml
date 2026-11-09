@@ -11,7 +11,7 @@ provide typed DAG operations; plain outcome classes remain allowed with `schedr.
 fixtures with mypy strict and basedpyright; graph/value misuse and mapped arguments still require
 loading-time checks.
 '''
-history = "PROJECT.md#D57"
+history = "archive/PROJECT.md#D57"
 step = "M4.2a"
 also = ["task-context", "testing-dags"]
 checked = 2026-11-08

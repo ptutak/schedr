@@ -11,7 +11,7 @@
 //! The internal links (worker → master, webserver → worker logs) use mTLS in `[tls] mode =
 //! "app"` (the default: each role needs `[tls] ca`, `cert` and `key`, read again when they
 //! change) and plain traffic in `mesh` mode, where a service mesh encrypts. SIGTERM and Ctrl-C
-//! stop a role (a worker drains first). See PROJECT.md, Architecture: Components and roles.
+//! stop a role (a worker drains first). See archive/PROJECT.md, Architecture: Components and roles.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -1160,11 +1160,11 @@ pub fn no_auth_warning_for(what: &str, address: SocketAddr, alternative: &str) -
     })
 }
 
-/// Who the user is for the role `what` (`webserver`, `ui`) listening on `address`, by
-/// `section`; a UI trusted by the token in `ui_token_file`. The safety rules (see PROJECT.md,
-/// Authentication): `proxy_header` beyond a loopback address only with `allow_remote`
-/// (anything reaching it around the proxy could name any user), `basic` only with
-/// `behind_tls_proxy` (passwords would cross the network in the clear).
+/// Who the user is for the role `what` (`webserver`, `ui`) listening on `address`, by `section`; a
+/// UI trusted by the token in `ui_token_file`. The safety rules (see archive/PROJECT.md,
+/// Authentication): `proxy_header` beyond a loopback address only with `allow_remote` (anything
+/// reaching it around the proxy could name any user), `basic` only with `behind_tls_proxy`
+/// (passwords would cross the network in the clear).
 ///
 /// # Errors
 ///

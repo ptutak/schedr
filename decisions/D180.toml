@@ -7,7 +7,7 @@ summary = '''
 A connection is defined when its module loads outside a DAG.
 Run-specific values go through task arguments or `dag_ctx` read inside the task.
 '''
-history = "PROJECT.md#D180"
+history = "archive/PROJECT.md#D180"
 step = "M4.7a"
 also = ["python-api", "code-delivery"]
 code = ["python/schedr/_build.py", "python/schedr/connections.py"]

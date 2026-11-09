@@ -2,7 +2,7 @@
 //!
 //! Within a major version, changes to DAG JSON (and the protocol, the API, stored outputs) are
 //! additive only, so a reader accepts data of the same major and an equal or lower minor
-//! version (see PROJECT.md, Upgrades and compatibility).
+//! version (see archive/PROJECT.md, Upgrades and compatibility).
 
 use std::borrow::Cow;
 use std::fmt;

@@ -7,7 +7,7 @@ summary = '''
 `planned_for` accepts a datetime or a reference and defaults to the parent’s planned time.
 Airflow’s `logical_date` maps to it.
 '''
-history = "PROJECT.md#D362"
+history = "archive/PROJECT.md#D362"
 step = "M4.12a"
 also = ["airflow"]
 checked = 2026-11-08

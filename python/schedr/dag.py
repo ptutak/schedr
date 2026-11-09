@@ -1,7 +1,7 @@
 """``Dag``, the context manager that defines a DAG, and ``StepDefaults``.
 
 Tasks created inside ``with Dag(...)`` belong to it. When the block ends, the DAG is checked
-(no cycles) and recorded for the runner (see PROJECT.md, Native API).
+(no cycles) and recorded for the runner (see archive/PROJECT.md, Native API).
 """
 
 import sys

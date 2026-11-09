@@ -7,7 +7,7 @@ summary = '''
 The base image includes every connection type's Python client and command-line tools.
 `schedr[connections]` installs all Python clients outside the image.
 '''
-history = "PROJECT.md#D212"
+history = "archive/PROJECT.md#D212"
 step = "M4.7e"
 also = ["deployment"]
 checked = 2026-11-08

@@ -7,7 +7,7 @@ summary = '''
 Attempts, logs and retry require an instance index for a mapped task; cancel can target one instance
 or the whole task. Index -1 means the whole task, and an out-of-range index returns 400.
 '''
-history = "PROJECT.md#D82"
+history = "archive/PROJECT.md#D82"
 step = "M4.3c"
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs"]
 checked = 2026-11-08

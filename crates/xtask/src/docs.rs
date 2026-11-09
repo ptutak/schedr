@@ -1,9 +1,9 @@
-//! Documentation sources generated from repository files (see PROJECT.md, Repository and
+//! Documentation sources generated from repository files (see archive/PROJECT.md, Repository and
 //! tooling: Documentation).
 //!
 //! The output is engine-neutral Markdown: the design pages (`design/`) and `DECISIONS.md`, the
-//! history (`JOURNAL.md`, and `PROJECT.md` split into one page per `##` chapter), `README.md`
-//! and `PLAN.md` as pages, and a page linking each crate's `rustdoc`. Only the engine's
+//! history (`JOURNAL.md`, and `archive/PROJECT.md` split into one page per `##` chapter),
+//! `README.md` and `PLAN.md` as pages, and a page linking each crate's `rustdoc`. Only the engine's
 //! committed index pages (`docs/`) pick these files up.
 
 use std::fmt::Write as _;
@@ -29,7 +29,7 @@ pub const REFERENCE_DIR: &str = "04-reference";
 /// The design pages' directory: `design/README.md`, `DECISIONS.md` and, in `topics/`, every
 /// other page of `design/` (names kept, so their links to each other work).
 pub const DESIGN_DIR: &str = "05-design";
-/// The history's directory: `JOURNAL.md`, and `PROJECT.md`'s chapters in `project/`.
+/// The history's directory: `JOURNAL.md`, and `archive/PROJECT.md`'s chapters in `project/`.
 pub const HISTORY_DIR: &str = "08-history";
 /// The plan's page.
 pub const PLAN_PAGE: &str = "06-plan.md";
@@ -57,7 +57,7 @@ Generated from the docstrings and type hints of the `schedr` package.
 /// The directory, relative to the repository root, that receives the generated sources.
 pub const DOCS_GENERATED_DIR: &str = "docs/_generated";
 
-/// One chapter of `PROJECT.md`.
+/// One chapter of `archive/PROJECT.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chapter {
     /// The chapter's title (the `##` heading's text); for the part before the first chapter,
@@ -204,7 +204,7 @@ fn html_escape(text: &str) -> String {
 /// The repository files the documentation is made from.
 #[derive(Debug, Clone, Default)]
 pub struct DocsInputs {
-    /// `PROJECT.md`: the history up to decision 366.
+    /// `archive/PROJECT.md`: the history up to decision 366.
     pub project: String,
     /// `JOURNAL.md`: the decisions since.
     pub journal: String,

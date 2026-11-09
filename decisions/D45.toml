@@ -7,5 +7,5 @@ summary = '''
 D45 is the pending M6 question of how LDAP locates a person’s entry: search then bind, a DN template, or both.
 No answer is recorded.
 '''
-history = "PROJECT.md: Roadmap; plan/M6.toml: notes"
+history = "archive/PROJECT.md: Roadmap; plan/M6.toml: notes"
 checked = 2026-11-08

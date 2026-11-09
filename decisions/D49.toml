@@ -9,7 +9,7 @@ since a plain call is typed as its result. Async cleanups and resource setups/cl
 supported. Remaining background tasks are cancelled; their errors are warnings and do not change the
 attempt’s result.
 '''
-history = "PROJECT.md#D49"
+history = "archive/PROJECT.md#D49"
 step = "M4.10"
 also = ["task-processes", "cleanup", "python-api"]
 code = ["python/schedr/runner/coroutines.py", "python/schedr/tasks.py"]

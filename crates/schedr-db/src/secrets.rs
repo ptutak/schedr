@@ -1,4 +1,4 @@
-//! The `db` secret storage (standalone; see PROJECT.md, Secret storage): one row per secret
+//! The `db` secret storage (standalone; see archive/PROJECT.md, Secret storage): one row per secret
 //! path, like a Vault KV v2 secret, its `data` a JSON object of key to value. Each value is
 //! encrypted with XChaCha20-Poly1305 under `SCHEDR_SECRET_KEY`, bound to its `path#key` (the
 //! associated data), so a value can't be moved to another key or path; paths and key names

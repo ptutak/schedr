@@ -1,5 +1,5 @@
 //! `schedr secrets ...`: the `db` secret storage, straight in the database as `schedr db` is
-//! (see PROJECT.md, Secret storage). Values are encrypted under `SCHEDR_SECRET_KEY`; only
+//! (see archive/PROJECT.md, Secret storage). Values are encrypted under `SCHEDR_SECRET_KEY`; only
 //! `get` prints one, `list` shows paths and key names, `export` writes files for Vault
 //! (decision 170) and prints none.
 

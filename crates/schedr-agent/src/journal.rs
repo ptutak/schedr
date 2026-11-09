@@ -1,6 +1,6 @@
 //! The journal on disk: one file per attempt the agent started and the master hasn't
 //! acknowledged, so a restarted agent still reports a result it had and stops a task process
-//! its previous incarnation left behind (see PROJECT.md, Worker lifecycle).
+//! its previous incarnation left behind (see archive/PROJECT.md, Worker lifecycle).
 //!
 //! - **Files:** `<journal_dir>/<attempt_id>.json`, each replaced atomically (a temporary file,
 //!   fsync, rename, fsync of the directory) before the message it backs is sent: `running`
@@ -19,7 +19,7 @@
 //!   its cleanup needs to run after a restart (the assignment and where its code is), written
 //!   before `Started`, and `<attempt_id>.handles`, its handles, a line each, on disk before
 //!   the task hears they are registered. Its record is `cleaning` from the task's end, with the
-//!   task's result: the cleanup runs again from there (see PROJECT.md, Per-task cleanup).
+//!   task's result: the cleanup runs again from there (see archive/PROJECT.md, Per-task cleanup).
 //!
 //! - **One agent per journal:** it holds a lock (see [`Journal::lock`]).
 //!

@@ -1,5 +1,5 @@
 //! Times in the CLI: reading `--for` and showing a moment in UTC and local time (see
-//! PROJECT.md, Web UI and CLI: times and time zones).
+//! archive/PROJECT.md, Web UI and CLI: times and time zones).
 //!
 //! `--for` without an offset is **UTC**, with a warning naming the moment taken; an explicit
 //! offset is used as given. Every time shown to a person appears twice, UTC and the machine's

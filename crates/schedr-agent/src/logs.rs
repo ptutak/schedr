@@ -1,5 +1,5 @@
-//! The worker's log endpoint (see PROJECT.md, Task logs): the webserver reads task logs from
-//! the worker that ran them, a part at a time.
+//! The worker's log endpoint (see archive/PROJECT.md, Task logs): the webserver reads task logs
+//! from the worker that ran them, a part at a time.
 //!
 //! - **`GET /logs/{attempt_id}?from=<byte>&limit=<bytes>`** answers the log's bytes from
 //!   `from` (at most `limit`, between 4 bytes and 1 MiB), with headers saying which worker

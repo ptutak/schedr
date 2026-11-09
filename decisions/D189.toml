@@ -7,7 +7,7 @@ summary = '''
 Mongo uses TLS with certificate and hostname verification by default.
 The URI can explicitly disable TLS or specify TLS options; `ca_cert` supplies a private CA.
 '''
-history = "PROJECT.md#D189"
+history = "archive/PROJECT.md#D189"
 step = "M4.7b1"
 code = ["python/schedr/connection_types.py"]
 checked = 2026-11-08

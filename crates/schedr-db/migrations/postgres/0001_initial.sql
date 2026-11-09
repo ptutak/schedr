@@ -1,6 +1,6 @@
 -- schedr schema v1 (Postgres). Keep in step with migrations/sqlite/0001_initial.sql.
 --
--- Conventions (see PROJECT.md, State storage):
+-- Conventions (see archive/PROJECT.md, State storage):
 --   * times: TIMESTAMPTZ, always UTC (never naive TIMESTAMP);
 --   * IDs: UUIDv7 as UUID;
 --   * JSON: JSONB;
@@ -62,7 +62,7 @@ CREATE TABLE parse_results (
 );
 
 -- When workers last switched to each code version of a root (a git-sync, a revert). The
--- newest code is the one switched to most recently (see PROJECT.md, Code versions and change
+-- newest code is the one switched to most recently (see archive/PROJECT.md, Code versions and change
 -- detection); kept so a restarted master decides the same.
 CREATE TABLE root_hashes (
     root          TEXT NOT NULL,
@@ -73,7 +73,7 @@ CREATE TABLE root_hashes (
 
 -- Each file of a parse as the worker reported it (after the master's validation): its DAGs
 -- (a JSON array of DAG JSON) or its import error (exception, message, traceback). The DAG list
--- is worked out from the current parse of each root (see PROJECT.md, DAG code delivery).
+-- is worked out from the current parse of each root (see archive/PROJECT.md, DAG code delivery).
 CREATE TABLE parse_files (
     parse_result_id UUID NOT NULL REFERENCES parse_results (id) ON DELETE CASCADE,
     path            TEXT NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE parse_files (
 );
 
 -- Each root's current parse, as the master decided it (from what alive workers report; see
--- PROJECT.md, Code versions and change detection): written so the API can show its import
+-- archive/PROJECT.md, Code versions and change detection): written so the API can show its import
 -- errors (decision 66) without deciding again.
 CREATE TABLE current_parses (
     root            TEXT PRIMARY KEY,
@@ -269,7 +269,7 @@ CREATE TABLE task_instances (
     -- When a user asked to cancel this task (`schedr tasks cancel`) while it ran.
     cancel_requested_at TIMESTAMPTZ,
     -- Why it ended without an attempt (a mapped task: too many instances, a mapped list that
-    -- isn't a list); see PROJECT.md, decision 78.
+    -- isn't a list); see archive/PROJECT.md, decision 78.
     reason        TEXT,
     -- A mapped task as a whole (map_index -1) once expanded: the size of each dimension of
     -- its instances (a JSON array), for an instance's place in each.
@@ -392,7 +392,7 @@ CREATE INDEX commands_by_run ON commands ((payload ->> 'run_id'));
 CREATE INDEX commands_by_result_run ON commands ((result ->> 'run_id'));
 CREATE INDEX commands_pauses ON commands (requested_at) WHERE kind = 'pause_dag';
 
--- The master's lease: one master per database (see PROJECT.md, Components and roles:
+-- The master's lease: one master per database (see archive/PROJECT.md, Components and roles:
 -- production path). Also created before the migrations (`Database::create_lease_table`), so
 -- a master holds it while it migrates.
 CREATE TABLE IF NOT EXISTS master_lease (
@@ -402,7 +402,7 @@ CREATE TABLE IF NOT EXISTS master_lease (
     expires_at TIMESTAMPTZ NOT NULL
 );
 
--- What changed, for the UI's live pages (see PROJECT.md, Web UI: 34A): one notification per
+-- What changed, for the UI's live pages (see archive/PROJECT.md, Web UI: 34A): one notification per
 -- changed run, DAG or the workers, sent when the writing transaction commits (Postgres drops
 -- a transaction's duplicates). `run <run id> <dag id>`, `dag <dag id>`, `workers`; DAG IDs
 -- have no spaces. Statement triggers: a round updating many rows notifies each run once.
@@ -492,7 +492,7 @@ CREATE TRIGGER workers_updated AFTER UPDATE ON workers REFERENCING NEW TABLE AS 
 CREATE TRIGGER workers_deleted AFTER DELETE ON workers REFERENCING OLD TABLE AS changed
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_workers_changed();
 
--- The `db` secret storage (standalone; PROJECT.md, Secret storage): one row per path, like a
+-- The `db` secret storage (standalone; archive/PROJECT.md, Secret storage): one row per path, like a
 -- Vault KV v2 secret; `data` maps each key to its value encrypted for `path#key` (`v1:` and
 -- base64), so the key names stay readable and no value is.
 CREATE TABLE secrets (

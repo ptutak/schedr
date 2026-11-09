@@ -1,5 +1,5 @@
-//! Connections (PROJECT.md, Connections; decisions 53 and 174): what the parser records of a
-//! `@connection` function, so the agent can render it for a task by name.
+//! Connections (archive/PROJECT.md, Connections; decisions 53 and 174): what the parser records of
+//! a `@connection` function, so the agent can render it for a task by name.
 //!
 //! A connection's values may name secrets; the record holds the names (as in DAG JSON),
 //! never a value. Its name is unique in a DAG root.

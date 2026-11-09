@@ -7,7 +7,7 @@ summary = '''
 Resource cleanup inherits its setup's secrets and connections and may add its own.
 Its queue defaults to the setup's; a static resource has only its own declarations.
 '''
-history = "PROJECT.md#D226"
+history = "archive/PROJECT.md#D226"
 step = "M4.8c1"
 also = ["connections", "secrets"]
 code = ["python/schedr/resources.py"]

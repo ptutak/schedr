@@ -1,7 +1,7 @@
 title = "Foundations"
 order = 10
 done_when = '''
-The shared model, configuration, database schema and CLI skeleton are in place (no criterion of its own: PROJECT.md, Roadmap).
+The shared model, configuration, database schema and CLI skeleton are in place (no criterion of its own: archive/PROJECT.md, Roadmap).
 '''
 notes = '''
 Python package layout:
@@ -115,7 +115,7 @@ commits = ["e48a56a"]
 id = "0.9"
 title = "Documentation site"
 scope = '''
-(PROJECT.md, Repository and tooling: Documentation): `cargo xtask docs-sources` (PROJECT.md → one Markdown file per chapter, plus README, PLAN and the crate list, into `docs/_generated/`, tested), Sphinx + MyST + Furo + autodoc, rustdoc copied under `rust/`, `make docs` / `make docs-serve`, ruff `D` rules (Google convention) and `rustdoc::broken_intra_doc_links`, CI docs job failing on warnings; docstrings added where missing
+(archive/PROJECT.md, Repository and tooling: Documentation): `cargo xtask docs-sources` (archive/PROJECT.md → one Markdown file per chapter, plus README, PLAN and the crate list, into `docs/_generated/`, tested), Sphinx + MyST + Furo + autodoc, rustdoc copied under `rust/`, `make docs` / `make docs-serve`, ruff `D` rules (Google convention) and `rustdoc::broken_intra_doc_links`, CI docs job failing on warnings; docstrings added where missing
 '''
 done_when = "`make docs` builds a site with every section; CI green"
 status = "done"

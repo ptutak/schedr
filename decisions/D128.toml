@@ -11,7 +11,7 @@ show details and configuration as TOML, omitting unset values. The UI panel reta
 page’s content; `/config`, its navigation entry, and separate deployment pages and routes are
 removed.
 '''
-history = "PROJECT.md#D128"
+history = "archive/PROJECT.md#D128"
 step = "M4.4b"
 also = ["deployment", "configuration"]
 code = ["crates/schedr-ui/src/deployments.rs"]

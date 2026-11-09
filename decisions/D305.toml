@@ -8,7 +8,7 @@ Python files containing the exact bytes `schedr` are parsed; other files are shi
 skipped. Unreadable files are parsed to report the error; `schedr dags check` follows the same rule
 and reports skipped files.
 '''
-history = "PROJECT.md#D305"
+history = "archive/PROJECT.md#D305"
 step = "M4.9d"
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/scan.rs", "crates/schedr/src/local.rs"]
 checked = 2026-11-08

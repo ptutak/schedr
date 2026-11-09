@@ -11,7 +11,7 @@ Done when: a worker's turn of messages (up to `MESSAGES_PER_TURN`) is stored in 
 transaction**: one lease check and one commit fsync per turn instead of one per message, a
 failed message undone alone, and the measured lock and commit time per turn lower than M4's.
 
-Planned with the user (2026-10-28; decision 54 in PROJECT.md, "T1b"), between M4 and M5. It
+Planned with the user (2026-10-28; decision 54 in archive/PROJECT.md, "T1b"), between M4 and M5. It
 builds on T1 (one transaction per message), `Dispatcher::memory` / `restore` (a message
 rolled back puts memory back) and D1 (a commit cut off is read back). **A savepoint per
 message:** `SAVEPOINT` before each message, `ROLLBACK TO` and its own memory snapshot restored

@@ -1,4 +1,4 @@
-//! Logs' ANSI colours as HTML (see PROJECT.md, Web UI: logs are converted on the server).
+//! Logs' ANSI colours as HTML (see archive/PROJECT.md, Web UI: logs are converted on the server).
 //!
 //! SGR sequences (`ESC [ ... m`) become `<span>`s with classes the stylesheet colours for both
 //! themes: `fg-0`..`fg-15` and `bg-0`..`bg-15` (the 16 standard colours; 256-colour and RGB

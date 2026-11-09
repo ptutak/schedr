@@ -7,7 +7,7 @@ summary = '''
 Connection secrets go to the tool's file and prefixed script variables, masked in logs.
 Passwords are moved out of URL variables into the files.
 '''
-history = "PROJECT.md#D190"
+history = "archive/PROJECT.md#D190"
 step = "M4.7b2"
 also = ["secrets", "task-processes"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/connection_env.rs", "crates/schedr-agent/src/secrets.rs"]

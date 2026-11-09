@@ -7,7 +7,7 @@ summary = '''
 Library threads are allowed and a thread alone is not a strike. A Python thread still alive
 at step end is logged; host thread counts are shown as tied and untied, and as a metric.
 '''
-history = "PROJECT.md#D339"
+history = "archive/PROJECT.md#D339"
 step = "M4.11a3"
 also = ["observability"]
 checked = 2026-11-08

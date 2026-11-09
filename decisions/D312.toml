@@ -7,7 +7,7 @@ summary = '''
 ScriptResource and cleanup_script reject declarations with outcomes; cleanup_script also rejects cleanup.
 A ScriptResource setup retains its declared cleanup for a partly failed setup.
 '''
-history = "PROJECT.md#D312"
+history = "archive/PROJECT.md#D312"
 step = "M4.9c"
 also = ["cleanup"]
 code = ["python/schedr/operators.py"]

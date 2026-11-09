@@ -8,7 +8,7 @@ A per-task cleanup without its own timeout uses `[worker] cleanup_timeout`; the 
 JSON omits `timeout_ms` and the worker supplies it. Resource cleanups instead default
 to `[worker] resource_cleanup_timeout`, 30 minutes per try.
 '''
-history = "PROJECT.md#D235"
+history = "archive/PROJECT.md#D235"
 step = "M4.8f"
 also = ["cleanup", "workers"]
 checked = 2026-11-08

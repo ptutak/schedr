@@ -1,10 +1,10 @@
-title = "JOURNAL.md holds decisions from 2026-11-08 on; PROJECT.md is left as it is"
+title = "JOURNAL.md holds decisions from 2026-11-08 on; archive/PROJECT.md is left as it is"
 date = 2026-11-08
 by = "user"
 status = "active"
 topic = "development"
 summary = '''
-New decisions are dated entries in JOURNAL.md with their anchors; PROJECT.md keeps its own text up to
+New decisions are dated entries in JOURNAL.md with their anchors; archive/PROJECT.md keeps its own text up to
 decision 366 and gains nothing but anchors.
 '''
 history = "JOURNAL.md#D370"

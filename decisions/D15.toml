@@ -7,7 +7,7 @@ summary = '''
 Before exiting, a forked task waits for non-daemon threads and runs its own exit handlers.
 Inherited server handlers are cleared; logging shutdown and task finalizers are retained.
 '''
-history = "PROJECT.md#D15"
+history = "archive/PROJECT.md#D15"
 step = "M2.5.3"
 code = ["python/schedr/runner/fork_server.py"]
 checked = 2026-11-08

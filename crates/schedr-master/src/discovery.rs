@@ -16,7 +16,7 @@
 //! Each time a root's current parse changes, the DAG list is worked out again from every
 //! root's current parse ([`catalog::plan`]) and the changes are stored. Only the newest code
 //! runs (tasks go to workers on the current hash), so a worker on older code can't put a DAG
-//! in conflict (see PROJECT.md, DAG ID conflicts).
+//! in conflict (see archive/PROJECT.md, DAG ID conflicts).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

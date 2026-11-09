@@ -1,7 +1,7 @@
 //! What the webserver reads: runs, their task instances and attempts, as shown to people.
 //!
 //! The webserver reads the database directly (with a read-only role in production) and never
-//! writes scheduling state; actions are command rows (see PROJECT.md, Web UI and CLI).
+//! writes scheduling state; actions are command rows (see archive/PROJECT.md, Web UI and CLI).
 
 use std::collections::BTreeMap;
 

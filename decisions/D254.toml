@@ -7,7 +7,7 @@ summary = '''
 A task with `cleanup_anywhere` that ends by itself while disconnected holds its cleanup.
 It waits for the master’s answer.
 '''
-history = "PROJECT.md#D254"
+history = "archive/PROJECT.md#D254"
 step = "M4.8b3"
 also = ["workers"]
 code = ["crates/schedr-agent/src/agent.rs"]

@@ -9,6 +9,6 @@ server, worker and webserver, including `auth_remembered` and `auth_recheck`. Th
 client, `task-ctx` and the CLI's commands don't use these timings (the binary reads the
 configuration file for every command but `task-ctx` and `dag-ctx`).
 '''
-history = "PROJECT.md#D236"
+history = "archive/PROJECT.md#D236"
 step = "M4.8u"
 checked = 2026-11-08

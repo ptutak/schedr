@@ -1,4 +1,4 @@
-// schedr's live pages, one stream per browser (PROJECT.md, decision 175): a SharedWorker,
+// schedr's live pages, one stream per browser (archive/PROJECT.md, decision 175): a SharedWorker,
 // started by a browser's first live page of this UI and ended with its last, holds the UI's
 // `/events` stream and hands every change to each page, which decides which concern it.
 //

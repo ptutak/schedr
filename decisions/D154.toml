@@ -7,7 +7,7 @@ summary = '''
 A pushed `vX.Y.Z` tag is checked against package versions and starts the release.
 The workflow builds and smoke-tests four wheels, publishes them and creates a GitHub Release.
 '''
-history = "PROJECT.md#D154"
+history = "archive/PROJECT.md#D154"
 step = "R0.1"
 code = ["scripts/release.py"]
 checked = 2026-11-08

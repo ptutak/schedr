@@ -1,5 +1,5 @@
 //! The master's gRPC service and its loop: workers' `Control` streams, parse uploads and
-//! `FetchInputs`, over [`MasterCore`] (see PROJECT.md, Master–worker protocol).
+//! `FetchInputs`, over [`MasterCore`] (see archive/PROJECT.md, Master–worker protocol).
 //!
 //! A [`Hub`] holds the core and each live worker's outgoing stream; whatever the core decides
 //! to send (assignments, cancels, acknowledgements) is delivered through it, from a stream's
@@ -139,7 +139,7 @@ impl Hub {
     }
 
     /// The hub abandoning a gauge refresh that takes longer than `limit` (it only reads, so
-    /// abandoning it is safe; a tick is never abandoned: see PROJECT.md, Observability).
+    /// abandoning it is safe; a tick is never abandoned: see archive/PROJECT.md, Observability).
     #[must_use]
     pub const fn with_refresh_limit(mut self, limit: Duration) -> Self {
         self.refresh_limit = limit;

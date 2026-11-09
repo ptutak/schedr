@@ -1,4 +1,4 @@
-//! `schedr.toml`: the scripts a script root declares (PROJECT.md, Plain script delivery;
+//! `schedr.toml`: the scripts a script root declares (archive/PROJECT.md, Plain script delivery;
 //! decisions 292-300). Read and checked here, in Rust, by the agent alone (decision 293): every
 //! key known, unknown ones an error. A declaration with a schedule (`schedule`, `every` or
 //! `once`) is a standalone job, a one-task DAG whose ID is its reference

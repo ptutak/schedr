@@ -7,7 +7,7 @@ summary = '''
 Cleanup runs after the task ends, including when it is killed.
 It uses the task’s preloaded or bare fork server, with spawn as fallback; downstream tasks wait.
 '''
-history = "PROJECT.md#D16"
+history = "archive/PROJECT.md#D16"
 step = "M4.8a"
 also = ["task-processes", "outcomes"]
 checked = 2026-11-08

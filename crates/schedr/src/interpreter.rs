@@ -5,7 +5,7 @@
 //! directory and its parents), the `python3` next to the `schedr` binary, then `python3` on
 //! `PATH`; a pyenv shim found there is resolved once with `pyenv which python3`, in the user's
 //! environment and directory, since tasks get a clean environment and run elsewhere. A
-//! configured `python` always wins. See PROJECT.md, Configuration: built-in interpreter.
+//! configured `python` always wins. See archive/PROJECT.md, Configuration: built-in interpreter.
 
 use std::collections::BTreeMap;
 use std::fmt;

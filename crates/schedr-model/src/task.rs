@@ -69,7 +69,7 @@ pub struct TaskSettings {
 }
 
 /// A task's trigger rule: what its upstream edges must have done for it to run (see
-/// PROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.
+/// archive/PROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunIf {
@@ -370,7 +370,8 @@ pub enum ResourceRole {
     },
 }
 
-/// What a task's cleanup runs: of the same kind as the task (see PROJECT.md, Per-task cleanup).
+/// What a task's cleanup runs: of the same kind as the task (see archive/PROJECT.md, Per-task
+/// cleanup).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CleanupRun {
@@ -392,7 +393,7 @@ pub enum CleanupRun {
     },
 }
 
-/// A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).
+/// A task's cleanup: `finally` for each of its attempts (see archive/PROJECT.md, Per-task cleanup).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TaskCleanup {
@@ -448,7 +449,7 @@ pub struct Task {
     pub settings: TaskSettings,
     /// The type of its output (`process_result` for commands, `none` for empty tasks).
     pub output_type: TypeDesc,
-    /// The outcomes it may end with (see PROJECT.md, Task results and outcomes).
+    /// The outcomes it may end with (see archive/PROJECT.md, Task results and outcomes).
     #[serde(
         default = "default_outcomes",
         skip_serializing_if = "is_default_outcomes"

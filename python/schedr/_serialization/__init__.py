@@ -1,6 +1,6 @@
 """Output types and values: annotations to type descriptors, and values to stored JSON.
 
-Three checks make sure an output can be serialized (see PROJECT.md, Output serialization):
+Three checks make sure an output can be serialized (see archive/PROJECT.md, Output serialization):
 the type checker (``Json`` bound on ``@task``), the parse-time check (:func:`describe`), and
 the run-time check (:func:`encode`).
 """

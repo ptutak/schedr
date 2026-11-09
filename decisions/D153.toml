@@ -8,7 +8,7 @@ summary = '''
 `pypa/gh-action-pypi-publish`; the `pypi` environment requires the user’s approval
 for each release.
 '''
-history = "PROJECT.md#D153"
+history = "archive/PROJECT.md#D153"
 step = "R0.1"
 code = ["scripts/release.py"]
 checked = 2026-11-08

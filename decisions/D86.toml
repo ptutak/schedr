@@ -7,7 +7,7 @@ summary = '''
 Task logs, attempts, output, cancel and retry accept `--map-index N`.
 `runs show` and `dags test` list instances after the task row as `fetch[0]`, `fetch[1]`, and so on.
 '''
-history = "PROJECT.md#D86"
+history = "archive/PROJECT.md#D86"
 step = "M4.3d"
 code = ["crates/schedr/src/local.rs", "crates/schedr/src/user.rs"]
 checked = 2026-11-08

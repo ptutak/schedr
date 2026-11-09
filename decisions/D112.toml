@@ -8,7 +8,7 @@ Structured arguments containing references are built recursively as the paramete
 uses the first fitting member of the same shape; when only one member has that shape, its literals
 are checked at parse time. Missing or refused fields fail the attempt with input_mismatch.
 '''
-history = "PROJECT.md#D112"
+history = "archive/PROJECT.md#D112"
 step = "M4.3e"
 also = ["python-api", "outcomes"]
 checked = 2026-11-08

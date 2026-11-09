@@ -4,11 +4,11 @@ done_when = '''
 The web UI shows DAGs, runs (their graph, tasks, attempts, outputs and logs, live), workers and commands, and takes the actions the API takes, with the auth modes, times in UTC and local, light and dark themes, over a list of deployments.
 '''
 notes = '''
-Done when (PROJECT.md, Roadmap): the web UI shows DAGs, runs (their graph, tasks, attempts,
+Done when (archive/PROJECT.md, Roadmap): the web UI shows DAGs, runs (their graph, tasks, attempts,
 outputs and logs, live), workers and commands, and takes the actions the API takes, with the
 auth modes, times in UTC and local, light and dark themes, over a list of deployments.
 
-Steps planned with the user (2026-10-27; decisions 21B-26A in PROJECT.md, Web UI): `schedr ui`,
+Steps planned with the user (2026-10-27; decisions 21B-26A in archive/PROJECT.md, Web UI): `schedr ui`,
 a role of its own talking only to webservers' JSON APIs (21B); askama and htmx (26A); a layered
 graph layout of our own (22A); the log tail polled and relayed over SSE (23A); no sessions of our
 own, actions checked by `Origin` (24A); M4's views as shells (25B); one stylesheet of our own,

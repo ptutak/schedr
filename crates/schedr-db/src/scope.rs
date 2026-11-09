@@ -2,7 +2,7 @@
 //! query of this database (writes and reads, so it sees its own writes) going through one
 //! transaction, committed once at its end or rolled back on an error. The master uses it for a
 //! worker message's writes and for a round's assignments: one lease check and one commit
-//! instead of one per write (see PROJECT.md, "Found by the stress suite").
+//! instead of one per write (see archive/PROJECT.md, "Found by the stress suite").
 //!
 //! The transaction is found through a task-local: only the work's own future uses it, never
 //! another task on the same database (the lease's renewals, a gauge refresh, an input fetch).

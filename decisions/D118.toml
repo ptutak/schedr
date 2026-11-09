@@ -7,7 +7,7 @@ summary = '''
 The master counts mapped elements containing t-strings or dag_ctx and sends them in stored form.
 Each instance's runner builds its element with the referenced outputs.
 '''
-history = "PROJECT.md#D118"
+history = "archive/PROJECT.md#D118"
 step = "M4.3e"
 also = ["task-processes"]
 code = ["crates/schedr-master/src/mapping.rs"]

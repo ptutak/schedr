@@ -2,7 +2,7 @@
 
 Rewritten at the end of each session or step (never appended to; at most 60 lines). Start here, then read only what
 the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons and history
-are in `PROJECT.md`; earlier hand-offs in `history/`.
+are in `JOURNAL.md` (`archive/PROJECT.md` before D367); earlier hand-offs in `archive/`.
 
 ## Now (2026-11-08, evening)
 
@@ -17,7 +17,7 @@ are in `PROJECT.md`; earlier hand-offs in `history/`.
 - **In progress:** the documents' restructuring (the user's, 2026-11-08; D367-D371 in `JOURNAL.md`),
   finished before M4.12a.
   - Done: `decisions/` (D1-D371, checked against the full text), `plan/` (PLAN.md generated),
-    `questions/`, `scripts/records.py` (`make records`, `make records-check`), anchors in PROJECT.md
+    `questions/`, `scripts/records.py` (`make records`, `make records-check`), anchors in archive/PROJECT.md
     (left as it is otherwise, D370), `JOURNAL.md`, B190 fixed and `make undone-check`.
   - Next: the `design/<topic>.md` pages (Codex, Terra, one round per batch, no check round per
     batch); then the docs build (`xtask docs-sources`) and the skill's templates (`records.py`).

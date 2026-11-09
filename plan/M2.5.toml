@@ -4,10 +4,10 @@ done_when = '''
 Python tasks start from the fork server on Linux workers, with fallback to spawn; stress scenario 14's rounds no longer grow with the quiet DAGs.
 '''
 notes = '''
-Done when (PROJECT.md, Roadmap): Python tasks start from the fork server on Linux workers,
+Done when (archive/PROJECT.md, Roadmap): Python tasks start from the fork server on Linux workers,
 with fallback to spawn; stress scenario 14's rounds no longer grow with the quiet DAGs.
 
-Steps planned with the user (2026-10-27; decisions in PROJECT.md, "How Python tasks are
+Steps planned with the user (2026-10-27; decisions in archive/PROJECT.md, "How Python tasks are
 started" and "Quiet DAGs"). Claude implements each; Grok reviews it independently
 and updates the guide.
 '''

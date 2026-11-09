@@ -8,7 +8,7 @@ SQL uses libpq `sslmode` vocabulary for Postgres and MySQL, defaulting to `verif
 Both accept a PEM `ca_cert` or use system CAs; MySQL URL keys outside this vocabulary are refused.
 A server without TLS requires an explicit `sslmode=disable`.
 '''
-history = "PROJECT.md#D187"
+history = "archive/PROJECT.md#D187"
 step = "M4.7b1"
 code = ["python/schedr/connection_types.py"]
 checked = 2026-11-08

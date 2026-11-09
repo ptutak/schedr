@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when CI's supply-chain pins are missing.
 
-Checks, against PROJECT.md (CI supply-chain pins):
+Checks, against archive/PROJECT.md (CI supply-chain pins):
 
 - every ``uses:`` is a 40-character commit SHA, a local ``./...`` action or
   reusable workflow, or ``docker://image@sha256:<64 hex>``;
@@ -65,7 +65,7 @@ _TOOL_ACTIONS = {
 
 _PIN_USES = (
     "pin it as `owner/repo@<sha> # <version>`, a local `./...` action, "
-    "or `docker://image@sha256:<64 hex>` (PROJECT.md, CI supply-chain pins)"
+    "or `docker://image@sha256:<64 hex>` (archive/PROJECT.md, CI supply-chain pins)"
 )
 
 
@@ -124,7 +124,7 @@ def _pin_error(image: str) -> str:
         why = "is not pinned to a sha256 digest"
     return (
         f"image `{image}` {why}; "
-        "pin it as `name@sha256:<64 hex>` (PROJECT.md, CI supply-chain pins)"
+        "pin it as `name@sha256:<64 hex>` (archive/PROJECT.md, CI supply-chain pins)"
     )
 
 
@@ -349,7 +349,7 @@ def _check_tool_inputs(uses: str, with_node: yaml.Node, display: str) -> list[st
         if "tool" not in inputs:
             errors.append(
                 f"{display}:{_line(with_node)}: `taiki-e/install-action` needs "
-                "`tool:` set to `name@version` (PROJECT.md, CI supply-chain pins)"
+                "`tool:` set to `name@version` (archive/PROJECT.md, CI supply-chain pins)"
             )
             return errors
         value, line = inputs["tool"]
@@ -375,14 +375,14 @@ def _check_tool_inputs(uses: str, with_node: yaml.Node, display: str) -> list[st
     if value_line is None:
         errors.append(
             f"{display}:{_line(with_node)}: `{name}` needs `version:` set to an "
-            "exact `x.y.z` (PROJECT.md, CI supply-chain pins)"
+            "exact `x.y.z` (archive/PROJECT.md, CI supply-chain pins)"
         )
         return errors
     value, line = value_line
     if "${{" in value or VERSION.fullmatch(value.strip()) is None:
         errors.append(
             f"{display}:{line}: `{name}` `version: {value}` is not an exact "
-            "`x.y.z` (PROJECT.md, CI supply-chain pins)"
+            "`x.y.z` (archive/PROJECT.md, CI supply-chain pins)"
         )
     return errors
 
@@ -437,13 +437,13 @@ def _walk(node: yaml.Node, display: str, rust_channel: str, errors: list[str]) -
                     errors.append(
                         f"{display}:{_line(where)}: `dtolnay/rust-toolchain` needs "
                         f"`toolchain:` set to `{rust_channel}` from rust-toolchain.toml "
-                        "(PROJECT.md, CI supply-chain pins)"
+                        "(archive/PROJECT.md, CI supply-chain pins)"
                     )
             if action in _TOOL_ACTIONS:
                 if with_node is None:
                     errors.append(
                         f"{display}:{_line(node)}: `{action}` needs "
-                        "its version input set (PROJECT.md, CI supply-chain pins)"
+                        "its version input set (archive/PROJECT.md, CI supply-chain pins)"
                     )
                 else:
                     errors.extend(_check_tool_inputs(uses_ref, with_node, display))
@@ -532,7 +532,7 @@ def check_requirements(text: str, display: str) -> list[str]:
             name = line.split()[0]
             errors.append(
                 f"{display}:{number}: requirement `{name}` has no `--hash=sha256:<64 hex>` "
-                "(PROJECT.md, CI supply-chain pins)"
+                "(archive/PROJECT.md, CI supply-chain pins)"
             )
     return errors
 

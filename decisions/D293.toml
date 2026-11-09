@@ -9,7 +9,7 @@ read TOML. During parsing, `ScriptOperator` requests checked declarations over t
 parsing it only records the reference; `schedr dags check` resolves references through
 `SCHEDR_SCRIPT_PATH`.
 '''
-history = "PROJECT.md#D293"
+history = "archive/PROJECT.md#D293"
 step = "M4.9b"
 also = ["code-delivery"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/jobs.rs"]

@@ -3,7 +3,7 @@
 //! The agent scans each root on every poll. A changed scan isn't hashed at once: the root must
 //! stay unchanged for the settle time, so half-written files are never parsed. Only a new
 //! content hash is reported; a scan that changed with the same contents (e.g. files touched)
-//! isn't (see PROJECT.md, Code versions and change detection). The first scan after start
+//! isn't (see archive/PROJECT.md, Code versions and change detection). The first scan after start
 //! settles too.
 
 use std::path::{Path, PathBuf};

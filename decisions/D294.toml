@@ -7,7 +7,7 @@ summary = '''
 A script root change re-parses DAGs whose `ScriptOperator`s refer to it, updating scheduling keys
 from the declaration. Workers run scripts at the script root hash expected by the master.
 '''
-history = "PROJECT.md#D294"
+history = "archive/PROJECT.md#D294"
 step = "M4.9b"
 also = ["code-delivery"]
 code = ["crates/schedr-agent/src/jobs.rs"]

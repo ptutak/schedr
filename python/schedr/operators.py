@@ -3,7 +3,7 @@
 ``CommandOperator`` runs an inline command; ``ScriptOperator`` a script declared in a
 ``schedr.toml``; ``EmptyOperator`` does nothing and is completed by the master. Operators
 can't be subclassed: reuse is by composition, e.g. a function that creates tasks (see
-PROJECT.md, Native API: no custom operators).
+archive/PROJECT.md, Native API: no custom operators).
 """
 
 import dataclasses

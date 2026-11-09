@@ -269,7 +269,7 @@ impl Database {
     }
 
     /// Records how a cleanup of an instance ended. A failure stays: a later attempt's
-    /// cleanup succeeding doesn't undo it (it fails the run, see PROJECT.md, Run result).
+    /// cleanup succeeding doesn't undo it (it fails the run, see archive/PROJECT.md, Run result).
     ///
     /// # Errors
     ///

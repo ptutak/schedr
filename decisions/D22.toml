@@ -7,7 +7,7 @@ summary = '''
 The server draws the DAG graph as SVG using its own layered layout.
 The layout performs layering, crossing reduction and x-placement.
 '''
-history = "PROJECT.md#D22"
+history = "archive/PROJECT.md#D22"
 step = "M3.2b"
 code = ["crates/schedr-ui/src/graph.rs"]
 checked = 2026-11-08

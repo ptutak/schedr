@@ -11,7 +11,7 @@ sync/async clients where supported: HTTP via httpx, Mongo via pymongo, SQL async
 SSH is sync. Async generators/checks are supported; Airflow reads its own entry format from the same
 storage.
 '''
-history = "PROJECT.md#D53"
+history = "archive/PROJECT.md#D53"
 step = "M4.10"
 also = ["async-tasks", "testing-dags", "airflow"]
 code = ["crates/schedr-model/src/connection.rs", "python/schedr/connections.py"]

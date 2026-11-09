@@ -1,4 +1,4 @@
-//! The master's lease: one master per database (see PROJECT.md, Components and roles:
+//! The master's lease: one master per database (see archive/PROJECT.md, Components and roles:
 //! production path). A one-row table, taken and renewed by one statement each, timed by the
 //! **database's** clock, so it needs no session state: it works through any connection
 //! pooler (`PgBouncer` in transaction pooling too), and on SQLite.

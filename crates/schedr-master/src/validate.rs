@@ -4,7 +4,7 @@
 //! relies on to schedule (it never runs user code, so DAG JSON is its only view of a DAG): the
 //! version that produced it, where it is, its trigger, task IDs, edges, cycles and the
 //! references between tasks. A file with an invalid DAG is treated as a file that failed to
-//! import: its DAGs keep their last good version (see PROJECT.md, DAG code delivery).
+//! import: its DAGs keep their last good version (see archive/PROJECT.md, DAG code delivery).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
@@ -272,7 +272,7 @@ fn cleanup_problem(task: &Task) -> Option<String> {
     }
 }
 
-/// Secrets (see PROJECT.md, Secret storage): each name well formed, none in a command line
+/// Secrets (see archive/PROJECT.md, Secret storage): each name well formed, none in a command line
 /// (it would show in the process list) nor mapped over, a whole secret only where a value
 /// goes (an argument), not in text.
 fn secret_problems(dag: &Dag, problems: &mut Vec<String>) {

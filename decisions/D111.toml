@@ -7,7 +7,7 @@ summary = '''
 The runner validates stored model data with model_validate_json.
 Schedr tags in the data are first written in Pydantic's JSON representation.
 '''
-history = "PROJECT.md#D111"
+history = "archive/PROJECT.md#D111"
 step = "M4.3e"
 also = ["python-api"]
 checked = 2026-11-08

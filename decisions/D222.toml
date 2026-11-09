@@ -7,7 +7,7 @@ summary = '''
 Handles are masked like outputs before reaching the worker journal or master, with a log warning.
 A cleanup needing a secret declares it; resource values are masked as outputs.
 '''
-history = "PROJECT.md#D222"
+history = "archive/PROJECT.md#D222"
 step = "M4.8a"
 also = ["secrets", "serialization"]
 code = ["crates/schedr-agent/src/handles.rs"]

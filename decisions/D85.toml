@@ -7,7 +7,7 @@ summary = '''
 `result.tasks["fetch"]` represents the whole task and its output is the gathered list.
 Indexing that result or using `.instances` accesses individual instance results.
 '''
-history = "PROJECT.md#D85"
+history = "archive/PROJECT.md#D85"
 step = "M4.3c"
 also = ["python-api"]
 code = ["python/schedr/testing.py"]

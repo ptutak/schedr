@@ -7,7 +7,7 @@ summary = '''
 The runner fails an attempt when an output string or dictionary key contains NUL.
 The error identifies the value at encoding time.
 '''
-history = "PROJECT.md#D106"
+history = "archive/PROJECT.md#D106"
 step = "M4.3e"
 also = ["outcomes"]
 checked = 2026-11-08

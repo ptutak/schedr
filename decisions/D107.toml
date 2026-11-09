@@ -7,6 +7,6 @@ summary = '''
 When the stored version belongs to the removed file, a conflict remains until the remaining file imports.
 The master logs a warning; a stored version belonging to the remaining file is kept.
 '''
-history = "PROJECT.md#D107"
+history = "archive/PROJECT.md#D107"
 step = "M4.3e"
 checked = 2026-11-08

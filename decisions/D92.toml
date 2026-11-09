@@ -7,7 +7,7 @@ summary = '''
 An integration test samples active counts with many tasks and tight limits.
 M4.4 also writes a stress scenario to run when the user next runs the stress suite.
 '''
-history = "PROJECT.md#D92"
+history = "archive/PROJECT.md#D92"
 step = "M4.4"
 also = ["assignment"]
 checked = 2026-11-08

@@ -1,5 +1,5 @@
-//! The worker registry: every worker the master has seen, with its state, kept after it is
-//! gone (offline or lost) so its logs can still be found (see PROJECT.md, Worker lifecycle).
+//! The worker registry: every worker the master has seen, with its state, kept after it is gone
+//! (offline or lost) so its logs can still be found (see archive/PROJECT.md, Worker lifecycle).
 //!
 //! The master is its only writer: on `Register`, at most once per heartbeat interval while the
 //! worker is connected, and on every change of state. At start it reads the registry back and

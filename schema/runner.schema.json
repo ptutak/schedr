@@ -719,7 +719,7 @@
       "type": "object"
     },
     "CleanupRun": {
-      "description": "What a task's cleanup runs: of the same kind as the task (see PROJECT.md, Per-task cleanup).",
+      "description": "What a task's cleanup runs: of the same kind as the task (see archive/PROJECT.md, Per-task\ncleanup).",
       "oneOf": [
         {
           "const": "python",
@@ -908,7 +908,7 @@
           "description": "The DAG's ID."
         },
         "initial_since": {
-          "description": "`since` of the run on the DAG's first fire time (see PROJECT.md, Runs).",
+          "description": "`since` of the run on the DAG's first fire time (see archive/PROJECT.md, Runs).",
           "format": "date-time",
           "type": [
             "string",
@@ -1072,7 +1072,7 @@
           "type": "string"
         },
         "root": {
-          "description": "The root's name (see PROJECT.md, DAG roots).",
+          "description": "The root's name (see archive/PROJECT.md, DAG roots).",
           "type": "string"
         }
       },
@@ -1528,7 +1528,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A secret from a secret storage (`secrets['etl/db']['password']`), fetched by the agent\nthat runs the task, never by the master (see PROJECT.md, Secret storage).",
+          "description": "A secret from a secret storage (`secrets['etl/db']['password']`), fetched by the agent\nthat runs the task, never by the master (see archive/PROJECT.md, Secret storage).",
           "properties": {
             "default": {
               "description": "What a reference reads when the secret or its key is missing\n(`secrets['etl/db'].get('password', '')`); a key's only, never declared in `secrets=`.",
@@ -1674,7 +1674,7 @@
       "type": "object"
     },
     "RunIf": {
-      "description": "A task's trigger rule: what its upstream edges must have done for it to run (see\nPROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.",
+      "description": "A task's trigger rule: what its upstream edges must have done for it to run (see\narchive/PROJECT.md, Outcomes, failures and joins). An edge not taken counts as skipped.",
       "oneOf": [
         {
           "const": "none_failed",
@@ -3091,7 +3091,7 @@
           "description": "The task's ID, unique within its DAG."
         },
         "outcomes": {
-          "description": "The outcomes it may end with (see PROJECT.md, Task results and outcomes).",
+          "description": "The outcomes it may end with (see archive/PROJECT.md, Task results and outcomes).",
           "items": {
             "$ref": "#/$defs/OutcomeDecl"
           },
@@ -3122,7 +3122,7 @@
     },
     "TaskCleanup": {
       "additionalProperties": false,
-      "description": "A task's cleanup: `finally` for each of its attempts (see PROJECT.md, Per-task cleanup).",
+      "description": "A task's cleanup: `finally` for each of its attempts (see archive/PROJECT.md, Per-task cleanup).",
       "properties": {
         "anywhere": {
           "description": "Whether it may run on another worker when its own is lost (`cleanup_anywhere`).",
@@ -3467,7 +3467,7 @@
           "type": "object"
         },
         {
-          "description": "A secret from a secret storage (`secrets['etl/db']['password']`), fetched by the agent\nthat runs the task, never by the master (see PROJECT.md, Secret storage).",
+          "description": "A secret from a secret storage (`secrets['etl/db']['password']`), fetched by the agent\nthat runs the task, never by the master (see archive/PROJECT.md, Secret storage).",
           "properties": {
             "default": {
               "description": "What a reference reads when the secret or its key is missing\n(`secrets['etl/db'].get('password', '')`); a key's only, never declared in `secrets=`.",

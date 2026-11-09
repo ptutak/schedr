@@ -230,7 +230,7 @@ step touches their code or the user schedules them.
 ## B153: A `Literal` field can't be rendered into a command's t-string
 
 - **Rating:** severity **low**, probability **possible**, usability (score 2): `t"{dag_ctx.params.region}"` with `region: Literal["eu", "us"]` is refused at parse time, though its values are text.
-- **Found:** 2026-11-01, by Grok writing the params docs: PROJECT.md's own example
+- **Found:** 2026-11-01, by Grok writing the params docs: archive/PROJECT.md's own example
   (`region: Literal["eu", "us"]` in `t"{dag_ctx.params.region}"`) fails to import with
   ``a value of type `Literal['eu', 'us']` can't be rendered into text``.
 - **Cause:** `python/schedr/_build.py` `is_renderable` takes scalars, `Any`, unions of them and

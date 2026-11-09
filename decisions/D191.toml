@@ -7,7 +7,7 @@ summary = '''
 SQL URLs, MySQL option files, Mongo URIs and SSH configs carry verifying defaults.
 Curl's config names the CA file when one is supplied.
 '''
-history = "PROJECT.md#D191"
+history = "archive/PROJECT.md#D191"
 step = "M4.7b2"
 also = ["task-processes"]
 code = ["crates/schedr-agent/src/connection_env.rs"]

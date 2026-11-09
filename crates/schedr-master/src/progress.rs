@@ -1,5 +1,5 @@
 //! How a run's tasks move forward: readiness (`NoneFailed`), retries, cancelling and the run
-//! result (see PROJECT.md, Outcomes, failures and joins, and Task assignment).
+//! result (see archive/PROJECT.md, Outcomes, failures and joins, and Task assignment).
 //!
 //! Pure rules over task instance states; [`crate::execution`] stores what they decide.
 //!
@@ -719,7 +719,7 @@ impl<'a> RunProgress<'a> {
         self
     }
 
-    /// Notes that a cleanup failed: the run ends `failed` (see PROJECT.md, Run result).
+    /// Notes that a cleanup failed: the run ends `failed` (see archive/PROJECT.md, Run result).
     #[must_use]
     pub const fn with_failed_cleanup(mut self, failed: bool) -> Self {
         self.failed_cleanup = failed;

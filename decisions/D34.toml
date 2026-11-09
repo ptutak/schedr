@@ -7,7 +7,7 @@ summary = '''
 Live events identify the changed run, DAG or workers; the UI re-renders from the API.
 Postgres uses NOTIFY and the SQLite webserver polls about once a second.
 '''
-history = "PROJECT.md#D34"
+history = "archive/PROJECT.md#D34"
 step = "M3.3"
 also = ["state"]
 code = ["crates/schedr-ui/src/live.rs"]

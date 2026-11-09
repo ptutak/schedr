@@ -8,7 +8,7 @@ A test hook fails the Nth database write; `fail_each_write` repeats an operation
 for each write. A shared consistency check compares the database with itself and master memory.
 Every master operation that writes must have this test.
 '''
-history = "PROJECT.md#D98"
+history = "archive/PROJECT.md#D98"
 step = "M4.3e"
 also = ["state"]
 code = ["crates/schedr-db/src/database.rs", "crates/schedr-db/src/faults.rs"]

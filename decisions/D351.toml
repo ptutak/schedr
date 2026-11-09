@@ -7,7 +7,7 @@ summary = '''
 The graph draws `first_of` options in one box with a dashed edge to the node,
 highlighting the winner. Where a box cannot be drawn, options have separate dashed edges.
 '''
-history = "PROJECT.md#D351"
+history = "archive/PROJECT.md#D351"
 step = "M4.11c"
 also = ["ui-cli"]
 code = ["crates/schedr-ui/src/runs.rs"]

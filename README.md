@@ -46,7 +46,7 @@ change in place: a new 0.x version needs a fresh database, with no upgrade path.
 M4.9a (secrets, connections, cleanups and resources; script roots read and listed). Next:
 plain script tasks and `ScriptOperator` (the rest of M4.9), then the rest of the native API
 (M4: async tasks, sensors and triggers, notifications, ...), batched worker messages (M4B),
-then 1.0.0. The Airflow layer is M5. See `PLAN.md` and the roadmap in `PROJECT.md`.
+then 1.0.0. The Airflow layer is M5. See `PLAN.md` and the roadmap in `archive/PROJECT.md`.
 
 What works on `main` (*main only* marks what came after 0.1.0):
 
@@ -99,7 +99,7 @@ http://localhost:8765). Its sections:
 2. **Writing DAGs** (`docs/02-dags/`): the native API, with tested examples.
 3. **How schedr works** (`docs/03-guide/`): the running system, failures, deployment.
 4. **Reference**, generated from the code: configuration, CLI, REST API, metrics.
-5. **Design**: `PROJECT.md`, the decision log, one page per chapter.
+5. **Design**: `archive/PROJECT.md`, the decision log, one page per chapter.
 6. **Plan**: `PLAN.md`.
 7. **API**: Python (from docstrings) and Rust (rustdoc).
 
@@ -160,7 +160,7 @@ images/             # Dockerfiles: schedr (with Python), schedr-server (without)
 scripts/            # smoke tests; kind-*.sh cluster checks (standalone, mesh, distributed, kill)
 ```
 
-Design decisions: `PROJECT.md`. Implementation plan: `PLAN.md`. Open
+Design decisions: `archive/PROJECT.md`. Implementation plan: `PLAN.md`. Open
 bugs: `BUGS.md`.
 
 ## Development

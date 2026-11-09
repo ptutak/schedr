@@ -2,8 +2,8 @@
 //!
 //! Requests go through a [`Transport`]: HTTP in the real CLI ([`HttpTransport`]), something in
 //! process in tests. Every request carries `Schedr-Client-Version`. Actions return a command;
-//! [`Client::wait`] reads it back until the master has decided it (see PROJECT.md, Web UI and
-//! CLI: the CLI waits for the decision).
+//! [`Client::wait`] reads it back until the master has decided it (see archive/PROJECT.md, Web UI
+//! and CLI: the CLI waits for the decision).
 
 use std::fmt::Write as _;
 use std::time::Duration;

@@ -1,5 +1,5 @@
 //! What a spawned process used, read from its zombie before it is reaped (decision 18A, see
-//! PROJECT.md, How Python tasks are started: the fork server).
+//! archive/PROJECT.md, How Python tasks are started: the fork server).
 //!
 //! The workspace forbids `unsafe`, and no safe call returns a child's `rusage`; but between
 //! its exit and its reaping a process is a zombie whose `/proc/<pid>/stat` still holds its

@@ -1,4 +1,4 @@
-"""The example DAG of PROJECT.md (Native API): extract, load, notify; daily at 03:00."""
+"""The example DAG of archive/PROJECT.md (Native API): extract, load, notify; daily at 03:00."""
 
 from datetime import timedelta
 

@@ -10,7 +10,7 @@ workers are errors, while disconnected workers, reported warnings and import err
 warnings. Offline workers have no problems and remain grey and dashed, ignoring stale warnings and
 import errors.
 '''
-history = "PROJECT.md#D129"
+history = "archive/PROJECT.md#D129"
 step = "M4.4b"
 also = ["ui-cli", "workers"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/src/nodes.rs"]

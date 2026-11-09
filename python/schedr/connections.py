@@ -1,4 +1,4 @@
-"""Connections (PROJECT.md, Connections; decisions 53 and 174): what a task connects to.
+"""Connections (archive/PROJECT.md, Connections; decisions 53 and 174): what a task connects to.
 
 A connection is a generator function, as with :func:`contextlib.contextmanager`, whose
 parameters are its shape; ``@connection(...)`` gives their values, which may be secrets, so

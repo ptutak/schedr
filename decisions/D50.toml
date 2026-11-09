@@ -8,7 +8,7 @@ Planned (M4.15), not built: an internal `schedr task-exec` sets the data limit b
 limited command; a fork-server child sets its own limit before running user code. Until then the
 `setrlimit` flag in the protocol is always false.
 '''
-history = "PROJECT.md#D50"
+history = "archive/PROJECT.md#D50"
 step = "M4.15"
 also = ["task-processes"]
 checked = 2026-11-08

@@ -319,7 +319,7 @@ impl Database {
     /// Postgres the check holds the lease's row until the write commits, so a takeover waits
     /// for it; SQLite runs one write at a time anyway. A write sent before a takeover but
     /// reaching the database after it (held up by the network or a pooler's queue) is refused
-    /// too: what the master's own clock can't rule out (see PROJECT.md, production path).
+    /// too: what the master's own clock can't rule out (see archive/PROJECT.md, production path).
     #[must_use]
     pub fn fenced(&self, holder: &str, epoch: i64) -> Self {
         Self {

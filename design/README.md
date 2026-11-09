@@ -10,7 +10,7 @@ One file per topic, `design/<topic>.md`, each in four parts:
 3. **Where in code:** the files and functions that do it; check them before saying how it behaves.
 4. **Open:** questions not decided yet, with the current proposal.
 
-The last line names the PROJECT.md sections with the details and edge cases: read them before changing the
+The last line names the archive/PROJECT.md sections with the details and edge cases: read them before changing the
 topic. A page is short on purpose; the code is what behaves.
 
 The other layers (see `AI_SETUP.md`, Project documents):
@@ -20,14 +20,14 @@ The other layers (see `AI_SETUP.md`, Project documents):
 | `STATUS.md` | where things stand, what's next | rewritten each session |
 | `design/<topic>.md` | how a part works now | edited in place |
 | `decisions/D<n>.toml`, `DECISIONS.md` | what was decided, whether it holds, where its reasons are | one file per decision; `DECISIONS.md` generated |
-| `PROJECT.md` | how the project got here, and why, up to D366 | by topic; left as it is, with an anchor at each decision |
+| `archive/PROJECT.md` | how the project got here, and why, up to D366 | by topic; left as it is, with an anchor at each decision |
 | `JOURNAL.md` | each decision since, with its reasons and "Not chosen" | dated entries appended, each starting with its anchor |
 
 ## Topics
 
 `scripts/decisions.py check` takes a decision's `topic` only from this table.
 
-| Topic | Covers | PROJECT.md sections (up to D366) |
+| Topic | Covers | archive/PROJECT.md sections (up to D366) |
 |---|---|---|
 | `goal` | what schedr is for, the deployment target | Goal; Deployment target |
 | `components` | the roles (master, webserver, worker, standalone), how they fit | Architecture: Components and roles |

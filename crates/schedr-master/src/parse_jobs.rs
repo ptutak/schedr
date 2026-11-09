@@ -6,7 +6,7 @@
 //! Jobs live in the master's memory: after a restart, workers report their hashes again and a
 //! hash with no stored parse gets a new job. A job whose worker is lost, or that isn't
 //! finished within the job timeout, goes to another worker that reported the same hash (see
-//! PROJECT.md, DAG ID conflicts: no duplicate parsing).
+//! archive/PROJECT.md, DAG ID conflicts: no duplicate parsing).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};

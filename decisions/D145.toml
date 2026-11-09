@@ -9,7 +9,7 @@ and two requests. Stored forms decode to native dates, timedeltas and tuples; ob
 dictionaries because the script does not know the declared class. `dag_ctx.params(Cls)` decodes
 strictly into the supplied class. Inside a Python task, its existing context values are used.
 '''
-history = "PROJECT.md#D145"
+history = "archive/PROJECT.md#D145"
 step = "M4.5b"
 also = ["python-api"]
 code = ["crates/schedr-agent/src/ctx.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs"]

@@ -7,7 +7,7 @@ summary = '''
 A disabled fork server is not retried for threads after preload or a version mismatch.
 The log reports failures and the disabled metric stays visible.
 '''
-history = "PROJECT.md#D20"
+history = "archive/PROJECT.md#D20"
 step = "M2.5.4a"
 also = ["observability"]
 code = ["crates/schedr-agent/src/fork.rs"]

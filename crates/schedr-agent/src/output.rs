@@ -1,7 +1,7 @@
 //! The captured stdout and stderr of a process: the last part up to the output size limit.
 //!
 //! When a stream exceeds the limit, the output keeps **the last part** and is marked
-//! truncated; the full stream is always in the task's log file (see PROJECT.md, Task
+//! truncated; the full stream is always in the task's log file (see archive/PROJECT.md, Task
 //! assignment: `Finished`).
 
 use std::collections::VecDeque;

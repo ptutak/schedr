@@ -7,7 +7,7 @@ summary = '''
 A `cleanup_anywhere` cleanup waits when no worker can take it and is shown as `unschedulable`.
 The task's retry waits too.
 '''
-history = "PROJECT.md#D221"
+history = "archive/PROJECT.md#D221"
 step = "M4.8b2"
 also = ["assignment", "workers"]
 code = ["crates/schedr-master/src/dispatch/tests.rs"]

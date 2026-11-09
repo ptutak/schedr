@@ -3,7 +3,7 @@
 Outside ``with Dag(...)`` a ``@task`` function is the plain function: calling it runs it.
 ``task_context(...)`` gives ``dag_ctx`` values to such calls, with no processes.
 ``run_dag(...)`` runs ``schedr dags test`` (one real run, every task its own process) and
-returns its result, every task inspectable on its own (see PROJECT.md, Testing DAGs).
+returns its result, every task inspectable on its own (see archive/PROJECT.md, Testing DAGs).
 Both take run parameters (``params=``) and secret values (``secrets=``); handles, ``step=``
 and ``replace=`` come with milestone M4.
 """

@@ -7,7 +7,7 @@ summary = '''
 A resource cleanup without `timeout` uses `[worker] resource_cleanup_timeout`, default 30 minutes.
 The master marks the assignment and the agent fills the worker's timeout; a timed-out try can be retried.
 '''
-history = "PROJECT.md#D278"
+history = "archive/PROJECT.md#D278"
 step = "M4.8f"
 also = ["configuration"]
 checked = 2026-11-08

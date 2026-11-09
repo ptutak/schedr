@@ -6,7 +6,8 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
 ## At the start of a session
 
 - Read `STATUS.md`, then only what the step needs: its row in `PLAN.md`, `DECISIONS.md` and
-  `design/<topic>.md`, `BUGS.md` (whichever exist); `PROJECT.md` when a decision's reasons matter.
+  `design/<topic>.md`, `BUGS.md` (whichever exist); `JOURNAL.md` (or a migrated project's
+  `archive/PROJECT.md`, by the decision's anchor) when a decision's reasons matter.
   Don't re-ask what is decided there.
 - If they disagree with each other or with the code, say so briefly and propose the fix.
 
@@ -33,8 +34,8 @@ at each step and how to talk to me. How a project is set up is in `AI_SETUP.md`.
    the change. Fix what it confirms, re-run the checks, and list in the summary what it found
    and what was fixed or left (with why). A finding outside the step's scope goes to
    `BUGS.md`.
-6. **Record the decisions** in `PROJECT.md`, in the section they belong to, with what wasn't
-   chosen and why.
+6. **Record the decisions** (the routine under Decisions): each a `decisions/D<n>.toml` and a
+   dated `JOURNAL.md` entry with what wasn't chosen and why. `archive/` is never written to.
 7. **Present a short summary and wait:** what was built, the decisions made (so I can
    overrule them), anything surprising (new bugs, inconsistencies, coverage close to the
    floor), and the proposed commit.
@@ -235,7 +236,7 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 - **Library ages:** a new major or minor version (its `x.y.0`) must be at least 7 days old;
   a patch on a minor that already qualifies may move once it is 3 days old (ages in UTC
   calendar days; a yanked `x.y.0` still dates its minor). A yanked version in the lock moves
-  to a version that meets the rule, forward if one exists, else back. Record new libraries in
-  `PROJECT.md`.
+  to a version that meets the rule, forward if one exists, else back. Record a new library in
+  `design/development.md`, Libraries (need, choice, why, not chosen).
 - Rewrite `STATUS.md` at the end of each step or session (at most 60 lines), so the next
   session can start from it.

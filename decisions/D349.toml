@@ -7,6 +7,6 @@ summary = '''
 Poke errors retain the bookmark; returned generators stop until code or version changes.
 Queue limits and idle restarts govern running triggers, whose strikes and consecutive errors persist.
 '''
-history = "PROJECT.md#D349"
+history = "archive/PROJECT.md#D349"
 step = "M4.11b"
 checked = 2026-11-08

@@ -19,7 +19,7 @@ mod tests;
 )]
 #[serde(deny_unknown_fields)]
 pub struct DagLocation {
-    /// The root's name (see PROJECT.md, DAG roots).
+    /// The root's name (see archive/PROJECT.md, DAG roots).
     pub root: String,
     /// The file's path relative to the root, with `/` separators.
     pub path: String,
@@ -159,7 +159,7 @@ pub struct Dag {
     pub tags: Vec<String>,
     /// What starts its runs (besides people and other DAGs).
     pub trigger: Trigger,
-    /// `since` of the run on the DAG's first fire time (see PROJECT.md, Runs).
+    /// `since` of the run on the DAG's first fire time (see archive/PROJECT.md, Runs).
     pub initial_since: Option<Timestamp>,
     /// At most this many runs at a time; `None` for no limit.
     pub max_active_runs: Option<u32>,

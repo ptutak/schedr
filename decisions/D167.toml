@@ -7,7 +7,7 @@ summary = '''
 The agent masks secret values in attempt outputs and error summaries before they leave the worker.
 Downstream tasks receive `****`; masking writes a warning naming the secret and replacement count.
 '''
-history = "PROJECT.md#D167"
+history = "archive/PROJECT.md#D167"
 step = "M4.6b"
 also = ["outcomes", "serialization"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/mask.rs"]

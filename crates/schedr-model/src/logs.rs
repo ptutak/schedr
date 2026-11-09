@@ -1,5 +1,5 @@
 //! The worker's log endpoint as both sides see it (the worker serves it, the webserver
-//! reads it; see PROJECT.md, Task logs).
+//! reads it; see archive/PROJECT.md, Task logs).
 
 /// The header naming the worker that answered.
 pub const WORKER_ID_HEADER: &str = "schedr-worker-id";

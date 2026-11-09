@@ -7,7 +7,7 @@ summary = '''
 `approve` and `ask` declare an `ask` task with its question, answer schema, approvers and timeout.
 When ready it waits on the master for an answer, without running Python or occupying a worker or watcher slot.
 '''
-history = "PROJECT.md#D283"
+history = "archive/PROJECT.md#D283"
 step = "M6"
 also = ["assignment"]
 checked = 2026-11-08

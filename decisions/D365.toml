@@ -7,7 +7,7 @@ summary = '''
 Tasks start runs with `TriggerDagOperator`.
 The task routes of `schedr.api` remain limited to events.
 '''
-history = "PROJECT.md#D365"
+history = "archive/PROJECT.md#D365"
 step = "M4.12a"
 also = ["task-context"]
 checked = 2026-11-08

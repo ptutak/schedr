@@ -3,7 +3,7 @@
 References (outputs, ``dag_ctx``) are filled in at run time by the agent or the runner;
 plain Python values known in the DAG body are formatted at parse time. A shell command takes
 no placeholders: values are passed as arguments or in the environment, never as shell source
-(see PROJECT.md, Airflow compatibility, Scope: Templating, decision 99).
+(see archive/PROJECT.md, Airflow compatibility, Scope: Templating, decision 99).
 """
 
 from datetime import date, datetime, timedelta

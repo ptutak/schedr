@@ -8,7 +8,7 @@ Wait steps accept applicable task options, using max_wait instead of timeout, an
 excluding cleanup and its settings, preload and fresh_process. Cleanup options cause
 a parse error directing the author to finally.
 '''
-history = "PROJECT.md#D323"
+history = "archive/PROJECT.md#D323"
 step = "M4.11a1"
 also = ["cleanup"]
 code = ["python/schedr/sensors.py"]

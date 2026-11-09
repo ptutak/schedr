@@ -1,7 +1,7 @@
 //! Fire times of a DAG's time trigger, with schedr's daylight-saving rules.
 //!
-//! A cron expression is matched against **wall-clock times** in its time zone (croner parses
-//! and matches it); each match becomes real moments by these rules (see PROJECT.md, Native API:
+//! A cron expression is matched against **wall-clock times** in its time zone (croner parses and
+//! matches it); each match becomes real moments by these rules (see archive/PROJECT.md, Native API:
 //! daylight-saving changes):
 //!
 //! - **Gap** (spring forward, the time doesn't exist): the fire time moves to the first moment

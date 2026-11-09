@@ -1,5 +1,5 @@
 //! Applying commands: the master reads pending command rows, oldest first, and applies each
-//! through the scheduler and the dispatcher (see PROJECT.md, Web UI and CLI).
+//! through the scheduler and the dispatcher (see archive/PROJECT.md, Web UI and CLI).
 //!
 //! A command that can't be applied (an unknown DAG or run, a run already finished, `--for` in
 //! the future, a payload that doesn't read) is **rejected with a reason**; an applied one

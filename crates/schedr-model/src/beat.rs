@@ -1,5 +1,6 @@
-//! When a loop last turned, for liveness probes (see PROJECT.md, Observability): the master's
-//! scheduling loop and the worker agent's event loop beat, and the ops port reads how long ago.
+//! When a loop last turned, for liveness probes (see archive/PROJECT.md, Observability): the
+//! master's scheduling loop and the worker agent's event loop beat, and the ops port reads how long
+//! ago.
 //!
 //! The clock is monotonic (from when the process started), so a wall clock that steps never
 //! makes a loop look stuck or alive.

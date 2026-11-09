@@ -10,7 +10,7 @@ webserver rejects NUL before storing a command; run-DAG views retain only masked
 Bad bodies, `-p`, invalid dataclass defaults and Pydantic default serialization produce no value-
 bearing diagnostics; invalid dataclass defaults also omit their type.
 '''
-history = "PROJECT.md#D134"
+history = "archive/PROJECT.md#D134"
 step = "M4.5a"
 also = ["secrets"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-master/src/params.rs", "crates/schedr-ui/src/params_form.rs"]

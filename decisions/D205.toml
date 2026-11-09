@@ -7,7 +7,7 @@ summary = '''
 The demo has its own commit after M4.7c.
 It shows `schedr connections check` and `test`.
 '''
-history = "PROJECT.md#D205"
+history = "archive/PROJECT.md#D205"
 step = "n/a"
 code = ["examples/demo/compose.yaml"]
 checked = 2026-11-08

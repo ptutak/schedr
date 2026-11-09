@@ -1,4 +1,4 @@
-# The libraries in schedr's base image, for tasks to use (see PROJECT.md, Components and roles:
+# The libraries in schedr's base image, for tasks to use (see archive/PROJECT.md, Components and roles:
 # the base image's libraries). Pinned with their dependencies in requirements.txt by
 # `make image-requirements`; an image of your own built FROM this one can add or pin others.
 # API calls

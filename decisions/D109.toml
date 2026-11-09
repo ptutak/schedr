@@ -7,7 +7,7 @@ summary = '''
 A resume command is applied once; a failed search for its parse jobs is retried each round.
 Retries stop when the search succeeds or the worker is drained again.
 '''
-history = "PROJECT.md#D109"
+history = "archive/PROJECT.md#D109"
 step = "M4.3e"
 also = ["code-delivery"]
 checked = 2026-11-08

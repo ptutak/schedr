@@ -1,4 +1,4 @@
-//! Task logs, read from the worker that ran the attempt (see PROJECT.md, Task logs): the
+//! Task logs, read from the worker that ran the attempt (see archive/PROJECT.md, Task logs): the
 //! webserver proxies them, so clients never reach workers.
 //!
 //! A worker's address is what it advertised when it registered (`workers.log_endpoint`), so

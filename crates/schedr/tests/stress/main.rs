@@ -1,4 +1,4 @@
-//! The stress suite (PLAN.md 2.10b; see PROJECT.md, stress suite, and the guide's "Stress
+//! The stress suite (PLAN.md 2.10b; see archive/PROJECT.md, stress suite, and the guide's "Stress
 //! tests"): the real binary under load and trouble, each scenario ending with the same
 //! invariants and a report in `target/stress/`. Not part of `make check` or the CI run on each
 //! push: `make stress` locally, nightly in CI.
@@ -969,7 +969,7 @@ with Dag("{id}"):
 }
 
 /// Scenario 14: Quiet DAGs: a few busy DAGs, measured alone and then beside many daily DAGs
-/// that don't fire meanwhile (PROJECT.md, "Quiet DAGs"). The rounds' times beside the quiet
+/// that don't fire meanwhile (archive/PROJECT.md, "Quiet DAGs"). The rounds' times beside the quiet
 /// ones, over their times alone: 7.1 before M2.5.2, at most 2 since.
 #[test]
 fn stress_14_quiet_dags() {
@@ -1085,12 +1085,12 @@ fn unpause(stress: &Stress, dags: &[String]) {
 }
 
 /// How long the rounds settle before a window: the unpause commands just sent each woke one.
-/// Scenario 15: What announcing changes costs the master (M3.3; PROJECT.md, "How M3.3 follows
-/// changes"), on Postgres: scenario 1's load four times, each on a database of its own, the
-/// triggers that announce what changed off, on, on, off (so a drift over the scenario, other
-/// load on the machine, weighs on both alike); with them on a client follows the webserver's
-/// events (as a live page does, so the notifications are listened to). The rounds' mean and
-/// p99 and the tasks a second, with over without.
+/// Scenario 15: What announcing changes costs the master (M3.3; archive/PROJECT.md, "How M3.3
+/// follows changes"), on Postgres: scenario 1's load four times, each on a database of its own, the
+/// triggers that announce what changed off, on, on, off (so a drift over the scenario, other load
+/// on the machine, weighs on both alike); with them on a client follows the webserver's events (as
+/// a live page does, so the notifications are listened to). The rounds' mean and p99 and the tasks
+/// a second, with over without.
 #[test]
 fn stress_15_change_signals() {
     change_signals("15_change_signals", Backend::Postgres);

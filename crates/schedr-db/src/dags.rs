@@ -1,9 +1,9 @@
 //! The DAG catalog's storage: parse results with their files, DAGs and DAG versions.
 //!
-//! A parse result is stored as the worker reported it (after the master's validation); the
-//! master works out the DAG list from the current parse of each root and stores the changes
-//! ([`DagChange`]). Each DAG version belongs to one parse (see PROJECT.md, DAG code delivery
-//! and DAG ID conflicts).
+//! A parse result is stored as the worker reported it (after the master's validation); the master
+//! works out the DAG list from the current parse of each root and stores the changes
+//! ([`DagChange`]). Each DAG version belongs to one parse (see archive/PROJECT.md, DAG code
+//! delivery and DAG ID conflicts).
 
 use std::collections::BTreeMap;
 

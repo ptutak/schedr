@@ -1,4 +1,4 @@
-// The schedr master <-> worker agent protocol (see PROJECT.md, Master–worker protocol, Worker
+// The schedr master <-> worker agent protocol (see archive/PROJECT.md, Master–worker protocol, Worker
 // lifecycle, Task assignment, Task rejections).
 //
 // Workers always open the connection. The package carries the protocol's major version; the

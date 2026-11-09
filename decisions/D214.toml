@@ -8,6 +8,6 @@ M4.8a covers same-worker cleanup; M4.8b/b2/b3 cover recovery, moved cleanups and
 network cuts. M4.8c1/c2 cover Python-resource parsing and execution; M4.8d command
 resources; M4.8e UI and test doubles. Script resources and cleanups belong to M4.9c.
 '''
-history = "PROJECT.md#D214"
+history = "archive/PROJECT.md#D214"
 step = "n/a"
 checked = 2026-11-08

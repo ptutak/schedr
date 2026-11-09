@@ -7,6 +7,6 @@ summary = '''
 Mongo login uses the URI's `authSource`, then its path database, then `admin`.
 `database=` selects only the database the task gets, in Python and tools' files.
 '''
-history = "PROJECT.md#D206"
+history = "archive/PROJECT.md#D206"
 step = "M4.7d"
 checked = 2026-11-08

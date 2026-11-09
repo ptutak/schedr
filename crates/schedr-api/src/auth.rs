@@ -1,4 +1,4 @@
-//! Who the user is (M3.5; see PROJECT.md, Authentication: as little as possible in schedr).
+//! Who the user is (M3.5; see archive/PROJECT.md, Authentication: as little as possible in schedr).
 //! The name is recorded on commands, never used to allow or deny anything; there are no roles.
 //!
 //! - **A caller proven to be `schedr ui`** passes the person's name on in [`USER_HEADER`]

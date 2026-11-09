@@ -4,11 +4,11 @@ done_when = '''
 The native API's whole design is built, so a DAG written against it runs as designed, distributed and in standalone.
 '''
 notes = '''
-Done when (PROJECT.md, Roadmap): the native API's whole design is built, so a DAG written
+Done when (archive/PROJECT.md, Roadmap): the native API's whole design is built, so a DAG written
 against it runs as designed, distributed and in standalone. **Planned with the user
-(2026-10-28; decisions 49-53 in PROJECT.md):** async points settled (49A), `setrlimit` through
+(2026-10-28; decisions 49-53 in archive/PROJECT.md):** async points settled (49A), `setrlimit` through
 `schedr task-exec` (50A), this order (51A), connections' sync and async clients and `check()`
-(53); nearly all of the rest of the design is already in PROJECT.md's sections, which each step
+(53); nearly all of the rest of the design is already in archive/PROJECT.md's sections, which each step
 follows. **Reviews (52A, refined by the user 2026-10-28):** steps are split into small sub-steps
 (M4.1a, M4.1b, …), each committed after Claude's own review and mutation-checked tests; Grok
 reviews a batch of about five sub-steps at once, then writes the guide for them. Sub-steps
@@ -20,9 +20,9 @@ whole-repository review (below); later M4 reviews planned after it. This replace
 reviews of about five sub-steps.
 
 
-### M4.4: decisions (taken by the user 2026-10-30: all as recommended, 87A 88A 89 90A 91 92B, 95 not now, 96 yes; recorded in PROJECT.md, Native API: Concurrency limits)
+### M4.4: decisions (taken by the user 2026-10-30: all as recommended, 87A 88A 89 90A 91 92B, 95 not now, 96 yes; recorded in archive/PROJECT.md, Native API: Concurrency limits)
 
-What PROJECT.md already settles (Native API: Concurrency limits; Task assignment):
+What archive/PROJECT.md already settles (Native API: Concurrency limits; Task assignment):
 `max_active_tasks` on the `Dag` (default `None`), `max_active` and `max_active_per_run` on a
 task (also operators and `StepDefaults`), checked when a task is assigned, counting
 `running`, `cleaning_up` and assigned-not-started; a task held back stays `queued` with its
@@ -36,12 +36,12 @@ among the tasks the limits allow (no head-of-line blocking). Open:
 - **88. How the master counts:** A in memory (running, cleaning-up and assigned instances per
   DAG and per task, rebuilt from the database when the master starts; the lease guarantees
   one master, and its writes are fenced), checked as each task is assigned; B a count query
-  in each assignment's transaction (PROJECT.md's wording; simplest to trust, a query per
+  in each assignment's transaction (archive/PROJECT.md's wording; simplest to trust, a query per
   assignment, which B18 showed costs at thousands a round). Recommended: A, with a test that
   the counts match the database after a restart.
 - **89. A mapped task:** its instances count one by one toward `max_active_tasks`,
   `max_active` and `max_active_per_run` (the `-1` row never counts). Recommended as stated
-  (PROJECT.md's own example: 1,000 instances, 10 at a time).
+  (archive/PROJECT.md's own example: 1,000 instances, 10 at a time).
 - **90. `max_active_per_run` on an unmapped task** (always one instance a run, so it limits
   nothing): A a parse-time warning (a `TypingHint`-like hint shown by `dags check`); B
   accepted silently; C an error. Recommended: A.
@@ -58,7 +58,7 @@ among the tasks the limits allow (no head-of-line blocking). Open:
 id = "M4.1"
 title = "Results and outcomes"
 scope = '''
-every task reports an (output, outcome) pair, stored per attempt, in DAG JSON (each task's outcome names), `Finished` and the database; Python outcomes (declared `Outcome` enums, unions of dataclasses / models / `None`), command exit codes as outcomes (`Outcome` `IntEnum`, `DefaultOutcome`); `.on(X)` (edge and narrowed data), `.outcome`; the edge kinds (on-outcome, selection, requirement); the trigger rules `NoneFailed` (default) and `RunIf.ALL_SUCCEEDED`, decided as soon as certain; skips and `None` data from skipped upstreams; the run result rules (PROJECT.md, Outcomes, failures and joins); the UI showing outcomes
+every task reports an (output, outcome) pair, stored per attempt, in DAG JSON (each task's outcome names), `Finished` and the database; Python outcomes (declared `Outcome` enums, unions of dataclasses / models / `None`), command exit codes as outcomes (`Outcome` `IntEnum`, `DefaultOutcome`); `.on(X)` (edge and narrowed data), `.outcome`; the edge kinds (on-outcome, selection, requirement); the trigger rules `NoneFailed` (default) and `RunIf.ALL_SUCCEEDED`, decided as soon as certain; skips and `None` data from skipped upstreams; the run result rules (archive/PROJECT.md, Outcomes, failures and joins); the UI showing outcomes
 '''
 done_when = '''
 a DAG routing on a Python outcome union, an enum and a command's exit code runs as the tables say, on SQLite and Postgres

@@ -1,6 +1,6 @@
 """Timestamps in DAG JSON: always UTC, written with ``Z``.
 
-See PROJECT.md, Times and time zones.
+See archive/PROJECT.md, Times and time zones.
 """
 
 from datetime import UTC, date, datetime

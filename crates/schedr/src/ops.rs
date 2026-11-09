@@ -1,4 +1,4 @@
-//! The ops port of every role (see PROJECT.md, Observability): plain HTTP on `[ops] bind` :
+//! The ops port of every role (see archive/PROJECT.md, Observability): plain HTTP on `[ops] bind` :
 //! `port` with only `/healthz`, `/readyz` and `/metrics`, never data or actions, so probes and
 //! Prometheus need no certificate or credentials. It is started first, so `/readyz` answers
 //! while a role starts.

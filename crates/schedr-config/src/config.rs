@@ -642,7 +642,7 @@ impl Default for LogSection {
 #[serde(default, deny_unknown_fields)]
 pub struct DatabaseSection {
     /// The connection URL (`sqlite:...` or `postgres://...`). A URL with a password must come
-    /// from `SCHEDR_CONFIG__DATABASE__URL`, never the file (see PROJECT.md, Configuration:
+    /// from `SCHEDR_CONFIG__DATABASE__URL`, never the file (see archive/PROJECT.md, Configuration:
     /// secrets).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -893,7 +893,7 @@ pub struct UiDeployment {
     pub token_file: Option<PathBuf>,
 }
 
-/// `[webserver.auth]` and `[ui.auth]`: who the user is (see PROJECT.md, Authentication: as
+/// `[webserver.auth]` and `[ui.auth]`: who the user is (see archive/PROJECT.md, Authentication: as
 /// little as possible in schedr). The name is recorded on commands, never used to allow or
 /// deny anything; there are no roles.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
@@ -1212,7 +1212,7 @@ impl Default for TlsSection {
 }
 
 /// `[secret_storage]`: where a worker's tasks get their secrets (only workers fetch them; see
-/// PROJECT.md, Secret storage). Each storage is a table of its own, named by its key
+/// archive/PROJECT.md, Secret storage). Each storage is a table of its own, named by its key
 /// (`[secret_storage.vault]`); standalone always has the `db` storage besides them.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]

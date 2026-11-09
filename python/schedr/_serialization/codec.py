@@ -13,9 +13,9 @@ A dict of the user's own whose only key is a tag (or ``$dict``) is stored escape
 ``{"$dict": {...}}``, so it reads back as written (B66; decision 104).
 
 Dataclasses are stored as plain objects, without a class name; decoding follows the receiving
-annotation (see PROJECT.md, Output serialization). Pydantic models are stored as Pydantic writes
-them (``model_dump(mode="json")``) and read back as JSON with ``model_validate_json`` (decisions
-59, 111).
+annotation (see archive/PROJECT.md, Output serialization). Pydantic models are stored as Pydantic
+writes them (``model_dump(mode="json")``) and read back as JSON with ``model_validate_json``
+(decisions 59, 111).
 """
 
 import dataclasses

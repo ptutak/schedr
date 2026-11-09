@@ -1,7 +1,7 @@
 """Types for task outputs: ``ProcessResult``, the ``Json`` alias, and size constants.
 
 ``Json`` is the bound type checkers use for ``@task`` return types; the guarantee is the
-parse-time check (see PROJECT.md, Output serialization).
+parse-time check (see archive/PROJECT.md, Output serialization).
 """
 
 from collections.abc import Mapping, Sequence

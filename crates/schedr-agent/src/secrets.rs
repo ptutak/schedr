@@ -1,4 +1,4 @@
-//! Secret storages on the worker, and the secrets of one attempt (see PROJECT.md, Secret
+//! Secret storages on the worker, and the secrets of one attempt (see archive/PROJECT.md, Secret
 //! storage).
 //!
 //! The agent fetches every secret an attempt names or declares before its process starts

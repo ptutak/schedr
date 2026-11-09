@@ -1,5 +1,5 @@
 //! The JSON Schemas generated from the model, committed to the repository and checked by CI
-//! (see PROJECT.md, Rust/Python integration: shared model and schemas).
+//! (see archive/PROJECT.md, Rust/Python integration: shared model and schemas).
 
 use schemars::{Schema, schema_for};
 

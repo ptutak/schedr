@@ -7,7 +7,7 @@ summary = '''
 Each node supplies its own effective configuration for the API and Deployments page.
 The node masks secrets before its configuration leaves the process.
 '''
-history = "PROJECT.md#D122"
+history = "archive/PROJECT.md#D122"
 step = "M4.4b"
 also = ["ui-cli", "deployment"]
 code = ["crates/schedr-config/src/masked.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-agent/src/agent.rs"]

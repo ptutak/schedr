@@ -7,7 +7,7 @@ summary = '''
 A connection definition provides clients for with and async with where its type supports both.
 Mongo and HTTP support both; SSH is sync only and Generic gives a dict.
 '''
-history = "PROJECT.md#D318"
+history = "archive/PROJECT.md#D318"
 step = "M4.10"
 also = ["async-tasks"]
 checked = 2026-11-08

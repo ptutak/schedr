@@ -216,7 +216,7 @@ reportUnusedParameter = false
 testpaths = ["python/tests/unit", "python/tests/integration"]
 pythonpath = ["python"]
 # importlib: test files with the same name in different folders don't clash, and test folders
-# need no __init__.py (see PROJECT.md, Repository and tooling: Testing).
+# need no __init__.py (see archive/PROJECT.md, Repository and tooling: Testing).
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 markers = ["integration: tests that spawn processes or touch the filesystem"]
 # Tests and examples write outcome classes as type checkers read them (decision 57); a test

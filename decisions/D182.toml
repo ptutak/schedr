@@ -7,7 +7,7 @@ summary = '''
 A file that imports but has an invalid DAG still defines its connections for the root.
 A file that fails to import defines none; the master clears its reported connections.
 '''
-history = "PROJECT.md#D182"
+history = "archive/PROJECT.md#D182"
 step = "M4.7a"
 also = ["code-delivery"]
 checked = 2026-11-08

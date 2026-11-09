@@ -1,11 +1,11 @@
 //! What every scenario checks at its end, and what it reports.
 //!
-//! **Invariants** (always a failure, see PROJECT.md, stress suite): nothing still running, no
-//! task succeeding twice, no command undecided, no run in a state the scenario doesn't
-//! expect, no try of a task starting before the previous one ended, by the database and by
-//! the tasks' own marks (each task appends a `start` and an `end` line to a shared file).
-//! **Performance** only fails on a gross regression (a generous floor per scenario); the
-//! numbers are written to `target/stress/<scenario>.json`.
+//! **Invariants** (always a failure, see archive/PROJECT.md, stress suite): nothing still running,
+//! no task succeeding twice, no command undecided, no run in a state the scenario doesn't expect,
+//! no try of a task starting before the previous one ended, by the database and by the tasks' own
+//! marks (each task appends a `start` and an `end` line to a shared file). **Performance** only
+//! fails on a gross regression (a generous floor per scenario); the numbers are written to
+//! `target/stress/<scenario>.json`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

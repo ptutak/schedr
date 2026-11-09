@@ -6,7 +6,7 @@ and a status socket. The fork server forks a **shim**, and the shim forks the **
 the process runs the normal runner code (``parse`` / ``task``) on its own channel, as a
 spawned runner does; the shim reports its PID once its process group exists, then its exit
 status, and reaps it when the agent closes the status socket, so the PID isn't reused while
-the agent may still signal the group (see PROJECT.md, How Python tasks are started: the fork
+the agent may still signal the group (see archive/PROJECT.md, How Python tasks are started: the fork
 server). Linux only.
 """
 

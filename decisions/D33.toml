@@ -7,6 +7,6 @@ summary = '''
 The UI shows the last 64 KiB of the pretty-printed task output and marks it as cut.
 The complete output is available for download.
 '''
-history = "PROJECT.md#D33"
+history = "archive/PROJECT.md#D33"
 step = "M3.2b"
 checked = 2026-11-08

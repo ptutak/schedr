@@ -1,7 +1,7 @@
 # schedr: the plan's lasting notes (from PLAN.md, 2026-11-08)
 
-Draft. The design is in PROJECT.md; this file only says **what to build first and in which
-order**. Milestones: see PROJECT.md, Roadmap.
+Draft. The design is in archive/PROJECT.md; this file only says **what to build first and in which
+order**. Milestones: see archive/PROJECT.md, Roadmap.
 
 - **M0. Foundations:** the workspace, the shared model, configuration, the database schema,
   the CLI skeleton. Nothing runs yet; everything is tested.
@@ -25,7 +25,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 - Trigger rule `NoneFailed` only; every task has the single outcome `SUCCESS`.
 - Runner `parse` and `task` modes; the agent ↔ runner channel (Unix socket, length-prefixed
   JSON).
-- **M2.5 also gets quiet DAGs** (busy DAGs visited every round, quiet DAGs only when woken; PROJECT.md, Components and roles, "Found by the stress suite") with stress scenario 14 (many quiet DAGs).
+- **M2.5 also gets quiet DAGs** (busy DAGs visited every round, quiet DAGs only when woken; archive/PROJECT.md, Components and roles, "Found by the stress suite") with stress scenario 14 (many quiet DAGs).
 - **Ready for the fork server (M2.5):** the runner and its protocol don't depend on how the
   process was started: the runner gets everything over the socket (nothing from inherited
   state), the agent supervises by process group, and every attempt records its start method
@@ -36,7 +36,7 @@ order**. Milestones: see PROJECT.md, Roadmap.
 - Master: DAG validation and storage per (root, hash, version), the scheduling loop (fire
   times, `catchup`, `max_active_runs`, `planned_for` / `since`, missed fire times), manual runs
   (`--for`, `queued`), dependency resolution, retries, run results, commands.
-- gRPC between master and agent over localhost (the protocol as decided in PROJECT.md:
+- gRPC between master and agent over localhost (the protocol as decided in archive/PROJECT.md:
   Master–worker protocol; no TLS in standalone).
 - Webserver: the **REST API subset** the M1 CLI needs (the UI comes in M3). Commands are
   written as rows and picked up by polling (SQLite).
@@ -75,7 +75,7 @@ schema/            # generated, committed: dag.schema.json, runner.schema.json, 
 python/schedr/     # the Python package
 ```
 
-- `schedr-model` is the reference for every shape (PROJECT.md: Shared model and schemas).
+- `schedr-model` is the reference for every shape (archive/PROJECT.md: Shared model and schemas).
   `schema/*.json` are generated from it by a small `xtask`-style binary; CI fails if they
   differ from the committed files.
 - The user CLI lives in the binary crate (a thin REST client); the in-task CLI
@@ -83,11 +83,11 @@ python/schedr/     # the Python package
 
 ## Library choices
 
-Confirmed: see PROJECT.md, Repository and tooling: Libraries.
+Confirmed: see archive/PROJECT.md, Repository and tooling: Libraries.
 
 ## Testing approach
 
-- **Rules: PROJECT.md, Repository and tooling: Testing** (unit tests for every public function
+- **Rules: archive/PROJECT.md, Repository and tooling: Testing** (unit tests for every public function
   and class, private ones not tested directly, 85 % coverage, structure mirroring the code, no
   skipped tests without asking), and integration tests with each step from 1.15 on (those of
   1.4–1.14 were written after 1.14).

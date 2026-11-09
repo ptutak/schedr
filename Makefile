@@ -16,13 +16,13 @@ help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
 
 # Rust test coverage: unit-test files (`src/**/tests.rs`) and `main.rs` (only calls into the
-# library) aren't counted; see PROJECT.md, Repository and tooling: Testing.
+# library) aren't counted; see archive/PROJECT.md, Repository and tooling: Testing.
 COVERAGE_MIN := 85
 
 # Integration tests: the Python with `schedr` installed (for the real runner, found through uv
 # inside the recipe, where the uv settings above apply) and a throwaway Postgres container; see
-# PROJECT.md, Repository and tooling: Testing.
-# postgres:17.6-alpine, created 2025-10-15 (PROJECT.md, CI supply-chain pins).
+# archive/PROJECT.md, Repository and tooling: Testing.
+# postgres:17.6-alpine, created 2025-10-15 (archive/PROJECT.md, CI supply-chain pins).
 POSTGRES_IMAGE := docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
 # vault:2.1.2, created 2026-10-07: the Vault storage's tests (dev mode, on the host's network so
 # it reaches the tests' fake Kubernetes API on 127.0.0.1).
@@ -349,7 +349,7 @@ demo-clean: demo-down ## Stop the demo and drop its generated passwords and keys
 # transaction pooling in front of it (any database name passed through), on a network of their
 # own; one scenario at a time. `STRESS_PROFILE=full` for the large one, `STRESS=<name>` for some
 # scenarios (a nextest name filter, e.g. `STRESS=failover`); reports in target/stress/.
-# pgbouncer:v1.26.0-p0, created 2026-09-30 (PROJECT.md, CI supply-chain pins).
+# pgbouncer:v1.26.0-p0, created 2026-09-30 (archive/PROJECT.md, CI supply-chain pins).
 PGBOUNCER_IMAGE := docker.io/edoburu/pgbouncer:v1.26.0-p0@sha256:b17551c776ef7e5769ef80b956d20f85e2fd25dd8912d31d58f782aad495b711
 STRESS_PROFILE ?= quick
 STRESS ?=
@@ -386,7 +386,7 @@ smoke:           ## Build the release wheel and smoke-test it (install, dags tes
 
 # The musllinux wheel is built in the pinned musllinux image (scripts/build-wheel.sh) and
 # smoke-tested on the Alpine image the standalone example uses.
-# python:3.14.8-alpine3.24, created 2026-10-01 (PROJECT.md, CI supply-chain pins).
+# python:3.14.8-alpine3.24, created 2026-10-01 (archive/PROJECT.md, CI supply-chain pins).
 ALPINE_IMAGE := docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 
 smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Alpine
@@ -398,7 +398,7 @@ smoke-musl:      ## Build the musllinux wheel into dist/ and smoke-test it on Al
 IMAGE ?= schedr:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
 # The base image's libraries, pinned with their dependencies for Alpine (musl) and Python 3.14,
-# none newer than two weeks (PROJECT.md, Repository and tooling: Libraries).
+# none newer than two weeks (archive/PROJECT.md, Repository and tooling: Libraries).
 IMAGE_PIN = uv pip compile --python-platform x86_64-unknown-linux-musl --python-version 3.14 \
 	--exclude-newer $$(date -u -d '14 days ago' +%Y-%m-%d) --no-annotate --quiet \
 	--custom-compile-command 'make image-requirements'

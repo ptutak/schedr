@@ -8,7 +8,7 @@ A run's parameters, including defaults, may occupy at most 64 KiB as JSON.
 An oversized set is refused at trigger time; a DAG with oversized defaults
 is refused at parse time.
 '''
-history = "PROJECT.md#D135"
+history = "archive/PROJECT.md#D135"
 step = "M4.5a"
 also = ["python-api"]
 code = ["crates/schedr-master/src/params.rs", "crates/schedr-model/src/params.rs", "python/schedr/_params.py"]

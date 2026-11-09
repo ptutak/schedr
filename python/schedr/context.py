@@ -5,7 +5,7 @@
 In the DAG body, ``dag_ctx.run.planned_for`` is a **reference**, filled in at run time; it
 can be passed to tasks and commands, but not used as a value in the DAG file. Inside a
 running task (while the runner calls its function) the same expression gives the **value**
-(see PROJECT.md, Run parameters and the DAG context). Anywhere else it fails ("must be run
+(see archive/PROJECT.md, Run parameters and the DAG context). Anywhere else it fails ("must be run
 inside a schedr task"); tests set values with ``schedr.testing.task_context(...)``.
 ``dag_ctx.params.<field>`` is the same for the run's parameters (``Dag(params=...)``), and
 ``dag_ctx.params(ReportParams)`` gives them typed by the class.
@@ -409,7 +409,7 @@ class DagContext:
 class Params:
     """``dag_ctx.params``: a reference in the DAG body, the values in a running task.
 
-    Statically a field is untyped (``Any``), as an output's path is (PROJECT.md, Run
+    Statically a field is untyped (``Any``), as an output's path is (archive/PROJECT.md, Run
     parameters); ``dag_ctx.params(ReportParams)`` is typed by the class passed.
     """
 

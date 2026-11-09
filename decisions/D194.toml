@@ -9,7 +9,7 @@ no password, and a separate password, for Mongo's database tools. <PREFIX>_URI n
 user; mongosh authenticates through the prefixed USER, PASSWORD and AUTH_SOURCE
 variables.
 '''
-history = "PROJECT.md#D194"
+history = "archive/PROJECT.md#D194"
 step = "M4.7b2"
 code = ["crates/schedr-agent/src/connection_env.rs"]
 checked = 2026-11-08

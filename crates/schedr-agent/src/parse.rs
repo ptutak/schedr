@@ -4,7 +4,7 @@
 //! Each file of a parse job gets a runner process of its own, a few at once (`[dags]
 //! parse_concurrency`). If a file doesn't finish within the per-file timeout, or its runner dies
 //! while importing it, the agent stops the runner and records an import error for that file
-//! (see PROJECT.md, Rust/Python integration: parsing granularity).
+//! (see archive/PROJECT.md, Rust/Python integration: parsing granularity).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;

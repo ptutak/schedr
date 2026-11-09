@@ -6,7 +6,7 @@ summary = "`t\"{dag_ctx.params.region}\"` with `region: Literal[\"eu\", \"us\"]`
 found = 2026-11-01
 suspected = false
 details = '''
-- **Found:** 2026-11-01, by Grok writing the params docs: PROJECT.md's own example
+- **Found:** 2026-11-01, by Grok writing the params docs: archive/PROJECT.md's own example
   (`region: Literal["eu", "us"]` in `t"{dag_ctx.params.region}"`) fails to import with
   ``a value of type `Literal['eu', 'us']` can't be rendered into text``.
 - **Cause:** `python/schedr/_build.py` `is_renderable` takes scalars, `Any`, unions of them and

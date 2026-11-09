@@ -7,7 +7,7 @@ summary = '''
 Each poke call is limited to every and calls do not overlap.
 A call that runs out of that time is cancelled and fails with a clear message.
 '''
-history = "PROJECT.md#D322"
+history = "archive/PROJECT.md#D322"
 step = "M4.11a1"
 code = ["python/schedr/runner/waiting.py"]
 checked = 2026-11-08

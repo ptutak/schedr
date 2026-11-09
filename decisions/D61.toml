@@ -7,7 +7,7 @@ summary = '''
 DAG loading rejects task output limits that cannot fit in a worker message.
 An oversized finished result becomes an unretried `output_too_large` failure before journalling.
 '''
-history = "PROJECT.md#D61"
+history = "archive/PROJECT.md#D61"
 step = "M4.1e"
 also = ["serialization"]
 checked = 2026-11-08

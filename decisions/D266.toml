@@ -9,7 +9,7 @@ descendants use the resource. Blocking cleanup failure makes successors `upstrea
 `blocking=False`, successors proceed but cleanup failure still fails the run. Resources outside groups create
 no such barrier.
 '''
-history = "PROJECT.md#D266"
+history = "archive/PROJECT.md#D266"
 step = "M4.8c1"
 also = ["outcomes"]
 code = ["crates/schedr-model/src/dag.rs", "python/schedr/_build.py", "python/schedr/_model/dag.py"]

@@ -1,5 +1,5 @@
-//! The master's metrics (see PROJECT.md, Observability), registered in the process's registry
-//! and served on the ops port.
+//! The master's metrics (see archive/PROJECT.md, Observability), registered in the process's
+//! registry and served on the ops port.
 //!
 //! Counters and histograms are recorded where things happen; the gauges taken from the
 //! database (runs, tasks, workers by state) are refreshed by the master's loop every

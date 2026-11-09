@@ -5,7 +5,7 @@
 //! directory), `.git` and `__pycache__` directories and `*.pyc` files. Every other file counts
 //! for the content hash, not only `.py` files, since tasks read SQL, configuration and other
 //! files next to their DAG files; only `.py` files mentioning `schedr` are parsed (see
-//! PROJECT.md, DAG code delivery and Code versions and change detection; decision 305).
+//! archive/PROJECT.md, DAG code delivery and Code versions and change detection; decision 305).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

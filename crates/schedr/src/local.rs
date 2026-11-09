@@ -1,5 +1,5 @@
 //! The DAG author's local commands: `schedr dags check` and `schedr dags test`
-//! (see PROJECT.md, Testing DAGs).
+//! (see archive/PROJECT.md, Testing DAGs).
 //!
 //! - **`dags check <path>`** imports the DAG files with the real runner (parse mode, the
 //!   per-file timeout) and applies the master's checks, so whatever the master would refuse is

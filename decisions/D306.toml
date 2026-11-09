@@ -7,7 +7,7 @@ summary = '''
 Outside a parse, `ScriptOperator` only records its reference.
 `schedr dags check` checks references against the configured script roots in `SCHEDR_SCRIPT_PATH`.
 '''
-history = "PROJECT.md#D306"
+history = "archive/PROJECT.md#D306"
 step = "M4.9b"
 code = ["python/schedr/operators.py"]
 checked = 2026-11-08

@@ -8,7 +8,7 @@ Commit the version before tagging: Cargo uses `X.Y.Z-rcN`, the tag `vX.Y.ZrcN`, 
 the wheel and runner comparison `X.Y.ZrcN`, without a dot after `rc`. The workflow
 checks the committed version rather than rewriting it.
 '''
-history = "PROJECT.md#D163"
+history = "archive/PROJECT.md#D163"
 step = "R0.1"
 code = ["crates/schedr-model/src/runner.rs", "crates/schedr-model/src/runner/tests.rs", "scripts/release.py"]
 checked = 2026-11-08

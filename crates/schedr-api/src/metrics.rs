@@ -1,4 +1,4 @@
-//! The webserver's metrics (see PROJECT.md, Observability), registered in the process's
+//! The webserver's metrics (see archive/PROJECT.md, Observability), registered in the process's
 //! registry and served on the ops port: requests by route template (never a raw path, which
 //! holds IDs) and status, and why the log proxy couldn't serve a log.
 

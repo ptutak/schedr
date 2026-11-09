@@ -7,7 +7,7 @@ summary = '''
 A no answer ends an approval with `Rejected`.
 `.on(Rejected)` branches on it, while tasks downstream through plain `>>` are skipped.
 '''
-history = "PROJECT.md#D285"
+history = "archive/PROJECT.md#D285"
 step = "M6"
 also = ["outcomes"]
 checked = 2026-11-08

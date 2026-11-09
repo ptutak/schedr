@@ -1,4 +1,4 @@
-//! Versions between clients and the server (see PROJECT.md, Web UI and CLI: compatibility).
+//! Versions between clients and the server (see archive/PROJECT.md, Web UI and CLI: compatibility).
 //!
 //! Every response carries `Schedr-Server-Version`. A client sending `Schedr-Client-Version`
 //! with another **major** version is refused, with what to install; any minor version works

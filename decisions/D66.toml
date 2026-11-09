@@ -8,7 +8,7 @@ The API shows failed files of each root’s recorded current parse, including ro
 worker/time, exception, message and traceback. Their DAGs retain their last good version; non-
 transient errors hold them, while transient failures hold nothing and are retried.
 '''
-history = "PROJECT.md#D66"
+history = "archive/PROJECT.md#D66"
 step = "M4.2c"
 also = ["code-delivery"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-db/migrations/postgres/0001_initial.sql"]

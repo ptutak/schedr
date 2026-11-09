@@ -7,5 +7,5 @@ summary = '''
 D46 is the pending M6 question of LDAP admission: an optional group restriction, a required group,
 or any valid account. No answer is recorded.
 '''
-history = "PROJECT.md: Roadmap; plan/M6.toml: notes"
+history = "archive/PROJECT.md: Roadmap; plan/M6.toml: notes"
 checked = 2026-11-08

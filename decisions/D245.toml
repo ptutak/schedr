@@ -7,7 +7,7 @@ summary = '''
 A cleanup on another worker uses that worker’s current code.
 A cleanup function missing from that code fails the cleanup.
 '''
-history = "PROJECT.md#D245"
+history = "archive/PROJECT.md#D245"
 step = "M4.8b2"
 also = ["code-delivery"]
 checked = 2026-11-08

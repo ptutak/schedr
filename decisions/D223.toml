@@ -7,7 +7,7 @@ summary = '''
 A setup can be called only once in a DAG.
 Calling it twice is a parse error.
 '''
-history = "PROJECT.md#D223"
+history = "archive/PROJECT.md#D223"
 step = "M4.8c1"
 also = ["python-api"]
 code = ["python/schedr/_build.py"]

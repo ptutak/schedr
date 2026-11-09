@@ -1,4 +1,4 @@
-//! The worker agent's metrics (see PROJECT.md, Observability), registered in the process's
+//! The worker agent's metrics (see archive/PROJECT.md, Observability), registered in the process's
 //! registry and served on the ops port. Each is updated where things happen; none costs
 //! anything at a scrape.
 
