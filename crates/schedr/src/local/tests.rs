@@ -691,3 +691,37 @@ fn a_files_warnings_are_listed_after_it_and_dont_fail_the_check() {
     );
     assert!(report["files"][1].get("warnings").is_none(), "{report}");
 }
+
+/// B210: a `--connection` that can't be read is never quoted back: its values may be secrets.
+#[test]
+fn a_bad_connection_value_is_not_quoted_back() {
+    for bad in [
+        "conn=\"conn-s3cret\"",
+        "conn-s3cret",
+        "conn=[\"conn-s3cret\"]",
+    ] {
+        let error = given_connection(bad).unwrap_err();
+        assert!(
+            !error.contains("s3cret") && !error.contains("Y29ubi1zM2NyZXQ"),
+            "{error}"
+        );
+    }
+}
+
+/// B209's review: the check's log file is made new and its user's only; a link planted where
+/// it goes is refused, its target left as it was.
+#[test]
+fn a_private_file_is_new_and_never_follows_a_link() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let made = private_file(dir.path(), "a.log").unwrap();
+    assert_eq!(
+        std::fs::metadata(&made).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let victim = dir.path().join("victim");
+    std::fs::write(&victim, "kept").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.path().join("planted.log")).unwrap();
+    assert!(private_file(dir.path(), "planted.log").is_err());
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "kept");
+}

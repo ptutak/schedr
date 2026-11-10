@@ -1909,3 +1909,41 @@ async fn the_pause_after_a_notifications_failure_ends_by_itself() {
     assert_eq!(paused_until, Some(until));
     assert_eq!(problems.now().len(), 1);
 }
+
+/// B200's review: once the master closes its streams, nothing holds a worker stream's sender
+/// any more, so the stream ends even when it was too full to take the stopping status
+/// (its server used to keep a sender while it waited for the worker's messages).
+#[tokio::test]
+async fn closing_the_streams_lets_every_sender_of_a_stream_go() {
+    let (hub, _db, client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .clone()
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let weak = hub
+        .streams
+        .lock()
+        .await
+        .values()
+        .next()
+        .unwrap()
+        .downgrade();
+    // The worker's side stays open: its server would wait for its messages for ever.
+    hub.close_streams().await;
+    let released = tokio::time::timeout(Duration::from_secs(5), async {
+        while weak.upgrade().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(released.is_ok(), "a sender of the stream is still held");
+    drop(to_master);
+}

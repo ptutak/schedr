@@ -1,0 +1,13 @@
+title = "a configuration with Basic sign-in makes `dags test` fail on its own server"
+severity = "medium"
+probability = "possible"
+kind = "correctness"
+summary = '''the test's temporary webserver keeps `[webserver.auth]` while its own client always calls with no sign-in: `error: not signed in`, and `--user` doesn't reach that client'''
+found = 2026-11-10
+suspected = false
+details = '''
+- **Found:** 2026-11-10, by Codex's full review (F12b), each with a probe failing on the code.
+- **Where:** `crates/schedr/src/local.rs` (`HttpTransport::new(api, Auth::None)` against a server with `config.webserver.auth`).
+- **Shown:** Codex's probe with `mode = "basic"`, `--user anna`, `SCHEDR_PASSWORD`: exit 1, `not signed in`.
+- **A fix:** the local server runs with sign-in off (it listens on 127.0.0.1 for this run only).
+'''

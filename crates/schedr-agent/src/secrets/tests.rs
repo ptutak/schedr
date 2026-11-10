@@ -78,6 +78,18 @@ fn a_secret_spec_is_parsed() {
     for bad in ["etl/db#password", "etl/db=x", "etl//db#k=x", "etl#=x"] {
         assert!(MemoryStorage::parse(bad).is_err(), "{bad}");
     }
+    // B210: an argument without its `=` may be the value alone: never quoted back.
+    for bad in [
+        "hunter2-s3cret",
+        "etl/db#hunter2-s3cret",
+        "aHVudGVyMi1zM2NyZXQ==",
+    ] {
+        let error = MemoryStorage::parse(bad).unwrap_err();
+        assert!(
+            !error.contains("s3cret") && !error.contains("aHVudGVy"),
+            "{error}"
+        );
+    }
 }
 
 #[tokio::test]

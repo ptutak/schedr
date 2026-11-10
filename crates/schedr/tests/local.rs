@@ -1278,3 +1278,259 @@ fn task_exec_caps_the_programs_data_and_runs_it_in_its_place() {
     assert_eq!(missing.status.code(), Some(127));
     assert!(String::from_utf8_lossy(&missing.stderr).contains("can't start `/no/such/program`"));
 }
+
+/// B209, B211: a test's folder is its user's only, and Ctrl-C stops the run's tasks (not the
+/// CLI alone) and removes the folder.
+#[test]
+fn ctrl_c_stops_the_tests_tasks_and_removes_its_private_folder() {
+    let local = Local::new(&[]);
+    let marker = local.dir.path().join("pid");
+    std::fs::write(
+        local.root().join("slow.py"),
+        format!(
+            r#"
+import os, pathlib, time
+from schedr import Dag, task
+
+@task
+def wait() -> None:
+    pathlib.Path({marker:?}).write_text(str(os.getpid()))
+    time.sleep(120)
+
+with Dag("slow"):
+    wait()
+"#,
+            marker = marker.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let tmp = local.dir.path().join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut cli = Command::new(BINARY)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", local.dir.path())
+        .env("TMPDIR", &tmp)
+        .arg("--config")
+        .arg(local.dir.path().join("config.toml"))
+        .args(["dags", "test", "slow", "--path", path_str(&local.root())])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let pid = loop {
+        if let Ok(pid) = std::fs::read_to_string(&marker)
+            && !pid.is_empty()
+        {
+            break pid;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the task didn't start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let folders: Vec<_> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("schedr-test-")
+        })
+        .collect();
+    assert_eq!(folders.len(), 1, "{folders:?}");
+    let mode = std::os::unix::fs::PermissionsExt::mode(
+        &std::fs::metadata(&folders[0]).unwrap().permissions(),
+    );
+    assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+    let sent = Command::new("kill")
+        .args(["-s", "INT", &cli.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = cli.try_wait().unwrap() {
+            break status;
+        }
+        assert!(std::time::Instant::now() < deadline, "the CLI didn't stop");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert_eq!(status.code(), Some(1), "{status}");
+    let gone = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while Path::new(&format!("/proc/{pid}")).exists() {
+        assert!(
+            std::time::Instant::now() < gone,
+            "the task {pid} still runs"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        !folders[0].exists(),
+        "the folder is left: {}",
+        folders[0].display()
+    );
+}
+
+/// B208: a test masks as the configured `min_mask_length` says, as a deployment would.
+#[test]
+fn a_test_masks_a_short_secret_when_the_configuration_says_so() {
+    let local = Local::new(&[(
+        "short.py",
+        r#"
+from schedr import Dag, task, task_ctx
+
+@task(secrets=["sample#key"])
+def show() -> str:
+    value = task_ctx.secret("sample", "key")
+    print("the value was", value)
+    return value
+
+with Dag("short"):
+    show()
+"#,
+    )]);
+    let config = local.dir.path().join("config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("\n[secret_storage]\nmin_mask_length = 1\n");
+    std::fs::write(&config, text).unwrap();
+    let (code, out, err) = local.test("short", &["--json", "--secret", "sample#key=1234"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(!out.contains("1234"), "{out}");
+}
+
+/// B207: the report masks a task's log and output as the API would, a secret the agent
+/// didn't know of included (a password-named field, a `password=` in a log).
+#[test]
+fn the_report_masks_logs_and_outputs_as_the_api_does() {
+    let local = Local::new(&[(
+        "leaky.py",
+        r#"
+from schedr import Dag, task
+
+@task
+def leak() -> dict[str, str]:
+    print("password=log-s3cret-value")
+    return {"user": "etl", "password": "output-s3cret-value"}
+
+with Dag("leaky"):
+    leak()
+"#,
+    )]);
+    for json in [true, false] {
+        let args: &[&str] = if json { &["--json"] } else { &[] };
+        let (code, out, err) = local.test("leaky", args);
+        assert_eq!(code, 0, "{out}\n{err}");
+        assert!(!out.contains("log-s3cret-value"), "{out}");
+        assert!(!out.contains("output-s3cret-value"), "{out}");
+        assert!(out.contains("etl"), "{out}");
+    }
+}
+
+/// B211's and B209's review: Ctrl-C while the files are parsed (a slow import) stops the
+/// parser and removes the copies, which are their user's only meanwhile; for a test and a
+/// check alike.
+#[test]
+fn ctrl_c_while_parsing_stops_the_parser_and_removes_the_private_copies() {
+    for command in ["test", "check"] {
+        let local = Local::new(&[]);
+        let marker = local.dir.path().join("pid");
+        std::fs::write(
+            local.root().join("slow_import.py"),
+            format!(
+                "# A schedr DAG file (only those mentioning it are parsed), slow to import.\n\
+                 import os, pathlib, time\n\
+                 pathlib.Path({marker:?}).write_text(str(os.getpid()))\n\
+                 time.sleep(120)\n",
+                marker = marker.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let tmp = local.dir.path().join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let root = local.root();
+        let args: Vec<&str> = if command == "test" {
+            vec!["dags", "test", "any", "--path", path_str(&root)]
+        } else {
+            vec!["dags", "check", path_str(&root)]
+        };
+        let mut cli = Command::new(BINARY)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("HOME", local.dir.path())
+            .env("TMPDIR", &tmp)
+            .arg("--config")
+            .arg(local.dir.path().join("config.toml"))
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(local.dir.path().join("stderr")).unwrap())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(&marker)
+                && !pid.is_empty()
+            {
+                break pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{command}: the parse didn't start: {}",
+                std::fs::read_to_string(local.dir.path().join("stderr")).unwrap_or_default()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        let copies: Vec<_> = std::fs::read_dir(&tmp)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect();
+        assert!(
+            !copies.is_empty(),
+            "{command}: no copy in {}",
+            tmp.display()
+        );
+        for copy in &copies {
+            let mode = std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(copy).unwrap().permissions(),
+            );
+            assert_eq!(
+                mode & 0o777,
+                0o700,
+                "{command}: {} {mode:o}",
+                copy.display()
+            );
+        }
+        let sent = Command::new("kill")
+            .args(["-s", "INT", &cli.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(sent.success());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = cli.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{command}: the CLI didn't stop"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        assert_eq!(status.code(), Some(1), "{command}: {status}");
+        let gone = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while Path::new(&format!("/proc/{pid}")).exists() {
+            assert!(
+                std::time::Instant::now() < gone,
+                "{command}: the parser {pid} still runs"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        for copy in &copies {
+            assert!(!copy.exists(), "{command}: left {}", copy.display());
+        }
+    }
+}

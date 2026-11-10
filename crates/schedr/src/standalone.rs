@@ -44,8 +44,29 @@ use schedr_config::masked::masked;
 #[cfg(test)]
 mod tests;
 
+impl std::fmt::Debug for Standalone {
+    /// Its addresses and folders, the database URLs' passwords hidden (B206's review); the
+    /// configuration masked as its own `Debug` masks it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let url = |url: &str| schedr_db::redact_password(url);
+        f.debug_struct("Standalone")
+            .field("data_dir", &self.data_dir)
+            .field("database_url", &url(&self.database_url))
+            .field(
+                "notifications_url",
+                &self.notifications_url.as_deref().map(url),
+            )
+            .field("grpc", &self.grpc)
+            .field("http", &self.http)
+            .field("ops", &self.ops)
+            .field("migrate", &self.migrate)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Everything `schedr standalone` runs, read from the configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Standalone {
     /// The secret storages, made once the database is connected (`db` among them).
     pub secret_storage: crate::secret_storage::SecretPlan,

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use figment::error::{Actual, Kind};
 use figment::providers::{Format, Toml};
 use figment::value::{Dict, Map};
 use figment::{Figment, Metadata, Profile, Provider};
@@ -123,10 +124,60 @@ pub enum ConfigError {
 }
 
 impl From<figment::Error> for ConfigError {
+    /// Each error with the value it found left out, its type kept: the value may be a secret
+    /// (B201: a numeric password given to a string field).
     fn from(error: figment::Error) -> Self {
-        let messages: Vec<String> = error.into_iter().map(|e| e.to_string()).collect();
+        let messages: Vec<String> = error
+            .into_iter()
+            .map(|mut e| {
+                e.kind = match e.kind {
+                    Kind::InvalidType(found, expected) => {
+                        Kind::InvalidType(unquoted(&found), expected)
+                    }
+                    Kind::InvalidValue(found, expected) => {
+                        Kind::InvalidValue(unquoted(&found), expected)
+                    }
+                    Kind::Message(message) => Kind::Message(without_excerpt(&message)),
+                    kind => kind,
+                };
+                e.to_string()
+            })
+            .collect();
         Self::Invalid(messages.join("\n"))
     }
+}
+
+/// A parser's message without its excerpt of the file (`2 | password = "...`, and the `|`
+/// lines around it): the line quoted may hold a secret, mistyped (B201's review). Where it is
+/// (line and column) and what is wrong stay.
+fn without_excerpt(message: &str) -> String {
+    let excerpt = |line: &str| {
+        let line = line.trim_start();
+        let after_number = line
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .trim_start();
+        after_number.starts_with('|')
+    };
+    message
+        .lines()
+        .filter(|line| !excerpt(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What a value was, without the value: `an unsigned int`, not ``unsigned int `731946285` ``.
+fn unquoted(found: &Actual) -> Actual {
+    let kind = match found {
+        Actual::Bool(_) => "a bool",
+        Actual::Unsigned(_) => "an unsigned int",
+        Actual::Signed(_) => "a signed int",
+        Actual::Float(_) => "a float",
+        Actual::Char(_) => "a char",
+        Actual::Str(_) => "a string",
+        Actual::Bytes(_) => "bytes",
+        other => return other.clone(),
+    };
+    Actual::Other(kind.to_owned())
 }
 
 /// The configuration file as a provider whose metadata names the file.

@@ -182,9 +182,11 @@ pub async fn run_local(
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     match command {
-        DagsCommand::Check { path, against } => {
-            check_path(path, against.as_deref(), client, config, env, out).await
-        }
+        // Interrupted, the check is dropped: its parser killed, its copies removed.
+        DagsCommand::Check { path, against } => tokio::select! {
+            checked = check_path(path, against.as_deref(), client, config, env, out) => checked,
+            () = interrupted() => Err(interrupted_error()),
+        },
         DagsCommand::Test {
             dag,
             planned_for,
@@ -203,12 +205,12 @@ pub async fn run_local(
                 .iter()
                 .map(|spec| schedr_agent::secrets::MemoryStorage::parse(spec))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AppError::BadArgument(format!("--secret {e}")))?;
+                .map_err(|e| AppError::BadArgument(format!("--secret: {e}")))?;
             let connections = connections
                 .iter()
                 .map(|spec| given_connection(spec))
                 .collect::<Result<BTreeMap<_, _>, _>>()
-                .map_err(|e| AppError::BadArgument(format!("--connection {e}")))?;
+                .map_err(|e| AppError::BadArgument(format!("--connection: {e}")))?;
             if task.is_some() {
                 return Err(not_yet("dags test --task", "M4"));
             }
@@ -457,7 +459,7 @@ pub async fn check_root(
                 config.dags.interpreter
             ))
         })?;
-    let log_file = std::env::temp_dir().join(format!("schedr-check-{}.log", std::process::id()));
+    let log_file = check_log_file()?;
     let check_forks = CheckForks::start(config, env).await?;
     let runner = ProcessParseRunner {
         process: ProcessSpec {
@@ -934,13 +936,102 @@ struct TestRun {
 ///
 /// What is wrong with it.
 pub(crate) fn given_connection(spec: &str) -> Result<(String, BTreeMap<String, Value>), String> {
+    // The value is never quoted back: it may hold a secret (B210).
     let Some((name, json)) = spec.split_once('=') else {
-        return Err(format!("`{spec}`: expected `name={{\"param\": value}}`"));
+        return Err("expected `name={\"param\": value}`".to_owned());
     };
-    schedr_model::TaskId::new(name).map_err(|e| format!("`{name}`: {e}"))?;
-    let values = serde_json::from_str(json)
-        .map_err(|e| format!("`{name}`: its values must be a JSON object: {e}"))?;
+    // Nor its name: a value alone may hold `=` (base64's padding).
+    schedr_model::TaskId::new(name)
+        .map_err(|_| "a connection's name is letters, digits and `_`".to_owned())?;
+    let values = serde_json::from_str(json).map_err(|e| {
+        format!(
+            "its values must be a JSON object (line {}, column {})",
+            e.line(),
+            e.column()
+        )
+    })?;
     Ok((name.to_owned(), values))
+}
+
+/// Once Ctrl-C or SIGTERM comes: the test then ends as a run's end does, its tasks stopped and
+/// its folder removed (B211, B209), not the CLI alone, its tasks going on.
+async fn interrupted() {
+    let _ = crate::roles::stop_on_signal().changed().await;
+}
+
+/// A check's parse log: a new private file in the temp folder, named afresh each time.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when it can't be made.
+fn check_log_file() -> Result<PathBuf, AppError> {
+    let name = format!("schedr-check-{}.log", uuid::Uuid::now_v7());
+    private_file(&std::env::temp_dir(), &name)
+}
+
+/// A new empty file `name` in `dir` (the temp folder), its user's only (0600), made before a runner
+/// writes it: an import may print a secret (B209's review). Made new: a file or a link
+/// already there (planted in a shared temp folder) is refused, never followed or truncated.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when it can't be made.
+fn private_file(dir: &Path, name: &str) -> Result<PathBuf, AppError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = dir.join(name);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| AppError::BadArgument(format!("{}: {e}", path.display())))?;
+    Ok(path)
+}
+
+/// Why a test or a check ended on Ctrl-C or SIGTERM.
+fn interrupted_error() -> AppError {
+    AppError::Failed("interrupted: what it started was stopped".to_owned())
+}
+
+/// A test run's folder, in the temp folder, its user's only: its database holds the run's
+/// parameters in plain text (B209).
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when it can't be made.
+fn private_folder() -> Result<PathBuf, AppError> {
+    private_temp(&format!(
+        "schedr-test-{}-{}",
+        std::process::id(),
+        jiff::Timestamp::now().as_nanosecond()
+    ))
+}
+
+/// A new folder `name` in the temp folder, its user's only (0700): what a check or a test
+/// copies or writes there (DAG files, a database, logs) may hold secrets, and the temp
+/// folder is shared (B209 and its review).
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] when it can't be made.
+fn private_temp(name: &str) -> Result<PathBuf, AppError> {
+    use std::os::unix::fs::DirBuilderExt;
+    let path = std::env::temp_dir().join(name);
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&path)
+        .map_err(|e| AppError::BadArgument(format!("can't make `{}`: {e}", path.display())))?;
+    Ok(path)
+}
+
+/// A test run's secrets: only its `--secret` values and `--connection` values, masked as
+/// the configured deployment masks (B208).
+fn test_stores(test: &TestRun, config: &Config) -> schedr_agent::secrets::SecretStores {
+    let values = schedr_agent::secrets::MemoryStorage::new(test.secrets.clone());
+    let mut stores = schedr_agent::secrets::SecretStores::for_test(values)
+        .with_test_connections(test.connections.clone());
+    stores.min_mask_length = config.secret_storage.min_mask_length;
+    stores
 }
 
 async fn test_dag(
@@ -987,12 +1078,13 @@ async fn test_dag(
             }]
         }
     };
-    ensure_defined(dag, &roots, config, env).await?;
-    let data = std::env::temp_dir().join(format!(
-        "schedr-test-{}-{}",
-        std::process::id(),
-        jiff::Timestamp::now().as_nanosecond()
-    ));
+    // Interrupted while the files are parsed: dropped, the parser is killed and its copy
+    // removed (B211's review).
+    tokio::select! {
+        defined = ensure_defined(dag, &roots, config, env) => defined?,
+        () = interrupted() => return Err(interrupted_error()),
+    }
+    let data = private_folder()?;
     if let Err(error) = scannable(&roots, &data.join("preflight")) {
         let _ = std::fs::remove_dir_all(&data);
         return Err(error);
@@ -1013,11 +1105,8 @@ async fn test_dag(
     setup.migrate = true;
     // A test run's secrets are only its `--secret` values (none: every read is "not found"),
     // never the configured storages standalone would otherwise put in their place.
-    let values = schedr_agent::secrets::MemoryStorage::new(test.secrets.clone());
-    setup.secret_storage = setup.secret_storage.clone().given(
-        schedr_agent::secrets::SecretStores::for_test(values)
-            .with_test_connections(test.connections.clone()),
-    );
+    let stores = test_stores(test, config);
+    setup.secret_storage = setup.secret_storage.clone().given(stores);
     let logs = setup.agent.setup.log_dir.clone();
     let (stop, stopped) = tokio::sync::watch::channel(0);
     let (bound, addresses) = tokio::sync::oneshot::channel();
@@ -1028,21 +1117,26 @@ async fn test_dag(
         },
         stopped,
     ));
-    let result = match addresses.await {
-        Ok(listening) => {
-            drive(
-                dag,
-                test,
-                &format!("http://{}", listening.http),
-                (&data, &logs),
-                json,
-                out,
-            )
-            .await
-        }
-        Err(_) => Err(AppError::BadArgument(
-            "the local schedr didn't start".to_owned(),
-        )),
+    let result = tokio::select! {
+        result = async {
+            match addresses.await {
+                Ok(listening) => {
+                    drive(
+                        dag,
+                        test,
+                        &format!("http://{}", listening.http),
+                        (&data, &logs),
+                        json,
+                        out,
+                    )
+                    .await
+                }
+                Err(_) => Err(AppError::BadArgument(
+                    "the local schedr didn't start".to_owned(),
+                )),
+            }
+        } => result,
+        () = interrupted() => Err(interrupted_error()),
     };
     // Two requests: whatever still runs (a run that timed out) is interrupted at once.
     let _ = stop.send(2);
@@ -1077,7 +1171,7 @@ impl CheckForks {
         if crate::roles::fork_config(config).is_none() {
             return Ok(None);
         }
-        let logs = std::env::temp_dir().join(format!("schedr-check-{}", uuid::Uuid::now_v7()));
+        let logs = private_temp(&format!("schedr-check-{}", uuid::Uuid::now_v7()))?;
         let settings = crate::roles::agent_settings(
             config,
             env,
@@ -1118,7 +1212,7 @@ impl CheckCopy {
         let bad = |e: schedr_agent::scan::ScanError| {
             AppError::BadArgument(format!("can't scan DAG root `{name}`: {e}"))
         };
-        let store = std::env::temp_dir().join(format!("schedr-check-{}", uuid::Uuid::now_v7()));
+        let store = private_temp(&format!("schedr-check-{}", uuid::Uuid::now_v7()))?;
         let before = scan(root).map_err(bad)?;
         let captured = schedr_agent::scan::capture(&before, &store).map_err(bad)?;
         let copy = Self {
@@ -1354,21 +1448,27 @@ async fn report(
             let file = logs.join(format!("{}.log", attempt.attempt_id));
             log.push_str(&std::fs::read_to_string(file).unwrap_or_default());
         }
-        let output = if task.instances.is_some() {
-            client
-                .instance_output(run_id, &task.task_id, None)
-                .await
-                .ok()
-                .map(|o| o.value)
-        } else {
-            match schedr_model::TaskId::new(task.task_id.clone()) {
-                Ok(id) => db
-                    .instance_output(run_id, &id, task.map_index)
-                    .await?
-                    .map(|(_, value)| value),
-                Err(_) => None,
-            }
-        };
+        // Read from its files, not the API: masked as the API masks a log (B207).
+        let log = schedr_config::masked::mask_text(&log);
+        let output =
+            if task.instances.is_some() {
+                client
+                    .instance_output(run_id, &task.task_id, None)
+                    .await
+                    .ok()
+                    .map(|o| o.value)
+            } else {
+                match schedr_model::TaskId::new(task.task_id.clone()) {
+                    // From the database, not the API: masked as the API masks an output (B207).
+                    Ok(id) => db.instance_output(run_id, &id, task.map_index).await?.map(
+                        |(_, mut value)| {
+                            schedr_config::masked::mask_data(&mut value);
+                            value
+                        },
+                    ),
+                    Err(_) => None,
+                }
+            };
         tasks.push(json!({
             "task_id": task.task_id,
             "map_index": task.map_index,

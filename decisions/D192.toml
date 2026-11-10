@@ -13,4 +13,4 @@ step = "M4.7b2"
 unverified = ["the documentation shows how to map the variables to tools"]
 also = ["task-context"]
 code = ["crates/schedr-agent/src/secrets.rs", "crates/schedr-agent/src/connection_env.rs::view", "crates/schedr-agent/src/connection_env.rs::own"]
-checked = 2026-11-09
+checked = 2026-11-10

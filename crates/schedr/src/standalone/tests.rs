@@ -226,3 +226,18 @@ async fn a_worker_stuck_after_the_masters_failure_is_given_up_after_the_bound() 
     let slow = tokio::time::sleep(Duration::from_secs(3600));
     assert!(ended_within(slow, watching, Duration::from_secs(10)).await);
 }
+
+/// B206's review: `Debug` of a standalone hides its database URLs' passwords.
+#[test]
+fn debug_hides_the_database_urls_passwords() {
+    let mut configured = config();
+    configured.database.url = Some("postgres://u:db_s3cret@db/schedr".to_owned());
+    configured.database.notifications_url = Some("postgres://u:listen_s3cret@db/schedr".to_owned());
+    let setup = plan(&configured, &env(&[("HOME", "/h")])).unwrap();
+    let shown = format!("{setup:?}");
+    assert!(
+        !shown.contains("db_s3cret") && !shown.contains("listen_s3cret"),
+        "{shown}"
+    );
+    assert!(shown.contains("postgres://u:***@db/schedr"), "{shown}");
+}

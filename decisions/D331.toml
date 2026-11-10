@@ -11,4 +11,4 @@ A named file that a worker does not receive is an error.
 history = "archive/PROJECT.md#D331"
 step = "M4.11L"
 code = ["crates/schedr/src/local.rs::check_path"]
-checked = 2026-11-09
+checked = 2026-11-10

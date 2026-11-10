@@ -381,3 +381,15 @@ fn an_unexpected_notification_names_its_probable_cause() {
     let other = DbError::Sqlx(sqlx::Error::PoolTimedOut);
     assert!(!other.to_string().contains("pooler"), "{other}");
 }
+
+/// B206's review: `Debug` of a database hides its notifications URL's password.
+#[tokio::test]
+async fn debug_hides_the_notifications_urls_password() {
+    let db = Database::connect("sqlite::memory:")
+        .await
+        .unwrap()
+        .with_notifications(true, Some("postgres://u:debug_s3cret@db/s".to_owned()));
+    let shown = format!("{db:?}");
+    assert!(!shown.contains("debug_s3cret"), "{shown}");
+    assert!(shown.contains("postgres://u:***@db/s"), "{shown}");
+}

@@ -74,12 +74,25 @@ pub struct Database {
 }
 
 /// `[database] notifications` and `notifications_url`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Notifications {
     /// On: a new command is announced, and the master listens.
     pub(crate) on: bool,
     /// The connection the master listens through, if not this database's own.
     pub(crate) url: Option<String>,
+}
+
+impl std::fmt::Debug for Notifications {
+    /// The URL's password hidden (B206's review).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Notifications")
+            .field("on", &self.on)
+            .field(
+                "url",
+                &self.url.as_deref().map(crate::backend::redact_password),
+            )
+            .finish()
+    }
 }
 
 impl Default for Notifications {
@@ -287,6 +300,13 @@ impl Database {
             Backend::Postgres => {
                 // No session state (see `crate::lease`): no `SET` on the connection, and no
                 // named prepared statements, which a pooler in transaction mode may not keep.
+                for name in crate::backend::unknown_postgres_parameters(url) {
+                    tracing::warn!(
+                        parameter = %name,
+                        "the database URL's parameter `{name}` is ignored: the Postgres client \
+                         doesn't know it (a typo?)"
+                    );
+                }
                 let options = PgConnectOptions::from_str(url)?.statement_cache_capacity(0);
                 // No ping before each use (a round trip per query): a connection that died
                 // in the pool fails its query instead, and the caller's next try gets another.

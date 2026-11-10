@@ -1073,3 +1073,46 @@ fn retention_keeps_ages_or_forever_its_outputs_and_events_as_its_runs() {
     let zero = load(Some(file("[retention]\nruns = \"0s\"\n")), &env(&[]), &[]).unwrap_err();
     assert!(zero.to_string().contains("\"forever\" keeps it"), "{zero}");
 }
+
+/// B201: a numeric secret given in the environment is taken as its text, and a value that
+/// fails to load is never quoted in the error.
+#[test]
+fn a_numeric_secret_loads_and_no_error_quotes_a_value() {
+    let config = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__NOTIFICATIONS__SMTP__PASSWORD", "731946285")]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        config.notifications.smtp.password.as_deref(),
+        Some("731946285")
+    );
+    let error = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__NOTIFICATIONS__SMTP__USERNAME", "531946285")]),
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("found an unsigned int, expected a string"),
+        "{error}"
+    );
+    assert!(!error.contains("531946285"), "{error}");
+}
+
+/// B201's review: a file that doesn't parse is reported by line and column, without the
+/// line itself, which may hold a secret.
+#[test]
+fn a_file_that_doesnt_parse_isnt_quoted_in_its_error() {
+    let error = load(
+        Some(file("[notifications.smtp]\npassword = \"TOML_s3cret\n")),
+        &env(&[]),
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!error.contains("TOML_s3cret"), "{error}");
+    assert!(error.contains("line 2"), "{error}");
+}

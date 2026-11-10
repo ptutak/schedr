@@ -219,7 +219,16 @@ fn reads_the_database_url() {
 #[case("postgres://db/path:with@colon", false)]
 #[case("sqlite::memory:", false)]
 #[case("sqlite:///x.db", false)]
-fn url_has_password_looks_at_the_user_info_only(#[case] url: &str, #[case] expected: bool) {
+// B203: a password given as a query parameter.
+#[case("postgres://postgres@db/schedr?password=schedr", true)]
+#[case("postgres://db/x?sslmode=require&SSLPassword=k", true)]
+#[case("postgres://db/x?%70assword=k", true)]
+#[case("postgres://db/x?pass\tword=k", true)]
+#[case("postgres://db/x?application_name=etl#password=", false)]
+fn url_has_password_looks_at_the_user_info_and_the_query(
+    #[case] url: &str,
+    #[case] expected: bool,
+) {
     assert_eq!(url_has_password(url), expected);
 }
 
@@ -445,4 +454,19 @@ fn the_schema_documents_every_key_with_its_default() {
         schema["$defs"]["PathList"]["anyOf"][1]["type"],
         serde_json::json!("string")
     );
+}
+
+/// B206: `Debug` of the configuration shows no database password or webhook URL.
+#[test]
+fn debug_hides_database_passwords_and_webhook_urls() {
+    let mut config = parse(
+        "[notifications.channels.slack]\ntype = \"webhook\"\n\
+         url = \"https://hooks.slack.com/services/hook_s3cret\"\n",
+    )
+    .unwrap();
+    config.database.url = Some("postgres://user:db_s3cret@db/schedr".to_owned());
+    let shown = format!("{config:?}");
+    assert!(!shown.contains("db_s3cret"), "{shown}");
+    assert!(!shown.contains("hook_s3cret"), "{shown}");
+    assert!(shown.contains("postgres://user:****@db/schedr"), "{shown}");
 }

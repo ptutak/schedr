@@ -51,6 +51,29 @@ use super::*;
 #[case::an_email("mail ops@example.com", "mail ops@example.com")]
 // Codex's review of the Deployments batch: characters a password may hold (reqwest and SQLx
 // accept them) ended the part, and a value's escaped quote ended the value.
+// B202: a raw `"` in a password, sqlx taking the URL.
+#[case::a_quote_in_the_password(
+    r#"postgres://user:head"secret@db/schedr"#,
+    "postgres://user:****@db/schedr"
+)]
+#[case::a_tab_in_a_query_name(
+    "https://h/?pass\tword=hunter2&x=1",
+    "https://h/?pass\tword=****&x=1"
+)]
+#[case::tab_separated_names("key\tpassword=hunter2", "key\tpassword=****")]
+#[case::tab_separated_plain("name\tvalue=shown", "name\tvalue=shown")]
+#[case::an_at_then_a_quote(
+    r#"postgres://user:head@mid"secret@db/schedr"#,
+    "postgres://user:****@db/schedr"
+)]
+#[case::a_quoted_url(
+    r#"url = "postgres://u:hunter2@db/s""#,
+    r#"url = "postgres://u:****@db/s""#
+)]
+#[case::a_quoted_url_with_no_password(
+    r#"see "http://h:8080/x" and a@b"#,
+    r#"see "http://h:8080/x" and a@b"#
+)]
 #[case::an_apostrophe("http://u:abc'hunter2@127.0.0.1:0", "http://u:****@127.0.0.1:0")]
 #[case::parentheses("postgres://u:abc(hunter2)@db/s", "postgres://u:****@db/s")]
 #[case::quoted_with_parentheses("('postgres://u:abc(hunter2)@db/s')", "('postgres://u:****@db/s')")]
@@ -304,4 +327,21 @@ fn a_server_webhook_shows_only_its_origin_and_no_body() {
         "https://relay.example.com:8443/****"
     );
     assert!(!shown.to_string().contains("SECRET"), "{shown}");
+}
+
+/// B202's review: many quotes before an `@` are masked in linear time, not quadratic.
+#[test]
+fn many_quotes_are_masked_in_linear_time() {
+    let text = |n: usize| format!("u:{}@h", "\"".repeat(n));
+    let started = std::time::Instant::now();
+    let _ = mask_text(&text(4000));
+    let small = started.elapsed();
+    let started = std::time::Instant::now();
+    let _ = mask_text(&text(64_000));
+    let large = started.elapsed();
+    // Sixteen times the text: linear is about 16 times the time, quadratic 256.
+    assert!(
+        large < small * 64 + std::time::Duration::from_millis(50),
+        "{small:?} → {large:?}"
+    );
 }

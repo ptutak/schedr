@@ -39,6 +39,21 @@ fn from_url_rejects_other_schemes_without_leaking_passwords(
 #[case("postgres://db/schedr", "postgres://db/schedr")]
 #[case("postgres://u:pw@db", "postgres://u:***@db")]
 #[case("sqlite::memory:", "sqlite::memory:")]
+// B203: a password given as a query parameter.
+#[case(
+    "postgres://postgres@db/schedr?password=s3cret",
+    "postgres://postgres@db/schedr?password=***"
+)]
+#[case(
+    "postgres://u:pw@db/x?sslmode=require&PassWord=s3cret&sslpassword=k#frag",
+    "postgres://u:***@db/x?sslmode=require&PassWord=***&sslpassword=***#frag"
+)]
+#[case("postgres://db/x?%70assword=s3cret", "postgres://db/x?%70assword=***")]
+#[case("postgres://db/x?pass\tword=s3cret", "postgres://db/x?pass\tword=***")]
+#[case(
+    "postgres://db/x?application_name=etl",
+    "postgres://db/x?application_name=etl"
+)]
 fn redact_password_hides_only_the_password(#[case] url: &str, #[case] expected: &str) {
     assert_eq!(redact_password(url), expected);
 }
@@ -69,4 +84,19 @@ fn migrators_belong_to_their_backend() {
     assert!(sqlite_sql.contains("(SQLite)"));
     assert!(postgres_sql.contains("(Postgres)"));
     assert!(postgres_sql.contains("TIMESTAMPTZ"));
+}
+
+/// B203's review: the parameters sqlx would ignore, by name only, for schedr's own warning.
+#[test]
+fn unknown_postgres_parameters_are_named() {
+    assert_eq!(
+        unknown_postgres_parameters(
+            "postgres://u@db/x?sslmod=require&sslmode=require&sslpassword=k&options[search_path]=a&ssl%2Dca=c#f"
+        ),
+        ["sslmod", "sslpassword"]
+    );
+    assert_eq!(
+        unknown_postgres_parameters("postgres://u@db/x"),
+        Vec::<String>::new()
+    );
 }

@@ -1,0 +1,12 @@
+title = "the chart turns `-` into `_` in interpreter and root names, the loader keeps them"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "correctness"  # security, data, correctness, reliability, performance, usability, tests
+summary = '''`upper | replace "-" "_"` in the chart's env names, while the loader only lowercases: `config.DAGS__INTERPRETER: etl-venv` with the fork server on fails at start; `dagsRoot: etl-jobs` silently becomes `etl_jobs`'''
+found = 2026-11-10
+suspected = false
+details = '''
+- **Found:** 2026-11-10, by Codex's full review (F12a), each with a probe failing on the code.
+- **Where:** `charts/schedr/templates/_helpers.tpl` (`schedr.forkServerEnv`), `charts/schedr/templates/_dags.tpl`, `crates/schedr-config/src/sources.rs` `env_key`. Contradicts `docs/03-guide/10-deployment.md` (lines 86-88). Shown by loading the variables the templates produce; helm itself not run.
+- **A fix:** refuse names with `-` in those chart values (fail with a message), or pass such tables as one JSON value instead of keyed variables.
+'''

@@ -150,6 +150,42 @@ fn a_role_stops_on_sigterm() {
     }
 }
 
+#[test]
+fn a_master_with_a_worker_attached_stops_on_sigterm() {
+    // B200: the worker's stream used to keep the master's gRPC server, and so the master,
+    // waiting for ever once its lease was given back.
+    let mut cluster = Cluster::new(None, "100ms");
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    for role in ["master", "webserver", "worker"] {
+        cluster.start(role);
+    }
+    cluster.wait("the worker to register", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    let pid = cluster.roles[0].child.id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = cluster.roles[0].child.try_wait().unwrap() {
+            assert!(status.success(), "{status}\n{}", cluster.logs());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the master didn't stop on SIGTERM with a worker attached\n{}",
+            cluster.logs()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// A task that runs long on its first try (leaving a marker with its process ID) and returns
 /// at once after.
 fn slow_first_try(marker: &std::path::Path) -> String {

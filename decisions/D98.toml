@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D98"
 step = "M4.3e"
 also = ["state"]
 code = ["crates/schedr-db/src/database.rs", "crates/schedr-db/src/faults.rs", "crates/schedr-master/src/faults.rs::fail_each_write"]
-checked = 2026-11-09
+checked = 2026-11-10

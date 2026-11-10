@@ -726,6 +726,9 @@ pub async fn serve_master(
             result.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))
         }
         ended = &mut master_loop => {
+            // The workers' streams ended, or the server's graceful shutdown waits for them
+            // forever (B200).
+            hub.close_streams().await;
             ended.map_err(|lost| AppError::BadArgument(lost.to_string()))?;
             grpc.await.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))
         }
@@ -1401,11 +1404,15 @@ pub async fn lead(
     if status.is_usable() {
         let db = db.clone();
         return Ok(Some(Box::pin(async move {
-            let lead = take_lease(db.clone(), period, role, holder).await;
+            let mut lead = take_lease(db.clone(), period, role, holder).await;
             // `--migrate` on an up-to-date schema: the switch only, holding the lease; failing
             // as a migration does.
             if migrate
-                && let Err(error) = apply_change_notifications(&db, change_notifications).await
+                && let Err(error) = while_holding(
+                    &mut lead,
+                    apply_change_notifications(&db, change_notifications),
+                )
+                .await
             {
                 lead.release().await;
                 return Err(error);
@@ -1502,30 +1509,64 @@ pub async fn migrate_holding(
     db: &Database,
     change_notifications: bool,
 ) -> Result<Leadership, AppError> {
-    let migration = db.migrate_as_lease_holder();
-    tokio::pin!(migration);
+    let applied = async {
+        while_holding(&mut lead, async {
+            db.migrate_as_lease_holder().await.map_err(AppError::from)
+        })
+        .await?;
+        while_holding(
+            &mut lead,
+            apply_change_notifications(db, change_notifications),
+        )
+        .await
+    }
+    .await;
+    // Failing, the lease given back at once: a retry, or a master, needn't wait for it to
+    // expire.
+    if let Err(error) = applied {
+        lead.release().await;
+        return Err(error);
+    }
+    Ok(lead)
+}
+
+/// Runs `work` while renewing the lease, as a migration's holder must (B204: a switch of
+/// `change_notifications` waiting on a lock let the lease lapse): [`LeaseLost`] when another
+/// master took it over, or its time ran out with renewals failing (the database not
+/// answering this master: another may take it), meanwhile or by the time `work` ended.
+///
+/// # Errors
+///
+/// What `work` returns, or [`AppError::BadArgument`] with [`LeaseLost`].
+async fn while_holding<T>(
+    lead: &mut Leadership,
+    work: impl Future<Output = Result<T, AppError>>,
+) -> Result<T, AppError> {
+    tokio::pin!(work);
     loop {
         tokio::select! {
-            migrated = &mut migration => {
-                let applied = match migrated {
-                    Ok(()) => apply_change_notifications(db, change_notifications).await,
-                    Err(error) => Err(error.into()),
-                };
-                // Failing, the lease given back at once: a retry, or a master, needn't wait for
-                // it to expire.
-                if let Err(error) = applied {
-                    lead.release().await;
-                    return Err(error);
-                }
-                return Ok(lead);
+            done = &mut work => {
+                let value = done?;
+                return still_held(lead).await.map(|()| value);
             }
-            () = tokio::time::sleep(lead.period() / 3) => {
-                if lead.renew(std::time::Instant::now()).await == Renewal::TakenOver {
-                    return Err(AppError::BadArgument(LeaseLost.to_string()));
-                }
-            }
+            () = tokio::time::sleep(lead.period() / 3) => still_held(lead).await?,
         }
     }
+}
+
+/// Renews the lease: [`LeaseLost`] when it was taken over, or is no longer held in time (a
+/// failed renewal past the last one's period: B204's review).
+async fn still_held(lead: &mut Leadership) -> Result<(), AppError> {
+    let held = match lead.renew(std::time::Instant::now()).await {
+        Renewal::Held => true,
+        Renewal::TakenOver => false,
+        // Not renewed: held while the last renewal's time lasts, no longer.
+        Renewal::Failed => lead.leads(std::time::Instant::now()),
+    };
+    if !held {
+        return Err(AppError::BadArgument(LeaseLost.to_string()));
+    }
+    Ok(())
 }
 
 /// Turns the database's change triggers on or off as `[database] change_notifications` says

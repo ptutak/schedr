@@ -9,7 +9,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M4B.3, A turn's messages in groups (decisions D397). Done when: a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
 - **Then:** M4B.4, M4B.5, M4B.6, R1.0a.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 38; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
+- **Open bugs:** 42; first: B196 (low/rare), B213 (medium/possible), B212 (medium/possible), B205 (medium/possible), B192 (medium/possible) (`BUGS.md`).
 
 ## Recent
 
@@ -24,7 +24,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- M4 done 2026-11-10 (M4.15b: Q26 decided as D441, held). Next, as agreed with the user: Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
+- M4 done 2026-11-10. Codex's full review: F12 done 2026-11-10 (split in F12a roles/config, F12b CLI/local secrets: B200-B214; the security and high ones fixed, each reviewed twice by Codex); F13 (deployment) and F14 (seams) next. Then the bug round (B205, B212-B214, B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
+- The greenhouse showcase (examples/showcase, asked by the user 2026-11-10: IoT, a test and a guide page, built alongside F12): four DAGs, a simulator, `make showcase`, its test; ran end to end on a standalone. Left: its review by Codex, the guide page (Codex, Terra medium), its commit.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
 - For the user: M4.13b's review fixes changed documented behaviour (an email's recipients read when it is sent; `timeout` bounds the SMTP exchange); M4.12c's CI failed only on the undone guard.

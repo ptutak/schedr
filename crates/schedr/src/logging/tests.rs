@@ -58,3 +58,38 @@ fn init_rejects_an_invalid_level() {
     };
     assert!(init(&section, true).is_err());
 }
+
+/// B203's review: sqlx's warning of an unknown URL parameter quotes its value (a password):
+/// the filter keeps it out, whatever the level.
+#[test]
+fn sqlx_connect_option_warnings_are_never_logged() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    // A level naming the target itself, which a directive added to it wouldn't outweigh.
+    let level = "debug,sqlx_postgres::options::parse=trace";
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(level_filter(level).unwrap())
+        .with_writer(move || writer.clone())
+        .finish()
+        .with(quiet_sqlx_options());
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::warn!(target: "sqlx_postgres::options::parse", value = "pw-s3cret", "ignoring");
+        tracing::warn!(target: "schedr_bin", "shown");
+    });
+    let logged = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+    assert!(!logged.contains("pw-s3cret"), "{logged}");
+    assert!(logged.contains("shown"), "{logged}");
+}

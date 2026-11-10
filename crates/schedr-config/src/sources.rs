@@ -151,10 +151,18 @@ impl Provider for Entries {
     fn data(&self) -> Result<Map<Profile, Dict>, Error> {
         let mut dict = Dict::new();
         for entry in &self.entries {
-            let value: Value = entry
-                .value
-                .parse()
-                .expect("parsing a figment value never fails");
+            // A secret is its text as given: parsed, `PASSWORD=000123` would be the integer
+            // 123 (B201).
+            let last = entry.key.rsplit('.').next().unwrap_or_default();
+            let secret = last == "password" || last == "token";
+            let value: Value = if secret {
+                Value::from(entry.value.clone())
+            } else {
+                entry
+                    .value
+                    .parse()
+                    .expect("parsing a figment value never fails")
+            };
             if let Some(nested) = figment::util::nest(&entry.key, value).into_dict() {
                 dict = merge(dict, nested);
             }

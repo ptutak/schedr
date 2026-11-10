@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D179"
 step = "M4.7a"
 also = ["python-api", "task-context"]
 code = ["crates/schedr-api/src/views.rs", "crates/schedr-model/src/connection.rs::problems", "crates/schedr-agent/src/secrets.rs::with_connections"]
-checked = 2026-11-09
+checked = 2026-11-10

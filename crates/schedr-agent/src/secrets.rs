@@ -120,10 +120,12 @@ impl MemoryStorage {
     pub fn parse(spec: &str) -> Result<(SecretName, String), String> {
         let (name, value) = spec
             .split_once('=')
-            .ok_or_else(|| format!("`{spec}`: a secret is `path#key=value`"))?;
+            // Not quoted back: without its `=` it may be the value alone (B210).
+            .ok_or_else(|| "a secret is `path#key=value`".to_owned())?;
         let (path, key) = name
             .split_once('#')
-            .ok_or_else(|| format!("`{name}`: name the key, `path#key=value`"))?;
+            // Not quoted either: a value alone may hold `=` (base64's padding).
+            .ok_or_else(|| "name the key: `path#key=value`".to_owned())?;
         let name = SecretName::new(path, Some(key));
         name.check()?;
         Ok((name, value.to_owned()))

@@ -295,6 +295,7 @@ fn ends_token(c: char) -> bool {
 /// hidden (a password may hold `@`, `:`, `/`, `,`; a segment holding two user infos without
 /// a scheme is hidden from the first one's password to the second one's host).
 fn hide_passwords(chars: &[char], hidden: &mut [bool]) {
+    let ahead = at_ahead(chars);
     let mut start = 0;
     let mut colon: Option<usize> = None;
     let mut last_at: Option<usize> = None;
@@ -304,7 +305,10 @@ fn hide_passwords(chars: &[char], hidden: &mut [bool]) {
         let scheme_end =
             c == ':' && chars.get(i + 1) == Some(&'/') && chars.get(i + 2) == Some(&'/');
         let network_path = c == '/' && chars.get(i + 1) == Some(&'/') && i == start;
-        if ends_token(c) || scheme_end || network_path {
+        // A `"` in a password (after its `:`, an `@` still to come in the token, whether one
+        // came before it or not) is the password's, not the end of a quoted value (B202).
+        let in_password = c == '"' && colon.is_some() && ahead[i];
+        if (ends_token(c) && !in_password) || scheme_end || network_path {
             end_segment(colon, last_at, hidden);
             (colon, last_at) = (None, None);
             i += if scheme_end {
@@ -325,6 +329,22 @@ fn hide_passwords(chars: &[char], hidden: &mut [bool]) {
         i += 1;
     }
     end_segment(colon, last_at, hidden);
+}
+
+/// For each place, whether an `@` comes after it before the token ends at something other
+/// than `"`: one pass from the end, so masking stays linear however many quotes a text has.
+fn at_ahead(chars: &[char]) -> Vec<bool> {
+    let mut ahead = vec![false; chars.len()];
+    let mut seen = false;
+    for (i, c) in chars.iter().enumerate().rev() {
+        ahead[i] = seen;
+        if *c == '@' {
+            seen = true;
+        } else if *c != '"' && ends_token(*c) {
+            seen = false;
+        }
+    }
+    ahead
 }
 
 /// Hides a segment's password: from its first `:` to its last `@`.
@@ -350,17 +370,29 @@ fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     if end > 0 && matches!(chars[end - 1], '"' | '\'') {
         end -= 1;
     }
+    let name_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '%');
     let mut start = end;
-    while start > 0
-        && (chars[start - 1].is_alphanumeric() || matches!(chars[start - 1], '_' | '-' | '.' | '%'))
-    {
+    while start > 0 && name_char(chars[start - 1]) {
         start -= 1;
     }
     if start == end {
         return;
     }
-    let name: String = chars[start..end].iter().collect();
-    if !names_secret(&compact(&percent_decoded(&name))) {
+    // Also read across tabs between its characters, as a URL parser drops them
+    // (`pass<TAB>word=`: B203's review); either reading naming a secret hides the value.
+    let mut across = start;
+    while across > 1 && chars[across - 1] == '\t' && name_char(chars[across - 2]) {
+        across -= 1;
+        while across > 0 && name_char(chars[across - 1]) {
+            across -= 1;
+        }
+    }
+    let names = |from: usize| {
+        let name: String = chars[from..end].iter().collect();
+        names_secret(&compact(&percent_decoded(&name)))
+    };
+    let secret = names(start) || (across < start && names(across));
+    if !secret {
         return;
     }
     // A URL's scheme (`token://…`) isn't a value: its user info is masked on its own.
@@ -395,8 +427,15 @@ fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     hidden[from..to].iter_mut().for_each(|flag| *flag = true);
 }
 
-/// `text` with its `%XX` escapes decoded (a bad one kept as it is).
-fn percent_decoded(text: &str) -> String {
+/// `text` with its `%XX` escapes decoded (a bad one kept as it is), its tabs and line
+/// breaks dropped.
+pub(crate) fn percent_decoded(text: &str) -> String {
+    // Tabs and line breaks dropped first, as a URL parser drops them (sqlx's does: B203's
+    // review, `pass<TAB>word=` is its `password`).
+    let text: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

@@ -462,8 +462,8 @@ async fn a_handle_of_another_type_or_in_a_cleanup_is_refused() {
 }
 
 #[rstest::rstest]
-#[case(&["job"], None, "isn't `key=value`")]
-#[case(&["=v"], None, "has no key")]
+#[case(&["job-s3cret"], None, "isn't `key=value`")]
+#[case(&["=v-s3cret"], None, "has no key")]
 #[case(&["a:={"], None, "isn't JSON")]
 #[case(&["a=1", "a=2"], None, "given twice")]
 #[case(&["a=1"], Some("{}"), "not both")]
@@ -477,6 +477,8 @@ fn a_handle_that_cant_be_read_is_an_error(
     let fields: Vec<_> = fields.iter().map(|f| (*f).to_owned()).collect();
     let error = handle_value(&fields, json).unwrap_err();
     assert!(error.contains(message), "{error}");
+    // B210: a field is never quoted back, being perhaps a secret.
+    assert!(!error.contains("s3cret"), "{error}");
 }
 
 #[test]

@@ -474,8 +474,9 @@ fn handle_value(fields: &[String], json: Option<&str>) -> Result<Value, String> 
     }
     let mut object = serde_json::Map::new();
     for field in fields {
+        // A field is never quoted back: it may be a secret (B210).
         let Some((name, text)) = field.split_once('=') else {
-            return Err(format!("`{field}` isn't `key=value` or `key:=json`"));
+            return Err("a field isn't `key=value` or `key:=json`".to_owned());
         };
         let (name, value) = match name.strip_suffix(':') {
             Some(name) => {
@@ -486,7 +487,7 @@ fn handle_value(fields: &[String], json: Option<&str>) -> Result<Value, String> 
             None => (name, Value::String(text.to_owned())),
         };
         if name.is_empty() {
-            return Err(format!("`{field}` has no key"));
+            return Err("a field has no key (`=value`)".to_owned());
         }
         if object.insert(name.to_owned(), value).is_some() {
             return Err(format!("the field `{name}` is given twice"));

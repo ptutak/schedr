@@ -668,7 +668,7 @@ impl Default for LogSection {
 }
 
 /// `[database]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DatabaseSection {
     /// The connection URL (`sqlite:...` or `postgres://...`). A URL with a password must come
@@ -707,16 +707,27 @@ impl Default for DatabaseSection {
     }
 }
 
-/// Whether a URL has a password in its user-info part (`scheme://user:password@host`).
+/// Whether a URL has a password: in its user-info part (`scheme://user:password@host`) or as
+/// a query parameter naming one (`?password=...`, any case, the name percent-decoded; B203).
 #[must_use]
 pub fn url_has_password(url: &str) -> bool {
     let Some((_, rest)) = url.split_once("://") else {
         return false;
     };
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
     let authority = rest.split('/').next().unwrap_or_default();
-    authority
+    let in_user_info = authority
         .rsplit_once('@')
-        .is_some_and(|(user_info, _)| user_info.contains(':'))
+        .is_some_and(|(user_info, _)| user_info.contains(':'));
+    let query = query.split('#').next().unwrap_or_default();
+    in_user_info
+        || query.split('&').any(|pair| {
+            pair.split_once('=').is_some_and(|(name, _)| {
+                crate::masked::percent_decoded(name)
+                    .to_ascii_lowercase()
+                    .ends_with("password")
+            })
+        })
 }
 
 /// `[ops]`.
@@ -932,6 +943,32 @@ pub struct SmtpSection {
     pub from: Option<String>,
 }
 
+impl std::fmt::Debug for DatabaseSection {
+    /// The URLs with their passwords masked (B206).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let masked = |url: &Option<String>| url.as_deref().map(crate::masked::mask_text);
+        f.debug_struct("DatabaseSection")
+            .field("url", &masked(&self.url))
+            .field("notifications", &self.notifications)
+            .field("notifications_url", &masked(&self.notifications_url))
+            .field("change_notifications", &self.change_notifications)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ChannelConfig {
+    /// Without its URL, which may be a capability (Slack's), or its body (B206).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelConfig")
+            .field("kind", &self.kind)
+            .field("url", &self.url.as_ref().map(|_| "****"))
+            .field("headers_env", &self.headers_env)
+            .field("body", &self.body.as_ref().map(|_| "****"))
+            .field("to", &self.to)
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for SmtpSection {
     /// Without the password (Codex's review of M4.13b).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -992,7 +1029,7 @@ impl Default for NotificationsSection {
 
 /// A server channel (`[notifications.channels.<name>]`, decision 424): its `type`, and the keys
 /// that type takes (the master refuses another type's).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelConfig {
     /// `webhook` (an HTTP POST of JSON) or `email`.

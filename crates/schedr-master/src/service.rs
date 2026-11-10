@@ -47,6 +47,9 @@ pub struct Hub {
     /// lock, which can be held while waiting for it, never waits on a slow worker; a delivery
     /// goes out whole under it, one after another.
     streams: Arc<Mutex<BTreeMap<String, Outbound>>>,
+    /// Set when the master stops: each stream's server lets its sender go, for the stream to
+    /// end even when full (B200's review).
+    closing: Arc<watch::Sender<bool>>,
     clock: fn() -> Timestamp,
     /// When the loop last turned (the master's liveness).
     beat: Beat,
@@ -117,6 +120,7 @@ impl Hub {
             listen_retry: None,
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
+            closing: Arc::new(watch::channel(false).0),
             clock,
         }
     }
@@ -538,6 +542,9 @@ impl Hub {
                 biased;
                 _ = &mut give_up => {
                     leadership.release().await;
+                    // Not leading from now on: a stream offered while stopping is refused, and
+                    // no heartbeat is answered (B200).
+                    self.set_leading(false);
                     return;
                 }
                 _ = renew.tick() => {
@@ -629,6 +636,26 @@ impl Hub {
         }
     }
 
+    /// The worker's next message, once this master leads (not while paused: another master
+    /// may be leading), unless the master closes its streams first.
+    async fn next_to_handle(
+        &self,
+        queued: &mut mpsc::UnboundedReceiver<worker_message::Message>,
+        closing: &mut watch::Receiver<bool>,
+    ) -> Next {
+        let next = async {
+            let Some(message) = queued.recv().await else {
+                return Next::Ended;
+            };
+            self.while_leading().await;
+            Next::Message(Box::new(message))
+        };
+        tokio::select! {
+            next = next => next,
+            _ = closing.wait_for(|closing| *closing) => Next::Closing,
+        }
+    }
+
     async fn serve_stream(
         self,
         worker_id: String,
@@ -650,9 +677,18 @@ impl Hub {
             },
         ));
         let mut unhandled = false;
-        while let Some(first) = queued.recv().await {
-            // Not while paused: another master may be leading.
-            self.while_leading().await;
+        let mut closing = self.closing.subscribe();
+        loop {
+            let first = match self.next_to_handle(&mut queued, &mut closing).await {
+                Next::Message(first) => *first,
+                Next::Ended => break,
+                // The master stopping: this stream's sender let go, its worker not written
+                // as disconnected (the lease is given back), as the master's end.
+                Next::Closing => {
+                    reader.abort();
+                    return;
+                }
+            };
             // Everything already queued, up to MESSAGES_PER_TURN, in one turn of the lock: one
             // message per turn left a worker's messages behind every round in between (B12).
             let mut outgoing = Vec::new();
@@ -813,10 +849,16 @@ impl Hub {
         // The worker's stream from now on, put in place before the lock is let go: a message
         // of the old stream handled after this registration is known to be the old one's
         // (B44).
-        self.streams
-            .lock()
-            .await
-            .insert(register.worker_id.clone(), stream.clone());
+        {
+            let mut streams = self.streams.lock().await;
+            // Checked under the streams' lock: a master stopping meanwhile (no longer leading,
+            // then closing its streams under that lock) either closes this one or refuses it,
+            // never leaving it open for its graceful shutdown to wait for (B200's review).
+            if !*self.leading.borrow() {
+                return Err(Status::unavailable(NOT_LEADING));
+            }
+            streams.insert(register.worker_id.clone(), stream.clone());
+        }
         drop(core);
         self.deliver(outgoing).await;
         tokio::spawn(
@@ -824,6 +866,19 @@ impl Hub {
                 .serve_stream(register.worker_id, stream, inbound),
         );
         Ok(Response::new(ReceiverStream::new(receiver)))
+    }
+
+    /// Ends every worker's stream with `UNAVAILABLE`, for the master to stop: tonic's graceful
+    /// shutdown waits for open calls, which a worker's stream never ends by itself, and each
+    /// worker connects again, to the master that leads (B200).
+    pub async fn close_streams(&self) {
+        // Each stream's server lets its sender go: a full one ends once its worker read it.
+        self.closing.send_replace(true);
+        let streams = std::mem::take(&mut *self.streams.lock().await);
+        for stream in streams.into_values() {
+            // Full, the worker isn't reading: its stream ends when its other senders go.
+            let _ = stream.try_send(Err(Status::unavailable(STOPPING)));
+        }
     }
 
     /// Whether `stream` is still `worker_id`'s stream (not replaced by a newer registration).
@@ -835,6 +890,19 @@ impl Hub {
             .is_some_and(|s| s.same_channel(stream))
     }
 }
+
+/// What a worker's stream's server does next.
+enum Next {
+    /// Handles this message (boxed: a message is far larger than the other cases).
+    Message(Box<worker_message::Message>),
+    /// The worker's stream ended.
+    Ended,
+    /// The master closes its streams.
+    Closing,
+}
+
+/// Why a worker's stream ends when this master stops.
+const STOPPING: &str = "this master is stopping: connect again";
 
 /// Why a stream opened while this master doesn't lead is refused.
 const NOT_LEADING: &str = "this master isn't leading (its database lease isn't renewed, or another \

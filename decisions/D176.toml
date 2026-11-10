@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D176"
 step = "M4.6e"
 also = ["task-context", "python-api"]
 code = ["crates/schedr-agent/src/secrets.rs", "crates/schedr-model/src/commands.rs", "crates/schedr-model/src/secret.rs", "python/schedr/_secrets.py::Secrets", "python/schedr/context.py::secret_value"]
-checked = 2026-11-09
+checked = 2026-11-10
