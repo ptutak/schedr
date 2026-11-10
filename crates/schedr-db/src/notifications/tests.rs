@@ -17,6 +17,7 @@ fn notification(channel: &str, url: Option<&str>) -> NewNotification {
     NewNotification {
         dag_id: "etl".into(),
         channel: channel.into(),
+        kind: "webhook".into(),
         url: url.map(Into::into),
         event: "RUN_FAILED".into(),
         body: json!({"text": "DAG `etl`: run failed", "tasks": ["load"]}),

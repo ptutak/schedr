@@ -18,6 +18,8 @@ pub struct NewNotification {
     pub dag_id: String,
     /// The channel's name.
     pub channel: String,
+    /// How it is sent: `webhook` (the body is posted) or `email` (the body holds the email).
+    pub kind: String,
     /// A DAG webhook's URL; `None` for a server channel, looked up when it is sent.
     pub url: Option<String>,
     /// The event's name (`RUN_FAILED`, `MESSAGE`).
@@ -35,6 +37,8 @@ pub struct Notification {
     pub dag_id: String,
     /// The channel's name.
     pub channel: String,
+    /// How it is sent: `webhook` or `email`.
+    pub kind: String,
     /// A DAG webhook's URL; `None` for a server channel.
     pub url: Option<String>,
     /// The event's name.
@@ -62,6 +66,7 @@ type Row = (
     String,
     String,
     String,
+    String,
     Option<String>,
     String,
     String,
@@ -81,8 +86,8 @@ impl Database {
         now: Timestamp,
     ) -> Result<(), DbError> {
         const INSERT: &str = "INSERT INTO notifications \
-            (id, dag_id, channel, url, event, body, created_at, next_try_at) \
-            VALUES ($1{uuid}, $2, $3, $4, $5, $6{json}, $7{ts}, $7{ts})";
+            (id, dag_id, channel, kind, url, event, body, created_at, next_try_at) \
+            VALUES ($1{uuid}, $2, $3, $4, $5, $6, $7{json}, $8{ts}, $8{ts})";
         if notifications.is_empty() {
             return Ok(());
         }
@@ -92,6 +97,7 @@ impl Database {
                     .bind(Uuid::now_v7().to_string())
                     .bind(&notification.dag_id)
                     .bind(&notification.channel)
+                    .bind(&notification.kind)
                     .bind(&notification.url)
                     .bind(&notification.event)
                     .bind(to_json(&notification.body))
@@ -113,7 +119,7 @@ impl Database {
         now: Timestamp,
         limit: u32,
     ) -> Result<Vec<Notification>, DbError> {
-        const DUE: &str = "SELECT id{text}, dag_id, channel, url, event, body{text}, \
+        const DUE: &str = "SELECT id{text}, dag_id, channel, kind, url, event, body{text}, \
             created_at{text}, tries FROM notifications WHERE next_try_at <= $1{ts} \
             ORDER BY next_try_at, id LIMIT $2";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
@@ -125,11 +131,12 @@ impl Database {
         });
         rows.into_iter()
             .map(
-                |(id, dag_id, channel, url, event, body, created_at, tries)| {
+                |(id, dag_id, channel, kind, url, event, body, created_at, tries)| {
                     Ok(Notification {
                         id,
                         dag_id,
                         channel,
+                        kind,
                         url,
                         event,
                         body: from_json("notifications.body", &body)?,

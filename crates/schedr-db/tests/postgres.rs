@@ -2151,6 +2151,7 @@ async fn notifications_are_queued_retried_and_deleted_with_what_their_messages_r
         &[NewNotification {
             dag_id: "sync".into(),
             channel: "ops".into(),
+            kind: "webhook".into(),
             url: None,
             event: "RUN_FAILED".into(),
             body: json!({"text": "x", "tasks": [1]}),

@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 use rstest::rstest;
 
 use super::*;
-use crate::config::ChannelKind;
+use crate::config::{ChannelKind, SmtpTls};
 use crate::roots::Root;
 
 const FILE: &str = "/etc/schedr/config.toml";
@@ -993,4 +993,38 @@ fn notifications_max_per_attempt_must_be_positive() {
     )
     .unwrap_err();
     assert_eq!(zero, ConfigError::NoNotificationsPerAttempt);
+}
+
+#[test]
+fn the_smtp_server_has_defaults_and_its_password_comes_from_the_environment_only() {
+    let default = load(None, &env(&[]), &[]).unwrap().notifications.smtp;
+    assert_eq!(
+        (default.host, default.port, default.tls),
+        (None, 587, SmtpTls::Starttls)
+    );
+    let toml = "[notifications.smtp]\nhost = \"smtp.example.com\"\nport = 465\ntls = \"tls\"\n\
+                username = \"schedr\"\nfrom = \"schedr <schedr@example.com>\"\n";
+    let set = load(
+        Some(file(toml)),
+        &env(&[("SCHEDR_CONFIG__NOTIFICATIONS__SMTP__PASSWORD", "pw")]),
+        &[],
+    )
+    .unwrap()
+    .notifications
+    .smtp;
+    assert_eq!(set.host.as_deref(), Some("smtp.example.com"));
+    assert_eq!((set.port, set.tls), (465, SmtpTls::Tls));
+    assert_eq!(set.password.as_deref(), Some("pw"));
+    assert!(
+        !format!("{set:?}").contains("pw\""),
+        "Debug hides the password"
+    );
+    let in_file = format!("{toml}password = \"pw\"\n");
+    assert!(matches!(
+        load(Some(file(&in_file)), &env(&[]), &[]).unwrap_err(),
+        ConfigError::SecretInFile {
+            key: "notifications.smtp.password",
+            ..
+        }
+    ));
 }

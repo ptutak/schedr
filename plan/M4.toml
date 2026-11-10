@@ -927,7 +927,8 @@ scope = '''
 (decisions 411, 424, 426): `type = "email"` channels sent by SMTP through `lettre` (`[notifications.smtp]`), plain text, one email to all recipients
 '''
 done_when = "a failed run sends one email by SMTP, a pure cancel none; a task's `send` to an email channel arrives"
-status = "planned"
+status = "done"
+done = 2026-11-10
 
 [[steps]]
 id = "M4.14"

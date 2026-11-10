@@ -32,7 +32,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D429 | 2026-11-10 | user | built M4.13a | outcomes | `[notifications] ca_file`: extra CAs for notifications |
 | D428 | 2026-11-10 | user | built M4.13a | outcomes | A webhook's 4xx drops the notification at once |
 | D427 | 2026-11-10 | user | built M4.13a | outcomes | The user's email service is reached as a webhook |
-| D426 | 2026-11-10 | user | planned (M4.13b) | outcomes | Email channels are in the configuration only |
+| D426 | 2026-11-10 | user | built M4.13b | outcomes | Email channels are in the configuration only |
 | D425 | 2026-11-10 | user | built M4.13a | outcomes | A DAG's own webhooks are gated by `[notifications] dag_urls` alone |
 | D424 | 2026-11-10 | user | built M4.13a | outcomes | Server channels are `[notifications.channels.<name>]` with a `type` |
 | D423 | 2026-11-09 | user | built M4.13a | outcomes | Templates reach into `data` by paths |
@@ -47,7 +47,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D414 | 2026-11-09 | user | superseded by D426 | outcomes | A DAG may define email channels of its own |
 | D413 | 2026-11-09 | user | built M4.13a | outcomes | Notifications link to the UI through `[notifications] ui_url` |
 | D412 | 2026-11-09 | user | superseded by D417 | outcomes | A webhook posts schedr's fixed JSON with a `text` |
-| D411 | 2026-11-09 | user | planned (M4.13b) | outcomes | Email goes by SMTP through lettre |
+| D411 | 2026-11-09 | user | built M4.13b | outcomes | Email goes by SMTP through lettre |
 | D410 | 2026-11-09 | user | built M4.13a | outcomes | Notifications go through an outbox, delivered at least once |
 | D409 | 2026-11-09 | user | built M4.13a | outcomes | The notification events' enum is `Notify` |
 | D408 | 2026-11-09 | user | built M4.13a | outcomes | Notifications have eight events, built together |

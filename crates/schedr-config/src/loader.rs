@@ -166,27 +166,7 @@ pub fn load(
     let mut config: Config = figment.extract()?;
     config.timings = hidden_timings(env)?;
     config.limits = hidden_limits(env)?;
-    let from_file = |key: &str| {
-        figment
-            .find_metadata(key)
-            .is_some_and(|m| m.source.as_ref().is_some_and(|s| s.file_path().is_some()))
-    };
-    for (key, env, url) in [
-        (
-            "database.url",
-            "SCHEDR_CONFIG__DATABASE__URL",
-            &config.database.url,
-        ),
-        (
-            "database.notifications_url",
-            "SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL",
-            &config.database.notifications_url,
-        ),
-    ] {
-        if from_file(key) && url.as_deref().is_some_and(url_has_password) {
-            return Err(ConfigError::SecretInFile { key, env });
-        }
-    }
+    check_secrets_in_file(&figment, &config)?;
     let worker = &config.worker;
     let drain_end = worker
         .drain_terminate_period
@@ -221,7 +201,7 @@ pub fn load(
     check_secret_storage(&config.secret_storage)?;
     for name in config.secret_storage.storages.keys() {
         // As every credential: from the environment, never the file.
-        if from_file(&format!("secret_storage.{name}.token")) {
+        if from_file(&figment, &format!("secret_storage.{name}.token")) {
             return Err(ConfigError::SecretStorage(format!(
                 "[secret_storage.{name}] token: a token isn't written in the file; set \
                  SCHEDR_CONFIG__SECRET_STORAGE__{}__TOKEN",
@@ -257,6 +237,40 @@ pub fn load(
     )?;
     crate::roots::check_apart(&config.dag_roots, &config.script_roots)?;
     Ok(config)
+}
+
+/// Whether `key`'s value came from the configuration file.
+fn from_file(figment: &Figment, key: &str) -> bool {
+    figment
+        .find_metadata(key)
+        .is_some_and(|m| m.source.as_ref().is_some_and(|s| s.file_path().is_some()))
+}
+
+/// Refuses a credential written in the file: those come from the environment only.
+fn check_secrets_in_file(figment: &Figment, config: &Config) -> Result<(), ConfigError> {
+    for (key, env, url) in [
+        (
+            "database.url",
+            "SCHEDR_CONFIG__DATABASE__URL",
+            &config.database.url,
+        ),
+        (
+            "database.notifications_url",
+            "SCHEDR_CONFIG__DATABASE__NOTIFICATIONS_URL",
+            &config.database.notifications_url,
+        ),
+    ] {
+        if from_file(figment, key) && url.as_deref().is_some_and(url_has_password) {
+            return Err(ConfigError::SecretInFile { key, env });
+        }
+    }
+    if from_file(figment, "notifications.smtp.password") {
+        return Err(ConfigError::SecretInFile {
+            key: "notifications.smtp.password",
+            env: "SCHEDR_CONFIG__NOTIFICATIONS__SMTP__PASSWORD",
+        });
+    }
+    Ok(())
 }
 
 /// The timings a zero would break everything with: every task timed out at once, a panicking

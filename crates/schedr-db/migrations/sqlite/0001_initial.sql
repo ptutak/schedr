@@ -155,6 +155,7 @@ CREATE TABLE notifications (
     id           TEXT PRIMARY KEY,
     dag_id       TEXT NOT NULL,
     channel      TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('webhook', 'email')),
     -- A DAG webhook's URL; NULL for a server channel, looked up when it is sent.
     url          TEXT,
     event        TEXT NOT NULL,

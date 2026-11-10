@@ -184,7 +184,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.12b (part of M4.12) | Backfill | done 2026-11-09 | D363, D364, D400, D401, D402, D403, D404, D405 |
 | M4.12c (part of M4.12) | Operator mapping | done 2026-11-09 | D406, D407 |
 | M4.13a | Notifications: events, outbox, webhooks | done 2026-11-10 | D390, D391, D408, D409, D410, D413, D415, D416, D417, D419, D420, D421, D422, D423, D424, D425, D427, D428, D429 |
-| M4.13b | Notifications: email | planned | D411, D426 |
+| M4.13b | Notifications: email | done 2026-11-10 | D411, D426 |
 | M4.14 | Retention | planned |  |
 | M4.15 | Per-task memory and upgrade rules | planned | D50 |
 

@@ -287,6 +287,7 @@ fn to_ops(body: serde_json::Value) -> NewNotification {
     NewNotification {
         dag_id: "etl".into(),
         channel: "ops".into(),
+        kind: "webhook".into(),
         url: None,
         event: "RUN_FAILED".into(),
         body,
@@ -593,4 +594,342 @@ async fn a_master_that_no_longer_leads_starts_no_delivery() {
     assert_eq!(pass.sent, 1);
     assert_eq!(receiver.got.lock().unwrap().len(), 1);
     assert_eq!(db.due_notifications(now, 10).await.unwrap().len(), 1);
+}
+
+fn with_email(mut section: NotificationsSection, smtp_port: u16) -> NotificationsSection {
+    section.smtp = schedr_config::config::SmtpSection {
+        host: Some("127.0.0.1".to_owned()),
+        port: smtp_port,
+        tls: schedr_config::config::SmtpTls::None,
+        from: Some("schedr <schedr@example.com>".to_owned()),
+        ..Default::default()
+    };
+    section.channels.insert(
+        "oncall".to_owned(),
+        ChannelConfig {
+            kind: ChannelKind::Email,
+            url: None,
+            headers_env: BTreeMap::new(),
+            body: None,
+            to: vec![
+                "oncall@example.com".to_owned(),
+                "Team A <a@example.com>".to_owned(),
+            ],
+        },
+    );
+    section
+}
+
+fn email_settings(smtp_port: u16) -> Notifications {
+    let env = BTreeMap::from([("OPS_TOKEN".to_owned(), "Bearer t".to_owned())]);
+    Notifications::from_config(
+        &with_email(section("https://hooks.example.com/x"), smtp_port),
+        &env,
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_email_channel_needs_the_smtp_server_recipients_and_only_its_keys() {
+    let env = BTreeMap::from([("OPS_TOKEN".to_owned(), "t".to_owned())]);
+    let check = |change: &dyn Fn(&mut NotificationsSection)| {
+        let mut section = with_email(section("https://hooks.example.com/x"), 25);
+        change(&mut section);
+        Notifications::from_config(&section, &env).map(|_| ())
+    };
+    assert_eq!(check(&|_| {}), Ok(()));
+    for (change, says) in [
+        (
+            Box::new(|s: &mut NotificationsSection| s.smtp.host = None)
+                as Box<dyn Fn(&mut NotificationsSection)>,
+            "sends through [notifications.smtp], which has no `host`",
+        ),
+        (
+            Box::new(|s| s.smtp.from = None),
+            "`from`, the sender, is needed",
+        ),
+        (
+            Box::new(|s| s.smtp.from = Some("not an address".into())),
+            "from: `not an address`",
+        ),
+        (
+            Box::new(|s| s.channels.get_mut("oncall").unwrap().to.clear()),
+            "needs its recipients",
+        ),
+        (
+            Box::new(|s| s.channels.get_mut("oncall").unwrap().to = vec!["nope".into()]),
+            "to: `nope` isn't an address",
+        ),
+        (
+            Box::new(|s| s.channels.get_mut("oncall").unwrap().url = Some("https://x/".into())),
+            "takes `to` only",
+        ),
+        (
+            Box::new(|s| s.smtp.username = Some("schedr".into())),
+            "which isn't set",
+        ),
+        (
+            Box::new(|s| {
+                s.smtp.username = Some("schedr".into());
+                s.smtp.password = Some("pw".into());
+            }),
+            "would send the password in plain text",
+        ),
+    ] {
+        let error = check(&*change).unwrap_err();
+        assert!(error.contains(says), "{says}: {error}");
+    }
+}
+
+#[test]
+fn an_email_is_plain_text_with_the_summary_as_its_subject() {
+    let settings = email_settings(25);
+    let dag = dag(&json!([{"channel": {"kind": "server", "name": "oncall"}}]));
+    assert_eq!(settings.problems(&dag), Vec::<String>::new());
+    let mut event = Event::new(&dag, ts("2026-11-09T10:00:00Z"));
+    event.run_id = Some("r1");
+    event.planned_for = Some(ts("2026-11-09T02:00:00Z"));
+    event.failed_tasks = vec![FailedTask {
+        task_id: "load".into(),
+        map_index: -1,
+        error: Some("ValueError: bad row".into()),
+    }];
+    let queued = settings.queued(&event, NotifyEvent::RunFailed, &MasterMetrics::default());
+    assert_eq!(queued.len(), 1);
+    let email = &queued[0];
+    assert_eq!(
+        (email.kind.as_str(), email.url.as_deref()),
+        (KIND_EMAIL, None)
+    );
+    // The recipients are the channel's when it's sent, not stored (Codex's review of M4.13b).
+    assert_eq!(email.body.get("to"), None);
+    assert_eq!(
+        email.body["subject"],
+        "DAG `etl`: run r1 failed (failed: load)"
+    );
+    let text = email.body["text"].as_str().unwrap();
+    for line in [
+        "DAG `etl`: run r1 failed (failed: load)\n",
+        "Event:        RUN_FAILED\n",
+        "Planned for:  2026-11-09T02:00:00Z (2026-11-09 03:00 Europe/Warsaw)\n",
+        "Link:         https://schedr.example.com/runs/r1\n",
+        "Failed tasks:\n  load: ValueError: bad row\n",
+    ] {
+        assert!(text.contains(line), "{line:?} in:\n{text}");
+    }
+
+    // A task's own message: its text as the subject, its data in the body.
+    let mut sent = Event::new(&dag, ts("2026-11-09T10:00:00Z"));
+    sent.task = Some("report");
+    sent.attempt = Some(1);
+    sent.text = Some("report ready".into());
+    sent.data = json!({"rows": 12});
+    let email = settings.message(&sent, "oncall").unwrap();
+    assert_eq!(email.body["subject"], "report ready");
+    let text = email.body["text"].as_str().unwrap();
+    assert!(
+        text.contains("Task:         report (attempt 1)\n"),
+        "{text}"
+    );
+    assert!(text.contains("Data:\n{\n  \"rows\": 12\n}\n"), "{text}");
+}
+
+/// A mail server on 127.0.0.1 speaking just enough SMTP: answers `RCPT TO` with `rcpt` (250
+/// to take it), keeping each message's DATA.
+async fn smtp_server(rcpt: &'static str) -> (u16, Arc<Mutex<Vec<String>>>) {
+    use tokio::io::AsyncBufReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let kept = got.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                return;
+            };
+            let kept = kept.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = socket.into_split();
+                let mut lines = tokio::io::BufReader::new(read).lines();
+                let _ = write.write_all(b"220 test ready\r\n").await;
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let upper = line.to_ascii_uppercase();
+                    let answer: &str = if upper.starts_with("EHLO") || upper.starts_with("HELO") {
+                        "250 test\r\n"
+                    } else if upper.starts_with("RCPT") {
+                        rcpt
+                    } else if upper.starts_with("DATA") {
+                        let _ = write.write_all(b"354 go on\r\n").await;
+                        let mut data = String::new();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            if line == "." {
+                                break;
+                            }
+                            data.push_str(&line);
+                            data.push('\n');
+                        }
+                        kept.lock().unwrap().push(data);
+                        "250 queued\r\n"
+                    } else if upper.starts_with("QUIT") {
+                        let _ = write.write_all(b"221 bye\r\n").await;
+                        return;
+                    } else {
+                        "250 ok\r\n"
+                    };
+                    let _ = write.write_all(answer.as_bytes()).await;
+                }
+            });
+        }
+    });
+    (port, got)
+}
+
+fn to_oncall(settings: &Notifications) -> NewNotification {
+    let dag = dag(&json!([{"channel": {"kind": "server", "name": "oncall"}}]));
+    let mut event = Event::new(&dag, ts("2026-11-09T10:00:00Z"));
+    event.run_id = Some("r1");
+    settings
+        .queued(&event, NotifyEvent::RunFailed, &MasterMetrics::default())
+        .remove(0)
+}
+
+#[tokio::test]
+async fn an_email_is_mailed_to_every_recipient_and_deleted() {
+    let (port, got) = smtp_server("250 ok\r\n").await;
+    let settings = email_settings(port);
+    let email = to_oncall(&settings);
+    let (db, sender) = outbox(settings).await;
+    let now = ts("2026-11-09T10:00:00Z");
+    db.queue_notifications(&[email], now).await.unwrap();
+    assert_eq!(sender.pass(now, || true).await.unwrap().sent, 1);
+    assert_eq!(
+        db.due_notifications(ts("2030-01-01T00:00:00Z"), 10)
+            .await
+            .unwrap(),
+        []
+    );
+    let data = got.lock().unwrap()[0].clone();
+    for header in [
+        "From: schedr <schedr@example.com>",
+        "To: oncall@example.com, \"Team A\" <a@example.com>",
+        "Subject: DAG `etl`: run r1 failed",
+        "Content-Type: text/plain; charset=utf-8",
+    ] {
+        assert!(data.contains(header), "{header} in:\n{data}");
+    }
+    assert!(data.contains("Event:        RUN_FAILED"), "{data}");
+}
+
+#[tokio::test]
+async fn a_mail_server_s_permanent_refusal_drops_it_a_passing_one_retries() {
+    for (rcpt, retried, dropped) in [("550 no such user\r\n", 0, 1), ("451 try later\r\n", 1, 0)] {
+        let (port, _) = smtp_server(rcpt).await;
+        let settings = email_settings(port);
+        let email = to_oncall(&settings);
+        let (db, sender) = outbox(settings).await;
+        let now = ts("2026-11-09T10:00:00Z");
+        db.queue_notifications(&[email], now).await.unwrap();
+        let pass = sender.pass(now, || true).await.unwrap();
+        assert_eq!((pass.retried, pass.dropped), (retried, dropped), "{rcpt}");
+    }
+}
+
+fn sender_on(db: &Database, settings: Notifications) -> Sender {
+    let backoff = Backoff {
+        first: Duration::from_secs(10),
+        max: Duration::from_secs(3600),
+    };
+    Sender::new(
+        db.clone(),
+        Arc::new(settings),
+        MasterMetrics::default(),
+        backoff,
+    )
+    .unwrap()
+}
+
+fn email_settings_to(smtp_port: u16, to: Option<&[&str]>) -> Notifications {
+    let env = BTreeMap::from([("OPS_TOKEN".to_owned(), "Bearer t".to_owned())]);
+    let mut section = with_email(section("https://hooks.example.com/x"), smtp_port);
+    match to {
+        Some(to) => {
+            section.channels.get_mut("oncall").unwrap().to =
+                to.iter().map(|&a| a.to_owned()).collect();
+        }
+        None => {
+            section.channels.remove("oncall");
+        }
+    }
+    Notifications::from_config(&section, &env).unwrap()
+}
+
+#[tokio::test]
+async fn an_email_goes_to_its_channel_s_recipients_when_sent_and_nowhere_once_it_is_gone() {
+    let (port, got) = smtp_server("250 ok\r\n").await;
+    let email = to_oncall(&email_settings(port));
+    let (db, _) = outbox(email_settings(port)).await;
+    let now = ts("2026-11-09T10:00:00Z");
+    db.queue_notifications(&[email], now).await.unwrap();
+
+    // The channel gone: kept, not mailed to the recipients it had.
+    let gone = sender_on(&db, email_settings_to(port, None))
+        .pass(now, || true)
+        .await
+        .unwrap();
+    assert_eq!((gone.sent, gone.retried), (0, 1));
+    assert!(got.lock().unwrap().is_empty());
+
+    // Back with other recipients: mailed to those only.
+    let later = ts("2026-11-09T11:00:00Z");
+    let changed = sender_on(&db, email_settings_to(port, Some(&["new@example.com"])));
+    assert_eq!(changed.pass(later, || true).await.unwrap().sent, 1);
+    let data = got.lock().unwrap()[0].clone();
+    assert!(data.contains("To: new@example.com\n"), "{data}");
+    assert!(!data.contains("oncall@example.com"), "{data}");
+}
+
+#[tokio::test]
+async fn a_notification_queued_while_its_channel_was_missing_is_mailed_once_it_is_an_email_one() {
+    let (port, got) = smtp_server("250 ok\r\n").await;
+    let missing = email_settings_to(port, None);
+    let queued = to_oncall(&missing);
+    assert_eq!(queued.kind, KIND_WEBHOOK);
+    let (db, _) = outbox(missing).await;
+    let now = ts("2026-11-09T10:00:00Z");
+    db.queue_notifications(&[queued], now).await.unwrap();
+    let pass = sender_on(&db, email_settings(port))
+        .pass(now, || true)
+        .await
+        .unwrap();
+    assert_eq!(pass.sent, 1);
+    let data = got.lock().unwrap()[0].clone();
+    assert!(data.contains("Subject: DAG `etl`: run r1 failed"), "{data}");
+    assert!(data.contains("\"event\": \"RUN_FAILED\""), "{data}");
+}
+
+#[tokio::test]
+async fn a_mail_server_that_never_answers_is_given_up_on_within_the_timeout() {
+    // Takes the connection, never greets.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let keep = held.clone();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            keep.lock().unwrap().push(socket);
+        }
+    });
+    let env = BTreeMap::from([("OPS_TOKEN".to_owned(), "Bearer t".to_owned())]);
+    let mut section = with_email(section("https://hooks.example.com/x"), port);
+    section.timeout = Duration::from_millis(200);
+    let settings = Notifications::from_config(&section, &env).unwrap();
+    let email = to_oncall(&settings);
+    let (db, sender) = outbox(settings).await;
+    let now = ts("2026-11-09T10:00:00Z");
+    db.queue_notifications(&[email], now).await.unwrap();
+    let pass = tokio::time::timeout(Duration::from_secs(30), sender.pass(now, || true))
+        .await
+        .expect("the pass ends")
+        .unwrap();
+    assert_eq!((pass.sent, pass.retried), (0, 1));
 }

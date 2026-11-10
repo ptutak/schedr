@@ -801,6 +801,69 @@ pub struct NotificationsSection {
     /// The server's channels, by name (`[notifications.channels.ops-slack]`): open to every
     /// DAG by its name.
     pub channels: BTreeMap<String, ChannelConfig>,
+    /// `[notifications.smtp]`: the mail server every email channel sends through.
+    pub smtp: SmtpSection,
+}
+
+/// `[notifications.smtp]`: the mail server email channels send through (decisions 411, 426).
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SmtpSection {
+    /// The server's host; none: no email channel can be configured.
+    pub host: Option<String>,
+    /// Its port: 587 (submission, STARTTLS) by default; 465 for `tls = "tls"`.
+    pub port: u16,
+    /// How the connection is secured: `starttls` (upgrade, required), `tls` (TLS from the
+    /// start) or `none` (plain text: a local relay only).
+    pub tls: SmtpTls,
+    /// The user to log in as; none: no login.
+    pub username: Option<String>,
+    /// Its password: only from `SCHEDR_CONFIG__NOTIFICATIONS__SMTP__PASSWORD`, never the
+    /// file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// The sender (`schedr <schedr@example.com>`).
+    pub from: Option<String>,
+}
+
+impl std::fmt::Debug for SmtpSection {
+    /// Without the password (Codex's review of M4.13b).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SmtpSection")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "****"))
+            .field("from", &self.from)
+            .finish()
+    }
+}
+
+impl Default for SmtpSection {
+    /// No server; port 587 with STARTTLS.
+    fn default() -> Self {
+        Self {
+            host: None,
+            port: 587,
+            tls: SmtpTls::Starttls,
+            username: None,
+            password: None,
+            from: None,
+        }
+    }
+}
+
+/// How an SMTP connection is secured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SmtpTls {
+    /// A plain connection upgraded with STARTTLS, which the server must offer.
+    Starttls,
+    /// TLS from the start (port 465).
+    Tls,
+    /// No TLS: for a relay on the same host or network only.
+    None,
 }
 
 impl Default for NotificationsSection {
@@ -816,6 +879,7 @@ impl Default for NotificationsSection {
             dag_urls: Vec::new(),
             ca_file: None,
             channels: BTreeMap::new(),
+            smtp: SmtpSection::default(),
         }
     }
 }

@@ -11,7 +11,13 @@ use jiff::{SignedDuration, Timestamp};
 use schedr_db::notifications::Notification;
 use schedr_db::{Database, DbError};
 
-use super::Notifications;
+use lettre::AsyncTransport as _;
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::client::{Certificate, Tls, TlsParameters};
+use lettre::{AsyncSmtpTransport, Message, Tokio1Executor};
+use schedr_config::config::SmtpTls;
+
+use super::{KIND_EMAIL, Notifications, Smtp};
 use crate::metrics::MasterMetrics;
 
 /// The most notifications one pass delivers.
@@ -45,6 +51,8 @@ pub struct Sender {
     client: reqwest::Client,
     metrics: MasterMetrics,
     backoff: Backoff,
+    /// The mail server's transport, when `[notifications.smtp]` has a host.
+    smtp: Option<AsyncSmtpTransport<Tokio1Executor>>,
 }
 
 /// What a pass did.
@@ -63,27 +71,36 @@ impl Sender {
     ///
     /// # Errors
     ///
-    /// The HTTP client can't be built (no TLS roots).
+    /// The HTTP client or the mail server's transport can't be built (no TLS roots, a bad
+    /// `ca_file`).
     pub fn new(
         db: Database,
         settings: Arc<Notifications>,
         metrics: MasterMetrics,
         backoff: Backoff,
-    ) -> Result<Self, reqwest::Error> {
+    ) -> Result<Self, String> {
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(settings.timeout)
             .user_agent(concat!("schedr/", env!("CARGO_PKG_VERSION")));
         if let Some(pem) = &settings.extra_roots {
-            builder = builder.tls_certs_merge(reqwest::Certificate::from_pem_bundle(pem)?);
+            let roots = reqwest::Certificate::from_pem_bundle(pem).map_err(|e| e.to_string())?;
+            builder = builder.tls_certs_merge(roots);
         }
-        let client = builder.build()?;
+        let client = builder.build().map_err(|e| e.to_string())?;
+        let smtp = settings
+            .smtp
+            .as_ref()
+            .map(|smtp| transport(smtp, settings.extra_roots.as_deref(), settings.timeout))
+            .transpose()
+            .map_err(|e| format!("[notifications.smtp]: {e}"))?;
         Ok(Self {
             db,
             settings,
             client,
             metrics,
             backoff,
+            smtp,
         })
     }
 
@@ -153,7 +170,8 @@ impl Sender {
                 }
                 Err(Failure::Passing(error))
                     if notification.url.is_none()
-                        && !self.settings.servers.contains_key(&notification.channel) =>
+                        && !self.settings.servers.contains_key(&notification.channel)
+                        && !self.settings.emails.contains_key(&notification.channel) =>
                 {
                     // An error, not a passing failure: kept until `give_up_after`, so a
                     // master started with the channel back delivers it.
@@ -208,8 +226,22 @@ impl Sender {
             .is_ok_and(|deadline| now >= deadline)
     }
 
-    /// Posts `notification`.
+    /// Sends `notification`: posts it, or mails it.
     async fn deliver(&self, notification: &Notification) -> Result<(), Failure> {
+        // The channel as configured now: its recipients may have changed or gone since it
+        // was queued, and a channel missing then may be back as an email one (Codex's review
+        // of M4.13b).
+        if notification.url.is_none()
+            && let Some(channel) = self.settings.emails.get(&notification.channel)
+        {
+            return self.mail(notification, &channel.to).await;
+        }
+        if notification.kind == KIND_EMAIL {
+            return Err(Failure::Passing(format!(
+                "no email channel `{}` in the configuration any more",
+                notification.channel
+            )));
+        }
         let (url, headers) = if let Some(url) = &notification.url {
             (url.as_str(), &[][..])
         } else {
@@ -251,6 +283,88 @@ impl Sender {
             Err(Failure::Passing(format!("HTTP {status}")))
         }
     }
+}
+
+impl Sender {
+    /// Mails `notification` to `to`: its body holds the email (`subject`, `text`), or, if it
+    /// was queued while its channel was missing, schedr's JSON.
+    async fn mail(&self, notification: &Notification, to: &[String]) -> Result<(), Failure> {
+        let (Some(transport), Some(smtp)) = (&self.smtp, &self.settings.smtp) else {
+            return Err(Failure::Passing(
+                "no [notifications.smtp] host in the configuration any more".to_owned(),
+            ));
+        };
+        let message = email(&smtp.from, to, &notification.body).map_err(Failure::Refused)?;
+        // A deadline over the whole exchange: lettre's own covers only connecting, and a server
+        // that never answers would hold up every notification behind it (Codex's review of
+        // M4.13b). Cut after the server took the message, it's sent again: at least once.
+        let timeout = self.settings.timeout;
+        match tokio::time::timeout(timeout, transport.send(message)).await {
+            Err(_) => Err(Failure::Passing(format!(
+                "no answer within {}s",
+                timeout.as_secs()
+            ))),
+            Ok(Ok(_)) => Ok(()),
+            // A 5xx won't fix itself (decision 428, as a webhook's 4xx).
+            Ok(Err(error)) if error.is_permanent() => Err(Failure::Refused(error.to_string())),
+            Ok(Err(error)) => Err(Failure::Passing(error.to_string())),
+        }
+    }
+}
+
+/// The message to `to` of an email notification's body: its `subject` and `text`, or schedr's
+/// JSON (queued while its channel was missing), its `text` as the subject and all of it below.
+fn email(from: &str, to: &[String], body: &serde_json::Value) -> Result<Message, String> {
+    let field = |key: &str| body.get(key).and_then(serde_json::Value::as_str);
+    let (subject, text) = if let (Some(subject), Some(text)) = (field("subject"), field("text")) {
+        (subject.to_owned(), text.to_owned())
+    } else {
+        let summary = field("text").unwrap_or("A notification from schedr");
+        let all = serde_json::to_string_pretty(body).unwrap_or_default();
+        (super::subject_of(summary), format!("{summary}\n\n{all}\n"))
+    };
+    let from = from.parse().map_err(|e| format!("from: {e}"))?;
+    let mut builder = Message::builder().from(from).subject(subject);
+    for address in to {
+        builder = builder.to(address
+            .parse()
+            .map_err(|e| format!("to `{address}`: {e}"))?);
+    }
+    builder
+        .header(lettre::message::header::ContentType::TEXT_PLAIN)
+        .body(text)
+        .map_err(|e| e.to_string())
+}
+
+/// The mail server's transport: TLS as `[notifications.smtp] tls` says, trusting the system's
+/// roots and `ca_file`'s; the login, if any.
+fn transport(
+    smtp: &Smtp,
+    extra_roots: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<AsyncSmtpTransport<Tokio1Executor>, lettre::transport::smtp::Error> {
+    let tls = if smtp.tls == SmtpTls::None {
+        Tls::None
+    } else {
+        let mut parameters = TlsParameters::builder(smtp.host.clone());
+        if let Some(pem) = extra_roots {
+            parameters = parameters.add_root_certificate(Certificate::from_pem(pem)?);
+        }
+        let parameters = parameters.build()?;
+        if smtp.tls == SmtpTls::Tls {
+            Tls::Wrapper(parameters)
+        } else {
+            Tls::Required(parameters)
+        }
+    };
+    let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host)
+        .port(smtp.port)
+        .tls(tls)
+        .timeout(Some(timeout));
+    if let Some((user, password)) = &smtp.login {
+        builder = builder.credentials(Credentials::new(user.clone(), password.clone()));
+    }
+    Ok(builder.build())
 }
 
 /// How a delivery failed.

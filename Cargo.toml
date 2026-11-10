@@ -37,6 +37,7 @@ jsonschema = { version = "0.60.2", default-features = false }
 jiff = { version = "0.2.38", features = ["serde", "tzdb-bundle-always"] }
 prometheus-client = "0.25.1"
 prost = "0.14.4"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "rustls-platform-verifier", "hostname"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "system-proxy"] }
 rustix = { version = "1.1.6", features = ["event", "fs", "net", "param", "process", "system"] }
 rustls-webpki = { version = "0.103.16", default-features = false, features = ["std"] }

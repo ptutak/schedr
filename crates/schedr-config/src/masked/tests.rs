@@ -293,7 +293,9 @@ fn a_server_webhook_shows_only_its_origin_and_no_body() {
             ..config.notifications.channels["ops"].clone()
         },
     );
+    config.notifications.smtp.password = Some("smtp-SECRET".to_owned());
     let shown = masked(&config);
+    assert_eq!(shown["notifications"]["smtp"]["password"], "****");
     let channels = &shown["notifications"]["channels"];
     assert_eq!(channels["ops"]["url"], "https://hooks.slack.com/****");
     assert_eq!(channels["ops"]["body"], "****");

@@ -3131,3 +3131,121 @@ with Dag("cancelled", notify=[relay, "ops"]):
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(got.lock().unwrap().len(), 4);
 }
+
+/// A mail server on 127.0.0.1 speaking just enough SMTP, keeping each message's DATA.
+fn smtp_receiver() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = got.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let Ok(reader) = stream.try_clone() else {
+                continue;
+            };
+            let mut lines = BufReader::new(reader).lines();
+            let _ = stream.write_all(b"220 test ready\r\n");
+            while let Some(Ok(line)) = lines.next() {
+                let upper = line.to_ascii_uppercase();
+                if upper.starts_with("DATA") {
+                    let _ = stream.write_all(b"354 go on\r\n");
+                    let mut data = String::new();
+                    for line in lines.by_ref() {
+                        let Ok(line) = line else { break };
+                        if line == "." {
+                            break;
+                        }
+                        data.push_str(&line);
+                        data.push('\n');
+                    }
+                    kept.lock().unwrap().push(data);
+                    let _ = stream.write_all(b"250 queued\r\n");
+                } else if upper.starts_with("QUIT") {
+                    let _ = stream.write_all(b"221 bye\r\n");
+                    break;
+                } else {
+                    let _ = stream.write_all(b"250 ok\r\n");
+                }
+            }
+        }
+    });
+    (port, got)
+}
+
+#[test]
+fn a_failed_run_mails_its_email_channel_a_pure_cancel_doesnt_and_a_task_mails_its_own() {
+    let (port, got) = smtp_receiver();
+    let dag = r#"
+import time
+from schedr import Dag, api, task
+
+@task
+def broken() -> None:
+    raise ValueError("source is down")
+
+@task
+def report() -> None:
+    api.notify("oncall", text="report ready", data={"rows": 12})
+
+@task
+def slow() -> None:
+    time.sleep(120)
+
+with Dag("fails", notify=["oncall"]):
+    broken()
+
+with Dag("reports"):
+    report()
+
+with Dag("cancelled", notify=["oncall"]):
+    slow()
+"#;
+    let config = format!(
+        "\n[notifications.smtp]\nhost = \"127.0.0.1\"\nport = {port}\ntls = \"none\"\n\
+         from = \"schedr <schedr@example.com>\"\n\n\
+         [notifications.channels.oncall]\ntype = \"email\"\nto = [\"oncall@example.com\"]\n"
+    );
+    let standalone = Standalone::start_configured(
+        &[("mail.py", dag)],
+        None,
+        &[],
+        &config,
+        &[("SCHEDR_HIDDEN__MASTER__OUTBOX_POLL", "100ms")],
+    );
+    standalone.wait("the DAGs", || {
+        standalone.dag_ids() == ["cancelled", "fails", "reports"]
+    });
+
+    let failed = standalone.trigger("fails");
+    standalone.wait_for_state(&failed, "failed");
+    standalone.wait("an email", || got.lock().unwrap().len() == 1);
+    // Long headers are folded onto the next line, starting with a space.
+    let mail = got.lock().unwrap()[0].replace("\n ", " ");
+    for part in [
+        "To: oncall@example.com",
+        &format!("Subject: DAG `fails`: run {failed} failed (failed: broken)"),
+        "broken: ValueError: source is down",
+    ] {
+        assert!(mail.contains(part), "{part} in:\n{mail}");
+    }
+
+    let reports = standalone.trigger("reports");
+    standalone.wait_for_state(&reports, "success");
+    standalone.wait("the task's email", || got.lock().unwrap().len() == 2);
+    let mail = got.lock().unwrap()[1].clone();
+    assert!(mail.contains("Subject: report ready"), "{mail}");
+    assert!(mail.contains("\"rows\": 12"), "{mail}");
+
+    let cancelled = standalone.trigger("cancelled");
+    standalone.wait("the task to run", || {
+        let attempts = standalone.get(&format!("/api/v1/runs/{cancelled}/tasks/slow/attempts"));
+        attempts.is_some_and(|a| a["attempts"].as_array().is_some_and(|a| !a.is_empty()))
+    });
+    let (code, _, err) = standalone.cli(&["runs", "cancel", &cancelled]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait_for_state(&cancelled, "cancelled");
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(got.lock().unwrap().len(), 2);
+}

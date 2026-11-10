@@ -1,8 +1,8 @@
 # Notifications
 
 A DAG can tell channels about runs, tasks and triggers. A string names a server channel;
-the operator configures its URL and body. A list uses the server's default events
-(`RUN_FAILED` unless changed):
+the operator configures it: a webhook's URL and body, or an email channel's recipients. A list
+uses the server's default events (`RUN_FAILED` unless changed):
 
 ```python
 with Dag("orders", notify=["ops-slack"]):
@@ -30,7 +30,27 @@ A dict chooses events for each channel. This example also defines webhooks in th
 A `WebhookChannel` posts JSON to its URL, which must be within the operator's
 `[notifications] dag_urls`. Keep secrets out of the URL: it is in the DAG file and its
 JSON. Slack and Teams webhook URLs are secrets; ask the operator for a server channel.
-A string uses that channel's configured body. Email channels are coming in M4.13b.
+A string names a server webhook or email channel. For example,
+`notify={"oncall": [Notify.RUN_FAILED]}` sends that event to the operator's `oncall` channel.
+There is no `EmailChannel` class: the operator chooses the recipients.
+
+An email is plain text, with the summary as its subject and details in its body. For example:
+
+```text
+Subject: DAG `orders`: run run-123 failed (failed: prepare)
+
+DAG `orders`: run run-123 failed (failed: prepare)
+
+Event:        RUN_FAILED
+DAG:          orders
+Run:          run-123
+Planned for:  2026-11-09T02:00:00Z (2026-11-09 03:00 Europe/Warsaw)
+At:           2026-11-09T03:00:12Z (2026-11-09 04:00 Europe/Warsaw)
+Link:         https://schedr.example.com/runs/run-123
+
+Failed tasks:
+  prepare: connection failed
+```
 
 ## Bodies
 
@@ -71,8 +91,9 @@ own schema if it expects a different body.
 
 The example's email service bodies show a plain send and a stored-template send with a
 template ID and variables. Adapt their field names and URLs to your service; these are
-webhooks, not built-in email channels. The operator can instead configure these bodies on
-server channels, including authentication headers from environment variables.
+webhooks, not built-in email channels. Choose this recipe when an email service accepts HTTP
+requests or uses stored templates instead of SMTP. The operator can instead configure these
+bodies on server channels, including authentication headers from environment variables.
 
 ## Sending from a task
 
@@ -84,6 +105,7 @@ from schedr import api
 
 relay.send("Loaded rows", data={"rows": 42})
 api.notify("ops-slack", text="Loaded rows", data={"rows": 42})
+api.notify("oncall", text="Loaded rows", data={"rows": 42})
 ```
 
 A command task can send JSON directly or read it from a file:
@@ -91,7 +113,11 @@ A command task can send JSON directly or read it from a file:
 ```sh
 schedr task-ctx notify ops-slack --text 'Loaded rows' --data '{"rows":42}'
 schedr task-ctx notify ops-slack --text 'Loaded rows' --data @file.json
+schedr task-ctx notify oncall --text 'Loaded rows' --data '{"rows":42}'
 ```
+
+For an email channel, the task's `text` becomes the subject: its first line is trimmed and
+shortened after 200 characters. The full text and `data` appear in the body.
 
 A return means queued, not delivered. Each attempt may send at most
 `[notifications] max_per_attempt` messages (100 by default); beyond it Python raises and the

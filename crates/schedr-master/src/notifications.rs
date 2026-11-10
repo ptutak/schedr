@@ -6,10 +6,11 @@
 //! it is queued, from fixed values ([`Placeholder`]): nothing in it is code.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use schedr_config::config::{ChannelKind, NotificationsSection};
+use schedr_config::config::{ChannelKind, NotificationsSection, SmtpSection, SmtpTls};
 use schedr_db::notifications::{FailedTask, NewNotification};
 use schedr_model::notify::{Body, ChannelRef, NotifyEvent, Part, PathKey, Placeholder, Ref};
 use schedr_model::{Dag, Trigger};
@@ -23,6 +24,12 @@ mod tests;
 
 /// The event name of a message a task sends itself.
 pub const MESSAGE: &str = "MESSAGE";
+
+/// A notification posted to a webhook (`notifications.kind`).
+pub const KIND_WEBHOOK: &str = "webhook";
+
+/// A notification sent as an email; its body holds `to`, `subject` and `text`.
+pub const KIND_EMAIL: &str = "email";
 
 /// The most bytes a filled body may take by default (1 MiB).
 pub const DEFAULT_MAX_BODY: usize = 1 << 20;
@@ -39,6 +46,10 @@ pub struct Notifications {
     pub default_events: Vec<NotifyEvent>,
     /// The server's webhooks, by name.
     pub servers: BTreeMap<String, ServerWebhook>,
+    /// The server's email channels, by name (decision 426).
+    pub emails: BTreeMap<String, EmailChannel>,
+    /// The mail server they send through; none: no email channel is configured.
+    pub smtp: Option<Smtp>,
     /// Where a DAG's own webhook may post: its URL starts with one of them; none: DAGs define
     /// no webhooks (decision 425).
     pub dag_urls: Vec<String>,
@@ -55,14 +66,58 @@ pub struct Notifications {
 }
 
 /// A server webhook, its headers read from the environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ServerWebhook {
-    /// Where it posts.
+    /// Where it posts (it may be its secret: never logged).
     pub url: String,
     /// Its headers, name and value (values are secrets: never logged).
     pub headers: Vec<(String, String)>,
     /// Its body; none: schedr's fixed JSON.
     pub body: Option<Body>,
+}
+
+impl std::fmt::Debug for ServerWebhook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("ServerWebhook")
+            .field("headers", &names)
+            .field("body", &self.body.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A server email channel (`type = "email"`): its recipients, every one in To.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailChannel {
+    /// The recipients, checked.
+    pub to: Vec<String>,
+}
+
+/// The mail server (`[notifications.smtp]`), checked.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Smtp {
+    /// Its host.
+    pub host: String,
+    /// Its port.
+    pub port: u16,
+    /// How the connection is secured.
+    pub tls: SmtpTls,
+    /// The login, user and password, if any (the password is a secret: never logged).
+    pub login: Option<(String, String)>,
+    /// The sender.
+    pub from: String,
+}
+
+impl std::fmt::Debug for Smtp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Smtp")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("user", &self.login.as_ref().map(|(user, _)| user))
+            .field("from", &self.from)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Notifications {
@@ -96,13 +151,20 @@ impl Notifications {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let smtp = smtp_of(&section.smtp)?;
         let mut servers = BTreeMap::new();
+        let mut emails = BTreeMap::new();
         for (name, channel) in &section.channels {
             let key = format!("[notifications.channels.{name}]");
             if channel.kind == ChannelKind::Email {
-                return Err(format!(
-                    "{key}: email channels come with M4.13b; only `type = \"webhook\"` for now"
-                ));
+                if smtp.is_none() {
+                    return Err(format!(
+                        "{key}: an email channel sends through [notifications.smtp], which has \
+                         no `host`"
+                    ));
+                }
+                emails.insert(name.clone(), email_channel(&key, channel)?);
+                continue;
             }
             if !channel.to.is_empty() {
                 return Err(format!(
@@ -164,6 +226,8 @@ impl Notifications {
                 .map(|url| url.trim_end_matches('/').to_owned()),
             default_events,
             servers,
+            emails,
+            smtp,
             dag_urls: section.dag_urls.clone(),
             extra_roots: None,
             timeout: section.timeout,
@@ -186,11 +250,11 @@ impl Notifications {
                 problems.push(format!("notify: two channels are named `{name}`"));
             }
             match &entry.channel {
-                ChannelRef::Server { name } if !self.servers.contains_key(name) => {
+                ChannelRef::Server { name } if !self.is_server_channel(name) => {
                     problems.push(format!(
                         "notify: no server channel `{name}` ([notifications.channels.{name}] in \
                          the master's configuration; configured: {})",
-                        list(self.servers.keys())
+                        self.server_names()
                     ));
                 }
                 ChannelRef::Server { .. } => {}
@@ -203,7 +267,7 @@ impl Notifications {
                             list(self.dag_urls.iter())
                         ));
                     }
-                    if self.servers.contains_key(name) {
+                    if self.is_server_channel(name) {
                         problems.push(format!(
                             "notify: WebhookChannel `{name}` is named as a server channel; give \
                              it another name"
@@ -240,7 +304,7 @@ impl Notifications {
                     })
             })
             .filter_map(|entry| {
-                self.notification(event.dag, &entry.channel, kind.name(), &vars, false)
+                self.notification(event, &entry.channel, kind.name(), &vars, false)
                     .map_err(|error| {
                         tracing::error!(dag_id = %event.dag.id, channel = entry.channel.name(),
                             event = kind.name(), %error, "a notification can't be sent; dropped");
@@ -269,28 +333,55 @@ impl Notifications {
         };
         let channel = match own {
             Some(channel) => channel,
-            None if self.servers.contains_key(name) => &server,
+            None if self.is_server_channel(name) => &server,
             None => {
                 return Err(format!(
                     "no channel `{name}`: not in DAG `{}`'s notify=, nor a server channel \
                      (configured: {})",
                     event.dag.id,
-                    list(self.servers.keys())
+                    self.server_names()
                 ));
             }
         };
         let vars = self.vars(event, MESSAGE);
-        self.notification(event.dag, channel, MESSAGE, &vars, true)
+        self.notification(event, channel, MESSAGE, &vars, true)
+    }
+
+    /// Whether `name` is a channel of the server's configuration, of either type.
+    fn is_server_channel(&self, name: &str) -> bool {
+        self.servers.contains_key(name) || self.emails.contains_key(name)
+    }
+
+    /// The server's channels' names, for messages.
+    fn server_names(&self) -> String {
+        let names: std::collections::BTreeSet<&String> =
+            self.servers.keys().chain(self.emails.keys()).collect();
+        list(names.into_iter())
     }
 
     fn notification(
         &self,
-        dag: &Dag,
+        happened: &Event<'_>,
         channel: &ChannelRef,
         event: &str,
         vars: &Vars,
         strict: bool,
     ) -> Result<NewNotification, String> {
+        let dag = happened.dag;
+        if let ChannelRef::Server { name } = channel
+            && self.emails.contains_key(name)
+        {
+            let body = email_json(happened, event, vars);
+            Budget::new(self.max_body).spend(json_len(&body))?;
+            return Ok(NewNotification {
+                dag_id: dag.id.to_string(),
+                channel: name.clone(),
+                kind: KIND_EMAIL.to_owned(),
+                url: None,
+                event: event.to_owned(),
+                body,
+            });
+        }
         let (url, body) = match channel {
             // Not configured now: queued all the same, with schedr's JSON; the sender keeps it
             // until `give_up_after`, so a master started with the channel back delivers it
@@ -317,6 +408,7 @@ impl Notifications {
         Ok(NewNotification {
             dag_id: dag.id.to_string(),
             channel: channel.name().to_owned(),
+            kind: KIND_WEBHOOK.to_owned(),
             url,
             event: event.to_owned(),
             body,
@@ -686,4 +778,148 @@ fn resolve<'a>(reference: &Ref, vars: &'a Vars, strict: bool) -> Result<&'a Valu
         }
     }
     Ok(value)
+}
+
+/// `[notifications.smtp]` checked: none without a host.
+fn smtp_of(section: &SmtpSection) -> Result<Option<Smtp>, String> {
+    let Some(host) = section.host.clone().filter(|host| !host.is_empty()) else {
+        return Ok(None);
+    };
+    let from = section
+        .from
+        .clone()
+        .ok_or_else(|| "[notifications.smtp]: `from`, the sender, is needed".to_owned())?;
+    from.parse::<lettre::message::Mailbox>()
+        .map_err(|e| format!("[notifications.smtp] from: `{from}` isn't an address: {e}"))?;
+    let login = match (&section.username, &section.password) {
+        (Some(user), Some(password)) => Some((user.clone(), password.clone())),
+        (None, None) => None,
+        (Some(_), None) => {
+            return Err("[notifications.smtp] username: its password is set in \
+                 SCHEDR_CONFIG__NOTIFICATIONS__SMTP__PASSWORD, which isn't set"
+                .to_owned());
+        }
+        (None, Some(_)) => {
+            return Err(
+                "[notifications.smtp]: a password with no `username` to log in as".to_owned(),
+            );
+        }
+    };
+    if section.tls == SmtpTls::None && login.is_some() {
+        return Err(
+            "[notifications.smtp]: a login over `tls = \"none\"` would send the password in \
+             plain text; use `starttls` or `tls`"
+                .to_owned(),
+        );
+    }
+    Ok(Some(Smtp {
+        host,
+        port: section.port,
+        tls: section.tls,
+        login,
+        from,
+    }))
+}
+
+/// A `type = "email"` channel checked: `to` only, every address one.
+fn email_channel(
+    key: &str,
+    channel: &schedr_config::config::ChannelConfig,
+) -> Result<EmailChannel, String> {
+    if channel.url.is_some() || !channel.headers_env.is_empty() || channel.body.is_some() {
+        return Err(format!(
+            "{key}: an email channel takes `to` only (`url`, `headers_env` and `body` are a \
+             webhook's)"
+        ));
+    }
+    if channel.to.is_empty() {
+        return Err(format!("{key} to: an email channel needs its recipients"));
+    }
+    for address in &channel.to {
+        address
+            .parse::<lettre::message::Mailbox>()
+            .map_err(|e| format!("{key} to: `{address}` isn't an address: {e}"))?;
+    }
+    Ok(EmailChannel {
+        to: channel.to.clone(),
+    })
+}
+
+/// An email's subject: one line of at most 200 characters.
+pub(crate) fn subject_of(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    let cut: String = line.chars().take(200).collect();
+    if cut.len() < line.len() {
+        format!("{cut}…")
+    } else {
+        cut
+    }
+}
+
+/// The email for `happened` (decision 426): plain text, the summary as the subject, then the
+/// run, the task, the failed tasks with their errors, the times, a task's data and the link.
+fn email_json(happened: &Event<'_>, event: &str, vars: &Vars) -> Value {
+    let summary = happened
+        .text
+        .clone()
+        .unwrap_or_else(|| summary(happened, event));
+    let mut text = format!("{summary}\n\n");
+    let mut line = |name: &str, value: &str| {
+        let _ = writeln!(text, "{name:<13} {value}");
+    };
+    line("Event:", event);
+    line("DAG:", happened.dag.id.as_str());
+    if let Some(run) = happened.run_id {
+        line("Run:", run);
+    }
+    let zone = zone(happened.dag);
+    if let Some(planned) = happened.planned_for {
+        line("Planned for:", &both_times(planned, zone));
+    }
+    if let Some(task) = happened.task {
+        match happened.attempt {
+            Some(attempt) => line("Task:", &format!("{task} (attempt {attempt})")),
+            None => line("Task:", task),
+        }
+    }
+    if let Some(error) = &happened.error {
+        line("Error:", first_line(error));
+    }
+    line("At:", &both_times(happened.time, zone));
+    if let Some(Value::String(link)) = vars.get(&Placeholder::Link) {
+        line("Link:", link);
+    }
+    if !happened.failed_tasks.is_empty() {
+        text.push_str("\nFailed tasks:\n");
+        for task in &happened.failed_tasks {
+            let name = if task.map_index >= 0 {
+                format!("{}[{}]", task.task_id, task.map_index)
+            } else {
+                task.task_id.clone()
+            };
+            let _ = writeln!(
+                text,
+                "  {name}: {}",
+                task.error
+                    .as_deref()
+                    .map_or("(no error recorded)", first_line)
+            );
+        }
+    }
+    if !happened.data.is_null() {
+        let data = serde_json::to_string_pretty(&happened.data).unwrap_or_default();
+        let _ = write!(text, "\nData:\n{data}\n");
+    }
+    json!({"subject": subject_of(&summary), "text": text})
+}
+
+/// `2026-11-09T03:00:00Z (04:00 Europe/Warsaw)`: UTC, and the DAG's zone when it isn't UTC.
+fn both_times(at: Timestamp, zone: &str) -> String {
+    if zone == "UTC" {
+        return at.to_string();
+    }
+    match at.in_tz(zone) {
+        Ok(local) => format!("{at} ({} {zone})", local.strftime("%Y-%m-%d %H:%M")),
+        Err(_) => at.to_string(),
+    }
 }
