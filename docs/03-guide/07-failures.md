@@ -4,7 +4,8 @@
 
 | State | Where | Survives |
 |---|---|---|
-| DAG versions, runs, task instances, attempts, results, commands, the worker registry, each root's current hash | the database | everything but losing the database |
+| DAG versions, runs, task instances, attempts, results, commands | the database | everything but losing the database, until [retention](04-master.md#retention) deletes them |
+| The worker registry, each root's current hash | the database | everything but losing the database |
 | Connected workers, their slots and code, parse jobs | the master's memory | nothing; rebuilt as workers reconnect |
 | Attempts running on a worker, results not yet acknowledged | the worker's journal (its disk) | agent restarts |
 | Cleanup handles | the worker's journal disk and the master | agent restart while that disk survives; handles delivered to the master can accompany a moved cleanup |

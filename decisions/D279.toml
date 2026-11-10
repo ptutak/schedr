@@ -15,4 +15,4 @@ history = "archive/PROJECT.md#D279"
 step = "M4.8f"
 also = ["runs", "ui-cli"]
 code = ["crates/schedr-ui/src/runs.rs::ResourceRow"]
-checked = 2026-11-09
+checked = 2026-11-10

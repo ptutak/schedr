@@ -28,6 +28,7 @@ fn every_metric_is_registered_as_documented() {
     metrics.run_late_failed("sync", "late_cleanup_failed");
     metrics.notification_sent("ops");
     metrics.notification_failed("ops");
+    metrics.retention_deleted("runs", 2);
     metrics
         .rejections
         .get_or_create(&ReasonLabels {

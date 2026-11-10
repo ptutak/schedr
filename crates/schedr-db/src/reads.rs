@@ -385,6 +385,23 @@ impl Database {
             .transpose()
     }
 
+    /// Whether `[retention] outputs` deleted run `run_id`'s outputs (decision 435).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn outputs_deleted(&self, run_id: &str) -> Result<bool, DbError> {
+        const DELETED: &str = "SELECT 1 FROM runs WHERE id = $1{uuid} \
+            AND outputs_deleted_at IS NOT NULL";
+        let found: Option<i32> = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, DELETED))
+                .bind(run_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        Ok(found.is_some())
+    }
+
     /// A DAG's runs, newest `planned_for` first, at most `limit` (capped at [`MAX_RUNS`]);
     /// only those for `planned_for` when given.
     ///

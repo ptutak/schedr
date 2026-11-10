@@ -478,6 +478,23 @@ async fn a_tasks_panel_shows_its_attempts_with_their_errors() {
 }
 
 #[tokio::test]
+async fn the_output_tab_says_an_output_was_deleted_by_retention() {
+    let mut answers = failed_run();
+    answers.push((
+        "/api/v1/runs/r2/tasks/report/output",
+        410,
+        json!({"error": "the output of `report` in run `r2` was deleted by retention"}),
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let fragment = [("hx-request", "true")];
+    let (_, html) = get(&app, "/d/etl/runs/r2/tasks/report?tab=output", &fragment).await;
+    assert_eq!(
+        texts(&html, ".tab-body .empty"),
+        ["Output deleted by retention."]
+    );
+}
+
+#[tokio::test]
 async fn the_output_tab_shows_the_value_and_its_download() {
     let mut answers = failed_run();
     let big = "x".repeat(70_000);

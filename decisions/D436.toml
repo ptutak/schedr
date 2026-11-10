@@ -1,0 +1,15 @@
+title = "A task's own memory budget is `memory=`; the hard cap `hard_memory_limit=`"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "workers"
+section = "Memory and environment"
+summary = '''
+`@task(memory="2GiB")` (and on operators: `CommandOperator(..., memory=...)`) replaces the worker's
+default budget for that task; the watchdog kills it above. `hard_memory_limit=True` also sets the
+hard cap at that size through `schedr task-exec` (D50). Not chosen: the engine's names
+`memory_budget=`/`setrlimit=`.
+'''
+history = "JOURNAL.md#D436"
+step = "M4.15"
+code = []

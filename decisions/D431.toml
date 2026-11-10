@@ -1,0 +1,14 @@
+title = "A chained run loses its parent link when the parent is deleted"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+A run's `parent_run_id` (a `TriggerDagOperator`'s child) is cleared when retention deletes the
+parent, which usually ages out first; `triggered_by` still names the parent run. A parent isn't
+kept for its children, nor deleted with them.
+'''
+history = "JOURNAL.md#D430"
+step = "M4.14"
+code = []

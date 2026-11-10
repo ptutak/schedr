@@ -115,6 +115,10 @@ read-only query. **A scrape reads only memory**: never the database, never the m
 Labels include states, kinds, reasons, `dag_id`, code sets, the interpreter's name, and
 `method` / `phase` on the start histogram, never a run, task or attempt ID.
 
+`schedr_retention_deleted{kind}` counts retention deletions by kind: `runs`, `outputs`,
+`events`, `commands`, `dags` or `versions`. For `outputs` it counts runs whose outputs were
+removed. See [Retention](04-master.md#retention).
+
 `schedr_notifications_sent` and `schedr_notifications_failed` count delivered and dropped
 notifications by channel. See [Notifications](16-notifications.md#delivery).
 

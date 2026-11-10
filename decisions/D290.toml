@@ -11,5 +11,5 @@ They remain at their corresponding row heights, with lines in a separate channel
 history = "archive/PROJECT.md#D290"
 step = "M4.8z"
 also = ["ui-cli"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-ui/src/runs.rs::Graph"]

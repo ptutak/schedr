@@ -1,0 +1,19 @@
+title = "Retention also keeps the runs catchup counts as done, and runs still read"
+date = 2026-11-10
+by = "claude"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+Besides D430's three newest runs, kept per DAG: its successful manual and backfill runs planned
+after its newest scheduled run, and, while it has no scheduled run, its successful backfill runs
+(catchup counts their fire times as done; deleted, it would run them again). Kept whatever the
+DAG: a run an open `TriggerDagOperator` attempt waits for (deleted, it would be started again), a
+run or posted event a waiting step or trigger was handed (its retry gets the same). A removed DAG
+keeps these until its removal is as old as `[retention] runs` (a file missing for a while costs no
+history). Found by Codex's review of M4.14; the never-scheduled case and the removed DAG's raised
+by side notes to the user.
+'''
+history = "JOURNAL.md#D440"
+step = "M4.14"
+code = ["crates/schedr-db/src/retention.rs::KEPT", "crates/schedr-db/src/retention.rs::HELD"]

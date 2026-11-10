@@ -1944,6 +1944,8 @@ pub enum TabBody {
     },
     /// No output (yet).
     NoOutput,
+    /// Its output was deleted by retention (`[retention] outputs`, decision 435).
+    OutputDeleted,
     /// A try's log: its end as HTML, whether it was cut, the tries to pick from.
     Log {
         /// The log's (end) as HTML.
@@ -2366,6 +2368,7 @@ async fn output_tab<T: Transport>(
             })
         }
         Err(ClientError::Server { status: 404, .. }) => Ok(TabBody::NoOutput),
+        Err(ClientError::Server { status: 410, .. }) => Ok(TabBody::OutputDeleted),
         Err(error) => Err(Failure::unavailable(&deployment.name, &error)),
     }
 }
@@ -2510,6 +2513,10 @@ pub async fn output_download<T: Transport>(
         }) => not_found_page(
             &page,
             &format!("`{task_id}` has no output in run `{run_id}`."),
+        ),
+        Err(ClientError::Server { status: 410, .. }) => not_found_page(
+            &page,
+            &format!("The output of `{task_id}` in run `{run_id}` was deleted by retention."),
         ),
         Err(error) => unavailable_page(&page, &deployment.name, &error),
     }

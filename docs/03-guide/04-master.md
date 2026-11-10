@@ -342,6 +342,63 @@ only in memory, and workers report their hashes again when they reconnect.
 
 Then the master listens for workers and starts its loop, and `/readyz` turns ready.
 
+## Retention
+
+Retention is on by default. In the configuration file, `[retention]` sets how long to keep
+finished runs, their outputs, events and commands:
+
+```toml
+[retention]
+runs = "90d"
+outputs = "90d"
+events = "90d"
+commands = "365d"
+```
+
+Each value is an age such as `90d`, or `"forever"` to keep that kind. Zero is refused.
+`outputs` and `events` default to `runs`, so setting only `runs` changes all three. Commands
+default to 365 days. An upgraded deployment starts deleting older data at once; set the ages
+before upgrading if it must be kept longer.
+
+Runs and outputs age from the run's end. Deleting a run also deletes its tasks, attempts,
+outputs and cleanup handles. An old backfill left without runs is deleted too. Commands about
+that run remain as an audit trail until their own age expires: decided commands age from when
+they were requested; pending commands are kept.
+
+An unfinished run is never deleted because it still has work to do. For each DAG still defined,
+retention also keeps:
+
+- Its newest scheduled run, so the scheduler can continue its chain without creating catchup
+  runs again from the start.
+- Its newest run of any kind, for a manual run's `since`.
+- The last run to end in success or failure, for `RUN_RECOVERED`.
+- Successful manual and backfill runs planned after its newest scheduled run, and, if it has
+  no scheduled run, its successful backfill runs. Catchup counts their fire times as done.
+
+Retention also keeps a run an open `TriggerDagOperator` attempt is waiting for, so it is not
+started again, and a run or posted event handed to a waiting step or trigger, so a retry gets
+the same item. Protected runs keep their outputs too. A removed DAG (its file no longer
+defines it) keeps these protections until the removal is as old as `runs`, so a file missing for
+a while, such as after a bad sync, costs no history. After that, unfinished runs and runs still
+being read are still kept; once its last run is gone, the DAG and its remaining history are
+deleted. If that ID is defined again afterwards, it starts with no history. When a parent run
+is deleted, a child run loses its parent link; `triggered_by` still names the parent.
+
+With `outputs` shorter than `runs`, eligible outputs can go while the run, tasks and outcomes
+stay. The output API then answers `410 Gone`, and the UI says "Output deleted by retention".
+An output age longer than the run age makes no difference: outputs go with the run.
+
+Events found by triggers age from when they were received; events posted through the API age
+from when they were posted. What triggers passed of a deleted posted event goes with it;
+trigger bookmarks stay. DAG versions no run, trigger or DAG uses are deleted when run
+retention is enabled. An explicit backfill over an old range sees deleted runs as missing and
+creates them again.
+
+The leading master runs retention every hour beside its main loop, deleting batches of runs
+from one DAG per transaction. `schedr_retention_deleted{kind}` counts what it deletes; for
+`outputs`, it counts runs whose outputs were removed. Worker task logs have their own
+[retention](05-workers.md#logs), independent of these ages.
+
 ## Gauges
 
 Every 15 s the loop also counts runs, tasks and workers by state with one read-only query, for

@@ -53,6 +53,8 @@
   <pre class="output">{{ text }}</pre>
 {% when TabBody::NoOutput %}
   <p class="empty">No output (yet).</p>
+{% when TabBody::OutputDeleted %}
+  <p class="empty">Output deleted by retention.</p>
 {% when TabBody::Log with { html, cut, size, running, tries, tail } %}
   <p class="tries">Try {% for t in tries %}<a class="try{% if t.open %} open{% endif %}" href="{{ t.href }}" hx-get="{{ t.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ t.href }}">{{ t.number }}</a>{% endfor %} · {{ size }}{% if running %} · still running{% endif %}</p>
   {% if cut %}<p class="dim">Only its end is shown (its last lines, about 256 KiB).</p>{% endif %}

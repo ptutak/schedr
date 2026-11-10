@@ -2035,3 +2035,48 @@ async fn a_dag_without_a_trigger_has_nothing_to_switch_on() {
     let (status, _) = send(&app, Method::POST, "/api/v1/dags/sync/trigger/skip", "").await;
     assert_eq!(status, StatusCode::ACCEPTED);
 }
+
+#[tokio::test]
+async fn an_output_retention_deleted_is_gone_one_never_stored_not_found() {
+    let (app, db, run_id) = api().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    db.store_output(&ready[0].instance_id, "SUCCESS", &json!(3))
+        .await
+        .unwrap();
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!()
+    };
+    for statement in [
+        format!(
+            "UPDATE task_instances SET state = 'success' WHERE id = '{}'",
+            ready[0].instance_id
+        ),
+        "DELETE FROM outputs".to_owned(),
+        format!("UPDATE runs SET outputs_deleted_at = '{NOW}' WHERE id = '{run_id}'"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(statement))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    let (status, body) = get(&app, &format!("/api/v1/runs/{run_id}/tasks/extract/output")).await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .ends_with("was deleted by retention"),
+        "{body}"
+    );
+    // A task that didn't succeed had none to delete.
+    sqlx::query("UPDATE task_instances SET state = 'failed'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = get(&app, &format!("/api/v1/runs/{run_id}/tasks/extract/output")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().starts_with("no output of"),
+        "{body}"
+    );
+}

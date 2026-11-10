@@ -1,0 +1,15 @@
+title = "Retention always keeps each DAG's three newest runs"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+Besides unfinished runs, never deleted per DAG: its newest scheduled run (the scheduler's chain:
+without it a catchup DAG would create its runs again from `start`), its newest run of any kind (a
+manual run's `since`), and the last that ended `success` or `failed` (`RUN_RECOVERED`). This
+replaces the archived "the latest run of each DAG".
+'''
+history = "JOURNAL.md#D430"
+step = "M4.14"
+code = []

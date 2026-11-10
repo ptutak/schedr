@@ -29,6 +29,17 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D440 | 2026-11-10 | claude | built M4.14 | state | Retention also keeps the runs catchup counts as done, and runs still read |
+| D439 | 2026-11-10 | user | planned (M4.15) | deployment | Upgrade-rule gaps: the clear ones fixed, the others asked |
+| D438 | 2026-11-10 | user | planned (M4.15) | workers | The hard memory cap is `RLIMIT_DATA` |
+| D437 | 2026-11-10 | user | planned (M4.15) | workers | A task's budget is placed within a worker's pod limit |
+| D436 | 2026-11-10 | user | planned (M4.15) | workers | A task's own memory budget is `memory=`; the hard cap `hard_memory_limit=` |
+| D435 | 2026-11-10 | user | built M4.14 | state | An output deleted by retention answers 410 Gone |
+| D434 | 2026-11-10 | user | built M4.14 | state | Named events go with `[retention] events` |
+| D433 | 2026-11-10 | user | built M4.14 | state | Retention is on by default |
+| D432 | 2026-11-10 | user | built M4.14 | state | Retention's interval and batch are hidden values |
+| D431 | 2026-11-10 | user | built M4.14 | state | A chained run loses its parent link when the parent is deleted |
+| D430 | 2026-11-10 | user | built M4.14 | state | Retention always keeps each DAG's three newest runs |
 | D429 | 2026-11-10 | user | built M4.13a | outcomes | `[notifications] ca_file`: extra CAs for notifications |
 | D428 | 2026-11-10 | user | built M4.13a | outcomes | A webhook's 4xx drops the notification at once |
 | D427 | 2026-11-10 | user | built M4.13a | outcomes | The user's email service is reached as a webhook |
@@ -641,6 +652,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### deployment
 
+- D439: Upgrade-rule gaps: the clear ones fixed, the others asked
 - D383: A slim image beside the full one
 - D37: Deploy schedr ui by default in the distributed chart
 
@@ -811,6 +823,13 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### state
 
+- D440: Retention also keeps the runs catchup counts as done, and runs still read
+- D435: An output deleted by retention answers 410 Gone
+- D434: Named events go with `[retention] events`
+- D433: Retention is on by default
+- D432: Retention's interval and batch are hidden values
+- D431: A chained run loses its parent link when the parent is deleted
+- D430: Retention always keeps each DAG's three newest runs
 - D114: Replace NUL in database JSON strings and keys
 - D78: A task instance records why it failed without an attempt
 
@@ -936,6 +955,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D438: The hard memory cap is `RLIMIT_DATA`
+- D437: A task's budget is placed within a worker's pod limit
+- D436: A task's own memory budget is `memory=`; the hard cap `hard_memory_limit=`
 - D397: A turn's messages are stored in groups by type; savepoints later
 - D396: B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups
 - D333: Worker pass_env reaches parsing and the fork server

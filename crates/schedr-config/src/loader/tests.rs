@@ -795,7 +795,7 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .split('`')
         .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
         .collect();
-    assert_eq!(names.len(), 68, "{names:?}");
+    assert_eq!(names.len(), 74, "{names:?}");
     for name in names {
         let loaded = load(None, &env(&[(name, "1s")]), &[]);
         if HIDDEN_LIMITS.iter().any(|limit| name.ends_with(limit)) {
@@ -1027,4 +1027,49 @@ fn the_smtp_server_has_defaults_and_its_password_comes_from_the_environment_only
             ..
         }
     ));
+}
+
+#[test]
+fn every_fixed_limit_can_be_set() {
+    // `MASTER__NOTIFICATION_BODY` was read as a timing: setting it stopped the start.
+    for name in HIDDEN_LIMITS {
+        let name = format!("{HIDDEN_PREFIX}{name}");
+        let limits = load(None, &env(&[(&name, "7")]), &[]).unwrap().limits;
+        assert_eq!(limits.overridden, [name]);
+    }
+    let limits = load(
+        None,
+        &env(&[("SCHEDR_HIDDEN__MASTER__RETENTION_BATCH", "5")]),
+        &[],
+    )
+    .unwrap()
+    .limits;
+    assert_eq!(limits.retention_batch, 5);
+}
+
+#[test]
+fn retention_keeps_ages_or_forever_its_outputs_and_events_as_its_runs() {
+    use crate::config::Age;
+    let day = Duration::from_hours(24);
+    let defaults = load(None, &env(&[]), &[]).unwrap().retention;
+    assert_eq!(defaults.runs, Age::For(90 * day));
+    assert_eq!(
+        (defaults.outputs(), defaults.events()),
+        (Age::For(90 * day), Age::For(90 * day))
+    );
+    assert_eq!(defaults.commands, Age::For(365 * day));
+    let set = load(
+        Some(file(
+            "[retention]\nruns = \"30d\"\noutputs = \"7d\"\ncommands = \"forever\"\n",
+        )),
+        &env(&[]),
+        &[],
+    )
+    .unwrap()
+    .retention;
+    assert_eq!(set.outputs(), Age::For(7 * day));
+    assert_eq!(set.events(), Age::For(30 * day), "as its runs");
+    assert_eq!(set.commands, Age::Forever);
+    let zero = load(Some(file("[retention]\nruns = \"0s\"\n")), &env(&[]), &[]).unwrap_err();
+    assert!(zero.to_string().contains("\"forever\" keeps it"), "{zero}");
 }

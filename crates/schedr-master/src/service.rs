@@ -223,6 +223,59 @@ impl Hub {
         }
     }
 
+    /// Deletes what `[retention]` no longer keeps while this master leads (decisions
+    /// 430-435): a pass at once, then one every `settings.interval`, until `stop` completes. A
+    /// failing pass is logged; the next one goes on.
+    pub async fn run_retention(
+        &self,
+        settings: crate::retention::RetentionSettings,
+        stop: impl Future<Output = ()>,
+    ) {
+        let nothing = crate::retention::RetentionSettings {
+            interval: settings.interval,
+            batch: settings.batch,
+            ..Default::default()
+        };
+        if settings == nothing {
+            return;
+        }
+        tokio::pin!(stop);
+        loop {
+            tokio::select! {
+                () = &mut stop => return,
+                () = self.while_leading() => {}
+            }
+            let leading = || *self.leading.borrow();
+            match crate::retention::pass(
+                &self.db,
+                &settings,
+                (self.clock)(),
+                leading,
+                &self.metrics,
+            )
+            .await
+            {
+                Ok(pass) if pass.any() => tracing::info!(
+                    runs = pass.runs,
+                    outputs = pass.outputs,
+                    events = pass.events,
+                    commands = pass.commands,
+                    dags = pass.dags,
+                    versions = pass.versions,
+                    "retention deleted what [retention] no longer keeps"
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "retention failed; trying again at its next pass");
+                }
+            }
+            tokio::select! {
+                () = &mut stop => return,
+                () = tokio::time::sleep(settings.interval) => {}
+            }
+        }
+    }
+
     /// Refreshes the gauges taken from the database; a failure is logged (the gauges keep
     /// their last values).
     pub async fn refresh_gauges(&self) {

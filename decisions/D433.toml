@@ -1,0 +1,14 @@
+title = "Retention is on by default"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+`[retention]` defaults as archived: `runs`, `outputs` and `events` 90 days, `commands` 365 days;
+`outputs` and `events` default to `runs` when only it is set; `"forever"` turns any of them off.
+An upgraded deployment starts deleting what is older at once.
+'''
+history = "JOURNAL.md#D430"
+step = "M4.14"
+code = []

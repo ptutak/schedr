@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D208"
 step = "M4.7e"
 also = ["ui-cli"]
 code = ["crates/schedr-ui/src/connections.rs::list", "crates/schedr-api/src/routes.rs::list_connections"]
-checked = 2026-11-09
+checked = 2026-11-10

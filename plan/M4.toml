@@ -937,7 +937,8 @@ scope = '''
 `[retention]` (runs, outputs, events, commands), the master's batched job, never the latest run nor an unfinished one, "output deleted by retention"
 '''
 done_when = "old runs and outputs go, the protected ones stay, on SQLite and Postgres"
-status = "planned"
+status = "done"
+done = 2026-11-10
 
 [[steps]]
 id = "M4.15"

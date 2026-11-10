@@ -92,6 +92,8 @@ pub struct Settings {
     /// The most records of one kind, and characters of each text, kept of what a worker
     /// reports (wait step hosts, warnings; B183).
     pub worker_report: ReportLimits,
+    /// `[retention]` and its job's timing (decisions 430-435).
+    pub retention: crate::retention::RetentionSettings,
 }
 
 /// How the master's loop and its parse jobs are paced.
@@ -161,6 +163,7 @@ impl Default for Settings {
             max_instances: crate::execution::DEFAULT_MAX_INSTANCES,
             backfill_max_runs: crate::scheduler::backfill::DEFAULT_MAX_RUNS,
             worker_report: ReportLimits::default(),
+            retention: crate::retention::RetentionSettings::default(),
         }
     }
 }

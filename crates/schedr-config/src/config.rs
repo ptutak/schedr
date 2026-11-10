@@ -170,6 +170,9 @@ pub struct Timings {
     pub outbox_retry_first: Duration,
     /// The longest wait before a notification that failed is tried again.
     pub outbox_retry_max: Duration,
+    /// How often the master's retention job deletes what `[retention]` no longer keeps
+    /// (decision 432).
+    pub retention_interval: Duration,
     /// The first wait before a failed parse job is tried again; it doubles up to
     /// `parse_retry_max`.
     pub parse_retry_first: Duration,
@@ -273,6 +276,7 @@ impl Default for Timings {
             outbox_poll: Duration::from_secs(5),
             outbox_retry_first: Duration::from_secs(10),
             outbox_retry_max: Duration::from_secs(3600),
+            retention_interval: Duration::from_hours(1),
             parse_retry_first: Duration::from_secs(30),
             parse_retry_max: Duration::from_mins(10),
             node_heartbeat: Duration::from_secs(10),
@@ -423,6 +427,9 @@ pub struct Config {
     pub events: EventsSection,
     /// `[notifications]`: what the master sends when runs and tasks end (decisions 408-429).
     pub notifications: NotificationsSection,
+    /// `[retention]`: how long the database keeps runs, outputs, events and commands
+    /// (decisions 430-435).
+    pub retention: RetentionSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).
@@ -458,17 +465,22 @@ pub struct HiddenLimits {
     /// The most bytes a notification's body may take once filled
     /// (`MASTER__NOTIFICATION_BODY`): a template using big values many times is refused.
     pub notification_body: usize,
+    /// The most runs the retention job deletes in one transaction (`MASTER__RETENTION_BATCH`,
+    /// decision 432): one run can hold thousands of rows, and a transaction holds its locks.
+    pub retention_batch: usize,
     /// The `SCHEDR_HIDDEN__*` variables that changed one.
     pub overridden: Vec<String>,
 }
 
 impl Default for HiddenLimits {
-    /// 256 records of each kind, 4096 characters of each text, 1 MiB a notification.
+    /// 256 records of each kind, 4096 characters of each text, 1 MiB a notification, 100 runs
+    /// a retention transaction.
     fn default() -> Self {
         Self {
             worker_report_records: 256,
             worker_report_text: 4096,
             notification_body: 1 << 20,
+            retention_batch: 100,
             overridden: Vec::new(),
         }
     }
@@ -761,6 +773,100 @@ impl Default for BackfillSection {
     /// 1000 runs: a year of a daily DAG, a month of an hourly one.
     fn default() -> Self {
         Self { max_runs: 1000 }
+    }
+}
+
+/// `[retention]`: how long the database keeps what runs left behind (decisions 430-435). The
+/// master deletes what is older every hour, in batches; never an unfinished run, nor a DAG's
+/// newest scheduled run, its newest run, or the last that ended `success` or `failed`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetentionSection {
+    /// Finished runs older than this (by their end) are deleted with their tasks, attempts and
+    /// outputs; `"forever"` keeps them.
+    pub runs: Age,
+    /// A finished run's outputs older than this are deleted, its tasks and their outcomes
+    /// kept; the same as `runs` by default. Longer than `runs` changes nothing.
+    pub outputs: Option<Age>,
+    /// Events triggers found and events posted through the API older than this are deleted;
+    /// the same as `runs` by default.
+    pub events: Option<Age>,
+    /// Commands (the audit trail) decided longer ago than this are deleted, whatever their
+    /// runs' age.
+    pub commands: Age,
+}
+
+impl Default for RetentionSection {
+    /// 90 days of runs (their outputs and events the same), 365 days of commands.
+    fn default() -> Self {
+        Self {
+            runs: Age::For(Duration::from_hours(90 * 24)),
+            outputs: None,
+            events: None,
+            commands: Age::For(Duration::from_hours(365 * 24)),
+        }
+    }
+}
+
+impl RetentionSection {
+    /// How long outputs are kept: `outputs`, else `runs`.
+    #[must_use]
+    pub fn outputs(&self) -> Age {
+        self.outputs.unwrap_or(self.runs)
+    }
+
+    /// How long events are kept: `events`, else `runs`.
+    #[must_use]
+    pub fn events(&self) -> Age {
+        self.events.unwrap_or(self.runs)
+    }
+}
+
+/// How long something is kept: a duration (`"90d"`) or `"forever"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Age {
+    /// Deleted once older than this.
+    For(Duration),
+    /// Never deleted.
+    Forever,
+}
+
+impl Serialize for Age {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::For(duration) => serialize_duration(duration, s),
+            Self::Forever => s.serialize_str("forever"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Age {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        if text == "forever" {
+            return Ok(Self::Forever);
+        }
+        let duration = crate::units::parse_duration(&text).map_err(serde::de::Error::custom)?;
+        if duration.is_zero() {
+            return Err(serde::de::Error::custom(
+                "a zero age would delete everything; \"forever\" keeps it",
+            ));
+        }
+        Ok(Self::For(duration))
+    }
+}
+
+impl JsonSchema for Age {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Age".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A duration such as `90d` or `12h`, or `forever`.",
+            "examples": ["90d", "forever"]
+        })
     }
 }
 

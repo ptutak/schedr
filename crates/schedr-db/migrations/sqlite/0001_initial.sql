@@ -274,7 +274,10 @@ CREATE TABLE runs (
     -- The event that started it, for a run of an event-triggered DAG: its own copy, as events
     -- are deleted by retention.
     event        TEXT,
-    cancel_requested_at TEXT
+    cancel_requested_at TEXT,
+    -- When `[retention] outputs` deleted its tasks' outputs (decision 435): asked for, they
+    -- are "deleted by retention", not missing.
+    outputs_deleted_at TEXT
 );
 
 -- A master that crashes after creating a scheduled run can't create it twice.
@@ -440,6 +443,21 @@ CREATE UNIQUE INDEX commands_by_key ON commands (requested_by, request_key)
 CREATE INDEX commands_by_run ON commands ((payload ->> 'run_id'));
 CREATE INDEX commands_by_result_run ON commands ((result ->> 'run_id'));
 CREATE INDEX commands_pauses ON commands (requested_at) WHERE kind = 'pause_dag';
+
+-- What the retention job reads per batch (decisions 430-435): the oldest finished runs, those
+-- with their outputs still, a deleted run's children, versions in use, what was handed, and
+-- the oldest events and decided commands.
+CREATE INDEX runs_finished_by_end ON runs (ended_at, id)
+    WHERE state IN ('success', 'failed', 'cancelled');
+CREATE INDEX runs_outputs_kept ON runs (ended_at, id)
+    WHERE state IN ('success', 'failed', 'cancelled') AND outputs_deleted_at IS NULL;
+CREATE INDEX runs_by_parent ON runs (parent_run_id) WHERE parent_run_id IS NOT NULL;
+CREATE INDEX runs_by_version ON runs (dag_version_id);
+CREATE INDEX task_instances_handed ON task_instances (handed_run) WHERE handed_run IS NOT NULL;
+CREATE INDEX trigger_passed_by_item ON trigger_passed (item);
+CREATE INDEX events_by_age ON events (received_at);
+CREATE INDEX named_events_by_age ON named_events (posted_at, id);
+CREATE INDEX commands_decided ON commands (requested_at) WHERE status <> 'pending';
 
 -- The master's lease: one master per database (see archive/PROJECT.md, Components and roles:
 -- production path). Also created before the migrations (`Database::create_lease_table`), so

@@ -3980,6 +3980,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Deleted by retention ([retention] outputs)"
           }
         },
         "summary": "A task's stored output in a run, with its outcome; 404 while it has none.",

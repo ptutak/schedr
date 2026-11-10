@@ -238,6 +238,11 @@ pub fn master_settings(config: &Config) -> Settings {
             records: config.limits.worker_report_records,
             text: config.limits.worker_report_text,
         },
+        retention: schedr_master::retention::RetentionSettings::from_config(
+            &config.retention,
+            config.timings.retention_interval,
+            config.limits.retention_batch,
+        ),
     }
 }
 
@@ -627,6 +632,7 @@ pub async fn serve_master(
     let connections = incoming(listener, tls, Protocol::Grpc, settings.timings.accept_retry)
         .map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
     let listen_retry = settings.listen_retry;
+    let retention = settings.retention;
     let (notifications, retry) = match db.command_notifications().await {
         Ok(notifications) => (notifications, false),
         Err(error) => {
@@ -700,6 +706,10 @@ pub async fn serve_master(
                 Err(error) => tracing::error!(%error, "notifications can't be sent"),
             }
         }
+    });
+    tokio::spawn({
+        let (hub, stop) = (hub.clone(), stop.clone());
+        async move { hub.run_retention(retention, until(stop)).await }
     });
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())

@@ -1,0 +1,14 @@
+title = "An output deleted by retention answers 410 Gone"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+`GET /api/v1/runs/{run}/tasks/{task}/output` answers 410 "output deleted by retention" for a task
+whose output `[retention] outputs` removed; 404 still means it never had one. The run, its tasks
+and their outcomes stay; the UI shows that text.
+'''
+history = "JOURNAL.md#D430"
+step = "M4.14"
+code = []

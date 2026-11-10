@@ -2203,3 +2203,145 @@ async fn notifications_are_queued_retried_and_deleted_with_what_their_messages_r
     let other = uuid::Uuid::now_v7().to_string();
     assert!(db.previous_run_failed("sync", &other).await.unwrap());
 }
+
+#[tokio::test]
+async fn retention_deletes_what_isnt_kept_on_postgres() {
+    let (db, version) = with_dag().await;
+    let schedr_db::database::Pool::Postgres(pool) = db.pool() else {
+        unreachable!()
+    };
+    let exec = |statement: String| async move {
+        sqlx::query(AssertSqlSafe(statement))
+            .execute(pool)
+            .await
+            .unwrap();
+    };
+    // `a` (old, started `e`), `b` (old, the newest scheduled), `c` (old, the newest).
+    let mut ids = Vec::new();
+    for (kind, state, planned, ended) in [
+        (
+            RunKind::Scheduled,
+            RunState::Success,
+            "2026-01-01T03:00:00Z",
+            "2026-01-01T04:00:00Z",
+        ),
+        (
+            RunKind::Scheduled,
+            RunState::Failed,
+            "2026-01-02T03:00:00Z",
+            "2026-01-02T04:00:00Z",
+        ),
+        (
+            RunKind::Manual,
+            RunState::Cancelled,
+            "2026-01-03T03:00:00Z",
+            "2026-01-03T04:00:00Z",
+        ),
+        (
+            RunKind::Chained,
+            RunState::Success,
+            "2026-01-01T05:00:00Z",
+            "2026-01-20T04:00:00Z",
+        ),
+    ] {
+        let id = db
+            .insert_run(&run(&version, kind, state, planned))
+            .await
+            .unwrap()
+            .unwrap();
+        exec(format!(
+            "UPDATE runs SET ended_at = '{ended}' WHERE id = '{id}'"
+        ))
+        .await;
+        let task = uuid::Uuid::now_v7();
+        exec(format!(
+            "INSERT INTO task_instances (id, run_id, task_id, state, updated_at) VALUES \
+             ('{task}', '{id}', 'load', 'success', now())"
+        ))
+        .await;
+        exec(format!(
+            "INSERT INTO outputs (task_instance_id, outcome, value, size_bytes) VALUES \
+             ('{task}', 'SUCCESS', '42', 2)"
+        ))
+        .await;
+        ids.push(id);
+    }
+    exec(format!(
+        "UPDATE runs SET parent_run_id = '{}' WHERE id = '{}'",
+        ids[0], ids[3]
+    ))
+    .await;
+    let cut = ts("2026-01-10T00:00:00Z");
+    // `a` and `c`: `c`, cancelled, isn't the last to succeed or fail, but it's the newest.
+    assert_eq!(db.delete_old_outputs(cut, 100, ts(NOW)).await.unwrap(), 1);
+    assert_eq!(db.delete_old_outputs(cut, 100, ts(NOW)).await.unwrap(), 0);
+    assert_eq!(db.delete_old_runs(cut, 100).await.unwrap(), 1);
+    assert_eq!(db.delete_old_runs(cut, 100).await.unwrap(), 0);
+    let left: Vec<String> = sqlx::query_scalar("SELECT id::text FROM runs ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert_eq!(left, ids[1..].to_vec());
+    let linked: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE parent_run_id IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(linked, 0);
+
+    // Removed: its runs aren't kept, and it goes with the last.
+    exec("UPDATE dags SET removed_at = '2026-01-05T00:00:00Z'".to_owned()).await;
+    assert_eq!(
+        db.delete_old_runs(ts("2026-02-01T00:00:00Z"), 100)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(db.delete_removed_dags(cut).await.unwrap(), 1);
+    let dags: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dags")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(dags, 0);
+}
+
+#[tokio::test]
+async fn retention_deletes_old_events_and_decided_commands_on_postgres() {
+    let (db, _) = with_dag().await;
+    let schedr_db::database::Pool::Postgres(pool) = db.pool() else {
+        unreachable!()
+    };
+    let exec = |statement: String| async move {
+        sqlx::query(AssertSqlSafe(statement))
+            .execute(pool)
+            .await
+            .unwrap();
+    };
+    let cut = ts("2026-01-10T00:00:00Z");
+    for (key, at) in [
+        ("old", "2026-01-01T00:00:00Z"),
+        ("new", "2026-01-20T00:00:00Z"),
+    ] {
+        let event = uuid::Uuid::now_v7();
+        exec(format!(
+            "INSERT INTO events (dag_id, key, data, received_at) VALUES ('sync', '{key}', '{{}}', \
+             '{at}')"
+        ))
+        .await;
+        exec(format!(
+            "INSERT INTO named_events (id, name, key, data, at, posted_at, posted_by) VALUES \
+             ('{event}', 'packed', '{key}', '{{}}', '{at}', '{at}', 'anna')"
+        ))
+        .await;
+        exec(format!(
+            "INSERT INTO commands (id, kind, payload, requested_by, requested_at, status, decided_at) \
+             VALUES ('{}', 'pause_dag', '{{}}', 'anna', '{at}', 'applied', '{at}')",
+            uuid::Uuid::now_v7()
+        ))
+        .await;
+    }
+    // The DAG's only version is its current one.
+    assert_eq!(db.delete_unused_versions().await.unwrap(), 0);
+    assert_eq!(db.delete_old_events(cut, 100).await.unwrap(), 2);
+    assert_eq!(db.delete_old_commands(cut, 100).await.unwrap(), 1);
+}

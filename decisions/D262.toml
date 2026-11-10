@@ -15,4 +15,4 @@ step = "M4.8e"
 unverified = ["the caps keep their graph-row heights"]
 also = ["cleanup"]
 code = ["crates/schedr-ui/src/runs.rs::cap_of", "crates/schedr-ui/src/runs.rs::rails_of"]
-checked = 2026-11-09
+checked = 2026-11-10

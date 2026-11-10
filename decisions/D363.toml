@@ -13,4 +13,4 @@ The DAG page has a Backfill form and displays progress.
 history = "archive/PROJECT.md#D363"
 step = "M4.12b"
 code = ["crates/schedr-api/src/routes.rs::create_backfill", "crates/schedr-api/src/routes.rs::get_backfill", "crates/schedr/src/user.rs::backfill", "crates/schedr-ui/src/actions.rs::backfill"]
-checked = 2026-11-09
+checked = 2026-11-10

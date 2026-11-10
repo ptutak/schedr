@@ -1,0 +1,14 @@
+title = "Upgrade-rule gaps: the clear ones fixed, the others asked"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "deployment"
+section = "Upgrades and compatibility"
+summary = '''
+M4.15's check of the upgrade rules against what M2 built fixes the gaps the archived rules
+(Upgrades and compatibility) settle; a gap needing a choice stops the step for the user, with what
+was done committed.
+'''
+history = "JOURNAL.md#D436"
+step = "M4.15"
+code = []

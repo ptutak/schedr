@@ -57,6 +57,13 @@ const NOTIFICATIONS_SENT: MetricDoc = MetricDoc {
     labels: &["channel"],
     help: "Notifications delivered, by channel",
 };
+const RETENTION_DELETED: MetricDoc = MetricDoc {
+    name: "retention_deleted",
+    kind: MetricKind::Counter,
+    labels: &["kind"],
+    help: "Rows the retention job deleted: runs, outputs (runs whose outputs went), events, \
+           commands, dags, versions",
+};
 const NOTIFICATIONS_FAILED: MetricDoc = MetricDoc {
     name: "notifications_failed",
     kind: MetricKind::Counter,
@@ -213,6 +220,7 @@ pub const METRICS: &[MetricDoc] = &[
     RUNS_LATE_FAILED,
     NOTIFICATIONS_SENT,
     NOTIFICATIONS_FAILED,
+    RETENTION_DELETED,
     TASKS,
     TASKS_WAITING,
     ASSIGNMENTS,
@@ -263,6 +271,13 @@ pub struct LateLabels {
     pub reason: String,
 }
 
+/// What the retention job deleted.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct KindLabels {
+    /// `runs`, `outputs`, `events`, `commands`, `dags` or `versions`.
+    pub kind: String,
+}
+
 /// A notification channel.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ChannelLabels {
@@ -308,6 +323,8 @@ pub struct MasterMetrics {
     pub notifications_sent: Family<ChannelLabels, Counter>,
     /// Notifications given up on, by channel.
     pub notifications_failed: Family<ChannelLabels, Counter>,
+    /// What the retention job deleted, by kind.
+    pub retention_deleted: Family<KindLabels, Counter>,
     /// Task instances of unfinished runs, by state.
     pub tasks: Family<StateLabels, Gauge>,
     /// Ready tasks no worker could take at the last assignment pass, by reason.
@@ -367,6 +384,7 @@ impl Default for MasterMetrics {
             runs_late_failed: Family::default(),
             notifications_sent: Family::default(),
             notifications_failed: Family::default(),
+            retention_deleted: Family::default(),
             tasks: Family::default(),
             tasks_waiting: Family::default(),
             assignments: Counter::default(),
@@ -422,6 +440,11 @@ impl MasterMetrics {
             NOTIFICATIONS_FAILED.name,
             NOTIFICATIONS_FAILED.help,
             self.notifications_failed.clone(),
+        );
+        r.register(
+            RETENTION_DELETED.name,
+            RETENTION_DELETED.help,
+            self.retention_deleted.clone(),
         );
         r.register(TASKS.name, TASKS.help, self.tasks.clone());
         r.register(
@@ -586,6 +609,17 @@ impl MasterMetrics {
                 channel: channel.to_owned(),
             })
             .inc();
+    }
+
+    /// Counts `n` rows of `kind` the retention job deleted.
+    pub fn retention_deleted(&self, kind: &str, n: u64) {
+        if n > 0 {
+            self.retention_deleted
+                .get_or_create(&KindLabels {
+                    kind: kind.to_owned(),
+                })
+                .inc_by(n);
+        }
     }
 
     /// Counts one finished run.

@@ -34,6 +34,9 @@ pub enum ApiError {
     /// The request's content is over what is taken (a posted event's data).
     #[error("{0}")]
     TooLarge(String),
+    /// It was there and was deleted for good (an output `[retention] outputs` removed).
+    #[error("{0}")]
+    Gone(String),
     /// The database failed (logged; the client gets a generic message).
     #[error(transparent)]
     Db(#[from] DbError),
@@ -51,6 +54,7 @@ impl ApiError {
             Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::Gone(_) => StatusCode::GONE,
             Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

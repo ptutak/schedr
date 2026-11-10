@@ -11,4 +11,4 @@ Its panel lists instances with their attempts, logs and outputs.
 history = "archive/PROJECT.md#D83"
 step = "M4.3c"
 code = ["crates/schedr-ui/src/runs.rs::MAPPED_TABS", "crates/schedr-ui/src/runs.rs::instance_rows"]
-checked = 2026-11-09
+checked = 2026-11-10

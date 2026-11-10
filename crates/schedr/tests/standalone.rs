@@ -3249,3 +3249,45 @@ with Dag("cancelled", notify=["oncall"]):
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(got.lock().unwrap().len(), 2);
 }
+
+#[test]
+fn retention_deletes_an_old_run_but_keeps_the_newest() {
+    let dag = r#"
+from schedr import Dag, task
+
+@task
+def one() -> int:
+    return 1
+
+with Dag("kept"):
+    one()
+"#;
+    let standalone = Standalone::start_configured(
+        &[("kept.py", dag)],
+        None,
+        &[],
+        "\n[retention]\nruns = \"1s\"\n",
+        &[("SCHEDR_HIDDEN__MASTER__RETENTION_INTERVAL", "200ms")],
+    );
+    standalone.wait("the DAG", || standalone.dag_ids() == ["kept"]);
+    let first = standalone.trigger("kept");
+    standalone.wait_for_state(&first, "success");
+    let second = standalone.trigger("kept");
+    standalone.wait_for_state(&second, "success");
+    // The first ended over a second ago and isn't the newest: deleted.
+    let ids = || {
+        standalone.get("/api/v1/dags/kept/runs").map(|list| {
+            list["runs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|run| run["run_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        })
+    };
+    standalone.wait("the old run deleted", || {
+        ids().is_some_and(|ids| ids == [second.clone()])
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(ids(), Some(vec![second]), "the newest stays");
+}

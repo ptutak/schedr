@@ -603,6 +603,10 @@ impl Database {
     /// # Errors
     ///
     /// [`DbError::Sqlx`] if a statement fails (nothing is stored then).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one transaction over each kind of change, its statements read together"
+    )]
     pub async fn apply_dag_changes(
         &self,
         changes: &[DagChange],
@@ -630,6 +634,7 @@ impl Database {
         const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL, \
             live_since = NULL WHERE dag_id = $2";
         const FORGET_PASSED: &str = "DELETE FROM trigger_passed WHERE dag_id = $1";
+        const LOCK: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR UPDATE";
         let now = db_time(now);
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for change in changes {
@@ -644,6 +649,15 @@ impl Database {
                             .bind(&now)
                             .execute(&mut *tx)
                             .await?;
+                        // As retention does before deleting its versions: one waits for the
+                        // other, so the version made current here isn't deleted meanwhile
+                        // (Codex's review of M4.14). SQLite's writes are one at a time.
+                        if backend == crate::Backend::Postgres {
+                            sqlx::query(sql(backend, LOCK))
+                                .bind(dag.id.as_str())
+                                .execute(&mut *tx)
+                                .await?;
+                        }
                         sqlx::query(sql(backend, VERSION))
                             .bind(Uuid::now_v7().to_string())
                             .bind(dag.id.as_str())

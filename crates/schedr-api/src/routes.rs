@@ -884,7 +884,8 @@ pub async fn get_run_dag(
     responses(
         (status = 200, body = OutputView),
         (status = 400, body = ErrorBody),
-        (status = 404, body = ErrorBody)
+        (status = 404, body = ErrorBody),
+        (status = 410, body = ErrorBody, description = "Deleted by retention ([retention] outputs)")
     ))]
 pub async fn get_output(
     State(state): State<ApiState>,
@@ -895,6 +896,14 @@ pub async fn get_output(
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let run_id = known_run(&state, &run_id).await?.id;
     let none = || ApiError::NotFound(format!("no output of `{task_id}` in run `{run_id}`"));
+    // A successful task's output that retention deleted (decision 435), not one never stored:
+    // asked after the outputs are read, so a deletion between the two isn't missed (Codex's
+    // review of M4.14).
+    let gone = || {
+        ApiError::Gone(format!(
+            "the output of `{task_id}` in run `{run_id}` was deleted by retention"
+        ))
+    };
     let mapped = mapped_count(&state, &run_id, &task_id).await?;
     if let (Some(_), None | Some(-1)) = (mapped, query.map_index) {
         // The mapped task's whole output: the list a downstream task gets (decision 81).
@@ -906,10 +915,11 @@ pub async fn get_output(
             .find(|i| i.task_id == task_id && i.map_index == -1)
             .filter(|i| i.state == schedr_model::TaskInstanceState::Success)
             .ok_or_else(none)?;
-        let list = state
-            .db
-            .instance_results(&run_id, &task_id)
-            .await?
+        let results = state.db.instance_results(&run_id, &task_id).await?;
+        if state.db.outputs_deleted(&run_id).await? {
+            return Err(gone());
+        }
+        let list = results
             .into_iter()
             .map(|r| {
                 if r.state == schedr_model::TaskInstanceState::Success {
@@ -925,11 +935,19 @@ pub async fn get_output(
         }));
     }
     let map_index = instance_of(mapped, &task_id, query.map_index, false)?;
-    let (outcome, value) = state
+    let Some((outcome, value)) = state
         .db
         .instance_output(&run_id, &task_id, map_index)
         .await?
-        .ok_or_else(none)?;
+    else {
+        let succeeded = state.db.outputs_deleted(&run_id).await?
+            && state.db.run_instances(&run_id).await?.iter().any(|i| {
+                i.task_id == task_id
+                    && i.map_index == map_index
+                    && i.state == schedr_model::TaskInstanceState::Success
+            });
+        return Err(if succeeded { gone() } else { none() });
+    };
     Ok(Json(OutputView {
         outcome,
         value: shown(value),

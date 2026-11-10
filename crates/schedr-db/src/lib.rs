@@ -19,6 +19,7 @@ pub mod nodes;
 pub mod notifications;
 mod query;
 pub mod reads;
+pub mod retention;
 pub mod run_of;
 pub mod runs;
 mod scope;

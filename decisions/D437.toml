@@ -1,0 +1,14 @@
+title = "A task's budget is placed within a worker's pod limit"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "workers"
+section = "Memory and environment"
+summary = '''
+A worker takes a task whose budget fits its pod limit minus the agent's reserve, whatever its
+default share; none fits: the task waits queued ("no worker has memory for 8 GiB"), as archived
+(rejection 7). Slots aren't counted in memory. Not chosen: memory tracked as a resource.
+'''
+history = "JOURNAL.md#D436"
+step = "M4.15"
+code = []

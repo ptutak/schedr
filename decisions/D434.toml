@@ -1,0 +1,14 @@
+title = "Named events go with `[retention] events`"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+Events posted through the API (`named_events`, D354) are deleted after `[retention] events`, as
+trigger events are, by when they were posted; what triggers passed of them goes with them. No key
+of their own.
+'''
+history = "JOURNAL.md#D430"
+step = "M4.14"
+code = []

@@ -1,0 +1,14 @@
+title = "Retention's interval and batch are hidden values"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "state"
+section = "Retention"
+summary = '''
+`SCHEDR_HIDDEN__MASTER__RETENTION_INTERVAL` (1h) and `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH`
+(100 runs per transaction), as D232's timings; `[retention]` holds only the ages: `runs`,
+`outputs`, `events`, `commands`. This replaces the archived public `interval` and batch keys.
+'''
+history = "JOURNAL.md#D430"
+step = "M4.14"
+code = []

@@ -77,6 +77,10 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_RETRY` | 30 s | Wait before retrying failed notifications; polling continues meanwhile. |
 | `SCHEDR_HIDDEN__MASTER__ALIVE_INTERVAL` | 5 s | How often the master's loop turns at least while waiting; it must stay shorter than the loop stall timeout, or a waiting master looks stuck. |
 | `SCHEDR_HIDDEN__MASTER__GAUGE_REFRESH` | 15 s | How often the master reads gauges from the database. |
+| `SCHEDR_HIDDEN__MASTER__OUTBOX_POLL` | 5 s | How often the sender looks for notifications to deliver. |
+| `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_FIRST` | 10 s | First wait before retrying a failed notification; it doubles up to the maximum. |
+| `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_MAX` | 1 h | Longest wait before retrying a failed notification. |
+| `SCHEDR_HIDDEN__MASTER__RETENTION_INTERVAL` | 1 h | How often the leading master runs retention. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_FIRST` | 30 s | First wait before retrying a failed parse job; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_MAX` | 10 min | Longest wait before retrying a failed parse job. |
 | `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT` | 10 s | How often the master writes its row of the deployment's nodes. |
@@ -161,10 +165,12 @@ API's maximum; an invalid value stops startup.
 
 ## Fixed limits
 
-Two limits are set the same way, with the same warning: whole numbers above zero, in the
+Four limits are set the same way, with the same warning: whole numbers above zero, in the
 environment only.
 
 | Variable | Default | What it does and what depends on it |
 |---|---|---|
 | `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_RECORDS` | 256 | The most wait step hosts, and the most warnings, the master keeps of one worker's report; the rest are dropped with a warning in its log. An honest worker sends a few. |
 | `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT` | 4096 | The most characters of each text in them (a host's code, a warning's message); longer ones are cut. |
+| `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
+| `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |

@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D291"
 step = "M4.8z"
 also = ["ui-cli"]
 code = ["crates/schedr-ui/templates/run.html", "crates/schedr-ui/src/runs.rs::Rail", "crates/schedr-ui/src/runs.rs::Badge"]
-checked = 2026-11-09
+checked = 2026-11-10

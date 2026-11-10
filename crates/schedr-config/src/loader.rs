@@ -333,9 +333,11 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 2] = [
+const HIDDEN_LIMITS: [&str; 4] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
+    "MASTER__NOTIFICATION_BODY",
+    "MASTER__RETENTION_BATCH",
 ];
 
 /// The fixed limits, with what `SCHEDR_HIDDEN__*` variables set: whole numbers above zero.
@@ -346,6 +348,7 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             Some("MASTER__WORKER_REPORT_RECORDS") => &mut limits.worker_report_records,
             Some("MASTER__WORKER_REPORT_TEXT") => &mut limits.worker_report_text,
             Some("MASTER__NOTIFICATION_BODY") => &mut limits.notification_body,
+            Some("MASTER__RETENTION_BATCH") => &mut limits.retention_batch,
             _ => continue,
         };
         *limit = text
@@ -422,6 +425,7 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
             "MASTER__OUTBOX_POLL" => &mut timings.outbox_poll,
             "MASTER__OUTBOX_RETRY_FIRST" => &mut timings.outbox_retry_first,
             "MASTER__OUTBOX_RETRY_MAX" => &mut timings.outbox_retry_max,
+            "MASTER__RETENTION_INTERVAL" => &mut timings.retention_interval,
             "MASTER__PARSE_RETRY_FIRST" => &mut timings.parse_retry_first,
             "MASTER__PARSE_RETRY_MAX" => &mut timings.parse_retry_max,
             "MASTER__NODE_HEARTBEAT" => &mut timings.node_heartbeat,

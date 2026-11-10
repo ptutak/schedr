@@ -400,3 +400,38 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   in To (not one each), plain text (not text and HTML); 427 a webhook for the email service (not
   a class of its own); 428 a 4xx dropped at once but 408 and 429 (not retried for a day); 429
   `[notifications] ca_file` (not the system's trust store only).
+
+### <a id="D430"></a><a id="D431"></a><a id="D432"></a><a id="D433"></a><a id="D434"></a><a id="D435"></a>2026-11-10: retention's open points (decisions 430-435)
+
+- **Question:** before M4.14, what the archived Retention design (archive/PROJECT.md) didn't
+  cover: it predates backfills, chained runs and named events, and D232's hidden timings.
+- **Along the way:** reading the scheduler showed that with `catchup` it creates runs after the
+  newest scheduled run, so keeping only "the latest run of each DAG" could re-create a catchup
+  DAG's old runs; and that `runs.parent_run_id` is a foreign key a deleted parent would break.
+- **Chosen (the user's):** 430 the three newest runs kept (not the newest only); 431 a child's
+  parent link cleared (not the parent kept, not deleted together); 432 the interval and batch
+  hidden (not public keys); 433 on by default, as archived (not off until set); 434 named events
+  with `events` (not a key of their own); 435 410 Gone for a deleted output (not 200 with a
+  flag, not 404).
+
+### <a id="D436"></a><a id="D437"></a><a id="D438"></a><a id="D439"></a>2026-11-10: per-task memory, M4.15's open points (decisions 436-439)
+
+- **Question:** asked ahead, before working through M4.15 unattended (the user: "you can ask me
+  about M4.15 if it's small and then work until end of M4.15"): the API names, placing a big
+  budget, which rlimit, and what to do with gaps in the upgrade rules.
+- **Chosen (the user's):** 436 `memory=` and `hard_memory_limit=` (not `memory_budget=` and
+  `setrlimit=`); 437 within a worker's pod limit, as archived (not memory as a resource); 438
+  `RLIMIT_DATA` (not `RLIMIT_AS`); 439 clear gaps fixed, choices stop the step (not a report
+  only).
+
+### <a id="D440"></a>2026-11-10: what retention keeps beyond the three newest runs (decision 440)
+
+- **Question:** Codex's review of M4.14 showed D430's three newest runs aren't enough: with
+  `catchup`, backfilled fire times ahead of the newest scheduled run are skipped only while their
+  runs exist; a `TriggerDagOperator` waiting for a deleted child starts it again; a sensor's retry
+  gets the run it was handed, gone. A side note to the user then pointed out a DAG never
+  scheduled (paused, only backfilled).
+- **Chosen (Claude's, to be overruled by the user):** keep those runs too: what catchup counts as
+  done (after the newest scheduled run; all successful backfills while there is none), and what
+  something unfinished still reads. Not chosen: storing the scheduler's position apart from the
+  runs (a bigger change to the scheduler), documenting the re-runs as a consequence.
