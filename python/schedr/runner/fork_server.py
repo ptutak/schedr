@@ -17,6 +17,7 @@ import gc
 import importlib
 import locale
 import os
+import pkgutil
 import signal
 import socket
 import sys
@@ -104,10 +105,35 @@ type Disabled = tuple[str, list[str]] | None
 """Why the fork server is disabled and the threads besides the main one; ``None`` if it isn't."""
 
 
+_NOT_PRELOADED = ("schedr.runner", "schedr.testing")
+"""Parts of schedr a server doesn't load for its processes: the runner's are its own, and the
+testing helpers are for tests."""
+
+
+def _load_schedr() -> None:
+    """Imports all of schedr, which a DAG file uses.
+
+    Its package loads its parts lazily, so each forked process would import them itself (about
+    200 ms a task). A part needing an optional library that isn't installed is left out: a task
+    importing it fails as it would anyway.
+    """
+    import schedr  # noqa: PLC0415 - the package is the runner's own, imported for its path
+
+    for found in pkgutil.walk_packages(schedr.__path__, "schedr."):
+        if found.name.startswith(_NOT_PRELOADED):
+            continue
+        with contextlib.suppress(ImportError):
+            importlib.import_module(found.name)
+
+
 def _prepare(preload: list[str], threads: Callable[[], list[str]]) -> Disabled:
-    """Preloads the modules; why the fork server can't be used, if it can't."""
+    """Preloads schedr and the modules; why the fork server can't be used, if it can't."""
     if not sys.platform.startswith("linux"):
         return "the fork server runs on Linux only", []
+    try:
+        _load_schedr()
+    except (Exception, SystemExit) as e:  # a part of schedr failing as a preload does
+        return f"loading schedr failed: {type(e).__name__}: {e}", []
     for module in preload:
         try:
             importlib.import_module(module)

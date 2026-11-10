@@ -11,5 +11,5 @@ If usage cannot be read, it reports null and still reports the exit.
 history = "archive/PROJECT.md#D14"
 step = "M2.5.3"
 also = ["observability"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["python/schedr/runner/fork_server.py::_exited"]

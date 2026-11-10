@@ -8,6 +8,7 @@ import os
 import select
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -736,3 +737,19 @@ def test_thread_names_lists_the_threads_besides_the_main_one() -> None:
     while "probe-thread" in thread_names() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert "probe-thread" not in thread_names()
+
+
+def test_both_servers_hold_all_of_schedr_but_the_runner_and_testing() -> None:
+    # A forked process imports none of schedr's parts itself (they cost a task ~200 ms). In a
+    # fresh interpreter: this one has imported much of schedr already.
+    script = (
+        "import sys; from schedr.runner import fork_server; "
+        "assert fork_server._prepare([], lambda: []) is None; "
+        "print(' '.join(sorted(m for m in sys.modules if m.startswith('schedr'))))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    loaded = set(done.stdout.split())
+    assert {"schedr.sensors", "schedr.chained", "schedr._model", "schedr.operators"} <= loaded
+    assert "schedr.testing" not in loaded

@@ -53,48 +53,120 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B196: a bad body's error would show an unknown enum value (unknown variant `…`) (Suspected) | 1 | low | rare | **security** |
-| 2 | B213: `tasks logs --follow` never ends for a task that will get no attempt | 4 | medium | possible | usability |
-| 3 | B212: a configuration with Basic sign-in makes `dags test` fail on its own server | 4 | medium | possible | correctness |
-| 4 | B205: the chart turns `-` into `_` in interpreter and root names, the loader keeps them | 4 | medium | possible | correctness |
-| 5 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
-| 6 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
-| 7 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 8 | B214: `dags test` drops the warning for a `--for` without an offset | 3 | low | likely | usability |
-| 9 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 10 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 11 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
-| 12 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
-| 13 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
-| 14 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 15 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 16 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 17 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 18 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 19 | B197: watcher tests fail under a full parallel run, pass alone (Suspected) | 2 | low | possible | tests |
-| 20 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 21 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 22 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 23 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 24 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 25 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 26 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 27 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 28 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
-| 29 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 30 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 31 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 32 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 33 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 34 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 35 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 36 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 37 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 38 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 39 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 40 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 41 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 42 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B220: a bad timestamp in a request body is echoed in the 400 | 4 | medium | possible | **security** |
+| 2 | B216: a password parameter spelled across several tabs or a CR/LF stays unmasked | 3 | high | rare | **security** |
+| 3 | B217: the chart's default git-sync image is a tag, not a digest, and pin-check doesn't look at chart values | 2 | medium | rare | **security** |
+| 4 | B218: kind-mesh.sh runs a downloaded istioctl without checking its digest | 1 | low | rare | **security** |
+| 5 | B196: a bad body's error would show an unknown enum value (unknown variant `…`) (Suspected) | 1 | low | rare | **security** |
+| 6 | B223: the deployment guide lists three TLS Secrets where the chart needs four | 6 | medium | likely | usability |
+| 7 | B221: UI pods ignore the chart's top-level `config` and `env` | 4 | medium | possible | correctness |
+| 8 | B213: `tasks logs --follow` never ends for a task that will get no attempt | 4 | medium | possible | usability |
+| 9 | B212: a configuration with Basic sign-in makes `dags test` fail on its own server | 4 | medium | possible | correctness |
+| 10 | B205: the chart turns `-` into `_` in interpreter and root names, the loader keeps them | 4 | medium | possible | correctness |
+| 11 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
+| 12 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
+| 13 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
+| 14 | B219: a master's graceful shutdown waits for a Control stream that never sent Register | 3 | high | rare | reliability |
+| 15 | B215: a command the CLI couldn't connect to send says it may have arrived | 3 | low | likely | usability |
+| 16 | B214: `dags test` drops the warning for a `--for` without an offset | 3 | low | likely | usability |
+| 17 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 18 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
+| 19 | B222: a long release name gives Service names over 63 characters | 2 | medium | rare | correctness |
+| 20 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
+| 21 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
+| 22 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
+| 23 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 24 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 25 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 26 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 27 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 28 | B197: watcher tests fail under a full parallel run, pass alone (Suspected) | 2 | low | possible | tests |
+| 29 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
+| 30 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
+| 31 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 32 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 33 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 34 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 35 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 36 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
+| 37 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 38 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 39 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 40 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 41 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 42 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
+| 43 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 44 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 45 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 46 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 47 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 48 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 49 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 50 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 51 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+
+## B223: the deployment guide lists three TLS Secrets where the chart needs four
+
+- **Rating:** severity **medium**, probability **likely**, usability (score 6): the guide says `tls.existingSecrets` (`master`, `webserver`, `worker`: all three); with the distributed UI enabled (the default) `checkTls` also needs `ui`, so following it the chart refuses; lines 20 and 64 still call the UI's chart deployment future work.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `docs/03-guide/10-deployment.md` (line 101; lines 20, 64).
+- **A fix:** name the four Secrets (`ui` when `ui.enabled`), and drop the "future" wording.
+
+## B222: a long release name gives Service names over 63 characters
+
+- **Rating:** severity **medium**, probability **rare**, correctness (score 2): `schedr.fullname` truncates to 63, then roles append `-master` etc.: a 53-character release gives a 67-character Service and the install fails.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `charts/schedr/templates/_helpers.tpl` (`schedr.fullname`).
+- **A fix:** truncate the fullname to 63 minus the longest suffix (`-webserver`, 10), or fail with a clear message on a release name too long.
+
+## B221: UI pods ignore the chart's top-level `config` and `env`
+
+- **Rating:** severity **medium**, probability **possible**, correctness (score 4): `ui.yaml` includes `schedr.authEnv` and `schedr.tlsEnv` but not `schedr.extraEnv` (which master, webserver and worker get through `schedr.env`): `config: {UI__DOCS_DIR: ""}` or proxy variables in `env` never reach the UI.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `charts/schedr/templates/ui.yaml` (env, line 104).
+- **A fix:** include `schedr.extraEnv` in the UI's env; a chart-check case.
+
+## B220: a bad timestamp in a request body is echoed in the 400
+
+- **Rating:** severity **medium**, probability **possible**, security (score 4): B194's `without_values` knows serde's integer/float/boolean/character forms only; the timestamp parser's errors quote the input (`parameter 'day' for `3141-02` is invalid`, `expected 0-9 but got h`), so part of a value comes back.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `crates/schedr-api/src/routes.rs` (`BACKTICKED_VALUES`, `without_values`).
+- **A fix:** for a field of a time type, replace the parser's message by a fixed one ("not an RFC 3339 time"); a test with both inputs above.
+
+## B219: a master's graceful shutdown waits for a Control stream that never sent Register
+
+- **Rating:** severity **high**, probability **rare**, reliability (score 3): `control` awaits the first message before the stream is in the map `close_streams` drains; a client that opens Control and stalls keeps tonic's graceful shutdown waiting until Kubernetes kills the pod.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `crates/schedr-master/src/service.rs` (`control`, `inbound.message().await` before `open_stream`).
+- **A fix:** wait for `Register` in a `select!` with the hub's closing signal (or a timeout), returning `UNAVAILABLE`; a test like F12's SIGTERM one with a stream that sends nothing.
+
+## B218: kind-mesh.sh runs a downloaded istioctl without checking its digest
+
+- **Rating:** severity **low**, probability **rare**, security (score 1): `curl … | tar -xz`, then the binary is run; a replaced release asset runs as the developer (a dev script, kind clusters only).
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `scripts/kind-mesh.sh` (the istioctl download).
+- **A fix:** download to a file, check a pinned SHA-256 per `$ISTIO` (Istio publishes `.sha256` files), then extract.
+
+## B217: the chart's default git-sync image is a tag, not a digest, and pin-check doesn't look at chart values
+
+- **Rating:** severity **medium**, probability **rare**, security (score 2): `git_sync.image` defaults to `registry.k8s.io/git-sync/git-sync:v4.7.1`; a replaced upstream tag runs other code with the repository credentials and write access to the DAG checkout. `make pin-check` reads workflows, tools, images and requirements, not `values.yaml`.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `charts/schedr/values.yaml` (git-sync `image`), `scripts/check-action-pins.py`.
+- **A fix:** pin `@sha256:` beside the tag, and have pin-check require a digest on every image in `values.yaml`.
+
+## B216: a password parameter spelled across several tabs or a CR/LF stays unmasked
+
+- **Rating:** severity **high**, probability **rare**, security (score 3): B203's scan reads a URL parameter's name across one tab between name characters only; sqlx also drops adjacent tabs, CR and LF, and a tab before `=`, so `pass<TAB><TAB>word=hunter2` connects with the password and the masked configuration keeps it.
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `crates/schedr-config/src/masked.rs` (`hide_value_after`, the `across` loop).
+- **A fix:** normalise the name as the URL parser does (drop every `\t\n\r` anywhere in it, as `percent_decoded` does) before `names_secret`, instead of stepping over single tabs; test the four spellings.
+
+## B215: a command the CLI couldn't connect to send says it may have arrived
+
+- **Rating:** severity **low**, probability **likely**, usability (score 3): with no server listening (connection refused on every try), a command ends with B140's `Unanswered`: "the command may have arrived. Look before sending it again", though nothing was sent.
+- **Found:** 2026-11-10, by the user running `make showcase` with no standalone up: four `dags unpause` each said the command may have arrived.
+- **Where:** `crates/schedr-client/src/lib.rs` (`ClientError::Unanswered`, B140), chosen after `COMMAND_TRIES` whatever the tries' errors were.
+- **A fix:** when every try failed to connect (reqwest's `is_connect()`, before any byte went out), say the server can't be reached and the command wasn't sent; keep `Unanswered` for a try that may have reached it.
 
 ## B214: `dags test` drops the warning for a `--for` without an offset
 
@@ -590,6 +662,7 @@ step touches their code or the user schedules them.
 - **Next:** look at the grace and what the worker was doing in those 8 s (its log in the
   test's output shows the drain's steps), then decide whether the limit or the drain is
   what's slow under load.
+- **Seen again:** 2026-11-10 on CI (run 42816200627, commit 43504fb), `a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_period`: the worker didn't stop within its grace (`exited: None`); passed in two local `make check` runs of the same tree.
 
 ## B4: `runs trigger` in a roles integration test got no result once
 

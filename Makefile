@@ -206,11 +206,15 @@ test-ui:         ## Run the web UI's browser tests (Playwright, Chromium)
 # can be reached from outside WSL (it signs no one in, auth mode none: LISTEN=127.0.0.1 on a
 # network you don't trust; `schedr dags list` works without --server with either), ops on 8090.
 # Ctrl-C stops it; `rm -rf .schedr` starts afresh. Python tasks fork from a fork server as the chart's do
-# (FORK_SERVER=false: spawned, as the configuration's default; Linux only).
+# (FORK_SERVER=false: spawned, as the configuration's default; Linux only), the preloaded one
+# importing PRELOAD (the libraries the examples' DAG files use; a JSON list, `[]` for the bare
+# server alone), so a forked task doesn't import them itself. Both servers load all of schedr,
+# with pydantic, on their own.
 DAGS ?= examples
 STANDALONE_DIR ?= .schedr
 LISTEN ?= 0.0.0.0
 FORK_SERVER ?= true
+PRELOAD ?= ["sqlite3", "asyncio", "json", "shutil", "tempfile", "random"]
 
 # The docs examples' configuration (the notification channels and URLs) and secrets, as
 # examples/test_docs.py gives them.
@@ -247,6 +251,7 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
+	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
 	$(if $(wildcard site/index.html),SCHEDR_CONFIG__UI__DOCS_DIR="$(abspath site)") \
 	uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
 
@@ -282,6 +287,8 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 		SCHEDR_CONFIG__WORKER__DATA_DIR="$$dir/$$1" \
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
+		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
+	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
 		SCHEDR_CONFIG__WEBSERVER__PORT=$$(($$3 + 80)) \
 		SCHEDR_CONFIG__MASTER__GRPC_PORT=$$(($$3 + 70)) \
 		SCHEDR_CONFIG__WORKER__LOG_PORT=$$(($$3 + 81)) \
@@ -321,7 +328,10 @@ SHOWCASE_DAG_IDS := readings_ingest anomaly_response device_maintenance greenhou
 
 showcase:        ## Play the greenhouse showcase against `make standalone DAGS=examples/showcase/dags`
 	cargo build -p schedr
-	for dag in $(SHOWCASE_DAG_IDS); do target/debug/schedr dags unpause $$dag >/dev/null; done
+	@curl -sf -o /dev/null http://localhost:8080/api/v1/dags/readings_ingest || { \
+		echo "no standalone with the showcase's DAGs on localhost:8080: start one first, in another" \
+			"terminal, with \`make standalone DAGS=examples/showcase/dags\`" >&2; exit 1; }
+	for dag in $(SHOWCASE_DAG_IDS); do target/debug/schedr dags unpause $$dag >/dev/null || exit 1; done
 	uv run --no-sync python examples/showcase/simulate.py --schedr target/debug/schedr demo
 
 # The connections demo (examples/demo, decisions 202-205): the base image (built once, `make

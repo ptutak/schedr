@@ -11,4 +11,4 @@ Inherited server handlers are cleared; logging shutdown and task finalizers are 
 history = "archive/PROJECT.md#D15"
 step = "M2.5.3"
 code = ["python/schedr/runner/fork_server.py::_shut_down", "python/schedr/runner/fork_server.py::_forget_server_exit_handlers"]
-checked = 2026-11-09
+checked = 2026-11-10

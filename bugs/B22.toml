@@ -21,4 +21,5 @@ details = '''
 - **Next:** look at the grace and what the worker was doing in those 8 s (its log in the
   test's output shows the drain's steps), then decide whether the limit or the drain is
   what's slow under load.
+- **Seen again:** 2026-11-10 on CI (run 42816200627, commit 43504fb), `a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_period`: the worker didn't stop within its grace (`exited: None`); passed in two local `make check` runs of the same tree.
 '''

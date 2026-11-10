@@ -325,8 +325,10 @@ sidecar's network, a mount). A failure still there after the window is lasting (
 package, a typo in the list).
 
 **The servers.** On Linux the worker starts them when the worker starts. With a `preload`
-list there are two: a preloaded one, sent that list, and a bare one, sent no modules (it
-has `schedr`, and nothing else preloaded). Without a list there is only the bare one. Each
+list there are two: a preloaded one, sent that list, and a bare one, sent no modules. Both
+load all of `schedr` first (but its runner and `schedr.testing`), with what it imports,
+such as pydantic: a child then imports none of it again, about 200 ms a task. Without a
+list there is only the bare one. Each
 server's own output is appended to `fork-server-preloaded.log` or `fork-server-bare.log`
 in the worker's log directory, beside the task logs.
 

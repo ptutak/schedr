@@ -1,0 +1,12 @@
+title = "a bad timestamp in a request body is echoed in the 400"
+severity = "medium"
+probability = "possible"
+kind = "security"
+summary = '''B194's `without_values` knows serde's integer/float/boolean/character forms only; the timestamp parser's errors quote the input (`parameter 'day' for `3141-02` is invalid`, `expected 0-9 but got h`), so part of a value comes back'''
+found = 2026-11-10
+suspected = false
+details = '''
+- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
+- **Where:** `crates/schedr-api/src/routes.rs` (`BACKTICKED_VALUES`, `without_values`).
+- **A fix:** for a field of a time type, replace the parser's message by a fixed one ("not an RFC 3339 time"); a test with both inputs above.
+'''
