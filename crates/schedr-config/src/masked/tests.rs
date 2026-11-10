@@ -56,9 +56,17 @@ use super::*;
     r#"postgres://user:head"secret@db/schedr"#,
     "postgres://user:****@db/schedr"
 )]
-#[case::a_tab_in_a_query_name(
-    "https://h/?pass\tword=hunter2&x=1",
-    "https://h/?pass\tword=****&x=1"
+#[case::a_tab_in_a_query_name("https://h/?pass\tword=hunter2&x=1", "https://h/?password=****&x=1")]
+// B216: every tab in the name, and one before the `=`; a URL is shown as sqlx reads it.
+#[case::two_tabs_in_a_query_name(
+    "https://h/?pass\t\tword=hunter2&x=1",
+    "https://h/?password=****&x=1"
+)]
+#[case::a_tab_before_the_equals("https://h/?password\t=hunter2", "https://h/?password=****")]
+// B216's review: in text a line break ends a line, whatever the line before said.
+#[case::a_line_after_a_password_message(
+    "invalid password\nstatus=denied",
+    "invalid password\nstatus=denied"
 )]
 #[case::tab_separated_names("key\tpassword=hunter2", "key\tpassword=****")]
 #[case::tab_separated_plain("name\tvalue=shown", "name\tvalue=shown")]
@@ -171,6 +179,42 @@ fn a_configuration_masks_its_database_url() {
     config.database.url = Some("postgres://schedr:hunter2@db/schedr".to_owned());
     let shown = masked(&config);
     assert_eq!(shown["database"]["url"], "postgres://schedr:****@db/schedr");
+}
+
+/// B216's review: a URL's tabs and line breaks, which sqlx drops, in its password's name, its
+/// value or its user info: shown as sqlx reads the URL, its password hidden.
+#[rstest::rstest]
+#[case(
+    "postgres://db/x?pass\nword=\thunter2",
+    "postgres://db/x?password=****"
+)]
+#[case(
+    "postgres://db/x?pass\t\tword=head\nhunter2",
+    "postgres://db/x?password=****"
+)]
+#[case("postgres://db/x?pass\rword=hunter2", "postgres://db/x?password=****")]
+#[case("postgres://u:head\nhunter2@db/x", "postgres://u:****@db/x")]
+#[case(
+    "postgres:\n//u@db/x?pass\nword=hunter2",
+    "postgres://u@db/x?password=****"
+)]
+fn a_configurations_url_is_masked_as_its_client_reads_it(
+    #[case] url: &str,
+    #[case] expected: &str,
+) {
+    let mut config = crate::Config::default();
+    config.database.url = Some(url.to_owned());
+    let shown = masked(&config);
+    assert_eq!(shown["database"]["url"], expected);
+}
+
+/// B216's second review: text holding a URL keeps its lines (an error summary's, a log's).
+#[test]
+fn text_with_a_url_keeps_its_lines() {
+    let text = "failed https://db\ninvalid password\nstatus=denied";
+    let mut value = json!({"message": text});
+    mask(&mut value);
+    assert_eq!(value, json!({"message": text}));
 }
 
 #[test]

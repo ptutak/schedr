@@ -449,8 +449,8 @@ pub async fn create_backfill(
     body: Bytes,
 ) -> Accepted {
     let dag_id = parse_dag_id(&dag_id)?;
-    let request: BackfillRequest = serde_json::from_slice(&body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid body: {}", body_error(&e))))?;
+    let request: BackfillRequest =
+        read_body(&body).map_err(|why| ApiError::BadRequest(format!("invalid body: {why}")))?;
     refuse_nul(request.params.as_ref())?;
     submit(
         &state,
@@ -1632,19 +1632,74 @@ fn optional_body<T: Default + serde::de::DeserializeOwned>(body: &[u8]) -> Resul
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(T::default());
     }
-    serde_json::from_slice(body)
-        .map_err(|e| ApiError::BadRequest(format!("invalid body: {}", body_error(&e))))
+    read_body(body).map_err(|why| ApiError::BadRequest(format!("invalid body: {why}")))
+}
+
+/// A JSON body read as `T`, or why it can't be, without any value from it ([`body_error`]).
+pub(crate) fn read_body<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, String> {
+    let mut reader = serde_json::Deserializer::from_slice(body);
+    let value = serde_path_to_error::deserialize(&mut reader)
+        .map_err(|error| body_error(error.inner(), Some(error.path())))?;
+    reader.end().map_err(|error| body_error(&error, None))?;
+    Ok(value)
 }
 
 /// Why a JSON body can't be read, without any value from it (decision 134): serde's message
-/// with the quoted and backticked values taken out, then masked as text.
-pub(crate) fn body_error(error: &serde_json::Error) -> String {
-    schedr_config::masked::mask_text(&without_values(&without_quoted(&error.to_string())))
+/// with the quoted and backticked values taken out, then masked as text. A message of a
+/// type's own (a timestamp's parser quoting the input, B220) is replaced: only serde's own
+/// forms are known not to hold more of the value. A data error names the field (`path`): a
+/// typed one, as only `params` holds keys of the client's, and its values (any JSON) fail as
+/// syntax, never as data.
+fn body_error(error: &serde_json::Error, path: Option<&serde_path_to_error::Path>) -> String {
+    let text = error.to_string();
+    let at =
+        (error.line() != 0).then(|| format!(" at line {} column {}", error.line(), error.column()));
+    let message = at
+        .as_deref()
+        .and_then(|at| text.strip_suffix(at))
+        .unwrap_or(&text);
+    let data = error.classify() == serde_json::error::Category::Data;
+    let own = data
+        && !SERDE_MESSAGES
+            .iter()
+            .any(|known| message.starts_with(known));
+    let message = if own {
+        "a value isn't valid here"
+    } else {
+        message
+    };
+    let field = path
+        .filter(|path| data && path.iter().next().is_some())
+        .map(|path| format!("`{path}`: "))
+        .unwrap_or_default();
+    let shown = format!("{field}{message}{}", at.unwrap_or_default());
+    // The backticked values first: one may hold a `"` (an unknown variant's, unescaped).
+    schedr_config::masked::mask_text(&without_quoted(&without_values(&shown)))
 }
 
-/// The kinds serde shows a value of in backticks (``integer `5` ``, decision 134, B194);
-/// names it puts in backticks (``unknown field `x` ``) stay.
-const BACKTICKED_VALUES: [&str; 4] = ["integer `", "floating point `", "boolean `", "character `"];
+/// How serde's own data errors start (`serde::de::Error`'s messages); any other is a type's.
+const SERDE_MESSAGES: [&str; 7] = [
+    "invalid type: ",
+    "invalid value: ",
+    "invalid length ",
+    "unknown variant `",
+    "unknown field `",
+    "missing field `",
+    "duplicate field `",
+];
+
+/// The kinds serde shows a value of in backticks (``integer `5` ``, decision 134, B194; an
+/// unknown variant's, B196); names it puts in backticks (``unknown field `x` ``) stay.
+const BACKTICKED_VALUES: [&str; 5] = [
+    "integer `",
+    "floating point `",
+    "boolean `",
+    "character `",
+    UNKNOWN_VARIANT,
+];
+
+/// How serde names an enum's value it doesn't know.
+const UNKNOWN_VARIANT: &str = "unknown variant `";
 
 /// `text` with each value serde shows in backticks as `` `…` ``.
 fn without_values(text: &str) -> String {
@@ -1653,7 +1708,17 @@ fn without_values(text: &str) -> String {
         let mut from = 0;
         while let Some(at) = out[from..].find(kind) {
             let start = from + at + kind.len();
-            let Some(length) = out[start..].find('`') else {
+            // An unknown variant's value may hold a backtick (serde doesn't escape it): to the
+            // last of serde's own words after it, which name only the type's variants.
+            let end = if kind == UNKNOWN_VARIANT {
+                ["`, expected", "`, there are no variants"]
+                    .iter()
+                    .filter_map(|after| out[start..].rfind(after))
+                    .max()
+            } else {
+                out[start..].find('`')
+            };
+            let Some(length) = end else {
                 break;
             };
             out.replace_range(start..start + length, "…");

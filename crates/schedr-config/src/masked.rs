@@ -164,10 +164,43 @@ pub fn names_secret_in_words(name: &str) -> bool {
         })
 }
 
+/// `text` masked; a URL as its client reads it, when that hides more. A URL parser drops tabs
+/// and line breaks (sqlx's: `pass\nword=\thunter2` is `password=hunter2`, `postgres:\n//`
+/// is `postgres://`; B216's reviews), so read without them its password's name and value are
+/// each one token. Only one URL is read so (no spaces, a scheme first); other text keeps its
+/// lines, where a line break ends a token.
+pub(crate) fn mask_url(text: &str) -> String {
+    let read = url_as_read(text);
+    if read.len() != text.len() && looks_like_url(&read) {
+        let masked = mask_text(&read);
+        if masked != read {
+            return masked;
+        }
+    }
+    mask_text(text)
+}
+
+/// `url` without the tabs and line breaks a URL parser drops.
+pub(crate) fn url_as_read(url: &str) -> String {
+    url.chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect()
+}
+
+/// Whether `text` is one URL: a scheme, `://`, and no whitespace.
+fn looks_like_url(text: &str) -> bool {
+    text.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    }) && !text.contains(char::is_whitespace)
+}
+
 /// Masks `value`, the field of the table named `table` (`""`: none).
 fn mask_under(value: &mut Value, table: &str) {
     match value {
-        Value::String(text) => *text = mask_text(text),
+        Value::String(text) => *text = mask_url(text),
         Value::Array(items) => items.iter_mut().for_each(|item| mask_under(item, table)),
         Value::Object(fields) => {
             for (name, field) in fields.iter_mut() {
@@ -375,23 +408,22 @@ fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     while start > 0 && name_char(chars[start - 1]) {
         start -= 1;
     }
-    if start == end {
-        return;
-    }
-    // Also read across tabs between its characters, as a URL parser drops them
-    // (`pass<TAB>word=`: B203's review); either reading naming a secret hides the value.
-    let mut across = start;
-    while across > 1 && chars[across - 1] == '\t' && name_char(chars[across - 2]) {
+    // Also read across tabs, anywhere in it and before the `=`, as a URL parser drops them
+    // (`pass<TAB><TAB>word=`, `password<TAB>=`: B203, B216); either reading naming a secret
+    // hides the value. Not across line breaks: in text they end a line (`invalid password` on
+    // one, `status=denied` on the next); a configuration's URL has them dropped first.
+    let mut across = end;
+    while across > 0 && (name_char(chars[across - 1]) || chars[across - 1] == '\t') {
         across -= 1;
-        while across > 0 && name_char(chars[across - 1]) {
-            across -= 1;
-        }
+    }
+    if across == end {
+        return;
     }
     let names = |from: usize| {
         let name: String = chars[from..end].iter().collect();
         names_secret(&compact(&percent_decoded(&name)))
     };
-    let secret = names(start) || (across < start && names(across));
+    let secret = (start < end && names(start)) || (across < start && names(across));
     if !secret {
         return;
     }

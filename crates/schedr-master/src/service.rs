@@ -192,6 +192,17 @@ impl Hub {
         let _ = leading.wait_for(|leads| *leads).await;
     }
 
+    /// Waits while this master doesn't lead, as [`Self::while_leading`]; false when it closes
+    /// its streams first (it stops): a call waiting would hold tonic's graceful shutdown
+    /// (B219's review).
+    async fn leading_unless_closing(&self) -> bool {
+        let mut closing = self.closing.subscribe();
+        tokio::select! {
+            () = self.while_leading() => true,
+            _ = closing.wait_for(|closing| *closing) => false,
+        }
+    }
+
     /// Delivers the outbox through `sender` while this master leads (decision 410): a pass
     /// every `poll`, at once again after a full one, until `stop` completes. A failing pass is
     /// logged; the next one goes on.
@@ -800,11 +811,11 @@ impl Hub {
             })
             .map(|entry| entry.attempt_id.as_str())
             .collect();
-        self.while_leading().await;
+        let leads = self.leading_unless_closing().await;
         let mut core = self.core.lock().await;
-        // Paused while it waited for the lock (behind a round): refused as above, what it
-        // added gone.
-        if !*self.leading.borrow() {
+        // Paused while it waited for the lock (behind a round), or stopping: refused as
+        // above, what it added gone.
+        if !leads || !*self.leading.borrow() {
             drop(core);
             for attempt_id in &added {
                 self.arrivals.start_handled(attempt_id);
@@ -984,10 +995,16 @@ impl Master for Hub {
         request: Request<Streaming<pb::WorkerMessage>>,
     ) -> Result<Response<Self::ControlStream>, Status> {
         let mut inbound = request.into_inner();
-        let first = inbound
-            .message()
-            .await?
-            .ok_or_else(|| Status::invalid_argument("the stream ended before `Register`"))?;
+        // Not waited for once the master stops: a stream that never sends `Register` would
+        // keep tonic's graceful shutdown waiting (B219).
+        let mut closing = self.closing.subscribe();
+        let first = tokio::select! {
+            first = inbound.message() => first?,
+            _ = closing.wait_for(|closing| *closing) => {
+                return Err(Status::unavailable(STOPPING));
+            }
+        }
+        .ok_or_else(|| Status::invalid_argument("the stream ended before `Register`"))?;
         let Some(worker_message::Message::Register(register)) = first.message else {
             return Err(Status::invalid_argument(
                 "the first message must be `Register`",
@@ -1014,7 +1031,16 @@ impl Master for Hub {
         // The header, then a file a message (B35): read whole before the lock is taken.
         let mut parts = request.into_inner();
         let mut upload = ParseUpload::default();
-        while let Some(part) = parts.message().await? {
+        // Not waited for once the master stops, as `control`'s `Register` isn't (B219's review).
+        let mut closing = self.closing.subscribe();
+        loop {
+            let part = tokio::select! {
+                part = parts.message() => part?,
+                _ = closing.wait_for(|closing| *closing) => {
+                    return Err(Status::unavailable(STOPPING));
+                }
+            };
+            let Some(part) = part else { break };
             upload
                 .add(part)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -1025,11 +1051,14 @@ impl Master for Hub {
         // Apart from this call, as a registration is: a reset stream doesn't stop it half-way.
         let hub = self.clone();
         let uploaded = tokio::spawn(async move {
-            hub.while_leading().await;
-            hub.core.lock().await.upload(result, (hub.clock)()).await
+            if !hub.leading_unless_closing().await {
+                return None;
+            }
+            Some(hub.core.lock().await.upload(result, (hub.clock)()).await)
         })
         .await
-        .map_err(|e| Status::internal(format!("the upload failed: {e}")))?;
+        .map_err(|e| Status::internal(format!("the upload failed: {e}")))?
+        .ok_or_else(|| Status::unavailable(STOPPING))?;
         match uploaded {
             Ok(()) => Ok(Response::new(pb::ParseResultAck {})),
             Err(error @ CoreError::BadMessage { .. }) => {

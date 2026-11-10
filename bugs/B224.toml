@@ -1,0 +1,12 @@
+title = "a type's own error message starting as serde's would be shown in a bad body's 400"
+severity = "low"
+probability = "rare"
+kind = "security"
+summary = '''body_error keeps a data error's message when it starts with one of serde's own forms (`invalid value: `, …); a type's own deserializer writing `Error::custom(format!("invalid value: {value}"))` would have its value shown. No request type does so today (latent)'''
+found = 2026-11-10
+suspected = true
+details = '''
+- **Found:** 2026-11-10, by Codex's review of the F13 fixes (session 01a1c5eb), with a throwaway custom deserializer; checked by Claude.
+- **Where:** `crates/schedr-api/src/routes.rs` (`body_error`, `SERDE_MESSAGES`).
+- **A fix:** tell serde's messages from a type's by more than their start (their whole form: `invalid value: <kind>, expected <what>`), or give the request types' own deserializers fixed messages; a test with such a type.
+'''

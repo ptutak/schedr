@@ -1736,7 +1736,7 @@ async fn a_bad_body_doesnt_quote_its_text() {
     let error = body["error"].as_str().unwrap();
     assert!(!error.contains("hunter2"), "{error}");
     assert!(
-        error.starts_with("invalid body: invalid type: string"),
+        error.starts_with("invalid body: `params`: invalid type: string"),
         "{error}"
     );
     let (status, body) = send(
@@ -1768,7 +1768,9 @@ async fn a_bad_body_doesnt_show_a_value_that_isnt_a_string() {
         for value in ["987654321", "31415926", "2718.2818", "false"] {
             assert!(!error.contains(value), "{body}: {error}");
         }
-        assert!(error.starts_with("invalid body: invalid type: "), "{error}");
+        // The field is named (B220's answer): `params` or `event_key`.
+        assert!(error.starts_with("invalid body: `"), "{error}");
+        assert!(error.contains("`: invalid type: "), "{error}");
     }
 }
 
@@ -2078,5 +2080,60 @@ async fn an_output_retention_deleted_is_gone_one_never_stored_not_found() {
     assert!(
         body["error"].as_str().unwrap().starts_with("no output of"),
         "{body}"
+    );
+}
+
+/// A type's own message (jiff's quotes a bad timestamp) is replaced by one naming the field, and
+/// an unknown enum value hidden: no part of the value comes back (B220, B196).
+#[test]
+fn a_bad_body_shows_no_part_of_a_bad_time_or_variant() {
+    #[derive(Debug, serde::Deserialize)]
+    struct Body {
+        #[expect(dead_code, reason = "only parsed")]
+        at: jiff::Timestamp,
+    }
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Mode {
+        Fast,
+    }
+    for at in ["3141-02-29T00:00:00Z", "hunter2-not-a-time"] {
+        let shown = read_body::<Body>(format!(r#"{{"at": "{at}"}}"#).as_bytes()).unwrap_err();
+        for part in ["3141", "hunter2", "expected 0-9 but got h"] {
+            assert!(!shown.contains(part), "{at}: {shown}");
+        }
+        assert!(
+            shown.starts_with("`at`: a value isn't valid here at line 1 column"),
+            "{shown}"
+        );
+    }
+    // A backtick in the value, and serde's own words too (B196's review).
+    for value in [
+        r#""hunter2""#,
+        r#""bad`hunter2""#,
+        r#"{"bad`hunter2": null}"#,
+        r#""a`, expected `x` hunter2""#,
+        r#""hunter2\"""#,
+        r#""hunter2\"suffix""#,
+    ] {
+        let shown = read_body::<Mode>(value.as_bytes()).unwrap_err();
+        assert!(!shown.contains("hunter2"), "{value}: {shown}");
+        assert!(
+            shown.starts_with("unknown variant `…`, expected `fast`"),
+            "{value}: {shown}"
+        );
+    }
+}
+
+/// A syntax error names no field: inside `params` its path would hold the client's keys.
+#[test]
+fn a_bad_bodys_syntax_error_names_no_field() {
+    let shown = read_body::<TriggerRequest>(br#"{"params": {"hunter2": tru}}"#).unwrap_err();
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert!(shown.starts_with("expected ident at line 1"), "{shown}");
+    let shown = read_body::<TriggerRequest>(br#"{"params": {}} x"#).unwrap_err();
+    assert!(
+        shown.starts_with("trailing characters at line 1"),
+        "{shown}"
     );
 }

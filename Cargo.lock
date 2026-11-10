@@ -3291,6 +3291,7 @@ dependencies = [
  "schedr-tls",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sqlx",
  "tempfile",
  "thiserror",

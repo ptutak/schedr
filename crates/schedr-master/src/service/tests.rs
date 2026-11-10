@@ -1947,3 +1947,65 @@ async fn closing_the_streams_lets_every_sender_of_a_stream_go() {
     assert!(released.is_ok(), "a sender of the stream is still held");
     drop(to_master);
 }
+
+/// B219: a stream that hasn't sent `Register` yet ends too when the master closes its streams
+/// (its call held tonic's graceful shutdown).
+#[tokio::test]
+async fn closing_the_streams_ends_one_waiting_for_its_register() {
+    let (hub, _db, client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    let call = tokio::spawn(async move {
+        let mut client = client.clone();
+        client.control(ReceiverStream::new(outbound)).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    hub.close_streams().await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), call).await;
+    let status = ended
+        .expect("the call is still waiting")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::Unavailable, "{status:?}");
+    drop(to_master);
+}
+
+/// B219's review: an upload of a parse result left unfinished ends too when the master
+/// closes its streams.
+#[tokio::test]
+async fn closing_the_streams_ends_an_unfinished_upload() {
+    let (hub, _db, client) = connected().await;
+    let (to_master, parts) = mpsc::channel::<pb::ParseResultPart>(16);
+    let call = tokio::spawn(async move {
+        let mut client = client.clone();
+        client.upload_parse_result(ReceiverStream::new(parts)).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    hub.close_streams().await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), call).await;
+    let status = ended
+        .expect("the upload is still waiting")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::Unavailable, "{status:?}");
+    drop(to_master);
+}
+
+/// B219's second review: an upload or a registration waiting for this master to lead again
+/// stops waiting once it closes its streams.
+#[tokio::test]
+async fn a_wait_for_leadership_ends_when_the_streams_close() {
+    let (hub, _db, _client) = connected().await;
+    hub.set_leading(false);
+    let waiting = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.leading_unless_closing().await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !waiting.is_finished(),
+        "it waits while the master doesn't lead"
+    );
+    hub.close_streams().await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), waiting).await;
+    assert!(!ended.expect("still waiting").unwrap());
+}

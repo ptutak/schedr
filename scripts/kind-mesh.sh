@@ -14,6 +14,8 @@
 #                        `kind delete cluster --name schedr-mesh`)
 #   IMAGE=schedr:0.1.0   the base image;  CONTAINER=podman  the container tool
 #   SCHEDR_BIN=target/debug/schedr  the CLI;  ISTIO=1.31.1  istioctl, kept in target/tools
+#   ISTIO_SHA256=...  the istioctl archive's SHA-256, needed with another ISTIO (Istio
+#                     publishes it beside the archive, `.sha256`); the download is checked
 #   SIDECARS=native  Istio's default here; classic: the sidecar as a plain container (as older
 #                    Istio and OpenShift Service Mesh 2 run it), started after init containers
 #                    and stopped with the pod: what migration onStart and the chart's proxy
@@ -25,6 +27,10 @@ NAMESPACE=schedr
 # Unqualified, so this stays schedr:0.1.0. kind-lib.sh would add podman's localhost/ prefix.
 IMAGE=${IMAGE:-schedr:0.1.0}
 ISTIO=${ISTIO:-1.31.1}
+# The archive's digest for the default version, checked before istioctl runs (B218).
+if [ "$ISTIO" = 1.31.1 ]; then
+    ISTIO_SHA256=${ISTIO_SHA256:-a44563904f22f2a8bf6ac4fff1b0bad9f718587c2be6aa807b83fe9049910639}
+fi
 SIDECARS=${SIDECARS:-native}
 case $SIDECARS in native) NATIVE=true ;; classic) NATIVE=false ;; *) echo "SIDECARS: native or classic"; exit 2 ;; esac
 TEST_IMAGE=localhost/schedr-kind-mesh:1
@@ -47,8 +53,12 @@ trap '[ -n "$FORWARD" ] && kill "$FORWARD" 2>/dev/null; rm -rf "$WORK"' EXIT
 say "istioctl $ISTIO"
 if [ ! -x "$ISTIOCTL" ]; then
     mkdir -p "$ROOT/target/tools"
-    curl -sSfL "https://github.com/istio/istio/releases/download/$ISTIO/istioctl-$ISTIO-linux-amd64.tar.gz" \
-        | tar -xz -C "$WORK"
+    [ -n "${ISTIO_SHA256:-}" ] || { echo "FAILED: ISTIO=$ISTIO needs ISTIO_SHA256 (the archive's SHA-256)"; exit 1; }
+    curl -sSfL -o "$WORK/istioctl.tar.gz" \
+        "https://github.com/istio/istio/releases/download/$ISTIO/istioctl-$ISTIO-linux-amd64.tar.gz"
+    echo "$ISTIO_SHA256  $WORK/istioctl.tar.gz" | sha256sum -c --quiet - \
+        || { echo "FAILED: the istioctl $ISTIO archive doesn't match ISTIO_SHA256"; exit 1; }
+    tar -xzf "$WORK/istioctl.tar.gz" -C "$WORK"
     mv "$WORK/istioctl" "$ISTIOCTL"
 fi
 

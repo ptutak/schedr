@@ -224,6 +224,12 @@ fn reads_the_database_url() {
 #[case("postgres://db/x?sslmode=require&SSLPassword=k", true)]
 #[case("postgres://db/x?%70assword=k", true)]
 #[case("postgres://db/x?pass\tword=k", true)]
+#[case("postgres://db/x?pass\t\tword=k", true)]
+#[case("postgres://db/x?pass\nword=k", true)]
+#[case("postgres://db/x?pass\rword=k", true)]
+#[case("postgres://db/x?password\t=k", true)]
+#[case("postgres:\n//u@db/x?pass\nword=k", true)]
+#[case("postgres:\t//u:p@db/x", true)]
 #[case("postgres://db/x?application_name=etl#password=", false)]
 fn url_has_password_looks_at_the_user_info_and_the_query(
     #[case] url: &str,
@@ -469,4 +475,13 @@ fn debug_hides_database_passwords_and_webhook_urls() {
     assert!(!shown.contains("db_s3cret"), "{shown}");
     assert!(!shown.contains("hook_s3cret"), "{shown}");
     assert!(shown.contains("postgres://user:****@db/schedr"), "{shown}");
+}
+
+/// B216's review: a database URL's line break, which sqlx drops, hides no password from `Debug`.
+#[test]
+fn debug_hides_a_password_split_by_a_line_break() {
+    let mut config = crate::Config::default();
+    config.database.url = Some("postgres://db/x?pass\nword=\thunter2".to_owned());
+    let shown = format!("{:?}", config.database);
+    assert!(!shown.contains("hunter2"), "{shown}");
 }

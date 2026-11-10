@@ -12,7 +12,8 @@ Checks, against archive/PROJECT.md (CI supply-chain pins):
   and ``azure/setup-helm`` set ``version:`` to ``x.y.z``;
 - every image used by a workflow (including ``container:`` and ``services``),
   ``scripts/*.sh``, the Makefile, ``images/**/Dockerfile``, an ``examples/``
-  ``Dockerfile`` or ``Containerfile``, or a service of an ``examples/`` ``compose.yaml``
+  ``Dockerfile`` or ``Containerfile``, a service of an ``examples/`` ``compose.yaml``, or
+  an ``image:`` string of a chart's ``values.yaml``
   is pinned to ``@sha256:<64 hex>`` (no tag is
   implicit ``:latest``);
 - ``scripts/maturin-requirements.txt`` carries a sha256 hash for every requirement.
@@ -604,6 +605,33 @@ def compose_errors(text: str, display: str) -> list[str]:
     return errors
 
 
+def values_errors(text: str, display: str) -> list[str]:
+    """Return one error per unpinned ``image:`` string of a chart's values (F13, B217).
+
+    Read as YAML, not scanned as lines: ``alpine:3.22``, an untagged
+    ``registry.k8s.io/git-sync/git-sync`` or ``kubernetes/git-sync:v4.7.1`` is an image here.
+    An ``image:`` mapping (``repository``, ``tag``) names schedr's own images, released with
+    the chart; an empty string is the user's to set.
+    """
+    try:
+        document = yaml.compose(text)
+    except yaml.YAMLError as exc:
+        return [f"{display}: cannot read ({exc})"]
+    errors: list[str] = []
+    nodes = [document] if document is not None else []
+    while nodes:
+        node = nodes.pop()
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                image = _scalar(value) if _scalar(key) == "image" else None
+                if image and not DIGEST.search(image):
+                    _report(errors, display, _line(value), _pin_error(image))
+                nodes.append(value)
+        elif isinstance(node, yaml.SequenceNode):
+            nodes.extend(node.value)
+    return sorted(errors, key=lambda error: int(error.removeprefix(f"{display}:").split(":")[0]))
+
+
 # A compose variable as the whole value: `${NAME}`, `${NAME:-default}` or `${NAME-default}`.
 COMPOSE_VARIABLE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-(?P<default>[^}]*))?\}")
 
@@ -644,6 +672,9 @@ def check_repository(root: Path) -> list[str]:
     examples = root / "examples"
     for path in sorted(examples.glob("**/compose.yaml")) if examples.is_dir() else []:
         errors.extend(compose_errors(path.read_text(), _display(path, root)))
+    charts = root / "charts"
+    for path in sorted(charts.glob("*/values.yaml")) if charts.is_dir() else []:
+        errors.extend(values_errors(path.read_text(), _display(path, root)))
     requirements = root / "scripts" / "maturin-requirements.txt"
     display = _display(requirements, root)
     if not requirements.is_file():

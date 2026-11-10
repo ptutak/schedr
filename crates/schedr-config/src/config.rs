@@ -711,6 +711,8 @@ impl Default for DatabaseSection {
 /// a query parameter naming one (`?password=...`, any case, the name percent-decoded; B203).
 #[must_use]
 pub fn url_has_password(url: &str) -> bool {
+    // As its client reads it: `postgres:\n//u:p@db` is `postgres://u:p@db` (B216's review).
+    let url = crate::masked::url_as_read(url);
     let Some((_, rest)) = url.split_once("://") else {
         return false;
     };
@@ -946,7 +948,7 @@ pub struct SmtpSection {
 impl std::fmt::Debug for DatabaseSection {
     /// The URLs with their passwords masked (B206).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let masked = |url: &Option<String>| url.as_deref().map(crate::masked::mask_text);
+        let masked = |url: &Option<String>| url.as_deref().map(crate::masked::mask_url);
         f.debug_struct("DatabaseSection")
             .field("url", &masked(&self.url))
             .field("notifications", &self.notifications)

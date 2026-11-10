@@ -439,6 +439,39 @@ def test_an_examples_compose_file_and_containerfile_are_scanned(tmp_path: Path) 
     assert "postgres:17.6" in errors[1]
 
 
+def test_a_charts_default_images_are_scanned(tmp_path: Path) -> None:
+    # B217: the chart's git-sync image was a tag, and its values weren't scanned.
+    (tmp_path / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.99.1"\n')
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("name: CI\non: push\njobs: {}\n")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "maturin-requirements.txt").write_text(
+        f"maturin==1.15.0 \\\n    --hash=sha256:{DIGEST}\n"
+    )
+    chart = tmp_path / "charts" / "app"
+    chart.mkdir(parents=True)
+    (chart / "values.yaml").write_text(
+        'image:\n  repository: ghcr.io/org/app\n  tag: ""\n'
+        "sidecar:\n  image: registry.k8s.io/git-sync/git-sync:v4.7.1\n"
+        f"pinned:\n  image: registry.k8s.io/git-sync/git-sync:v4.7.1@sha256:{DIGEST}\n"
+        # B217's review: forms a line scan doesn't take for images.
+        "others:\n  - image: registry.k8s.io/git-sync/git-sync\n"
+        "  - image: alpine:3.24\n  - image: kubernetes/git-sync:v4.7.1\n"
+        'unset:\n  image: ""\n'
+    )
+    errors = pins().check_repository(tmp_path)
+    assert [error.split(": ")[0] for error in errors] == [
+        "charts/app/values.yaml:5",
+        "charts/app/values.yaml:9",
+        "charts/app/values.yaml:10",
+        "charts/app/values.yaml:11",
+    ], errors
+    assert "git-sync:v4.7.1" in errors[0]
+    assert "alpine:3.24" in errors[2]
+
+
 def test_a_compose_images_default_and_a_merged_image_are_checked() -> None:
     text = (
         "x-db: &db\n  image: docker.io/library/postgres:latest\n"

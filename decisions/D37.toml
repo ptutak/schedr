@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D37"
 step = "M3.6"
 also = ["components", "ui-cli"]
 code = ["charts/schedr/values.yaml"]
-checked = 2026-11-09
+checked = 2026-11-10
