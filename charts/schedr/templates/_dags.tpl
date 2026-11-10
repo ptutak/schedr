@@ -22,7 +22,11 @@
 - name: SCHEDR_DAG_PATH
   value: {{ join ":" $roots | quote }}
 {{- if and .Values.dagsPath .Values.dagsRoot }}
-- name: SCHEDR_CONFIG__DAGS__ROOTS__{{ .Values.dagsRoot | upper | replace "-" "_" }}
+{{- /* An environment variable's name can't hold `-`; written `_`, the root would silently be another name (B205). */}}
+{{- if not (regexMatch "^[A-Za-z0-9_]+$" .Values.dagsRoot) }}
+{{- fail (printf "dagsRoot %q: the root is named in an environment variable, so use letters, digits and `_` only (a release that used `-` ran it as `_`: set that name to keep its DAGs and runs)" .Values.dagsRoot) }}
+{{- end }}
+- name: SCHEDR_CONFIG__DAGS__ROOTS__{{ .Values.dagsRoot | upper }}
   value: {{ .Values.dagsPath | quote }}
 {{- end }}
 {{- if .Values.dags.files }}

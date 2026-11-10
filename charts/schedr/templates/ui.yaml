@@ -105,6 +105,10 @@ spec:
             {{- if $mtls }}
             {{- include "schedr.tlsEnv" (list . "ui") | trim | nindent 12 }}
             {{- end }}
+            {{- /* The top-level config and env, as every role's (B221). */}}
+            {{- with include "schedr.extraEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
           ports:
             - name: http-ui
               containerPort: {{ .Values.service.uiPort }}

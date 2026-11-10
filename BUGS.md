@@ -53,118 +53,45 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B224: a type's own error message starting as serde's would be shown in a bad body's 400 (Suspected) | 1 | low | rare | **security** |
-| 2 | B223: the deployment guide lists three TLS Secrets where the chart needs four | 6 | medium | likely | usability |
-| 3 | B221: UI pods ignore the chart's top-level `config` and `env` | 4 | medium | possible | correctness |
-| 4 | B213: `tasks logs --follow` never ends for a task that will get no attempt | 4 | medium | possible | usability |
-| 5 | B212: a configuration with Basic sign-in makes `dags test` fail on its own server | 4 | medium | possible | correctness |
-| 6 | B205: the chart turns `-` into `_` in interpreter and root names, the loader keeps them | 4 | medium | possible | correctness |
-| 7 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
-| 8 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
-| 9 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 10 | B215: a command the CLI couldn't connect to send says it may have arrived | 3 | low | likely | usability |
-| 11 | B214: `dags test` drops the warning for a `--for` without an offset | 3 | low | likely | usability |
-| 12 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 13 | B40: a lease test times out its 2 s query limit under load | 3 | low | likely | tests |
-| 14 | B222: a long release name gives Service names over 63 characters | 2 | medium | rare | correctness |
-| 15 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
-| 16 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
-| 17 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
-| 18 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 19 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 20 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 21 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 22 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 23 | B197: watcher tests fail under a full parallel run, pass alone (Suspected) | 2 | low | possible | tests |
-| 24 | B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15) | 2 | low | possible | tests |
-| 25 | B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load | 2 | low | possible | tests |
-| 26 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 27 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 28 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 29 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 30 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 31 | B22: a draining worker once missed its 8 s grace under load | 2 | low | possible | tests |
-| 32 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
-| 33 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 34 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 35 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 36 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 37 | B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected) | 1 | low | rare | tests |
-| 38 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 39 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 40 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 41 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 42 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 43 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 44 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 45 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-| 46 | B4: `runs trigger` in a roles integration test got no result once | 1 | low | rare | tests |
+| 1 | B225: an assignment delivered late and journaled slowly can start after the master took it back | 4 | critical | rare | correctness |
+| 2 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
+| 3 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
+| 4 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
+| 5 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 6 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
+| 7 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
+| 8 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
+| 9 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 10 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 11 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 12 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 13 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 14 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 15 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 16 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 17 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 18 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 19 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 20 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 21 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 22 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 23 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 24 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 25 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 26 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 27 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 28 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 29 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 30 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 31 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 
-## B224: a type's own error message starting as serde's would be shown in a bad body's 400 (Suspected)
+## B225: an assignment delivered late and journaled slowly can start after the master took it back
 
-- **Rating:** severity **low**, probability **rare**, security (score 1): body_error keeps a data error's message when it starts with one of serde's own forms (`invalid value: `, …); a type's own deserializer writing `Error::custom(format!("invalid value: {value}"))` would have its value shown. No request type does so today (latent).
-- **Found:** 2026-11-10, by Codex's review of the F13 fixes (session 01a1c5eb), with a throwaway custom deserializer; checked by Claude.
-- **Where:** `crates/schedr-api/src/routes.rs` (`body_error`, `SERDE_MESSAGES`).
-- **A fix:** tell serde's messages from a type's by more than their start (their whole form: `invalid value: <kind>, expected <what>`), or give the request types' own deserializers fixed messages; a test with such a type.
-
-## B223: the deployment guide lists three TLS Secrets where the chart needs four
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): the guide says `tls.existingSecrets` (`master`, `webserver`, `worker`: all three); with the distributed UI enabled (the default) `checkTls` also needs `ui`, so following it the chart refuses; lines 20 and 64 still call the UI's chart deployment future work.
-- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
-- **Where:** `docs/03-guide/10-deployment.md` (line 101; lines 20, 64).
-- **A fix:** name the four Secrets (`ui` when `ui.enabled`), and drop the "future" wording.
-
-## B222: a long release name gives Service names over 63 characters
-
-- **Rating:** severity **medium**, probability **rare**, correctness (score 2): `schedr.fullname` truncates to 63, then roles append `-master` etc.: a 53-character release gives a 67-character Service and the install fails.
-- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
-- **Where:** `charts/schedr/templates/_helpers.tpl` (`schedr.fullname`).
-- **A fix:** truncate the fullname to 63 minus the longest suffix (`-webserver`, 10), or fail with a clear message on a release name too long.
-
-## B221: UI pods ignore the chart's top-level `config` and `env`
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): `ui.yaml` includes `schedr.authEnv` and `schedr.tlsEnv` but not `schedr.extraEnv` (which master, webserver and worker get through `schedr.env`): `config: {UI__DOCS_DIR: ""}` or proxy variables in `env` never reach the UI.
-- **Found:** 2026-11-10, by Codex's full review F13 (session 01a1c5ad), checked by Claude against the code.
-- **Where:** `charts/schedr/templates/ui.yaml` (env, line 104).
-- **A fix:** include `schedr.extraEnv` in the UI's env; a chart-check case.
-
-## B215: a command the CLI couldn't connect to send says it may have arrived
-
-- **Rating:** severity **low**, probability **likely**, usability (score 3): with no server listening (connection refused on every try), a command ends with B140's `Unanswered`: "the command may have arrived. Look before sending it again", though nothing was sent.
-- **Found:** 2026-11-10, by the user running `make showcase` with no standalone up: four `dags unpause` each said the command may have arrived.
-- **Where:** `crates/schedr-client/src/lib.rs` (`ClientError::Unanswered`, B140), chosen after `COMMAND_TRIES` whatever the tries' errors were.
-- **A fix:** when every try failed to connect (reqwest's `is_connect()`, before any byte went out), say the server can't be reached and the command wasn't sent; keep `Unanswered` for a try that may have reached it.
-
-## B214: `dags test` drops the warning for a `--for` without an offset
-
-- **Rating:** severity **low**, probability **likely**, usability (score 3): `--for` and `--event-at` are parsed with `parse_for` and only `.at` is kept: the documented warning that an offset-free time is read as UTC is never shown.
-- **Found:** 2026-11-10, by Codex's full review (F12b), each with a probe failing on the code.
-- **Where:** `crates/schedr/src/local.rs` (`.map(|t| t.at)` for both).
-- **Shown:** Codex's probe: `--for 2026-01-01T12:00:00`, exit 0, no warning.
-- **A fix:** print the `ParsedTime`'s warning on stderr, as `runs trigger` does.
-
-## B213: `tasks logs --follow` never ends for a task that will get no attempt
-
-- **Rating:** severity **medium**, probability **possible**, usability (score 4): with no attempt yet, following waits and polls for ever without looking at the task's or run's state: an `upstream_failed` task's log follow never returns.
-- **Found:** 2026-11-10, by Codex's full review (F12b), each with a probe failing on the code.
-- **Where:** `crates/schedr/src/user.rs` (`(None, None) if args.follow => {}`).
-- **Shown:** Codex's probe on a real standalone: run failed, task `upstream_failed`, no attempts; the follow didn't exit.
-- **A fix:** stop following once the task is in an end state without attempts (or the run has ended), saying so.
-
-## B212: a configuration with Basic sign-in makes `dags test` fail on its own server
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): the test's temporary webserver keeps `[webserver.auth]` while its own client always calls with no sign-in: `error: not signed in`, and `--user` doesn't reach that client.
-- **Found:** 2026-11-10, by Codex's full review (F12b), each with a probe failing on the code.
-- **Where:** `crates/schedr/src/local.rs` (`HttpTransport::new(api, Auth::None)` against a server with `config.webserver.auth`).
-- **Shown:** Codex's probe with `mode = "basic"`, `--user anna`, `SCHEDR_PASSWORD`: exit 1, `not signed in`.
-- **A fix:** the local server runs with sign-in off (it listens on 127.0.0.1 for this run only).
-
-## B205: the chart turns `-` into `_` in interpreter and root names, the loader keeps them
-
-- **Rating:** severity **medium**, probability **possible**, correctness (score 4): `upper | replace "-" "_"` in the chart's env names, while the loader only lowercases: `config.DAGS__INTERPRETER: etl-venv` with the fork server on fails at start; `dagsRoot: etl-jobs` silently becomes `etl_jobs`.
-- **Found:** 2026-11-10, by Codex's full review (F12a), each with a probe failing on the code.
-- **Where:** `charts/schedr/templates/_helpers.tpl` (`schedr.forkServerEnv`), `charts/schedr/templates/_dags.tpl`, `crates/schedr-config/src/sources.rs` `env_key`. Contradicts `docs/03-guide/10-deployment.md` (lines 86-88). Shown by loading the variables the templates produce; helm itself not run.
-- **A fix:** refuse names with `-` in those chart values (fail with a message), or pass such tables as one JSON value instead of keyed variables.
+- **Rating:** severity **critical**, probability **rare**, correctness (score 4): the master's start timeout counts from `assigned_at`, the worker's lease from the master's last word: an AssignTask delayed on its way (near a lease, while the worker's heartbeats still reach the master) and a slow journal write leave the worker within its lease when the master has already expired the attempt and assigned it again, so both run it.
+- **Found:** 2026-11-10, by Codex's review of batch A (session 01a1c665), with a paused-clock harness over the real dispatcher and agent: assigned at 0 s, delivered at 55 s, journaled 10 s, expired at 61 s, reassigned at 62 s, started on the first worker at 65 s.
+- **Where:** `crates/schedr-agent/src/agent.rs` (`journal_start`: `gone_silent` is the worker's own lease, refreshed by the assignment's arrival); `crates/schedr-master/src/dispatch.rs` (`expire`: from `assigned_at`). An `AssignTask` carries no time of the master's.
+- **Decided:** 2026-11-10, the user: a budget in the assignment (how long it may still wait to start, from the master's start timeout and its age when sent), counted by the worker conservatively against the link's delay; no extra round trip.
+- **The options were:** e.g. the assignment carries how long it may wait before starting (the master's start timeout less its age when sent) and the worker counts it from the arrival of the master's last earlier word; or the worker's `Started` is acknowledged before it launches (a round trip per task); or the master answers a late `Started` for a taken-back attempt by stopping it (both may already run).
 
 ## B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up
 
@@ -179,22 +106,6 @@ step touches their code or the user schedules them.
 - **A fix:** enumerate a range's fire times in one walk (`FireTimes::between`: every match
   from `from - MARGIN` to `to + MARGIN`, their moments by the same rules, sorted, deduped,
   stopping past `max`), so the work is the range's matches, not matches times fire times.
-
-## B197: watcher tests fail under a full parallel run, pass alone (Suspected)
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): schedr-agent's watchers test a_poke_whose_new_host_died_goes_on_on_its_code failed after 5.8 s in a parallel run of five crates' tests, and passed alone three times (12 s each): likely a timing it depends on under load.
-- **Found:** by Claude in M4.12a, running `cargo nextest run -p schedr-master -p schedr-db
-  -p schedr-api -p schedr-model -p schedr-agent` with `SCHEDR_TEST_PYTHON` set (1842 of 1843
-  passed). The failure's output wasn't kept. M4.12a changes only a match arm in the agent.
-- **Test:** `crates/schedr-agent/tests/watchers.rs::a_poke_whose_new_host_died_goes_on_on_its_code`
-  (M4.11a2, decisions 334-339).
-- **Again, later the same day:** in a parallel run of eight crates (2409 tests),
-  `schedr-agent::watchers a_slow_import_isnt_a_blocked_loop` failed (`BlockedEventLoop`: no
-  `await` within `[watchers] block_limit` 0.3 s) and `schedr::standalone
-  a_poke_renamed_in_new_code_finishes_its_run_on_a_real_worker` took 71 s and failed; both passed
-  alone (3.6 s, 3.4 s). A 0.3 s block limit is tight on a loaded machine.
-- **Next:** rerun it under load (`--test-threads` high, or beside a full run) to catch its message,
-  then find the timing it assumes.
 
 ## B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected)
 
@@ -249,6 +160,7 @@ step touches their code or the user schedules them.
 ## B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised
 
 - **Rating:** severity **medium**, probability **possible**, correctness (score 4): TaskKind has no deny_unknown_fields and both ends are protocol 0.1: a worker of 0.1.0 under a newer master (the supported upgrade order) drops what it doesn't know, e.g. batch_ms, and runs a batched poke as one event per item, the run's data then not the list its tasks take.
+- **Decided:** 2026-11-10, the user: left until 1.0's protocol freeze (no 0.1.0 workers in production); fixed then, not before M4B.
 - **Found:** Grok's security review of M4.11f, by parsing DAG JSON with the fields of 0.1.0
   (`batch_ms` dropped, the runner then telling one event per item).
 - **Cause:** `PROTOCOL_VERSION` is still 0.1, raised for nothing added in M4 (14 changes to the
@@ -303,18 +215,6 @@ step touches their code or the user schedules them.
   its `Finished`s written together, each run settled once per turn, the agent's journal in groups
   (M4B.4, M4B.5); fixed when stress 23 records its 500 ends within 5 s on Postgres.
 
-## B166: Stress scenario 15's round-time ratio went over its limit in CI (1.167 > 1.15)
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): The nightly Stress run on 2026-11-05 (run 42003419375, on b9fa0e3) failed only scenario 15 (`15_change_signals`): the master's mean round with the change triggers on was 1.167 times the one without, over the 1.15 limit; a noisy comparison on a shared CI runner, or a real cost of the triggers.
-- **Found:** 2026-11-05, the scheduled Stress run 42003419375 (`round_mean_ratio = 1.167, over
-  its limit 1.15`, crates/schedr/tests/stress/check.rs:465). The run before passed (11-04); runs
-  on 10-31 to 11-02 failed (not checked here which scenario).
-- **To check:** the ratio over the last runs' reports (the JSON artefacts), and whether it
-  moves with the runner's load; then either a wider limit or more samples (a noisy comparison),
-  or the triggers' cost looked at (a real regression).
-- **Why it matters:** a red nightly hides real failures; the triggers' cost is what scenario 15
-  exists to bound.
-
 ## B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected)
 
 - **Rating:** severity **low**, probability **rare**, correctness (score 1): The demo's MySQL client task logged `...caching_sha2_password.so: **** such file or directory`: `No` masked, though none of the attempt's secrets (`dev_app`, a 24-character password, `dev`, too short to mask) is `No`; the mask set alone doesn't reproduce it.
@@ -327,17 +227,6 @@ step touches their code or the user schedules them.
   the other declared secrets, and whether the reader (`tasks logs`) masks again.
 - **Why it matters:** over-masking makes a log mislead (an error reads as a secret); not a
   leak.
-
-## B159: A registration test with many new roots timed out its 10 s wait under `make check`'s load
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): `schedr-master`'s `a_registration_with_more_new_roots_than_a_stream_holds_gets_every_parse` (B45's test) takes 4.3-4.8 s alone, and its registration has 10 s to answer: in a full `make check` (2008 tests, the machine busy) it ran out once, `registered in time: Elapsed(())` at `crates/schedr-master/src/service/tests.rs:1557`.
-- **Found:** 2026-11-03, by Claude, in M4.7b1's `make check` (1921 of 2008 passed, this one
-  failed); alone it passed five times in five, at 4.3-4.8 s. M4.7b1 doesn't touch
-  registration.
-- **When:** possible: the whole Rust suite running in parallel on a busy machine (WSL).
-- **A fix:** find where its 4.5 s go (a parse per root, `STREAM_BUFFER + 10` roots, each
-  probably a real runner) and make that cheaper, or wait on progress (each `Registered` or
-  parse message) rather than one 10 s limit for the whole registration.
 
 ## B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected)
 
@@ -416,13 +305,6 @@ step touches their code or the user schedules them.
   outside its select (`hashes()` while a root settles, `client.control()` opening the stream)
   are the candidates). Lowered to low: what is left is a slower exit, and the log line to
   find the cause the next time it happens.
-
-## B150: A failed migration's lease stayed held once under the coverage run (flaky test) (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): `roles::tests::a_failed_migration_gives_the_lease_back` failed once in `make check` (coverage, heavy load: neighbouring tests took 7 s instead of 0.1 s): the lease was still held after `schedr db migrate` failed. Likely the release query hit its 5 s limit (logged, the lease then expires by itself after its period).
-- **Found:** check13 during M4.4b (`FAIL [7.503s]`, "the lease stayed held"). Not reproduced: 5 runs alone, 3 runs of the schedr lib tests, 48 copies at once all passed.
-- **Suspected cause:** `migrate_holding` releases on the query-limited database; the failed migration's connection is closed on drop in the background (`Starting::drop`, `close_on_drop`), so its SQLite write lock may outlive the error and the release waits on it, past the limit when the machine is loaded.
-- **A fix:** close the failed migration's connection (awaited) before giving the lease back; or retry the release once. The test could also capture the warning to tell the two apart.
 
 ## B148: the limit check searches a DAG's task list for each ready task, every round
 
@@ -516,24 +398,6 @@ step touches their code or the user schedules them.
   `Started`, `Rejected` and `Finished` each take `Dispatcher::memory` (the D1 snapshot: `workers`, `rejections`, `code_missing` cloned, `crates/schedr-master/src/core.rs:499`, `dispatch.rs:280`) under the core lock, so each message costs in proportion to the whole registry and its outstanding attempts; Codex measured 10 vs 1,000 workers (4 attempts each), 500 snapshots each, unrelated attempts included.
 - **A fix:** a snapshot of what the message can change (its attempt and worker) instead of everything; measure first with M4B.1's per-turn timings.
 
-## B40: a lease test times out its 2 s query limit under load
-
-- **Rating:** severity **low**, probability **likely**, tests (score 3): a lease test fails under load.
-- **Found:** 2026-10-30, in `make check` while two other builds and test runs shared the
-  machine: `lease::tests::a_master_taken_over_never_writes_itself_back_as_the_holder` failed
-  with `QueryTimeout(2s)` (`crates/schedr-master/src/lease/tests.rs:101`, an `unwrap` on a
-  query). Alone it passed 5 times out of 5 (6-9 s each).
-- **The cause, likely:** the test runs with the production 2 s query limit; SQLite under a
-  loaded CPU can exceed it. Not investigated: whether the test exercises a write that should
-  be retried rather than a limit that should be longer in tests.
-- **Seen again:** 2026-10-30, `make check` while a worktree's full build ran:
-  `schedr-db` `scope::tests::a_masters_work_is_refused_once_its_lease_was_taken_over`
-  (`QueryTimeout(2s)`), `scope::tests::work_that_fails_stores_nothing` (`QueryTimeout(4s)`)
-  and `query::tests::an_sqlite_write_waits_for_another_writer_instead_of_failing` (SQLite's
-  "database is locked"); all three use the production limits.
-- **A fix:** the test's own query limit (or a retry of what the master retries itself), and
-  the same check over the other tests using the default limit.
-
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 
 - **Rating:** severity **low**, probability **possible**, usability (score 2): DAGs with many groups drawn far too wide (M6).
@@ -598,41 +462,3 @@ step touches their code or the user schedules them.
   and checks the methods the master gets. **A fix:** keep the method in the journal record
   (`JournalRecord::Running` with the process identity) and send it with the journal entries on
   `Register`, or send `Started{fork}` again on reconnecting.
-
-## B22: a draining worker once missed its 8 s grace under load
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): a drain test misses its grace under load.
-- **Seen:** 2026-10-26, one `make check` while other role tests were running.
-  `roles::a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_period`
-  (`crates/schedr/tests/roles.rs`) panicked: `terminate_within` for the worker, grace 8 s,
-  was not success ("the worker didn't stop within the grace period"). 37 role tests had
-  passed; that one failed and `make check` exited 2.
-- **Not reproduced** on the next full `make check` (1257 Rust unit tests, 662 Python unit
-  tests, 99 Rust integration tests, 27 Python integration tests, then `make docs`).
-- **Suspect:** the 8 s grace under load, the same kind of limit as B21 (a bound that is
-  long enough until the machine is busy). Not fixed.
-- **Seen again:** 2026-10-28, `make check` during M4.1b (the same message, `None`: the
-  worker hadn't ended at all). Alone it passed three times in about 10.5 s, so it is the
-  load again, not a hang. Two misses in three days.
-- **Next:** look at the grace and what the worker was doing in those 8 s (its log in the
-  test's output shows the drain's steps), then decide whether the limit or the drain is
-  what's slow under load.
-- **Seen again:** 2026-11-10 on CI (run 42816200627, commit 43504fb), `a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_period`: the worker didn't stop within its grace (`exited: None`); passed in two local `make check` runs of the same tree.
-
-## B4: `runs trigger` in a roles integration test got no result once
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): one test run got no result once (likely B6, fixed).
-- **Seen:** 2026-10-22, the first `make test-integration` of M2.3:
-  `roles::a_worker_that_never_comes_back_is_lost_and_stays_listed` panicked in
-  `Cluster::trigger` (`crates/schedr/tests/roles.rs`): `cli_json(["runs", "trigger", …])` was
-  `None`, so the CLI exited non-zero, after 34.8 s; the whole run took 35 s instead of the
-  usual 12 s.
-- **Not reproduced** in the two runs right after (53/53 passed each time). Postgres had just
-  been started by podman; `cli_json` doesn't keep the CLI's stderr, so the reason is unknown.
-- **2026-10-23:** the role tests now keep every failed or slow (over 2 s) CLI call's stderr,
-  and the system's I/O stall, in their failure messages. Most likely B6 (fixed the same day:
-  a 7–8 s Postgres stall after a rebuild, and the master declaring live workers lost during
-  it; the trigger's CLI waits 30 s for the master's decision, and the run took 35 s instead
-  of 12 s, as in B6's stalls), but unproven: no test reproduces it.
-- **Next:** if it happens again, read the CLI's stderr in the failure message; otherwise close
-  it after a few weeks of clean `make check` runs.

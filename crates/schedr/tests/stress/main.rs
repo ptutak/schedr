@@ -1171,11 +1171,14 @@ fn change_signals(scenario: &'static str, backend: Backend) {
     // Measured 2026-10-28 (quick, four runs each): on Postgres 1.02 / 1.00 / 0.97, on SQLite
     // 0.94 / 1.17 / 0.98, all within run-to-run noise (two runs alike differed by 8%). The
     // limits catch a change that makes announcing expensive, not the noise: the p99s are
-    // bucket edges √2 apart, so 1.5 allows one bucket worse.
+    // bucket edges √2 apart, so 1.5 allows one bucket worse. The round mean's ratio over the
+    // nightly runs of 2026-11-05 to 11-10 (15, 15b, 15c: 18 ratios): 0.85 to 1.17, two runs
+    // alike differing by up to 31%; 1.15 failed on noise (B166), so 1.3, about three times it:
+    // announcing made expensive would cost far more.
     report.at_most(
         "round_mean_ratio",
         mean(true, &round_mean) / mean(false, &round_mean).max(1e-6),
-        1.15,
+        1.3,
     );
     report.at_most(
         "round_p99_ratio",

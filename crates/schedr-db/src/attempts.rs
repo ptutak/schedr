@@ -267,6 +267,7 @@ const UNSTARTED_CLEANUPS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t
     t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.moved_at < $1{ts} \
+    AND a.worker_id NOT IN (SELECT value FROM {json_each}($3{json})) \
     ORDER BY a.moved_at LIMIT $2";
 const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.task_id \
     FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
@@ -278,6 +279,7 @@ const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.started_at IS NULL \
     AND a.assigned_at < $1{ts} \
+    AND a.worker_id NOT IN (SELECT value FROM {json_each}($3{json})) \
     ORDER BY a.assigned_at, a.id LIMIT $2";
 
 impl Database {
@@ -865,7 +867,8 @@ impl Database {
         Ok(())
     }
 
-    /// The moved cleanups assigned before `cutoff` and not started.
+    /// The moved cleanups assigned before `cutoff` and not started, but those of
+    /// `except_workers`.
     ///
     /// # Errors
     ///
@@ -873,13 +876,16 @@ impl Database {
     pub async fn unstarted_cleanups(
         &self,
         cutoff: Timestamp,
+        except_workers: &[String],
         limit: u32,
     ) -> Result<Vec<StoredAttempt>, DbError> {
+        let except = serde_json::to_string(except_workers).unwrap_or_else(|_| "[]".to_owned());
         let query = UNSTARTED_CLEANUPS;
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, query))
                 .bind(db_time(cutoff))
                 .bind(i64::from(limit))
+                .bind(&except)
                 .fetch_all(pool)
                 .await?
         });
@@ -989,7 +995,9 @@ impl Database {
             .collect()
     }
 
-    /// The oldest `limit` attempts assigned before `cutoff` that never reported `Started`,
+    /// The oldest `limit` attempts assigned before `cutoff` that never reported `Started`, but
+    /// those of `except_workers` (workers that may come back: left out before the limit, so
+    /// they can't fill it, F14's review),
     /// oldest assigned first (a backlog read a round's worth at a time, B52).
     ///
     /// # Errors
@@ -998,13 +1006,16 @@ impl Database {
     pub async fn unstarted_attempts(
         &self,
         cutoff: Timestamp,
+        except_workers: &[String],
         limit: u32,
     ) -> Result<Vec<StoredAttempt>, DbError> {
+        let except = serde_json::to_string(except_workers).unwrap_or_else(|_| "[]".to_owned());
         let query = UNSTARTED_ATTEMPTS;
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, query))
                 .bind(db_time(cutoff))
                 .bind(i64::from(limit))
+                .bind(&except)
                 .fetch_all(pool)
                 .await?
         });

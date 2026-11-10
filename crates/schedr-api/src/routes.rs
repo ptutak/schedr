@@ -1659,10 +1659,7 @@ fn body_error(error: &serde_json::Error, path: Option<&serde_path_to_error::Path
         .and_then(|at| text.strip_suffix(at))
         .unwrap_or(&text);
     let data = error.classify() == serde_json::error::Category::Data;
-    let own = data
-        && !SERDE_MESSAGES
-            .iter()
-            .any(|known| message.starts_with(known));
+    let own = data && !serde_form(message);
     let message = if own {
         "a value isn't valid here"
     } else {
@@ -1677,16 +1674,120 @@ fn body_error(error: &serde_json::Error, path: Option<&serde_path_to_error::Path
     schedr_config::masked::mask_text(&without_quoted(&without_values(&shown)))
 }
 
-/// How serde's own data errors start (`serde::de::Error`'s messages); any other is a type's.
-const SERDE_MESSAGES: [&str; 7] = [
-    "invalid type: ",
-    "invalid value: ",
-    "invalid length ",
-    "unknown variant `",
-    "unknown field `",
-    "missing field `",
-    "duplicate field `",
-];
+/// Whether `message` has the whole form of one of serde's own data errors, not just its
+/// start (B224: a type's own `invalid value: {value}` would pass a check of the start). An
+/// invalid type or value names the kind of value found the way serde does (`Unexpected`), a
+/// value of it in backticks or, a string, in quotes, which are hidden after.
+fn serde_form(message: &str) -> bool {
+    /// `Unexpected`'s forms holding no value.
+    const WORDS: [&str; 12] = [
+        "byte array",
+        "unit value",
+        "Option value",
+        "newtype struct",
+        "sequence",
+        "map",
+        "enum",
+        "unit variant",
+        "newtype variant",
+        "tuple variant",
+        "struct variant",
+        "null",
+    ];
+    /// Those holding one, in backticks.
+    const VALUES: [&str; 4] = ["integer `", "floating point `", "boolean `", "character `"];
+    // What follows a value: serde's `, expected `, then what the type says it expects, its
+    // author's text (`u8`, `a map`), not the client's: the rest of such a message can't be
+    // told from a type's own more exactly than that.
+    let expected = |rest: &str| rest.starts_with(", expected ");
+    let found = message
+        .strip_prefix("invalid type: ")
+        .or_else(|| message.strip_prefix("invalid value: "));
+    if let Some(found) = found {
+        if WORDS
+            .iter()
+            .any(|word| found.strip_prefix(word).is_some_and(expected))
+        {
+            return true;
+        }
+        // A string, as Rust's `Debug` quotes it (`"` and `\` escaped).
+        if let Some(quoted) = found.strip_prefix("string \"") {
+            return closing_quote(quoted).is_some_and(|end| expected(&quoted[end + 1..]));
+        }
+        return VALUES.iter().any(|kind| {
+            found
+                .strip_prefix(kind)
+                .is_some_and(|rest| rest.find('`').is_some_and(|end| expected(&rest[end + 1..])))
+        });
+    }
+    if let Some(length) = message.strip_prefix("invalid length ") {
+        let digits = length.bytes().take_while(u8::is_ascii_digit).count();
+        return digits > 0 && expected(&length[digits..]);
+    }
+    // `missing field`, `duplicate field`: the name, and the end. `unknown field`, `unknown
+    // variant`: the name (or the value, which may hold a backtick), then serde's list of what
+    // it knows, backticked names only, or that there are none.
+    for known in ["missing field `", "duplicate field `"] {
+        if let Some(rest) = message.strip_prefix(known) {
+            return rest.find('`').is_some_and(|end| end + 1 == rest.len());
+        }
+    }
+    let unknown = message
+        .strip_prefix("unknown field `")
+        .map(|rest| (rest, rest.find('`')))
+        .or_else(|| {
+            message.strip_prefix(UNKNOWN_VARIANT).map(|rest| {
+                let end = [UNKNOWN_VARIANT_END, "`, there are no variants"]
+                    .iter()
+                    .filter_map(|after| rest.rfind(after))
+                    .max();
+                (rest, end)
+            })
+        });
+    unknown.is_some_and(|(rest, end)| end.is_some_and(|end| serde_list(&rest[end + 1..])))
+}
+
+/// Whether `rest` is serde's list of the fields or variants a type knows, after a name:
+/// "expected" and one backticked name, two joined by "or", or "one of" and three or more
+/// separated by commas; or that there are none.
+fn serde_list(rest: &str) -> bool {
+    if matches!(rest, ", there are no fields" | ", there are no variants") {
+        return true;
+    }
+    let Some(names) = rest
+        .strip_prefix(", expected one of ")
+        .or_else(|| rest.strip_prefix(", expected "))
+    else {
+        return false;
+    };
+    let one = |name: &str| {
+        name.len() >= 2
+            && name.starts_with('`')
+            && name.ends_with('`')
+            && !name[1..name.len() - 1].contains('`')
+    };
+    // serde's two names are `a` or `b`; three or more, a list.
+    names
+        .split_once(" or ")
+        .map_or_else(|| names.split(", ").all(one), |(a, b)| one(a) && one(b))
+}
+
+/// Where a string Rust's `Debug` quoted ends: its closing `"`, after `\` escapes.
+fn closing_quote(quoted: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (at, c) in quoted.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What follows an unknown variant's value: serde's list of the type's variants.
+const UNKNOWN_VARIANT_END: &str = "`, expected";
 
 /// The kinds serde shows a value of in backticks (``integer `5` ``, decision 134, B194; an
 /// unknown variant's, B196); names it puts in backticks (``unknown field `x` ``) stay.
@@ -1711,7 +1812,7 @@ fn without_values(text: &str) -> String {
             // An unknown variant's value may hold a backtick (serde doesn't escape it): to the
             // last of serde's own words after it, which name only the type's variants.
             let end = if kind == UNKNOWN_VARIANT {
-                ["`, expected", "`, there are no variants"]
+                [UNKNOWN_VARIANT_END, "`, there are no variants"]
                     .iter()
                     .filter_map(|after| out[start..].rfind(after))
                     .max()

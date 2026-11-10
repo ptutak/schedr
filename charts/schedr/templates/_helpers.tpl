@@ -42,6 +42,15 @@ app.kubernetes.io/component: {{ index . 1 }}
 {{- if and (eq .Values.mode "distributed") (not (or .Values.database.postgres.host .Values.database.existingSecret)) -}}
 {{- fail "mode distributed needs Postgres: set database.postgres.host (or database.existingSecret); SQLite is for one pod" -}}
 {{- end -}}
+{{- /*
+The objects' names fit Kubernetes' 63 characters (B222): distributed's longest is the full
+name and `-webserver-ui-port` (18); a StatefulSet's name leaves 11 for its pods' revision label.
+*/ -}}
+{{- $fullname := include "schedr.fullname" . -}}
+{{- $room := ternary 45 52 (eq .Values.mode "distributed") -}}
+{{- if gt (len $fullname) $room -}}
+{{- fail (printf "the release's objects are named after %q (%d characters): mode %s needs %d at most, so that every name fits Kubernetes' 63; install it under a shorter release name" $fullname (len $fullname) .Values.mode $room) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -377,7 +386,12 @@ interpreter configured in `config` too is refused: the chart's path would replac
 {{- define "schedr.forkServerEnv" -}}
 {{- with .Values.worker.forkServer }}
 {{- if and .enabled (ne (toString .enabled) "false") }}
-{{- $name := (index $.Values.config "DAGS__INTERPRETER") | default "python" | upper | replace "-" "_" }}
+{{- $interpreter := (index $.Values.config "DAGS__INTERPRETER") | default "python" }}
+{{- /* An environment variable's name can't hold `-`; written `_`, the loader would read another name (B205). */}}
+{{- if not (regexMatch "^[A-Za-z0-9_]+$" $interpreter) }}
+{{- fail (printf "config.DAGS__INTERPRETER %q: the fork server's interpreter is named in environment variables, so use letters, digits and `_` only" $interpreter) }}
+{{- end }}
+{{- $name := $interpreter | upper }}
 {{- range $key, $_ := $.Values.config }}
 {{- if or (eq $key (printf "INTERPRETERS__%s" $name)) (hasPrefix (printf "INTERPRETERS__%s__" $name) $key) }}
 {{- fail (printf "config.%s sets the DAG interpreter, which worker.forkServer sets too: set worker.forkServer.enabled=false and configure it in config (path, fork_server, preload), or drop config.%s and use worker.forkServer.path" $key $key) }}

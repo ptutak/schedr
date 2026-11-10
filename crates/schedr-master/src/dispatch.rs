@@ -263,6 +263,9 @@ pub struct Dispatcher {
     /// Creates the runs `TriggerDagOperator`s start (the core's, shared, once set).
     scheduler: crate::scheduler::Scheduler,
     workers: Workers,
+    /// Workers a restarted master read back that haven't registered with it yet: within the
+    /// lease it gave them, they may come back with their attempts in their journals (F14).
+    away: BTreeSet<String>,
     cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
     switch_off_after: u32,
@@ -320,6 +323,7 @@ pub struct Dispatcher {
 #[derive(Debug, Clone)]
 pub struct Memory {
     workers: Workers,
+    away: BTreeSet<String>,
     rejections: BTreeMap<String, BTreeMap<String, String>>,
     code_missing: BTreeMap<String, CodeMissing>,
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
@@ -355,6 +359,7 @@ impl Dispatcher {
             scheduler: crate::scheduler::Scheduler::new(db.clone()),
             db,
             workers: Workers::new(),
+            away: BTreeSet::new(),
             cancel_grace,
             switch_off_after: 3,
             sensor_max_wait: Duration::from_hours(24),
@@ -424,6 +429,7 @@ impl Dispatcher {
     pub fn memory(&self) -> Memory {
         Memory {
             workers: self.workers.clone(),
+            away: self.away.clone(),
             rejections: self.rejections.clone(),
             code_missing: self.code_missing.clone(),
             stops: self.stops.clone(),
@@ -452,6 +458,7 @@ impl Dispatcher {
     /// Puts back a copy taken by [`Self::memory`].
     pub fn restore(&mut self, memory: Memory) {
         self.workers = memory.workers;
+        self.away = memory.away;
         self.rejections = memory.rejections;
         self.code_missing = memory.code_missing;
         self.stops = memory.stops;
@@ -568,6 +575,7 @@ impl Dispatcher {
         slots: u32,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
+        self.away.remove(worker_id);
         if self.workers.register(worker_id, incarnation, queues, slots) {
             self.rejections.clear();
             self.code_missing.clear();
@@ -610,6 +618,20 @@ impl Dispatcher {
     /// A worker's stream ended: no connections job goes to it until it registers again.
     pub fn worker_disconnected(&mut self, worker_id: &str) {
         self.workers.disconnected(worker_id);
+    }
+
+    /// A worker a restarted master read back, not registered with it yet (see `away`).
+    pub fn worker_away(&mut self, worker_id: &str) {
+        self.away.insert(worker_id.to_owned());
+    }
+
+    /// The workers that may still come back with their attempts in their journals: read back
+    /// by a restarted master, or disconnected, and not lost yet (their leases running).
+    fn may_come_back(&self) -> Vec<String> {
+        let disconnected = self.workers.all().filter(|worker| !worker.connected);
+        let mut ids: BTreeSet<String> = disconnected.map(|worker| worker.id.clone()).collect();
+        ids.extend(self.away.iter().cloned());
+        ids.into_iter().collect()
     }
 
     /// The roots having connections, by name.
@@ -2027,7 +2049,7 @@ impl Dispatcher {
     /// Takes back assignments with no `Started` within the start timeout: they end
     /// `assignment_expired` and their tasks run again without using a retry. One whose
     /// `Started` arrived but waits for a busy master isn't taken back: the task did start
-    /// (B11). Returns how many.
+    /// (B11); nor one whose worker may come back with it (F14). Returns how many.
     ///
     /// # Errors
     ///
@@ -2046,16 +2068,32 @@ impl Dispatcher {
         let limit =
             EXPIRIES_PER_ROUND + self.arrivals.starts_waiting() + self.adopted_unrecorded.len();
         let limit = u32::try_from(limit).unwrap_or(u32::MAX);
-        let mut expired = self.db.unstarted_attempts(cutoff, limit).await?;
+        // Nor those of a worker that may come back (F14): it may have run the task and
+        // finished, the `Started` lost with the old master or stream; its journal says so when
+        // it registers. Its lease run out, it is lost and they end with it. Left out by the
+        // query, so they can't fill a round's share.
+        let coming_back = self.may_come_back();
+        let mut expired = self
+            .db
+            .unstarted_attempts(cutoff, &coming_back, limit)
+            .await?;
         expired.retain(|attempt| {
             !self.arrivals.start_waiting(&attempt.id)
                 && !self.adopted_unrecorded.contains(&attempt.id)
         });
         expired.truncate(EXPIRIES_PER_ROUND);
         // A moved cleanup never started: it goes on waiting.
-        for attempt in self.db.unstarted_cleanups(cutoff, limit).await? {
-            // Its `Started` is here, waiting its turn: the worker has it.
-            if self.arrivals.start_waiting(&attempt.id) {
+        // A moved cleanup's too: its worker may come back with it finished (F14's review).
+        for attempt in self
+            .db
+            .unstarted_cleanups(cutoff, &coming_back, limit)
+            .await?
+        {
+            // Its `Started` is here, waiting its turn, or it was adopted though that couldn't be
+            // recorded (batch A's review): the worker has it.
+            if self.arrivals.start_waiting(&attempt.id)
+                || self.adopted_unrecorded.contains(&attempt.id)
+            {
                 continue;
             }
             self.take_back_cleanup(&attempt, now).await?;
@@ -2151,6 +2189,7 @@ impl Dispatcher {
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         self.workers.remove(worker_id);
+        self.away.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
             if attempt.started {
                 self.end_lost(&attempt, lost_summary(worker_id), results, now)

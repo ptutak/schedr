@@ -2000,14 +2000,14 @@ async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
         .await
         .unwrap();
     while !dispatcher.step(ts(NOW)).await.unwrap().is_empty() {}
-    let unstarted = db.unstarted_attempts(later(11), 1000).await.unwrap();
+    let unstarted = db.unstarted_attempts(later(11), &[], 1000).await.unwrap();
     assert_eq!(unstarted.len(), width);
     // The oldest ones' starts arrived and wait for a busy master.
     for attempt in &unstarted[..EXPIRIES_PER_ROUND] {
         arrivals.start_arrived("w1", &attempt.id);
     }
     dispatcher.step(later(11)).await.unwrap();
-    let left = db.unstarted_attempts(later(11), 1000).await.unwrap();
+    let left = db.unstarted_attempts(later(11), &[], 1000).await.unwrap();
     let ids = |attempts: &[schedr_db::attempts::StoredAttempt]| -> Vec<String> {
         attempts.iter().map(|a| a.id.clone()).collect()
     };
@@ -4244,4 +4244,81 @@ async fn a_sensor_isn_t_given_an_event_posted_after_its_wait_ran_out() {
         .find(|i| i.task_id == id("wait"))
         .unwrap();
     assert_eq!(wait.outcome.as_deref(), Some("TimedOut"));
+}
+
+/// F14's review: a moved cleanup isn't taken back while its worker may come back with it
+/// finished (disconnected, or read back by a restarted master), as an attempt isn't.
+#[tokio::test]
+async fn a_moved_cleanup_isnt_taken_back_while_its_worker_may_come_back() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    dispatcher.worker_disconnected("w2");
+    dispatcher.expire(later(1200)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
+
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    dispatcher.worker_away("w2");
+    dispatcher.expire(later(1200)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
+}
+
+/// F14's review: the attempts of a worker that may come back don't fill a round's expiries,
+/// so a connected worker's assignment past its start timeout is still taken back.
+#[tokio::test]
+async fn attempts_of_a_worker_that_may_come_back_dont_fill_a_rounds_expiries() {
+    let width = EXPIRIES_PER_ROUND + 1;
+    let tasks: Vec<Json> = (0..width)
+        .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
+        .collect();
+    let wide: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": tasks, "edges": []
+    }))
+    .unwrap();
+    let (mut dispatcher, db, _run_id) = with_run(wide).await;
+    let slots = u32::try_from(EXPIRIES_PER_ROUND).unwrap();
+    dispatcher
+        .register("w1", "i1", &[], slots, ts(NOW))
+        .await
+        .unwrap();
+    while !dispatcher.step(ts(NOW)).await.unwrap().is_empty() {}
+    dispatcher.worker_disconnected("w1");
+    dispatcher
+        .register("w2", "i1", &[], 1, later(1))
+        .await
+        .unwrap();
+    dispatcher.step(later(1)).await.unwrap();
+    let on_w2 = db.open_attempts(Some("w2")).await.unwrap();
+    assert_eq!(on_w2.len(), 1);
+    dispatcher.expire(later(30)).await.unwrap();
+    let stored = db.attempt(&on_w2[0].id).await.unwrap().unwrap();
+    assert_eq!(stored.status, Some(AttemptStatus::AssignmentExpired));
+    assert_eq!(
+        db.open_attempts(Some("w1")).await.unwrap().len(),
+        EXPIRIES_PER_ROUND
+    );
+}
+
+/// Batch A's review: a moved cleanup adopted while that couldn't be recorded is kept, as an
+/// attempt is: its worker runs it.
+#[tokio::test]
+async fn a_moved_cleanup_adopted_unrecorded_isnt_taken_back() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_to_w2(&mut dispatcher).await;
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_adoption BEFORE UPDATE ON attempts \
+         WHEN OLD.moved_at IS NOT NULL AND NEW.moved_at IS NULL \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let _ = dispatcher.adopt("w2", &attempt, later(5)).await;
+    dispatcher.expire(later(1200)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }

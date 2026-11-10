@@ -192,6 +192,23 @@ async fn a_failed_send_says_why() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn a_send_no_connection_took_says_not_sent() {
+    // B215: refused before any connection, nothing was stored: "not sent", the key dropped.
+    let refused = Scripted {
+        refused: true,
+        ..Scripted::default()
+    };
+    let app = ui(vec![deployment("etl", refused)]);
+    let (_, html) = post(&app, "/d/etl/workers/w1/drain", "", &[SAME]).await;
+    let shown = texts(&html, ".command");
+    assert!(
+        shown[0].starts_with("Drain worker w1: not sent: can't reach"),
+        "{html}"
+    );
+    assert!(shown[0].ends_with("the command wasn't sent"), "{html}");
+}
+
 /// What a POST's answer says about its command: its `Schedr-Command-Answer` header.
 async fn answer_kind(app: &axum::Router, path: &str) -> Option<String> {
     let request = Request::builder()

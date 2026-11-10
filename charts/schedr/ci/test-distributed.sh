@@ -277,3 +277,29 @@ render --set worker.forkServer.enabled=false --set config.INTERPRETERS__PYTHON=/
     > "$WORK/out.yaml"
 has "SCHEDR_CONFIG__INTERPRETERS__PYTHON" "an interpreter of one's own with the fork server off"
 echo "ok: the fork server's variables: by the DAG interpreter's name, off, off as a string"
+
+# The top-level config and env reach the UI too (B221): its docs switched off, a proxy.
+helm template t "$CHART" --namespace ns "${PG[@]}" --set-string config.UI__DOCS_DIR= \
+    --set 'env[0].name=HTTPS_PROXY' --set 'env[0].value=http://proxy:3128' \
+    --show-only templates/ui.yaml > "$WORK/out.yaml"
+has 'name: SCHEDR_CONFIG__UI__DOCS_DIR' "the UI's config"
+has 'name: HTTPS_PROXY' "the UI's env"
+echo "ok: the top-level config and env on the UI"
+
+# A release name too long for the objects' names is refused, not rendered past 63 (B222).
+long=$(printf 'a%.0s' $(seq 53))
+why=$(helm template "$long" "$CHART" --namespace ns "${PG[@]}" 2>&1 || true)
+[[ $why == *"needs 45 at most"* ]] || fail "a 53-character release name not refused with its reason: $why"
+helm template "${long:0:38}" "$CHART" --namespace ns "${PG[@]}" > "$WORK/out.yaml"
+too_long=$(grep -E '^  name: ' "$WORK/out.yaml" | awk 'length($2) > 63')
+[ -z "$too_long" ] || fail "a name over 63 characters: $too_long"
+echo "ok: release names too long for the objects refused"
+
+# A `-` in the root's or the interpreter's name is refused, not turned into `_` (B205).
+why=$(helm template t "$CHART" --set dagsRoot=etl-jobs 2>&1 || true)
+[[ $why == *'dagsRoot "etl-jobs"'* ]] || fail "dagsRoot with a - not refused: $why"
+why=$(helm template t "$CHART" --set config.DAGS__INTERPRETER=etl-venv 2>&1 || true)
+[[ $why == *'DAGS__INTERPRETER "etl-venv"'* ]] || fail "an interpreter with a - not refused: $why"
+helm template t "$CHART" --set dagsRoot=etl_jobs > "$WORK/out.yaml"
+has 'name: SCHEDR_CONFIG__DAGS__ROOTS__ETL_JOBS' "dagsRoot with a _"
+echo "ok: names with a - refused"

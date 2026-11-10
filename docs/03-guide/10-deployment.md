@@ -17,7 +17,7 @@ every key. Workers find DAG roots through `SCHEDR_DAG_PATH` and script roots thr
 | `schedr master` | **exactly one** | `[database] url`, a migrated schema (or `--migrate`); its gRPC port behind a Service the workers reach |
 | `schedr webserver` | one or more | `[database] url` (it waits for the schema to be migrated); its REST port behind a Service |
 | `schedr worker` | as many as the load needs | `[worker] master_url`, the DAG code (e.g. a git-sync sidecar), a disk for its journal and logs; a StatefulSet with a headless Service, each pod's `log_address` set to its DNS name |
-| `schedr ui` | one | `[ui] deployments` (each webserver's URL); no database. Listens on `[ui] port` (8082). A chart pod for it comes in M3.6; until then, [run it yourself](#running-schedr-ui) |
+| `schedr ui` | one | `[ui] deployments` (each webserver's URL); no database. Listens on `[ui] port` (8082). The chart's distributed mode deploys it (`ui.enabled`); elsewhere, [run it yourself](#running-schedr-ui) |
 
 - **Postgres** is the database for anything spread over several hosts. Migrate the schema
   with `schedr db migrate` before starting the master (it holds the master's lease while it
@@ -61,12 +61,17 @@ standalone's pod goes, the roles come (a short downtime). Standalone's volume st
 | Role | Kubernetes | Image | Notes |
 |---|---|---|---|
 | master | a Deployment, **1 replica, `Recreate`** | `schedr-server` (`images/schedr-server`, 44 MB, no Python) | The old master stops (giving up the lease) before the new one starts. `migration`: an init container (`db migrate --wait`) or `onStart` (`master --migrate`). Its Service `<release>-master` (gRPC 8070). |
-| webserver | a Deployment, `webserver.replicas` (1) | `schedr-server` | The API's Service `<release>` (8080). Waits for its schema, so during an upgrade the old one serves until the new one is ready. The web UI is a separate role; the chart gains it in M3.6. |
+| webserver | a Deployment, `webserver.replicas` (1) | `schedr-server` | The API's Service `<release>` (8080). Waits for its schema, so during an upgrade the old one serves until the new one is ready. The web UI is a separate role (below). |
 | workers | a **StatefulSet**, `worker.replicas` (2), one pod at a time on updates | `image` (the base image or yours) | A headless Service `<release>-worker`; each pod's `log_address` is its own DNS name; **a volume each** (`worker.persistence`: logs and the journal survive the pod moving); a PodDisruptionBudget (`worker.podDisruptionBudget`, at most 1 down); `terminationGracePeriodSeconds` mirrored into `[worker] termination_grace_period`; the DAGs (git-sync, `dags.files`) only here. |
+| ui | a Deployment, `ui.replicas` (1), with `ui.enabled` (the default) | `schedr-server` | The web UI over the release's own webserver (`default`) and `ui.deployments`. Its Service `<release>-ui` (8082). No database, no DAG code. |
 
-Each role has its own section (`master`, `webserver`, `worker`: `replicas`, `resources`,
+Each role has its own section (`master`, `webserver`, `worker`, `ui`: `replicas`, `resources`,
 `image` for the server roles, `serviceAccountName`, `podAnnotations`, `nodeSelector`,
-`tolerations`, `affinity`); standalone keeps the top-level ones.
+`tolerations`, `affinity`); standalone keeps the top-level ones. The top-level `config` and
+`env` reach every role, the UI's too. The objects are named after the release
+(`<release>-schedr`, or the release's name when it holds `schedr`), and Kubernetes allows 63
+characters: the chart refuses a full name over 45 characters in this mode (52 in standalone),
+its longest object's name being that and `-webserver-ui-port`.
 
 **The fork server.** `worker.forkServer` turns it on for these workers and for standalone's
 own worker, not for the master or the webserver. It is on by default.
@@ -84,7 +89,9 @@ The image's build imports that list and fails if a thread is still running. `mak
 chart-check` fails if this default differs from the file.
 
 The chart sets that interpreter's `path`, `fork_server` and `preload`. The interpreter is
-`config.DAGS__INTERPRETER`, or `python` when that is unset; the chart uppercases the name.
+`config.DAGS__INTERPRETER`, or `python` when that is unset; the chart uppercases the name. It
+names the interpreter in environment variables, so the chart refuses a name with other than
+letters, digits and `_`; `dagsRoot` too, for the same reason.
 A renamed DAG interpreter is the one it sets. To use an interpreter of your own in
 `config`, turn `worker.forkServer.enabled` off. The chart refuses to render when both set
 the DAG interpreter (`config.INTERPRETERS__PYTHON`, or `INTERPRETERS__PYTHON__PATH` and
@@ -98,12 +105,14 @@ the bare one. Size the pod for them as well as its slots.
 **TLS between the roles:** `tls.mode: app` (the default) is schedr's own mTLS, with a
 certificate per role in a Secret of its own (`ca.crt`, `tls.crt`, `tls.key`), from, in order:
 
-1. `tls.existingSecrets` (`master`, `webserver`, `worker`: all three): the master's
-   certificate must name its Service (`<release>-master.<namespace>.svc`), the workers' must
-   name `tls.workerName` (`schedr-worker`), and both need serverAuth and clientAuth;
+1. `tls.existingSecrets` (`master`, `webserver`, `worker`, and `ui` while the UI is deployed,
+   as it is by default: one each): the master's certificate must name its Service
+   (`<release>-master.<namespace>.svc`), the workers' must name `tls.workerName`
+   (`schedr-worker`), the UI's `tls.uiName` (`schedr-ui`), and each needs serverAuth and
+   clientAuth;
 2. cert-manager: `tls.certManager.issuerRef` creates a `Certificate` per role;
-3. **generated by the chart** (`tls.generate`, on by default): a CA and the three
-   certificates at install, valid 10 years, kept on upgrades (made again when the names they
+3. **generated by the chart** (`tls.generate`, on by default): a CA and a certificate
+   per role at install, valid 10 years, kept on upgrades (made again when the names they
    must carry change: `tls.workerName`, `clusterDomain`). Helm reads them back from the
    cluster, which `helm template`, client dry runs and GitOps tools that render (ArgoCD)
    can't: they would make new ones on every render, so use cert-manager or your own Secrets
@@ -412,7 +421,8 @@ them stopping.
 `schedr ui` is the web UI as its own process, over one or more webservers. It needs no
 database and no DAG code. The server image is enough: it has the binary and the
 documentation, and this role runs no user code. The base image has them too. The chart's
-distributed mode deploys this process in M3.6. Until then, run it yourself. Standalone
+distributed mode deploys this process (`ui.enabled`, on by default), and its `mode: ui` deploys
+it alone over other deployments; elsewhere, run it yourself. Standalone
 already serves the same pages on its API port, and ignores `[ui] bind`, `[ui] port` and
 `[ui] deployments`.
 

@@ -924,6 +924,34 @@ pub async fn run_tasks<T: Transport>(
     done(out, output, &command, &message)
 }
 
+/// How a task (instance) ended with no attempt (`` `upstream_failed` ``, or its run's end), if
+/// it did: followed, its log would never come.
+async fn ended_untried<T: Transport>(
+    client: &Client<T>,
+    run_id: &str,
+    task_id: &str,
+    map_index: Option<u32>,
+) -> Result<Option<String>, AppError> {
+    let detail = client.run(run_id).await?;
+    let index = map_index.map_or(-1, |i| i32::try_from(i).unwrap_or(i32::MAX));
+    let state = detail
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id && task.map_index == index)
+        .map(|task| task.state.as_str());
+    let final_task = state
+        .and_then(|state| serde_json::from_value(serde_json::Value::from(state)).ok())
+        .is_some_and(schedr_model::TaskInstanceState::is_final);
+    if final_task {
+        return Ok(state.map(|state| format!("`{state}`")));
+    }
+    let run_ended = matches!(
+        detail.run.state.as_str(),
+        "success" | "failed" | "cancelled"
+    );
+    Ok(run_ended.then(|| format!("(its run `{}`)", detail.run.state)))
+}
+
 /// `schedr tasks logs`: the attempt's log as it is, part by part (`--json`: each part as the
 /// API's JSON, one per line); with `--follow`, waiting for the attempt to start and on until
 /// it ends.
@@ -951,7 +979,14 @@ async fn print_log<T: Transport>(
             (Some(a), _) => break a.try_number,
             // The API says what is missing.
             (None, Some(n)) => break n,
-            (None, None) if args.follow => {}
+            // Waiting for its first attempt, unless it ended without one (B213).
+            (None, None) if args.follow => {
+                if let Some(ended) = ended_untried(client, run_id, task_id, map_index).await? {
+                    return Err(AppError::BadArgument(format!(
+                        "task `{task_id}` of run `{run_id}` ended {ended} without being tried: no log"
+                    )));
+                }
+            }
             (None, None) => {
                 return Err(AppError::BadArgument(format!(
                     "task `{task_id}` of run `{run_id}` hasn't been tried yet: no log so far"
@@ -1103,7 +1138,11 @@ fn shown_task(task_id: &str, map_index: Option<u32>) -> String {
     map_index.map_or_else(|| task_id.to_owned(), |i| format!("{task_id}[{i}]"))
 }
 
-fn for_time(text: Option<&str>, err: &mut impl Write) -> Result<Option<jiff::Timestamp>, AppError> {
+/// A `--for`-style time, its warning (an offset-free time read as UTC) written to `err`.
+pub(crate) fn for_time(
+    text: Option<&str>,
+    err: &mut impl Write,
+) -> Result<Option<jiff::Timestamp>, AppError> {
     let Some(text) = text else {
         return Ok(None);
     };

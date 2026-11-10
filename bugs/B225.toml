@@ -1,0 +1,13 @@
+title = "an assignment delivered late and journaled slowly can start after the master took it back"
+severity = "critical"
+probability = "rare"
+kind = "correctness"
+summary = '''the master's start timeout counts from `assigned_at`, the worker's lease from the master's last word: an AssignTask delayed on its way (near a lease, while the worker's heartbeats still reach the master) and a slow journal write leave the worker within its lease when the master has already expired the attempt and assigned it again, so both run it'''
+found = 2026-11-10
+suspected = false
+details = '''
+- **Found:** 2026-11-10, by Codex's review of batch A (session 01a1c665), with a paused-clock harness over the real dispatcher and agent: assigned at 0 s, delivered at 55 s, journaled 10 s, expired at 61 s, reassigned at 62 s, started on the first worker at 65 s.
+- **Where:** `crates/schedr-agent/src/agent.rs` (`journal_start`: `gone_silent` is the worker's own lease, refreshed by the assignment's arrival); `crates/schedr-master/src/dispatch.rs` (`expire`: from `assigned_at`). An `AssignTask` carries no time of the master's.
+- **Decided:** 2026-11-10, the user: a budget in the assignment (how long it may still wait to start, from the master's start timeout and its age when sent), counted by the worker conservatively against the link's delay; no extra round trip.
+- **The options were:** e.g. the assignment carries how long it may wait before starting (the master's start timeout less its age when sent) and the worker counts it from the arrival of the master's last earlier word; or the worker's `Started` is acknowledged before it launches (a round trip per task); or the master answers a late `Started` for a taken-back attempt by stopping it (both may already run).
+'''

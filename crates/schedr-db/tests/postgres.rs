@@ -601,6 +601,24 @@ async fn worker_text_holding_nul_is_stored_with_a_replacement_character() {
     );
 }
 
+/// A worker that may come back is left out of the expiry's reads (F14's review), on
+/// Postgres's JSON list too: `w1` holds the only unstarted attempt.
+async fn workers_that_may_come_back_are_left_out(db: &Database) {
+    let away = ["w1".to_owned()];
+    assert_eq!(
+        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), &away, 100)
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(
+        db.unstarted_cleanups(ts("2026-10-21T09:00:00Z"), &away, 100)
+            .await
+            .unwrap(),
+        []
+    );
+}
+
 #[tokio::test]
 async fn attempts_and_outputs_move_a_task_forward() {
     let (db, run_id) = with_instances().await;
@@ -618,12 +636,13 @@ async fn attempts_and_outputs_move_a_task_forward() {
     assert_eq!(db.open_attempts(Some("w1")).await.unwrap().len(), 1);
     assert_eq!(db.open_attempts(None).await.unwrap().len(), 1);
     assert_eq!(
-        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), 100)
+        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), &[], 100)
             .await
             .unwrap()
             .len(),
         1
     );
+    workers_that_may_come_back_are_left_out(&db).await;
     db.undo_assignment(
         &attempt_id,
         TaskInstanceState::Queued,

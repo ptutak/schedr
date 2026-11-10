@@ -882,6 +882,53 @@ async fn following_waits_for_the_attempt_to_start() {
     assert_eq!(logs.asked_from.lock().unwrap().clone(), [0]);
 }
 
+#[tokio::test]
+async fn following_a_task_that_ended_untried_stops_saying_so() {
+    // B213: an `upstream_failed` task gets no attempt; following its log waited for ever.
+    let client = world_with_logs(false, None).await;
+    runs(&client, trigger(Some("2026-10-15T01:00:00Z")), &text()).await;
+    let db = &client.transport().db;
+    let run_id = db
+        .dag_runs(&schedr_model::DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap()[0]
+        .id
+        .clone();
+    client
+        .transport()
+        .master
+        .lock()
+        .await
+        .2
+        .step(ts(NOW))
+        .await
+        .unwrap();
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!()
+    };
+    // As an upstream task's failure leaves it: never tried.
+    sqlx::query("DELETE FROM attempts")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE task_instances SET state = 'upstream_failed' WHERE task_id = 'extract'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let followed = tokio::time::timeout(
+        Duration::from_secs(5),
+        tasks(&client, logs_of(&run_id, None, true)),
+    )
+    .await
+    .expect("still following");
+    assert_eq!(
+        followed.unwrap_err().to_string(),
+        format!(
+            "task `extract` of run `{run_id}` ended `upstream_failed` without being tried: no log"
+        )
+    );
+}
+
 fn logs_of(run_id: &str, try_number: Option<u32>, follow: bool) -> TasksCommand {
     TasksCommand::Logs(crate::cli::LogsArgs {
         target: target(run_id, None),

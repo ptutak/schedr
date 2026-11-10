@@ -89,6 +89,14 @@ pub enum ClientError {
         /// Why.
         reason: String,
     },
+    /// No connection could be made: nothing was sent (B215).
+    #[error("can't reach the schedr server at {server}: {reason}")]
+    Unreachable {
+        /// The server's URL.
+        server: String,
+        /// Why.
+        reason: String,
+    },
     /// The server answered with an error.
     #[error("{message}")]
     Server {
@@ -357,10 +365,17 @@ impl Transport for HttpTransport {
         if let Some(key) = &request.key {
             builder = builder.header("idempotency-key", key);
         }
-        let response = builder
-            .send()
-            .await
-            .map_err(|e| connect_error(&self.server, e))?;
+        let response = builder.send().await.map_err(|e| {
+            // Refused before a connection was made: the request never left (B215).
+            if e.is_connect() {
+                let ClientError::Connect { server, reason } = connect_error(&self.server, e) else {
+                    unreachable!("connect_error makes a Connect")
+                };
+                ClientError::Unreachable { server, reason }
+            } else {
+                connect_error(&self.server, e)
+            }
+        })?;
         refuse_redirect(&self.server, &response)?;
         let status = response.status().as_u16();
         let bytes = response
@@ -1368,6 +1383,11 @@ impl<T: Transport> Client<T> {
             ) => Err(ClientError::Unanswered {
                 reason: error.to_string(),
             }),
+            // No try made a connection: said so, the command can be sent again (B215).
+            Err(ClientError::Unreachable { server, reason }) => Err(ClientError::Unreachable {
+                server,
+                reason: format!("{reason}; the command wasn't sent"),
+            }),
             other => other,
         }
     }
@@ -1387,15 +1407,30 @@ impl<T: Transport> Client<T> {
     {
         let mut delay = self.poll;
         let mut tries = 1;
+        // Whether a try may have reached the server: then the last one's `Unreachable` doesn't
+        // mean the command was never sent.
+        let mut reached = false;
         loop {
             let sent = with_command_key(key.clone(), request()).await;
             let again = match &sent {
-                Err(ClientError::Connect { .. }) => true,
-                Err(ClientError::Server { status, .. }) => *status >= 500,
+                Err(ClientError::Unreachable { .. }) => true,
+                Err(ClientError::Connect { .. }) => {
+                    reached = true;
+                    true
+                }
+                Err(ClientError::Server { status, .. }) => {
+                    reached = true;
+                    *status >= 500
+                }
                 _ => false,
             };
             if !again || tries >= COMMAND_TRIES {
-                return sent;
+                return match sent {
+                    Err(ClientError::Unreachable { server, reason }) if reached => {
+                        Err(ClientError::Connect { server, reason })
+                    }
+                    other => other,
+                };
             }
             tokio::time::sleep(delay).await;
             delay = delay.saturating_mul(2);

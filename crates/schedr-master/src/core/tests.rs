@@ -1383,6 +1383,54 @@ async fn a_restarted_master_restores_workers_and_counts_their_lease_from_its_sta
     );
 }
 
+/// F14: an attempt whose `Started` the old master never stored isn't taken back while its
+/// worker has the fresh lease a restart gives it: it may have finished there, and its journal
+/// comes when it registers. Its lease run out, it ends as a lost worker's does.
+#[tokio::test]
+async fn a_restarted_master_takes_back_no_assignment_within_its_workers_lease() {
+    let mut first = with_dag().await;
+    trigger(&mut first).await;
+    let out = first.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let db = first.db.clone();
+    let mut restarted = MasterCore::new(db.clone(), Settings::default());
+    restarted.restore(later(100)).await.unwrap();
+    for at in [100, 130, 160] {
+        restarted.tick(later(at)).await.unwrap();
+        let open = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+        assert_eq!(open.status, None, "taken back at {at} s");
+    }
+    restarted.tick(later(161)).await.unwrap();
+    let ended = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        ended.status,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
+    );
+}
+
+/// F14: nor while its worker is disconnected within its lease: it may come back with the
+/// attempt in its journal.
+#[tokio::test]
+async fn no_assignment_is_taken_back_from_a_disconnected_worker_within_its_lease() {
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    // Seen at 50 s, then gone: its lease runs to 110 s, the start timeout out at 60 s.
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle("w1", heartbeat, later(50)).await.unwrap();
+    core.disconnected("w1", later(50)).await.unwrap();
+    for at in [61, 100, 110] {
+        core.tick(later(at)).await.unwrap();
+        let open = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+        assert_eq!(open.status, None, "taken back at {at} s");
+    }
+}
+
 #[tokio::test]
 async fn a_registration_that_fails_half_way_leaves_no_live_stream() {
     let mut core = core().await;

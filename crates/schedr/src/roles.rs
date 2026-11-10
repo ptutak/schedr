@@ -140,6 +140,8 @@ pub struct MasterOutbox {
     pub backoff: Backoff,
     /// How often the sender looks for notifications to deliver.
     pub poll: Duration,
+    /// Whether they are delivered: `dags test` keeps them, to list (its run notifies no one).
+    pub deliver: bool,
 }
 
 /// `[notifications]` with the values its webhooks' headers read from `env`.
@@ -187,6 +189,7 @@ pub fn master_outbox(
             max: config.timings.outbox_retry_max,
         },
         poll: config.timings.outbox_poll,
+        deliver: true,
     })
 }
 
@@ -603,6 +606,26 @@ pub async fn listen(address: SocketAddr) -> Result<TcpListener, AppError> {
         .map_err(|e| AppError::BadArgument(format!("can't listen on {address}: {e}")))
 }
 
+/// Starts the notification sender, unless `outbox` keeps them (`dags test`). Its HTTP client
+/// is built there, off the way to ready (loading TLS roots takes a while).
+fn spawn_sender(
+    hub: &Hub,
+    (db, metrics): (Database, MasterMetrics),
+    outbox: MasterOutbox,
+    stop: watch::Receiver<u32>,
+) {
+    if !outbox.deliver {
+        return;
+    }
+    let hub = hub.clone();
+    tokio::spawn(async move {
+        match Sender::new(db, outbox.settings, metrics, outbox.backoff) {
+            Ok(sender) => hub.run_sender(sender, outbox.poll, until(stop)).await,
+            Err(error) => tracing::error!(%error, "notifications can't be sent"),
+        }
+    });
+}
+
 /// Serves the master: its gRPC service on `listener` (over mTLS with `tls`) and its loop,
 /// until `stop`, once `leadership` has taken the lease (a standby waits there).
 ///
@@ -699,17 +722,7 @@ pub async fn serve_master(
             }
         }
     });
-    // Its HTTP client is built here, off the way to ready (loading TLS roots takes a while).
-    tokio::spawn({
-        let (hub, stop) = (hub.clone(), stop.clone());
-        async move {
-            let (db, metrics) = sending;
-            match Sender::new(db, outbox.settings, metrics, outbox.backoff) {
-                Ok(sender) => hub.run_sender(sender, outbox.poll, until(stop)).await,
-                Err(error) => tracing::error!(%error, "notifications can't be sent"),
-            }
-        }
-    });
+    spawn_sender(&hub, sending, outbox, stop.clone());
     tokio::spawn({
         let (hub, stop) = (hub.clone(), stop.clone());
         async move { hub.run_retention(retention, until(stop)).await }

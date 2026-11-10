@@ -22,6 +22,8 @@ mod runs;
 struct Scripted {
     answers: BTreeMap<String, (u16, Value)>,
     down: bool,
+    /// Refuses every connection, nothing sent (B215).
+    refused: bool,
     /// The bodies of the requests sent, by path, in order (shared by its clones).
     sent: Sent,
 }
@@ -38,7 +40,12 @@ impl Transport for Scripted {
             .lock()
             .unwrap()
             .push((request.path.clone(), request.body.clone()));
-        let answer = if self.down {
+        let answer = if self.refused {
+            Err(ClientError::Unreachable {
+                server: "http://etl-webserver:8080".to_owned(),
+                reason: "connection refused".to_owned(),
+            })
+        } else if self.down {
             Err(ClientError::Connect {
                 server: "http://etl-webserver:8080".to_owned(),
                 reason: "connection refused".to_owned(),

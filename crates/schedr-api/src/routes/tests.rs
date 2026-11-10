@@ -2137,3 +2137,80 @@ fn a_bad_bodys_syntax_error_names_no_field() {
         "{shown}"
     );
 }
+
+/// B224: a type's own message is replaced even when it starts as one of serde's would.
+#[test]
+fn a_types_message_in_serdes_words_is_replaced() {
+    #[derive(Debug)]
+    struct Own;
+    impl<'de> serde::Deserialize<'de> for Own {
+        fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Self, D::Error> {
+            // Its message is the text sent: the forms of serde's to imitate.
+            let text = String::deserialize(reader)?;
+            Err(serde::de::Error::custom(text))
+        }
+    }
+    #[derive(Debug, serde::Deserialize)]
+    struct Body {
+        #[expect(dead_code, reason = "only parsed")]
+        key: Own,
+    }
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Typed {
+        #[expect(dead_code, reason = "only parsed")]
+        n: u8,
+        #[expect(dead_code, reason = "only parsed")]
+        list: [u8; 2],
+    }
+    for value in [
+        "invalid value: hunter2",
+        r#"invalid value: string "x" hunter2"#,
+        r#"invalid value: string "x", expected" hunter2"#,
+        "missing field `x` hunter2",
+        "unknown field `x`, hunter2",
+        "invalid length 3 hunter2",
+        // Grok's review: serde's words, then more of the type's own (B224).
+        "missing field `x`, expected hunter2",
+        "duplicate field `x`, expected hunter2",
+        "unknown field `x`, there are no fields hunter2",
+        "unknown field `x`, expected `a`, hunter2",
+        "unknown variant `x`, there are no variants hunter2",
+    ] {
+        let body = json!({"key": value}).to_string();
+        let shown = read_body::<Body>(body.as_bytes()).unwrap_err();
+        assert!(!shown.contains("hunter2"), "{value}: {shown}");
+        assert!(
+            shown.starts_with("`key`: a value isn't valid here"),
+            "{value}: {shown}"
+        );
+    }
+    // serde's own forms are kept, their values hidden.
+    for (body, start) in [
+        (
+            r#"{"n": "x", "list": [1, 2]}"#,
+            "`n`: invalid type: string \"…\", expected u8",
+        ),
+        (
+            r#"{"n": 300, "list": [1, 2]}"#,
+            "`n`: invalid value: integer `…`, expected u8",
+        ),
+        (
+            r#"{"n": 1, "list": {}}"#,
+            "`list`: invalid type: map, expected an array",
+        ),
+        (
+            r#"{"n": 1, "list": [1]}"#,
+            "`list`: invalid length 1, expected an array",
+        ),
+        (r#"{"n": 1}"#, "missing field `list`"),
+        // serde's two names (Grok's review): `a` or `b`.
+        (
+            r#"{"n": 1, "list": [1, 2], "x": 0}"#,
+            "`x`: unknown field `x`, expected `n` or `list`",
+        ),
+    ] {
+        let shown = read_body::<Typed>(body.as_bytes()).unwrap_err();
+        assert!(shown.starts_with(start), "{body}: {shown}");
+    }
+}

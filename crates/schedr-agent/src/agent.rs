@@ -1021,6 +1021,10 @@ pub struct Agent<E> {
     executor: E,
     incarnation: String,
     journal: Journal,
+    /// How long an attempt's first journal write takes (tests: a stalled disk, F14), and how
+    /// many were delayed so.
+    #[cfg(test)]
+    journal_stall: (Duration, Arc<std::sync::atomic::AtomicUsize>),
     watchers: BTreeMap<String, RootWatcher>,
     /// The triggers running here, on watcher slots: never attempts, so never journaled, and gone
     /// with the agent.
@@ -1177,6 +1181,8 @@ impl<E: Executor> Agent<E> {
         Self {
             settings,
             executor,
+            #[cfg(test)]
+            journal_stall: (Duration::ZERO, Arc::default()),
             warnings,
             incarnation,
             journal,
@@ -2322,6 +2328,7 @@ impl<E: Executor> Agent<E> {
         client: &mut MasterClient<Channel>,
         timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
+        let opened = timers.1;
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
                 attempt_id: assign.attempt_id.clone(),
@@ -2374,14 +2381,17 @@ impl<E: Executor> Agent<E> {
         // storage never holds up the agent): whether it runs here doesn't depend on them.
         spec.stand_in_secrets();
         let planned = self.plan(&mut spec, &assign);
-        if !matches!(planned, Err(NotRun::Rejected { .. }))
-            && let Err(error) = self.record_start(&spec, &assign, external.as_deref()).await
-        {
-            let detail = format!(
-                "can't write the journal in `{}`: {error}; check the worker's data directory",
-                self.journal.dir().display()
-            );
-            let _ = to_master.send(reject(pb::RejectReason::DiskNotWritable, detail));
+        let journaled = match planned {
+            Err(NotRun::Rejected { .. }) => Ok(()),
+            _ => {
+                self.journal_start(&spec, &assign, external.as_deref(), opened)
+                    .await
+            }
+        };
+        if let Err(why) = journaled {
+            if let Some(detail) = why {
+                let _ = to_master.send(reject(pb::RejectReason::DiskNotWritable, detail));
+            }
             return;
         }
         self.remember_code(&assign, &spec);
@@ -2402,6 +2412,17 @@ impl<E: Executor> Agent<E> {
             }
             return;
         }
+        self.start_planned(spec, planned, to_master);
+    }
+
+    /// An assignment journaled: started (`Started`, then launched), failed before it could
+    /// start, or rejected, as `planned` says.
+    fn start_planned(
+        &mut self,
+        mut spec: AttemptSpec,
+        planned: Result<Plan, NotRun>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
@@ -2409,7 +2430,11 @@ impl<E: Executor> Agent<E> {
         match planned {
             Err(NotRun::Rejected { reason, detail }) => {
                 self.release_code(&spec.attempt_id);
-                let _ = to_master.send(reject(reason, detail));
+                let _ = to_master.send(wrap(worker_message::Message::Rejected(pb::Rejected {
+                    attempt_id: spec.attempt_id.clone(),
+                    reason: reason.into(),
+                    detail,
+                })));
             }
             Err(NotRun::Failed { kind, message }) => {
                 let _ = to_master.send(started);
@@ -2727,12 +2752,47 @@ impl<E: Executor> Agent<E> {
     }
 
     /// Journals an attempt about to start: first what its cleanup would need after a restart.
+    /// Journals an attempt about to start: `Err(Some(why))` when the journal can't be written,
+    /// `Err(None)` when the lease ran out meanwhile (a stalled disk, F14): the master has taken
+    /// the attempt back and may have run it elsewhere, so it isn't started here, nor left in
+    /// the journal to be reported as started when this worker connects again.
+    async fn journal_start(
+        &self,
+        spec: &AttemptSpec,
+        assign: &pb::AssignTask,
+        external: Option<&[u8]>,
+        opened: tokio::time::Instant,
+    ) -> Result<(), Option<String>> {
+        if let Err(error) = self.record_start(spec, assign, external).await {
+            return Err(Some(format!(
+                "can't write the journal in `{}`: {error}; check the worker's data directory",
+                self.journal.dir().display()
+            )));
+        }
+        if self.gone_silent(opened) {
+            tracing::warn!(
+                attempt_id = spec.attempt_id.as_str(),
+                "the lease ran out while the attempt was journaled; not started"
+            );
+            self.forget(&spec.attempt_id).await;
+            return Err(None);
+        }
+        Ok(())
+    }
+
     async fn record_start(
         &self,
         spec: &AttemptSpec,
         assign: &pb::AssignTask,
         external: Option<&[u8]>,
     ) -> std::io::Result<()> {
+        #[cfg(test)]
+        if !self.journal_stall.0.is_zero() {
+            tokio::time::sleep(self.journal_stall.0).await;
+            self.journal_stall
+                .1
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         if spec.task.cleanup.is_some() {
             let mut assign = assign.clone();
             if let Some(inputs) = external {

@@ -13,7 +13,8 @@ use super::*;
 /// separate from it).
 async fn file_db(dir: &tempfile::TempDir) -> Database {
     let url = format!("sqlite://{}", dir.path().join("scope.db").display());
-    let db = Database::connect_with_timeout(&url, Duration::from_secs(2))
+    // Generous: nothing here waits on the limit, and 2 s ran out under load (B40).
+    let db = Database::connect_with_timeout(&url, Duration::from_secs(10))
         .await
         .unwrap();
     db.migrate().await.unwrap();

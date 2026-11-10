@@ -6,6 +6,7 @@ summary = "TaskKind has no deny_unknown_fields and both ends are protocol 0.1: a
 found = 2026-11-08
 suspected = false
 details = '''
+- **Decided:** 2026-11-10, the user: left until 1.0's protocol freeze (no 0.1.0 workers in production); fixed then, not before M4B.
 - **Found:** Grok's security review of M4.11f, by parsing DAG JSON with the fields of 0.1.0
   (`batch_ms` dropped, the runner then telling one event per item).
 - **Cause:** `PROTOCOL_VERSION` is still 0.1, raised for nothing added in M4 (14 changes to the

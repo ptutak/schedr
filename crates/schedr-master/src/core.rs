@@ -594,6 +594,7 @@ impl MasterCore {
             self.db
                 .set_worker_state(&worker.id, WorkerState::Disconnected, now)
                 .await?;
+            self.dispatcher.worker_away(&worker.id);
             self.connections.insert(
                 worker.id,
                 Connection {

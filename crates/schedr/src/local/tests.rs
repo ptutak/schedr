@@ -725,3 +725,40 @@ fn a_private_file_is_new_and_never_follows_a_link() {
     assert!(private_file(dir.path(), "planted.log").is_err());
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "kept");
 }
+
+/// Grok's review: `dags test` takes the deployment's own folder of connection files, which its
+/// start sweeps (a live worker's on the same host), nor the secrets of its notifications.
+#[test]
+fn a_test_runs_on_no_deployment_folder_or_secret() {
+    let mut config = Config::default();
+    config.worker.connection_dir = Some("/var/lib/schedr/connections".into());
+    config.webserver.ui_token_file = Some("/var/run/schedr/ui-token".into());
+    let local = test_config(&config, Vec::new(), Path::new("/tmp/schedr-test-data"));
+    assert_eq!(local.worker.connection_dir, None);
+    assert_eq!(local.webserver.ui_token_file, None);
+}
+
+/// Grok's review: a notification's body is masked as data: in an email's text, a nested
+/// object or a JSON string, its secret doesn't show.
+#[test]
+fn a_reported_notification_shows_no_secret() {
+    for body in [
+        json!({"subject": "s", "text": "Data:\n{\n  \"password\": \"hunter2\"\n}\n"}),
+        json!({"data": {"token": {"access": "hunter2"}}, "event": "MESSAGE"}),
+        json!("{\"password\":\"hunter2\"}"),
+    ] {
+        let notification = schedr_db::notifications::Notification {
+            id: "n1".to_owned(),
+            dag_id: "sync".to_owned(),
+            channel: "ops".to_owned(),
+            kind: "email".to_owned(),
+            url: None,
+            event: "MESSAGE".to_owned(),
+            body: body.clone(),
+            created_at: jiff::Timestamp::UNIX_EPOCH,
+            tries: 0,
+        };
+        let shown = reported_notification(notification).to_string();
+        assert!(!shown.contains("hunter2"), "{body}: {shown}");
+    }
+}

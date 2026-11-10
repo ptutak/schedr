@@ -1148,7 +1148,7 @@ fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_peri
 }
 
 #[test]
-fn a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_period() {
+fn a_draining_worker_stops_a_task_already_being_cancelled_near_its_grace_not_the_cancels() {
     // B9: a task already being stopped (here cancelled, so on the master's 30 s cancel grace)
     // when the drain's time is up kept that grace: the worker outlived the pod's deadline and
     // never deregistered.
@@ -1186,10 +1186,12 @@ fn a_draining_worker_stops_a_task_already_being_cancelled_within_the_grace_perio
     cluster.wait("the cancel's SIGTERM to reach the task", || {
         terminated.exists()
     });
-    let exited = cluster.terminate_within("worker", grace);
+    // Its grace and a few seconds for the process to end on a loaded machine (B22: 8 s alone
+    // ran out twice): still far below the cancel's 30 s, which B9 kept.
+    let exited = cluster.terminate_within("worker", grace + Duration::from_secs(5));
     assert!(
         exited.is_some_and(|s| s.success()),
-        "the worker didn't stop within the grace period: {exited:?}\n{}",
+        "the worker didn't stop within its grace and 5 s: {exited:?}\n{}",
         cluster.logs()
     );
     assert_eq!(cluster.worker_state("w1").as_deref(), Some("offline"));

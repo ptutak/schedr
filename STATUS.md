@@ -9,7 +9,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M4B.3, A turn's messages in groups (decisions D397). Done when: a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
 - **Then:** M4B.4, M4B.5, M4B.6, R1.0a.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 46; first: B224 (low/rare), B223 (medium/likely), B221 (medium/possible), B213 (medium/possible), B212 (medium/possible) (`BUGS.md`).
+- **Open bugs:** 31; first: B225 (critical/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
 
 ## Recent
 
@@ -24,7 +24,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- M4 done 2026-11-10. Codex's full review: F12 done (B200-B214), F13 (deployment) done 2026-11-10: B216-B223; B216-B220 and B196 fixed, reviewed twice by Codex (B224 logged). F14 (seams) next, its prompt in the session's scratchpad (f14.md); then the bug round (B221-B224, B205, B212-B215, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150, B199), F14's findings joining it, then M4B.
+- M4 done 2026-11-10. Codex's full review done (F12-F14) 2026-11-10. The bug round before M4B (accepted 2026-11-10, commits pre-accepted): batch A (F14's two critical fixes, B205, B221-B224), D (CLI: B212-B215) and E (flaky tests: B22, B40, B150, B159, B166, B197, B4) done; next B225 (critical, the user chose a start budget in AssignTask), then B (B192, B193, B185, B191, B195), C (B157, B85, B199), F (B48); then M4B, with a Grok review of the whole of M4B at its end. B187 left until 1.0 (the user).
 - The greenhouse showcase done 2026-11-10 (examples/showcase, docs/02-dags/25-showcase.md; asked by the user: IoT, a test and a guide page): `make standalone DAGS=examples/showcase/dags`, then `make showcase`; its code review cancelled by the user.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).

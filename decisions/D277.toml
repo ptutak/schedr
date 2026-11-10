@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D277"
 step = "M4.8c2"
 also = ["runs"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-db/src/instances.rs", "crates/schedr-master/src/progress.rs"]
-checked = 2026-11-09
+checked = 2026-11-10

@@ -268,6 +268,7 @@ async def polls() -> str | NotYet:
 @sensor.poke(every=timedelta(seconds=7), max_wait=timedelta(seconds=WAIT))
 async def slow_call() -> str | NotYet:
     state = Path(os.environ["IMPORTS"]).parent
+    (state / "slow_call_started").write_text("yes")
     while not (state / "release").exists():
         await asyncio.sleep(0.05)
     return CODE if (state / "ready").exists() else NOT_YET
@@ -992,13 +993,21 @@ async fn a_poke_whose_new_host_died_goes_on_on_its_code() {
     )
     .unwrap();
     let copies = BTreeMap::from([("etl".to_owned(), new_root)]);
+    // On events, not times, which a loaded machine stretches (B197): in its call, then its
+    // new host gone (a second after it imports).
     let changing = async {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let started = worker.dir.path().join("slow_call_started");
+        while !started.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         worker.hosts.code_changed(&copies);
-        tokio::time::sleep(Duration::from_millis(3000)).await;
-        // By now it was told to stop and its new host is gone.
-        let log = worker.log("slow_call");
-        assert!(log.contains("its host ended"), "{log}");
+        let ended = tokio::time::timeout(Duration::from_secs(60), async {
+            while !worker.log("slow_call").contains("its host ended") {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(ended.is_ok(), "{}", worker.log("slow_call"));
         std::fs::write(worker.dir.path().join("release"), "").unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         std::fs::write(worker.dir.path().join("ready"), "").unwrap();
@@ -1235,7 +1244,9 @@ async fn a_host_is_told_as_it_is_and_one_lost_is_counted_by_its_code() {
 #[tokio::test]
 async fn a_slow_import_isnt_a_blocked_loop() {
     let mut worker = Worker::new().await;
-    worker.setup.timeouts.watcher_block_limit = Duration::from_millis(300);
+    // Under the import's 2 s, so an import counted as blocking would fail it; over the loop's
+    // own pauses on a loaded machine (0.3 s wasn't, B197).
+    worker.setup.timeouts.watcher_block_limit = Duration::from_secs(1);
     std::fs::write(worker.dir.path().join("slow_import"), "").unwrap();
     let ran = worker.run("alpha", no_stop(), mask_none()).await;
     assert!(

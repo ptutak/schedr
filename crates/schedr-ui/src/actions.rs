@@ -535,6 +535,10 @@ async fn act<T: Transport>(
         Err(error @ ClientError::Server { status, .. }) if status < 500 => {
             failed(what, &error.to_string())
         }
+        // No try made a connection: nothing was sent (B215), so "not sent", and why.
+        Err(error @ ClientError::Unreachable { .. }) => {
+            failed(what, &format!("{error}; the command wasn't sent"))
+        }
         // No answer, or the server failed: it may have been stored (never "not sent", which
         // would invite sending it twice). The browser keeps its key, so sending it again
         // from this page gives the one stored, if it was.

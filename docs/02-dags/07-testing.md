@@ -126,7 +126,14 @@ While the run goes, each task's state is printed as it changes, except `schedule
 - a failed attempt as `extract | try 1 failed (failed):` and the traceback
 - a table with the columns `TASK`, `STATE`, `OUTCOME`, `TRIES`, `DURATION`
 - `outputs:`, and each task's output as stored JSON
+- `notifications (not sent):`, and each notification the run would have sent, as
+  `ops-slack: RUN_FAILED`, when there are some
 - `run <id>: success` (or `failed`, or `cancelled`)
+
+A test run notifies no one. The configured channels are known by name, so a DAG whose
+`notify=` names one loads; none of their secrets (`headers_env`, `[notifications] ca_file`)
+is read, and nothing is posted or mailed. The run listens on this machine only, with no
+sign-in, whatever `[webserver]` says.
 
 Exit 0 means the run succeeded. Exit 1 means it did not, or the DAG is unknown (the
 error names the files that failed to import, when there are some), or a root can't be
@@ -134,8 +141,9 @@ scanned and copied as a worker would (``can't scan DAG root `etl`: reading …/r
 Permission denied``): every file of a root is copied, not only the `.py` files. The command waits up
 to an hour; a task's own `timeout` stops that task sooner.
 
-`--json` prints the run, the file that defined the DAG (`location`), and each task's
-`state`, `outcome`, `try_number`, `output`, `attempts` and `log`. A successful task's
+`--json` prints the run, the file that defined the DAG (`location`), each task's
+`state`, `outcome`, `try_number`, `output`, `attempts` and `log`, and the `notifications`
+(each one's `channel`, `kind`, `event` and `body`, masked). A successful task's
 `outcome` is the outcome name (`SUCCESS` when the task has no outcomes of its own). A
 skipped or failed task's is `null`; the table prints `-` for those. Datetimes, dates,
 durations and tuples in `output` use the tags in

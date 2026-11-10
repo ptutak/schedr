@@ -3258,6 +3258,41 @@ async fn an_assignment_arriving_after_a_lease_of_silence_isnt_started() {
 }
 
 #[tokio::test]
+async fn an_assignment_journaled_past_the_lease_isnt_started() {
+    // F14: a journal write stalled past the lease returned, and its assignment started after
+    // the master took it back and ran it elsewhere.
+    let mut script = silent_master(false);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("stalled");
+    script[1] = assign("a1", &task, "sync.py", false);
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(600);
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let stalled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen_stalls = Arc::clone(&stalled);
+    let (seen, left) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+        agent.journal_stall = (Duration::from_millis(250), seen_stalls);
+    })
+    .await;
+    // The assignment was taken and journaled (its write delayed), then dropped from the
+    // journal, never launched (F14's review: the test must see the write happen).
+    assert_eq!(stalled.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(left, Vec::<String>::new());
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    assert!(
+        kinds(&seen).iter().all(|k| *k == "register"),
+        "{:?}",
+        kinds(&seen)
+    );
+}
+
+#[tokio::test]
 async fn an_assignment_whose_inputs_come_after_a_lease_of_silence_isnt_started() {
     // Codex's review of B163: the fetch of inputs ran without the silence limit, and its
     // assignment started after the master took it back.

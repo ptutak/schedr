@@ -308,16 +308,32 @@ async fn attempts_start_and_end_once() {
     assert_eq!(db.open_attempts(Some("w2")).await.unwrap(), []);
     assert_eq!(db.open_attempts(None).await.unwrap().len(), 1);
     assert_eq!(
-        db.unstarted_attempts(ts("2026-10-21T08:00:10Z"), 100)
+        db.unstarted_attempts(ts("2026-10-21T08:00:10Z"), &[], 100)
             .await
             .unwrap()
             .len(),
         1
     );
-    assert_eq!(db.unstarted_attempts(ts(NOW), 100).await.unwrap(), []);
+    assert_eq!(db.unstarted_attempts(ts(NOW), &[], 100).await.unwrap(), []);
+    // Not those of workers that may come back (F14's review).
+    let away = ["w1".to_owned()];
+    assert_eq!(
+        db.unstarted_attempts(ts("2026-10-21T08:00:10Z"), &away, 100)
+            .await
+            .unwrap(),
+        []
+    );
+    let others = ["w2".to_owned(), "w3".to_owned()];
+    assert_eq!(
+        db.unstarted_attempts(ts("2026-10-21T08:00:10Z"), &others, 100)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     // At most `limit` (B52).
     assert_eq!(
-        db.unstarted_attempts(ts("2026-10-21T08:00:10Z"), 0)
+        db.unstarted_attempts(ts("2026-10-21T08:00:10Z"), &[], 0)
             .await
             .unwrap(),
         []
@@ -330,7 +346,7 @@ async fn attempts_start_and_end_once() {
     );
     assert!(db.attempt(&attempt_id).await.unwrap().unwrap().started);
     assert_eq!(
-        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), 100)
+        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), &[], 100)
             .await
             .unwrap(),
         []
@@ -394,7 +410,7 @@ async fn an_adopted_attempt_counts_as_started_keeping_an_earlier_start() {
         .unwrap();
     assert!(db.attempt(&attempt_id).await.unwrap().unwrap().started);
     assert_eq!(
-        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), 100)
+        db.unstarted_attempts(ts("2026-10-21T09:00:00Z"), &[], 100)
             .await
             .unwrap(),
         []

@@ -7,8 +7,9 @@ use sqlx::Connection as _;
 use super::*;
 
 /// One statement's limit in these tests. Long enough that a loaded machine (coverage, a
-/// busy disk) still finishes it. A renewal leads for the period less this.
-const QUERY_LIMIT: Duration = Duration::from_secs(2);
+/// busy disk) still finishes it: 2 s wasn't (B40, a full `make check` beside other builds).
+/// A renewal leads for the period less this; the periods below are its multiples.
+const QUERY_LIMIT: Duration = Duration::from_secs(3);
 
 fn db_url(dir: &tempfile::TempDir) -> String {
     format!("sqlite://{}", dir.path().join("lease.db").display())

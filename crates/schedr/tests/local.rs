@@ -308,6 +308,78 @@ fn test_runs_the_dag_and_reports_each_task() {
         "{table}"
     );
     assert!(out.trim_end().ends_with(": success"), "{out}");
+    assert!(!err.contains("no offset given"), "{err}");
+}
+
+/// B212: a configuration with Basic sign-in (the deployment's) doesn't stop `dags test`, whose
+/// own server and client are this command's alone.
+#[test]
+fn test_runs_under_a_configuration_with_basic_sign_in() {
+    use std::fmt::Write as _;
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let users = local.dir.path().join("users");
+    std::fs::write(&users, "").unwrap();
+    let config = local.dir.path().join("config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    writeln!(
+        text,
+        "[webserver.auth]\nmode = \"basic\"\nusers_file = \"{}\"",
+        users.display()
+    )
+    .unwrap();
+    std::fs::write(&config, text).unwrap();
+    let (code, out, err) = local.test("sync", &["--for", "2026-10-21T08:00:00Z"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.trim_end().ends_with(": success"), "{out}");
+}
+
+/// Grok's review of B212: `dags test` reads none of the deployment's notification secrets or
+/// UI token, and sends nothing; it lists what its run would have notified (the user's choice).
+#[test]
+fn test_lists_its_notifications_and_sends_none() {
+    use std::fmt::Write as _;
+    let dag = GOOD
+        .replace(
+            "from schedr import Dag, task",
+            "from schedr import Dag, Notify, task",
+        )
+        .replace(
+            r#"with Dag("sync"):"#,
+            r#"with Dag("sync", notify={"ops": [Notify.RUN_SUCCEEDED]}):"#,
+        );
+    let local = Local::new(&[("sync.py", &dag)]);
+    let missing = local.dir.path().join("missing");
+    let config = local.dir.path().join("config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    writeln!(
+        text,
+        "[webserver]\nui_token_file = \"{m}/ui-token\"\n\
+         [notifications]\nca_file = \"{m}/ca.pem\"\n\
+         [notifications.channels.ops]\ntype = \"webhook\"\n\
+         url = \"http://127.0.0.1:1/hook\"\n\
+         headers_env = {{ Authorization = \"SCHEDR_TEST_UNSET_TOKEN\" }}",
+        m = missing.display()
+    )
+    .unwrap();
+    std::fs::write(&config, text).unwrap();
+    let (code, out, err) = local.test("sync", &["--for", "2026-10-21T08:00:00Z"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(
+        out.contains("notifications (not sent):\n  ops: RUN_SUCCEEDED\n"),
+        "{out}"
+    );
+}
+
+/// B214: a `--for` or `--event-at` without an offset is read as UTC, and says so.
+#[test]
+fn test_says_a_time_without_an_offset_is_read_as_utc() {
+    let local = Local::new(&[("sync.py", GOOD)]);
+    let (code, out, err) = local.test("sync", &["--for", "2026-10-21T08:00:00"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(
+        err.contains("warning: no offset given: interpreted as"),
+        "{err}"
+    );
 }
 
 /// A task posting an event through `schedr.api` posts to the test's own local schedr (M4.11h):

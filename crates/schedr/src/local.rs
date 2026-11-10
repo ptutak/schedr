@@ -214,12 +214,8 @@ pub async fn run_local(
             if task.is_some() {
                 return Err(not_yet("dags test --task", "M4"));
             }
-            let at = planned_for
-                .as_deref()
-                .map(crate::times::parse_for)
-                .transpose()
-                .map_err(AppError::BadArgument)?
-                .map(|t| t.at);
+            // Its warnings shown, as `runs trigger`'s are (B214).
+            let at = crate::user::for_time(planned_for.as_deref(), &mut std::io::stderr())?;
             let event = event_key.clone().map(|key| (key, event_data.as_deref()));
             let event = event
                 .map(|(key, data)| {
@@ -228,12 +224,7 @@ pub async fn run_local(
                     Ok::<_, AppError>((key, data))
                 })
                 .transpose()?;
-            let event_at = event_at
-                .as_deref()
-                .map(crate::times::parse_for)
-                .transpose()
-                .map_err(AppError::BadArgument)?
-                .map(|t| t.at);
+            let event_at = crate::user::for_time(event_at.as_deref(), &mut std::io::stderr())?;
             let run = TestRun {
                 planned_for: at,
                 params,
@@ -1034,6 +1025,42 @@ fn test_stores(test: &TestRun, config: &Config) -> schedr_agent::secrets::Secret
     stores
 }
 
+/// The configuration of `dags test`'s own standalone: `config` with `roots`, its data in
+/// `data`, every port chosen by the system.
+fn test_config(config: &Config, roots: Vec<Root>, data: &Path) -> Config {
+    let mut local = config.clone();
+    local.dag_roots = roots;
+    local.database.url = Some(format!("sqlite://{}", data.join("schedr.db").display()));
+    local.worker.data_dir = Some(data.to_path_buf());
+    local.master.grpc_port = 0;
+    local.webserver.port = 0;
+    local.worker.log_port = 0;
+    local.ops.port = 0;
+    // Its own server, for this command alone: on this machine only, and with no sign-in, as
+    // its own client calls it without one (B212; `--user` never reached it).
+    let loopback = std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST);
+    local.master.bind = loopback;
+    local.webserver.bind = loopback;
+    local.ops.bind = loopback;
+    local.worker.log_bind = loopback;
+    local.webserver.auth = schedr_config::config::AuthSection::default();
+    // Nor the deployment's UI token, which its own UI doesn't need (Grok's review of B212).
+    local.webserver.ui_token_file = None;
+    // Nor its folder of connection files: one set there is swept at start, a live worker's
+    // with it on the same host (Grok's review); unset, it is the test's own, from its data.
+    local.worker.connection_dir = None;
+    // Its notifications are kept, not sent (the user, 2026-11-10): the channels stay known by
+    // name, so a DAG naming one loads, but none of their secrets is read.
+    local.notifications.ca_file = None;
+    for channel in local.notifications.channels.values_mut() {
+        channel.headers_env.clear();
+    }
+    local.timings.tick_interval = Duration::from_millis(100);
+    local.dags.poll_interval = Duration::from_millis(200);
+    local.dags.settle_time = Duration::ZERO;
+    local
+}
+
 async fn test_dag(
     dag: &str,
     test: &TestRun,
@@ -1089,18 +1116,9 @@ async fn test_dag(
         let _ = std::fs::remove_dir_all(&data);
         return Err(error);
     }
-    let mut local = config.clone();
-    local.dag_roots = roots;
-    local.database.url = Some(format!("sqlite://{}", data.join("schedr.db").display()));
-    local.worker.data_dir = Some(data.clone());
-    local.master.grpc_port = 0;
-    local.webserver.port = 0;
-    local.worker.log_port = 0;
-    local.ops.port = 0;
-    local.timings.tick_interval = Duration::from_millis(100);
-    local.dags.poll_interval = Duration::from_millis(200);
-    local.dags.settle_time = Duration::ZERO;
+    let local = test_config(config, roots, &data);
     let mut setup = plan(&local, env)?;
+    setup.outbox.deliver = false;
     // A database of its own, created here.
     setup.migrate = true;
     // A test run's secrets are only its `--secret` values (none: every read is "not found"),
@@ -1482,12 +1500,34 @@ async fn report(
             "log": log,
         }));
     }
+    // What the run would have notified: kept in the outbox, never sent (masked, as a log is).
+    let notifications: Vec<Value> = db
+        .due_notifications(jiff::Timestamp::MAX, u32::MAX)
+        .await?
+        .into_iter()
+        .map(reported_notification)
+        .collect();
     Ok(json!({
         "run": detail.run,
         "location": location,
         "tasks": tasks,
         "resources": detail.resources,
+        "notifications": notifications,
     }))
+}
+
+/// A notification the run would have sent, as the report shows it: its body masked as data,
+/// as a task's output is (as text, after JSON escaped it, a secret in an email's text or a
+/// nested object would show: Grok's review).
+fn reported_notification(notification: schedr_db::notifications::Notification) -> Value {
+    let mut body = notification.body;
+    schedr_config::masked::mask_data(&mut body);
+    json!({
+        "channel": notification.channel,
+        "kind": notification.kind,
+        "event": notification.event,
+        "body": body,
+    })
 }
 
 /// A task as the report shows it: `fetch`, or `fetch[2]` for an instance (decision 86).
@@ -1565,6 +1605,18 @@ fn print_report(report: &Value, out: &mut impl Write) -> Result<(), AppError> {
         if !task["output"].is_null() {
             // Named as in the table: `fetch` the gathered list, `fetch[0]` an instance's.
             writeln!(out, "  {}: {}", reported_name(task), task["output"])?;
+        }
+    }
+    let notifications = report["notifications"].as_array().unwrap_or(&empty);
+    if !notifications.is_empty() {
+        writeln!(out, "notifications (not sent):")?;
+        for notification in notifications {
+            writeln!(
+                out,
+                "  {}: {}",
+                notification["channel"].as_str().unwrap_or_default(),
+                notification["event"].as_str().unwrap_or_default()
+            )?;
         }
     }
     writeln!(

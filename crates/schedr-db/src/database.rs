@@ -12,6 +12,28 @@ use crate::backend::{Backend, UnsupportedUrl};
 use crate::query::Starting;
 use crate::status::SchemaStatus;
 
+/// A migration's end on its connection: given back to the pool once it ran; failed, its
+/// transaction's rollback, which sqlx only queues, run now, awaited (B150): the connection is
+/// then closed in the background, and SQLite's write lock held till that rollback would make
+/// the lease's release that follows wait, past its query limit on a loaded machine.
+async fn finish_migration<DB: sqlx::Database>(
+    whole: &mut Starting<DB>,
+    ran: Result<(), sqlx::migrate::MigrateError>,
+) -> Result<(), DbError>
+where
+    DB::Connection: sqlx::Connection<Database = DB>,
+{
+    match ran {
+        Ok(()) => {
+            whole.completed();
+            Ok(())
+        }
+        Err(error) => {
+            let _ = sqlx::Connection::ping(whole.conn()).await;
+            Err(error.into())
+        }
+    }
+}
 #[cfg(test)]
 mod tests;
 
@@ -454,13 +476,13 @@ impl Database {
         match &self.pool {
             Pool::Sqlite(pool) => {
                 let mut whole = Starting::new(pool.acquire().await?);
-                migrator.run_direct(None, whole.conn(), false).await?;
-                whole.completed();
+                let ran = migrator.run_direct(None, whole.conn(), false).await;
+                finish_migration(&mut whole, ran).await?;
             }
             Pool::Postgres(pool) => {
                 let mut whole = Starting::new(pool.acquire().await?);
-                migrator.run_direct(None, whole.conn(), false).await?;
-                whole.completed();
+                let ran = migrator.run_direct(None, whole.conn(), false).await;
+                finish_migration(&mut whole, ran).await?;
             }
         }
         Ok(())
@@ -490,13 +512,13 @@ impl Database {
         match &self.pool {
             Pool::Sqlite(pool) => {
                 let mut whole = Starting::new(pool.acquire().await?);
-                migrator.run_direct(None, whole.conn(), false).await?;
-                whole.completed();
+                let ran = migrator.run_direct(None, whole.conn(), false).await;
+                finish_migration(&mut whole, ran).await?;
             }
             Pool::Postgres(pool) => {
                 let mut whole = Starting::new(pool.acquire().await?);
-                migrator.run_direct(None, whole.conn(), false).await?;
-                whole.completed();
+                let ran = migrator.run_direct(None, whole.conn(), false).await;
+                finish_migration(&mut whole, ran).await?;
             }
         }
         Ok(())

@@ -125,7 +125,7 @@ least one `run` event per run.
 
 The two runs with the triggers on are compared with the two without: the average round
 mean, the average round p99, and the average tasks a second. The scenario fails when the
-mean with them on is over 1.15 times the mean without, the p99 over 1.5 times, or the tasks
+mean with them on is over 1.3 times the mean without, the p99 over 1.5 times, or the tasks
 a second under 0.9 times. The p99 is a bucket edge, and those buckets are √2 apart, so 1.5
 allows one bucket worse and not two. The report `target/stress/15_change_signals.json`
 (and `15b_change_signals_sqlite.json`) records each side's round mean

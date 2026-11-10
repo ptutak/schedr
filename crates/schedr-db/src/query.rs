@@ -236,8 +236,10 @@ pub(crate) fn sql(backend: Backend, query: &'static str) -> AssertSqlSafe<String
 /// As [`sql`], for a query built at run time from this crate's fixed text (placeholders and
 /// casts only, never values: those are bound).
 pub(crate) fn sql_text(backend: Backend, query: &str) -> AssertSqlSafe<String> {
-    let casts: [(&str, &str); 6] = match backend {
+    // `{json_each}($n{json})`: a bound JSON list's items, as rows of one column `value`.
+    let casts: [(&str, &str); 7] = match backend {
         Backend::Sqlite => [
+            ("{json_each}", "json_each"),
             ("{uuid}", ""),
             ("{ts}", ""),
             ("{json}", ""),
@@ -246,6 +248,7 @@ pub(crate) fn sql_text(backend: Backend, query: &str) -> AssertSqlSafe<String> {
             ("{>ts}", ""),
         ],
         Backend::Postgres => [
+            ("{json_each}", "jsonb_array_elements_text"),
             ("{uuid}", "::uuid"),
             ("{ts}", "::timestamptz"),
             ("{json}", "::jsonb"),

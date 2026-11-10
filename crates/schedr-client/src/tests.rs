@@ -499,11 +499,53 @@ async fn a_command_carries_its_key_and_a_read_none() {
 }
 
 #[tokio::test]
-async fn a_command_with_no_answer_may_have_arrived() {
-    // B140 (a side note): the CLI's last word after its tries isn't "can't reach", which
-    // invites running the command again under a new key.
+async fn a_command_no_connection_took_says_nothing_was_sent() {
+    // B215: every try refused before a connection (nothing listening): not B140's "may have
+    // arrived", which sends one looking for a command that was never stored.
     let api = Client::new(
         HttpTransport::new("http://127.0.0.1:1/", Auth::None),
+        Duration::from_millis(1),
+        Duration::from_millis(50),
+    );
+    let error = api
+        .send_command(|| api.set_paused("sync", true, false))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::Unreachable { .. }), "{error}");
+    assert!(
+        error.to_string().ends_with("; the command wasn't sent"),
+        "{error}"
+    );
+}
+
+/// Answers in turn from a list of results, errors too.
+struct Failing {
+    results: Mutex<Vec<Result<ApiResponse, ClientError>>>,
+}
+
+impl Transport for Failing {
+    async fn send(&self, _request: ApiRequest) -> Result<ApiResponse, ClientError> {
+        tokio::task::yield_now().await;
+        self.results.lock().unwrap().remove(0)
+    }
+}
+
+#[tokio::test]
+async fn a_command_one_of_whose_tries_reached_the_server_may_have_arrived() {
+    // B140: a try that reached the server (it failed, 503) may have stored the command, so a
+    // later try's refused connection doesn't make it "not sent" (B215's review of the case).
+    let unreachable = || ClientError::Unreachable {
+        server: "http://s".to_owned(),
+        reason: "refused".to_owned(),
+    };
+    let failing = ApiResponse {
+        status: 503,
+        body: json!({"error": "unavailable"}),
+    };
+    let api = Client::new(
+        Failing {
+            results: Mutex::new(vec![Ok(failing), Err(unreachable()), Err(unreachable())]),
+        },
         Duration::from_millis(1),
         Duration::from_millis(50),
     );
