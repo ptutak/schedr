@@ -5,27 +5,26 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Now (2026-11-10)
 
-- **Milestone:** M4, Native API complete.
-- **Next step:** M4.12, Runs between and over time. Done when: a parent waits on a chained run; a backfill fills missing periods oldest first
-- **Then:** M4.15b, M4B.3, M4B.4, M4B.5, M4B.6.
-- **Open questions:** 1 (`DECISIONS.md`).
+- **Milestone:** M4B, Batched worker messages (a milestone after M4).
+- **Next step:** M4B.3, A turn's messages in groups (decisions D397). Done when: a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
+- **Then:** M4B.4, M4B.5, M4B.6, R1.0a.
+- **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 38; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
 
 ## Recent
 
+- D441 (2026-11-10): a DAG that no longer parses after a major upgrade (decision 441, Q26)
 - D440 (2026-11-10): what retention keeps beyond the three newest runs
 - D405 (2026-11-09): the scheduler skips fire times another run covers
 - D399 (2026-11-09): cycles between DAGs allowed, inside a DAG refused
 - D398 (2026-11-09): a TriggerDagOperator starts only a `Chained` DAG
-- D397 (2026-11-09): a turn's messages in groups, savepoints later
+- M4.15b (2026-11-10): Upgrade rules completed
 - M4.15a (2026-11-10): Per-task memory
-- M4.14 (2026-11-10): Retention
-- M4.13b (2026-11-10): Notifications: email
+- M4.15 (2026-11-10): Per-task memory and upgrade rules
 
 ## In progress
 
-- Order agreed with the user (2026-11-09): M4 to its end (M4.13, M4.14 and M4.15a done 2026-11-10; M4.15b waits for Q26), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
-- Night of 2026-11-10 ended at M4.15b by D439: its check of the upgrade rules found one choice, Q26 (a DAG that no longer parses after a major upgrade: held as D72, or its last good version runs); the rest of the rules are built and tested.
+- M4 done 2026-11-10 (M4.15b: Q26 decided as D441, held). Next, as agreed with the user: Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
 - For the user: M4.13b's review fixes changed documented behaviour (an email's recipients read when it is sent; `timeout` bounds the SMTP exchange); M4.12c's CI failed only on the undone guard.
@@ -35,11 +34,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Waiting for the user
 
-- Q26: a DAG that no longer parses after a major upgrade, held (D72) or its last good version runs?
+Nothing.
 
 ## Rules in force
 
-- Commits and pushes need the user's acceptance again (the night's pre-acceptance ended at M4.15's open question).
+- Commits and pushes pre-accepted (2026-11-10) after each review, `make check` and `make docs`; stop at any decision that is the user's.
 - One review per step: Codex (security in its prompt); Grok only when Codex can't run.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly; never started by hand.

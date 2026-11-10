@@ -46,6 +46,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
         path: "a.py".to_owned(),
         exception: "ModuleNotFoundError".to_owned(),
         message: "No module named 'pandas'".to_owned(),
+        schedr_version: "0.1.0".to_owned(),
     };
     let by_file = HashMap::from([(("etl".to_owned(), "a.py".to_owned()), held)]);
     assert_eq!(
@@ -54,8 +55,10 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
             "path": "a.py", "exception": "ModuleNotFoundError",
             "message": "No module named 'pandas'",
             "reason": "DAG `sync` is held, no runs are created and it can't be triggered: its \
-                file `a.py` fails to import (ModuleNotFoundError: No module named 'pandas'), so \
-                its tasks couldn't run. Every DAG of the file is held until it imports"
+                file `a.py` fails to import with schedr 0.1.0 (ModuleNotFoundError: No module \
+                named 'pandas'), so its tasks couldn't run. Every DAG of the file is held until \
+                it imports: fix the file, or, if it stopped importing when schedr was upgraded, \
+                roll back"
         })
     );
     let conflict = StoredDag {

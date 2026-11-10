@@ -1,7 +1,7 @@
 title = "A DAG that no longer parses after a major upgrade: held, or its last good version runs?"
 asked = 2026-11-10
 topic = "deployment"
-status = "open"
+status = "decided"
 proposal = '''
 Found by M4.15's check of the upgrade rules (D439). archive/PROJECT.md (Upgrades and
 compatibility) says that across a major upgrade a DAG whose file no longer parses keeps running
@@ -13,3 +13,4 @@ under a newer schedr, the same code having parsed under the older one, keeps the
 use (its version runs on workers still able to run it, a warning shown), D72 for any other error.
 '''
 history = "JOURNAL.md"
+decided_by = 441

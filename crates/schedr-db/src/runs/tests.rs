@@ -470,6 +470,7 @@ fn a_hold_is_explained_as_the_files_failure_with_what_to_do() {
             path: "etl/all.py".to_owned(),
             exception: exception.to_owned(),
             message: "the details".to_owned(),
+            schedr_version: "1.0.0".to_owned(),
         }
         .reason("sync")
     };
@@ -483,6 +484,13 @@ fn a_hold_is_explained_as_the_files_failure_with_what_to_do() {
     ] {
         assert!(too_large.contains(part), "{part}\n{too_large}");
     }
+    // A file that stopped importing when schedr was upgraded: the version says so (D441).
+    let upgraded = held("ImportError");
+    assert!(
+        upgraded.contains("fails to import with schedr 1.0.0 (ImportError: the details)")
+            && upgraded.contains("if it stopped importing when schedr was upgraded, roll back"),
+        "{upgraded}"
+    );
     let invalid = held("InvalidDag");
     assert!(
         invalid.contains("Every DAG of the file is held while one is invalid"),
@@ -494,7 +502,8 @@ fn a_hold_is_explained_as_the_files_failure_with_what_to_do() {
     );
     assert!(held("InvalidPath").contains("isn't inside its root"));
     assert!(
-        held("SyntaxError").contains("fails to import (SyntaxError: the details)"),
+        held("SyntaxError")
+            .contains("fails to import with schedr 1.0.0 (SyntaxError: the details)"),
         "{}",
         held("SyntaxError")
     );

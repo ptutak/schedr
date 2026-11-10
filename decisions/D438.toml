@@ -6,7 +6,7 @@ topic = "workers"
 section = "Memory and environment"
 summary = '''
 `hard_memory_limit=True` sets `RLIMIT_DATA` (heap and anonymous mappings) to the task's budget.
-Not chosen: `RLIMIT_AS` (breaks programs reserving big ranges up front: Go, the JVM).
+Not chosen: the whole address space limit (breaks programs reserving big ranges up front: Go, the JVM).
 '''
 history = "JOURNAL.md#D436"
 step = "M4.15"

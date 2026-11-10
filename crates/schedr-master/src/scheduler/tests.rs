@@ -269,8 +269,9 @@ async fn a_dag_whose_file_fails_to_import_is_held() {
     assert_eq!(
         error.to_string(),
         "DAG `sync` is held, no runs are created and it can't be triggered: its file `a.py` \
-         fails to import (ModuleNotFoundError: No module named 'pandas'), so its tasks couldn't \
-         run. Every DAG of the file is held until it imports"
+         fails to import with schedr 0.1.0 (ModuleNotFoundError: No module named 'pandas'), so \
+         its tasks couldn't run. Every DAG of the file is held until it imports: fix the file, \
+         or, if it stopped importing when schedr was upgraded, roll back"
     );
 
     // A transient error holds nothing (72.2): the queued run starts.

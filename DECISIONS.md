@@ -5,9 +5,7 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ## Open questions
 
-| # | Asked | Topic | Question | Proposal |
-|---|---|---|---|---|
-| Q26 | 2026-11-10 | deployment | A DAG that no longer parses after a major upgrade: held, or its last good version runs? | Found by M4.15's check of the upgrade rules (D439). archive/PROJECT.md (Upgrades and compatibility) says that across a major upgrade a DAG whose file no longer parses keeps running its last good version, the error shown ("doesn't parse with schedr 2.0"), as the code didn't change, schedr did. D72 (later, the user's) holds every DAG of a file with a non-transient error: no new runs, manual triggers refused, running runs go on. Built is D72's. Options: (A) keep D72 for upgrades too (a hold says why; the user fixes the DAG or rolls back); (B) an import error under a newer schedr, the same code having parsed under the older one, keeps the older parse in use (its version runs on workers still able to run it, a warning shown), D72 for any other error. |
+None.
 
 ## Deferred questions
 
@@ -31,11 +29,12 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D441 | 2026-11-10 | user | built M4.15b | deployment | A DAG that no longer parses after a major upgrade is held |
 | D440 | 2026-11-10 | claude | built M4.14 | state | Retention also keeps the runs catchup counts as done, and runs still read |
-| D439 | 2026-11-10 | user | planned (M4.15) | deployment | Upgrade-rule gaps: the clear ones fixed, the others asked |
-| D438 | 2026-11-10 | user | planned (M4.15) | workers | The hard memory cap is `RLIMIT_DATA` |
-| D437 | 2026-11-10 | user | planned (M4.15) | workers | A task's budget is placed within a worker's pod limit |
-| D436 | 2026-11-10 | user | planned (M4.15) | workers | A task's own memory budget is `memory=`; the hard cap `hard_memory_limit=` |
+| D439 | 2026-11-10 | user | built M4.15 | deployment | Upgrade-rule gaps: the clear ones fixed, the others asked |
+| D438 | 2026-11-10 | user | built M4.15 | workers | The hard memory cap is `RLIMIT_DATA` |
+| D437 | 2026-11-10 | user | built M4.15 | workers | A task's budget is placed within a worker's pod limit |
+| D436 | 2026-11-10 | user | built M4.15 | workers | A task's own memory budget is `memory=`; the hard cap `hard_memory_limit=` |
 | D435 | 2026-11-10 | user | built M4.14 | state | An output deleted by retention answers 410 Gone |
 | D434 | 2026-11-10 | user | built M4.14 | state | Named events go with `[retention] events` |
 | D433 | 2026-11-10 | user | built M4.14 | state | Retention is on by default |
@@ -421,7 +420,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D53 | 2026-10-28 | user | built M4.10 | connections | Connections provide sync and async clients and checks |
 | D52 | 2026-10-28 | user | rule | development | M4 uses small substeps and the revised review schedule |
 | D51 | 2026-10-28 | user | rule | development | M4 implementation follows dependency order |
-| D50 | 2026-10-28 | user | planned (M4.15) | workers | Limited tasks start through schedr task-exec |
+| D50 | 2026-10-28 | user | built M4.15 | workers | Limited tasks start through schedr task-exec |
 | D49 | 2026-10-28 | user | built M4.10 | async-tasks | Async task calls return coroutines outside a DAG |
 | D48 | 2026-10-28 | user | untraced | development | No record found |
 | D47 | 2026-10-28 | user | untraced | ui-cli | LDAP transport encryption remains undecided |
@@ -654,6 +653,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### deployment
 
+- D441: A DAG that no longer parses after a major upgrade is held
 - D439: Upgrade-rule gaps: the clear ones fixed, the others asked
 - D383: A slim image beside the full one
 - D37: Deploy schedr ui by default in the distributed chart

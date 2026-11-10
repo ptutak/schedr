@@ -867,7 +867,8 @@ scope = '''
 `TriggerDagOperator` (chained runs, `wait`, cancel, cycles) and backfill (`runs backfill`, `--all`, `max_runs`, `runs cancel --backfill`, priorities)
 '''
 done_when = "a parent waits on a chained run; a backfill fills missing periods oldest first"
-status = "planned"
+status = "done"
+done = 2026-11-09
 
 [[steps]]
 id = "M4.12a"
@@ -949,7 +950,8 @@ a task's own memory budget in the API, `setrlimit` opt-in through `schedr task-e
 done_when = '''
 a task over its own budget is killed; a rolling upgrade keeps old-parse tasks on old workers
 '''
-status = "planned"
+status = "done"
+done = 2026-11-10
 
 [[steps]]
 id = "M4.15a"
@@ -968,6 +970,7 @@ title = "Upgrade rules completed"
 scope = '''
 the upgrade rules checked against what M2 built (D439): version gating, parse jobs per schedr version, the newer parse taking over and `schedr dags check` are built and tested; open: a DAG that no longer parses after a major upgrade (Q26: held as D72, or its last good version runs)
 '''
-done_when = "Q26 decided and built; a rolling upgrade keeps old-parse tasks on old workers"
-status = "planned"
+done_when = "Q26 decided (D441: held) and its reason built; a rolling upgrade keeps old-parse tasks on old workers"
+status = "done"
+done = 2026-11-10
 part_of = "M4.15"

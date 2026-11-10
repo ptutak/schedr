@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M4.12, Runs between and over time.
+**Next:** M4B.3, A turn's messages in groups.
 
 ## M0: Foundations
 
@@ -179,16 +179,16 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.11f | `batch=` on `@trigger.poke` | done 2026-11-08 | D352 |
 | M4.11g | `delay` and `until` wait steps | done 2026-11-08 | D355 |
 | M4.11h | `schedr.api`, Python access to the REST API | done 2026-11-08 | D356 |
-| M4.12 | Runs between and over time | **next** |  |
+| M4.12 | Runs between and over time | done 2026-11-09 |  |
 | M4.12a (part of M4.12) | `TriggerDagOperator` | done 2026-11-09 | D358, D359, D360, D361, D362, D365, D378, D379, D380, D398, D399 |
 | M4.12b (part of M4.12) | Backfill | done 2026-11-09 | D363, D364, D400, D401, D402, D403, D404, D405 |
 | M4.12c (part of M4.12) | Operator mapping | done 2026-11-09 | D406, D407 |
 | M4.13a | Notifications: events, outbox, webhooks | done 2026-11-10 | D390, D391, D408, D409, D410, D413, D415, D416, D417, D419, D420, D421, D422, D423, D424, D425, D427, D428, D429 |
 | M4.13b | Notifications: email | done 2026-11-10 | D411, D426 |
 | M4.14 | Retention | done 2026-11-10 | D430, D431, D432, D433, D434, D435, D440 |
-| M4.15 | Per-task memory and upgrade rules | planned | D50, D436, D437, D438, D439 |
+| M4.15 | Per-task memory and upgrade rules | done 2026-11-10 | D50, D436, D437, D438, D439 |
 | M4.15a (part of M4.15) | Per-task memory | done 2026-11-10 |  |
-| M4.15b (part of M4.15) | Upgrade rules completed | planned |  |
+| M4.15b (part of M4.15) | Upgrade rules completed | done 2026-11-10 | D441 |
 
 ## 0.1.0: after M4.5
 
@@ -208,7 +208,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 |---|---|---|---|
 | M4B.1 | Measure first | dropped |  |
 | M4B.2 | Savepoints in `schedr-db` | dropped |  |
-| M4B.3 | A turn's messages in groups | planned | D397 |
+| M4B.3 | A turn's messages in groups | **next** | D397 |
 | M4B.4 | A turn's `Finished`s written together | planned |  |
 | M4B.5 | The agent's journal in groups | planned | D396 |
 | M4B.6 | The turn in one transaction, savepoints per group | planned |  |

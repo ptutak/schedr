@@ -1,0 +1,16 @@
+title = "A DAG that no longer parses after a major upgrade is held"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "deployment"
+section = "Upgrades and compatibility"
+summary = '''
+As any file that fails to import (D72): every DAG of the file is held, no new runs, manual
+triggers refused, running runs finish. The hold's reason names the schedr version the file failed
+with and says to fix the file or roll back. Not chosen: keeping the older parse in use (the
+archived design's "last good version keeps running").
+'''
+history = "JOURNAL.md#D441"
+step = "M4.15b"
+code = ["crates/schedr-db/src/runs.rs::schedr_version"]
+checked = 2026-11-10

@@ -153,6 +153,9 @@ pub struct Held {
     pub exception: String,
     /// The error's message.
     pub message: String,
+    /// The schedr version of the parse that failed (`0.2.0`): after an upgrade, the reason
+    /// says the file stopped importing with it, the code being the same (decision 441).
+    pub schedr_version: String,
 }
 
 impl Held {
@@ -184,8 +187,10 @@ impl Held {
                  held until it is"
             ),
             exception => format!(
-                "its file `{path}` fails to import ({exception}: {message}), so its tasks \
-                 couldn't run. Every DAG of the file is held until it imports"
+                "its file `{path}` fails to import with schedr {} ({exception}: {message}), so \
+                 its tasks couldn't run. Every DAG of the file is held until it imports: fix \
+                 the file, or, if it stopped importing when schedr was upgraded, roll back",
+                self.schedr_version
             ),
         };
         format!("DAG `{dag_id}` is held, no runs are created and it can't be triggered: {what}")
@@ -203,6 +208,7 @@ impl Held {
                     path: e.path.clone(),
                     exception: e.error.exception.clone(),
                     message: e.error.message.clone(),
+                    schedr_version: e.schedr_version.clone(),
                 };
                 ((e.root.clone(), e.path.clone()), held)
             })

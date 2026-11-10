@@ -435,3 +435,10 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   done (after the newest scheduled run; all successful backfills while there is none), and what
   something unfinished still reads. Not chosen: storing the scheduler's position apart from the
   runs (a bigger change to the scheduler), documenting the re-runs as a consequence.
+
+### <a id="D441"></a>2026-11-10: a DAG that no longer parses after a major upgrade (decision 441, Q26)
+
+- **Question:** M4.15's check of the upgrade rules (D439) found the archived design ("the last
+  good version keeps running") at odds with D72 (a file failing to import holds its DAGs).
+- **Chosen (the user's):** held, as D72; the reason names the schedr version and says to fix the
+  file or roll back. Not chosen: keeping the older parse in use.
