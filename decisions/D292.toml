@@ -12,4 +12,4 @@ is reviewed and documented.
 history = "archive/PROJECT.md#D292"
 step = "n/a"
 code = ["crates/schedr-agent/src/jobs.rs"]
-checked = 2026-11-08
+checked = 2026-11-10

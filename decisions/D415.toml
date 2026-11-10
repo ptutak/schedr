@@ -1,0 +1,12 @@
+title = "Notifications aren't throttled"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+Each event sends its message; operators choose the events per channel. Throttling may come later if
+floods are seen.
+'''
+history = "JOURNAL.md#D415"
+step = "M4.13a"

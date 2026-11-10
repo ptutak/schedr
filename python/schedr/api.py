@@ -42,6 +42,7 @@ __all__ = [
 ]
 
 _EVENTS = "/api/v1/events"
+_NOTIFICATIONS = "/api/v1/notifications"
 _CTX_FD_ENV = "SCHEDR_CTX_FD"
 _TIMEOUT = 100.0
 """Seconds an HTTP request may take: as long as a task's call through its agent."""
@@ -269,6 +270,25 @@ class Client:
         answer = self.request("POST", _EVENTS, json=body, idempotency_key=idempotency_key)
         return PostedEvent.from_json(_object(answer))
 
+    def notify(self, channel: str, *, text: str | None = None, data: object = None) -> None:
+        """Sends a message to a notification channel, from a running task (decision 421).
+
+        The channel is one of the task's DAG (``Dag(notify=...)``) or a server channel; the
+        master fills its body (``text`` and ``data`` among the values) and delivers it later:
+        this returns once it is queued.
+
+        Args:
+            channel: The channel's name.
+            text: Its text (the ``text`` placeholder; schedr's summary otherwise).
+            data: Its data, JSON (the ``data`` placeholder).
+
+        Raises:
+            ApiError: For a channel the DAG doesn't have, a field of ``data`` the channel's
+                body uses and ``data`` lacks, or more than ``[notifications] max_per_attempt``
+                sends (429). Outside a task, the server has no such route (404).
+        """
+        self.request("POST", _NOTIFICATIONS, json={"channel": channel, "text": text, "data": data})
+
     def events(self, *, name: str | None = None, limit: int = 50) -> list[PostedEvent]:
         """The events posted, newest first.
 
@@ -314,6 +334,29 @@ def post_event(
         The event as stored.
     """
     return Client().post_event(name, key=key, data=data, at=at, idempotency_key=idempotency_key)
+
+
+def notify(channel: str, *, text: str | None = None, data: object = None) -> None:
+    """Sends a message to a notification channel as :meth:`Client.notify`, from a task.
+
+    Args:
+        channel: The channel's name.
+        text: Its text.
+        data: Its data, JSON.
+    """
+    Client().notify(channel, text=text, data=data)
+
+
+async def anotify(channel: str, *, text: str | None = None, data: object = None) -> None:
+    """:func:`notify` from a coroutine, run in a thread.
+
+    Args:
+        channel: The channel's name.
+        text: Its text.
+        data: Its data, JSON.
+    """
+    client = Client()
+    await asyncio.to_thread(client.notify, channel, text=text, data=data)
 
 
 def events(*, name: str | None = None, limit: int = 50) -> list[PostedEvent]:

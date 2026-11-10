@@ -874,9 +874,20 @@ impl MasterCore {
                 record.dag_version_id.as_deref().unwrap_or_default(),
                 record.code_hash.as_deref().unwrap_or_default()
             );
-            self.db
-                .set_trigger_stopped(&stopped.dag_id, Some((STOPPED_RETURNED, &on)))
-                .await?;
+            // One write: the stop and its notification (Codex's review of M4.13a).
+            let db = self.db.clone();
+            Box::pin(db.atomically(async {
+                self.db
+                    .set_trigger_stopped(&stopped.dag_id, Some((STOPPED_RETURNED, &on)))
+                    .await?;
+                self.notify_trigger_failing(
+                    &stopped.dag_id,
+                    "its generator returned: it starts no more runs until the DAG changes",
+                    now,
+                )
+                .await
+            }))
+            .await?;
         }
         let why = if stopped.message.is_empty() {
             stopped.error_kind
@@ -1025,15 +1036,28 @@ impl MasterCore {
             .as_ref()
             .and_then(crate::dispatch::time_of)
             .unwrap_or(now);
-        self.db
-            .trigger_poked(
-                &record.dag_id,
-                &poked.instance_id,
-                at,
-                error.as_deref(),
-                poked.failures,
-            )
-            .await?;
+        // A poke trigger that keeps failing stays alive: its channels hear of it as it crosses
+        // `failing_after` (Codex's review of M4.13a), in the write that records it.
+        let limit = self.settings.failing_after;
+        let crossed = limit > 0 && record.failures < limit && poked.failures >= limit;
+        let db = self.db.clone();
+        Box::pin(db.atomically(async {
+            self.db
+                .trigger_poked(
+                    &record.dag_id,
+                    &poked.instance_id,
+                    at,
+                    error.as_deref(),
+                    poked.failures,
+                )
+                .await?;
+            if crossed && let Some(why) = &error {
+                self.notify_trigger_failing(&record.dag_id, why, now)
+                    .await?;
+            }
+            Ok::<_, CoreError>(())
+        }))
+        .await?;
         if error.is_none()
             && let Ok(dag_id) = DagId::new(&record.dag_id)
             && let Some(dag) = self.db.active_dags_of(&[&dag_id]).await?.first()
@@ -1063,10 +1087,49 @@ impl MasterCore {
         );
         let wait = SignedDuration::try_from(wait).unwrap_or(SignedDuration::MAX);
         let why = fit_error(why);
-        self.db
-            .trigger_ended(dag_id, instance, Some(&why), now.checked_add(wait).ok())
-            .await?;
+        // `failing_after` failures in a row: its channels hear of it once, as it crosses.
+        let failing = self.settings.failing_after > 0
+            && failures.saturating_add(1) == self.settings.failing_after
+            && !why.starts_with(TRIGGER_RETURNED);
+        let db = self.db.clone();
+        Box::pin(db.atomically(async {
+            self.db
+                .trigger_ended(dag_id, instance, Some(&why), now.checked_add(wait).ok())
+                .await?;
+            if failing {
+                self.notify_trigger_failing(dag_id, &why, now).await?;
+            }
+            Ok::<_, CoreError>(())
+        }))
+        .await?;
         tracing::warn!(dag = dag_id, why, "a trigger failed");
+        Ok(())
+    }
+
+    /// Queues `TRIGGER_FAILING` for DAG `dag_id`'s channels.
+    async fn notify_trigger_failing(
+        &self,
+        dag_id: &str,
+        why: &str,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let Ok(id) = DagId::new(dag_id) else {
+            return Ok(());
+        };
+        let Some(active) = self.db.active_dags_of(&[&id]).await?.into_iter().next() else {
+            return Ok(());
+        };
+        if active.dag.notify.is_empty() {
+            return Ok(());
+        }
+        let mut event = crate::notifications::Event::new(&active.dag, now);
+        event.error = Some(why.to_owned());
+        let queued = self.notifications.queued(
+            &event,
+            schedr_model::notify::NotifyEvent::TriggerFailing,
+            &self.metrics,
+        );
+        self.db.queue_notifications(&queued, now).await?;
         Ok(())
     }
 

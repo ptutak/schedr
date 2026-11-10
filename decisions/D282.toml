@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D282"
 step = "M4.8z"
 also = ["workers"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs", "crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-09
+checked = 2026-11-10

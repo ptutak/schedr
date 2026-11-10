@@ -1,0 +1,12 @@
+title = "Notifications link to the UI through `[notifications] ui_url`"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`[notifications] ui_url` (e.g. `https://schedr.example.com`) is the base of the links to the run and
+its logs; without it, messages carry no links.
+'''
+history = "JOURNAL.md#D413"
+step = "M4.13a"

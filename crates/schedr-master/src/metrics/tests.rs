@@ -26,6 +26,8 @@ fn every_metric_is_registered_as_documented() {
     metrics.attempt_ended(&AttemptStatus::Success);
     metrics.run_finished("sync", &RunState::Success);
     metrics.run_late_failed("sync", "late_cleanup_failed");
+    metrics.notification_sent("ops");
+    metrics.notification_failed("ops");
     metrics
         .rejections
         .get_or_create(&ReasonLabels {

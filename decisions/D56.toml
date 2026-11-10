@@ -12,4 +12,4 @@ ends, naming where the dependency was written.
 history = "archive/PROJECT.md#D56"
 step = "M4.2b"
 code = ["crates/schedr-model/src/dag.rs", "python/schedr/_build.py::make_group_dependencies"]
-checked = 2026-11-09
+checked = 2026-11-10

@@ -1,0 +1,20 @@
+title = "A DAG may define webhook channels inside `dag_urls`"
+date = 2026-11-09
+by = "user"
+status = "superseded"
+superseded_by = 425
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`WebhookChannel("x", url=..., body=...)`: the URL must start with one of `[notifications.webhooks]
+dag_urls` (checked when the master validates the DAG); it carries no secrets: no secret headers, and its URL
+is in the DAG file and the DAG's JSON, so it's for targets protected another way (the user's email
+service, a relay in the cluster); a secret URL (Slack's, Teams') is a server webhook, its secret from
+the environment; redirects aren't followed, for any webhook; `[notifications]
+dag_channels = false` refuses DAG channels. Both are checked again when a notification is queued
+and when it is sent (a side agent's note): a channel the settings no longer allow is logged as an
+error, counted (`notifications_failed`) and dropped; an unknown server channel is kept until
+`give_up_after`, so a master started with it back delivers it.
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

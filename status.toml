@@ -1,10 +1,11 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-09
+updated = 2026-11-10
 
 in_progress = [
-    "Order agreed with the user (2026-11-09): the rest of M4 (M4.12b and M4.12c done; next M4.13 notifications, then M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.",
+    "Order agreed with the user (2026-11-09): the rest of M4 (M4.12b, M4.12c and M4.13a done; next M4.13b email channels, then M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.",
+    "M4.13b (night of 2026-11-10, pre-accepted to its end; stop after M4.13): `type = \"email\"` channels in `[notifications.channels]`, `[notifications.smtp]` through `lettre` (D411, D424, D426), plain text, one email to all recipients; the user's email service is a webhook (D427), no email-over-HTTP transport.",
     "For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).",
     "B199 (a backfill over a DST change of a sub-minute cron holds the master up; medium/rare) logged by M4.12b's review: for the bug round.",
 ]
@@ -12,7 +13,7 @@ in_progress = [
 waiting = []
 
 rules = [
-    "Commits and pushes pre-accepted while nothing waits for the user's decision (M4.12).",
+    "Commits and pushes pre-accepted to the end of M4.13 while nothing waits for the user's decision; stop after M4.13 (the night of 2026-11-10).",
     "One review per step: Codex (security in its prompt); Grok only when Codex can't run.",
     "Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`.",
     "Stress runs only nightly; never started by hand.",
@@ -21,7 +22,7 @@ rules = [
 ]
 
 colleagues = """
-Codex weekly 54% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Codex weekly 57% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
 Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`."""
 
 resume = "claude --resume e45442ad-3ec7-4bce-9d45-b6191e505a11"

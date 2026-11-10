@@ -3,11 +3,11 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-09)
+## Now (2026-11-10)
 
 - **Milestone:** M4, Native API complete.
 - **Next step:** M4.12, Runs between and over time. Done when: a parent waits on a chained run; a backfill fills missing periods oldest first
-- **Then:** M4.13, M4.14, M4.15, M4B.3, M4B.4.
+- **Then:** M4.13b, M4.14, M4.15, M4B.3, M4B.4.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 38; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
 
@@ -18,13 +18,14 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D398 (2026-11-09): a TriggerDagOperator starts only a `Chained` DAG
 - D397 (2026-11-09): a turn's messages in groups, savepoints later
 - D396 (2026-11-09): B184 fixed in M4B
+- M4.13a (2026-11-10): Notifications: events, outbox, webhooks
 - M4.12c (2026-11-09): Operator mapping
 - M4.12b (2026-11-09): Backfill
-- M4.12a (2026-11-09): `TriggerDagOperator`
 
 ## In progress
 
-- Order agreed with the user (2026-11-09): the rest of M4 (M4.12b and M4.12c done; next M4.13 notifications, then M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
+- Order agreed with the user (2026-11-09): the rest of M4 (M4.12b, M4.12c and M4.13a done; next M4.13b email channels, then M4.14, M4.15), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
+- M4.13b (night of 2026-11-10, pre-accepted to its end; stop after M4.13): `type = "email"` channels in `[notifications.channels]`, `[notifications.smtp]` through `lettre` (D411, D424, D426), plain text, one email to all recipients; the user's email service is a webhook (D427), no email-over-HTTP transport.
 - For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).
 - B199 (a backfill over a DST change of a sub-minute cron holds the master up; medium/rare) logged by M4.12b's review: for the bug round.
 
@@ -34,7 +35,7 @@ Nothing.
 
 ## Rules in force
 
-- Commits and pushes pre-accepted while nothing waits for the user's decision (M4.12).
+- Commits and pushes pre-accepted to the end of M4.13 while nothing waits for the user's decision; stop after M4.13 (the night of 2026-11-10).
 - One review per step: Codex (security in its prompt); Grok only when Codex can't run.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`.
 - Stress runs only nightly; never started by hand.
@@ -43,7 +44,7 @@ Nothing.
 
 ## Colleagues
 
-Codex weekly 54% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Codex weekly 57% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
 Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:

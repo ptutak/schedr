@@ -33,7 +33,37 @@ pub const MASK: &str = "****";
 pub fn masked(config: &crate::Config) -> Value {
     let mut value = serde_json::to_value(config).unwrap_or(Value::Null);
     mask(&mut value);
+    mask_channels(&mut value);
     value
+}
+
+/// A server webhook's URL may be its secret (a Slack or Teams webhook URL is the credential to
+/// post): only its scheme and host are shown. Its body may carry a service's key: hidden whole
+/// (Codex's review of M4.13a).
+fn mask_channels(value: &mut Value) {
+    let Some(channels) = value
+        .pointer_mut("/notifications/channels")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for channel in channels.values_mut() {
+        if let Some(Value::String(url)) = channel.get_mut("url") {
+            *url = origin(url);
+        }
+        if let Some(body) = channel.get_mut("body") {
+            *body = Value::String(MASK.to_owned());
+        }
+    }
+}
+
+/// `https://hooks.slack.com/****` for `https://hooks.slack.com/services/T/B/x`.
+fn origin(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Userinfo is a secret too: what follows the last `@` is the host.
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    format!("{scheme}://{host}/{MASK}")
 }
 
 /// Masks every secret in `value`, in place.

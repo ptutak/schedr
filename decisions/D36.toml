@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D36"
 step = "M3.6"
 also = ["deployment"]
 code = ["crates/schedr-client/src/lib.rs", "crates/schedr-config/src/config.rs", "crates/schedr-api/src/auth.rs::read_ui_token"]
-checked = 2026-11-09
+checked = 2026-11-10

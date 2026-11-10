@@ -11,4 +11,4 @@ Job names contain only letters, digits, `_` and `-`; invalid names produce an im
 history = "archive/PROJECT.md#D300"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs::job_of", "crates/schedr-agent/src/jobs.rs::valid_name"]
-checked = 2026-11-09
+checked = 2026-11-10

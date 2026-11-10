@@ -39,4 +39,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 21-wait-for
 22-events
 23-chained-runs
+24-notifications
 ```

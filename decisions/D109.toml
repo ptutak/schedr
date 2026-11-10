@@ -11,5 +11,5 @@ Retries stop when the search succeeds or the worker is drained again.
 history = "archive/PROJECT.md#D109"
 step = "M4.3e"
 also = ["code-delivery"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-master/src/dispatch.rs::resume"]

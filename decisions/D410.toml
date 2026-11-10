@@ -1,0 +1,15 @@
+title = "Notifications go through an outbox, delivered at least once"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+Each notification is a row written in the transaction that records its event (a run's end, a
+task's failure); the master's sender delivers it, retrying with backoff until
+`[notifications] give_up_after` (24 h by default). A delivered row is deleted with the write that
+records it; one given up on is logged as an error, counted (`notifications_failed`) and deleted.
+Restarts and failover lose none; a receiver may get one twice.
+'''
+history = "JOURNAL.md#D410"
+step = "M4.13a"

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D295"
 step = "M4.9b"
 also = ["code-delivery"]
 code = ["crates/schedr-agent/src/jobs.rs::lookup", "crates/schedr-model/src/runner.rs::ScriptDeclaration"]
-checked = 2026-11-09
+checked = 2026-11-10

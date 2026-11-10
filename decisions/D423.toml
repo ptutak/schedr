@@ -1,0 +1,13 @@
+title = "Templates reach into `data` by paths"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`data['rows']` in a template records a path. A call whose `data` lacks a field the template uses is
+refused (it raises, naming the field). In event notifications `data` is null, and a path into it
+gives an empty string.
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

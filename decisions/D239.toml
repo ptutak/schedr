@@ -11,5 +11,5 @@ Changing the users file forgets remembered checks; `auth_recheck` sets the chang
 history = "archive/PROJECT.md#D239"
 step = "M4.8u"
 also = ["ui-cli"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-config/src/config.rs::auth_remembered", "crates/schedr-config/src/config.rs::auth_recheck"]

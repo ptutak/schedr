@@ -12,4 +12,4 @@ errors.
 history = "archive/PROJECT.md#D296"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs::job_of"]
-checked = 2026-11-09
+checked = 2026-11-10

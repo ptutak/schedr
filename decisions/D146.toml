@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D146"
 step = "M4.5b"
 also = ["task-processes"]
 code = ["crates/schedr-model/src/ctx.rs", "crates/schedr/src/ctx.rs", "crates/schedr-agent/src/launch.rs::CTX_FD_ENV", "crates/schedr-agent/src/ctx.rs::channel"]
-checked = 2026-11-09
+checked = 2026-11-10

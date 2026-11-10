@@ -2978,3 +2978,156 @@ fn a_batched_poke_starts_one_run_per_window() {
     );
     assert_eq!(standalone.runs("load").len(), 1, "one window, one run");
 }
+
+/// What a webhook receiver got: each POST's path and body.
+type Received = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+/// A webhook receiver on 127.0.0.1: answers 200 to each POST, keeping its path and body.
+fn webhook_receiver() -> (String, Received) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = got.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut request = Vec::new();
+            let mut buffer = [0; 8192];
+            let (head, body) = loop {
+                let Ok(read) = stream.read(&mut buffer) else {
+                    break (String::new(), String::new());
+                };
+                if read == 0 {
+                    break (String::new(), String::new());
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let text = String::from_utf8_lossy(&request).into_owned();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break (head.to_owned(), body.to_owned());
+                    }
+                }
+            };
+            let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+            if let Ok(value) = serde_json::from_str(&body) {
+                kept.lock().unwrap().push((path, value));
+            }
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        }
+    });
+    (base, got)
+}
+
+#[test]
+fn a_failed_run_sends_its_webhooks_a_pure_cancel_none_and_a_task_its_own() {
+    let (base, got) = webhook_receiver();
+    let schedr = format!("{BINARY:?}");
+    let dag = format!(
+        r#"
+import time
+from schedr import CommandOperator, Dag, Notify, WebhookChannel, notify, task
+
+relay = WebhookChannel(
+    "relay",
+    url="{base}/relay",
+    body={{"title": t"[etl] {{notify.dag}} {{notify.event}}", "tasks": notify.failed_tasks,
+          "rows": notify.data["rows"]}},
+)
+
+@task
+def broken() -> None:
+    raise ValueError("source is down")
+
+@task
+def report() -> None:
+    relay.send("loaded", data={{"rows": 12}})
+
+@task
+def slow() -> None:
+    time.sleep(120)
+
+with Dag("fails", notify=[relay, "ops"]):
+    broken()
+
+with Dag("reports", notify={{relay: [Notify.RUN_FAILED]}}):
+    report() >> CommandOperator("tell", [{schedr}, "task-ctx", "notify", "relay", "--text", "told",
+                                         "--data", '{{"rows": 3}}'])
+
+with Dag("cancelled", notify=[relay, "ops"]):
+    slow()
+"#
+    );
+    let config = format!(
+        "\n[notifications]\ndag_urls = [\"{base}/\"]\n\n\
+         [notifications.channels.ops]\ntype = \"webhook\"\nurl = \"{base}/ops\"\n"
+    );
+    let standalone = Standalone::start_configured(
+        &[("notify.py", &dag)],
+        None,
+        &[],
+        &config,
+        &[("SCHEDR_HIDDEN__MASTER__OUTBOX_POLL", "100ms")],
+    );
+    standalone.wait("the DAGs", || {
+        standalone.dag_ids() == ["cancelled", "fails", "reports"]
+    });
+
+    let failed = standalone.trigger("fails");
+    standalone.wait_for_state(&failed, "failed");
+    standalone.wait("two webhooks", || got.lock().unwrap().len() == 2);
+    let mut sent = got.lock().unwrap().clone();
+    sent.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(sent[0].0, "/ops");
+    assert_eq!(sent[0].1["event"], "RUN_FAILED");
+    assert_eq!(sent[0].1["run"], failed.as_str());
+    assert_eq!(
+        sent[0].1["failed_tasks"],
+        json!([{"task": "broken", "error": "ValueError: source is down"}])
+    );
+    assert_eq!(sent[1].0, "/relay");
+    assert_eq!(
+        sent[1].1,
+        json!({"title": "[etl] fails RUN_FAILED",
+               "tasks": [{"task": "broken", "error": "ValueError: source is down"}],
+               "rows": null})
+    );
+
+    let reports = standalone.trigger("reports");
+    standalone.wait_for_state(&reports, "success");
+    standalone.wait("the tasks' messages", || got.lock().unwrap().len() == 4);
+    assert_eq!(
+        got.lock().unwrap()[2..],
+        [
+            (
+                "/relay".to_owned(),
+                json!({"title": "[etl] reports MESSAGE", "tasks": [], "rows": 12})
+            ),
+            (
+                "/relay".to_owned(),
+                json!({"title": "[etl] reports MESSAGE", "tasks": [], "rows": 3})
+            ),
+        ]
+    );
+
+    let cancelled = standalone.trigger("cancelled");
+    standalone.wait("the task to run", || {
+        let attempts = standalone.get(&format!("/api/v1/runs/{cancelled}/tasks/slow/attempts"));
+        attempts.is_some_and(|a| a["attempts"].as_array().is_some_and(|a| !a.is_empty()))
+    });
+    let (code, _, err) = standalone.cli(&["runs", "cancel", &cancelled]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait_for_state(&cancelled, "cancelled");
+    // A few sender passes: nothing more arrives.
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(got.lock().unwrap().len(), 4);
+}

@@ -11,5 +11,5 @@ Each setting is warned about; unknown names and invalid durations stop startup.
 history = "archive/PROJECT.md#D233"
 step = "M4.8t"
 also = ["deployment"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-config/src/loader.rs::hidden_timings"]

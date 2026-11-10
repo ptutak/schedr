@@ -102,6 +102,11 @@ def test_example_dag_json_matches_the_schema(path: Path) -> None:
         VALIDATOR.validate(dag.to_json())
 
 
+def _check_notifications(dag_id: str, result: RunResult) -> None:
+    assert dag_id == "notifications_demo"
+    assert result.tasks["prepare"].output == "ready"
+
+
 def _check_chained(dag_id: str, result: RunResult) -> None:
     """`chained_report` reports the run it started; `chained_load` runs alone too."""
     if dag_id == "chained_report":
@@ -145,6 +150,7 @@ def _check_mapped_process(dag_id: str, result: RunResult) -> None:
 
 
 EXAMPLE_CHECKS: dict[str, Callable[[str, RunResult], None]] = {
+    "notifications.py": _check_notifications,
     "chained_runs.py": _check_chained,
     "mapped_chained.py": _check_mapped_chained,
     "mapped_process.py": _check_mapped_process,
@@ -153,8 +159,23 @@ EXAMPLE_CHECKS: dict[str, Callable[[str, RunResult], None]] = {
 """Each example's own checks, by file, beyond every task ending well."""
 
 
+def _configure(path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The master's configuration an example needs: the channels and URLs it names."""
+    if path.name == "notifications.py":
+        config = tmp_path / "config.toml"
+        config.write_text(
+            '[notifications]\ndag_urls = ["https://relay.example.com/"]\n'
+            '[notifications.channels.ops-slack]\ntype = "webhook"\n'
+            'url = "https://hooks.example.com/service/path"\n'
+        )
+        monkeypatch.setenv("SCHEDR_CONFIG_FILE", str(config))
+
+
 @pytest.mark.parametrize("path", DOC_EXAMPLES, ids=lambda path: path.name)
-def test_doc_example_runs(path: Path, run_api: str) -> None:
+def test_doc_example_runs(
+    path: Path, run_api: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _configure(path, tmp_path, monkeypatch)
     connections = {"schedr_api": {"base_url": run_api}} if path.name == "sensors.py" else None
     for dag in _load(path):
         result = run_dag(

@@ -2141,3 +2141,64 @@ async fn a_backfill_its_runs_and_the_times_covered_are_stored_on_postgres() {
         ]
     );
 }
+
+#[tokio::test]
+async fn notifications_are_queued_retried_and_deleted_with_what_their_messages_read() {
+    use schedr_db::notifications::{FailedTask, NewNotification};
+    let (db, run_id) = with_instances().await;
+    let now = ts(NOW);
+    db.queue_notifications(
+        &[NewNotification {
+            dag_id: "sync".into(),
+            channel: "ops".into(),
+            url: None,
+            event: "RUN_FAILED".into(),
+            body: json!({"text": "x", "tasks": [1]}),
+        }],
+        now,
+    )
+    .await
+    .unwrap();
+    let due = db.due_notifications(now, 10).await.unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].body, json!({"text": "x", "tasks": [1]}));
+    assert_eq!(due[0].created_at, now);
+    db.retry_notification(&due[0].id, ts("2026-10-21T09:00:00Z"), "HTTP 503")
+        .await
+        .unwrap();
+    assert_eq!(db.due_notifications(now, 10).await.unwrap(), []);
+    let later = db
+        .due_notifications(ts("2026-10-21T09:00:00Z"), 10)
+        .await
+        .unwrap();
+    assert_eq!(later[0].tries, 1);
+    db.delete_notification(&due[0].id).await.unwrap();
+    assert_eq!(
+        db.due_notifications(ts("2030-01-01T00:00:00Z"), 10)
+            .await
+            .unwrap(),
+        []
+    );
+
+    db.update_instances(
+        &run_id,
+        &[plain_update("extract", TaskInstanceState::Failed)],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.failed_tasks(&run_id, 20).await.unwrap(),
+        [FailedTask {
+            task_id: "extract".into(),
+            map_index: -1,
+            error: None
+        }]
+    );
+    let instance = &db.run_tasks(&run_id).await.unwrap().unwrap().instances[0];
+    assert_eq!(db.instance_error(&instance.id).await.unwrap(), None);
+    assert!(!db.previous_run_failed("sync", &run_id).await.unwrap());
+    db.finish_run(&run_id, RunState::Failed, now).await.unwrap();
+    let other = uuid::Uuid::now_v7().to_string();
+    assert!(db.previous_run_failed("sync", &other).await.unwrap());
+}

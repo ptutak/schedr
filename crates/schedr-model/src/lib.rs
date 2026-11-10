@@ -12,6 +12,7 @@ pub mod dag;
 pub mod ids;
 pub mod logs;
 pub mod metric_doc;
+pub mod notify;
 pub mod params;
 pub mod runner;
 pub mod schema;
@@ -26,6 +27,9 @@ pub mod version;
 pub use connection::ConnectionDef;
 pub use dag::{Dag, DagLocation, Edge, EdgeKind, Group, Params, Resource, ResourceState};
 pub use ids::{DagId, EventName, IdError, TaskId};
+pub use notify::{
+    Body, ChannelRef, NotifyEntry, NotifyEvent, Part, PathKey, Placeholder, Ref, WebhookChannel,
+};
 pub use secret::{SecretDecl, SecretName};
 pub use states::{
     AttemptStatus, CleanupResult, RetryRule, RunKind, RunState, TaskInstanceState, WorkerState,

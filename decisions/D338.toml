@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D338"
 step = "M4.11a3"
 also = ["triggers", "configuration"]
 code = ["crates/schedr-agent/src/attempt.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "crates/schedr-master/src/dispatch.rs::count_strike", "crates/schedr-config/src/config.rs::switch_off_after"]
-checked = 2026-11-09
+checked = 2026-11-10

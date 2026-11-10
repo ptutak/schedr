@@ -57,7 +57,7 @@ containing `schedr.toml`. Durations use strings such as `"1h30m"` and sizes use 
 (a TOML date or datetime). The default timezone is UTC, `catchup` is false and
 `max_active_runs` is 1. With `once`, `start`, `end` and `catchup` are errors.
 
-Unknown keys are errors. `notify` is not available yet and is an error too.
+Unknown keys are errors. A job’s `notify` is refused: notifications belong to the DAG; use `Dag(notify=...)` as in [Notifications](24-notifications.md).
 
 ### Parameters, outcomes and cleanup
 

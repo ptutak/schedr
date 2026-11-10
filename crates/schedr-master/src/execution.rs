@@ -6,16 +6,19 @@
 //! protocol use these operations (see archive/PROJECT.md, Task assignment).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use jiff::Timestamp;
-use schedr_db::instances::{InstanceUpdate, NewlyRunning, RunTasks};
+use schedr_db::instances::{InstanceUpdate, NewlyRunning, RunTasks, StoredInstance};
 use schedr_db::{Database, DbError};
 use schedr_model::{
-    AttemptStatus, CleanupResult, Dag, DagId, Reference, RunState, TaskId, TaskInstanceState,
-    TaskKind,
+    AttemptStatus, CleanupResult, Dag, Reference, RunState, TaskId, TaskInstanceState, TaskKind,
 };
 
+use schedr_model::notify::NotifyEvent;
 use serde_json::json;
+
+use crate::notifications::{Event, MAX_FAILED_TASKS, Notifications};
 
 /// What an `@sensor(wait_for=...)`'s attempt ends with when its function returned `NOT_YET` for
 /// the run it was given (decision 353): it waits for a later one.
@@ -180,6 +183,8 @@ pub struct Execution {
     wakes: Wakes,
     /// `[mapping] max_instances`.
     max_instances: usize,
+    /// `[notifications]`.
+    notifications: Arc<Notifications>,
 }
 
 impl Execution {
@@ -191,6 +196,7 @@ impl Execution {
             metrics: MasterMetrics::default(),
             wakes: Wakes::default(),
             max_instances: DEFAULT_MAX_INSTANCES,
+            notifications: Arc::default(),
         }
     }
 
@@ -204,22 +210,133 @@ impl Execution {
         self.metrics = metrics;
     }
 
+    /// What finished runs and tasks notify (`[notifications]`).
+    pub fn set_notifications(&mut self, notifications: Arc<Notifications>) {
+        self.notifications = notifications;
+    }
+
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub const fn set_max_instances(&mut self, max_instances: usize) {
         self.max_instances = max_instances;
     }
 
-    /// Finishes run `run_id` of `dag` with `result`, and counts it.
+    /// Finishes run `run_id` of `dag` with `result`, queues its notifications with it (decision
+    /// 410), and counts it.
     async fn finish(
         &self,
         run_id: &str,
-        dag: &DagId,
+        dag: &Dag,
         result: RunState,
         now: Timestamp,
     ) -> Result<(), ExecutionError> {
-        self.db.finish_run(run_id, result, now).await?;
-        self.metrics.run_finished(dag.as_str(), &result);
-        self.wakes.wake(dag, WakeReason::RunEnded);
+        Box::pin(self.db.atomically(async {
+            self.db.finish_run(run_id, result, now).await?;
+            self.notify_run(run_id, dag, result, now).await
+        }))
+        .await?;
+        self.metrics.run_finished(dag.id.as_str(), &result);
+        self.wakes.wake(&dag.id, WakeReason::RunEnded);
+        Ok(())
+    }
+
+    /// Queues what run `run_id` ending `result` tells its DAG's channels.
+    async fn notify_run(
+        &self,
+        run_id: &str,
+        dag: &Dag,
+        result: RunState,
+        now: Timestamp,
+    ) -> Result<(), ExecutionError> {
+        if dag.notify.is_empty() {
+            return Ok(());
+        }
+        let kinds = match result {
+            RunState::Failed => vec![NotifyEvent::RunFailed],
+            RunState::Cancelled => vec![NotifyEvent::RunCancelled],
+            RunState::Success if self.db.previous_run_failed(dag.id.as_str(), run_id).await? => {
+                vec![NotifyEvent::RunSucceeded, NotifyEvent::RunRecovered]
+            }
+            RunState::Success => vec![NotifyEvent::RunSucceeded],
+            RunState::Queued | RunState::Running => return Ok(()),
+        };
+        let state = result.to_string();
+        let mut event = Event::new(dag, now);
+        event.run_id = Some(run_id);
+        event.state = Some(&state);
+        event.planned_for = self.db.run_record(run_id).await?.map(|r| r.planned_for);
+        if result == RunState::Failed {
+            event.failed_tasks = self.db.failed_tasks(run_id, MAX_FAILED_TASKS).await?;
+        }
+        let queued: Vec<_> = kinds
+            .into_iter()
+            .flat_map(|kind| self.notifications.queued(&event, kind, &self.metrics))
+            .collect();
+        self.db.queue_notifications(&queued, now).await?;
+        Ok(())
+    }
+
+    /// Queues `LATE_CLEANUP_FAILED` for run `run_id`: a cleanup of `task` failed after the run
+    /// had succeeded (decision 309).
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or a database failure.
+    pub async fn late_cleanup_failed(
+        &self,
+        run_id: &str,
+        task: &str,
+        error: Option<String>,
+        now: Timestamp,
+    ) -> Result<(), ExecutionError> {
+        let run = self.run(run_id).await?;
+        if run.dag.notify.is_empty() {
+            return Ok(());
+        }
+        let mut event = Event::new(&run.dag, now);
+        event.run_id = Some(run_id);
+        event.state = Some("success");
+        event.task = Some(task);
+        event.error = error;
+        event.planned_for = self.db.run_record(run_id).await?.map(|r| r.planned_for);
+        let queued =
+            self.notifications
+                .queued(&event, NotifyEvent::LateCleanupFailed, &self.metrics);
+        self.db.queue_notifications(&queued, now).await?;
+        Ok(())
+    }
+
+    /// Queues what a task's attempt ending `state` tells its DAG's channels: `TASK_FAILED`
+    /// after its last retry, `TASK_RETRY` before another.
+    async fn notify_task(
+        &self,
+        (run_id, dag): (&str, &Dag),
+        instance: &StoredInstance,
+        state: TaskInstanceState,
+        now: Timestamp,
+    ) -> Result<(), ExecutionError> {
+        let kind = match state {
+            TaskInstanceState::Failed => NotifyEvent::TaskFailed,
+            TaskInstanceState::UpForRetry => NotifyEvent::TaskRetry,
+            _ => return Ok(()),
+        };
+        if dag.notify.is_empty() {
+            return Ok(());
+        }
+        let task = if instance.map_index >= 0 {
+            format!("{}[{}]", instance.task_id, instance.map_index)
+        } else {
+            instance.task_id.to_string()
+        };
+        let state = state.to_string();
+        let mut event = Event::new(dag, now);
+        event.run_id = Some(run_id);
+        event.state = Some(&state);
+        event.task = Some(&task);
+        event.attempt = Some(instance.try_number);
+        event.error = self.db.instance_error(&instance.id).await?;
+        event.planned_for = self.db.run_record(run_id).await?.map(|r| r.planned_for);
+        let queued = self.notifications.queued(&event, kind, &self.metrics);
+        self.db.queue_notifications(&queued, now).await?;
         Ok(())
     }
 
@@ -264,7 +381,7 @@ impl Execution {
         self.store(&run.run_id, &mut progress, &before, Vec::new(), now)
             .await?;
         if let Some(result) = progress.result() {
-            self.finish(&run.run_id, &run.dag.id, result, now).await?;
+            self.finish(&run.run_id, &run.dag, result, now).await?;
         }
         Ok(())
     }
@@ -359,6 +476,8 @@ impl Execution {
             let value = result.output.clone().unwrap_or(serde_json::Value::Null);
             self.db.store_output(&instance.id, outcome, &value).await?;
         }
+        self.notify_task((run_id, &run.dag), &instance, state, now)
+            .await?;
         let first = InstanceUpdate {
             ready_at,
             outcome: (state == TaskInstanceState::Success).then(|| outcome.to_owned()),
@@ -469,7 +588,7 @@ impl Execution {
         }
         self.db.request_cancel(run_id, now).await?;
         if run.state == RunState::Queued {
-            self.finish(run_id, &run.dag.id, RunState::Cancelled, now)
+            self.finish(run_id, &run.dag, RunState::Cancelled, now)
                 .await?;
             return Ok(Cancelled {
                 running: Vec::new(),
@@ -485,7 +604,7 @@ impl Execution {
             .await?;
         let run_result = progress.result();
         if let Some(result) = run_result {
-            self.finish(run_id, &run.dag.id, result, now).await?;
+            self.finish(run_id, &run.dag, result, now).await?;
         }
         Ok(Cancelled {
             running,
@@ -562,7 +681,7 @@ impl Execution {
                 .await?;
             let result = progress.result();
             if let Some(result) = result {
-                self.finish(run_id, &run.dag.id, result, now).await?;
+                self.finish(run_id, &run.dag, result, now).await?;
             }
             return Ok(if running {
                 TaskCancel::Stopping
@@ -823,7 +942,7 @@ impl Execution {
             .await?;
         let result = progress.result();
         if let Some(result) = result {
-            self.finish(run_id, &run.dag.id, result, now).await?;
+            self.finish(run_id, &run.dag, result, now).await?;
         }
         Ok((result, stops))
     }

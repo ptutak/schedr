@@ -271,3 +271,35 @@ fn a_key_is_masked_as_a_text_too() {
         serde_json::json!({"hosts": {"postgres://u:****@db/s": "a"}})
     );
 }
+
+#[test]
+fn a_server_webhook_shows_only_its_origin_and_no_body() {
+    let mut config = crate::Config::default();
+    config.notifications.channels.insert(
+        "ops".to_owned(),
+        crate::config::ChannelConfig {
+            kind: crate::config::ChannelKind::Webhook,
+            url: Some("https://hooks.slack.com/services/T123/B456/SECRETcapability".to_owned()),
+            headers_env: std::collections::BTreeMap::new(),
+            body: Some(serde_json::json!({"api_key": "k", "text": "{text}"})),
+            to: Vec::new(),
+        },
+    );
+    config.notifications.channels.insert(
+        "relay".to_owned(),
+        crate::config::ChannelConfig {
+            url: Some("https://user:pw@relay.example.com:8443/x?y=1".to_owned()),
+            body: None,
+            ..config.notifications.channels["ops"].clone()
+        },
+    );
+    let shown = masked(&config);
+    let channels = &shown["notifications"]["channels"];
+    assert_eq!(channels["ops"]["url"], "https://hooks.slack.com/****");
+    assert_eq!(channels["ops"]["body"], "****");
+    assert_eq!(
+        channels["relay"]["url"],
+        "https://relay.example.com:8443/****"
+    );
+    assert!(!shown.to_string().contains("SECRET"), "{shown}");
+}

@@ -1,0 +1,18 @@
+title = "A webhook's body: schedr's fixed JSON, or a template"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+Without `body`, a webhook posts D412's fixed JSON with `text`. With one, the body is any JSON whose
+strings may be templates: in a DAG, t-strings over `schedr.notify` placeholders (`t"{dag} {event}"`;
+plain values baked in when the file loads; conversions, format specs and calls on a placeholder
+refused); in the server config, `"{name}"` strings (`{{` a literal brace), parsed at startup. Both are
+stored as text parts and references; the master fills them value by value (a bare placeholder keeps
+its JSON type), so nothing runs and nothing needs escaping by hand. Placeholders: event, dag, run,
+planned_for, state, text, link, failed_tasks, task, attempt, time, zone, data. Email over HTTP
+(M4.13b) uses the same bodies.
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

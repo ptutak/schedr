@@ -10,5 +10,5 @@ summary = '''
 '''
 history = "archive/PROJECT.md#D73"
 step = "M4.3a"
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["python/schedr/testing.py::TaskResult"]

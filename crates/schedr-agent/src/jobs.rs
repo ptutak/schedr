@@ -238,6 +238,7 @@ impl Declaration {
             groups: Vec::new(),
             params: schedule.params.clone(),
             resources: Vec::new(),
+            notify: Vec::new(),
         })
     }
 }
@@ -546,9 +547,12 @@ impl Keys<'_> {
             if !JOB_KEYS.contains(&key.as_str()) {
                 self.problems.push(format!("unknown key `{key}`"));
             } else if key == "notify" {
-                // Decision 298: no channels yet.
-                self.problems
-                    .push("`notify` isn't available yet".to_owned());
+                // Decisions 298, 416: a job's failure is its task's; the DAG's `notify=` says.
+                self.problems.push(
+                    "`notify` isn't set on a job: notifications are a DAG's, \
+                     `Dag(notify=...)` in a DAG file"
+                        .to_owned(),
+                );
             }
         }
     }

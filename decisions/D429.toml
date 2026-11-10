@@ -1,0 +1,12 @@
+title = "`[notifications] ca_file`: extra CAs for notifications"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+A PEM file of CAs trusted for notifications besides the system's (OpenShift's service CA, mounted),
+for internal services with a private certificate.
+'''
+history = "JOURNAL.md#D424"
+step = "M4.13a"

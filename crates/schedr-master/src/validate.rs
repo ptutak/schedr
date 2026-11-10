@@ -1402,6 +1402,9 @@ pub struct Checks<'a> {
     /// The secret storages of the worker that parsed them: a DAG naming another is refused;
     /// none when unknown (not checked).
     pub secret_storages: Option<&'a BTreeSet<String>>,
+    /// The master's notification settings: a DAG's `notify=` is checked against them; none
+    /// when unknown (not checked).
+    pub notifications: Option<&'a crate::notifications::Notifications>,
 }
 
 impl Checks<'_> {
@@ -1412,6 +1415,7 @@ impl Checks<'_> {
             master,
             max_message_size,
             secret_storages: None,
+            notifications: None,
         }
     }
 }
@@ -1607,6 +1611,9 @@ fn validate_file(root: &str, mut file: ParsedFile, checks: &Checks<'_>) -> Parse
         problems.extend(output_problems(dag, checks.max_message_size));
         if let Some(storages) = checks.secret_storages {
             problems.extend(storage_problems(dag, storages));
+        }
+        if let Some(notifications) = checks.notifications {
+            problems.extend(notifications.problems(dag));
         }
         problems
             .into_iter()

@@ -148,7 +148,12 @@ async fn the_master_and_the_api_serve_until_stopped() {
     let master = serve_master(
         db.clone(),
         master_settings(&config()),
-        (Duration::from_millis(10), Problems::default(), 1024 * 1024),
+        (
+            Duration::from_millis(10),
+            Problems::default(),
+            1024 * 1024,
+            master_outbox(&config(), &BTreeMap::new()).unwrap(),
+        ),
         listen(loopback()).await.unwrap(),
         None,
         // Past three query limits (sqlx's 30 s acquire timeout), as a real lease: else it
@@ -1132,5 +1137,53 @@ fn a_hidden_timing_reaches_what_uses_it() {
     assert_eq!(
         ApiTimings::of(&config).events.keep_alive,
         Duration::from_secs(1008)
+    );
+}
+
+#[test]
+fn a_webhook_header_s_variable_must_be_set_and_its_body_valid() {
+    let mut config = config();
+    config.notifications.channels.insert(
+        "ops".to_owned(),
+        schedr_config::config::ChannelConfig {
+            kind: schedr_config::config::ChannelKind::Webhook,
+            url: Some("https://hooks.example.com/x".to_owned()),
+            headers_env: BTreeMap::from([("Authorization".to_owned(), "OPS_TOKEN".to_owned())]),
+            body: Some(serde_json::json!({"text": "{dag} {event}"})),
+            to: Vec::new(),
+        },
+    );
+    let missing = master_outbox(&config, &BTreeMap::new()).unwrap_err();
+    assert!(
+        missing.to_string().contains("OPS_TOKEN, which isn't set"),
+        "{missing}"
+    );
+    let env = BTreeMap::from([("OPS_TOKEN".to_owned(), "Bearer t".to_owned())]);
+    let outbox = master_outbox(&config, &env).unwrap();
+    assert_eq!(
+        outbox.settings.servers["ops"].headers,
+        vec![("Authorization".to_owned(), "Bearer t".to_owned())]
+    );
+    config.notifications.channels.get_mut("ops").unwrap().body =
+        Some(serde_json::json!({"text": "{dgа}"}));
+    let bad = master_outbox(&config, &env).unwrap_err();
+    assert!(
+        bad.to_string()
+            .contains("[notifications.channels.ops] body: ")
+            && bad.to_string().contains("unknown placeholder"),
+        "{bad}"
+    );
+}
+
+#[test]
+fn an_unreadable_ca_file_stops_the_master() {
+    let mut config = config();
+    config.notifications.ca_file = Some("/nonexistent/ca.pem".into());
+    let error = master_outbox(&config, &BTreeMap::new()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("[notifications] ca_file: can't read `/nonexistent/ca.pem`"),
+        "{error}"
     );
 }

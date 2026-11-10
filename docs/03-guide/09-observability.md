@@ -115,6 +115,9 @@ read-only query. **A scrape reads only memory**: never the database, never the m
 Labels include states, kinds, reasons, `dag_id`, code sets, the interpreter's name, and
 `method` / `phase` on the start histogram, never a run, task or attempt ID.
 
+`schedr_notifications_sent` and `schedr_notifications_failed` count delivered and dropped
+notifications by channel. See [Notifications](16-notifications.md#delivery).
+
 ## schedr's own logs
 
 Each role logs to stdout. `[log] format` is `auto` (JSON when stdout isn't a terminal, as in a

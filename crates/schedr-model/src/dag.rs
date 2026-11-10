@@ -181,6 +181,9 @@ pub struct Dag {
     /// Its resources.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<Resource>,
+    /// The channels it notifies, and of which events (`Dag(notify=...)`, decision 409).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notify: Vec<crate::notify::NotifyEntry>,
 }
 
 /// The run parameters a DAG takes (`Dag(params=SomeDataclass)`, decision 138).

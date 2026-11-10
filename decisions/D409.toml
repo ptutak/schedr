@@ -1,0 +1,12 @@
+title = "The notification events' enum is `Notify`"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`Notify.RUN_FAILED`, used as `Dag(notify={team_a: [Notify.RUN_FAILED, Notify.TASK_RETRY]})`;
+`Event` stays what a trigger yields.
+'''
+history = "JOURNAL.md#D409"
+step = "M4.13a"

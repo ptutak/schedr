@@ -163,6 +163,13 @@ pub struct Timings {
     pub master_alive_interval: Duration,
     /// How often the master's gauges are read from the database.
     pub gauge_refresh: Duration,
+    /// How often the master's sender looks for notifications to deliver.
+    pub outbox_poll: Duration,
+    /// The first wait before a notification that failed is tried again; it doubles up to
+    /// `outbox_retry_max`.
+    pub outbox_retry_first: Duration,
+    /// The longest wait before a notification that failed is tried again.
+    pub outbox_retry_max: Duration,
     /// The first wait before a failed parse job is tried again; it doubles up to
     /// `parse_retry_max`.
     pub parse_retry_first: Duration,
@@ -263,6 +270,9 @@ impl Default for Timings {
             notification_retry: Duration::from_secs(30),
             master_alive_interval: Duration::from_secs(5),
             gauge_refresh: Duration::from_secs(15),
+            outbox_poll: Duration::from_secs(5),
+            outbox_retry_first: Duration::from_secs(10),
+            outbox_retry_max: Duration::from_secs(3600),
             parse_retry_first: Duration::from_secs(30),
             parse_retry_max: Duration::from_mins(10),
             node_heartbeat: Duration::from_secs(10),
@@ -411,6 +421,8 @@ pub struct Config {
     pub grpc: GrpcSection,
     /// `[events]`: events posted through the API (decision 354).
     pub events: EventsSection,
+    /// `[notifications]`: what the master sends when runs and tasks end (decisions 408-429).
+    pub notifications: NotificationsSection,
     /// `[tls]`: mTLS on the internal links (master ↔ worker, webserver → worker logs).
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).
@@ -443,16 +455,20 @@ pub struct HiddenLimits {
     /// The most characters of each text in them the master keeps
     /// (`MASTER__WORKER_REPORT_TEXT`).
     pub worker_report_text: usize,
+    /// The most bytes a notification's body may take once filled
+    /// (`MASTER__NOTIFICATION_BODY`): a template using big values many times is refused.
+    pub notification_body: usize,
     /// The `SCHEDR_HIDDEN__*` variables that changed one.
     pub overridden: Vec<String>,
 }
 
 impl Default for HiddenLimits {
-    /// 256 records of each kind, 4096 characters of each text.
+    /// 256 records of each kind, 4096 characters of each text, 1 MiB a notification.
     fn default() -> Self {
         Self {
             worker_report_records: 256,
             worker_report_text: 4096,
+            notification_body: 1 << 20,
             overridden: Vec::new(),
         }
     }
@@ -746,6 +762,97 @@ impl Default for BackfillSection {
     fn default() -> Self {
         Self { max_runs: 1000 }
     }
+}
+
+/// `[notifications]`: messages the master sends to channels when runs and tasks end, and
+/// those tasks send themselves (decisions 408-429).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct NotificationsSection {
+    /// The UI's address (`https://schedr.example.com`), the base of the links in messages;
+    /// none: messages carry no links.
+    pub ui_url: Option<String>,
+    /// The events a channel named without events is told of (`RUN_FAILED`, ...).
+    pub default_events: Vec<String>,
+    /// How long the master keeps retrying a notification it can't deliver; then it is logged
+    /// as an error, counted and dropped.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub give_up_after: Duration,
+    /// The limit for one delivery (a POST); past it, the delivery failed and is retried.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub timeout: Duration,
+    /// The most notifications one task attempt may send itself (`send`); past it, `send`
+    /// fails. At least 1.
+    pub max_per_attempt: u32,
+    /// The URLs a DAG's own webhook (`WebhookChannel`) may post to: its URL must start with
+    /// one of them (`https://relay.example.com/`); empty: DAGs define none (decision 425).
+    pub dag_urls: Vec<String>,
+    /// A PEM file of CAs trusted for notifications besides the system's (a private CA, such
+    /// as `OpenShift`'s service CA).
+    pub ca_file: Option<PathBuf>,
+    /// The server's channels, by name (`[notifications.channels.ops-slack]`): open to every
+    /// DAG by its name.
+    pub channels: BTreeMap<String, ChannelConfig>,
+}
+
+impl Default for NotificationsSection {
+    /// No links, `RUN_FAILED`, giving up after 24 h, 10 s a delivery, 100 sends an attempt,
+    /// no DAG webhooks, no channels.
+    fn default() -> Self {
+        Self {
+            ui_url: None,
+            default_events: vec!["RUN_FAILED".to_owned()],
+            give_up_after: Duration::from_hours(24),
+            timeout: Duration::from_secs(10),
+            max_per_attempt: 100,
+            dag_urls: Vec::new(),
+            ca_file: None,
+            channels: BTreeMap::new(),
+        }
+    }
+}
+
+/// A server channel (`[notifications.channels.<name>]`, decision 424): its `type`, and the keys
+/// that type takes (the master refuses another type's).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelConfig {
+    /// `webhook` (an HTTP POST of JSON) or `email`.
+    #[serde(rename = "type")]
+    pub kind: ChannelKind,
+    /// A webhook's URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A webhook's headers whose values are read from environment variables, header to
+    /// variable (`{ Authorization = "OPS_HOOK_TOKEN" }`); a secret is never written in the file.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers_env: BTreeMap<String, String>,
+    /// A webhook's JSON, with `{name}` placeholders in its strings (`{{` for a brace); none:
+    /// schedr's fixed JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    pub body: Option<serde_json::Value>,
+    /// An email channel's recipients.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub to: Vec<String>,
+}
+
+/// A server channel's type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelKind {
+    /// An HTTP POST of JSON (decisions 412, 417, 427).
+    Webhook,
+    /// An email, through `[notifications.smtp]` (decision 426).
+    Email,
 }
 
 /// `[master]`.

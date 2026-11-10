@@ -13,5 +13,5 @@ precedence.
 history = "archive/PROJECT.md#D325"
 step = "M4.11a1"
 also = ["configuration"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["python/schedr/dag.py::StepDefaults"]

@@ -522,6 +522,14 @@ impl Dispatcher {
         self
     }
 
+    /// What finished runs and tasks notify (`[notifications]`).
+    pub fn set_notifications(
+        &mut self,
+        notifications: std::sync::Arc<crate::notifications::Notifications>,
+    ) {
+        self.execution.set_notifications(notifications);
+    }
+
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub const fn set_max_instances(&mut self, max_instances: usize) {
         self.execution.set_max_instances(max_instances);
@@ -2005,6 +2013,13 @@ impl Dispatcher {
                  is a yellow success (late_cleanup_failed)"
             );
             self.metrics.run_late_failed(&dag_id, LATE_CLEANUP_FAILED);
+            let error = rest
+                .error_summary
+                .as_deref()
+                .map(schedr_db::notifications::readable);
+            self.execution
+                .late_cleanup_failed(&attempt.run_id, attempt.task_id.as_str(), error, now)
+                .await?;
         }
         Ok(())
     }

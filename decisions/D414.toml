@@ -1,0 +1,15 @@
+title = "A DAG may define email channels of its own"
+date = 2026-11-09
+by = "user"
+status = "superseded"
+superseded_by = 426
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`EmailChannel("team-a", ["a@example.com"])` holds only recipients; addresses are checked when the
+file loads, recipients against `[notifications.email] allowed_domains` when the master validates the
+DAG; `[notifications.email] dag_channels = false` refuses them. Objects are DAG channels, strings
+name server channels.
+'''
+history = "JOURNAL.md#D414"
+step = "M4.13b"

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D78"
 step = "M4.3b"
 also = ["outcomes"]
 code = ["crates/schedr-db/migrations/sqlite/0001_initial.sql::reason", "crates/schedr-db/migrations/postgres/0001_initial.sql::reason", "crates/schedr-db/src/instances.rs::reason"]
-checked = 2026-11-09
+checked = 2026-11-10

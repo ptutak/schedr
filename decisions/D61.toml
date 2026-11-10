@@ -11,5 +11,5 @@ An oversized finished result becomes an unretried `output_too_large` failure bef
 history = "archive/PROJECT.md#D61"
 step = "M4.1e"
 also = ["serialization"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-master/src/validate.rs::output_problems", "crates/schedr-agent/src/agent.rs::fit_result"]

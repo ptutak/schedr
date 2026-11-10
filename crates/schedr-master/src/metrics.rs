@@ -51,6 +51,18 @@ const RUNS_LATE_FAILED: MetricDoc = MetricDoc {
     help: "Runs that ended `success` and learnt of a failure afterwards (a yellow success, \
            decision 309), by DAG and reason (`late_cleanup_failed`)",
 };
+const NOTIFICATIONS_SENT: MetricDoc = MetricDoc {
+    name: "notifications_sent",
+    kind: MetricKind::Counter,
+    labels: &["channel"],
+    help: "Notifications delivered, by channel",
+};
+const NOTIFICATIONS_FAILED: MetricDoc = MetricDoc {
+    name: "notifications_failed",
+    kind: MetricKind::Counter,
+    labels: &["channel"],
+    help: "Notifications given up on (`[notifications] give_up_after`), by channel",
+};
 const TASKS: MetricDoc = MetricDoc {
     name: "tasks",
     kind: MetricKind::Gauge,
@@ -199,6 +211,8 @@ pub const METRICS: &[MetricDoc] = &[
     RUNS,
     RUNS_FINISHED,
     RUNS_LATE_FAILED,
+    NOTIFICATIONS_SENT,
+    NOTIFICATIONS_FAILED,
     TASKS,
     TASKS_WAITING,
     ASSIGNMENTS,
@@ -249,6 +263,13 @@ pub struct LateLabels {
     pub reason: String,
 }
 
+/// A notification channel.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ChannelLabels {
+    /// Its name.
+    pub channel: String,
+}
+
 /// A reason (a rejection's, a waiting task's).
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ReasonLabels {
@@ -283,6 +304,10 @@ pub struct MasterMetrics {
     pub runs_finished: Family<ResultLabels, Counter>,
     /// Runs that ended `success` and learnt of a failure afterwards, by DAG and reason.
     pub runs_late_failed: Family<LateLabels, Counter>,
+    /// Notifications delivered, by channel.
+    pub notifications_sent: Family<ChannelLabels, Counter>,
+    /// Notifications given up on, by channel.
+    pub notifications_failed: Family<ChannelLabels, Counter>,
     /// Task instances of unfinished runs, by state.
     pub tasks: Family<StateLabels, Gauge>,
     /// Ready tasks no worker could take at the last assignment pass, by reason.
@@ -340,6 +365,8 @@ impl Default for MasterMetrics {
             runs: Family::default(),
             runs_finished: Family::default(),
             runs_late_failed: Family::default(),
+            notifications_sent: Family::default(),
+            notifications_failed: Family::default(),
             tasks: Family::default(),
             tasks_waiting: Family::default(),
             assignments: Counter::default(),
@@ -385,6 +412,16 @@ impl MasterMetrics {
             RUNS_LATE_FAILED.name,
             RUNS_LATE_FAILED.help,
             self.runs_late_failed.clone(),
+        );
+        r.register(
+            NOTIFICATIONS_SENT.name,
+            NOTIFICATIONS_SENT.help,
+            self.notifications_sent.clone(),
+        );
+        r.register(
+            NOTIFICATIONS_FAILED.name,
+            NOTIFICATIONS_FAILED.help,
+            self.notifications_failed.clone(),
         );
         r.register(TASKS.name, TASKS.help, self.tasks.clone());
         r.register(
@@ -529,6 +566,24 @@ impl MasterMetrics {
             .get_or_create(&LateLabels {
                 dag_id: dag_id.to_owned(),
                 reason: reason.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Counts one notification delivered to `channel`.
+    pub fn notification_sent(&self, channel: &str) {
+        self.notifications_sent
+            .get_or_create(&ChannelLabels {
+                channel: channel.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Counts one notification to `channel` given up on.
+    pub fn notification_failed(&self, channel: &str) {
+        self.notifications_failed
+            .get_or_create(&ChannelLabels {
+                channel: channel.to_owned(),
             })
             .inc();
     }

@@ -11,4 +11,4 @@ Fixed arguments remain in `arguments`, while `expand` describes the values that 
 history = "archive/PROJECT.md#D69"
 step = "M4.3a"
 code = ["crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/validate.rs", "crates/schedr-model/src/task.rs::Expand", "python/schedr/_model/tasks.py::ExpandProduct"]
-checked = 2026-11-09
+checked = 2026-11-10

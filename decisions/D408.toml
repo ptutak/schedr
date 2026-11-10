@@ -1,0 +1,16 @@
+title = "Notifications have eight events, built together"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`Notify.RUN_FAILED` (the default set, a server setting), `TASK_FAILED` (after its last retry),
+`TASK_RETRY`, `RUN_CANCELLED` (a pure cancel; one with a failure is `RUN_FAILED`),
+`RUN_SUCCEEDED`, `RUN_RECOVERED` (a success after the DAG's previous run failed),
+`TRIGGER_FAILING` (`[triggers] failing_after` errors in a row, or its generator returned) and
+`LATE_CLEANUP_FAILED` (decision 309). `WAITING_FOR_ANSWER` comes with M6.
+'''
+unverified = ["WAITING_FOR_ANSWER"]
+history = "JOURNAL.md#D408"
+step = "M4.13a"

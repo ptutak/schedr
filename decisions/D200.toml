@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D200"
 step = "M4.7c"
 also = ["workers", "ui-cli"]
 code = ["crates/schedr-agent/src/connection_jobs.rs", "crates/schedr-config/src/config.rs::connection_test_timeout", "crates/schedr-api/src/routes.rs::test_connection", "crates/schedr-model/src/commands.rs::MAX_CONNECTION_TEST_MS"]
-checked = 2026-11-09
+checked = 2026-11-10

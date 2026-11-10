@@ -8,5 +8,5 @@ summary = '''
 Notifications have no long-running or SLA event; a task's `timeout` stops one that runs too long.
 '''
 history = "JOURNAL.md#D390"
-step = "M4.13"
+step = "M4.13a"
 code = []

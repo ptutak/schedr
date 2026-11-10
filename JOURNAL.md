@@ -334,3 +334,69 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   new reference kind); mapping command and script operators (with shell lines limited to literal
   strings); an `EmptyOperator` mapped over a list, a fan-out that only counts; mapping wait steps
   now, with `TimedOut` routed per element.
+
+### <a id="D408"></a><a id="D409"></a><a id="D410"></a><a id="D411"></a><a id="D412"></a><a id="D413"></a><a id="D414"></a><a id="D415"></a><a id="D416"></a>2026-11-09: notifications' open points (decisions 408-416)
+
+- **Question:** before M4.13, what archive/PROJECT.md's design (Outcomes, failures and joins:
+  notifications) leaves open.
+- **Chosen (the user's, all as recommended):** 408, all eight events now (not `RUN_FAILED` and
+  `LATE_CLEANUP_FAILED` alone); 409, the enum `Notify` (not `NotifyOn`, `NotificationEvent`);
+  410, an outbox written with the event, delivered at least once and retried until it gives up
+  (not sent from memory), and, the user asked, "after sending we clear it?": yes, a delivered
+  row is deleted, one given up on logged, counted and deleted; 411, SMTP through `lettre` (not
+  a client of our own); 412, a webhook's fixed JSON with a `text`, headers from the
+  environment (not an HMAC signature, not JSON without `text`); asked whether a webhook takes
+  any content: the receiver decides, so Teams, PagerDuty and Opsgenie go through a relay, and
+  the user kept the generic webhook (not formats per service now); 413, `[notifications]
+  ui_url` (not taken from the UI's settings); 414, DAG-defined `EmailChannel`s as designed (not
+  server channels only); 415, no throttling (not N an hour per channel); 416, a job's `notify`
+  stays refused (not per-job notifications).
+- **Open:** the user's own email service takes a POST: an HTTP transport for email, beside
+  SMTP, once its API is known.
+
+### <a id="D417"></a><a id="D418"></a><a id="D419"></a><a id="D420"></a><a id="D421"></a><a id="D422"></a><a id="D423"></a>2026-11-09: webhook bodies, DAG webhooks, notifications from tasks (decisions 417-423)
+
+- **Question:** the user's email service takes a POST of its own shape, plain or with a template
+  stored in its database; the user wants to define the POST's content, then webhooks defined in
+  DAGs, then to use a DAG's channel from its tasks and scripts.
+- **Asked along the way:** "shouldn't we use python templates for this?": callbacks would run
+  user code per notification (D410's outbox undone), `string.Template` adds nothing, Jinja
+  (minijinja) gives loops at a new dependency; the user then proposed t-strings (`t"{var}"`,
+  PEP 750; schedr requires Python 3.14): evaluated when the worker parses the file, into text
+  parts and references, filled by the master. The user asked whether workers send them: no, the
+  master sends every notification; the worker only turns the t-string into data.
+- **Chosen (the user's, all as recommended):** 417, a body template, t-strings in DAGs and
+  `"{name}"` strings in the config, D412's fixed JSON the default (not Jinja, not callbacks, not a
+  fixed shape the service adapts to); 418, DAG webhooks within `dag_urls`, no secret headers (not
+  `Secret(...)` headers the admin allows, not any URL), and redirects not followed (Claude's
+  default, shown to the user); 419, a server webhook used as configured (not a DAG's body over
+  it); 420, `timeout` a public key (not hidden); 421, `send`/`api.notify`/`schedr task-ctx
+  notify` with `text` and `data`, in M4.13a, commands included (not a whole `body=` from the
+  call, not commands later, not a step of its own); 422, a cap per attempt (not none); 423,
+  paths into `data`, a missing field refusing the call, null in event notifications (not the
+  whole `data` only, not refused at validation).
+- **Corrected (a side agent's note, the user's choice A):** 418 first said a DAG webhook's
+  secret goes in its URL; but a Slack or Teams webhook URL is the secret, and the URL would sit
+  in the DAG file and its JSON. DAG webhooks are for URLs that aren't secret; secret ones are
+  server webhooks (not the master reading secrets under a prefix, which gives up "the master
+  never sees a value"; not dropping DAG webhooks).
+- **Open:** the email service's request shape, for M4.13b (it fits 417's bodies); closed by 427.
+
+### <a id="D424"></a><a id="D425"></a><a id="D426"></a><a id="D427"></a><a id="D428"></a><a id="D429"></a>2026-11-10: the notification config's layout, email in the config only (decisions 424-429)
+
+- **Question:** before the night's M4.13b, its decisions asked ahead: email over HTTP, the switch
+  for DAG channels (D414's `[notifications.email] dag_channels` against D418's), several
+  recipients, the email's look.
+- **Along the way:** the user asked "Can't we just create PythonAPI version of it?" for the email
+  service: a `WebhookChannel` whose body is the service's request (427). On the switches: "a
+  type= webhook, type=email inside to know which one is which", then "one email channel with
+  type=email, and multiple other channels with type=webhook", then "multiple email channels
+  (per-name) and webhook channels" (424). Asked what `dag_channels` is, then "we shouldn't allow
+  defining EmailChannel in code. It's a standard, no need to have a class" (426, superseding 414);
+  asked why `dag_urls` restricts: the master posts, from a more privileged place than a worker
+  (SSRF), so a list empty by default (425, superseding 418; no `dag_channels`).
+- **Chosen (the user's):** 424 channels with a `type` (not a table per kind); 425 `dag_urls` alone,
+  empty by default (not any URL until set, not none); 426 email in the config, one email to all
+  in To (not one each), plain text (not text and HTML); 427 a webhook for the email service (not
+  a class of its own); 428 a 4xx dropped at once but 408 and 429 (not retried for a day); 429
+  `[notifications] ca_file` (not the system's trust store only).

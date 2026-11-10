@@ -94,6 +94,9 @@ pub enum ConfigError {
     /// `[backfill] max_runs` is zero.
     #[error("[backfill] max_runs must be at least 1")]
     NoBackfillRuns,
+    /// `[notifications] max_per_attempt` is zero.
+    #[error("[notifications] max_per_attempt must be at least 1")]
+    NoNotificationsPerAttempt,
     /// `[mapping] max_instances` is zero.
     #[error("[mapping] max_instances must be at least 1")]
     NoInstances,
@@ -259,8 +262,12 @@ pub fn load(
 /// The timings a zero would break everything with: every task timed out at once, a panicking
 /// interval, or every log deleted. Where zero means something (no wait, no retry) it stays allowed.
 fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
+    if config.notifications.max_per_attempt == 0 {
+        return Err(ConfigError::NoNotificationsPerAttempt);
+    }
     let fixed = [
         ("[dags] poll_interval", config.dags.poll_interval),
+        ("[notifications] timeout", config.notifications.timeout),
         ("[dags] parse_file_timeout", config.dags.parse_file_timeout),
         (
             "[master] parse_job_timeout",
@@ -324,6 +331,7 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
         let limit = match name.strip_prefix(HIDDEN_PREFIX) {
             Some("MASTER__WORKER_REPORT_RECORDS") => &mut limits.worker_report_records,
             Some("MASTER__WORKER_REPORT_TEXT") => &mut limits.worker_report_text,
+            Some("MASTER__NOTIFICATION_BODY") => &mut limits.notification_body,
             _ => continue,
         };
         *limit = text
@@ -397,6 +405,9 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
             "MASTER__NOTIFICATION_RETRY" => &mut timings.notification_retry,
             "MASTER__ALIVE_INTERVAL" => &mut timings.master_alive_interval,
             "MASTER__GAUGE_REFRESH" => &mut timings.gauge_refresh,
+            "MASTER__OUTBOX_POLL" => &mut timings.outbox_poll,
+            "MASTER__OUTBOX_RETRY_FIRST" => &mut timings.outbox_retry_first,
+            "MASTER__OUTBOX_RETRY_MAX" => &mut timings.outbox_retry_max,
             "MASTER__PARSE_RETRY_FIRST" => &mut timings.parse_retry_first,
             "MASTER__PARSE_RETRY_MAX" => &mut timings.parse_retry_max,
             "MASTER__NODE_HEARTBEAT" => &mut timings.node_heartbeat,

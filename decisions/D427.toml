@@ -1,0 +1,13 @@
+title = "The user's email service is reached as a webhook"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+No email-over-HTTP transport: a service taking a POST (plain or with its stored templates) is a
+webhook, a server channel with a `"{name}"` body or a DAG's `WebhookChannel` within `dag_urls`, its
+body the service's request (recipients, template ID, variables).
+'''
+history = "JOURNAL.md#D424"
+step = "M4.13a"

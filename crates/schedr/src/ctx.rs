@@ -90,6 +90,25 @@ pub fn run_task_ctx(
         TaskCtxCommand::Events { command } => {
             run_task_ctx_events(command, env, version, (out, err))
         }
+        TaskCtxCommand::Notify {
+            channel,
+            text,
+            data,
+        } => {
+            let data = crate::user::given_event_data(data.as_deref())
+                .map_err(|why| why.replace("--event-data", "--data"))?;
+            let request = CtxRequest::ApiCall {
+                method: "POST".to_owned(),
+                path: "/api/v1/notifications".to_owned(),
+                body: Some(serde_json::json!({
+                    "channel": channel,
+                    "text": text,
+                    "data": data.unwrap_or_default(),
+                })),
+                idempotency_key: None,
+            };
+            api_call(env, version, &request, err).map(|_| ())
+        }
     }
 }
 

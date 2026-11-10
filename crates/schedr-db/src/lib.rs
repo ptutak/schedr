@@ -16,6 +16,7 @@ pub mod instances;
 pub mod lease;
 pub mod named_events;
 pub mod nodes;
+pub mod notifications;
 mod query;
 pub mod reads;
 pub mod run_of;

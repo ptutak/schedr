@@ -59,6 +59,8 @@ pub struct Discovery {
     master: SchedrVersion,
     /// The master's message limit: a task whose output can't fit it is refused (B33).
     max_message_size: usize,
+    /// `[notifications]`: DAGs' `notify=` is checked against it.
+    notifications: std::sync::Arc<crate::notifications::Notifications>,
     jobs: ParseJobs,
     /// What each alive worker last reported for each root.
     reports: BTreeMap<String, BTreeMap<String, ParseKey>>,
@@ -123,6 +125,14 @@ impl Discovery {
         self.wakes = wakes;
     }
 
+    /// Checks DAGs' `notify=` against `notifications`.
+    pub fn set_notifications(
+        &mut self,
+        notifications: std::sync::Arc<crate::notifications::Notifications>,
+    ) {
+        self.notifications = notifications;
+    }
+
     /// Discovery refusing tasks whose output can't fit `bytes`, the master's message limit.
     #[must_use]
     pub const fn with_max_message_size(mut self, bytes: usize) -> Self {
@@ -137,6 +147,7 @@ impl Discovery {
             db,
             master,
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
+            notifications: std::sync::Arc::default(),
             jobs,
             reports: BTreeMap::new(),
             current: BTreeMap::new(),
@@ -496,6 +507,7 @@ impl Discovery {
                 master: self.master,
                 max_message_size: self.max_message_size,
                 secret_storages: upload.secret_storages.as_ref(),
+                notifications: Some(&self.notifications),
             },
         );
         let key = &upload.key;

@@ -625,6 +625,18 @@ pub enum TaskCtxCommand {
         #[command(subcommand)]
         command: TaskEventsCommand,
     },
+    /// Sends a message to a notification channel of the task's DAG (or a server one); the
+    /// master fills the channel's body and delivers it later.
+    Notify {
+        /// The channel's name.
+        channel: String,
+        /// Its text (the `text` placeholder; schedr's summary otherwise).
+        #[arg(long)]
+        text: Option<String>,
+        /// Its data (the `data` placeholder): JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON")]
+        data: Option<String>,
+    },
 }
 
 /// `schedr task-ctx events ...`: as `schedr events`, made as the task.

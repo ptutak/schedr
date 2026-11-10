@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D354"
 step = "M4.11e"
 also = ["wait-steps"]
 code = ["crates/schedr-api/src/views.rs", "crates/schedr-client/src/lib.rs", "crates/schedr-api/src/named_events.rs::post_event", "crates/schedr-master/src/core/triggers.rs::event_named_pass"]
-checked = 2026-11-09
+checked = 2026-11-10

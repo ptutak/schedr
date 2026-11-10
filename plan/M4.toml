@@ -909,12 +909,24 @@ done = 2026-11-09
 part_of = "M4.12"
 
 [[steps]]
-id = "M4.13"
-title = "Notifications"
+id = "M4.13a"
+title = "Notifications: events, outbox, webhooks"
 scope = '''
-channels in the server's configuration (email and webhook), `Dag(notify=...)`, the events (`RUN_FAILED` by default; `LATE_CLEANUP_FAILED`, decision 309), fixed messages, metrics
+(decisions 408-410, 413, 415-417, 419-425, 427-429): the eight events, the outbox and the master's sender, `Dag(notify=...)`, `[notifications.channels.<name>]` webhooks and DAG `WebhookChannel`s (`dag_urls`), bodies from t-strings and `"{name}"` strings, `channel.send`/`api.notify`/`schedr task-ctx notify`, `[notifications]`, metrics
 '''
-done_when = "a failed run sends one email and one webhook, a pure cancel none"
+done_when = '''
+a failed run sends one webhook with its template filled, a pure cancel none; a task's `send` reaches its channel; an undelivered notification is retried, then given up on
+'''
+status = "done"
+done = 2026-11-10
+
+[[steps]]
+id = "M4.13b"
+title = "Notifications: email"
+scope = '''
+(decisions 411, 424, 426): `type = "email"` channels sent by SMTP through `lettre` (`[notifications.smtp]`), plain text, one email to all recipients
+'''
+done_when = "a failed run sends one email by SMTP, a pure cancel none; a task's `send` to an email channel arrives"
 status = "planned"
 
 [[steps]]

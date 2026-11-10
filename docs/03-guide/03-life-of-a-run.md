@@ -213,8 +213,7 @@ remains `success`: something may already have acted on that result. Its one reas
 from a moved cleanup after the run ended. Handles may be left behind. The UI shows the success
 in yellow with the reason; the CLI shows `success (late_cleanup_failed)` and the API exposes
 `late_failure`. The task instance shows its failed cleanup, the master logs an error, and
-`schedr_master_runs_late_failed_total` counts it for alerts. Notifications, when added, will
-send this as an event. See [cleanup](../02-dags/15-cleanup.md#cleanup-on-another-worker).
+`schedr_master_runs_late_failed_total` counts it for alerts. [Notifications](../02-dags/24-notifications.md) can send this as a `LATE_CLEANUP_FAILED` event. See [cleanup](../02-dags/15-cleanup.md#cleanup-on-another-worker).
 
 Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, which fetches
 it from the worker that ran the attempt (see [Workers](05-workers.md)). The

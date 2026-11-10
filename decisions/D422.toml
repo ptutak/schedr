@@ -1,0 +1,12 @@
+title = "`[notifications] max_per_attempt`, 100"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+A task attempt may send at most this many notifications; past it `send` raises (the CLI exits
+non-zero).
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

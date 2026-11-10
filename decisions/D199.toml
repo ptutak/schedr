@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D199"
 step = "M4.7c"
 also = ["workers"]
 code = ["crates/schedr-agent/src/connection_jobs.rs", "crates/schedr/src/cli.rs", "crates/schedr-agent/src/agent.rs::connection_jobs"]
-checked = 2026-11-09
+checked = 2026-11-10

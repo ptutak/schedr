@@ -1,0 +1,12 @@
+title = "A DAG uses a server webhook as configured"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+A string names a server channel, with the server's body; a DAG wanting its own format defines its own
+`WebhookChannel`.
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

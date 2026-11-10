@@ -11,5 +11,5 @@ The failure is shown clearly; a retry command comes later.
 history = "archive/PROJECT.md#D263"
 step = "M4.8c2"
 also = ["runs", "outcomes"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-model/src/dag.rs::ResourceState"]

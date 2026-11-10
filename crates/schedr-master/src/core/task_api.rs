@@ -11,8 +11,17 @@ use schedr_proto::pb::{self, master_message};
 use super::{CoreError, MasterCore, Outgoing};
 
 /// The routes a task may call, by method and path (a query is allowed after it): the events
-/// for now (the user's, 2026-11-08); a route is added here, its code is the API's own.
-pub const TASK_ROUTES: &[(&str, &str)] = &[("POST", "/api/v1/events"), ("GET", "/api/v1/events")];
+/// (the user's, 2026-11-08), whose code is the API's own, and its own notifications (decision
+/// 421), which the master answers itself.
+pub const TASK_ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/v1/events"),
+    ("GET", "/api/v1/events"),
+    ("POST", NOTIFICATIONS),
+];
+
+/// A task's own notification: `{"channel": ..., "text": ..., "data": ...}`, answered 202 once
+/// queued.
+pub const NOTIFICATIONS: &str = "/api/v1/notifications";
 
 /// A request a task made, as the router gets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +109,59 @@ fn answer(worker_id: &str, request_id: u64, status: u16, body: Vec<u8>) -> Outgo
     }
 }
 
+/// Why a task's own notification wasn't queued.
+#[derive(Debug)]
+enum Unsent {
+    /// Past `[notifications] max_per_attempt`.
+    OverQuota,
+    /// The database failed.
+    Db(schedr_db::DbError),
+}
+
+impl From<schedr_db::DbError> for Unsent {
+    fn from(error: schedr_db::DbError) -> Self {
+        Self::Db(error)
+    }
+}
+
+/// The body of a task's own notification.
+#[derive(Debug)]
+struct NotifyRequest {
+    channel: String,
+    text: Option<String>,
+    data: serde_json::Value,
+}
+
+impl NotifyRequest {
+    /// `{"channel": "...", "text": "..." | null, "data": ...}`, nothing else.
+    fn read(body: &[u8]) -> Result<Self, String> {
+        let value: serde_json::Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        let serde_json::Value::Object(mut map) = value else {
+            return Err("it isn't an object".to_owned());
+        };
+        if let Some(key) = map
+            .keys()
+            .find(|k| !matches!(k.as_str(), "channel" | "text" | "data"))
+        {
+            return Err(format!("unknown field `{key}`"));
+        }
+        let Some(serde_json::Value::String(channel)) = map.remove("channel") else {
+            return Err("`channel` is a channel's name".to_owned());
+        };
+        let text = match map.remove("text") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(text)) => Some(text),
+            Some(_) => return Err("`text` is a string".to_owned()),
+        };
+        let data = map.remove("data").unwrap_or(serde_json::Value::Null);
+        Ok(Self {
+            channel,
+            text,
+            data,
+        })
+    }
+}
+
 fn refusal(why: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({ "error": why })).unwrap_or_default()
 }
@@ -111,11 +173,14 @@ impl MasterCore {
         &mut self,
         worker_id: &str,
         call: pb::ApiCall,
+        now: jiff::Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
-        Ok(vec![match self.plan_api_call(worker_id, call).await? {
-            ApiCallPlan::Answered(answer) => *answer,
-            ApiCallPlan::Run(job) => job.run().await,
-        }])
+        Ok(vec![
+            match self.plan_api_call(worker_id, call, now).await? {
+                ApiCallPlan::Answered(answer) => *answer,
+                ApiCallPlan::Run(job) => job.run().await,
+            },
+        ])
     }
 
     /// A task's request through its worker: to run as the task, if the worker holds that
@@ -128,6 +193,7 @@ impl MasterCore {
         &mut self,
         worker_id: &str,
         call: pb::ApiCall,
+        now: jiff::Timestamp,
     ) -> Result<ApiCallPlan, CoreError> {
         let refuse = |status: u16, why: &str| {
             Ok(ApiCallPlan::Answered(Box::new(answer(
@@ -152,6 +218,20 @@ impl MasterCore {
                 ),
             );
         }
+        if call
+            .path
+            .split_once('?')
+            .map_or(call.path.as_str(), |(bare, _)| bare)
+            == NOTIFICATIONS
+        {
+            let (status, body) = self.notify_call(worker_id, &call, now).await?;
+            return Ok(ApiCallPlan::Answered(Box::new(answer(
+                worker_id,
+                call.request_id,
+                status,
+                body,
+            ))));
+        }
         let Some(caller) = self.api_caller(worker_id, &call).await? else {
             return refuse(403, "no open attempt or trigger of this worker makes it");
         };
@@ -171,6 +251,99 @@ impl MasterCore {
             worker_id: worker_id.to_owned(),
             request_id: call.request_id,
         }))
+    }
+
+    /// A task's own notification (decision 421): to a channel of its DAG, or a server one,
+    /// queued with its count, at most `[notifications] max_per_attempt` an attempt.
+    async fn notify_call(
+        &self,
+        worker_id: &str,
+        call: &pb::ApiCall,
+        now: jiff::Timestamp,
+    ) -> Result<(u16, Vec<u8>), CoreError> {
+        if !call.trigger_dag_id.is_empty() {
+            return Ok((
+                403,
+                refusal("a trigger can't send notifications; a task can"),
+            ));
+        }
+        let attempt = self.db.attempt(&call.attempt_id).await?;
+        let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id && a.status.is_none())
+        else {
+            return Ok((403, refusal("no open attempt of this worker makes it")));
+        };
+        let request = match NotifyRequest::read(&call.body_json) {
+            Ok(request) => request,
+            Err(error) => {
+                return Ok((
+                    400,
+                    refusal(&format!(
+                        "the body is {{\"channel\": ..., \"text\": ..., \"data\": ...}}: {error}"
+                    )),
+                ));
+            }
+        };
+        let Some(run) = self.db.run_tasks(&attempt.run_id).await? else {
+            return Ok((404, refusal("the attempt's run is gone")));
+        };
+        let task = if attempt.map_index >= 0 {
+            format!("{}[{}]", attempt.task_id, attempt.map_index)
+        } else {
+            attempt.task_id.to_string()
+        };
+        let mut event = crate::notifications::Event::new(&run.dag, now);
+        event.run_id = Some(&attempt.run_id);
+        event.task = Some(&task);
+        event.attempt = Some(attempt.try_number);
+        event.state = Some("running");
+        event.text = request.text;
+        event.data = request.data;
+        event.planned_for = self
+            .db
+            .run_record(&attempt.run_id)
+            .await?
+            .map(|r| r.planned_for);
+        let queued = match self.notifications.message(&event, &request.channel) {
+            Ok(queued) => queued,
+            Err(why) => return Ok((400, refusal(&why))),
+        };
+        let max = self.notifications.max_per_attempt;
+        let db = &self.db;
+        let key = call.idempotency_key.as_str();
+        // Over the quota rolls the whole write back, the call's key with it: sent again, it is
+        // refused again (not taken for one that was queued).
+        let sent = Box::pin(db.atomically(async {
+            // Sent again (its agent reconnected before the answer): queued already.
+            if !key.is_empty() && !db.first_notification_request(&attempt.id, key).await? {
+                return Ok(());
+            }
+            if !db.count_attempt_notification(&attempt.id, max).await? {
+                return Err(Unsent::OverQuota);
+            }
+            db.queue_notifications(std::slice::from_ref(&queued), now)
+                .await?;
+            Ok(())
+        }))
+        .await;
+        let counted = match sent {
+            Ok(()) => true,
+            Err(Unsent::OverQuota) => false,
+            Err(Unsent::Db(error)) => return Err(error.into()),
+        };
+        Ok(if counted {
+            (
+                202,
+                serde_json::to_vec(&serde_json::json!({"queued": true})).unwrap_or_default(),
+            )
+        } else {
+            (
+                429,
+                refusal(&format!(
+                    "this attempt has sent {max} notifications, the most it may \
+                     ([notifications] max_per_attempt)"
+                )),
+            )
+        })
     }
 
     /// Who makes `call`: the attempt it names, open on this worker, or its trigger instance.
@@ -223,5 +396,7 @@ mod tests {
         assert!(!allowed("POST", "/api/v1/dags/sync/pause"));
         assert!(!allowed("GET", "/api/v1/events/../dags"));
         assert!(!allowed("GET", "/api/v1/events/"));
+        assert!(allowed("POST", "/api/v1/notifications"));
+        assert!(!allowed("GET", "/api/v1/notifications"));
     }
 }

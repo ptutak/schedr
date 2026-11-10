@@ -1627,3 +1627,142 @@ async fn a_first_of_keeps_what_its_options_were_each_allowed_whatever_its_own_li
     }
     assert_eq!(state_of(&db, &run_id, "first").await, S::Success);
 }
+
+/// `[notifications]` with one server webhook, `ops`.
+fn ops_notifications() -> Arc<Notifications> {
+    let mut section = schedr_config::config::NotificationsSection {
+        dag_urls: vec!["https://relay/".to_owned()],
+        ..Default::default()
+    };
+    section.channels.insert(
+        "ops".to_owned(),
+        schedr_config::config::ChannelConfig {
+            kind: schedr_config::config::ChannelKind::Webhook,
+            url: Some("https://hooks.example.com/ops".to_owned()),
+            headers_env: BTreeMap::new(),
+            body: None,
+            to: Vec::new(),
+        },
+    );
+    Arc::new(Notifications::from_config(&section, &BTreeMap::new()).unwrap())
+}
+
+/// `chain()` telling `ops` of the default events (`RUN_FAILED`) and its own `relay` of retries,
+/// failures and cancels, with a body of its own.
+fn notifying_chain() -> Dag {
+    let mut dag = chain();
+    dag.notify = serde_json::from_value(json!([
+        {"channel": {"kind": "server", "name": "ops"}},
+        {"channel": {"kind": "webhook", "name": "relay", "url": "https://relay/x",
+                     "body": {"object": {
+                        "title": {"template": [{"ref": {"name": "dag"}}, {"text": " "},
+                                               {"ref": {"name": "event"}}]},
+                        "who": {"ref": {"name": "task"}}}}},
+         "events": ["TASK_RETRY", "RUN_FAILED", "RUN_CANCELLED"]}
+    ]))
+    .unwrap();
+    dag
+}
+
+async fn queued(db: &Database) -> Vec<(String, String, Json)> {
+    db.due_notifications(ts("2030-01-01T00:00:00Z"), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| (n.channel, n.event, n.body))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_retry_and_a_failed_run_queue_what_each_channel_chose() {
+    let (mut execution, db, run_id) = with_run(notifying_chain(), RunState::Running).await;
+    execution.set_notifications(ops_notifications());
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    start(&db, &run_id, "extract").await;
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("extract"),
+            -1,
+            &ended(AttemptStatus::Failed),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let retry = queued(&db).await;
+    assert_eq!(
+        retry,
+        vec![(
+            "relay".to_owned(),
+            "TASK_RETRY".to_owned(),
+            json!({"title": "sync TASK_RETRY", "who": "extract"})
+        )]
+    );
+
+    execution
+        .queue_due_retries(ts("2026-10-21T08:01:00Z"))
+        .await
+        .unwrap();
+    start(&db, &run_id, "extract").await;
+    let recorded = execution
+        .attempt_finished(
+            &run_id,
+            &id("extract"),
+            -1,
+            &ended(AttemptStatus::Failed),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recorded.run_result, Some(RunState::Failed));
+    let all = queued(&db).await;
+    // TASK_FAILED is nobody's; RUN_FAILED is both's.
+    let events: Vec<(&str, &str)> = all
+        .iter()
+        .map(|(c, e, _)| (c.as_str(), e.as_str()))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            ("relay", "TASK_RETRY"),
+            ("ops", "RUN_FAILED"),
+            ("relay", "RUN_FAILED")
+        ]
+    );
+    // The server webhook has no body: schedr's fixed JSON, with a text and the failed task.
+    let fixed = &all[1].2;
+    assert_eq!(fixed["event"], "RUN_FAILED");
+    assert_eq!(fixed["dag"], "sync");
+    assert_eq!(fixed["run"], run_id.as_str());
+    assert_eq!(fixed["planned_for"], NOW);
+    assert_eq!(
+        fixed["failed_tasks"],
+        json!([{"task": "extract", "error": null}])
+    );
+    assert_eq!(
+        fixed["text"],
+        format!("DAG `sync`: run {run_id} failed (failed: extract)")
+    );
+    assert!(fixed.get("data").is_none(), "{fixed}");
+}
+
+#[tokio::test]
+async fn a_pure_cancel_tells_only_the_channels_that_chose_it() {
+    let (mut execution, db, run_id) = with_run(notifying_chain(), RunState::Queued).await;
+    execution.set_notifications(ops_notifications());
+    execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let events: Vec<(String, String)> = queued(&db)
+        .await
+        .into_iter()
+        .map(|(c, e, _)| (c, e))
+        .collect();
+    assert_eq!(events, [("relay".to_owned(), "RUN_CANCELLED".to_owned())]);
+}
+
+#[tokio::test]
+async fn a_dag_without_notify_queues_nothing() {
+    let (mut execution, db, run_id) = with_run(chain(), RunState::Queued).await;
+    execution.set_notifications(ops_notifications());
+    execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    assert_eq!(queued(&db).await, Vec::new());
+}

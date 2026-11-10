@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D94"
 step = "M4.3c"
 also = ["outcomes"]
 code = ["crates/schedr-master/src/validate.rs", "python/schedr/_build.py::make_group_dependencies"]
-checked = 2026-11-09
+checked = 2026-11-10

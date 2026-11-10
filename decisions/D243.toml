@@ -13,4 +13,4 @@ step = "M4.8b2"
 unverified = ["the old worker's name stays in the log"]
 also = ["workers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-db/src/attempts.rs::move_cleanup"]
-checked = 2026-11-09
+checked = 2026-11-10

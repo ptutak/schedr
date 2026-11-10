@@ -188,6 +188,41 @@ impl Hub {
         let _ = leading.wait_for(|leads| *leads).await;
     }
 
+    /// Delivers the outbox through `sender` while this master leads (decision 410): a pass
+    /// every `poll`, at once again after a full one, until `stop` completes. A failing pass is
+    /// logged; the next one goes on.
+    pub async fn run_sender(
+        &self,
+        sender: crate::notifications::sender::Sender,
+        poll: Duration,
+        stop: impl Future<Output = ()>,
+    ) {
+        tokio::pin!(stop);
+        loop {
+            tokio::select! {
+                () = &mut stop => return,
+                () = self.while_leading() => {}
+            }
+            let full = match sender.pass((self.clock)(), || *self.leading.borrow()).await {
+                Ok(pass) => {
+                    pass.sent + pass.retried + pass.dropped
+                        >= crate::notifications::sender::BATCH as usize
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "can't deliver notifications; trying again");
+                    false
+                }
+            };
+            if full {
+                continue;
+            }
+            tokio::select! {
+                () = &mut stop => return,
+                () = tokio::time::sleep(poll) => {}
+            }
+        }
+    }
+
     /// Refreshes the gauges taken from the database; a failure is logged (the gauges keep
     /// their last values).
     pub async fn refresh_gauges(&self) {
@@ -528,7 +563,7 @@ impl Hub {
         let worker_message::Message::ApiCall(call) = message else {
             return core.handle(worker_id, message, (self.clock)()).await;
         };
-        match core.plan_api_call(worker_id, call).await? {
+        match core.plan_api_call(worker_id, call, (self.clock)()).await? {
             ApiCallPlan::Answered(answer) => Ok(vec![*answer]),
             ApiCallPlan::Run(job) => {
                 let hub = self.clone();

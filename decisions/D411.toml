@@ -1,0 +1,14 @@
+title = "Email goes by SMTP through lettre"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`[notifications.email]`: `host`, `port`, `tls` (`starttls`, `tls` or `none`), `username`,
+`from`; the password only from `SCHEDR_CONFIG__NOTIFICATIONS__EMAIL__PASSWORD`. A new dependency,
+`lettre`, on the rustls and tokio already used. (An HTTP transport for the user's own email service
+is to be decided with its API.)
+'''
+history = "JOURNAL.md#D411"
+step = "M4.13b"

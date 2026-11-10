@@ -5,7 +5,7 @@ Tasks created inside ``with Dag(...)`` belong to it. When the block ends, the DA
 """
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from types import FrameType, TracebackType
@@ -27,6 +27,7 @@ from schedr._model import (
 from schedr._serialization.describe import describe
 from schedr.chained import Chained
 from schedr.event_triggers import EventTrigger, TriggerFunction
+from schedr.notify import Notify, WebhookChannel, notify_entries
 from schedr.outcomes import RunIf
 from schedr.runner.sources import IMPORTING
 from schedr.triggers import Cron, Every, Once, Trigger
@@ -128,6 +129,9 @@ class Dag:
         params: The run parameters it takes: a dataclass or a Pydantic model class. With a
             trigger, every field needs a default (scheduled runs use them). Read them with
             ``dag_ctx.params.<field>`` in the DAG body (a reference) and in a task.
+        notify: The channels told of its runs (``schedr.notify``): a list of channels, each
+            told of the server's default events, or a dict of channel to ``Notify`` events.
+            A string names a server channel; a ``WebhookChannel`` is the DAG's own.
 
     Raises:
         IdError: If the DAG ID is invalid.
@@ -148,9 +152,13 @@ class Dag:
         description: str | None = None,
         tags: Sequence[str] = (),
         params: type | None = None,
+        notify: Sequence[WebhookChannel | str]
+        | Mapping[WebhookChannel | str, Sequence[Notify]]
+        | None = None,
     ) -> None:
         """Records the DAG's settings; tasks are added inside the ``with`` block."""
         self.dag_id = validate_dag_id(dag_id)
+        self._notify = notify_entries(notify, self.dag_id)
         if isinstance(trigger, TriggerFunction):
             raise TypeError(
                 f"trigger: @trigger `{trigger.task_id}` is to be called with its arguments: "
@@ -286,6 +294,7 @@ class Dag:
             groups=[Group(g.id, g.parent) for g in builder.groups.values()],
             params=self._params,
             resources=resources,
+            notify=self._notify,
         )
         registry.register(
             self.model, builder.functions, self._filename, self.params, builder.cleanups

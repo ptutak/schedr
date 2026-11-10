@@ -161,7 +161,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.8e (part of M4.8) | UI and test doubles | done 2026-11-05 | D262, D272 |
 | M4.8f (part of M4.8) | A hung resource cleanup | done 2026-11-05 | D235, D278, D279 |
 | M4.8z (part of M4.8) | Chaos scenarios | done 2026-11-05 | D280, D281, D282, D290, D291, D297 |
-| M4.9a | Script roots and `schedr.toml` | done 2026-11-05 | D296, D298, D299, D300 |
+| M4.9a | Script roots and `schedr.toml` | done 2026-11-05 | D296, D299, D300 |
 | M4.9b | The `script` task kind and `ScriptOperator` | done 2026-11-05 | D293, D294, D295, D301, D302, D303, D304, D306 |
 | M4.9c | The rest of `[jobs.<name>]` | done 2026-11-06 | D271, D310, D311, D312, D313, D314 |
 | M4.9d | Libraries in roots | done 2026-11-06 | D305 |
@@ -183,7 +183,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.12a (part of M4.12) | `TriggerDagOperator` | done 2026-11-09 | D358, D359, D360, D361, D362, D365, D378, D379, D380, D398, D399 |
 | M4.12b (part of M4.12) | Backfill | done 2026-11-09 | D363, D364, D400, D401, D402, D403, D404, D405 |
 | M4.12c (part of M4.12) | Operator mapping | done 2026-11-09 | D406, D407 |
-| M4.13 | Notifications | planned | D390, D391 |
+| M4.13a | Notifications: events, outbox, webhooks | done 2026-11-10 | D390, D391, D408, D409, D410, D413, D415, D416, D417, D419, D420, D421, D422, D423, D424, D425, D427, D428, D429 |
+| M4.13b | Notifications: email | planned | D411, D426 |
 | M4.14 | Retention | planned |  |
 | M4.15 | Per-task memory and upgrade rules | planned | D50 |
 

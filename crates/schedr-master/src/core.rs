@@ -451,6 +451,8 @@ pub struct MasterCore {
     stopping_triggers: BTreeMap<String, (String, String)>,
     /// The API tasks call through their agents (M4.11h); none: they are refused.
     task_api: Option<Arc<dyn task_api::TaskApi>>,
+    /// `[notifications]`.
+    notifications: Arc<crate::notifications::Notifications>,
 }
 
 impl MasterCore {
@@ -503,11 +505,25 @@ impl MasterCore {
             connection_jobs: BTreeMap::new(),
             stopping_triggers: BTreeMap::new(),
             task_api: None,
+            notifications: Arc::default(),
             settings,
             db,
         }
         // One set shared by every part, replaced by the caller's to register them.
         .with_metrics(MasterMetrics::default())
+    }
+
+    /// The master sending notifications as `notifications` says (`[notifications]`): what
+    /// runs, tasks and triggers queue, and the checks on DAGs' `notify=`.
+    #[must_use]
+    pub fn with_notifications(
+        mut self,
+        notifications: Arc<crate::notifications::Notifications>,
+    ) -> Self {
+        self.dispatcher.set_notifications(notifications.clone());
+        self.discovery.set_notifications(notifications.clone());
+        self.notifications = notifications;
+        self
     }
 
     /// The master serving tasks' REST requests through `api` (M4.11h).
@@ -1033,7 +1049,7 @@ impl MasterCore {
                 }
                 vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
             }
-            worker_message::Message::ApiCall(call) => self.api_call(worker_id, call).await?,
+            worker_message::Message::ApiCall(call) => self.api_call(worker_id, call, now).await?,
             worker_message::Message::HandlesAdded(added) => {
                 self.handles_added(worker_id, &added).await?
             }

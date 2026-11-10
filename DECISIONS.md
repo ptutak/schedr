@@ -23,12 +23,34 @@ None.
 
 ## Unverified claims
 
-Active decisions with a claim nobody found in the code yet (`unverified`): D57, D65, D66, D129, D192, D221, D222, D242, D243, D245, D262, D294, D303.
+Active decisions with a claim nobody found in the code yet (`unverified`): D57, D65, D66, D129, D192, D221, D222, D242, D243, D245, D262, D294, D303, D408, D425.
 
 ## Every decision
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D429 | 2026-11-10 | user | built M4.13a | outcomes | `[notifications] ca_file`: extra CAs for notifications |
+| D428 | 2026-11-10 | user | built M4.13a | outcomes | A webhook's 4xx drops the notification at once |
+| D427 | 2026-11-10 | user | built M4.13a | outcomes | The user's email service is reached as a webhook |
+| D426 | 2026-11-10 | user | planned (M4.13b) | outcomes | Email channels are in the configuration only |
+| D425 | 2026-11-10 | user | built M4.13a | outcomes | A DAG's own webhooks are gated by `[notifications] dag_urls` alone |
+| D424 | 2026-11-10 | user | built M4.13a | outcomes | Server channels are `[notifications.channels.<name>]` with a `type` |
+| D423 | 2026-11-09 | user | built M4.13a | outcomes | Templates reach into `data` by paths |
+| D422 | 2026-11-09 | user | built M4.13a | outcomes | `[notifications] max_per_attempt`, 100 |
+| D421 | 2026-11-09 | user | built M4.13a | outcomes | Tasks send notifications to their channels |
+| D420 | 2026-11-09 | user | built M4.13a | outcomes | `[notifications] timeout`, 10 s |
+| D419 | 2026-11-09 | user | built M4.13a | outcomes | A DAG uses a server webhook as configured |
+| D418 | 2026-11-09 | user | superseded by D425 | outcomes | A DAG may define webhook channels inside `dag_urls` |
+| D417 | 2026-11-09 | user | built M4.13a | outcomes | A webhook's body: schedr's fixed JSON, or a template |
+| D416 | 2026-11-09 | user | built M4.13a | outcomes | A job's `notify` stays refused |
+| D415 | 2026-11-09 | user | built M4.13a | outcomes | Notifications aren't throttled |
+| D414 | 2026-11-09 | user | superseded by D426 | outcomes | A DAG may define email channels of its own |
+| D413 | 2026-11-09 | user | built M4.13a | outcomes | Notifications link to the UI through `[notifications] ui_url` |
+| D412 | 2026-11-09 | user | superseded by D417 | outcomes | A webhook posts schedr's fixed JSON with a `text` |
+| D411 | 2026-11-09 | user | planned (M4.13b) | outcomes | Email goes by SMTP through lettre |
+| D410 | 2026-11-09 | user | built M4.13a | outcomes | Notifications go through an outbox, delivered at least once |
+| D409 | 2026-11-09 | user | built M4.13a | outcomes | The notification events' enum is `Notify` |
+| D408 | 2026-11-09 | user | built M4.13a | outcomes | Notifications have eight events, built together |
 | D407 | 2026-11-09 | user | built M4.12c | chained-runs | A mapped TriggerDagOperator starts a run per element |
 | D406 | 2026-11-09 | user | built M4.12c | chained-runs | Of the operators, only a TriggerDagOperator is mapped |
 | D405 | 2026-11-09 | user | built M4.12b | runs | The scheduler skips fire times another run covers |
@@ -45,8 +67,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D394 | 2026-11-09 | user | rule | triggers | A cycle through trigger=RunOf across DAGs isn't caught |
 | D393 | 2026-11-09 | user | rule | wait-steps | first_of doesn't cancel the tasks that didn't win |
 | D392 | 2026-11-09 | user | rule | wait-steps | No by_deadline wait |
-| D391 | 2026-11-09 | user | planned (M4.13) | outcomes | Notifications go by email and a generic webhook |
-| D390 | 2026-11-09 | user | planned (M4.13) | outcomes | No notification for a task running too long |
+| D391 | 2026-11-09 | user | built M4.13a | outcomes | Notifications go by email and a generic webhook |
+| D390 | 2026-11-09 | user | built M4.13a | outcomes | No notification for a task running too long |
 | D389 | 2026-11-09 | user | rule | outcomes | A command's retry doesn't depend on its exit code |
 | D388 | 2026-11-09 | user | rule | python-api | A calendar is an event trigger, not a built-in time trigger |
 | D387 | 2026-11-09 | user | rule | observability | Wait steps aren't isolated after host losses |
@@ -138,7 +160,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D301 | 2026-11-05 | user | built M4.9b | scripts | A DAG root's hash includes its used script roots |
 | D300 | 2026-11-05 | user | built M4.9a | scripts | A standalone job's task has the job's name |
 | D299 | 2026-11-05 | user | built M4.9a | scripts | Script roots and DAG roots cannot share a name |
-| D298 | 2026-11-05 | user | built M4.9a | scripts | A job's notify key is an import error until notifications exist |
+| D298 | 2026-11-05 | user | superseded by D416 | scripts | A job's notify key is an import error until notifications exist |
 | D297 | 2026-11-05 | user | built M4.8z | components | A master that is not leading is unready and refuses streams |
 | D296 | 2026-11-05 | user | built M4.9a | scripts | An unscheduled script declaration is only for DAGs |
 | D295 | 2026-11-05 | user | built M4.9b | scripts | A missing script root is a parse import error |
@@ -677,6 +699,25 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### outcomes
 
+- D429: `[notifications] ca_file`: extra CAs for notifications
+- D428: A webhook's 4xx drops the notification at once
+- D427: The user's email service is reached as a webhook
+- D426: Email channels are in the configuration only
+- D425: A DAG's own webhooks are gated by `[notifications] dag_urls` alone
+- D424: Server channels are `[notifications.channels.<name>]` with a `type`
+- D423: Templates reach into `data` by paths
+- D422: `[notifications] max_per_attempt`, 100
+- D421: Tasks send notifications to their channels
+- D420: `[notifications] timeout`, 10 s
+- D419: A DAG uses a server webhook as configured
+- D417: A webhook's body: schedr's fixed JSON, or a template
+- D416: A job's `notify` stays refused
+- D415: Notifications aren't throttled
+- D413: Notifications link to the UI through `[notifications] ui_url`
+- D411: Email goes by SMTP through lettre
+- D410: Notifications go through an outbox, delivered at least once
+- D409: The notification events' enum is `Notify`
+- D408: Notifications have eight events, built together
 - D391: Notifications go by email and a generic webhook
 - D390: No notification for a task running too long
 - D389: A command's retry doesn't depend on its exit code
@@ -736,7 +777,6 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 - D301: A DAG root's hash includes its used script roots
 - D300: A standalone job's task has the job's name
 - D299: Script roots and DAG roots cannot share a name
-- D298: A job's notify key is an import error until notifications exist
 - D296: An unscheduled script declaration is only for DAGs
 - D295: A missing script root is a parse import error
 - D294: A changed script declaration re-parses its DAGs

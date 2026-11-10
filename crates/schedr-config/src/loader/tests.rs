@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 
 use super::*;
+use crate::config::ChannelKind;
 use crate::roots::Root;
 
 const FILE: &str = "/etc/schedr/config.toml";
@@ -914,4 +915,82 @@ fn a_log_mode_number_that_isnt_a_mode_is_refused() {
             mode: "0666".to_owned()
         }
     );
+}
+
+#[test]
+fn notifications_have_defaults_and_read_server_channels_by_type() {
+    let default = load(None, &env(&[]), &[]).unwrap().notifications;
+    assert_eq!(default.default_events, vec!["RUN_FAILED".to_owned()]);
+    assert_eq!(default.give_up_after, Duration::from_hours(24));
+    assert_eq!(default.timeout, Duration::from_secs(10));
+    assert_eq!(default.max_per_attempt, 100);
+    assert!(default.dag_urls.is_empty() && default.channels.is_empty());
+    assert_eq!(default.ca_file, None);
+
+    let toml = r#"
+[notifications]
+ui_url = "https://schedr.example.com"
+default_events = ["RUN_FAILED", "RUN_RECOVERED"]
+give_up_after = "2h"
+dag_urls = ["https://relay.example.com/"]
+ca_file = "/etc/ssl/service-ca.crt"
+
+[notifications.channels.ops-slack]
+type = "webhook"
+url = "https://hooks.example.com/x"
+headers_env = { Authorization = "OPS_TOKEN" }
+
+[notifications.channels.ops-slack.body]
+text = "[ops] {dag} {event}"
+tasks = "{failed_tasks}"
+"#;
+    let set = load(Some(file(toml)), &env(&[]), &[])
+        .unwrap()
+        .notifications;
+    assert_eq!(set.ui_url.as_deref(), Some("https://schedr.example.com"));
+    assert_eq!(set.give_up_after, Duration::from_secs(7200));
+    assert_eq!(set.dag_urls, vec!["https://relay.example.com/".to_owned()]);
+    assert_eq!(set.ca_file, Some(PathBuf::from("/etc/ssl/service-ca.crt")));
+    let hook = &set.channels["ops-slack"];
+    assert_eq!(hook.kind, ChannelKind::Webhook);
+    assert_eq!(hook.url.as_deref(), Some("https://hooks.example.com/x"));
+    assert_eq!(hook.headers_env["Authorization"], "OPS_TOKEN");
+    assert_eq!(
+        hook.body,
+        Some(serde_json::json!({"text": "[ops] {dag} {event}", "tasks": "{failed_tasks}"}))
+    );
+}
+
+#[test]
+fn a_channel_needs_a_known_type_and_known_keys() {
+    for (toml, says) in [
+        (
+            "[notifications.channels.x]\nurl = \"https://h/\"\n",
+            "missing field `type`",
+        ),
+        (
+            "[notifications.channels.x]\ntype = \"pager\"\n",
+            "unknown variant: found `pager`",
+        ),
+        (
+            "[notifications.channels.x]\ntype = \"webhook\"\nurl = \"https://h/\"\nuri = \"x\"\n",
+            "unknown field: found `uri`",
+        ),
+    ] {
+        let error = load(Some(file(toml)), &env(&[]), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(says), "{toml}: {error}");
+    }
+}
+
+#[test]
+fn notifications_max_per_attempt_must_be_positive() {
+    let zero = load(
+        None,
+        &env(&[("SCHEDR_CONFIG__NOTIFICATIONS__MAX_PER_ATTEMPT", "0")]),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(zero, ConfigError::NoNotificationsPerAttempt);
 }

@@ -149,6 +149,23 @@ CREATE UNIQUE INDEX named_events_by_request ON named_events (posted_by, request_
 -- What each `@trigger(wait_for=...)` was done with or passed: the runs or events it was called
 -- for, so one stored behind its cursor (an event's time is taken before it commits) is still
 -- called for, and only once (decision 354).
+-- Notifications to deliver (decision 410): written with the event, deleted once delivered or
+-- given up on.
+CREATE TABLE notifications (
+    id           TEXT PRIMARY KEY,
+    dag_id       TEXT NOT NULL,
+    channel      TEXT NOT NULL,
+    -- A DAG webhook's URL; NULL for a server channel, looked up when it is sent.
+    url          TEXT,
+    event        TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    next_try_at  TEXT NOT NULL,
+    tries        INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT
+);
+CREATE INDEX notifications_due ON notifications (next_try_at, id);
+
 CREATE TABLE trigger_passed (
     dag_id  TEXT NOT NULL,
     item    TEXT NOT NULL,
@@ -366,10 +383,20 @@ CREATE TABLE attempts (
     -- The handles its first worker registered past the master's knowledge were cleaned by that
     -- worker after the attempt ended, and their result was added (B169).
     rest_cleaned      INTEGER NOT NULL DEFAULT 0 CHECK (rest_cleaned IN (0, 1)),
+    -- How many notifications the task sent itself (`send`, decision 422).
+    notifications_sent INTEGER NOT NULL DEFAULT 0,
     UNIQUE (task_instance_id, try_number)
 );
 
 CREATE INDEX attempts_open ON attempts (assigned_at) WHERE status IS NULL;
+
+-- The calls a task attempt made to send its own (decision 421), by key: a call sent again (its
+-- agent reconnected before the answer) is answered without queueing it twice.
+CREATE TABLE notification_requests (
+    attempt_id   TEXT NOT NULL REFERENCES attempts (id) ON DELETE CASCADE,
+    request_key  TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, request_key)
+);
 
 -- An attempt's cleanup handles (decision 228), for a cleanup on another worker.
 CREATE TABLE cleanup_handles (

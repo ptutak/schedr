@@ -1,0 +1,12 @@
+title = "A job's `notify` stays refused"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+A `schedr.toml` job's failure is its task's, and the DAG's `notify=` covers it: `notify` in a job
+stays an import error (decision 298), its message pointing to `Dag(notify=...)`.
+'''
+history = "JOURNAL.md#D416"
+step = "M4.13a"

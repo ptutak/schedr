@@ -1,0 +1,13 @@
+title = "Server channels are `[notifications.channels.<name>]` with a `type`"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+Every channel of the master's configuration is `[notifications.channels.<name>]`, `type = "webhook"`
+(`url`, `headers_env`, `body`) or `type = "email"` (`to`); there are several of each, and every DAG
+of the deployment names them by name. Settings common to all stay in `[notifications]`.
+'''
+history = "JOURNAL.md#D424"
+step = "M4.13a"

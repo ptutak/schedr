@@ -22,6 +22,7 @@ from schedr.event_triggers import Event, EventTrigger, TriggerFunction, trigger
 from schedr.first_of import at_least, first_of
 from schedr.groups import Group, group
 from schedr.named_events import EventNamed
+from schedr.notify import Notify, WebhookChannel
 from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
 from schedr.outcomes import (
     DagHint,
@@ -74,6 +75,7 @@ __all__ = [
     "Mapped",
     "MiB",
     "NotYet",
+    "Notify",
     "Once",
     "Outcome",
     "Output",
@@ -94,6 +96,7 @@ __all__ = [
     "TriggerFunction",
     "TypingHint",
     "Waited",
+    "WebhookChannel",
     "acleanup_handle",
     "at_least",
     "branch",

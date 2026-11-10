@@ -4066,3 +4066,155 @@ async fn a_tasks_api_call_runs_as_the_task_only_from_its_worker_on_a_listed_rout
         ("POST", Some("k"))
     );
 }
+
+#[tokio::test]
+async fn a_poke_trigger_crossing_failing_after_tells_its_channels_once() {
+    let mut section = schedr_config::config::NotificationsSection::default();
+    section.channels.insert(
+        "ops".to_owned(),
+        schedr_config::config::ChannelConfig {
+            kind: schedr_config::config::ChannelKind::Webhook,
+            url: Some("https://hooks.example.com/ops".to_owned()),
+            headers_env: BTreeMap::new(),
+            body: None,
+            to: Vec::new(),
+        },
+    );
+    let settings =
+        crate::notifications::Notifications::from_config(&section, &BTreeMap::new()).unwrap();
+    let mut file = serde_json::to_value(event_file()).unwrap();
+    file["dags"][0]["notify"] =
+        json!([{"channel": {"kind": "server", "name": "ops"}, "events": ["TRIGGER_FAILING"]}]);
+    let file: ParsedFile = serde_json::from_value(file).unwrap();
+    let mut core = core().await.with_notifications(Arc::new(settings));
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    core.upload(upload_of(&job.parse_job_id, &file), ts(NOW))
+        .await
+        .unwrap();
+    core.db
+        .set_paused(&DagId::new("sync").unwrap(), false)
+        .await
+        .unwrap();
+    let assign = assign_of(&core.tick(later(1)).await.unwrap()).expect("the trigger is given");
+    let poked = |failures| {
+        worker_message::Message::TriggerPoked(pb::TriggerPoked {
+            dag_id: assign.dag_id.clone(),
+            instance_id: assign.instance_id.clone(),
+            at: None,
+            error: "ConnectionError: refused".to_owned(),
+            failures,
+        })
+    };
+    let queued = |core: &MasterCore| {
+        let db = core.db.clone();
+        async move { db.due_notifications(later(10_000), 10).await.unwrap() }
+    };
+    for (failures, expected) in [(4, 0), (5, 1), (6, 1)] {
+        core.handle("w1", poked(failures), later(2)).await.unwrap();
+        assert_eq!(
+            queued(&core).await.len(),
+            expected,
+            "after {failures} failures"
+        );
+    }
+    let sent = &queued(&core).await[0];
+    assert_eq!(sent.event, "TRIGGER_FAILING");
+    assert!(
+        sent.body["text"]
+            .as_str()
+            .unwrap()
+            .contains("its trigger is failing: ConnectionError: refused"),
+        "{}",
+        sent.body
+    );
+}
+
+/// M4.13a (decisions 421, 422): a task's own notification is queued once per call, a call sent
+/// again (same key) answered without queueing it twice, and the quota refuses past it, again on
+/// a resend.
+#[tokio::test]
+async fn a_tasks_notification_is_queued_once_per_call_within_its_quota() {
+    let mut section = schedr_config::config::NotificationsSection {
+        max_per_attempt: 1,
+        ..Default::default()
+    };
+    section.channels.insert(
+        "ops".to_owned(),
+        schedr_config::config::ChannelConfig {
+            kind: schedr_config::config::ChannelKind::Webhook,
+            url: Some("https://hooks.example.com/ops".to_owned()),
+            headers_env: BTreeMap::new(),
+            body: Some(json!({"text": "{task}: {text} ({data[rows]})"})),
+            to: Vec::new(),
+        },
+    );
+    let settings =
+        crate::notifications::Notifications::from_config(&section, &BTreeMap::new()).unwrap();
+    let mut core = with_dag().await.with_notifications(Arc::new(settings));
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    let call = |key: &str, body: &str| {
+        worker_message::Message::ApiCall(pb::ApiCall {
+            request_id: 7,
+            attempt_id: assign.attempt_id.clone(),
+            method: "POST".to_owned(),
+            path: "/api/v1/notifications".to_owned(),
+            body_json: body.as_bytes().to_vec(),
+            idempotency_key: key.to_owned(),
+            ..pb::ApiCall::default()
+        })
+    };
+    let answer = |out: &[Outgoing]| {
+        let master_message::Message::ApiAnswer(answer) = message(&out[0]) else {
+            panic!("expected ApiAnswer, got {out:?}")
+        };
+        (
+            answer.status,
+            String::from_utf8_lossy(&answer.body_json).into_owned(),
+        )
+    };
+    let ok = r#"{"channel": "ops", "text": "loaded", "data": {"rows": 12}}"#;
+    let mut statuses = Vec::new();
+    for (worker, key, body) in [
+        ("w1", "a", ok),
+        ("w1", "a", ok),
+        ("w1", "b", ok),
+        ("w1", "b", ok),
+        ("w1", "c", r#"{"channel": "nope"}"#),
+        ("w1", "d", r#"{"channel": "ops", "data": {}}"#),
+        ("w1", "e", r#"{"channel": "ops", "extra": 1}"#),
+        ("w2", "f", ok),
+    ] {
+        let out = core.handle(worker, call(key, body), ts(NOW)).await.unwrap();
+        statuses.push(answer(&out));
+    }
+    let codes: Vec<u32> = statuses.iter().map(|(code, _)| *code).collect();
+    assert_eq!(
+        codes,
+        [202, 202, 429, 429, 400, 400, 400, 403],
+        "{statuses:#?}"
+    );
+    assert!(
+        statuses[4].1.contains("no channel `nope`"),
+        "{}",
+        statuses[4].1
+    );
+    assert!(
+        statuses[5].1.contains("data[\\\"rows\\\"]"),
+        "{}",
+        statuses[5].1
+    );
+    let queued = core.db.due_notifications(later(10), 10).await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].event, "MESSAGE");
+    assert_eq!(queued[0].body, json!({"text": "extract: loaded (12)"}));
+}

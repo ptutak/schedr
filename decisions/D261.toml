@@ -13,5 +13,5 @@ instances.
 history = "archive/PROJECT.md#D261"
 step = "M4.8c2"
 also = ["state"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-model/src/dag.rs::resource_of_cleanup"]

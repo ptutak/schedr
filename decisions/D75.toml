@@ -15,4 +15,4 @@ history = "archive/PROJECT.md#D75"
 step = "M4.3b"
 also = ["runs", "assignment"]
 code = ["crates/schedr-db/src/instances.rs", "crates/schedr-master/src/execution.rs", "crates/schedr-master/src/mapping.rs", "crates/schedr-master/src/progress.rs::settle_mapped"]
-checked = 2026-11-09
+checked = 2026-11-10

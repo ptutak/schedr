@@ -10,5 +10,5 @@ Queue limits and idle restarts govern running triggers, whose strikes and consec
 '''
 history = "archive/PROJECT.md#D349"
 step = "M4.11b"
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-master/src/core/triggers.rs::trigger_failed", "crates/schedr-master/src/core/triggers.rs::idle_too_long"]

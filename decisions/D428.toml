@@ -1,0 +1,12 @@
+title = "A webhook's 4xx drops the notification at once"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+400-499 (but 408 and 429) won't fix itself: logged as an error, counted (`notifications_failed`) and
+dropped; 408, 429, 5xx, timeouts and connection errors are retried until `give_up_after`.
+'''
+history = "JOURNAL.md#D424"
+step = "M4.13a"

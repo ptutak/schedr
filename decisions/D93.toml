@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D93"
 step = "M4.3c"
 also = ["ui-cli"]
 code = ["crates/schedr-master/src/discovery.rs", "crates/schedr-db/src/dags.rs::parsed_at"]
-checked = 2026-11-09
+checked = 2026-11-10

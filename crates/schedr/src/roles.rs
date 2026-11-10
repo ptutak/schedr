@@ -42,6 +42,8 @@ use schedr_db::{Backend, Database, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::lease::{Leadership, Renewal};
 use schedr_master::metrics::MasterMetrics;
+use schedr_master::notifications::Notifications;
+use schedr_master::notifications::sender::{Backoff, Sender};
 use schedr_master::problems::{ProblemKind, Problems};
 use schedr_master::service::{Hub, LeaseLost};
 use schedr_proto::pb::master_client::MasterClient;
@@ -127,6 +129,65 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         connection_cancel_grace: config.timings.connection_job_cancel_grace,
         accept_retry: config.timings.accept_retry,
     }
+}
+
+/// The master's notifications: `[notifications]` checked, with its sender's timings.
+#[derive(Debug, Clone)]
+pub struct MasterOutbox {
+    /// `[notifications]`, header values read from the environment.
+    pub settings: std::sync::Arc<Notifications>,
+    /// The waits between deliveries of a failing notification.
+    pub backoff: Backoff,
+    /// How often the sender looks for notifications to deliver.
+    pub poll: Duration,
+}
+
+/// `[notifications]` with the values its webhooks' headers read from `env`.
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for a bad setting or a header's variable not set (the message
+/// names the key).
+pub fn master_outbox(
+    config: &Config,
+    env: &BTreeMap<String, String>,
+) -> Result<MasterOutbox, AppError> {
+    let mut settings =
+        Notifications::from_config(&config.notifications, env).map_err(AppError::BadArgument)?;
+    settings.max_body = config.limits.notification_body;
+    if let Some(path) = &config.notifications.ca_file {
+        let pem = std::fs::read(path).map_err(|e| {
+            AppError::BadArgument(format!(
+                "[notifications] ca_file: can't read `{}`: {e}",
+                path.display()
+            ))
+        })?;
+        // Checked here: the sender's client is built later, once the master serves.
+        match reqwest::Certificate::from_pem_bundle(&pem) {
+            Ok(certs) if !certs.is_empty() => {}
+            Ok(_) => {
+                return Err(AppError::BadArgument(format!(
+                    "[notifications] ca_file: `{}` holds no certificate",
+                    path.display()
+                )));
+            }
+            Err(e) => {
+                return Err(AppError::BadArgument(format!(
+                    "[notifications] ca_file: `{}` isn't PEM certificates: {e}",
+                    path.display()
+                )));
+            }
+        }
+        settings.extra_roots = Some(pem);
+    }
+    Ok(MasterOutbox {
+        settings: std::sync::Arc::new(settings),
+        backoff: Backoff {
+            first: config.timings.outbox_retry_first,
+            max: config.timings.outbox_retry_max,
+        },
+        poll: config.timings.outbox_poll,
+    })
 }
 
 /// The master's timing, from the configuration.
@@ -545,7 +606,7 @@ pub async fn listen(address: SocketAddr) -> Result<TcpListener, AppError> {
 pub async fn serve_master(
     db: Database,
     settings: Settings,
-    (tick, problems, max_event_size): (Duration, Problems, usize),
+    (tick, problems, max_event_size, outbox): (Duration, Problems, usize, MasterOutbox),
     listener: TcpListener,
     tls: Option<Tls>,
     leadership: impl Future<Output = Result<Leadership, AppError>>,
@@ -592,10 +653,12 @@ pub async fn serve_master(
         settings.max_message_size.saturating_sub(4096),
     );
     // Its writes through the lease: refused once another master took it over.
+    let sending = (leadership.fenced_db(), observed.metrics.clone());
     let mut hub = Hub::new(
         MasterCore::new(leadership.fenced_db(), settings)
             .with_metrics(observed.metrics)
-            .with_task_api(std::sync::Arc::new(task_api)),
+            .with_task_api(std::sync::Arc::new(task_api))
+            .with_notifications(outbox.settings.clone()),
     )
     .with_refresh_limit(observed.health.stall() / 2)
     .with_problems(problems);
@@ -624,6 +687,17 @@ pub async fn serve_master(
                 if leading.changed().await.is_err() {
                     break;
                 }
+            }
+        }
+    });
+    // Its HTTP client is built here, off the way to ready (loading TLS roots takes a while).
+    tokio::spawn({
+        let (hub, stop) = (hub.clone(), stop.clone());
+        async move {
+            let (db, metrics) = sending;
+            match Sender::new(db, outbox.settings, metrics, outbox.backoff) {
+                Ok(sender) => hub.run_sender(sender, outbox.poll, until(stop)).await,
+                Err(error) => tracing::error!(%error, "notifications can't be sent"),
             }
         }
     });
@@ -1466,6 +1540,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let tls = role_tls(config)?;
     check_timeouts(config)?;
+    let outbox = master_outbox(config, &std::env::vars().collect())?;
     let health = Health::new(config.timings.loop_stall_timeout);
     let ready = health.starting("master");
     let metrics = MasterMetrics::default();
@@ -1509,6 +1584,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
             config.timings.tick_interval,
             problems,
             usize::try_from(config.events.max_size).unwrap_or(usize::MAX),
+            outbox,
         ),
         listener,
         tls,

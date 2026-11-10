@@ -38,6 +38,7 @@ fn dag() -> Dag {
     Dag {
         params: None,
         resources: Vec::new(),
+        notify: Vec::new(),
         produced_by: SchedrVersion::new(0, 1),
         id: DagId::new("sync").unwrap(),
         location: DagLocation {

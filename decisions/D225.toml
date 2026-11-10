@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D225"
 step = "M4.8c2"
 also = ["assignment"]
 code = ["crates/schedr-db/src/attempts.rs::ready_instances", "crates/schedr-master/src/dispatch.rs::resource_of_cleanup"]
-checked = 2026-11-09
+checked = 2026-11-10

@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D310"
 step = "M4.9c"
 also = ["task-context"]
 code = ["crates/schedr-agent/src/jobs.rs::param_of"]
-checked = 2026-11-09
+checked = 2026-11-10

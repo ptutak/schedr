@@ -240,10 +240,14 @@ fn unknown_keys_are_errors_at_the_top_and_in_a_job() {
 }
 
 #[test]
-fn notify_isnt_available_yet() {
+fn notify_is_refused_pointing_to_a_dag_s() {
     let text = "[jobs.x]\nscript = \"run.sh\"\ninterpreter = \"bash\"\nschedule = \"@daily\"\n\
                 notify = [\"ops\"]\n";
-    assert_eq!(problem(text), "job `x`: `notify` isn't available yet");
+    assert_eq!(
+        problem(text),
+        "job `x`: `notify` isn't set on a job: notifications are a DAG's, `Dag(notify=...)` in \
+         a DAG file"
+    );
 }
 
 /// A scheduled job in `team_a` with `rest` after its keys.

@@ -11,5 +11,5 @@ The master marks the assignment and the agent fills the worker's timeout; a time
 history = "archive/PROJECT.md#D278"
 step = "M4.8f"
 also = ["configuration"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-config/src/config.rs::resource_cleanup_timeout"]

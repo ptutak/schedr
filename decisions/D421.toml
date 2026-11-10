@@ -1,0 +1,15 @@
+title = "Tasks send notifications to their channels"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`channel.send(text=..., data=...)`, `schedr.api.notify("x", text=..., data=...)`, and `schedr
+task-ctx notify x --text ... --data JSON|@file.json` for commands: through the agent, as the task
+(`POST /api/v1/notifications`, opened to tasks). The name is looked up in the task's own DAG, then
+among the server channels; dag, run and task come from the task, event is `MESSAGE`. It returns once
+queued in the outbox, not once delivered. In M4.13a.
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

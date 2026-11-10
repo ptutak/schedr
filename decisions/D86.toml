@@ -11,4 +11,4 @@ Task logs, attempts, output, cancel and retry accept `--map-index N`.
 history = "archive/PROJECT.md#D86"
 step = "M4.3d"
 code = ["crates/schedr/src/local.rs", "crates/schedr/src/user.rs::shown_task", "crates/schedr/src/cli.rs::map_index"]
-checked = 2026-11-09
+checked = 2026-11-10

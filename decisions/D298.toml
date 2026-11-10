@@ -1,7 +1,8 @@
 title = "A job's notify key is an import error until notifications exist"
 date = 2026-11-05
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 416
 topic = "scripts"
 section = "What a job says"
 summary = '''
@@ -11,4 +12,4 @@ The error says notifications are not available yet.
 history = "archive/PROJECT.md#D298"
 step = "M4.9a"
 code = ["crates/schedr-agent/src/jobs.rs::check_known"]
-checked = 2026-11-09
+checked = 2026-11-10

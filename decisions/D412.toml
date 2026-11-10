@@ -1,0 +1,16 @@
+title = "A webhook posts schedr's fixed JSON with a `text`"
+date = 2026-11-09
+by = "user"
+status = "superseded"
+superseded_by = 417
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`[notifications.webhooks.<name>]`: `url`, and headers whose values come from environment variables.
+The body is fixed, structured JSON (the event, DAG, run, failed tasks with their error summaries,
+links, UTC times, the DAG's zone) with a top-level `text`, which Slack's and Mattermost's incoming
+webhooks show. Teams, PagerDuty and Opsgenie need their own schemas: a relay (Power Automate, n8n, a
+small service) translates; formats of their own may come later.
+'''
+history = "JOURNAL.md#D412"
+step = "M4.13a"

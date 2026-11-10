@@ -14,4 +14,4 @@ stay fixed; an argument is fixed or mapped, never both.
 history = "JOURNAL.md#D407"
 step = "M4.12c"
 code = ["python/schedr/chained.py::PartialTriggerDag", "crates/schedr-master/src/validate.rs::trigger_dag_expand_problems", "crates/schedr-master/src/dispatch/chained.rs::element"]
-checked = 2026-11-09
+checked = 2026-11-10

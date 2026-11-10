@@ -1,0 +1,18 @@
+title = "A DAG's own webhooks are gated by `[notifications] dag_urls` alone"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+A `WebhookChannel`'s URL must start with one of `[notifications] dag_urls`; empty (the default), DAGs
+define none. The master posts it, from where it sits (its database, its API, the cloud metadata
+address), so a DAG file must not steer it elsewhere (SSRF). It carries no secrets (its URL is in the
+DAG file); redirects aren't followed, for any webhook. No `dag_channels` switch: the list is it.
+Checked when the DAG loads, again when a notification is queued and when it is sent: a channel no
+longer allowed is logged as an error, counted (`notifications_failed`) and dropped; an unknown server
+channel is kept until `give_up_after`.
+'''
+unverified = ["dag_channels"]
+history = "JOURNAL.md#D424"
+step = "M4.13a"

@@ -1,0 +1,16 @@
+title = "Email channels are in the configuration only"
+date = 2026-11-10
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+`type = "email"` channels with `to = [...]`, sent through `[notifications.smtp]` (host, port, tls,
+username, from; the password from `SCHEDR_CONFIG__NOTIFICATIONS__SMTP__PASSWORD` only). No
+`EmailChannel` in DAG files: code names email channels by name (`notify={"oncall": [...]}`,
+`api.notify("team-a", ...)`, `schedr task-ctx notify`). One email per notification, every recipient
+in To; plain text: the summary as the subject, the failed tasks, times and link in the body, a
+task's `data` when it sent some.
+'''
+history = "JOURNAL.md#D424"
+step = "M4.13b"

@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D38"
 step = "M3.4"
 also = ["state", "configuration"]
 code = ["crates/schedr/src/roles.rs::apply_change_notifications"]
-checked = 2026-11-09
+checked = 2026-11-10

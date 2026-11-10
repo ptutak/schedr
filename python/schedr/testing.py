@@ -94,12 +94,15 @@ class TestRunValues(RunValues):
         handles: The handles the block registered (``cleanup_handle``), in order.
         posted_events: The events the block posted (``schedr.api``), in order, as the API
             gives them (JSON).
+        notifications: The notifications the block sent (``WebhookChannel.send``,
+            ``schedr.api.notify``), in order: ``{"channel": ..., "text": ..., "data": ...}``.
     """
 
     __test__ = False  # not a test class, for pytest
 
     handles: list[object] = field(default_factory=list)
     posted_events: list[dict[str, object]] = field(default_factory=list)
+    notifications: list[dict[str, object]] = field(default_factory=list)
 
 
 @contextlib.contextmanager
@@ -191,8 +194,9 @@ def task_context(
 def _fake_api(values: TestRunValues, caller: str) -> ApiCaller:
     """``schedr.api`` in a ``task_context``.
 
-    Events are posted to ``values.posted_events`` and listed from them; another route is
-    refused, as on a master.
+    Events are posted to ``values.posted_events`` and listed from them; notifications are
+    recorded in ``values.notifications`` (the channel isn't checked: the master does that);
+    another route is refused, as on a master.
     """
     keys: dict[str, dict[str, object]] = {}
 
@@ -203,8 +207,13 @@ def _fake_api(values: TestRunValues, caller: str) -> ApiCaller:
             name, limit = asked.get("name"), int(asked.get("limit", "50"))
             listed = [e for e in reversed(values.posted_events) if name in {None, e["name"]}]
             return 200, {"events": listed[:limit]}
-        if (method, bare) != ("POST", "/api/v1/events"):
-            return 403, {"error": f"`{method} {bare}` isn't open to tasks"}
+        if (method, bare) == ("POST", "/api/v1/notifications"):
+            return _notified(values, body)
+        if (method, bare) == ("POST", "/api/v1/events"):
+            return post(body, key)
+        return 403, {"error": f"`{method} {bare}` isn't open to tasks"}
+
+    def post(body: object, key: str | None) -> tuple[int, object]:
         if not isinstance(body, dict) or not body.get("name") or not body.get("key"):
             return 400, {"error": "the event: a name and a key"}
         if key is not None and key in keys:
@@ -234,6 +243,16 @@ def _fake_api(values: TestRunValues, caller: str) -> ApiCaller:
         return 201, event
 
     return call
+
+
+def _notified(values: TestRunValues, body: object) -> tuple[int, object]:
+    """A task's own notification, recorded in ``values.notifications``."""
+    if not isinstance(body, dict) or not isinstance(body.get("channel"), str):
+        return 400, {"error": "the notification: a channel's name"}
+    values.notifications.append(
+        {"channel": body["channel"], "text": body.get("text"), "data": body.get("data")}
+    )
+    return 202, {"queued": True}
 
 
 def _doubles(connections: Mapping[str, object]) -> ConnectionOpener:

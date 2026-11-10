@@ -1,0 +1,11 @@
+title = "`[notifications] timeout`, 10 s"
+date = 2026-11-09
+by = "user"
+status = "active"
+topic = "outcomes"
+section = "Notifications"
+summary = '''
+The limit for one POST, a public key; past it the delivery counts as failed and is retried.
+'''
+history = "JOURNAL.md#D417"
+step = "M4.13a"

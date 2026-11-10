@@ -1,5 +1,141 @@
 {
   "$defs": {
+    "Body": {
+      "description": "A message body (decision 417): JSON, with values filled in when a notification is queued.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A JSON value as it is.",
+          "properties": {
+            "value": true
+          },
+          "required": [
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A placeholder's value, keeping its JSON type.",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/Ref"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A string of text parts and placeholders.",
+          "properties": {
+            "template": {
+              "items": {
+                "$ref": "#/$defs/Part"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "template"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An object of bodies.",
+          "properties": {
+            "object": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Body"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "object"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An array of bodies.",
+          "properties": {
+            "array": {
+              "items": {
+                "$ref": "#/$defs/Body"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "array"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ChannelRef": {
+      "description": "A channel: one the server configuration defines (named by a string in Python), or one the\nDAG defines itself (an object).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`[notifications.channels.<name>]`: a webhook or an email channel.",
+          "properties": {
+            "kind": {
+              "const": "server",
+              "type": "string"
+            },
+            "name": {
+              "description": "Its name in the configuration.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `WebhookChannel` of the DAG's own (decision 425).",
+          "properties": {
+            "body": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Body"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The JSON it posts; none: schedr's fixed JSON (decision 417)."
+            },
+            "kind": {
+              "const": "webhook",
+              "type": "string"
+            },
+            "name": {
+              "description": "Its name, unique among the DAG's channels.",
+              "type": "string"
+            },
+            "url": {
+              "description": "Where it posts.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "CleanupRun": {
       "description": "What a task's cleanup runs: of the same kind as the task (see archive/PROJECT.md, Per-task\ncleanup).",
       "oneOf": [
@@ -357,6 +493,75 @@
       ],
       "type": "object"
     },
+    "NotifyEntry": {
+      "additionalProperties": false,
+      "description": "One channel a DAG notifies (`notify=[...]` or `notify={channel: [...]}`).",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/ChannelRef",
+          "description": "The channel."
+        },
+        "events": {
+          "description": "The events it is told of; none: the server's default events\n(`[notifications] default_events`).",
+          "items": {
+            "$ref": "#/$defs/NotifyEvent"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channel"
+      ],
+      "type": "object"
+    },
+    "NotifyEvent": {
+      "description": "An event a channel can be told of (decision 408; `Notify` in Python, decision 409).",
+      "oneOf": [
+        {
+          "const": "RUN_FAILED",
+          "description": "A run ended `failed` (a cancel with a failure included).",
+          "type": "string"
+        },
+        {
+          "const": "TASK_FAILED",
+          "description": "A task failed after its last retry.",
+          "type": "string"
+        },
+        {
+          "const": "TASK_RETRY",
+          "description": "An attempt failed and will be retried.",
+          "type": "string"
+        },
+        {
+          "const": "RUN_CANCELLED",
+          "description": "A run was cancelled, with no failure.",
+          "type": "string"
+        },
+        {
+          "const": "RUN_SUCCEEDED",
+          "description": "A run ended `success`.",
+          "type": "string"
+        },
+        {
+          "const": "RUN_RECOVERED",
+          "description": "A run succeeded after the DAG's previous run failed.",
+          "type": "string"
+        },
+        {
+          "const": "TRIGGER_FAILING",
+          "description": "The DAG's trigger kept failing (`[triggers] failing_after`), or its generator returned.",
+          "type": "string"
+        },
+        {
+          "const": "LATE_CLEANUP_FAILED",
+          "description": "A cleanup that ran after its run had ended failed (decision 309).",
+          "type": "string"
+        }
+      ]
+    },
     "OutcomeDecl": {
       "additionalProperties": false,
       "description": "One of a task's outcomes: its name, and for a `command` task the exit code meaning it.",
@@ -404,6 +609,37 @@
       ],
       "type": "object"
     },
+    "Part": {
+      "description": "A piece of a [`Body::Template`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Text as it is.",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A placeholder's value, as text (a string as it is, anything else as its JSON).",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/Ref"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "PathElem": {
       "anyOf": [
         {
@@ -418,6 +654,112 @@
         }
       ],
       "description": "One step of a path into an output: a field or key, or a list / tuple index."
+    },
+    "PathKey": {
+      "anyOf": [
+        {
+          "description": "An index into an array.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "description": "A key of an object.",
+          "type": "string"
+        }
+      ],
+      "description": "A step of a [`Ref`]'s path."
+    },
+    "Placeholder": {
+      "description": "The values a body can use (decision 417).",
+      "oneOf": [
+        {
+          "const": "event",
+          "description": "The event's name (`RUN_FAILED`; `MESSAGE` for a task's own `send`).",
+          "type": "string"
+        },
+        {
+          "const": "dag",
+          "description": "The DAG's ID.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "The run's ID.",
+          "type": "string"
+        },
+        {
+          "const": "planned_for",
+          "description": "The run's planned time (UTC, RFC 3339), or null.",
+          "type": "string"
+        },
+        {
+          "const": "state",
+          "description": "The run's or the task's state.",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "schedr's one-line summary; a task's own `send`: its `text`.",
+          "type": "string"
+        },
+        {
+          "const": "link",
+          "description": "The link to the run in the UI (`[notifications] ui_url`), or null.",
+          "type": "string"
+        },
+        {
+          "const": "failed_tasks",
+          "description": "The failed tasks: a list of `{task, error}`.",
+          "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "The task's ID, for task events and `send`; null otherwise.",
+          "type": "string"
+        },
+        {
+          "const": "attempt",
+          "description": "The attempt's number, for task events and `send`; null otherwise.",
+          "type": "string"
+        },
+        {
+          "const": "time",
+          "description": "When the event happened (UTC, RFC 3339).",
+          "type": "string"
+        },
+        {
+          "const": "zone",
+          "description": "The DAG's time zone.",
+          "type": "string"
+        },
+        {
+          "const": "data",
+          "description": "A task's own `send`: its `data`; null in event notifications.",
+          "type": "string"
+        }
+      ]
+    },
+    "Ref": {
+      "additionalProperties": false,
+      "description": "A placeholder, and a path into its value (`data['rows']`, decision 423).",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Placeholder",
+          "description": "The placeholder."
+        },
+        "path": {
+          "description": "Keys and indexes into its value, outermost first.",
+          "items": {
+            "$ref": "#/$defs/PathKey"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
     },
     "Reference": {
       "description": "A reference to data known only at run time.",
@@ -2245,6 +2587,13 @@
         "integer",
         "null"
       ]
+    },
+    "notify": {
+      "description": "The channels it notifies, and of which events (`Dag(notify=...)`, decision 409).",
+      "items": {
+        "$ref": "#/$defs/NotifyEntry"
+      },
+      "type": "array"
     },
     "params": {
       "anyOf": [

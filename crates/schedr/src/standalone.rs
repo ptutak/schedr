@@ -35,9 +35,9 @@ use crate::app::AppError;
 use crate::node::{MasterIdentity, heartbeat_master, new_master_id, webserver_node};
 use crate::ops::{Health, Ops, ops_line, serve_ops};
 use crate::roles::{
-    LocalUi, Observed, WorkerLinks, agent_settings, check_timeouts, data_dir, docs_dir, lead,
-    listen, lock_journal, log_retention, master_settings, memory_text, no_auth_warning, role_auth,
-    run_worker, serve_api, serve_master, stop_on_signal,
+    LocalUi, MasterOutbox, Observed, WorkerLinks, agent_settings, check_timeouts, data_dir,
+    docs_dir, lead, listen, lock_journal, log_retention, master_outbox, master_settings,
+    memory_text, no_auth_warning, role_auth, run_worker, serve_api, serve_master, stop_on_signal,
 };
 use schedr_config::masked::masked;
 
@@ -86,6 +86,8 @@ pub struct Standalone {
     pub retention: LogRetention,
     /// The master's timing.
     pub master: Settings,
+    /// `[notifications]`, checked, and its sender's timings.
+    pub outbox: MasterOutbox,
     /// How often the master's loop runs.
     pub tick: Duration,
     /// The worker agent.
@@ -158,6 +160,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         retention: log_retention(config),
         log_mode: crate::roles::log_mode(config),
         master: master_settings(config),
+        outbox: master_outbox(config, env)?,
         tick: config.timings.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,
         secret_storage: crate::secret_storage::SecretPlan::new(&config.secret_storage, env)
@@ -210,6 +213,17 @@ async fn bind(setup: &Standalone) -> Result<([tokio::net::TcpListener; 4], Liste
     Ok(([grpc, http, logs, ops], addresses))
 }
 
+impl Standalone {
+    /// What the master's loop runs with: its tick, the events' limit and the notifications.
+    fn master_loop(&self) -> (Duration, usize, MasterOutbox) {
+        (
+            self.tick,
+            self.api_timings.max_event_size,
+            self.outbox.clone(),
+        )
+    }
+}
+
 /// Runs standalone until asked to stop (`shutdown` counts the requests): its worker drains
 /// first (a second request interrupts its tasks at once), then the master and the API stop,
 /// so interrupted tasks are recorded; `listening` gets the addresses once bound. A failing
@@ -238,6 +252,7 @@ pub async fn run(
     let ([grpc, http, logs, ops], addresses) = bind(&setup).await?;
     let auth = standalone_auth(&setup, addresses.http)?;
     listening(addresses);
+    let (tick, max_event_size, outbox) = setup.master_loop();
     let mut agent = setup.agent;
     agent.log_endpoint = format!("http://{}", addresses.logs);
 
@@ -283,7 +298,7 @@ pub async fn run(
         let served = Box::pin(serve_master(
             master_db,
             setup.master,
-            (setup.tick, problems, setup.api_timings.max_event_size),
+            (tick, problems, max_event_size, outbox),
             grpc,
             None,
             leadership,

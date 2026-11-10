@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any
 
 from schedr._model.ids import IdError, validate_dag_id, validate_task_id
+from schedr._model.notify import NotifyEntry
 from schedr._model.tasks import Task
 from schedr._model.timestamps import format_optional_timestamp
 from schedr._model.trigger import NoTrigger, Trigger
@@ -198,6 +199,8 @@ class Dag:
         produced_by: The schedr version producing this JSON (the installed one by default).
         groups: The task groups, outer before inner.
         params: The run parameters it takes; ``None``: none.
+        resources: Its resources.
+        notify: The channels it notifies, and of which events.
     """
 
     id: str
@@ -214,6 +217,7 @@ class Dag:
     groups: Sequence[Group] = ()
     params: DagParams | None = None
     resources: Sequence[Resource] = ()
+    notify: Sequence[NotifyEntry] = ()
 
     def __post_init__(self) -> None:
         """Validates the DAG ID, unique task IDs, edges between known tasks and the limits.
@@ -275,4 +279,6 @@ class Dag:
             result["params"] = self.params.to_json()
         if self.resources:
             result["resources"] = [r.to_json() for r in self.resources]
+        if self.notify:
+            result["notify"] = [n.to_json() for n in self.notify]
         return result

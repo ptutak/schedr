@@ -14,4 +14,4 @@ for a list known when it loads). Wait steps aren't mapped either (Q21, deferred 
 history = "JOURNAL.md#D406"
 step = "M4.12c"
 code = ["crates/schedr-master/src/validate.rs::expand_problems", "python/schedr/chained.py::partial"]
-checked = 2026-11-09
+checked = 2026-11-10

@@ -26,4 +26,5 @@ Read [Overview](01-overview.md) first; the other pages each go into one part.
 13-secrets
 14-timings
 15-protocol
+16-notifications
 ```

@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D272"
 step = "M4.8e"
 also = ["cleanup"]
 code = ["crates/schedr-ui/src/runs.rs::resource_edges", "crates/schedr-model/src/dag.rs::blocking"]
-checked = 2026-11-09
+checked = 2026-11-10
