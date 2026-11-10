@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D90"
 step = "M4.4"
 also = ["assignment", "testing-dags"]
 code = ["crates/schedr-master/src/limits.rs", "python/schedr/_build.py::hint_unmapped_per_run"]
-checked = 2026-11-09
+checked = 2026-11-10

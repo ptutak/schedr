@@ -1514,3 +1514,40 @@ fn a_chained_trigger_names_other_dags(#[case] by: Json, #[case] expected: &str) 
         [expected]
     );
 }
+
+#[test]
+fn a_tasks_memory_budget_is_its_own_processs_at_least_16_mib_and_a_hard_cap_needs_it() {
+    let with = |settings: &Json, kind: &Json| {
+        let mut one = task("extract", &json!({}));
+        for (key, value) in settings.as_object().unwrap() {
+            one["settings"][key] = value.clone();
+        }
+        for (key, value) in kind.as_object().unwrap() {
+            one[key] = value.clone();
+        }
+        problems(&json!({"tasks": [one], "edges": []}))
+    };
+    assert_eq!(
+        with(
+            &json!({"memory_bytes": 64 << 20, "hard_memory_limit": true}),
+            &json!({})
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        with(&json!({"hard_memory_limit": true}), &json!({})),
+        ["task `extract`: hard_memory_limit needs memory_bytes, the cap"]
+    );
+    assert_eq!(
+        with(&json!({"memory_bytes": 1 << 20}), &json!({})),
+        ["task `extract`: memory_bytes must be at least 16 MiB, got 1048576"]
+    );
+    let sensor = with(
+        &json!({"memory_bytes": 64 << 20}),
+        &json!({"kind": "empty"}),
+    );
+    assert!(
+        sensor[0].contains("only a task running its own process"),
+        "{sensor:?}"
+    );
+}

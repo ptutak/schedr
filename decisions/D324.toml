@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D324"
 step = "M4.11a1"
 also = ["outcomes"]
 code = ["python/schedr/_build.py", "python/schedr/runner/task.py", "python/schedr/outcomes.py::Waited"]
-checked = 2026-11-09
+checked = 2026-11-10

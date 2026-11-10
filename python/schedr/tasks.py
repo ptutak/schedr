@@ -891,6 +891,8 @@ class TaskFunction[**P, R]:
         run_if: _outcomes.RunIf | None = None,
         max_active: int | None = None,
         max_active_per_run: int | None = None,
+        memory: int | str | None = None,
+        hard_memory_limit: bool | None = None,
         secrets: SecretsArg = None,
         connections: ConnectionsArg = None,
         cleanup: Callable[..., object] | None = None,
@@ -915,6 +917,8 @@ class TaskFunction[**P, R]:
             run_if: Overrides its trigger rule.
             max_active: Overrides its limit across runs.
             max_active_per_run: Overrides its limit within a run.
+            memory: Overrides its own memory budget.
+            hard_memory_limit: Overrides whether that budget is a hard cap.
             secrets: Overrides the secrets it declares.
             connections: Overrides the connections it declares.
             cleanup: Overrides its cleanup.
@@ -939,6 +943,8 @@ class TaskFunction[**P, R]:
             run_if,
             max_active=max_active,
             max_active_per_run=max_active_per_run,
+            memory=_build.memory_size(memory, f"task `{task_id or self._task_id}`"),
+            hard_memory_limit=hard_memory_limit,
             secrets=None
             if secrets is None
             else _secrets.declared(secrets, f"task `{task_id or self._task_id}`"),
@@ -1219,6 +1225,8 @@ def task(
     run_if: _outcomes.RunIf | None = None,
     max_active: int | None = None,
     max_active_per_run: int | None = None,
+    memory: int | str | None = None,
+    hard_memory_limit: bool | None = None,
     secrets: SecretsArg = None,
     connections: ConnectionsArg = None,
     cleanup: Callable[..., object] | None = None,
@@ -1245,6 +1253,8 @@ def task(  # noqa: PLR0913 (the task's options, by keyword)
     run_if: _outcomes.RunIf | None = None,
     max_active: int | None = None,
     max_active_per_run: int | None = None,
+    memory: int | str | None = None,
+    hard_memory_limit: bool | None = None,
     secrets: SecretsArg = None,
     connections: ConnectionsArg = None,
     cleanup: Callable[..., object] | None = None,
@@ -1280,6 +1290,12 @@ def task(  # noqa: PLR0913 (the task's options, by keyword)
         max_active_per_run: At most this many of its instances running at once within one
             run (``None``: no limit), for a mapped task: ``.expand()`` over 1,000 files, 10 at
             a time.
+        memory: Its own memory budget, instead of the worker's share: bytes (``2 * GiB``) or a
+            size (``"2GiB"``, ``"512MiB"``), at least 16 MiB. The worker kills it above (its
+            attempt ends ``oom_killed``); only a worker whose memory limit holds it takes it.
+        hard_memory_limit: Also cap it hard at ``memory``: an allocation past it fails inside
+            the task (``MemoryError``) instead of the task being killed. It counts reserved
+            memory, so a program reserving a lot up front may fail; off by default.
         secrets: The secrets it reads on demand, with ``task_ctx.secret(...)``:
             ``secrets['path']['key']``, ``'path#key'``, ``'path'`` (every key) or
             ``SecretPrefix(...)`` (every secret under it, fetched when read). Secrets in its
@@ -1316,6 +1332,8 @@ def task(  # noqa: PLR0913 (the task's options, by keyword)
         run_if,
         max_active=max_active,
         max_active_per_run=max_active_per_run,
+        memory=_build.memory_size(memory, f"task `{task_id}`" if task_id else "`@task(...)`"),
+        hard_memory_limit=hard_memory_limit,
         secrets=None
         if secrets is None
         else _secrets.declared(secrets, f"task `{task_id}`" if task_id else "`@task(...)`"),

@@ -187,6 +187,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.13b | Notifications: email | done 2026-11-10 | D411, D426 |
 | M4.14 | Retention | done 2026-11-10 | D430, D431, D432, D433, D434, D435, D440 |
 | M4.15 | Per-task memory and upgrade rules | planned | D50, D436, D437, D438, D439 |
+| M4.15a (part of M4.15) | Per-task memory | done 2026-11-10 |  |
+| M4.15b (part of M4.15) | Upgrade rules completed | planned |  |
 
 ## 0.1.0: after M4.5
 

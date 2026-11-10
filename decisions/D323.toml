@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D323"
 step = "M4.11a1"
 also = ["cleanup"]
 code = ["python/schedr/sensors.py::_no_cleanup"]
-checked = 2026-11-09
+checked = 2026-11-10

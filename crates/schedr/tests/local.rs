@@ -1232,3 +1232,49 @@ with Dag("reads"):
     assert!(!out.contains("hunter22-pw"), "{out}");
     assert!(out.contains("len 11"), "{out}");
 }
+
+#[test]
+fn task_exec_caps_the_programs_data_and_runs_it_in_its_place() {
+    let python = std::env::var("SCHEDR_TEST_PYTHON").expect("SCHEDR_TEST_PYTHON");
+    let run = |megabytes: u32| {
+        Command::new(BINARY)
+            .args([
+                "task-exec",
+                "--data-limit",
+                &(256_u64 << 20).to_string(),
+                "--",
+                &python,
+            ])
+            .args([
+                "-c",
+                &format!("import os; x = bytearray({megabytes} << 20); print(os.getpid())"),
+            ])
+            .output()
+            .unwrap()
+    };
+    let within = run(64);
+    assert!(
+        within.status.success(),
+        "{}",
+        String::from_utf8_lossy(&within.stderr)
+    );
+    let over = run(512);
+    assert!(!over.status.success());
+    assert!(
+        String::from_utf8_lossy(&over.stderr).contains("MemoryError"),
+        "{over:?}"
+    );
+    // A program that isn't there: said so, exit 127.
+    let missing = Command::new(BINARY)
+        .args([
+            "task-exec",
+            "--data-limit",
+            "1000000000",
+            "--",
+            "/no/such/program",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(127));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("can't start `/no/such/program`"));
+}

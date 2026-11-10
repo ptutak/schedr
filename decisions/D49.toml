@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D49"
 step = "M4.10"
 also = ["task-processes", "cleanup", "python-api"]
 code = ["python/schedr/runner/coroutines.py::run_coroutine", "python/schedr/tasks.py::is_async"]
-checked = 2026-11-09
+checked = 2026-11-10

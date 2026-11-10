@@ -1,7 +1,7 @@
 //! Retention (decisions 430-435): what the master's retention job deletes once `[retention]` no
 //! longer keeps it, a batch per transaction (runs and outputs one DAG at a time). Never an
 //! unfinished run, nor one something unfinished reads, nor what a DAG still needs (see
-//! [`KEPT`]), unless the DAG was removed long enough ago; a removed DAG then goes with its last
+//! `KEPT`), unless the DAG was removed long enough ago; a removed DAG then goes with its last
 //! run.
 
 use jiff::Timestamp;
@@ -46,8 +46,10 @@ const HELD: &str = "r.id IN (SELECT a.chained_run_id FROM attempts a \
 const OLD: &str = "r.state IN ('success', 'failed', 'cancelled') AND r.ended_at < $1{ts}";
 
 /// Taken before a DAG's runs or versions are deleted, so a definition of it (which takes the
-/// same lock) waits, or is seen (Codex's review of M4.14). SQLite's writes are one at a time.
-const LOCK_DAG: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR UPDATE";
+/// same lock) waits, or is seen (Codex's review of M4.14). `NO KEY`: a new run of the DAG (its
+/// foreign key takes a key-share lock) doesn't wait for the batch, nor the master's loop with
+/// it. SQLite's writes are one at a time.
+const LOCK_DAG: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR NO KEY UPDATE";
 
 impl Database {
     /// The DAG of the oldest run `select` (a query over `runs r JOIN dags d` with `$1`, the

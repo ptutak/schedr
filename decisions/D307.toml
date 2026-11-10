@@ -11,5 +11,5 @@ A restarted master gives each worker a fresh lease from its start.
 history = "archive/PROJECT.md#D307"
 step = "B168"
 also = ["workers"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-agent/src/agent.rs::reconnect_cap"]

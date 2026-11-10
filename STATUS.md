@@ -7,8 +7,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M4, Native API complete.
 - **Next step:** M4.12, Runs between and over time. Done when: a parent waits on a chained run; a backfill fills missing periods oldest first
-- **Then:** M4.15, M4B.3, M4B.4, M4B.5, M4B.6.
-- **Open questions:** 0 (`DECISIONS.md`).
+- **Then:** M4.15b, M4B.3, M4B.4, M4B.5, M4B.6.
+- **Open questions:** 1 (`DECISIONS.md`).
 - **Open bugs:** 38; first: B196 (low/rare), B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B152 (low/likely) (`BUGS.md`).
 
 ## Recent
@@ -18,35 +18,37 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D399 (2026-11-09): cycles between DAGs allowed, inside a DAG refused
 - D398 (2026-11-09): a TriggerDagOperator starts only a `Chained` DAG
 - D397 (2026-11-09): a turn's messages in groups, savepoints later
+- M4.15a (2026-11-10): Per-task memory
 - M4.14 (2026-11-10): Retention
 - M4.13b (2026-11-10): Notifications: email
-- M4.13a (2026-11-10): Notifications: events, outbox, webhooks
 
 ## In progress
 
-- Order agreed with the user (2026-11-09): M4 to its end (M4.13 and M4.14 done 2026-11-10; M4.15 next, pre-accepted with decisions 436-439), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
-- For the user: decision 440 (Claude's, to be overruled): retention keeps, beyond D430's three newest runs, what catchup counts as done and what something unfinished reads; a side note raised the never-scheduled DAG, now covered.
+- Order agreed with the user (2026-11-09): M4 to its end (M4.13, M4.14 and M4.15a done 2026-11-10; M4.15b waits for Q26), then Codex's full review (F12-F14 of the scan), then a bug round (B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
+- Night of 2026-11-10 ended at M4.15b by D439: its check of the upgrade rules found one choice, Q26 (a DAG that no longer parses after a major upgrade: held as D72, or its last good version runs); the rest of the rules are built and tested.
+- For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
+- For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
 - For the user: M4.13b's review fixes changed documented behaviour (an email's recipients read when it is sent; `timeout` bounds the SMTP exchange); M4.12c's CI failed only on the undone guard.
-- Known limit of M4.14: a sensor handed a run after its outputs were already deleted gets null outputs (only when it waits past `[retention] outputs`).
+- Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
 - For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).
 - B199 (a backfill over a DST change of a sub-minute cron holds the master up; medium/rare) logged by M4.12b's review: for the bug round.
 
 ## Waiting for the user
 
-Nothing.
+- Q26: a DAG that no longer parses after a major upgrade, held (D72) or its last good version runs?
 
 ## Rules in force
 
-- Commits and pushes pre-accepted to the end of M4.15 (night of 2026-11-10); an upgrade-rule gap needing a choice stops it (D439).
+- Commits and pushes need the user's acceptance again (the night's pre-acceptance ended at M4.15's open question).
 - One review per step: Codex (security in its prompt); Grok only when Codex can't run.
-- Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`.
+- Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly; never started by hand.
 - Before stating how something behaves, read the code or run it, and say which.
 - Work from a worktree reaches main through git only; read `git diff --cached --stat` before committing (D371).
 
 ## Colleagues
 
-Codex weekly 63% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
+Codex weekly 65% used (resets Sat 14 Nov 21:47). Grok 79% of the week (confirmed 2026-11-09; resets
 Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:

@@ -29,6 +29,37 @@ pub const INVALID_DAG_EXCEPTION: &str = schedr_model::runner::INVALID_DAG_EXCEPT
 /// The exception name of the import error recorded for a path outside its root.
 pub const INVALID_PATH_EXCEPTION: &str = schedr_model::runner::INVALID_PATH_EXCEPTION;
 
+/// What is wrong with a task's own memory budget (decisions 436-438), if anything: only a
+/// task with a process of its own has one (a wait step shares its host's), at least 16 MiB,
+/// and a hard cap needs it (Codex's review of M4.15).
+fn memory_problem(task: &schedr_model::Task) -> Option<String> {
+    use schedr_model::TaskKind;
+    let settings = &task.settings;
+    let own = matches!(
+        task.kind,
+        TaskKind::Python { .. } | TaskKind::Command { .. } | TaskKind::Script { .. }
+    );
+    if !own && (settings.memory_bytes.is_some() || settings.hard_memory_limit) {
+        return Some(
+            "only a task running its own process has a memory budget (a wait step shares its \
+             host's, `[watchers] memory_budget`)"
+                .to_owned(),
+        );
+    }
+    match settings.memory_bytes {
+        Some(bytes) if bytes < MIN_TASK_MEMORY => {
+            Some(format!("memory_bytes must be at least 16 MiB, got {bytes}"))
+        }
+        None if settings.hard_memory_limit => {
+            Some("hard_memory_limit needs memory_bytes, the cap".to_owned())
+        }
+        _ => None,
+    }
+}
+
+/// The smallest task memory budget: no Python process starts in less.
+const MIN_TASK_MEMORY: u64 = 16 << 20;
+
 /// What is wrong with a DAG parsed from `root`:`path`; empty when it is valid.
 #[must_use]
 pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) -> Vec<String> {
@@ -62,6 +93,9 @@ pub fn dag_problems(dag: &Dag, root: &str, path: &str, master: SchedrVersion) ->
             if limit == Some(0) {
                 problems.push(format!("task `{}`: {name} must be at least 1", task.id));
             }
+        }
+        if let Some(problem) = memory_problem(task) {
+            problems.push(format!("task `{}`: {problem}", task.id));
         }
     }
     if let (Some(start), Some(end)) = (dag.trigger.start(), dag.trigger.end())

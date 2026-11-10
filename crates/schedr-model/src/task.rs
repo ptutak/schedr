@@ -66,6 +66,16 @@ pub struct TaskSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub max_active_per_run: Option<u32>,
+    /// Its own memory budget in bytes (`memory=`, decision 436), instead of the worker's share:
+    /// the watchdog kills it above; taken only by a worker whose pod limit, less its reserve,
+    /// holds it (decision 437). `None`: the worker's budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 16_777_216))]
+    pub memory_bytes: Option<u64>,
+    /// Also capped hard at `memory_bytes` (`hard_memory_limit=True`, decision 438): the
+    /// process's `RLIMIT_DATA`, so an allocation past it fails inside the task.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hard_memory_limit: bool,
 }
 
 /// A task's trigger rule: what its upstream edges must have done for it to run (see
@@ -121,6 +131,14 @@ const fn yes() -> bool {
     true
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if takes &T"
+)]
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl Default for TaskSettings {
     /// The settings of a task that sets nothing and has no defaults: no retries, a 5 minute
     /// retry delay, no timeout, the default queue, a 1 MiB output limit, forked from the
@@ -137,6 +155,8 @@ impl Default for TaskSettings {
             run_if: RunIf::NoneFailed,
             max_active: None,
             max_active_per_run: None,
+            memory_bytes: None,
+            hard_memory_limit: false,
         }
     }
 }

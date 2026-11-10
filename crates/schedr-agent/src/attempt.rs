@@ -160,6 +160,8 @@ pub struct AttemptSpec {
     pub connection_test: Option<String>,
     /// Set for a Python task's cleanup: the attempt's handles, for its function.
     pub cleanup_handles: Option<Vec<CleanupHandle>>,
+    /// Only its cleanup, moved here from a lost worker (`cleanup_only`).
+    pub moved_cleanup: bool,
     /// The journal its handles go to; `None` keeps them in memory only.
     pub journal: Option<crate::journal::Journal>,
     /// Told each handle, to send it on to the master; `None` keeps them here.
@@ -275,6 +277,7 @@ impl AttemptSpec {
             connection_env: BTreeMap::new(),
             connection_test: None,
             cleanup_handles: None,
+            moved_cleanup: assign.cleanup_only.is_some(),
             journal: None,
             handle_sink: None,
             api: None,
@@ -567,6 +570,79 @@ pub fn plan_at(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> Resu
             detail: format!("{} not found on this worker", file.display()),
         });
     }
+    let settings = &spec.task.settings;
+    // A cleanup must run somewhere: never turned away, it is watched at what this worker gives
+    // (Codex's review of M4.15).
+    if let (Some(own), Some(ceiling)) = (settings.memory_bytes, setup.memory.ceiling)
+        && own > ceiling
+        && !spec.moved_cleanup
+    {
+        return Err(NotRun::Rejected {
+            reason: pb::RejectReason::MemoryBudgetTooLarge,
+            detail: format!(
+                "the task asks for a memory budget of {}; this worker gives one task at most {} \
+                 (its memory limit less its reserve)",
+                crate::memory::show_size(own),
+                crate::memory::show_size(ceiling)
+            ),
+        });
+    }
+    let plan = plan_kind(spec, setup, root_dir, &file)?;
+    capped(plan, spec, setup)
+}
+
+/// `plan`'s process started through `schedr task-exec` when its task caps its memory hard
+/// (`hard_memory_limit=True`, decisions 50, 438): the limit is set before its program runs.
+fn capped(plan: Plan, spec: &AttemptSpec, setup: &WorkerSetup) -> Result<Plan, NotRun> {
+    let settings = &spec.task.settings;
+    let (true, Some(limit)) = (settings.hard_memory_limit, settings.memory_bytes) else {
+        return Ok(plan);
+    };
+    let Some(exec) = &setup.memory.task_exec else {
+        return Err(failed(
+            crate::agent::START_FAILED,
+            &"this worker can't cap a task's memory (`schedr task-exec` isn't found)",
+        ));
+    };
+    let wrap = |mut process: ProcessSpec| {
+        let program = std::mem::replace(&mut process.program, exec.clone());
+        // Its arguments are text: a path that isn't is refused, not changed (Codex's review).
+        let program = program.into_os_string().into_string().map_err(|path| {
+            failed(
+                crate::agent::START_FAILED,
+                &format!(
+                    "can't cap {}: its path isn't UTF-8",
+                    Path::new(&path).display()
+                ),
+            )
+        })?;
+        let mut args = vec![
+            "task-exec".to_owned(),
+            "--data-limit".to_owned(),
+            limit.to_string(),
+            "--".to_owned(),
+            program,
+        ];
+        args.append(&mut process.args);
+        process.args = args;
+        Ok(process)
+    };
+    Ok(match plan {
+        Plan::Python { process, request } => Plan::Python {
+            process: wrap(process)?,
+            request,
+        },
+        Plan::Command(process) => Plan::Command(wrap(process)?),
+    })
+}
+
+/// The plan of `spec`'s kind of task, `file` its DAG file.
+fn plan_kind(
+    spec: &AttemptSpec,
+    setup: &WorkerSetup,
+    root_dir: &Path,
+    file: &Path,
+) -> Result<Plan, NotRun> {
     let vars = run_vars(spec);
     let log_file = setup.log_file(&spec.attempt_id);
     let max_output_size = usize::try_from(spec.task.settings.max_output_size).unwrap_or(usize::MAX);

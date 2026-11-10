@@ -465,8 +465,9 @@ pub async fn run_python(
         .timeout
         .map(|timeout| tokio::time::Instant::from_std(started) + timeout);
     // The task's own choice: never forked (`fresh_process`), or not from the preloaded server.
+    // A hard memory cap is set by `schedr task-exec` before the runner starts: spawned too.
     let settings = &request.task.settings;
-    let forks = forks.filter(|_| !settings.fresh_process);
+    let forks = forks.filter(|_| !settings.fresh_process && !settings.hard_memory_limit);
     let preload = settings.preload;
     let stops = Some((&mut stop, deadline));
     let start = start_task_runner(

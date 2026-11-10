@@ -2807,6 +2807,8 @@ time.sleep(30)
     let (mut executor, spec, plan, dir) = attempt_with_cleanup("true", cleanup, 0);
     executor.setup.memory = crate::memory::MemoryWatch {
         budget: Some(100 << 20),
+        ceiling: None,
+        task_exec: None,
         interval: Duration::from_millis(50),
         proc_root: PathBuf::from("/proc"),
     };

@@ -15,6 +15,9 @@ KiB = 1024
 MiB = 1024 * KiB
 """One mebibyte, in bytes."""
 
+GiB = 1024 * MiB
+"""One gibibyte, in bytes."""
+
 
 class DataclassInstance(Protocol):
     """Any dataclass instance (for type checkers)."""

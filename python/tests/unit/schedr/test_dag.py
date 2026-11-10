@@ -12,6 +12,8 @@ from schedr import (
     DagHint,
     EmptyOperator,
     Every,
+    GiB,
+    MiB,
     Once,
     StepDefaults,
     chain,
@@ -347,6 +349,51 @@ def test_no_limits_leave_the_dag_json_as_it_was() -> None:
     assert set(document["tasks"][0]["settings"]) & {"max_active", "max_active_per_run"} == set()
 
 
+def test_a_tasks_own_memory_budget_and_hard_cap_reach_the_dag_json() -> None:
+    @task(memory="2GiB", hard_memory_limit=True)
+    def capped() -> int:
+        return 1
+
+    @task
+    def plain() -> int:
+        return 1
+
+    with Dag("d"):
+        capped()
+        plain.override(memory=512 * MiB)()
+        CommandOperator("dump", ["pg_dump"], memory="1024MiB")
+    settings = {t["id"]: t["settings"] for t in only_dag().to_json()["tasks"]}
+    assert (settings["capped"]["memory_bytes"], settings["capped"]["hard_memory_limit"]) == (
+        2 * GiB,
+        True,
+    )
+    assert settings["plain"]["memory_bytes"] == 512 * MiB
+    assert "hard_memory_limit" not in settings["plain"]
+    assert settings["dump"]["memory_bytes"] == GiB
+
+
+@pytest.mark.parametrize(
+    ("memory", "hard", "error", "says"),
+    [
+        ("2 GiB", None, ValueError, "isn't a size"),
+        ("2G", None, ValueError, "isn't a size"),
+        (1.5, None, TypeError, "takes bytes or a size"),
+        (True, None, TypeError, "takes bytes or a size"),
+        ("1MiB", None, ValueError, "at least 16 MiB"),
+        (None, True, ValueError, "set memory= too"),
+    ],
+)
+def test_a_memory_budget_that_isnt_one_is_an_error(
+    memory: Any, hard: bool | None, error: type[Exception], says: str
+) -> None:
+    @task
+    def one() -> int:
+        return 1
+
+    with Dag("d"), pytest.raises(error, match=says):
+        one.override(memory=memory, hard_memory_limit=hard)()
+
+
 @pytest.mark.parametrize("limit", ["max_active", "max_active_per_run"])
 def test_a_task_limit_below_one_is_an_error(limit: str) -> None:
     @task
@@ -382,3 +429,32 @@ def test_max_active_per_run_on_an_unmapped_task_is_hinted_unless_a_default() -> 
             mapped.expand(n=[1, 2])
     with pytest.warns(DagHint, match="task `cmd`"), Dag("f"):
         CommandOperator("cmd", "true", max_active_per_run=1)
+
+
+def test_a_resource_s_cleanup_has_its_setup_s_memory_a_sensor_none() -> None:
+    from schedr import resource, sensor  # noqa: PLC0415 (only this test)
+
+    @resource(memory="64MiB", hard_memory_limit=True)
+    def area() -> int:
+        return 1
+
+    @area.cleanup
+    def drop(value: int) -> None:
+        del value
+
+    @task
+    def use(a: int) -> int:
+        return a
+
+    with Dag("d"):
+        use(area())
+    settings = {t["id"]: t["settings"] for t in only_dag().to_json()["tasks"]}
+    assert settings["area.cleanup"]["memory_bytes"] == 64 * MiB
+    assert settings["area.cleanup"]["hard_memory_limit"] is True
+
+    @sensor
+    async def ready() -> bool:
+        return True
+
+    with Dag("e"), pytest.raises(TypeError, match="no memory budget of its own"):
+        ready.override(memory="64MiB")()

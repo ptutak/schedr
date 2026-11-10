@@ -169,6 +169,7 @@ pub fn test_spec(
         connection_env: std::collections::BTreeMap::new(),
         connection_test: Some(name.to_owned()),
         cleanup_handles: None,
+        moved_cleanup: false,
         journal: None,
         handle_sink: None,
         api: None,

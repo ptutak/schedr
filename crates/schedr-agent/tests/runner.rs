@@ -390,6 +390,8 @@ async fn a_file_whose_import_takes_too_much_memory_is_an_import_error_and_parsin
     .unwrap();
     let memory = schedr_agent::memory::MemoryWatch {
         budget: Some(100 << 20),
+        ceiling: None,
+        task_exec: None,
         interval: Duration::from_millis(100),
         ..schedr_agent::memory::MemoryWatch::default()
     };

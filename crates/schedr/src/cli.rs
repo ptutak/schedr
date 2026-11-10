@@ -164,6 +164,17 @@ pub enum Command {
         #[command(subcommand)]
         command: DagCtxCommand,
     },
+    /// Internal, started by a worker: caps the process's data (`RLIMIT_DATA`) and runs the
+    /// task's program in its place (`hard_memory_limit=True`, decisions 50, 438).
+    #[command(hide = true)]
+    TaskExec {
+        /// The cap, in bytes.
+        #[arg(long)]
+        data_limit: u64,
+        /// The program and its arguments, after `--`.
+        #[arg(last = true, required = true, value_parser = clap::value_parser!(std::ffi::OsString))]
+        command: Vec<std::ffi::OsString>,
+    },
 }
 
 /// `schedr db ...`.
@@ -792,6 +803,7 @@ impl Command {
             | Self::Resources { .. }
             | Self::Connections { .. }
             | Self::DagCtx { .. }
+            | Self::TaskExec { .. }
             | Self::TaskCtx { .. } => None,
         }
     }
@@ -818,6 +830,7 @@ impl Command {
             Self::Connections { .. } => "connections",
             Self::TaskCtx { .. } => "task-ctx",
             Self::DagCtx { .. } => "dag-ctx",
+            Self::TaskExec { .. } => "task-exec",
         }
     }
 }

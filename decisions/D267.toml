@@ -11,4 +11,4 @@ A different cleanup requires a different resource.
 history = "archive/PROJECT.md#D267"
 step = "M4.8c1"
 code = ["python/schedr/resources.py::Resource"]
-checked = 2026-11-09
+checked = 2026-11-10

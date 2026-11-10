@@ -171,6 +171,8 @@ async fn the_dag(dir: &Path) -> Dag {
         process,
         memory: schedr_agent::memory::MemoryWatch {
             budget: None,
+            ceiling: None,
+            task_exec: None,
             interval: Duration::from_secs(1),
             proc_root: PathBuf::from("/proc"),
         },
@@ -727,6 +729,8 @@ async fn parsed_ids(dir: &Path, file: &str, forks: Option<ForkServers>) -> Vec<S
         process,
         memory: schedr_agent::memory::MemoryWatch {
             budget: None,
+            ceiling: None,
+            task_exec: None,
             interval: Duration::from_secs(1),
             proc_root: PathBuf::from("/proc"),
         },
@@ -802,6 +806,8 @@ async fn a_forked_parse_dropped_unfinished_is_killed() {
         ),
         memory: schedr_agent::memory::MemoryWatch {
             budget: None,
+            ceiling: None,
+            task_exec: None,
             interval: Duration::from_secs(1),
             proc_root: PathBuf::from("/proc"),
         },

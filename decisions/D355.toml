@@ -10,5 +10,5 @@ Both return the moment they end, and retries of `delay` wait only the remaining 
 '''
 history = "archive/PROJECT.md#D355"
 step = "M4.11g"
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["python/schedr/sensors.py::delay", "python/schedr/sensors.py::until"]

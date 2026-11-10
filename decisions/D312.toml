@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D312"
 step = "M4.9c"
 also = ["cleanup"]
 code = ["python/schedr/operators.py::_refuse_for_resource"]
-checked = 2026-11-09
+checked = 2026-11-10

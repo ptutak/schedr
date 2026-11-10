@@ -27,7 +27,7 @@ use schedr_agent::fork::{ForkConfig, ForkServers};
 use schedr_agent::journal::Journal;
 use schedr_agent::logs::LogEndpoint;
 use schedr_agent::memory::{
-    MIN_BUDGET, MemoryWatch, Reserve, WORKER_RESERVE, budget, cgroup_limit, show_size,
+    MIN_BUDGET, MemoryWatch, Reserve, WORKER_RESERVE, budget, ceiling, cgroup_limit, show_size,
 };
 use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::parse::ParseLimits;
@@ -429,6 +429,9 @@ pub fn memory_watch(config: &Config, limit: Option<u64>, default_reserve: Reserv
             config.worker.slots,
             reserve,
         ),
+        ceiling: limit.map(|limit| ceiling(limit, reserve)),
+        // The binary running the agent: `schedr task-exec` (decision 50).
+        task_exec: std::env::current_exe().ok(),
         interval: config.timings.memory_check_interval,
         ..MemoryWatch::default()
     }

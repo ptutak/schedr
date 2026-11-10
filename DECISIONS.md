@@ -5,7 +5,9 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ## Open questions
 
-None.
+| # | Asked | Topic | Question | Proposal |
+|---|---|---|---|---|
+| Q26 | 2026-11-10 | deployment | A DAG that no longer parses after a major upgrade: held, or its last good version runs? | Found by M4.15's check of the upgrade rules (D439). archive/PROJECT.md (Upgrades and compatibility) says that across a major upgrade a DAG whose file no longer parses keeps running its last good version, the error shown ("doesn't parse with schedr 2.0"), as the code didn't change, schedr did. D72 (later, the user's) holds every DAG of a file with a non-transient error: no new runs, manual triggers refused, running runs go on. Built is D72's. Options: (A) keep D72 for upgrades too (a hold says why; the user fixes the DAG or rolls back); (B) an import error under a newer schedr, the same code having parsed under the older one, keeps the older parse in use (its version runs on workers still able to run it, a warning shown), D72 for any other error. |
 
 ## Deferred questions
 

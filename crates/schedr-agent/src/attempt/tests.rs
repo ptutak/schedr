@@ -907,3 +907,59 @@ fn a_wait_step_s_first_start_is_the_masters_or_now_on_its_first_try() {
     let task = AttemptSpec::from_assign(&assign(&python_task()), None).unwrap();
     assert_eq!(task.run.first_started, None, "a task has none");
 }
+
+#[test]
+fn a_task_over_what_this_worker_gives_one_is_rejected_a_capped_one_starts_through_task_exec() {
+    let (_dir, mut setup) = setup();
+    setup.memory.ceiling = Some(1 << 30);
+    let mut asking = command_task(
+        &json!({"argv": [[{"text": "echo"}], [{"text": "hi"}]]}),
+        &json!({}),
+    );
+    asking["settings"]["memory_bytes"] = json!(2_u64 << 30);
+    let spec = AttemptSpec::from_assign(&assign(&asking), None).unwrap();
+    let Err(NotRun::Rejected { reason, detail }) = plan(&spec, &setup) else {
+        panic!("rejected")
+    };
+    assert_eq!(reason, pb::RejectReason::MemoryBudgetTooLarge);
+    assert!(
+        detail.contains("of 2 GiB") && detail.contains("at most 1 GiB"),
+        "{detail}"
+    );
+
+    // Within it, capped: `schedr task-exec` sets the limit, then runs the command.
+    asking["settings"]["memory_bytes"] = json!(512_u64 << 20);
+    asking["settings"]["hard_memory_limit"] = json!(true);
+    let spec = AttemptSpec::from_assign(&assign(&asking), None).unwrap();
+    let Err(NotRun::Failed { message, .. }) = plan(&spec, &setup) else {
+        panic!("without schedr to start it, it fails")
+    };
+    assert!(message.contains("can't cap a task's memory"), "{message}");
+    setup.memory.task_exec = Some(PathBuf::from("/usr/bin/schedr"));
+    let Ok(Plan::Command(process)) = plan(&spec, &setup) else {
+        panic!("a command")
+    };
+    assert_eq!(process.program, PathBuf::from("/usr/bin/schedr"));
+    assert_eq!(
+        process.args,
+        ["task-exec", "--data-limit", "536870912", "--", "echo", "hi"]
+    );
+    // A Python task's runner the same.
+    let mut python = python_task();
+    python["settings"]["memory_bytes"] = json!(512_u64 << 20);
+    python["settings"]["hard_memory_limit"] = json!(true);
+    let spec = AttemptSpec::from_assign(&assign(&python), None).unwrap();
+    let Ok(Plan::Python { process, .. }) = plan(&spec, &setup) else {
+        panic!("a Python task")
+    };
+    assert_eq!(
+        process.args[..5],
+        [
+            "task-exec",
+            "--data-limit",
+            "536870912",
+            "--",
+            "/usr/bin/python3"
+        ]
+    );
+}

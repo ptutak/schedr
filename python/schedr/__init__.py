@@ -41,7 +41,7 @@ from schedr.run_of import RunOf, RunResult, wait_for
 from schedr.sensors import NOT_YET, NotYet, SensorFunction, sensor
 from schedr.tasks import Chosen, Mapped, Output, Task, branch, chain, on, task
 from schedr.triggers import DAILY, HOURLY, MONTHLY, WEEKLY, YEARLY, Cron, Every, Once, Trigger
-from schedr.types import KiB, MiB
+from schedr.types import GiB, KiB, MiB
 
 __all__ = [
     "DAILY",
@@ -70,6 +70,7 @@ __all__ = [
     "EventTrigger",
     "Every",
     "Failed",
+    "GiB",
     "Group",
     "KiB",
     "Mapped",

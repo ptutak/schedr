@@ -11,4 +11,4 @@ Outside a parse, `ScriptOperator` only records its reference.
 history = "archive/PROJECT.md#D306"
 step = "M4.9b"
 code = ["python/schedr/operators.py::_declaration"]
-checked = 2026-11-09
+checked = 2026-11-10

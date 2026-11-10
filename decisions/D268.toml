@@ -10,5 +10,5 @@ The method works on a setup, its override and `Resource(name)`.
 '''
 history = "archive/PROJECT.md#D268"
 step = "M4.8c1"
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["python/schedr/resources.py::cleanup"]

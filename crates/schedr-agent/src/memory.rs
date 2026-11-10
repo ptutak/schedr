@@ -5,9 +5,11 @@
 //!
 //! - **The limit** is the smallest cgroup v2 `memory.max` from the agent's own cgroup up to
 //!   the root (`/proc/self/cgroup`), so it is found in a pod and on a host alike. None found
-//!   (`max`, cgroup v1): nothing is killed, peak memory is still measured. No `/proc`:
-//!   nothing is measured and nothing is killed.
-//! - **The budget** per task is `[worker] memory_budget`, else (limit − 10 %) ÷ slots.
+//!   (`max`, cgroup v1): no task is killed but one asking for its own budget, peak memory is
+//!   still measured. No `/proc`: nothing is measured and nothing is killed.
+//! - **The budget** per task is its own (`memory=`, decision 436), else `[worker]
+//!   memory_budget`, else (limit − 10 %) ÷ slots. A task asking for more than the limit less
+//!   the reserve is turned away (decision 437); its cleanup, moved here, gets at most that.
 //! - **A task's memory** is the PSS (`/proc/<pid>/smaps_rollup`) of every process in its
 //!   process group (what SIGTERM and SIGKILL reach), RSS where PSS can't be read: PSS splits
 //!   shared pages between the processes sharing them, so a tree isn't counted many times. Not
@@ -57,6 +59,12 @@ pub const STANDALONE_RESERVE: Reserve = Reserve::Percent(25);
 pub struct MemoryWatch {
     /// Each task's budget; `None`: measured, never killed.
     pub budget: Option<u64>,
+    /// The most one task may ask for (`memory=`, decision 437): the limit less the reserve;
+    /// `None` without a limit (any is taken).
+    pub ceiling: Option<u64>,
+    /// `schedr` itself, for `schedr task-exec` (a hard memory cap, decision 50); `None`:
+    /// this worker can't cap a task.
+    pub task_exec: Option<PathBuf>,
     /// How often a task's memory is sampled.
     pub interval: Duration,
     /// Where `/proc` is (a fake directory in tests).
@@ -68,8 +76,23 @@ impl Default for MemoryWatch {
     fn default() -> Self {
         Self {
             budget: None,
+            ceiling: None,
+            task_exec: None,
             interval: Duration::from_secs(1),
             proc_root: PathBuf::from("/proc"),
+        }
+    }
+}
+
+impl MemoryWatch {
+    /// This watch for a task asking for its own budget (`memory=`, decision 436), at most the
+    /// ceiling: a moved cleanup, never turned away, gets what this worker can give.
+    #[must_use]
+    pub fn for_task(&self, own: Option<u64>) -> Self {
+        let own = own.map(|own| self.ceiling.map_or(own, |ceiling| own.min(ceiling)));
+        Self {
+            budget: own.or(self.budget),
+            ..self.clone()
         }
     }
 }
@@ -113,6 +136,16 @@ pub fn cgroup_limit(proc_root: &Path, cgroup_root: &Path) -> io::Result<Option<u
     }
 }
 
+/// The most one task may take of `limit`: what `reserve` leaves (decision 437).
+#[must_use]
+pub fn ceiling(limit: u64, reserve: Reserve) -> u64 {
+    let kept = match reserve {
+        Reserve::Percent(percent) => limit / 100 * u64::from(percent),
+        Reserve::Bytes(bytes) => bytes,
+    };
+    limit.saturating_sub(kept)
+}
+
 /// Each task's budget: `configured`, else (`limit` − `reserve`) ÷ `slots`; `None` without
 /// either.
 #[must_use]
@@ -122,14 +155,7 @@ pub fn budget(
     slots: u32,
     reserve: Reserve,
 ) -> Option<u64> {
-    configured.or_else(|| {
-        let limit = limit?;
-        let kept = match reserve {
-            Reserve::Percent(percent) => limit / 100 * u64::from(percent),
-            Reserve::Bytes(bytes) => bytes,
-        };
-        Some(limit.saturating_sub(kept) / u64::from(slots.max(1)))
-    })
+    configured.or_else(|| Some(ceiling(limit?, reserve) / u64::from(slots.max(1))))
 }
 
 /// The memory of the processes in group `pgid`, in bytes (PSS, else RSS where

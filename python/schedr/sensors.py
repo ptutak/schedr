@@ -272,6 +272,11 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             raise TypeError(
                 f"@sensor `{task_id}`: `timeout` limits a task's work; a wait step has `max_wait`"
             )
+        if options.memory is not None or options.hard_memory_limit is not None:
+            raise TypeError(
+                f"@sensor `{task_id}`: a wait step has no memory budget of its own (it shares "
+                "its host's, `[watchers] memory_budget`)"
+            )
         made = SensorFunction(
             self._fn, task_id, options, self._every, self._wait_for, self._call_timeout_ms
         )

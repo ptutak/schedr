@@ -11,4 +11,4 @@ Declare command and script cleanups with `cluster.cleanup_command([...])` and
 history = "archive/PROJECT.md#D271"
 step = "M4.9c"
 code = ["python/schedr/resources.py::cleanup_command", "python/schedr/resources.py::cleanup_script"]
-checked = 2026-11-09
+checked = 2026-11-10

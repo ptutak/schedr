@@ -40,6 +40,37 @@ it is always a new process, and never forked. The same two arguments are on `.ov
 and `StepDefaults(...)`, and the task's own argument wins. What the worker does with them is
 [The fork server](../03-guide/05-workers.md#the-fork-server).
 
+## Memory
+
+Set `memory=` on `@task`, `CommandOperator`, `ScriptOperator` or `@resource` to give
+the task its own memory budget instead of the worker's share. Give bytes, such as
+`2 * GiB`, or a size string such as `"2GiB"`, `"512MiB"`, `"1024KiB"` or
+`"20000000B"`. The budget must be at least 16 MiB.
+
+```python
+from schedr import task
+
+@task(memory="2GiB", hard_memory_limit=True)
+def transform() -> None:
+    ...
+```
+
+The worker's watchdog kills the task above its budget: the attempt ends `oom_killed`
+with `MemoryBudgetExceeded`. A worker takes the task only if its memory limit less its
+reserve can hold the budget. Otherwise the task waits for a suitable worker, with a
+reason saying that no worker has enough memory.
+
+`hard_memory_limit=True` also sets `RLIMIT_DATA` at the budget; it requires `memory=`.
+An allocation past the cap fails inside the task instead of causing a kill: Python raises
+`MemoryError`, while `malloc` fails in other programs. The cap counts reserved memory, so
+a program that reserves a lot up front, such as the JVM or Go, may fail. A capped Python
+task starts in a fresh process and is never forked, so it takes a little longer to start.
+
+A resource's cleanup gets its setup's budget and cap. A wait step (`@sensor` or
+`wait_for`) has no budget of its own: it shares its host's `[watchers] memory_budget`.
+Memory options on a wait step are refused when the DAG loads. See
+[Workers: Memory](../03-guide/05-workers.md#memory) for how the worker enforces budgets.
+
 ## Async tasks
 
 Use `async def` for concurrent waits inside one attempt, for example several HTTP calls

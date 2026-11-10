@@ -12,5 +12,5 @@ process starts: the attempt ends `timed_out` and its connection files are remove
 history = "archive/PROJECT.md#D213"
 step = "B160"
 also = ["assignment", "secrets", "connections"]
-checked = 2026-11-09
+checked = 2026-11-10
 code = ["crates/schedr-agent/src/launch.rs::deadline"]

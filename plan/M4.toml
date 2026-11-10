@@ -950,3 +950,24 @@ done_when = '''
 a task over its own budget is killed; a rolling upgrade keeps old-parse tasks on old workers
 '''
 status = "planned"
+
+[[steps]]
+id = "M4.15a"
+title = "Per-task memory"
+scope = '''
+(decisions 50, 436-438): `memory=` and `hard_memory_limit=` on tasks, operators and resources; the worker's watch with the task's budget, a budget over its limit less its reserve turned away to another worker; the hard cap (`RLIMIT_DATA`) through `schedr task-exec`
+'''
+done_when = "a task over its own budget is killed; a capped one fails inside with MemoryError"
+status = "done"
+done = 2026-11-10
+part_of = "M4.15"
+
+[[steps]]
+id = "M4.15b"
+title = "Upgrade rules completed"
+scope = '''
+the upgrade rules checked against what M2 built (D439): version gating, parse jobs per schedr version, the newer parse taking over and `schedr dags check` are built and tested; open: a DAG that no longer parses after a major upgrade (Q26: held as D72, or its last good version runs)
+'''
+done_when = "Q26 decided and built; a rolling upgrade keeps old-parse tasks on old workers"
+status = "planned"
+part_of = "M4.15"

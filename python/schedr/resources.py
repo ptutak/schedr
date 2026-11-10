@@ -47,6 +47,8 @@ class ResourceOptions(TypedDict, total=False):
     run_if: _outcomes.RunIf | None
     max_active: int | None
     max_active_per_run: int | None
+    memory: int | str | None
+    hard_memory_limit: bool | None
     secrets: SecretsArg
     connections: ConnectionsArg
     cleanup: Callable[..., object] | None
@@ -344,6 +346,9 @@ class _Declared:
             # Forgotten, it would surface only when the cleanup runs (decision 226).
             secrets=tuple(dict.fromkeys((*made.secrets, *declared.secrets))),
             connections=tuple(dict.fromkeys((*made.connections, *declared.connections))),
+            # Its setup's memory budget and cap: the same resource (Codex's review of M4.15).
+            memory=made.settings.memory_bytes,
+            hard_memory_limit=made.settings.hard_memory_limit,
         )
         if isinstance(declared.run, _Command | _Script):
             where = f"task `{task_id}`"

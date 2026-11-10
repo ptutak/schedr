@@ -751,7 +751,7 @@ impl ProcessExecutor {
             secrets,
             handles,
             started,
-            spawned,
+            spawned: shared_spawned,
         } = shared;
         let limits = Limits {
             timeout,
@@ -760,18 +760,18 @@ impl ProcessExecutor {
             poll: self.setup.timeouts.stop_poll,
         };
         let seen = SharedSeen::default();
+        let memory = self.setup.memory.for_task(spec.task.settings.memory_bytes);
         // The watchdog's kill is one more reason to stop, in the same channel.
         let oom = stop.sender();
         // Declared before the watch, so it is dropped after it on any path (locals go in
         // reverse order), a dropped attempt included.
         let mut hold = None;
         let mut watching = None;
-        let shared_spawned = spawned;
         let spawned = |pid, forked| {
             started.store(true, Ordering::SeqCst);
             // The task's process leads its own group; watched from its first moment.
             watching = Some(watch_group(
-                self.setup.memory.clone(),
+                memory.clone(),
                 pid,
                 seen.clone(),
                 oom,
@@ -850,7 +850,7 @@ impl ProcessExecutor {
             with_resource_value(&mut finished, outcome);
         }
         let seen = *seen.lock().unwrap_or_else(PoisonError::into_inner);
-        with_memory(&mut finished, seen, self.setup.memory.budget);
+        with_memory(&mut finished, seen, memory.budget);
         finished
     }
 

@@ -2345,3 +2345,43 @@ async fn retention_deletes_old_events_and_decided_commands_on_postgres() {
     assert_eq!(db.delete_old_events(cut, 100).await.unwrap(), 2);
     assert_eq!(db.delete_old_commands(cut, 100).await.unwrap(), 1);
 }
+
+#[tokio::test]
+async fn retentions_lock_on_a_dag_lets_its_new_runs_in() {
+    let (db, version) = with_dag().await;
+    let schedr_db::database::Pool::Postgres(pool) = db.pool() else {
+        unreachable!()
+    };
+    // The lock a retention batch holds (and a definition takes) on the DAG's row.
+    let mut batch = pool.begin().await.unwrap();
+    sqlx::query("SELECT dag_id FROM dags WHERE dag_id = 'sync' FOR NO KEY UPDATE")
+        .execute(&mut *batch)
+        .await
+        .unwrap();
+    let created = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        db.insert_run(&run(&version, RunKind::Manual, RunState::Queued, NOW)),
+    )
+    .await
+    .expect("a new run doesn't wait for the batch");
+    assert!(created.unwrap().is_some());
+    batch.rollback().await.unwrap();
+    // What `FOR UPDATE` did instead: the new run waits for the whole batch.
+    let mut batch = pool.begin().await.unwrap();
+    sqlx::query("SELECT dag_id FROM dags WHERE dag_id = 'sync' FOR UPDATE")
+        .execute(&mut *batch)
+        .await
+        .unwrap();
+    let held = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        db.insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Queued,
+            "2026-10-21T09:00:00Z",
+        )),
+    )
+    .await;
+    assert!(held.is_err(), "it waits");
+    batch.rollback().await.unwrap();
+}

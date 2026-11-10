@@ -3291,3 +3291,48 @@ with Dag("kept"):
     std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(ids(), Some(vec![second]), "the newest stays");
 }
+
+#[test]
+fn a_task_over_its_own_memory_budget_is_killed_a_capped_one_fails_inside() {
+    let dag = r#"
+import time
+from schedr import Dag, task
+
+@task(memory="64MiB")
+def greedy() -> None:
+    held = bytearray(400 << 20)
+    time.sleep(10)
+
+@task(memory="64MiB", hard_memory_limit=True)
+def capped() -> None:
+    bytearray(400 << 20)
+
+with Dag("greedy"):
+    greedy()
+
+with Dag("capped"):
+    capped()
+"#;
+    let standalone = Standalone::start(&[("memory.py", dag)], None);
+    standalone.wait("the DAGs", || standalone.dag_ids() == ["capped", "greedy"]);
+    let attempt = |run: &str, task: &str| {
+        standalone
+            .get(&format!("/api/v1/runs/{run}/tasks/{task}/attempts"))
+            .unwrap()["attempts"][0]
+            .clone()
+    };
+    let greedy = standalone.trigger("greedy");
+    standalone.wait_for_state(&greedy, "failed");
+    let killed = attempt(&greedy, "greedy");
+    assert_eq!(killed["status"], "oom_killed", "{killed}");
+    assert!(
+        killed.to_string().contains("exceeded memory budget 64 MiB"),
+        "{killed}"
+    );
+
+    let capped = standalone.trigger("capped");
+    standalone.wait_for_state(&capped, "failed");
+    let failed = attempt(&capped, "capped");
+    assert_eq!(failed["status"], "failed", "{failed}");
+    assert!(failed.to_string().contains("MemoryError"), "{failed}");
+}

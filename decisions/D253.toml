@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D253"
 step = "M4.8b3"
 also = ["workers", "protocol"]
 code = ["crates/schedr-agent/src/attempt.rs::CleanupGate"]
-checked = 2026-11-09
+checked = 2026-11-10

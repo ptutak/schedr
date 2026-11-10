@@ -541,9 +541,9 @@ fires, it kills everything in the container, the agent included. So the agent en
 **budgets** itself for task and parse processes and watcher hosts:
 
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
-  budget is `[worker] memory_budget`, else (limit − 10 %) ÷ slots. The parse runner gets the
-  same budget for each file process. Parsing is separate from task slots, so concurrent
-  parsers can together exceed the pod limit; see [Parsing capacity](06-parsing.md#imports-and-parsing-capacity).
+  budget is its own `memory=`, else `[worker] memory_budget`, else (limit − reserve) ÷ slots.
+  The parse runner gets the worker's budget for each file process. Parsing is separate from
+  task slots, so concurrent parsers can together exceed the pod limit; see [Parsing capacity](06-parsing.md#imports-and-parsing-capacity).
 - Every [second](14-timings.md#fixed-timings) the agent measures each task's process group
   (PSS, so shared pages aren't counted twice). A spawned task uses resident set size (RSS)
   for a process whose PSS can't be read. A forked task shares pages with its fork server, so
@@ -552,9 +552,20 @@ fires, it kills everything in the container, the agent included. So the agent en
   A zombie (a child not yet reaped) holds no memory and counts as nothing.
 - A group over its budget gets **SIGKILL at once**: a spike can't wait for a grace period.
   The attempt ends `oom_killed` (using a retry), with "exceeded memory budget … (… used)".
-- With no limit found (cgroup v1, a Linux laptop), memory is measured but never limited.
+- With no limit found (cgroup v1, a Linux laptop), the worker accepts any task budget and
+  enforces its own `memory=` if set. Otherwise memory is measured but not limited.
 - Without `/proc` (macOS) there is no cgroup limit and a task's memory can't be read, so the
   watchdog neither measures nor kills.
+
+A task's own budget replaces the worker's share. A worker rejects a task whose budget exceeds
+its ceiling, the memory limit less the reserve, so another worker can take it. If none can,
+the task waits with a reason saying so. A cleanup moved to another worker is never turned away
+for its budget; its watchdog budget is at most that worker's ceiling.
+
+For `hard_memory_limit=True`, the worker starts the internal `schedr task-exec`, which sets
+`RLIMIT_DATA` and runs the task's program in its place. It remains the same process and process
+group, with the same descriptors. See [Task memory](../02-dags/02-tasks.md#memory) for the
+allocation behavior and the cost of starting a capped Python task.
 
 Task process attempts report their peak memory, shown in the API, and their `start_method` once
 `Started` has been stored. `usage`, stored with the result, is separate. For a forked

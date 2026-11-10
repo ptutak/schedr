@@ -142,6 +142,8 @@ class TaskOptions:
         max_active_per_run: The same within one run.
         secrets: The secrets it declares (``secrets=``); a task's own, never inherited.
         connections: The connections it opens (``connections=``, decision 179), by name.
+        memory: Its own memory budget in bytes (``memory=``, decision 436).
+        hard_memory_limit: Also capped hard at ``memory`` (decision 438).
     """
 
     retries: int | None = None
@@ -162,6 +164,8 @@ class TaskOptions:
     cleanup_anywhere: bool | None = None
     uses: tuple[object, ...] | None = None
     max_wait: timedelta | None = None
+    memory: int | None = None
+    hard_memory_limit: bool | None = None
 
     def over(self, base: TaskOptions) -> TaskOptions:
         """These options, falling back to ``base`` where not set.
@@ -207,6 +211,10 @@ class TaskOptions:
                 base.cleanup_anywhere if self.cleanup_anywhere is None else self.cleanup_anywhere
             ),
             uses=base.uses if self.uses is None else self.uses,
+            memory=base.memory if self.memory is None else self.memory,
+            hard_memory_limit=(
+                base.hard_memory_limit if self.hard_memory_limit is None else self.hard_memory_limit
+            ),
         )
 
     def cleanup_set(self) -> str | None:
@@ -287,7 +295,47 @@ class TaskOptions:
             run_if=defaults.run_if if self.run_if is None else self.run_if.value,
             max_active=self.max_active,
             max_active_per_run=self.max_active_per_run,
+            memory_bytes=self.memory,
+            hard_memory_limit=bool(self.hard_memory_limit),
         )
+
+
+_SIZE_UNITS = {"B": 1, "KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30}
+
+
+def memory_size(value: int | str | None, where: str) -> int | None:
+    """A ``memory=`` value in bytes.
+
+    Bytes (``2 * GiB``) or a size as the configuration writes one (``"2GiB"``, ``"512MiB"``,
+    ``"1024KiB"``, ``"20000000B"``).
+
+    Args:
+        value: The value given; ``None`` when not set.
+        where: Where it was given, for the message.
+
+    Returns:
+        The bytes, or ``None``.
+
+    Raises:
+        TypeError: For a value that is neither.
+        ValueError: For a string that isn't a size.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        raise TypeError(
+            f'{where}: memory= takes bytes or a size such as "2GiB", got {type(value).__name__}'
+        )
+    if isinstance(value, int):
+        return value
+    digits = len(value) - len(value.lstrip("0123456789"))
+    unit = _SIZE_UNITS.get(value[digits:])
+    if digits == 0 or unit is None:
+        raise ValueError(
+            f"{where}: memory={value!r} isn't a size: a number and B, KiB, MiB or GiB, "
+            'such as "2GiB"'
+        )
+    return int(value[:digits]) * unit
 
 
 def hint_unmapped_per_run(options: TaskOptions, task_id: str, stacklevel: int) -> None:

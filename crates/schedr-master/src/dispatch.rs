@@ -2949,8 +2949,10 @@ impl Dispatcher {
             inputs_json: if external { Vec::new() } else { inputs },
             inputs_external: external,
             cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),
-            memory_budget_bytes: 0,
-            setrlimit: false,
+            // The task's own budget and cap (decisions 436, 438); the agent reads them from the
+            // task too.
+            memory_budget_bytes: task.and_then(|t| t.settings.memory_bytes).unwrap_or(0),
+            setrlimit: task.is_some_and(|t| t.settings.hard_memory_limit),
             upstream_outcomes: outcomes.into_iter().collect(),
             // Only what the task declares (decision 179): the agent serves no other, and a
             // root's whole registry could outgrow the worker's 4 MiB message.

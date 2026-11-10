@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D79"
 step = "M4.3b"
 also = ["serialization"]
 code = ["crates/schedr-model/src/task.rs", "python/schedr/_model/tasks.py::ExpandProduct", "crates/schedr-master/src/mapping.rs::coordinates"]
-checked = 2026-11-09
+checked = 2026-11-10

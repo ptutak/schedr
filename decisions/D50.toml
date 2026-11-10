@@ -5,9 +5,11 @@ status = "active"
 topic = "workers"
 section = "Memory and environment"
 summary = '''
-Planned (M4.15), not built: an internal `schedr task-exec` sets the data limit before executing a
-limited command; a fork-server child sets its own limit before running user code. Until then the
-`setrlimit` flag in the protocol is always false.
+An internal `schedr task-exec --data-limit N -- <program>` sets the data limit (`RLIMIT_DATA`,
+D438) on its own process and executes the task's program in its place (built in M4.15a). A capped
+Python task is spawned through it, never forked: a fork-server child setting its own limit was
+not built (Claude's choice in M4.15a: one path, the fork's faster start given up for capped tasks
+only).
 '''
 history = "archive/PROJECT.md#D50"
 step = "M4.15"

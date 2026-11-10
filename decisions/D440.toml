@@ -17,3 +17,4 @@ by side notes to the user.
 history = "JOURNAL.md#D440"
 step = "M4.14"
 code = ["crates/schedr-db/src/retention.rs::KEPT", "crates/schedr-db/src/retention.rs::HELD"]
+checked = 2026-11-10

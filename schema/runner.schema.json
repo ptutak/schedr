@@ -3669,6 +3669,10 @@
           "description": "A Python task: always a new process, never forked (for code that misbehaves after a\nfork). Not for other tasks.",
           "type": "boolean"
         },
+        "hard_memory_limit": {
+          "description": "Also capped hard at `memory_bytes` (`hard_memory_limit=True`, decision 438): the\nprocess's `RLIMIT_DATA`, so an allocation past it fails inside the task.",
+          "type": "boolean"
+        },
         "max_active": {
           "description": "At most this many of its instances running at once, across all runs (decided from\nthe DAG's current version, decision 87A); `None` for no limit.",
           "format": "uint32",
@@ -3692,6 +3696,15 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "memory_bytes": {
+          "description": "Its own memory budget in bytes (`memory=`, decision 436), instead of the worker's share:\nthe watchdog kills it above; taken only by a worker whose pod limit, less its reserve,\nholds it (decision 437). `None`: the worker's budget.",
+          "format": "uint64",
+          "minimum": 16777216,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "preload": {
           "default": true,

@@ -23,6 +23,10 @@ DEFAULT_OUTCOMES: tuple[tuple[str, int | None], ...] = (("SUCCESS", 0),)
 """A task's outcomes when it declares none: ``SUCCESS``, exit code 0 for a command."""
 
 
+MIN_MEMORY = 16 * 1024 * 1024
+"""The smallest task memory budget: no Python process starts in less (the worker's own floor)."""
+
+
 @dataclass(frozen=True, slots=True)
 class TaskSettings:
     """A task's settings, resolved from its own arguments and the defaults that apply.
@@ -40,6 +44,8 @@ class TaskSettings:
         max_active: At most this many of its instances running at once, across all runs;
             ``None`` for no limit.
         max_active_per_run: The same within one run.
+        memory_bytes: Its own memory budget (decision 436); ``None``: the worker's.
+        hard_memory_limit: Also capped hard at ``memory_bytes`` (``RLIMIT_DATA``, decision 438).
     """
 
     retries: int = 0
@@ -52,6 +58,8 @@ class TaskSettings:
     run_if: str = "none_failed"
     max_active: int | None = None
     max_active_per_run: int | None = None
+    memory_bytes: int | None = None
+    hard_memory_limit: bool = False
 
     def __post_init__(self) -> None:
         """Checks that the numbers are in range.
@@ -72,6 +80,13 @@ class TaskSettings:
         ):
             if limit is not None and limit < 1:
                 raise ValueError(f"{name} must be at least 1 or None, got {limit}")
+        if self.memory_bytes is not None and self.memory_bytes < MIN_MEMORY:
+            raise ValueError(
+                f"memory must be at least 16 MiB (no Python process starts in less), got "
+                f"{self.memory_bytes} bytes"
+            )
+        if self.hard_memory_limit and self.memory_bytes is None:
+            raise ValueError("hard_memory_limit=True caps the task's memory: set memory= too")
         if self.run_if not in {"none_failed", "all_succeeded"}:
             raise ValueError(f"run_if must be none_failed or all_succeeded, got {self.run_if!r}")
 
@@ -97,6 +112,10 @@ class TaskSettings:
             result["max_active"] = self.max_active
         if self.max_active_per_run is not None:
             result["max_active_per_run"] = self.max_active_per_run
+        if self.memory_bytes is not None:
+            result["memory_bytes"] = self.memory_bytes
+        if self.hard_memory_limit:
+            result["hard_memory_limit"] = True
         return result
 
 

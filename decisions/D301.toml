@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D301"
 step = "M4.9b"
 also = ["code-delivery"]
 code = ["crates/schedr-proto/proto/schedr/protocol/v1/master.proto", "crates/schedr-agent/src/agent.rs::fold_hash"]
-checked = 2026-11-09
+checked = 2026-11-10

@@ -384,6 +384,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         max_active: At most this many running at once, across all runs (``None``: no limit).
         max_active_per_run: Accepted for symmetry with ``@task``; an operator isn't mapped,
             so it limits nothing (a ``DagHint`` says so).
+        memory: Its own memory budget (bytes or a size such as ``"2GiB"``), as ``@task``'s.
+        hard_memory_limit: Also cap the command hard at ``memory``, as ``@task``'s.
         secrets: The secrets the command reads on demand, with ``schedr task-ctx secret get``
             (never in its environment): ``secrets['path']['key']``, ``'path#key'``,
             ``'path'`` (every key) or ``SecretPrefix(...)``. A secret it gets in ``env`` needs no
@@ -425,6 +427,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         run_if: RunIf | None = None,
         max_active: int | None = None,
         max_active_per_run: int | None = None,
+        memory: int | str | None = None,
+        hard_memory_limit: bool | None = None,
         secrets: SecretsArg = None,
         connections: ConnectionsArg | Mapping[str, ConnectionBase[object] | str] = None,
         cleanup: str | TString | Sequence[object] | None = None,
@@ -452,6 +456,8 @@ class CommandOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
                     run_if=run_if,
                     max_active=max_active,
                     max_active_per_run=max_active_per_run,
+                    memory=_build.memory_size(memory, f"task `{task_id}`"),
+                    hard_memory_limit=hard_memory_limit,
                     cleanup_timeout=cleanup_timeout,
                     cleanup_retries=cleanup_retries,
                     cleanup_retry_delay=cleanup_retry_delay,
@@ -699,6 +705,8 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         max_active: At most this many running at once, across all runs (``None``: no limit).
         max_active_per_run: Accepted for symmetry; an operator isn't mapped (a ``DagHint``
             says so).
+        memory: Its own memory budget (bytes or a size such as ``"2GiB"``), as ``@task``'s.
+        hard_memory_limit: Also cap the script hard at ``memory``, as ``@task``'s.
         cleanup_timeout: How long one try of the declared cleanup may run.
         cleanup_retries: How many times the declared cleanup is retried.
         cleanup_retry_delay: The delay before each of its retries.
@@ -730,6 +738,8 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         run_if: RunIf | None = None,
         max_active: int | None = None,
         max_active_per_run: int | None = None,
+        memory: int | str | None = None,
+        hard_memory_limit: bool | None = None,
         cleanup_timeout: timedelta | None = None,
         cleanup_retries: int | None = None,
         cleanup_retry_delay: timedelta | None = None,
@@ -757,6 +767,8 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
                     run_if=run_if,
                     max_active=max_active,
                     max_active_per_run=max_active_per_run,
+                    memory=_build.memory_size(memory, f"task `{task_id}`"),
+                    hard_memory_limit=hard_memory_limit,
                     cleanup_timeout=cleanup_timeout,
                     cleanup_retries=cleanup_retries,
                     cleanup_retry_delay=cleanup_retry_delay,

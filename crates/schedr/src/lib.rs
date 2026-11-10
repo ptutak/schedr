@@ -72,6 +72,14 @@ where
     // Inside a task, before the configuration: a task may have none, and the call is one
     // request on the task's channel (decision 147: the descriptor is adopted before any
     // thread starts).
+    // A task's start under a hard memory cap: nothing else first, its program replaces this.
+    if let cli::Command::TaskExec {
+        data_limit,
+        command,
+    } = &cli.command
+    {
+        return task_exec(*data_limit, command, err);
+    }
     if let cli::Command::DagCtx { command } = &cli.command {
         return match ctx::run_dag_ctx(command, env, VERSION, out) {
             Ok(()) => 0,
@@ -120,4 +128,34 @@ where
 fn report(stream: &mut impl Write, message: &str, code: u8) -> u8 {
     let _ = stream.write_all(message.as_bytes());
     code
+}
+
+/// `schedr task-exec`: sets `RLIMIT_DATA` to `limit` (current and maximum: the task can't raise
+/// it) and runs `command` in this process's place, so its pid, process group, environment and
+/// inherited descriptors stay the worker's to watch. Returns only when that fails.
+fn task_exec(limit: u64, command: &[std::ffi::OsString], err: &mut impl Write) -> u8 {
+    use std::os::unix::process::CommandExt as _;
+    let cap = rustix::process::Rlimit {
+        current: Some(limit),
+        maximum: Some(limit),
+    };
+    if let Err(error) = rustix::process::setrlimit(rustix::process::Resource::Data, cap) {
+        return report(
+            err,
+            &format!("error: can't cap the task's memory: {error}\n"),
+            1,
+        );
+    }
+    let Some((program, args)) = command.split_first() else {
+        return report(err, "error: task-exec: no program given\n", EXIT_USAGE);
+    };
+    let error = std::process::Command::new(program).args(args).exec();
+    report(
+        err,
+        &format!(
+            "error: can't start `{}`: {error}\n",
+            program.to_string_lossy()
+        ),
+        127,
+    )
 }

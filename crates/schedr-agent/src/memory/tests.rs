@@ -198,6 +198,8 @@ fn the_default_watch_measures_from_proc_every_second() {
         MemoryWatch::default(),
         MemoryWatch {
             budget: None,
+            ceiling: None,
+            task_exec: None,
             interval: Duration::from_secs(1),
             proc_root: PathBuf::from("/proc"),
         }
@@ -209,6 +211,8 @@ async fn over_budget_records_the_peak_and_completes_past_the_budget() {
     let proc = fake_proc(&[(100, 100, Some(1000), 0)]);
     let watch = MemoryWatch {
         budget: Some(2000 * 1024),
+        ceiling: None,
+        task_exec: None,
         interval: Duration::from_millis(10),
         proc_root: proc.path().to_path_buf(),
     };
@@ -261,6 +265,8 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
     let proc = fake_proc(&[(pgid, pgid, Some(3000), 0)]);
     let watch = MemoryWatch {
         budget: Some(2000 * 1024),
+        ceiling: None,
+        task_exec: None,
         interval: Duration::from_millis(10),
         proc_root: proc.path().to_path_buf(),
     };
@@ -293,6 +299,8 @@ async fn a_group_watch_reports_its_kill_and_stops_when_dropped() {
     let watching = watch_group(
         MemoryWatch {
             budget: None,
+            ceiling: None,
+            task_exec: None,
             ..watch
         },
         pgid,
@@ -314,6 +322,8 @@ async fn a_forked_group_over_the_budget_by_rss_alone_isnt_killed() {
     let proc = fake_proc(&[(pgid, pgid, None, 1_000_000)]);
     let watch = MemoryWatch {
         budget: Some(1024),
+        ceiling: None,
+        task_exec: None,
         interval: Duration::from_millis(5),
         proc_root: proc.path().to_path_buf(),
     };
@@ -338,4 +348,27 @@ async fn a_forked_group_over_the_budget_by_rss_alone_isnt_killed() {
         .await
         .unwrap();
     assert_eq!(reason, StopReason::OomKilled);
+}
+
+#[test]
+fn a_task_asking_for_its_own_budget_is_watched_with_it_the_ceiling_is_the_limit_less_its_reserve() {
+    let watch = MemoryWatch {
+        budget: Some(100),
+        ceiling: None,
+        task_exec: None,
+        ..MemoryWatch::default()
+    };
+    assert_eq!(watch.for_task(Some(500)).budget, Some(500));
+    assert_eq!(watch.for_task(None).budget, Some(100));
+    let ceiled = MemoryWatch {
+        ceiling: Some(300),
+        ..watch
+    };
+    assert_eq!(
+        ceiled.for_task(Some(500)).budget,
+        Some(300),
+        "a moved cleanup's"
+    );
+    assert_eq!(ceiling(1000, Reserve::Percent(10)), 900);
+    assert_eq!(ceiling(1000, Reserve::Bytes(2000)), 0);
 }

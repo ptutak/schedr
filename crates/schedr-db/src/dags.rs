@@ -634,7 +634,8 @@ impl Database {
         const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL, \
             live_since = NULL WHERE dag_id = $2";
         const FORGET_PASSED: &str = "DELETE FROM trigger_passed WHERE dag_id = $1";
-        const LOCK: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR UPDATE";
+        // As retention's: not one a new run's foreign key waits for.
+        const LOCK: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR NO KEY UPDATE";
         let now = db_time(now);
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for change in changes {
