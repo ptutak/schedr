@@ -1,0 +1,10 @@
+# The master's configuration the examples need on `make standalone`: the server channel and the
+# URLs the DAGs' own webhooks post to. Read by examples/test_docs.py (docs/notifications.py),
+# examples/showcase/test_showcase.py and the standalone targets of the Makefile.
+[notifications]
+# The docs' made-up relay, and the showcase's local receiver (`make showcase`).
+dag_urls = ["https://relay.example.com/", "http://127.0.0.1:9099/"]
+
+[notifications.channels.ops-slack]
+type = "webhook"
+url = "https://hooks.example.com/service/path"

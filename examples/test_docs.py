@@ -159,23 +159,15 @@ EXAMPLE_CHECKS: dict[str, Callable[[str, RunResult], None]] = {
 """Each example's own checks, by file, beyond every task ending well."""
 
 
-def _configure(path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The master's configuration an example needs: the channels and URLs it names."""
+def _configure(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The master's configuration an example needs, next to it (`make standalone` reads it too)."""
     if path.name == "notifications.py":
-        config = tmp_path / "config.toml"
-        config.write_text(
-            '[notifications]\ndag_urls = ["https://relay.example.com/"]\n'
-            '[notifications.channels.ops-slack]\ntype = "webhook"\n'
-            'url = "https://hooks.example.com/service/path"\n'
-        )
-        monkeypatch.setenv("SCHEDR_CONFIG_FILE", str(config))
+        monkeypatch.setenv("SCHEDR_CONFIG_FILE", str(Path(__file__).parent / "standalone.toml"))
 
 
 @pytest.mark.parametrize("path", DOC_EXAMPLES, ids=lambda path: path.name)
-def test_doc_example_runs(
-    path: Path, run_api: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _configure(path, tmp_path, monkeypatch)
+def test_doc_example_runs(path: Path, run_api: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure(path, monkeypatch)
     connections = {"schedr_api": {"base_url": run_api}} if path.name == "sensors.py" else None
     for dag in _load(path):
         result = run_dag(

@@ -25,12 +25,12 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## In progress
 
 - M4 done 2026-11-10. Codex's full review: F12 done 2026-11-10 (split in F12a roles/config, F12b CLI/local secrets: B200-B214; the security and high ones fixed, each reviewed twice by Codex); F13 (deployment) and F14 (seams) next. Then the bug round (B205, B212-B214, B196, B192 with B193, B187, the flaky tests B197, B40, B159, B22, B166, B150), then M4B.
-- The greenhouse showcase (examples/showcase, asked by the user 2026-11-10: IoT, a test and a guide page, built alongside F12): four DAGs, a simulator, `make showcase`, its test; ran end to end on a standalone. Left: its review by Codex, the guide page (Codex, Terra medium), its commit.
+- The greenhouse showcase done 2026-11-10 (examples/showcase, docs/02-dags/25-showcase.md; asked by the user: IoT, a test and a guide page): `make standalone DAGS=examples/showcase/dags`, then `make showcase`; its code review cancelled by the user.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
 - For the user: M4.13b's review fixes changed documented behaviour (an email's recipients read when it is sent; `timeout` bounds the SMTP exchange); M4.12c's CI failed only on the undone guard.
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
-- For the next review round (Codex): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value).
+- For the next review round (Codex, F13's prompt): B194's fix (b1f3d25), pushed unreviewed; include B196 (`unknown variant` would echo an enum value); and the last five F12 fixes in 43504fb, from the second fix review, not reviewed though its message says two reviews (names split by a tab in masked text, the global filter muting sqlx's option warnings, the check's log made new, TOML errors without the file's line, a stream's server letting its sender go on close).
 - B199 (a backfill over a DST change of a sub-minute cron holds the master up; medium/rare) logged by M4.12b's review: for the bug round.
 
 ## Waiting for the user

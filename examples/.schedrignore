@@ -4,3 +4,6 @@ test_*.py
 conftest.py
 # The connections demo's DAGs: run by `make demo`, with their own secrets.
 demo/
+# The greenhouse showcase: a root of its own (`make standalone DAGS=examples/showcase/dags`),
+# its module names its own.
+showcase/

@@ -138,7 +138,7 @@ convention = "google"
 "scripts/check-action-pins.py" = ["PLR0912"]
 # Example DAGs are user code: docstrings on their tasks are up to the author.
 "examples/**" = ["D103"]
-"examples/test_*.py" = ["PLR2004", "D"]
+"examples/**/test_*.py" = ["PLR2004", "D"]
 
 # --- mypy ---------------------------------------------------------------
 [tool.mypy]
@@ -173,6 +173,11 @@ extraPaths = ["python"]
 # The demo's DAG folder (examples/demo): its root on the path, as on a worker.
 [[tool.basedpyright.executionEnvironments]]
 root = "examples/demo/dags"
+extraPaths = ["python"]
+
+# The greenhouse showcase's DAG folder, the same way.
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/showcase/dags"
 extraPaths = ["python"]
 
 [[tool.basedpyright.executionEnvironments]]

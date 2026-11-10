@@ -40,4 +40,5 @@ are files under `examples/` and `examples/docs/`, quoted below, and each one is 
 22-events
 23-chained-runs
 24-notifications
+25-showcase
 ```

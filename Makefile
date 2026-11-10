@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -70,6 +70,8 @@ fmt-check:       ## Verify formatting without changing files
 DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/docs/test_%,$(wildcard examples/*.py examples/docs/*.py))) python/tests/typing/dag_types.py
 # The demo's DAG folder apart: its `connections` module is another than examples/docs/'s.
 DEMO_DAGS = $(wildcard examples/demo/dags/*.py)
+# The greenhouse showcase's DAG folder apart too, for the same reason.
+SHOWCASE_DAGS = $(wildcard examples/showcase/dags/*.py)
 
 lint:            ## Run clippy, ruff, mypy, and mypy and basedpyright over DAG code
 	cargo clippy --workspace --all-targets -- -D warnings
@@ -77,6 +79,7 @@ lint:            ## Run clippy, ruff, mypy, and mypy and basedpyright over DAG c
 	uv run mypy
 	uv run mypy --strict $(DAG_TYPED)
 	uv run mypy --strict $(DEMO_DAGS)
+	uv run mypy --strict $(SHOWCASE_DAGS)
 	uv run basedpyright --project pyproject.toml
 
 schema:          ## Regenerate the committed files under schema/
@@ -209,9 +212,11 @@ STANDALONE_DIR ?= .schedr
 LISTEN ?= 0.0.0.0
 FORK_SERVER ?= true
 
-# The docs examples' secrets, as examples/test_docs.py gives them.
+# The docs examples' configuration (the notification channels and URLs) and secrets, as
+# examples/test_docs.py gives them.
+STANDALONE_CONFIG := $(abspath examples/standalone.toml)
 STANDALONE_SECRETS := "etl/db password=s3cret-db-password" "etl/api token=s3cret-api-token" \
-	"tenants/acme api_key=s3cret-acme-key"
+	"tenants/acme api_key=s3cret-acme-key" "greenhouse/devices token=s3cret-device-token"
 # `prepare DIR`, a shell function for a standalone whose SQLite database is DIR/schedr.db: a
 # secret key made once in DIR/secret.key (`SCHEDR_SECRET_KEY`), and STANDALONE_SECRETS set
 # where missing (listed, never decrypted: one written under another key is kept). A new database is migrated first to hold them; one there already is migrated
@@ -237,6 +242,7 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	dir="$(abspath $(STANDALONE_DIR))"; prepare "$$dir"; \
 	SCHEDR_SECRET_KEY="$$(cat "$$dir/secret.key")" \
 	SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/schedr.db" \
+	SCHEDR_CONFIG_FILE="$(STANDALONE_CONFIG)" \
 	SCHEDR_DAG_PATH="$(abspath $(DAGS))" \
 	SCHEDR_CONFIG__WORKER__DATA_DIR="$(abspath $(STANDALONE_DIR))" \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')" \
@@ -272,6 +278,7 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 		SCHEDR_SECRET_KEY="$$(cat "$$dir/$$1/secret.key")" \
 		SCHEDR_DAG_PATH="$$2" \
 		SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/$$1/schedr.db" \
+		SCHEDR_CONFIG_FILE="$(STANDALONE_CONFIG)" \
 		SCHEDR_CONFIG__WORKER__DATA_DIR="$$dir/$$1" \
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
@@ -291,6 +298,7 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 	( until curl -sf -o /dev/null "http://127.0.0.1:$$((main + 80))/api/v1/dags"; do sleep 0.5; done; \
 	  SCHEDR_SECRET_KEY="$$(cat "$$dir/main/secret.key")" \
 	  SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/main/schedr.db" \
+	  SCHEDR_CONFIG_FILE="$(STANDALONE_CONFIG)" \
 	  SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((main + 71)) \
 	  SCHEDR_CONFIG__OPS__PORT=$$((main + 91)) \
 	  SCHEDR_CONFIG__TLS__MODE=mesh \
@@ -304,6 +312,17 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 	run second "$(abspath $(DAGS2)):$$broken" $$((8100 + $(PORT_OFFSET))); \
 	target/debug/schedr --config "$$dir/ui.toml" ui & \
 	wait -n
+
+# The greenhouse showcase (examples/showcase): its simulator against a standalone running its
+# DAGs, started first in another terminal with `make standalone DAGS=examples/showcase/dags`.
+# Unpauses the four DAGs, then plays the devices, an operator and the pager's receiver
+# (examples/showcase/simulate.py). Ctrl-C stops it.
+SHOWCASE_DAG_IDS := readings_ingest anomaly_response device_maintenance greenhouse_rollup
+
+showcase:        ## Play the greenhouse showcase against `make standalone DAGS=examples/showcase/dags`
+	cargo build -p schedr
+	for dag in $(SHOWCASE_DAG_IDS); do target/debug/schedr dags unpause $$dag >/dev/null; done
+	uv run --no-sync python examples/showcase/simulate.py --schedr target/debug/schedr demo
 
 # The connections demo (examples/demo, decisions 202-205): the base image (built once, `make
 # image`), the demo image FROM it, every password and key generated into the demo's volumes,
