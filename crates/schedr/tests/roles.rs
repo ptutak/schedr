@@ -1059,6 +1059,8 @@ fn a_master_waiting_for_its_database_is_alive_but_not_ready() {
         &[
             ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "20s"),
             ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "60s"),
+            // Its lead (60 s less 20 s) under the worker lease (decision 444).
+            ("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "60s"),
         ],
     );
     assert_eq!(
@@ -1654,7 +1656,7 @@ fn a_master_gone_stops_a_task_whose_cleanup_may_move_and_the_cleanup_waits_for_i
 fn a_handle_registered_while_the_master_is_down_is_cleaned_up_after_its_restart() {
     // B168: the worker waits up to half the lease between tries, so it is back before the
     // restarted master takes it for lost (and moves the cleanup without the handle it never
-    // got). Its first wait asks for 14 s, far past the test cluster's 4 s lease.
+    // got). Its first wait asks for 14 s, far past the test cluster's 5 s lease.
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("cleaned");
     let late = left_behind_for(&marker, 30).replace(

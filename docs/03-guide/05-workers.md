@@ -48,7 +48,9 @@ to 30 s, with jitter, so
 workers that lost the master together don't come back in step. After a session in which it
 was registered, the backoff starts from 200 ms again. Once the worker knows its lease, each
 reconnect wait is capped at half that lease. A restarted master gives it a fresh lease from
-the master's start.
+the master's start plus the time a master it replaced may still answer it (20 s by default).
+A worker that has heard a master of a newer lease epoch ends a stream from an older one, a
+deposed master still answering, unless the newer has been silent for a whole lease.
 
 If the worker returns after its lease and its `cleanup_anywhere` move is still waiting, the
 master gives the cleanup back when the worker has handles it did not receive. If the move

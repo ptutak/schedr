@@ -651,6 +651,22 @@ fn a_lease_under_four_heartbeats_is_refused(#[case] vars: &[(&str, &str)]) {
 }
 
 #[test]
+fn a_master_lead_not_shorter_than_the_worker_lease_is_refused() {
+    // Decision 444 (Grok's review): a deposed master answers its workers for its lease period
+    // less a query limit; a worker's epoch fence lasts a worker lease, so that lead must end
+    // first. 90 s less 10 s is 80 s, over the 60 s lease.
+    let long = env(&[("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "90s")]);
+    let error = load(None, &long, &[]).unwrap_err().to_string();
+    assert!(
+        error.contains("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD")
+            && error.contains("shorter than `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`"),
+        "{error}"
+    );
+    let within = env(&[("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "69s")]);
+    assert!(load(None, &within, &[]).is_ok());
+}
+
+#[test]
 fn without_a_hidden_variable_the_timings_are_the_fixed_ones() {
     assert_eq!(
         load(None, &env(&[]), &[]).unwrap().timings,

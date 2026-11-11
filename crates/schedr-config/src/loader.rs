@@ -541,6 +541,21 @@ fn check_lease(timings: &Timings) -> Result<(), ConfigError> {
             ),
         });
     }
+    // A deposed master answers its workers until its lead runs out, its lease period less a
+    // query limit; a worker follows a lower lease epoch only after a lease without word from
+    // the higher one, so that lead must end first (decision 444, Grok's review).
+    let lead = timings.lease_period.saturating_sub(timings.query_timeout);
+    if lead >= timings.lease_timeout {
+        return Err(ConfigError::BadHiddenTiming {
+            name: format!("{HIDDEN_PREFIX}MASTER__LEASE_PERIOD"),
+            reason: format!(
+                "less `{HIDDEN_PREFIX}DATABASE__QUERY_TIMEOUT` ({:?}), it must be shorter than \
+                 `{HIDDEN_PREFIX}MASTER__LEASE_TIMEOUT` ({:?}): a deposed master leads that \
+                 long, got {:?}",
+                timings.query_timeout, timings.lease_timeout, timings.lease_period
+            ),
+        });
+    }
     Ok(())
 }
 

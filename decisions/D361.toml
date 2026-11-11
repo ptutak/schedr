@@ -11,5 +11,5 @@ stopped in between creates it once, never two.
 '''
 history = "archive/PROJECT.md#D361"
 step = "M4.12a"
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["crates/schedr-db/src/attempts.rs::start_chained_attempt", "crates/schedr-master/src/dispatch/chained.rs::create_chained", "crates/schedr-master/src/scheduler.rs::trigger_chained"]

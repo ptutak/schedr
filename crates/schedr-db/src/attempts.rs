@@ -591,6 +591,66 @@ impl Database {
         rows.into_iter().map(stored_attempt).collect()
     }
 
+    /// Marks open attempts as left behind by a replaced incarnation (decision 443): they end
+    /// `lost` once its lease is over. A mark already made stands.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a write fails.
+    pub async fn mark_replaced(
+        &self,
+        attempt_ids: &[String],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const MARK: &str = "UPDATE attempts SET replaced_at = COALESCE(replaced_at, $1{ts}) \
+            WHERE id = $2{uuid} AND status IS NULL";
+        in_tx!(self, |tx, backend| {
+            for attempt_id in attempt_ids {
+                sqlx::query(sql(backend, MARK))
+                    .bind(db_time(now))
+                    .bind(attempt_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        });
+        Ok(())
+    }
+
+    /// Clears the marks of [`Self::mark_replaced`]: the hold did its work (ended or moved the
+    /// attempt), or a worker's journal reports it, alive (Grok's review of decision 443).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a write fails.
+    pub async fn clear_replaced(&self, attempt_ids: &[String]) -> Result<(), DbError> {
+        const CLEAR: &str = "UPDATE attempts SET replaced_at = NULL \
+            WHERE id = $1{uuid} AND replaced_at IS NOT NULL";
+        in_tx!(self, |tx, backend| {
+            for attempt_id in attempt_ids {
+                sqlx::query(sql(backend, CLEAR))
+                    .bind(attempt_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        });
+        Ok(())
+    }
+
+    /// The open attempts a replaced incarnation left behind ([`Self::mark_replaced`]).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn replaced_attempts(&self) -> Result<Vec<String>, DbError> {
+        const REPLACED: &str = "SELECT id{text} FROM attempts \
+            WHERE status IS NULL AND replaced_at IS NOT NULL ORDER BY replaced_at, id";
+        Ok(on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, REPLACED))
+                .fetch_all(pool)
+                .await?
+        }))
+    }
+
     /// Keeps the task's result of an open attempt while its cleanup runs (decision 229).
     ///
     /// # Errors
@@ -856,8 +916,9 @@ impl Database {
     ///
     /// [`DbError`] if the write fails.
     pub async fn unassign_cleanup(&self, attempt_id: &str) -> Result<(), DbError> {
-        const BACK: &str = "UPDATE attempts SET worker_id = NULL, moved_at = NULL \
-            WHERE id = $1{uuid} AND status IS NULL";
+        // Taken back, no worker runs it: no replaced incarnation's hold on it either.
+        const BACK: &str = "UPDATE attempts SET worker_id = NULL, moved_at = NULL, \
+            replaced_at = NULL WHERE id = $1{uuid} AND status IS NULL";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, BACK))
                 .bind(attempt_id)

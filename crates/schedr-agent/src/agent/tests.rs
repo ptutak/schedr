@@ -467,6 +467,8 @@ struct Scripted {
     /// Each heartbeat answered with a `HeartbeatAck`, as the master does, once this long has
     /// passed since the stream opened (before it, none: a paused master).
     ack_heartbeats: Option<Duration>,
+    /// The lease epoch on its stamps (decision 444).
+    epoch: i64,
 }
 
 #[tonic::async_trait]
@@ -485,6 +487,7 @@ impl pb::master_server::Master for Scripted {
         // names the latest heartbeat heard (B225), as the master's do.
         let opened = Instant::now();
         let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let epoch = self.epoch;
         let stamp = {
             let heard = Arc::clone(&heard);
             move |mut message: pb::MasterMessage| {
@@ -493,6 +496,7 @@ impl pb::master_server::Master for Scripted {
                     master_ms: i64::try_from(opened.elapsed().as_millis()).unwrap(),
                     heard_sequence: heard.load(std::sync::atomic::Ordering::SeqCst),
                     wall_ms: 0,
+                    lease_epoch: epoch,
                 });
                 message
             }
@@ -3485,6 +3489,78 @@ async fn heartbeats_never_answered_dont_hold_back_the_start_budget() {
     };
     let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
         agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
+}
+
+#[tokio::test]
+async fn a_deposed_masters_stream_is_ended_and_nothing_of_it_counts() {
+    // Decision 444 (B231): a worker that has heard a master leading with lease epoch 5 ends a
+    // stream from one leading with 4, a deposed master still answering: its assignment
+    // isn't started.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("deposed");
+    script[1] = assign("a1", &task, "sync.py", false);
+    let master = Scripted {
+        script,
+        epoch: 4,
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(600);
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+        agent.leader_epoch = (5, Some(tokio::time::Instant::now()));
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    // It did connect and register, more than once (Grok's review: silence passed too): each
+    // session ended at the deposed master's `Registered`, before a heartbeat.
+    let registers = seen
+        .iter()
+        .filter(|m| matches!(m.message, Some(worker_message::Message::Register(_))))
+        .count();
+    assert!(registers >= 1, "{:?}", kinds(&seen));
+    assert!(
+        !seen
+            .iter()
+            .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_)))),
+        "the session ended at its Registered: {:?}",
+        kinds(&seen)
+    );
+}
+
+#[tokio::test]
+async fn a_lower_epoch_is_followed_once_the_higher_has_been_silent_for_a_lease() {
+    // Decision 444, a restored database: its epoch set back, every worker would refuse every
+    // master. A lease (5 s here) after the last word of epoch 5, epoch 4 is followed.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("restored");
+    script[1] = assign("a1", &task, "sync.py", false);
+    let master = Scripted {
+        script,
+        epoch: 4,
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let watched = Arc::clone(&launched);
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| {
+        !watched.lock().unwrap().is_empty() || started.elapsed() > Duration::from_secs(3)
+    };
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+        let long_ago = tokio::time::Instant::now()
+            .checked_sub(Duration::from_secs(6))
+            .unwrap();
+        agent.leader_epoch = (5, Some(long_ago));
+        agent.lease = Some(Duration::from_secs(5));
     })
     .await;
     assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));

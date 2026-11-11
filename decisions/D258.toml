@@ -6,7 +6,7 @@ topic = "protocol"
 section = "Connection"
 summary = '''
 The master answers each `Heartbeat` with `HeartbeatAck` as it arrives.
-The response is not behind the master’s lock and is not sent while paused.
+The response is not behind the master’s lock and is not sent while paused, nor on a stream a newer registration replaced (decision 443).
 '''
 history = "archive/PROJECT.md#D258"
 step = "M4.8b3"

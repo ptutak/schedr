@@ -57,7 +57,7 @@ async fn connected_on_with(
     settings: &Settings,
 ) -> (Hub, Database, MasterClient<Channel>) {
     db.migrate().await.unwrap();
-    let hub = Hub::with_clock(MasterCore::new(db.clone(), *settings), clock);
+    let hub = Hub::with_clock(MasterCore::new(db.clone(), *settings), clock).with_epoch(7);
     let client = served(&hub).await;
     (hub, db, client)
 }
@@ -395,6 +395,7 @@ async fn every_message_carries_the_masters_clock_and_an_assignment_its_deadline(
     assert_eq!(first.master_ms, fixed_now().as_millisecond());
     assert_eq!(first.heard_sequence, 0);
     assert_eq!(first.wall_ms, fixed_now().as_millisecond());
+    assert_eq!(first.lease_epoch, 7, "its lease's epoch (decision 444)");
     let beat = pb::Heartbeat {
         sequence: 3,
         ..pb::Heartbeat::default()
@@ -414,6 +415,7 @@ async fn every_message_carries_the_masters_clock_and_an_assignment_its_deadline(
             Some(master_message::Message::AssignParse(_)) => parse_seen = true,
             Some(master_message::Message::HeartbeatAck(_)) => {
                 assert_eq!(clock_of(&message).heard_sequence, 3);
+                assert_eq!(clock_of(&message).lease_epoch, 7);
                 break;
             }
             other => panic!("unexpected {other:?}"),
@@ -1598,6 +1600,84 @@ async fn an_old_stream_of_a_worker_neither_changes_nor_disconnects_its_new_one()
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(state().await, schedr_model::WorkerState::Active);
     assert!(hub.core().lock().await.is_live("w1"));
+}
+
+#[tokio::test]
+async fn a_replaced_stream_gets_no_more_heartbeat_answers() {
+    // Decision 443 (B230): a new incarnation's registration is the master's last word to the
+    // old one, so the old process's lease runs out from it; the new stream is answered.
+    let (hub, _db, client) = connected().await;
+    let open = |message: pb::WorkerMessage| {
+        let mut client = client.clone();
+        async move {
+            let (to_master, outbound) = mpsc::channel(16);
+            to_master.send(message).await.unwrap();
+            let stream = client
+                .control(ReceiverStream::new(outbound))
+                .await
+                .unwrap()
+                .into_inner();
+            (to_master, stream)
+        }
+    };
+    let (old, mut old_stream) = open(register(PROTOCOL_VERSION)).await;
+    assert!(matches!(
+        next(&mut old_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // Its transport still open, the old stream taken for gone (a lease run out, B44's case).
+    hub.core()
+        .lock()
+        .await
+        .disconnected("w1", fixed_now())
+        .await
+        .unwrap();
+    let mut again = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(register)) = again.message.as_mut() {
+        register.incarnation_id = "i2".to_owned();
+    }
+    let (new, mut new_stream) = open(again).await;
+    assert!(matches!(
+        next(&mut new_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let beat = |sequence| {
+        wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
+            sequence,
+            ..pb::Heartbeat::default()
+        }))
+    };
+    // Whether an answer came, or else whether the stream ended (not merely went quiet).
+    let acked = async |stream: &mut tonic::Streaming<pb::MasterMessage>| {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match tokio::time::timeout_at(deadline, stream.message()).await {
+                Ok(Ok(Some(message))) => {
+                    if matches!(
+                        message.message,
+                        Some(master_message::Message::HeartbeatAck(_))
+                    ) {
+                        return (true, false);
+                    }
+                }
+                Ok(_) => return (false, true),
+                Err(_) => return (false, false),
+            }
+        }
+    };
+    old.send(beat(1)).await.unwrap();
+    // Unanswered, and let go at that heartbeat (Grok's review: a quiet 500 ms passed too).
+    assert_eq!(
+        acked(&mut old_stream).await,
+        (false, true),
+        "the old stream"
+    );
+    new.send(beat(1)).await.unwrap();
+    assert_eq!(
+        acked(&mut new_stream).await,
+        (true, false),
+        "the new stream"
+    );
 }
 
 #[tokio::test]

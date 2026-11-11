@@ -747,6 +747,7 @@ async fn an_attempt_a_restarted_agent_doesnt_report_keeps_its_tasks_result() {
         .incarnation_replaced("w1", &BTreeSet::new(), ts(NOW))
         .await
         .unwrap();
+    dispatcher.end_replaced(later(10)).await.unwrap();
     let extract = extract_instance(&db, &run_id).await;
     assert_eq!(
         (extract.state, extract.cleanup_result),
@@ -951,6 +952,96 @@ async fn a_cleanup_that_keeps_losing_workers_ends_worker_lost() {
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(AttemptStatus::Lost)
+    );
+}
+
+#[tokio::test]
+async fn a_replaced_incarnations_cleanup_moves_once() {
+    // Grok's review of decision 443: the mark stayed after the hold moved the cleanup, and a
+    // lease later it was taken from the worker running it and moved again.
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let none = BTreeSet::new();
+    dispatcher
+        .incarnation_replaced("w1", &none, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
+    let moved = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((moved.cleanup_moves, moved.status), (1, None));
+    // Moved, assigned again after its wait, and started.
+    dispatcher.step(later(600)).await.unwrap();
+    dispatcher
+        .started("w1", &started(&attempt), later(600))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.end_replaced(later(700)).await.unwrap(), 0);
+    let kept = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(
+        (kept.cleanup_moves, kept.worker_id.as_str(), kept.status),
+        (1, "w1", None)
+    );
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_not_started_when_its_worker_restarts_keeps_waiting() {
+    // Grok's review of decision 443: assigned to w2 and not started there, it was held for
+    // w2's old incarnation, taken back by its start timeout, and the hold then ended it `lost`
+    // with no move left: the cleanup never ran.
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.step(ts(NOW)).await.unwrap();
+    let moving = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((moving.worker_id.as_str(), moving.moving), ("w2", true));
+    assert_eq!(
+        dispatcher
+            .incarnation_replaced("w2", &BTreeSet::new(), later(9))
+            .await
+            .unwrap(),
+        0,
+        "not the old process's"
+    );
+    dispatcher.expire(later(11)).await.unwrap();
+    dispatcher.end_replaced(later(19)).await.unwrap();
+    let waiting = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            waiting.cleanup_moves,
+            waiting.status,
+            waiting.worker_id.as_str()
+        ),
+        (1, None, "")
+    );
+}
+
+#[tokio::test]
+async fn a_lost_workers_held_cleanup_moves_once() {
+    // Grok's review of decision 443: the worker lost during the hold moved the cleanup, and the
+    // hold's end moved it again; a move clears the mark whichever path made it.
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .incarnation_replaced("w1", &BTreeSet::new(), ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, later(1))
+        .await
+        .unwrap();
+    let moved = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!((moved.cleanup_moves, moved.status), (1, None));
+    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 0);
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().cleanup_moves,
+        1
     );
 }
 
@@ -1296,6 +1387,11 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
             .unwrap(),
         1
     );
+    // Decision 443 (B230): the old process may still run it until its lease (the start
+    // timeout, 10 s here) is over in master time.
+    assert_eq!(dispatcher.end_replaced(later(9)).await.unwrap(), 0);
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
     let ended = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(AttemptStatus::Lost));
     let task = assignment(&out[0]).task_id.clone();
@@ -4222,6 +4318,7 @@ fn an_assignment_over_what_a_worker_takes_is_never_sent() {
             master_ms: i64::MIN,
             heard_sequence: u64::MAX,
             wall_ms: i64::MIN,
+            lease_epoch: i64::MIN,
         }),
         ..message.clone()
     };

@@ -384,6 +384,10 @@ message MasterClock {
   // The master's wall clock, Unix milliseconds: for a clock-skew warning only, never a
   // deadline.
   int64 wall_ms = 4;
+  // The leader's lease epoch, raised at each takeover (decision 444): a worker that has seen
+  // an epoch ends a stream from a lower one, a deposed master's, and connects again. 0: no
+  // lease (a test's master).
+  int64 lease_epoch = 5;
 }
 
 // The answer to an `ApiCall`: the HTTP status and body the router gave, or the master's refusal

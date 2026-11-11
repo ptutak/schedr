@@ -311,6 +311,10 @@ pub struct Dispatcher {
     /// When each cleanup waiting to move may go to another worker, in master time (D256, B228);
     /// after a restart, a whole wait from when it is first seen.
     move_not_before: BTreeMap<String, Timestamp>,
+    /// When each attempt a replaced incarnation left behind was marked, in master time
+    /// (decision 443): it ends `lost` a lease after; after a restart, from when it is first
+    /// seen.
+    replaced_since: BTreeMap<String, Timestamp>,
     /// How far behind its cursor an event sensor reads back, for an event committed late
     /// (B185; the triggers' `event_lookback`).
     event_lookback: SignedDuration,
@@ -401,6 +405,7 @@ impl Dispatcher {
             steady: crate::clock::as_given,
             unstarted_since: BTreeMap::new(),
             move_not_before: BTreeMap::new(),
+            replaced_since: BTreeMap::new(),
             event_lookback: SignedDuration::from_mins(1),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
@@ -892,6 +897,7 @@ impl Dispatcher {
         self.execution.prepare_runs(now).await?;
         self.execution.queue_due_retries(now).await?;
         self.expire(now).await?;
+        self.end_replaced(now).await?;
         self.assign_into(now, outgoing).await
     }
 
@@ -2283,10 +2289,12 @@ impl Dispatcher {
     }
 
     /// A worker's agent restarted (a new incarnation): the attempts it had started and doesn't
-    /// report in its journal end `lost` with a `WorkerRestarted` error summary, each using a
-    /// retry, as for a lost worker (the crash may have been the task's own; see archive/PROJECT.md,
-    /// Worker lifecycle). Attempts it hadn't started yet are left to expire without using a
-    /// retry. Returns how many ended.
+    /// report in its journal are marked, and end `lost` with a `WorkerRestarted` error
+    /// summary once the old incarnation's lease is over in master time (decision 443, B230:
+    /// the old process may still run them meanwhile; see [`Self::end_replaced`]), each using a
+    /// retry, as for a lost worker (the crash may have been the task's own; see
+    /// archive/PROJECT.md, Worker lifecycle). Attempts it hadn't started yet are left to expire
+    /// without using a retry. Returns how many were marked.
     ///
     /// # Errors
     ///
@@ -2297,42 +2305,105 @@ impl Dispatcher {
         reported: &BTreeSet<&str>,
         now: Timestamp,
     ) -> Result<usize, DispatchError> {
-        // Whole or not at all, memory with it (B49).
-        let ended = self
-            .whole(async |dispatcher| {
-                dispatcher
-                    .end_unreported(worker_id, reported, KeptResults::Used, now)
-                    .await
-            })
-            .await;
-        match ended {
-            Err(error) if error.is_data_fault() => {
-                tracing::error!(worker_id, %error, "a kept result the database refuses");
-                self.whole(async |dispatcher| {
-                    dispatcher
-                        .end_unreported(worker_id, reported, KeptResults::Refused, now)
-                        .await
-                })
-                .await
-            }
-            ended => ended,
+        let left: Vec<String> = self
+            .db
+            .open_attempts(Some(worker_id))
+            .await?
+            .into_iter()
+            // A moved cleanup assigned here and not started yet isn't the old process's: its
+            // own start timeout takes it back (Grok's review).
+            .filter(|a| a.started && !a.moving && !reported.contains(a.id.as_str()))
+            .map(|a| a.id)
+            .collect();
+        self.db.mark_replaced(&left, now).await?;
+        let since = (self.steady)(now);
+        for attempt_id in &left {
+            self.replaced_since
+                .entry(attempt_id.clone())
+                .or_insert(since);
         }
+        Ok(left.len())
     }
 
-    async fn end_unreported(
+    /// The attempts `worker_id`'s journal reports at its registration: alive there, none of
+    /// its own is held for a replaced incarnation any more (Grok's review of decision 443: one
+    /// told to continue was still ended when the hold ran out). Another worker's, which its
+    /// journal can't keep, stays held.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn reported(
         &mut self,
         worker_id: &str,
-        reported: &BTreeSet<&str>,
-        results: KeptResults,
-        now: Timestamp,
-    ) -> Result<usize, DispatchError> {
+        attempt_ids: &[String],
+    ) -> Result<(), DispatchError> {
+        if attempt_ids.is_empty() {
+            return Ok(());
+        }
+        let own: Vec<String> = self
+            .db
+            .open_attempts(Some(worker_id))
+            .await?
+            .into_iter()
+            .map(|attempt| attempt.id)
+            .filter(|id| attempt_ids.contains(id))
+            .collect();
+        // After a restart the hold isn't in memory yet: cleared in the database all the same.
+        self.db.clear_replaced(&own).await?;
+        for id in &own {
+            self.replaced_since.remove(id);
+        }
+        Ok(())
+    }
+
+    /// Ends `lost` the attempts a replaced incarnation left behind whose lease is over in master
+    /// time (decision 443), each whole or not at all; a kept result the database refuses is
+    /// dropped, as for a lost worker. Returns how many ended.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn end_replaced(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
+        let left = self.db.replaced_attempts().await?;
+        let steady = (self.steady)(now);
+        self.replaced_since.retain(|id, _| left.contains(id));
         let mut ended = 0;
-        for attempt in self.db.open_attempts(Some(worker_id)).await? {
-            if attempt.started && !reported.contains(attempt.id.as_str()) {
-                self.end_lost(&attempt, restarted_summary(worker_id), results, now)
-                    .await?;
-                ended += 1;
+        for attempt_id in left {
+            let since = *self
+                .replaced_since
+                .entry(attempt_id.clone())
+                .or_insert(steady);
+            if steady.duration_since(since) < self.start_timeout {
+                continue;
             }
+            let Some(attempt) = self.db.attempt(&attempt_id).await? else {
+                continue;
+            };
+            let summary = restarted_summary(&attempt.worker_id);
+            // `end_lost` clears the mark with it: a cleanup moved stays open, and mustn't be
+            // moved again a lease later (Grok's review).
+            let done = self
+                .whole(async |dispatcher| {
+                    dispatcher
+                        .end_lost(&attempt, summary.clone(), KeptResults::Used, now)
+                        .await
+                })
+                .await;
+            match done {
+                Err(error) if error.is_data_fault() => {
+                    tracing::error!(attempt_id, %error, "a kept result the database refuses");
+                    self.whole(async |dispatcher| {
+                        dispatcher
+                            .end_lost(&attempt, summary.clone(), KeptResults::Refused, now)
+                            .await
+                    })
+                    .await?;
+                }
+                done => done?,
+            }
+            self.replaced_since.remove(&attempt_id);
+            ended += 1;
         }
         Ok(ended)
     }
@@ -2391,6 +2462,12 @@ impl Dispatcher {
         results: KeptResults,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
+        // Ended or moved here, a replaced incarnation's hold on it is over, whichever path
+        // took it (Grok's review of decision 443: a lost worker's moved cleanup moved again).
+        self.db
+            .clear_replaced(std::slice::from_ref(&attempt.id))
+            .await?;
+        self.replaced_since.remove(&attempt.id);
         if results == KeptResults::Refused && attempt.result_kept {
             return self.end_refused(attempt, now).await;
         }
@@ -3407,6 +3484,7 @@ pub(crate) fn too_big_to_send(message: &pb::MasterMessage, limit: usize) -> Opti
         master_ms: i64::MIN,
         heard_sequence: u64::MAX,
         wall_ms: i64::MIN,
+        lease_epoch: i64::MIN,
     });
     let size = prost::Message::encoded_len(message)
         + stamp.map_or(0, |clock| {

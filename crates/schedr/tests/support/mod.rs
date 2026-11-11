@@ -242,10 +242,12 @@ impl Cluster {
             .env("SCHEDR_CONFIG__DATABASE__URL", &self.database_url)
             .env("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", &self.tick)
             .env("SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL", "1s")
-            .env("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "4s")
+            .env("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "5s")
             .env("SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT", "1s")
-            .env("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "15s")
-            .env("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "5s")
+            // A master leads 4 s past its last renewal (its lease less a query limit), under
+            // the worker lease (decision 444); a lease is at least three query limits.
+            .env("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "6s")
+            .env("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "2s")
             .env("SCHEDR_DAG_PATH", self.root());
         if self.ca.is_some() {
             command

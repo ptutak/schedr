@@ -48,6 +48,10 @@ pub struct Settings {
     pub heartbeat_interval: Duration,
     /// A worker silent for this long is lost.
     pub lease_timeout: Duration,
+    /// How long a deposed leader may still believe it leads, and answer its workers'
+    /// heartbeats: its lease period less the query timeout (decision 444). A worker restored
+    /// at a takeover is lost only this plus its lease after the takeover.
+    pub takeover_wait: Duration,
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
     pub cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
@@ -143,6 +147,8 @@ impl Default for Settings {
         Self {
             heartbeat_interval: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(60),
+            takeover_wait: crate::lease::DEFAULT_LEASE_PERIOD
+                .saturating_sub(schedr_db::database::DEFAULT_QUERY_TIMEOUT),
             cancel_grace: DEFAULT_CANCEL_GRACE,
             switch_off_after: 3,
             max_queued_events: 1000,
@@ -600,15 +606,21 @@ impl MasterCore {
     }
 
     /// Reads the worker registry back at start: every worker not gone counts as disconnected
-    /// from `now`, so its lease starts from zero (master downtime doesn't count against
-    /// workers) and one that never comes back is lost, its attempts with it. Returns how many
-    /// workers were restored.
+    /// from `now` plus [`Settings::takeover_wait`], so its lease starts from zero once a
+    /// deposed leader can no longer answer it (decision 444; master downtime doesn't count
+    /// against workers) and one that never comes back is lost, its attempts with it. Returns
+    /// how many workers were restored.
     ///
     /// # Errors
     ///
     /// [`CoreError::Db`] if the database fails.
     pub async fn restore(&mut self, now: Timestamp) -> Result<usize, CoreError> {
         let mut restored = 0;
+        let takeover =
+            SignedDuration::try_from(self.settings.takeover_wait).unwrap_or(SignedDuration::MAX);
+        let heard = (self.steady)(now)
+            .checked_add(takeover)
+            .unwrap_or(Timestamp::MAX);
         for worker in self.db.workers().await? {
             if worker.state.is_gone() {
                 continue;
@@ -622,7 +634,7 @@ impl MasterCore {
                 Connection {
                     incarnation: worker.incarnation,
                     schedr_version: worker.schedr_version,
-                    heard: (self.steady)(now),
+                    heard,
                     persisted: now,
                     live: false,
                     secret_storages: None,
@@ -728,7 +740,8 @@ impl MasterCore {
         Ok(())
     }
 
-    /// A worker came back as a new incarnation: its unreported attempts and its jobs are lost.
+    /// A worker came back as a new incarnation: its unreported attempts end lost once the old
+    /// one's lease is over (decision 443); its jobs are lost now.
     async fn incarnation_replaced(
         &mut self,
         register: &pb::Register,
@@ -746,9 +759,9 @@ impl MasterCore {
             .await?;
         tracing::warn!(
             worker_id,
-            ended,
-            "worker restarted (a new incarnation): its unreported attempts are lost \
-             (possibly out of memory)"
+            unreported = ended,
+            "worker restarted (a new incarnation): the attempts it doesn't report end lost once \
+             the old one's lease is over (possibly out of memory)"
         );
         // The old incarnation's jobs: none will answer.
         self.connection_jobs_lost(
@@ -832,6 +845,12 @@ impl MasterCore {
             self.sync_code();
         }
         let mut outgoing = reported?;
+        let reported: Vec<String> = register
+            .journal
+            .iter()
+            .map(|entry| entry.attempt_id.clone())
+            .collect();
+        self.dispatcher.reported(worker_id, &reported).await?;
         let mut decisions = Vec::with_capacity(register.journal.len());
         for entry in &register.journal {
             let (decision, cleanup_from, cancel) =

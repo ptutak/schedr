@@ -1,0 +1,18 @@
+title = "A replaced incarnation's lost attempts wait out its lease"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+When a worker registers as a new incarnation, the started attempts its journal doesn't report
+end `lost` only once the old incarnation's lease is over in master time, counted from the
+registration (the old stream gets no more heartbeat answers). The hold is stored with each
+attempt, so a master restart keeps it, counting afresh. Ordinary tasks of an old process still
+alive keep the at-least-once guarantee of a lost worker. Not chosen: stopping every task at
+the lease; refusing the new incarnation until the old one is lost.
+'''
+history = "JOURNAL.md#D443"
+step = "B230"
+code = ["crates/schedr-master/src/dispatch.rs::end_replaced", "crates/schedr-master/src/dispatch.rs::incarnation_replaced", "crates/schedr-master/src/service.rs::is_current", "crates/schedr-db/src/attempts.rs::mark_replaced"]
+checked = 2026-11-11

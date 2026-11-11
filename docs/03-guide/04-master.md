@@ -335,9 +335,11 @@ lock at its start (`BEGIN IMMEDIATE`), waiting for another writer instead of fai
 ## Starting up
 
 At start the master takes the lease (above), then checks that the database schema matches its version, then reads back the
-worker registry. Every worker that isn't gone counts as `disconnected` from that moment, so its
-lease starts again from zero: the master's own downtime never counts against workers. A worker
-that doesn't come back within the lease is lost in a round, with its attempts. Parse jobs live
+worker registry. Every worker that isn't gone counts as `disconnected` from that moment, and
+its lease starts again from zero once a master it may have replaced can no longer answer it:
+`lease_period` less `query_timeout` (20 s by default), how long that master may still believe
+it leads (decision 444). The master's own downtime never counts against workers. A worker that
+doesn't come back within that wait and the lease is lost in a round, with its attempts. Parse jobs live
 only in memory, and workers report their hashes again when they reconnect.
 
 Then the master listens for workers and starts its loop, and `/readyz` turns ready.

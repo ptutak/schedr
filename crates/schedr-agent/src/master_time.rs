@@ -208,6 +208,7 @@ mod tests {
             master_ms,
             heard_sequence: heard,
             wall_ms: 0,
+            lease_epoch: 0,
         }
     }
 

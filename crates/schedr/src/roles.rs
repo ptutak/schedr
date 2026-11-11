@@ -199,6 +199,10 @@ pub fn master_settings(config: &Config) -> Settings {
     Settings {
         heartbeat_interval: config.timings.heartbeat_interval,
         lease_timeout: config.timings.lease_timeout,
+        takeover_wait: config
+            .timings
+            .lease_period
+            .saturating_sub(config.timings.query_timeout),
         cancel_grace: config.master.cancel_grace,
         switch_off_after: config.watchers.switch_off_after,
         max_queued_events: config.triggers.max_queued_events,
@@ -693,6 +697,7 @@ pub async fn serve_master(
             .with_notifications(outbox.settings.clone()),
     )
     .with_refresh_limit(observed.health.stall() / 2)
+    .with_epoch(leadership.epoch())
     .with_problems(problems);
     if retry {
         hub = hub.with_listen_retry(listen_retry);
@@ -705,7 +710,8 @@ pub async fn serve_master(
     if restored > 0 {
         tracing::info!(
             restored,
-            "workers restored as disconnected; their leases start now"
+            "workers restored as disconnected; their leases start once a deposed master can no \
+             longer answer them"
         );
     }
     observed.ready.ready();

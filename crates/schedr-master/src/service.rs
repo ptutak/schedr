@@ -78,10 +78,12 @@ pub struct Hub {
     timings: crate::core::MasterTimings,
     /// Master time (see [`crate::clock`]), stamped on every message.
     steady: crate::clock::Steady,
+    /// The lease epoch this master leads with (decision 444), on every message's stamp.
+    epoch: i64,
     /// The heartbeats heard on each worker's current stream: the latest's number goes on every
     /// message to it (`MasterClock.heard_sequence`). One count per stream, so a replaced
     /// stream's reader can't put its numbers on the new one's messages.
-    heard: Arc<std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>>,
+    heard: Counters,
 }
 
 /// Another master took the lease over: this one's view is stale, and it must end.
@@ -130,6 +132,7 @@ impl Hub {
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             closing: Arc::new(watch::channel(false).0),
             steady: core_steady,
+            epoch: 0,
             heard: Arc::default(),
             clock,
         }
@@ -142,6 +145,13 @@ impl Hub {
     #[must_use]
     pub const fn with_listen_retry(mut self, period: Duration) -> Self {
         self.listen_retry = Some(period);
+        self
+    }
+
+    /// The hub stamping `epoch`, its lease's, on every message (decision 444).
+    #[must_use]
+    pub const fn with_epoch(mut self, epoch: i64) -> Self {
+        self.epoch = epoch;
         self
     }
 
@@ -630,7 +640,7 @@ impl Hub {
     /// The master's clock to stamp on a message (B225), `heard` the latest heartbeat heard on
     /// the worker's stream.
     fn stamp(&self, heard: u64) -> pb::MasterClock {
-        stamp_of((self.clock, self.steady), heard)
+        stamp_of((self.clock, self.steady), heard, self.epoch)
     }
 
     /// The latest heartbeat heard on `worker_id`'s current stream (0: none yet, or no stream).
@@ -737,6 +747,8 @@ impl Hub {
                 leading: self.leading.subscribe(),
                 clocks: (self.clock, self.steady),
                 heard,
+                epoch: self.epoch,
+                current: (worker_id.clone(), Arc::clone(&self.heard)),
             },
         ));
         let mut unhandled = false;
@@ -868,6 +880,13 @@ impl Hub {
             }
             return Err(Status::unavailable(NOT_LEADING));
         }
+        // The worker's old stream, no longer live (a live one refuses this registration), is
+        // answered no more from here (decision 443): a replaced incarnation's lease runs out
+        // from this registration, the master's last word to it, whatever the old process
+        // still sends.
+        if !core.is_live(&register.worker_id) {
+            lock_heard(&self.heard).remove(&register.worker_id);
+        }
         let registered = core.register(&register, (self.clock)()).await;
         match &registered {
             // Its journal is the whole truth now: what it reports is adopted (started) or
@@ -970,10 +989,12 @@ const NOT_LEADING: &str = "this master isn't leading (its database lease isn't r
      master took it over): connect again";
 
 /// The master's clock to stamp on a message (B225): this process's timeline, master time
-/// and the wall clock now, and the latest heartbeat heard on the worker's stream.
+/// and the wall clock now, the latest heartbeat heard on the worker's stream, and the lease
+/// epoch it leads with (decision 444).
 fn stamp_of(
     (wall, steady): (fn() -> Timestamp, crate::clock::Steady),
     heard: u64,
+    epoch: i64,
 ) -> pb::MasterClock {
     let wall = wall();
     pb::MasterClock {
@@ -981,6 +1002,7 @@ fn stamp_of(
         master_ms: steady(wall).as_millisecond(),
         heard_sequence: heard,
         wall_ms: wall.as_millisecond(),
+        lease_epoch: epoch,
     }
 }
 
@@ -992,6 +1014,10 @@ fn lock_heard(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Each worker's current stream's heartbeat counter (B225), shared by the hub and the
+/// streams' readers.
+type Counters = Arc<std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>>;
+
 /// Answers a worker's heartbeats as they arrive, before they wait for the lock: a busy master
 /// isn't a lost one. Not while paused: another master may be leading, and may count the worker
 /// lost. The stream is held weakly, for this reader not to keep it open.
@@ -1002,6 +1028,11 @@ struct HeartbeatAcks {
     clocks: (fn() -> Timestamp, crate::clock::Steady),
     /// The heartbeats heard on this stream: the latest's number.
     heard: Arc<AtomicU64>,
+    /// The lease epoch on the stamp.
+    epoch: i64,
+    /// Its worker and the hub's counters of the current streams: answered only while `heard`
+    /// is its worker's current one (decision 443).
+    current: (String, Counters),
 }
 
 impl HeartbeatAcks {
@@ -1013,15 +1044,25 @@ impl HeartbeatAcks {
             .fetch_max(sequence, Ordering::SeqCst)
             .max(sequence);
         if *self.leading.borrow()
+            && self.is_current()
             && let Some(stream) = self.stream.upgrade()
         {
             let ack = pb::MasterMessage {
                 message: Some(master_message::Message::HeartbeatAck(pb::HeartbeatAck {})),
-                clock: Some(stamp_of(self.clocks, heard)),
+                clock: Some(stamp_of(self.clocks, heard, self.epoch)),
             };
             // Full, the worker isn't reading: the next heartbeat tries again.
             let _ = stream.try_send(Ok(ack));
         }
+    }
+
+    /// Whether this is its worker's current stream: one replaced by a registration (a new
+    /// incarnation, or the same reconnecting) is answered no more.
+    fn is_current(&self) -> bool {
+        let (worker_id, streams) = &self.current;
+        lock_heard(streams)
+            .get(worker_id)
+            .is_some_and(|heard| Arc::ptr_eq(heard, &self.heard))
     }
 
     /// Master time now (a message's arrival).

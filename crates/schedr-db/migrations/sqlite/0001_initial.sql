@@ -388,6 +388,9 @@ CREATE TABLE attempts (
     cleanup_moves     INTEGER NOT NULL DEFAULT 0,
     -- When the moved cleanup was assigned, until its `Started`.
     moved_at          TEXT,
+    -- When its worker registered as a new incarnation that doesn't report it: it ends `lost`
+    -- once the old incarnation's lease is over (decision 443, B230).
+    replaced_at       TEXT,
     cleanup_not_before TEXT,
     -- The worker its waiting cleanup moved from: its late result still counts (decision 282).
     moved_from        TEXT,

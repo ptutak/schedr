@@ -1,0 +1,19 @@
+title = "A new leader waits out the deposed one; workers fence older epochs"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+After a takeover, a worker the new leader hasn't heard from counts as lost only a lead time
+(`lease_period - query_timeout`) plus the worker lease after it began leading. Every master
+message carries the leader's lease epoch; a worker that has seen an epoch refuses messages and
+registrations from a lower one, and reconnects, until a worker lease passes without word from
+that epoch (a database restored sets it back); a configuration whose lead isn't shorter than the
+worker lease is refused at load. Not chosen: the master's lead clock counting
+suspend (`CLOCK_BOOTTIME`); fencing by timeline only; restarting workers after a restore.
+'''
+history = "JOURNAL.md#D444"
+step = "B231"
+code = ["crates/schedr-master/src/core.rs::takeover_wait", "crates/schedr-agent/src/agent.rs::older_leader", "crates/schedr-master/src/service.rs::with_epoch"]
+checked = 2026-11-11

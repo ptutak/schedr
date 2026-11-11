@@ -271,7 +271,10 @@ sequenceDiagram
     end
 ```
 
-A restart that omits an attempt is reconciled similarly; a saved task result is retained.
+A restart that omits an attempt is reconciled similarly, once the old incarnation's lease is
+over (60 s from the new one's registration, the master's last word to the old one; stored, so
+a master restart counts it afresh); a saved task result is retained. An old incarnation that
+registers again with the attempt in its journal keeps it.
 
 ## Lost worker with cleanup_anywhere
 
@@ -390,11 +393,11 @@ sequenceDiagram
     Note over A: Master crashes; worker tasks continue
     Note over DB,B: Master lease: 30 s default; standby can take over after expiry (clean stop releases it)
     B->>DB: Take lease and read state
-    B->>B: Mark workers disconnected; restart worker leases
+    B->>B: Mark workers disconnected; leases restart after the old master's lead time
     Note over W: Reconnect backoff: 200 ms first, up to 30 s default and half known lease
     W->>B: Register (journal and roots)
     B-->>W: Registered (Continue, Kill, Ack or CLEAN_REST per entry)
-    Note over B: Worker lease: 60 s default from startup; absent worker becomes lost
+    Note over B: 20 s default (lease period less query timeout), then the 60 s worker lease; absent worker becomes lost
 ```
 
 ## Parse job
@@ -480,13 +483,15 @@ identical effects.
 
 Every master message carries the master's clock (`MasterClock`): its process's timeline,
 master time (its monotonic clock) as it was sent, the latest heartbeat number it had from this
-stream (`0`: only the `Register`), and its wall clock. Every deadline the master and its
+stream (`0`: only the `Register`), its wall clock, and its lease epoch (raised at each
+takeover; a worker that has seen an epoch ends a stream from a lower one, unless the higher
+one has been silent for a whole lease). Every deadline the master and its
 workers must agree on is a master time; a worker reads master time from these, counting from
 when it sent the heartbeat a message names. No deadline reads the wall clock it carries.
 
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
-| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard (its clock, as on every master message, names the heartbeat it answers); silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads and the stream is the worker's current one (not one a newer registration replaced) | Note the master as heard (its clock, as on every master message, names the heartbeat it answers); silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `Registered` | Master after `Register` | Apply timing, journal decisions and `script_uses` (`RootUses` per DAG root); ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `ScriptUses` | Master when the script roots sent for DAG roots change | Replace the uses (`RootUses` per DAG root); fold the used script roots' hashes into each DAG root's reported hash, withdrawing a DAG root that uses a script root this worker lacks (decisions 301, 303, 304) | Yes, it replaces; an omitted root uses none | — |
 | `AssignTask` | Master after storing assignment | Validate and start attempt, or reject it `TOO_LATE` past `start_by_ms` (its start timeout from when it was stored, in master time, read from the master's clock on its messages, two heartbeat intervals kept for `Started`); `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |

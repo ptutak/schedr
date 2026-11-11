@@ -6,7 +6,8 @@ topic = "cleanup"
 section = "Moving and disconnection"
 summary = '''
 A worker caps its reconnect backoff at half the lease the master gave it.
-A restarted master gives each worker a fresh lease from its start.
+A restarted master gives each worker a fresh lease from its start, plus the time a
+deposed master may still lead (decision 444).
 '''
 history = "archive/PROJECT.md#D307"
 step = "B168"

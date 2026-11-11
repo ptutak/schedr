@@ -1348,15 +1348,108 @@ async fn signs_of_life_are_written_at_most_once_per_heartbeat_interval() {
 
 #[tokio::test]
 async fn a_new_incarnation_ends_the_started_attempts_it_doesnt_report() {
+    // Once the old incarnation's lease (60 s) from the registration is over (decision 443,
+    // B230): its process may run them until then.
     let mut core = with_dag().await;
     let attempt = started_attempt(&mut core).await;
     core.disconnected("w1", later(1)).await.unwrap();
     core.register(&register("w1", "i2", vec![]), later(5))
         .await
         .unwrap();
+    assert!(core.is_live("w1"));
+    core.tick(later(64)).await.unwrap();
+    let open = core.db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(open.status, None, "held within the old lease");
+    core.tick(later(65)).await.unwrap();
     let ended = core.db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
-    assert!(core.is_live("w1"));
+}
+
+#[tokio::test]
+async fn an_old_incarnation_reporting_a_held_attempt_keeps_it() {
+    // Grok's review of decision 443: the old process registering again with the attempt in
+    // its journal is told to continue; the hold mustn't end it a lease later.
+    let mut core = with_dag().await;
+    let attempt = started_attempt(&mut core).await;
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(5))
+        .await
+        .unwrap();
+    core.disconnected("w1", later(8)).await.unwrap();
+    let journal = running(&attempt, 0);
+    let (registered, _) = core
+        .register(&register("w1", "i1", journal), later(10))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue)
+    );
+    // Neither when the first hold would have run out, nor a lease after the master next
+    // looks (the mark is cleared, not only forgotten in memory).
+    let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    for at in [65, 66, 130] {
+        // Alive throughout: its heartbeats keep it from being lost.
+        core.handle("w1", heartbeat(), later(at)).await.unwrap();
+        core.tick(later(at)).await.unwrap();
+        let open = core.db.attempt(&attempt).await.unwrap().unwrap();
+        assert_eq!(open.status, None, "ended at {at} s");
+    }
+}
+
+#[tokio::test]
+async fn another_workers_journal_leaves_a_held_attempt_held() {
+    // Grok's review of decision 443: a journal naming another worker's attempt (told to kill
+    // it) cleared that worker's hold, and the attempt was never ended.
+    let mut core = with_dag().await;
+    let attempt = started_attempt(&mut core).await;
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(5))
+        .await
+        .unwrap();
+    let (registered, _) = core
+        .register(&register("w2", "i1", running(&attempt, 0)), later(6))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill)
+    );
+    let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    for at in [30, 60, 65] {
+        core.handle("w1", heartbeat(), later(at)).await.unwrap();
+        core.handle("w2", heartbeat(), later(at)).await.unwrap();
+    }
+    core.tick(later(65)).await.unwrap();
+    assert_eq!(
+        core.db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(schedr_model::AttemptStatus::Lost),
+        "w2's journal cleared w1's hold"
+    );
+}
+
+#[tokio::test]
+async fn a_replaced_incarnations_hold_survives_a_master_restart() {
+    // Decision 443: the mark is stored; a restarted master holds it a whole lease from when
+    // it first sees it, then ends it.
+    let mut first = with_dag().await;
+    let attempt = started_attempt(&mut first).await;
+    first.disconnected("w1", later(1)).await.unwrap();
+    first
+        .register(&register("w1", "i2", vec![]), later(5))
+        .await
+        .unwrap();
+    let db = first.db.clone();
+    let mut restarted = MasterCore::new(db.clone(), Settings::default());
+    restarted.restore(later(30)).await.unwrap();
+    restarted.tick(later(30)).await.unwrap();
+    restarted.tick(later(89)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    restarted.tick(later(90)).await.unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(schedr_model::AttemptStatus::Lost)
+    );
 }
 
 #[tokio::test]
@@ -1389,6 +1482,8 @@ async fn a_new_incarnation_leaves_unstarted_attempts_to_expire() {
 
 #[tokio::test]
 async fn a_restarted_master_restores_workers_and_counts_their_lease_from_its_start() {
+    // Decision 444 (B231): from its start plus the time a deposed leader may still answer
+    // them (20 s by default), then the 60 s lease.
     let mut first = with_dag().await;
     let attempt = started_attempt(&mut first).await;
     let db = first.db.clone();
@@ -1399,9 +1494,9 @@ async fn a_restarted_master_restores_workers_and_counts_their_lease_from_its_sta
         registry_state(&restarted, "w1").await.0,
         WorkerState::Disconnected
     );
-    restarted.tick(later(160)).await.unwrap();
+    restarted.tick(later(180)).await.unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
-    restarted.tick(later(161)).await.unwrap();
+    restarted.tick(later(181)).await.unwrap();
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(schedr_model::AttemptStatus::Lost)
@@ -1429,12 +1524,13 @@ async fn a_restarted_master_takes_back_no_assignment_within_its_workers_lease() 
     let db = first.db.clone();
     let mut restarted = MasterCore::new(db.clone(), Settings::default());
     restarted.restore(later(100)).await.unwrap();
-    for at in [100, 130, 160] {
+    // The lease from the restart plus the takeover wait (decision 444).
+    for at in [100, 130, 160, 180] {
         restarted.tick(later(at)).await.unwrap();
         let open = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
         assert_eq!(open.status, None, "taken back at {at} s");
     }
-    restarted.tick(later(161)).await.unwrap();
+    restarted.tick(later(181)).await.unwrap();
     let ended = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(
         ended.status,

@@ -1024,6 +1024,11 @@ pub struct Agent<E> {
     journal: Journal,
     /// Master time as this session knows it (B225; see [`crate::master_time`]).
     master_time: MasterTime,
+    /// The highest lease epoch a master's message carried, and when one of it was last
+    /// accepted: a stream from a lower one, a deposed master's, is ended (decision 444),
+    /// until a lease passes without word from that epoch (a database restored, its epoch
+    /// set back; that leader has counted this worker lost by then).
+    leader_epoch: (i64, Option<tokio::time::Instant>),
     /// How long an attempt's first journal write takes (tests: a stalled disk, F14), and how
     /// many were delayed so.
     #[cfg(test)]
@@ -1185,6 +1190,7 @@ impl<E: Executor> Agent<E> {
             settings,
             executor,
             master_time: MasterTime::default(),
+            leader_epoch: (0, None),
             #[cfg(test)]
             journal_stall: (Duration::ZERO, Arc::default()),
             warnings,
@@ -2022,8 +2028,8 @@ impl<E: Executor> Agent<E> {
                 }
                 message = inbound.message() => match message {
                     Ok(Some(pb::MasterMessage { message: Some(message), clock })) => {
-                        if Self::answer_too_late(&message, opened.elapsed()) {
-                            return SessionEnd::Lost(TOO_LATE.to_owned());
+                        if let Some(why) = self.refused(&message, clock.as_ref(), opened) {
+                            return SessionEnd::Lost(why);
                         }
                         // Past the lease, a message (one held while this worker was frozen,
                         // B162, or on its way through a one-way cut, B163) doesn't count as
@@ -2064,6 +2070,49 @@ impl<E: Executor> Agent<E> {
                 }
             }
         }
+    }
+
+    /// Why a message ends the session before anything of it counts: a `Registered` past its
+    /// lease ([`Self::answer_too_late`]), or a deposed master's ([`Self::older_leader`]).
+    fn refused(
+        &mut self,
+        message: &master_message::Message,
+        clock: Option<&pb::MasterClock>,
+        opened: tokio::time::Instant,
+    ) -> Option<String> {
+        if Self::answer_too_late(message, opened.elapsed()) {
+            return Some(TOO_LATE.to_owned());
+        }
+        self.older_leader(clock)
+    }
+
+    /// Why a message stamped `clock` is a deposed master's: its lease epoch is lower than one
+    /// seen before (decision 444), and nothing of it counts; `None` otherwise, the highest
+    /// epoch noted.
+    fn older_leader(&mut self, clock: Option<&pb::MasterClock>) -> Option<String> {
+        let epoch = clock?.lease_epoch;
+        let (highest, heard) = self.leader_epoch;
+        let now = tokio::time::Instant::now();
+        if epoch < highest {
+            let fenced = match (heard, self.lease) {
+                (Some(heard), Some(lease)) => now.duration_since(heard) < lease,
+                _ => true,
+            };
+            if fenced {
+                return Some(format!(
+                    "a master leading with lease epoch {epoch}, after epoch {highest}: deposed, \
+                     connecting again"
+                ));
+            }
+            tracing::warn!(
+                epoch,
+                highest,
+                "a master with a lower lease epoch, and none of epoch {highest} for a lease: \
+                 its database was restored or replaced; following it"
+            );
+        }
+        self.leader_epoch = (epoch, Some(now));
+        None
     }
 
     /// A master message arrived on the live stream: the master's word, and its clock read

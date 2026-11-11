@@ -466,3 +466,37 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
 - **Known limits:** a `Started` held up more than two heartbeat intervals; a master whose
   monotonic clock jumps (some VM migrations); the holes in leadership and incarnations Grok's
   design review found (B230, B231).
+
+### <a id="D443"></a>2026-11-11: a replaced incarnation's lost attempts wait out its lease (decision 443, B230)
+
+- **Question:** B230 (Grok's review of the liveness draft): a worker's new incarnation was
+  accepted while the old process might still run within its lease, and the old one's
+  unreported attempts were retried at once, so a retry or a moved cleanup could overlap it.
+- **Chosen (the user's):** the new incarnation registers at once; the old one's unreported
+  started attempts end `lost` only after its lease in master time from the registration, the
+  old stream getting no more heartbeat answers. Stored with the attempts, the hold survives a
+  master restart, counting afresh. Not chosen: refusing the new incarnation until the old one
+  is lost (a fast pod restart would wait a lease); stopping every task at the lease (a network
+  blip longer than the lease would kill all of a worker's tasks).
+- **Known limit:** at the lease an old process stops only its `cleanup_anywhere` tasks and
+  triggers; an ordinary task still running there may overlap its retry, as with a lost worker.
+
+### <a id="D444"></a>2026-11-11: a new leader waits out the deposed one; workers fence older epochs (decision 444, B231)
+
+- **Question:** B231 (Grok's review of the liveness draft): a deposed master still answering
+  heartbeats kept a worker's lease alive past what the new leader counted.
+- **Chosen (the user's, A + C):** the new leader counts a worker it hasn't heard from lost only
+  after its leading began plus a lead time (`lease_period - query_timeout`, as long as the old
+  leader may still believe it leads) plus the worker lease; and every master message carries
+  the lease's epoch, a worker refusing a lower epoch than one it has seen (it reconnects).
+  Not chosen: the lead clock counting suspend (`CLOCK_BOOTTIME`), which covers only a paused
+  master; fencing by timeline (unordered).
+- **Then (a side agent's note, the user's choice):** a database restored from a backup sets the
+  epoch back, and every worker would refuse every master. The fence expires: a worker lease
+  without word from its highest epoch (that leader has counted the worker lost by then; a
+  deposed master stops answering within its lead time, shorter than the lease), and the lower
+  epoch is followed. Not chosen: restarting every worker after a restore.
+- **Then (Grok's review, the user's choice):** that holds only while the lead is shorter than
+  the worker lease, which a legal configuration could break (a 90 s lease period, 10 s queries:
+  an 80 s lead against a 60 s lease); such a configuration is refused at load. Not chosen:
+  sending the lead to workers for the fence to wait it out.

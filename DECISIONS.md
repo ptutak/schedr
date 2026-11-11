@@ -29,6 +29,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D444 | 2026-11-11 | user | built (B231 fixed) | workers | A new leader waits out the deposed one; workers fence older epochs |
+| D443 | 2026-11-11 | user | built (B230 fixed) | workers | A replaced incarnation's lost attempts wait out its lease |
 | D442 | 2026-11-11 | user | built (B225 fixed) | workers | One monotonic clock for the cluster: master time |
 | D441 | 2026-11-10 | user | built M4.15b | deployment | A DAG that no longer parses after a major upgrade is held |
 | D440 | 2026-11-10 | claude | built M4.14 | state | Retention also keeps the runs catchup counts as done, and runs still read |
@@ -958,6 +960,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D444: A new leader waits out the deposed one; workers fence older epochs
+- D443: A replaced incarnation's lost attempts wait out its lease
 - D442: One monotonic clock for the cluster: master time
 - D438: The hard memory cap is `RLIMIT_DATA`
 - D437: A task's budget is placed within a worker's pod limit

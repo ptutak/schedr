@@ -143,11 +143,13 @@ The names used across the documentation, the API and the logs.
 **Worker ID** and **incarnation**
 : The worker ID is stable across restarts (by default the host name, which is the pod name in
   Kubernetes). The incarnation ID is new each time the agent process starts. It tells the
-  master whether a worker reconnected (tasks still running) or restarted (its tasks are gone).
+  master whether a worker reconnected (tasks still running) or restarted (its tasks are gone:
+  those its journal doesn't report end `lost` once the old incarnation's lease is over).
 
 **Lease**
 : How long a worker may stay silent (the [worker lease](14-timings.md#fixed-timings), 60 s, counted from when its
-  latest message arrived, or from the master's start after a restart) before the master
+  latest message arrived, or after a restart from the master's start plus the time a master
+  it replaced may still answer, 20 s by default) before the master
   declares it `lost` and ends its attempts. Heartbeats renew it.
 
 **Journal**
