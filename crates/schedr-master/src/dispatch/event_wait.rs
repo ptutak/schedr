@@ -111,10 +111,22 @@ impl Dispatcher {
             let Some(run) = self.db.run_record(&waiting.run_id).await? else {
                 return Ok(false);
             };
-            let after = wait.waited.as_ref().map(|(id, at)| (*at, id.as_str()));
-            self.db
-                .first_named_event(event.name.as_str(), key.as_deref(), run.triggered_at, after)
-                .await?
+            let named = (event.name.as_str(), key.as_deref());
+            match &wait.waited {
+                // After one it said `NOT_YET` to: read back a lookback, those passed left out
+                // (B185).
+                Some((_, at)) => {
+                    let back = (self.event_lookback, waiting.instance_id.as_str());
+                    self.db
+                        .next_named_event_for(named, run.triggered_at, *at, back)
+                        .await?
+                }
+                None => {
+                    self.db
+                        .first_named_event(named.0, named.1, run.triggered_at, None)
+                        .await?
+                }
+            }
         };
         // A new one posted after its time ran out doesn't count, though seen late (as for the
         // node, Codex's review of part 1); a retry gets the one it was handed.

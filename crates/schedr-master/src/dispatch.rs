@@ -157,6 +157,9 @@ pub const ASSIGNMENTS_PER_ROUND: usize = 50;
 /// The most assignments a round takes back as never started (B18).
 pub const EXPIRIES_PER_ROUND: usize = 50;
 
+/// Why a task of a DAG in an ID conflict waits (B193).
+pub const DAG_IN_CONFLICT: &str = "waiting: DAG ID conflict";
+
 /// The most waiting reasons a round writes (each a statement, about 3.5 ms in stress runs): a
 /// burst of runs leaves thousands of tasks waiting, and their reasons (only shown) are filled in
 /// over the following rounds rather than in one long one (B18). The waiting counts in the
@@ -304,6 +307,9 @@ pub struct Dispatcher {
     /// When each cleanup waiting to move may go to another worker, in master time (D256, B228);
     /// after a restart, a whole wait from when it is first seen.
     move_not_before: BTreeMap<String, Timestamp>,
+    /// How far behind its cursor an event sensor reads back, for an event committed late
+    /// (B185; the triggers' `event_lookback`).
+    event_lookback: SignedDuration,
     /// How a commit cut off is read back.
     read_back: ReadBack,
     /// `CancelAttempt`s for running instances whose mapped task's step failed (75a), sent
@@ -391,6 +397,7 @@ impl Dispatcher {
             steady: crate::clock::as_given,
             unstarted_since: BTreeMap::new(),
             move_not_before: BTreeMap::new(),
+            event_lookback: SignedDuration::from_mins(1),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
             read_back: ReadBack::default(),
@@ -498,6 +505,13 @@ impl Dispatcher {
     #[must_use]
     pub fn with_arrivals(mut self, arrivals: Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// The dispatcher reading back `lookback` behind an event sensor's cursor (B185).
+    #[must_use]
+    pub fn with_event_lookback(mut self, lookback: Duration) -> Self {
+        self.event_lookback = SignedDuration::try_from(lookback).unwrap_or(SignedDuration::MAX);
         self
     }
 
@@ -904,10 +918,10 @@ impl Dispatcher {
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
-        let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = self
-            .db
-            .ready_instances(now)
-            .await?
+        self.wind_down_removed(now).await?;
+        let ready = self.db.ready_instances(now).await?;
+        let ready = self.unless_held(ready, now).await?;
+        let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
             .filter(|r| !self.set_aside.contains_key(&r.instance_id))
             .partition(|r| r.dag.task(&r.task_id).is_some_and(waits_for_a_run));
@@ -958,6 +972,56 @@ impl Dispatcher {
         // a time, the others go on and it is set aside, instead of every round failing on it.
         tracing::warn!(%error, "a round's assignments failed together: assigning one at a time");
         self.assign_one_by_one(now, &ready, outgoing).await
+    }
+
+    /// Cancels what the runs of removed DAGs haven't started (B192): each run whole or not at
+    /// all, so a run that fails is found again the next round, never left with its tasks
+    /// ended and itself running (Codex's review).
+    async fn wind_down_removed(&mut self, now: Timestamp) -> Result<(), DispatchError> {
+        for run_id in self.db.removed_dags_runs().await? {
+            // One run that can't be wound down holds no other assignment up.
+            if let Err(error) =
+                Box::pin(self.db.atomically(self.execution.wind_down(&run_id, now))).await
+            {
+                tracing::warn!(run_id, %error, "a removed DAG's run not wound down yet");
+            }
+        }
+        Ok(())
+    }
+
+    /// The ready tasks but those of a held DAG (its resources' cleanups still run): a removed
+    /// DAG's are left out, [`Self::wind_down_removed`] cancelling them (B192); a DAG in an ID
+    /// conflict's wait until it is resolved (B193, decision 107).
+    async fn unless_held(
+        &mut self,
+        ready: Vec<ReadyInstance>,
+        now: Timestamp,
+    ) -> Result<Vec<ReadyInstance>, DispatchError> {
+        if ready.is_empty() {
+            return Ok(ready);
+        }
+        let held = self.db.held_dags().await?;
+        let mut free = Vec::with_capacity(ready.len());
+        let mut reasons = Vec::new();
+        for instance in ready {
+            let cleanup = instance
+                .dag
+                .resource_of_cleanup(&instance.task_id)
+                .is_some();
+            match held.get(instance.dag.id.as_str()) {
+                Some(true) if !cleanup => {}
+                Some(false) if !cleanup => {
+                    if instance.queued_reason.as_deref() != Some(DAG_IN_CONFLICT) {
+                        reasons.push((instance.instance_id.clone(), DAG_IN_CONFLICT.to_owned()));
+                    }
+                }
+                _ => free.push(instance),
+            }
+        }
+        if !reasons.is_empty() {
+            self.db.set_queued_reasons(&reasons, now).await?;
+        }
+        Ok(free)
     }
 
     /// Fails each resource's user `unschedulable` for longer than the resource's

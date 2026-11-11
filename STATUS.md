@@ -9,7 +9,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M4B.3, A turn's messages in groups (decisions D397). Done when: a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
 - **Then:** M4B.4, M4B.5, M4B.6, R1.0a.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 34; first: B192 (medium/possible), B187 (medium/possible), B184 (medium/possible), B231 (high/rare), B230 (high/rare) (`BUGS.md`).
+- **Open bugs:** 29; first: B187 (medium/possible), B184 (medium/possible), B231 (high/rare), B230 (high/rare), B152 (low/likely) (`BUGS.md`).
 
 ## Recent
 
@@ -25,7 +25,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## In progress
 
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user.
-- M4 done 2026-11-10. Codex's full review done (F12-F14) 2026-11-10. The bug round before M4B (accepted 2026-11-10, commits pre-accepted): batch A (F14's two critical fixes, B205, B221-B224), D (CLI: B212-B215) and E (flaky tests: B22, B40, B150, B159, B166, B197, B4) done; B225-B228 rewritten 2026-11-11 on one monotonic clock (D442, the user's: master time on every message, deadlines in master time, a lease at least four heartbeats), under Grok's review, then commit; B230 and B231 (high, from Grok's design review) wait for the user's decision; next B (B192, B193, B185, B191, B195), C (B157, B85, B199), F (B48); then M4B, with a Grok review of the whole of M4B at its end. B187 left until 1.0 (the user).
+- M4 done 2026-11-10. Codex's full review done (F12-F14) 2026-11-10. The bug round before M4B (accepted 2026-11-10, commits pre-accepted): batch A (F14's two critical fixes, B205, B221-B224), D (CLI: B212-B215) and E (flaky tests: B22, B40, B150, B159, B166, B197, B4) done; B225-B228 rewritten 2026-11-11 on one monotonic clock (D442, the user's: master time on every message, deadlines in master time, a lease at least four heartbeats), committed 2026-11-11; B230 and B231 (high, from Grok's design review) wait for the user's decision; B (B192, B193, B185, B191, B195) done 2026-11-11 (Codex's review); next C (B157, B85, B199), F (B48: its record says measure with M4B.1 first, so it waits for the user); then M4B, with a Grok review of the whole of M4B at its end. B187 left until 1.0 (the user).
 - The greenhouse showcase done 2026-11-10 (examples/showcase, docs/02-dags/25-showcase.md; asked by the user: IoT, a test and a guide page): `make standalone DAGS=examples/showcase/dags`, then `make showcase`; its code review cancelled by the user.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
@@ -49,8 +49,7 @@ Nothing.
 
 ## Colleagues
 
-Codex at its limit (92% of its week; resets Sat 14 Nov 21:47). Grok reset 2026-11-10 (the user),
-its reviews since then about 8%; its script's week figure counts from Friday and is wrong now. Usage logs in the skills' `USAGE.md`.
+Codex at 97% of its week (resets Sat 14 Nov 21:47); Grok about 98% (resets Fri 13 Nov 9:00). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

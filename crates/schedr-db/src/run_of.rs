@@ -414,7 +414,29 @@ impl Database {
     pub async fn not_yet(&self, instance_id: &str) -> Result<(), DbError> {
         const SEEN: &str = "UPDATE task_instances SET waited_run = handed_run, waited_at = handed_at \
              WHERE id = $1{uuid}";
+        // A named event handed is kept as passed, in the same transaction: read back behind
+        // the cursor, it isn't handed again (B185). Looked up by its ID as a UUID, so the
+        // event's index serves it (Codex's review: a cast column scanned every event).
+        const HANDED: &str = "SELECT handed_run FROM task_instances WHERE id = $1{uuid}";
+        const PASS: &str = "INSERT INTO sensor_passed (instance_id, item) \
+            SELECT $1{uuid}, id FROM named_events WHERE id = $2{uuid} \
+            ON CONFLICT (instance_id, item) DO NOTHING";
         in_tx!(self, |tx, backend| {
+            let handed: Option<Option<String>> = sqlx::query_scalar(sql(backend, HANDED))
+                .bind(instance_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            // A run's ID is handed too: only an event's is in `named_events`.
+            if let Some(item) = handed
+                .flatten()
+                .filter(|item| uuid::Uuid::parse_str(item).is_ok())
+            {
+                sqlx::query(sql(backend, PASS))
+                    .bind(instance_id)
+                    .bind(item)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             sqlx::query(sql(backend, SEEN))
                 .bind(instance_id)
                 .execute(&mut *tx)

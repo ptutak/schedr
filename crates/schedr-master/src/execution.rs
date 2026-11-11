@@ -612,6 +612,42 @@ impl Execution {
         })
     }
 
+    /// Winds down a run of a removed DAG (B192; archive/PROJECT.md, DAG code delivery: "attempts
+    /// already running finish; tasks not started yet are cancelled"): a queued run ends
+    /// `cancelled`; in a running one every task and instance not started is cancelled, as
+    /// [`Self::cancel_run`] does, but nothing running is stopped or marked. A resource's
+    /// cleanup still runs. Returns the run's result, if it finished now.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or a database failure.
+    pub async fn wind_down(
+        &self,
+        run_id: &str,
+        now: Timestamp,
+    ) -> Result<Option<RunState>, ExecutionError> {
+        let run = self.run(run_id).await?;
+        if run.state.is_final() {
+            return Ok(None);
+        }
+        if run.state == RunState::Queued {
+            self.finish(run_id, &run.dag, RunState::Cancelled, now)
+                .await?;
+            return Ok(Some(RunState::Cancelled));
+        }
+        let mut progress = progress_of(&run);
+        let before = progress.snapshot();
+        let _ = progress.cancel();
+        self.settle_all(run_id, &run.dag, &mut progress).await?;
+        self.store(run_id, &mut progress, &before, Vec::new(), now)
+            .await?;
+        let result = progress.result();
+        if let Some(result) = result {
+            self.finish(run_id, &run.dag, result, now).await?;
+        }
+        Ok(result)
+    }
+
     /// Cancels one task of a run: one that hasn't started becomes `cancelled` at once, one
     /// that runs is marked so that whatever its attempt reports (or a rejection, an expired
     /// assignment, a lost worker) ends it `cancelled` without a retry, a failure staying a

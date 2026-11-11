@@ -330,6 +330,16 @@ CREATE TABLE task_instances (
     UNIQUE (run_id, task_id, map_index)
 );
 
+-- The events an `@sensor(wait_for=EventNamed(...))` was handed and said `NOT_YET` to (B185): it
+-- reads back a lookback behind its cursor, for one committed late, and none of these again.
+CREATE TABLE sensor_passed (
+    instance_id TEXT NOT NULL REFERENCES task_instances (id) ON DELETE CASCADE,
+    item        TEXT NOT NULL REFERENCES named_events (id) ON DELETE CASCADE,
+    PRIMARY KEY (instance_id, item)
+);
+-- An event deleted by retention finds its rows (the cascade).
+CREATE INDEX sensor_passed_by_item ON sensor_passed (item);
+
 CREATE INDEX task_instances_ready ON task_instances (ready_at) WHERE state = 'queued';
 -- Each round's retries due and running attempts: only the pending ones, not the history (B87).
 CREATE INDEX task_instances_retry_due ON task_instances (ready_at) WHERE state = 'up_for_retry';

@@ -122,8 +122,10 @@ references there, as are upstream outputs.
 
 The master gives the first matching event posted since the run was created and no later than
 its `max_wait` to the function's first parameter. `NOT_YET` means “not this event”: it waits
-for a later match until `max_wait`. A retry gets the same event. Without `key=`, any key
-matches. As with the node, every waiting run can receive the same event.
+for a later match until `max_wait`. A retry gets the same event. An event whose time was
+taken before the one it said `NOT_YET` to but stored after it is still given, if it is no more
+than a minute older (`SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK`); none is given twice. Without
+`key=`, any key matches. As with the node, every waiting run can receive the same event.
 
 ## Deciding whether an event starts a run
 

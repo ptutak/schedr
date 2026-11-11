@@ -697,6 +697,26 @@ impl Hub {
         }
     }
 
+    /// Whether `stream` still carries its worker's messages (under the core's lock); not, it
+    /// is let go.
+    async fn still_served(&self, core: &MasterCore, worker_id: &str, stream: &Outbound) -> bool {
+        if !self.is_current(worker_id, stream).await {
+            // Replaced by a newer stream of the worker: what this one still says is out of
+            // date, and must not change the newer one's state (B44).
+            tracing::warn!(worker_id, "messages of a replaced stream dropped");
+            return false;
+        }
+        if !core.is_live(worker_id) {
+            // The worker was taken for lost (its lease) while this stream stayed open: ended,
+            // so it registers again and its journal is reconciled; meanwhile its messages
+            // change nothing.
+            self.streams.lock().await.remove(worker_id);
+            tracing::warn!(worker_id, "stream of a worker taken for lost ended");
+            return false;
+        }
+        true
+    }
+
     async fn serve_stream(
         self,
         worker_id: String,
@@ -737,29 +757,22 @@ impl Hub {
             let mut outgoing = Vec::new();
             {
                 let mut core = self.core.lock().await;
-                if !self.is_current(&worker_id, &stream).await {
-                    // Replaced by a newer stream of the worker: what this one still says is
-                    // out of date, and must not change the newer one's state (B44).
+                if !self.still_served(&core, &worker_id, &stream).await {
                     reader.abort();
-                    tracing::warn!(worker_id, "messages of a replaced stream dropped");
-                    return;
-                }
-                if !core.is_live(&worker_id) {
-                    // The worker was taken for lost (its lease) while this stream stayed open:
-                    // ended, so it registers again and its journal is reconciled; meanwhile
-                    // its messages change nothing.
-                    reader.abort();
-                    self.streams.lock().await.remove(&worker_id);
-                    tracing::warn!(worker_id, "stream of a worker taken for lost ended");
                     return;
                 }
                 let mut next = Some(first);
                 let mut handled = 0;
                 let mut finished = false;
                 while let Some(message) = next.take() {
-                    finished |= matches!(message, worker_message::Message::Finished(_));
+                    let is_finished = matches!(message, worker_message::Message::Finished(_));
                     match self.handle(&mut core, &worker_id, message).await {
-                        Ok(out) => outgoing.extend(out),
+                        // A round wakes for a `Finished` recorded, not one dropped or whose
+                        // handling ended the stream (B191, decision 42).
+                        Ok(out) => {
+                            finished |= is_finished;
+                            outgoing.extend(out);
+                        }
                         // Refused for its data, it would be refused again after a reconnect,
                         // and the worker's later messages with it: dropped, the stream goes on
                         // (B106; a `Finished` is stored as the attempt's failure instead).

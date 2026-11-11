@@ -1915,6 +1915,99 @@ async fn a_task_or_file_gone_since_the_run_started_is_explained() {
 }
 
 #[tokio::test]
+async fn a_removed_dags_tasks_not_started_are_cancelled() {
+    // B192: its runs finish only what they started; a task queued (or ready later) is
+    // cancelled, never assigned to a worker still on its code.
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let gone = DagChange::Remove {
+        dag_id: DagId::new("sync").unwrap(),
+    };
+    db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert!(
+        !out.iter().any(|o| matches!(
+            o.message.message,
+            Some(pb::master_message::Message::AssignTask(_))
+        )),
+        "{out:?}"
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn a_removed_dags_running_task_finishes_and_nothing_after_it_starts() {
+    // Codex's review of B192: only ready tasks were cancelled, so a scheduled downstream task
+    // outlived the removal and ran once the DAG came back; the running one isn't stopped.
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let extract = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&extract), ts(NOW))
+        .await
+        .unwrap();
+    let gone = DagChange::Remove {
+        dag_id: DagId::new("sync").unwrap(),
+    };
+    db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
+    let out = dispatcher.step(later(1)).await.unwrap();
+    assert!(out.is_empty(), "nothing assigned, nothing stopped: {out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "load").await.0,
+        TaskInstanceState::Cancelled
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Running
+    );
+    redefine(&db, dag(0)).await;
+    dispatcher
+        .finished(
+            "w1",
+            &finished(&extract, pb::AttemptStatus::Success, &json!([1])),
+            later(2),
+        )
+        .await
+        .unwrap();
+    let out = dispatcher.step(later(3)).await.unwrap();
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Success
+    );
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.state, RunState::Cancelled);
+}
+
+#[tokio::test]
+async fn a_dag_in_an_id_conflict_keeps_its_tasks_queued_until_it_is_resolved() {
+    // B193 (decision 107): no task of it is assigned while two places define it; once one
+    // does again, they are.
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let conflict = DagChange::Conflict {
+        dag_id: DagId::new("sync").unwrap(),
+        places: Vec::new(),
+        pause: false,
+    };
+    db.apply_dag_changes(&[conflict], ts(NOW)).await.unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+    assert_eq!(
+        reason_of(&db, &run_id, "extract").await.as_deref(),
+        Some(DAG_IN_CONFLICT)
+    );
+    redefine(&db, dag(0)).await;
+    let out = dispatcher.step(later(1)).await.unwrap();
+    assert_eq!(assignment(&out[0]).task_id, "extract");
+}
+
+#[tokio::test]
 async fn a_worker_on_newer_code_whose_parse_is_on_its_way_gets_the_task() {
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
     dispatcher.report_root("w1", "etl", "h3");
@@ -4245,6 +4338,56 @@ async fn a_sensor_waiting_for_an_event_is_called_with_it_and_then_with_a_later_o
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Success
     );
+}
+
+#[tokio::test]
+async fn a_sensor_that_said_not_yet_still_sees_an_event_committed_late_with_an_earlier_time() {
+    // B185: two posts overlap; the later-timed one commits first and is handed, `NOT_YET`; the
+    // earlier-timed one, committed after, sat behind the sensor's cursor and was never given.
+    let (mut dispatcher, db, _run_id) = with_run(event_sensor_dag()).await;
+    post_paid(&db, "o-1", later(5)).await;
+    let out = dispatcher.step(later(6)).await.unwrap();
+    assert_eq!(out.len(), 1);
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(6))
+        .await
+        .unwrap();
+    let not_yet = pb::Finished {
+        outcome: "NotYet".to_owned(),
+        ..finished(&attempt, pb::AttemptStatus::Success, &json!(null))
+    };
+    dispatcher.finished("w1", &not_yet, later(7)).await.unwrap();
+    assert_eq!(
+        dispatcher.step(later(8)).await.unwrap().len(),
+        0,
+        "not it again"
+    );
+    // Posted at 3 s, committed now.
+    post_paid(&db, "o-1", later(3)).await;
+    let out = dispatcher.step(later(9)).await.unwrap();
+    assert_eq!(out.len(), 1, "the late one is handed");
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&attempt), later(9))
+        .await
+        .unwrap();
+    dispatcher
+        .finished("w1", &not_yet_of(&attempt), later(10))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher.step(later(11)).await.unwrap().len(),
+        0,
+        "and only once"
+    );
+}
+
+fn not_yet_of(attempt: &str) -> pb::Finished {
+    pb::Finished {
+        outcome: "NotYet".to_owned(),
+        ..finished(attempt, pb::AttemptStatus::Success, &json!(null))
+    }
 }
 
 #[tokio::test]

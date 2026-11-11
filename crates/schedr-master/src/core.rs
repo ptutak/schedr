@@ -492,6 +492,7 @@ impl MasterCore {
                     .saturating_add(settings.cleanup_move_wait),
             )
             .with_start_timeout(settings.lease_timeout)
+            .with_event_lookback(settings.event_lookback)
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
         dispatcher.set_max_instances(settings.max_instances);

@@ -542,6 +542,43 @@ impl Database {
         rows.into_iter().map(stored_dag).collect()
     }
 
+    /// The DAGs whose queued tasks mustn't be assigned, each `true` when removed (their tasks
+    /// not started are cancelled, B192) and `false` when in an ID conflict (they wait until it
+    /// is resolved, B193; decision 107).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn held_dags(&self) -> Result<BTreeMap<String, bool>, DbError> {
+        const HELD: &str = "SELECT dag_id, removed_at IS NOT NULL FROM dags \
+            WHERE removed_at IS NOT NULL OR conflict IS NOT NULL";
+        let rows: Vec<(String, bool)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, HELD)).fetch_all(pool).await?
+        });
+        Ok(rows.into_iter().collect())
+    }
+
+    /// The unfinished runs of removed DAGs with something not started yet (B192): queued runs,
+    /// and running ones with a task scheduled, queued, up for retry or unschedulable. The
+    /// master cancels what they haven't started; their running attempts finish.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn removed_dags_runs(&self) -> Result<Vec<String>, DbError> {
+        const RUNS: &str = "SELECT r.id{text} FROM runs r JOIN dags d ON d.dag_id = r.dag_id \
+            WHERE d.removed_at IS NOT NULL AND r.state IN ('queued', 'running') \
+            AND (r.state = 'queued' OR EXISTS (SELECT 1 FROM task_instances t \
+                WHERE t.run_id = r.id \
+                AND t.state IN ('scheduled', 'queued', 'up_for_retry', 'unschedulable'))) \
+            ORDER BY r.triggered_at, r.id";
+        Ok(on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql(backend, RUNS))
+                .fetch_all(pool)
+                .await?
+        }))
+    }
+
     /// DAG `dag_id` as [`Self::stored_dags`] lists it, read alone (B136: one DAG's reads
     /// read every DAG); `None` if it was never stored.
     ///

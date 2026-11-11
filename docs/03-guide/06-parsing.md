@@ -248,7 +248,16 @@ name that DAG. A file defining such a DAG fails to import, and the error says wh
 
 A DAG ID defined in two places within the current code (two files, or two roots) is in
 **conflict**. No new runs are created and nothing is assigned until it is resolved; running
-attempts finish. Workers on different code are never a conflict: only the newest code counts.
+attempts finish, and queued tasks wait, shown as `waiting: DAG ID conflict` (its resources'
+cleanups still run). Workers on different code are never a conflict: only the newest code
+counts.
+
+A DAG no longer defined (its file deleted, or no longer defining it) is removed: its history is
+kept, and its runs in progress finish the attempts they started. Everything else they haven't
+started is cancelled at the next round: queued tasks, tasks waiting for upstream ones, retries
+and unschedulable tasks; a queued run ends `cancelled`. A resource's cleanup still runs. A run
+whose last attempt then finishes ends `cancelled`, or `failed` if a task failed. If the DAG
+comes back, nothing it cancelled starts again.
 
 A conflict is resolved by removing one of the places. If the file left fails to import at
 that moment, and the version stored came from the file removed, the DAG stays in conflict

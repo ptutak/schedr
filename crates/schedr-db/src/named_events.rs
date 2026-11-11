@@ -2,7 +2,7 @@
 //! its own, a repeat of a name and key too; a trigger starts a run per key it hasn't seen, and a
 //! step waiting in a run matches one posted since its run started.
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use uuid::Uuid;
 
 use crate::database::{Database, DbError};
@@ -274,6 +274,41 @@ impl Database {
                 .bind(db_time(since))
                 .bind(after_at.map(db_time))
                 .bind(after_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        found.map(row).transpose()
+    }
+
+    /// The first event of `name` (and `key`) posted since `since` that the sensor of
+    /// `instance_id` wasn't handed and said `NOT_YET` to, posted no earlier than `back` before
+    /// its cursor `after` (B185): one committed late, its time taken before its commit, sits
+    /// behind the cursor, and is found still within that lookback.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or the row doesn't read.
+    pub async fn next_named_event_for(
+        &self,
+        (name, key): (&str, Option<&str>),
+        since: Timestamp,
+        after: Timestamp,
+        (back, instance_id): (SignedDuration, &str),
+    ) -> Result<Option<NamedEvent>, DbError> {
+        let query = format!(
+            "SELECT {COLUMNS} FROM named_events WHERE name = $1 AND ($2 IS NULL OR key = $2) \
+             AND posted_at >= $3{{ts}} AND posted_at >= $4{{ts}} AND NOT EXISTS \
+             (SELECT 1 FROM sensor_passed p WHERE p.instance_id = $5{{uuid}} \
+             AND p.item = named_events.id) ORDER BY posted_at, id LIMIT 1"
+        );
+        let from = after.checked_sub(back).unwrap_or(Timestamp::MIN);
+        let found: Option<Row> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql_text(backend, &query))
+                .bind(name)
+                .bind(key)
+                .bind(db_time(since))
+                .bind(db_time(from))
+                .bind(instance_id)
                 .fetch_optional(pool)
                 .await?
         });
