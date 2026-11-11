@@ -82,16 +82,17 @@ checks only the worker's half (a start it would allow is at least the reserve be
 plus the unseen-stall allowance). Decision 446's run of the core and the dispatcher, with restarts
 and takeovers, is not built.
 
-### The worker's cutoff is the earlier of the receipt and the stamp
+### The worker's cutoff is the earliest of the receipt, the stamp and what the master heard
 
-A `cleanup_anywhere` task stops at the earlier of the worker lease after the last message received
-and the bound of the last stamp's `master_ms` plus the lease. The cleanup gate waits on that same
+A `cleanup_anywhere` task stops at the earliest of the worker lease after the last message received,
+the bound of the last stamp's `master_ms` plus the lease, and the lease (less 0.1 %) after this
+session sent the latest heartbeat a stamp's `heard_sequence` named. The cleanup gate waits on that same
 instant, and a reconnect keeps it until the new session has a sample. A message held on the way
 cannot push the stop later than the receipt bound (decision 252); the stamp pulls it earlier
-(decision 445).
+(decision 445); the heard heartbeat's send pulls it to before the master's loss (decision 453).
 
-`cutoff = min(heard + lease, bound(last.master_ms + lease), carried)`, with `bound` the first
-rule's. With no sample and nothing carried, `cutoff_in` is `None`, not zero, and only
+`cutoff = min(heard + lease, bound(last.master_ms + lease), heard_sent + lease - lease/1000,
+carried)`, with `bound` the first rule's; the third is zero after a pause. With no sample and nothing carried, `cutoff_in` is `None`, not zero, and only
 `heard + lease` remains. A `Registered` that names heartbeat 0 is a sample. The master loses the
 worker when `master_time > last_worker_message + lease`: the later of the last arrival
 (`service::read_stream`, `Arrivals::arrived`, before the lock) and the last handled message
@@ -102,22 +103,24 @@ the wait is a whole one from when this master first sees it. Where the last stam
 that last worker message, `bound(stamp + lease)` is before the loss and the move is a grace and a
 move-wait later, so the worker has stopped. A later master send is stamped at send
 (`service::deliver`) and moves the worker's `heard` and `last.master_ms` without moving
-`last_worker_message`. A send more than `cancel_grace + cleanup_move_wait` after the last worker
-message (defaults 30 s + 10 s, against a 60 s lease) leaves this cutoff after the move. The guide's
-diagram says the master counts its lease from the stamp; the code counts it from the last worker
-message. `stop_cut_off` also stops every trigger. The timer is armed only while `gates` is
+`last_worker_message`; it carries the same `heard_sequence`, so `heard_sent` stays, and the master
+received that heartbeat no earlier than its send: `heard_sent + lease` (on a clock at most 0.1 %
+fast) is at or before the loss, and the worker has stopped a grace and a move wait before the
+move, whatever the master sends. `stop_cut_off` also stops every trigger. The timer is armed only while `gates` is
 non-empty, so a worker with no `cleanup_anywhere` task does not run this cutoff.
 
 `agent::lease_deadline` takes the min; `agent::master_cutoff` and `master_time::cutoff_in` are the
-master-time side; `agent::open_session` stores it in `carried_cutoff` before `MasterTime::open`
+master-time side (`MasterTime::heard` sets `heard_sent`); `agent::open_session` stores it in `carried_cutoff` before `MasterTime::open`
 forgets the samples; `agent::heard_master` drops the carried instant once `cutoff_in` is `Some`.
 `agent::publish_deadline` is what `attempt::CleanupGate::passes` reads, and `agent::on_alive`
 recomputes it. Decisions 445 and 252. Breaks
 `master_time::window_tests::the_cutoff_counts_from_the_last_stamp_on_master_time`,
+`the_cutoff_counts_from_the_send_of_what_the_master_last_heard`,
 `agent::tests::a_reconnect_keeps_the_cutoff_the_last_stamps_set`,
 `the_cleanup_gates_read_the_master_time_cutoff`,
 `a_master_gone_silent_stops_a_task_whose_cleanup_may_move`, and the simulator's check that a worker
-still inside `cutoff_in` is within a lease of the last stamp. The move wait breaks
+still inside `cutoff_in` is within a lease of when the master last heard it (heartbeats lost one
+way included). The move wait breaks
 `dispatch::tests::a_lost_workers_cleanup_waits_for_a_task_it_cant_see_to_stop`. No test runs the
 worker's cutoff and the master's move against one clock.
 
@@ -306,6 +309,12 @@ Each is one line; the reader's page has the diagrams.
   refuses to start it two intervals before: four intervals between the last start and the take-back,
   for a `Started` held on its way. A reassignment comes 20 s later by default. Not chosen: one
   interval; none.
+- **A worker's cutoff counts from the send of the last heartbeat the master heard** (D453): The
+  worker's cutoff is also at most a lease, less 0.1 %, after it sent the latest heartbeat a master
+  stamp names as heard (`heard_sequence`): the master received it no earlier and counts the worker
+  lost from it, so a worker whose messages are lost one way stops before its cleanup moves, whatever
+  the master still sends (B233). Not chosen: the master counting its lease from its own last send
+  too (a silent worker kept alive while the master writes to it).
 
 ### Drain
 
@@ -399,8 +408,8 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/jobs.rs` (D297)
 - `crates/schedr-agent/src/journal.rs::write_many` (D396)
 - `crates/schedr-agent/src/master_time.rs::MasterTime` (D442)
-- `crates/schedr-agent/src/master_time.rs::cutoff_in` (D445)
-- `crates/schedr-agent/src/master_time.rs::heard` (D447)
+- `crates/schedr-agent/src/master_time.rs::cutoff_in` (D445, D453)
+- `crates/schedr-agent/src/master_time.rs::heard` (D447, D453)
 - `crates/schedr-agent/src/master_time.rs::wall_skew` (D449)
 - `crates/schedr-agent/src/master_time.rs::with_window` (D447)
 - `crates/schedr-agent/src/status.rs` (D252)
@@ -478,6 +487,6 @@ None.
 <!-- generated by scripts/records.py: details -->
 Details and edge cases, with the reasons; read them before changing this:
 
-- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445
+- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453
 - archive/PROJECT.md: Cleanup and resources, DAG code delivery, Master–worker protocol, Web UI and CLI, Worker lifecycle, Worker memory protection and crash recovery
 <!-- end of details -->

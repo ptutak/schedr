@@ -25,3 +25,14 @@ done_when = '''
 the slim image is released with 1.0.0 and its smoke test runs a DAG without connections
 '''
 status = "planned"
+
+[[steps]]
+id = "R1.0b"
+title = "The master's side in the clock simulator"
+scope = '''
+(decision 446; built later, the user's choice 2026-11-11): the master's core and dispatcher in `clock_sim` beside the worker's `MasterTime`, with restarts, takeovers and incarnations, checking the four rules against one virtual clock (the take-back two heartbeats past `start_by`, a replaced incarnation's hold, a moved cleanup's wait)
+'''
+done_when = '''
+the simulator drives the master's core and the worker together; removing the start grace, the hold or the move wait makes it fail
+'''
+status = "planned"

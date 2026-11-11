@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
 | D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
 | D451 | 2026-11-11 | user | built M4B.3 | components | B48 is fixed by M4B's per-group memory snapshot |
 | D450 | 2026-11-11 | user | built M4B.0 | workers | The master expires an assignment two heartbeats after its deadline |
@@ -971,6 +972,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D453: A worker's cutoff counts from the send of the last heartbeat the master heard
 - D450: The master expires an assignment two heartbeats after its deadline
 - D449: A clock-skew warning from the master's wall clock
 - D447: The worker's best clock sample is taken over a window

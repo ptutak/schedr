@@ -7,17 +7,17 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M4B, Batched worker messages (a milestone after M4).
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
-- **Then:** R1.0a.
+- **Then:** R1.0a, R1.0b.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 23; first: B187 (medium/possible), B184 (medium/possible), B233 (high/rare), B152 (low/likely), B148 (medium/rare) (`BUGS.md`).
+- **Open bugs:** 22; first: B187 (medium/possible), B184 (medium/possible), B152 (low/likely), B148 (medium/rare), B82 (medium/rare) (`BUGS.md`).
 
 ## Recent
 
+- D453 (2026-11-11): the cutoff from what the master heard (decision 453, B233)
 - D445 (2026-11-11): the clock step before M4B (decisions 445-452)
 - D444 (2026-11-11): a new leader waits out the deposed one; workers fence older epochs (decision 444, B231)
 - D443 (2026-11-11): a replaced incarnation's lost attempts wait out its lease (decision 443, B230)
 - D442 (2026-11-11): one monotonic clock for the cluster (decision 442, B225-B228)
-- D441 (2026-11-10): a DAG that no longer parses after a major upgrade (decision 441, Q26)
 - M4B.5 (2026-11-11): The agent's journal in groups
 - M4B.4 (2026-11-11): A turn's `Finished`s written together
 - M4B.3 (2026-11-11): A turn's messages in groups
@@ -31,6 +31,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
 - For the user: M4.13b's review fixes changed documented behaviour (an email's recipients read when it is sent; `timeout` bounds the SMTP exchange); M4.12c's CI failed only on the undone guard.
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
+- B233 fixed 2026-11-11 (D453, the user's choice): a worker's cutoff also counts from the send of the last heartbeat the master heard; the simulator loses heartbeats one way. D446's master side planned as R1.0b, after M4B (the user's choice).
 - Fork servers load all of schedr before forking, the bare one too (asked by the user 2026-11-10): a child's import of the showcase's ingest.py 241 ms -> 23 ms; `make standalone` preloads the showcase's libraries (PRELOAD).
 
 ## Waiting for the user

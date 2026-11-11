@@ -521,3 +521,14 @@ with restarts and takeovers, are left open for the user to decide (built later, 
 narrowed). Grok's review of the step: a reconnect forgot the master-time cutoff, the cleanup
 gates read only the receipt's, the alive tick didn't recheck it after a suspend, the age gauge
 froze between sessions, overlapping stalls in the simulator; all fixed, each with a test.
+
+### <a id="D453"></a>2026-11-11: the cutoff from what the master heard (decision 453, B233)
+
+Grok found, writing the invariants of master time, that a cut one way (the worker's heartbeats
+lost, the master's messages arriving) left the worker's cutoff behind the master's later stamps,
+while the master counts the worker lost from the last heartbeat it received: a send more than a
+grace and a move wait (40 s by default) after that left a `cleanup_anywhere` task running beside
+its moved cleanup. The user chose to count the cutoff from the send of the last heartbeat a stamp
+names as heard, over the master counting from its own sends. With answered heartbeats the new
+bound and the stamp's are within milliseconds; the simulator now loses heartbeats one way and
+checks the worker against the master's loss, and fails without the bound.

@@ -257,17 +257,41 @@ sequenceDiagram
     Note over M: The master counts its lease from the worker's last message it received.
 ```
 
-When the last stamp answers the worker's last message, the worker has stopped before the
-master loses it. When the worker's messages are lost on the way while the master's still arrive,
-it can stop later than the master moves its cleanup: an open bug (B233).
+### A worker cut off one way (decision 453)
+
+The master counts a worker lost a lease after the last message it received from it, not from
+its own last send. With the worker's heartbeats lost on the way while the master's messages
+still arrive, each stamped later than the one before, the stamp alone would keep pushing the
+worker's cutoff past the moment the master moves its cleanup. So the cutoff has a third bound:
+every master message names the last heartbeat it heard (`heard_sequence`), the worker knows when
+it sent that heartbeat, and the master received it no earlier. The worker stops a lease after
+that send, less the drift allowance (0.1 %), on its own boot clock.
+
+```{mermaid}
+sequenceDiagram
+    participant W as Worker
+    participant M as Master
+    W->>M: Heartbeat 7, sent at 10 s (worker's clock)
+    Note over M: Heard at 10.02 s. Lost from 70.02 s (lease 60 s).
+    W-xM: Heartbeats 8, 9, ... lost on the way
+    M->>W: Assignment stamped at 50 s, heard_sequence 7
+    Note over W: By the stamp alone: stop near 110 s.
+    Note over W: By heartbeat 7's send: stop at 10 + 60 - 0.06 = 69.94 s. Stops then.
+    Note over M: Moves the cleanup a grace and a move wait after 70.02 s.
+```
+
+When the master answers each heartbeat, this bound and the stamp's are within a few
+milliseconds of each other; it only matters when the worker's messages stop getting through.
 
 ## Checked by a simulator (decision 446)
 
 The worker's real `MasterTime` runs against a master on a virtual clock in a property test
 (`crates/schedr-agent/tests/clock_sim.rs`): rate drift up to 0.1 %, delays both ways up to
 5 s, answers lost, assignments delivered up to 30 s late, and stalls the boot clock missed.
-At every event it checks that a start is at least the reserve before its deadline in master
-time, and that a worker not yet cut off is within a lease of the last stamp. Removing the
+Heartbeats are also lost on their way to the master while its messages still arrive, naming
+the last heartbeat it heard. At every event it checks that a start is at least the reserve
+before its deadline in master time, and that a worker not yet cut off is within a lease of when
+the master last heard it (so of the last stamp too). Removing the third bound above, or the
 drift allowance makes it fail at once. The master's side of the rules (the take-back two
 heartbeats after the deadline, a replaced incarnation's hold) is checked by the dispatcher's
 tests; running the master's core and dispatcher in the simulator too, with restarts and
@@ -277,7 +301,7 @@ takeovers, as decision 446 has it, is still to come.
 flowchart LR
     gen[Random scenario: drift, delays, losses, stalls, late assignments] --> sim[Worker MasterTime on virtual clocks]
     sim --> rule1{Started at least the reserve before start_by?}
-    sim --> rule3{Not cut off only within a lease of the last stamp?}
+    sim --> rule3{Not cut off only within a lease of the last heartbeat the master heard?}
     rule1 -->|no| fail[Fails, with the smallest scenario]
     rule3 -->|no| fail
 ```

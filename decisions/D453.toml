@@ -1,0 +1,17 @@
+title = "A worker's cutoff counts from the send of the last heartbeat the master heard"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+The worker's cutoff is also at most a lease, less 0.1 %, after it sent the latest heartbeat a
+master stamp names as heard (`heard_sequence`): the master received it no earlier and counts the
+worker lost from it, so a worker whose messages are lost one way stops before its cleanup moves,
+whatever the master still sends (B233). Not chosen: the master counting its lease from its own
+last send too (a silent worker kept alive while the master writes to it).
+'''
+history = "JOURNAL.md#D453"
+step = "M4B.0"
+code = ["crates/schedr-agent/src/master_time.rs::cutoff_in", "crates/schedr-agent/src/master_time.rs::heard"]
+checked = 2026-11-11

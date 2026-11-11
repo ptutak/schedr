@@ -36,8 +36,9 @@ the warnings change (see [The fork server](#the-fork-server)).
 If the connection drops, running tasks initially keep running. After a worker lease (60 s
 by default) without word from the master, the agent stops those with `cleanup_anywhere` as
 `lost`, using a retry; sooner when the master's last message was held on its way: the agent
-also stops them once master time may have passed that message's stamp plus the lease, over
-a reconnect too (see [Master time](17-master-clock.md)). Their cleanup waits for the master's decision, including if a task
+also stops them once master time may have passed that message's stamp plus the lease, or a
+lease after it sent the last heartbeat the master says it heard (its own messages lost while the
+master's still arrive), over a reconnect too (see [Master time](17-master-clock.md)). Their cleanup waits for the master's decision, including if a task
 ends on its own while disconnected. A master outage longer than the lease has the same effect.
 The agent ends any stream silent for a lease, whatever it runs, and acts on no message
 arriving past that limit. This also applies while fetching inputs: a late chunk is ignored,

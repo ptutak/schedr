@@ -144,7 +144,7 @@ pub struct SampleReading {
 }
 
 /// Master time as this worker knows it, for one session.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MasterTime {
     /// What it sent and the master hasn't shown it heard: number, when sent.
     sent: VecDeque<(u64, Local)>,
@@ -157,6 +157,9 @@ pub struct MasterTime {
     window: Duration,
     /// The latest master message's stamp.
     last: Option<LastStamp>,
+    /// When this session sent the latest heartbeat a stamp said the master had heard (B233):
+    /// the master counts a worker lost from the last message it heard, received no earlier.
+    heard_sent: Option<Local>,
 }
 
 impl Default for MasterTime {
@@ -175,6 +178,7 @@ impl MasterTime {
             samples: VecDeque::new(),
             window,
             last: None,
+            heard_sent: None,
         }
     }
 
@@ -249,6 +253,7 @@ impl MasterTime {
         if number != clock.heard_sequence {
             return None;
         }
+        self.heard_sent = Some(sent);
         let sample = Sample {
             timeline: clock.timeline,
             sent,
@@ -280,15 +285,25 @@ impl MasterTime {
         Some(wall_skew(clock.wall_ms, sent.wall, now.wall))
     }
 
-    /// How long from `now` until master time may have passed the latest stamp's plus `lease`
-    /// (decision 445: the cutoff's other bound); `None` without a stamp and a sample to read it
-    /// by.
+    /// How long from `now` until the master may count this worker lost: the earlier of master
+    /// time passing the latest stamp's plus `lease` (decision 445) and `lease` after the send
+    /// of the latest heartbeat a stamp said the master had heard, on this clock less the drift
+    /// allowance (B233: the master counts its lease from what it last heard, which a one-way
+    /// cut leaves behind the stamps still arriving). `None` without a stamp and a sample.
     #[must_use]
     pub fn cutoff_in(&self, lease: Duration, now: Local) -> Option<Duration> {
         let last = self.last?;
         self.best()?;
         let lease_ms = i64::try_from(lease.as_millis()).unwrap_or(i64::MAX);
-        Some(self.until(last.master_ms.saturating_add(lease_ms), now))
+        let by_stamp = self.until(last.master_ms.saturating_add(lease_ms), now);
+        let by_heard = self.heard_sent.map(|sent| {
+            if paused(sent, now) {
+                return Duration::ZERO;
+            }
+            let at = sent.boot + lease.saturating_sub(lease / 1000 * DRIFT_PER_MILLE);
+            at.saturating_sub(now.boot)
+        });
+        Some(by_heard.map_or(by_stamp, |heard| heard.min(by_stamp)))
     }
 
     /// How long from `now` until master time `by_ms` may be reached, by the same bound as
@@ -539,7 +554,8 @@ mod window_tests {
         // Decision 445: Register sent at 1000, answered at master 50 000; a later message stamped
         // 55 000 arrives at 9000 (held on its way). The lease (10 s) after master time 55 000 may
         // be reached at 1000 + 15 000, less 1 ms (the stamp's rounding) and 0.1 %: 15 984.001,
-        // sooner than 9000 + 10 000 by receipt.
+        // sooner than 9000 + 10 000 by receipt. With only the Register heard, B233's bound (lease
+        // after its send, less 0.1 %: 10 990) is sooner still.
         let mut time = MasterTime::with_window(Duration::from_secs(600));
         assert_eq!(
             time.cutoff_in(Duration::from_secs(10), at(0)),
@@ -549,14 +565,42 @@ mod window_tests {
         time.sent = VecDeque::from([(0, at(1_000))]);
         time.next = 1;
         time.heard(&clock(50_000, 0), at(1_100));
-        time.heard(&clock(55_000, 0), at(9_000));
+        let mut pushed = time.clone();
+        pushed.heard(&clock(55_000, 0), at(9_000));
+        assert_eq!(
+            pushed.cutoff_in(Duration::from_secs(10), at(9_000)),
+            Some(Duration::from_millis(1_990))
+        );
+        // A heartbeat sent at 8000 heard: the stamp's bound (master time read by that sample,
+        // 17 989.001) is 1 ms sooner than B233's (17 990), for the stamp's rounding.
+        time.sent(at(8_000));
+        time.heard(&clock(55_000, 1), at(9_000));
         assert_eq!(
             time.cutoff_in(Duration::from_secs(10), at(9_000)),
-            Some(Duration::from_micros(6_984_001))
+            Some(Duration::from_micros(8_989_001))
         );
         assert_eq!(
-            time.cutoff_in(Duration::from_secs(10), at(16_000)),
+            time.cutoff_in(Duration::from_secs(10), at(17_990)),
             Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn the_cutoff_counts_from_the_send_of_what_the_master_last_heard() {
+        // B233: heartbeat 0 sent at 1000, heard and answered at master 50 000; the worker's
+        // messages are lost from then on, but the master's still arrive, the last stamped at
+        // master 80 000 at 31 000. The master counts its lease from what it last heard: it may
+        // lose the worker a lease after 1000, so the worker stops by 1000 + 60 000, less 0.1 %
+        // (60 940), not by the last stamp's 80 000 + 60 000 (about 59.9 s on).
+        let mut time = MasterTime::with_window(Duration::from_secs(600));
+        time.sent = VecDeque::from([(0, at(1_000))]);
+        time.next = 1;
+        time.heard(&clock(50_000, 0), at(1_100));
+        time.sent(at(11_000));
+        time.heard(&clock(80_000, 0), at(31_000));
+        assert_eq!(
+            time.cutoff_in(Duration::from_secs(60), at(31_000)),
+            Some(Duration::from_millis(29_940))
         );
     }
 

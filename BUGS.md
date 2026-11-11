@@ -55,35 +55,26 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
 | 2 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 3 | B233: a worker cut off one way (its messages lost, the master's arriving) keeps a `cleanup_anywhere` task past the moment its cleanup moves (Suspected) | 3 | high | rare | correctness |
-| 4 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 7 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
-| 8 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 9 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 10 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 13 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 14 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 15 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 16 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 17 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 18 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 19 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 20 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 21 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 22 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 23 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-
-## B233: a worker cut off one way (its messages lost, the master's arriving) keeps a `cleanup_anywhere` task past the moment its cleanup moves (Suspected)
-
-- **Rating:** severity **high**, probability **rare**, correctness (score 3): the master counts a worker lost from the last message it received from it, the worker its cutoff from the last message it received (and, since D445, from that message's stamp); with the worker's messages lost on the way and the master still sending (an assignment while the worker looks idle), the worker's cutoff runs from the master's later send while the master loses it earlier, and moves its cleanup a grace and a move wait (40 s by default) after that: a send more than 40 s after the worker's last arrived message leaves the task running beside its moved cleanup.
-- **Found:** 2026-11-11, by Grok, writing the invariants section of `design/workers.md` for the clock step; checked by Claude against the code (`core::heard_from`, `core::tick_into`, `service::deliver` stamping at send). Not reproduced by a test yet. It predates the clock step: the cutoff by receipt alone (decision 252) was as late or later.
-- **Where:** `crates/schedr-agent/src/agent.rs` (`lease_deadline`, `master_cutoff`), `crates/schedr-agent/src/master_time.rs`; `crates/schedr-master/src/core.rs` (`tick_into`).
-- **A fix, proposed (for the user to decide):** the worker counts its cutoff from the send of the latest heartbeat the master says it heard (`MasterClock.heard_sequence`): the master received it no earlier, so it loses the worker no earlier than that send plus the lease. The cutoff is then `min(that send + lease, the receipt bound)` on the worker's boot clock, less the drift allowance; normally about a heartbeat interval earlier than now. Not chosen yet: the master counting its lease from its own last send too (keeps a silent worker alive while the master writes to it).
-- **Also:** `docs/03-guide/17-master-clock.md`'s cutoff diagram says the worker has stopped first; true only while the last stamp answers the worker's last message.
+| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 5 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 6 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
+| 7 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 8 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 9 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 10 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 11 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 12 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 13 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 14 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 15 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 16 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 17 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 18 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 19 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 20 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 21 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 22 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 
 ## B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected)
 

@@ -10,7 +10,10 @@
 //!    when it arrives; one never started the master expires (its side: `dispatch` tests).
 //! 3. **No retry within a replaced incarnation's hold:** a worker cut off from the master stops
 //!    by master time last stamp + lease; the master ends its attempts no earlier than a lease
-//!    after it marks them, which is after its last stamp to that worker (decision 443).
+//!    after it marks them, which is after its last stamp to that worker (decision 443). And it
+//!    stops by a lease after the master last heard it (B233): a cut one way only, heartbeats
+//!    lost on their way while the master's messages still arrive, stamped later each time, as
+//!    the master counts the worker lost.
 //! 4. **A moved cleanup never beside its old worker:** a cleanup moves only past that hold and
 //!    the move wait, so rule 3 covers it.
 //!
@@ -88,10 +91,12 @@ impl Worker {
     }
 }
 
-/// One heartbeat's fate: its delay to the master, its answer's back (`None`: lost), and the
-/// assignment the answer is, if any (its age when sent, its lease).
+/// One heartbeat's fate: its delay to the master or lost on its way (`up_lost`: the master
+/// still sends a message then, naming the last heartbeat it heard), its answer's back (`None`:
+/// lost), and the assignment the answer is, if any (its age when sent, its lease).
 #[derive(Debug, Clone)]
 struct Beat {
+    up_lost: bool,
     up_ms: u64,
     down_ms: Option<u64>,
     assignment: Option<(u64, u64)>,
@@ -101,11 +106,13 @@ fn beat() -> impl Strategy<Value = Beat> {
     // Mostly quick, now and then very slow either way.
     let delay = prop_oneof![8 => 0..50u64, 2 => 0..5_000u64];
     (
+        prop::bool::weighted(0.15),
         delay.clone(),
         prop::option::weighted(0.8, delay),
         prop::option::weighted(0.3, (0..30_000u64, 1_000..60_000u64)),
     )
-        .prop_map(|(up_ms, down_ms, assignment)| Beat {
+        .prop_map(|(up_lost, up_ms, down_ms, assignment)| Beat {
+            up_lost,
             up_ms,
             down_ms,
             assignment,
@@ -164,15 +171,64 @@ enum Event {
         clock: pb::MasterClock,
         /// The real time master time was at the stamp.
         stamped: u64,
+        /// The real time the master heard the heartbeat it names.
+        heard_at: u64,
         /// The assignment's deadline in master time, milliseconds.
         start_by_ms: Option<i64>,
     },
 }
 
+/// A scenario's sends and arrivals, in real time order.
+fn events(s: &Scenario) -> Vec<(u64, Event)> {
+    let master_ns = |t: u64| s.master_origin_ms * MS + t;
+    let stamp_ms = |t: u64| i64::try_from(master_ns(t) / MS).unwrap();
+    let heartbeat = s.heartbeat_ms * MS;
+    let mut events: Vec<(u64, Event)> = Vec::new();
+    let (mut at_master, mut back) = (0, 0);
+    // The last heartbeat the master heard: its number, when it arrived.
+    let mut heard: Option<(u64, u64)> = None;
+    for (number, beat) in s.beats.iter().enumerate() {
+        let number = u64::try_from(number).unwrap();
+        let sent = s.worker.awake(number * heartbeat);
+        events.push((sent, Event::Send(number)));
+        // One stream: in order both ways.
+        at_master = (sent + beat.up_ms * MS).max(at_master);
+        if !beat.up_lost {
+            heard = Some((number, at_master));
+        }
+        let (Some(down_ms), Some((heard_sequence, heard_at))) = (beat.down_ms, heard) else {
+            continue;
+        };
+        back = s.worker.awake((at_master + down_ms * MS).max(back));
+        let start_by_ms = beat.assignment.map(|(age_ms, lease_ms)| {
+            let created = master_ns(at_master).saturating_sub(age_ms * MS);
+            i64::try_from((created + lease_ms * MS) / MS).unwrap()
+        });
+        let clock = pb::MasterClock {
+            timeline: 7,
+            master_ms: stamp_ms(at_master),
+            heard_sequence,
+            wall_ms: 0,
+            lease_epoch: 1,
+        };
+        events.push((
+            back,
+            Event::Answer {
+                clock,
+                stamped: at_master,
+                heard_at,
+                start_by_ms,
+            },
+        ));
+    }
+    // Sends before answers at the same instant: an answer never names a beat not sent yet.
+    events.sort_by_key(|(t, e)| (*t, matches!(e, Event::Answer { .. })));
+    events
+}
+
 /// Runs a scenario, checking the rules at every event; `Err` names the one broken.
 fn run(s: &Scenario) -> Result<(), String> {
     let master_ns = |t: u64| s.master_origin_ms * MS + t;
-    let stamp_ms = |t: u64| i64::try_from(master_ns(t) / MS).unwrap();
     let heartbeat = s.heartbeat_ms * MS;
     let reserve = Duration::from_nanos(2 * heartbeat);
     let lease = Duration::from_millis(s.lease_ms);
@@ -184,42 +240,9 @@ fn run(s: &Scenario) -> Result<(), String> {
             0
         }
     };
-    let mut events: Vec<(u64, Event)> = Vec::new();
-    let (mut at_master, mut back) = (0, 0);
-    for (number, beat) in s.beats.iter().enumerate() {
-        let number = u64::try_from(number).unwrap();
-        let sent = s.worker.awake(number * heartbeat);
-        events.push((sent, Event::Send(number)));
-        // One stream: in order both ways.
-        at_master = (sent + beat.up_ms * MS).max(at_master);
-        let Some(down_ms) = beat.down_ms else {
-            continue;
-        };
-        back = s.worker.awake((at_master + down_ms * MS).max(back));
-        let start_by_ms = beat.assignment.map(|(age_ms, lease_ms)| {
-            let created = master_ns(at_master).saturating_sub(age_ms * MS);
-            i64::try_from((created + lease_ms * MS) / MS).unwrap()
-        });
-        let clock = pb::MasterClock {
-            timeline: 7,
-            master_ms: stamp_ms(at_master),
-            heard_sequence: number,
-            wall_ms: 0,
-            lease_epoch: 1,
-        };
-        events.push((
-            back,
-            Event::Answer {
-                clock,
-                stamped: at_master,
-                start_by_ms,
-            },
-        ));
-    }
-    // Sends before answers at the same instant: an answer never names a beat not sent yet.
-    events.sort_by_key(|(t, e)| (*t, matches!(e, Event::Answer { .. })));
+    let events = events(s);
     let mut time = MasterTime::with_window(Duration::from_millis(s.window_ms));
-    let mut last_stamped = None;
+    let mut last_heard_at = None;
     for (t, event) in events {
         let now = s.worker.local(t);
         match event {
@@ -232,10 +255,12 @@ fn run(s: &Scenario) -> Result<(), String> {
             Event::Answer {
                 clock,
                 stamped,
+                heard_at,
                 start_by_ms,
             } => {
                 time.heard(&clock, now);
-                last_stamped = Some(stamped);
+                debug_assert!(heard_at <= stamped, "stamped after it heard");
+                last_heard_at = Some(heard_at);
                 // Rule 1: started only its reserve before the deadline.
                 if let Some(by) = start_by_ms
                     && time.slack(by, reserve, now).is_some()
@@ -250,12 +275,13 @@ fn run(s: &Scenario) -> Result<(), String> {
                 }
             }
         }
-        // Rule 3: while not cut off, master time is within a lease of the latest stamp; and
-        // the cutoff it counts down to (no stall before it) is too.
-        let Some(stamped) = last_stamped else {
+        // Rule 3: while not cut off, master time is within a lease of the last heartbeat the
+        // master heard (so of the latest stamp too, which comes after it); and the cutoff it
+        // counts down to (no stall before it) is too.
+        let Some(heard_at) = last_heard_at else {
             continue;
         };
-        let limit = master_ns(stamped) + s.lease_ms * MS + unseen(t);
+        let limit = master_ns(heard_at) + s.lease_ms * MS + unseen(t);
         // Zero left: cut off already (a message arriving past its lease doesn't count, B162).
         if let Some(left) = time.cutoff_in(lease, now)
             && !left.is_zero()
@@ -304,11 +330,13 @@ fn a_stall_the_boot_clock_missed_counts_every_deadline_as_passed() {
         master_origin_ms: 5_000,
         beats: vec![
             Beat {
+                up_lost: false,
                 up_ms: 1,
                 down_ms: Some(1),
                 assignment: None,
             },
             Beat {
+                up_lost: false,
                 up_ms: 10,
                 down_ms: Some(100),
                 assignment: Some((0, 10_000)),
