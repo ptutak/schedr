@@ -305,17 +305,27 @@ impl Database {
         updates: &[InstanceUpdate],
         now: Timestamp,
     ) -> Result<(), DbError> {
-        let now = db_time(now);
         let updates = merged(updates);
+        // Each row a microsecond after the one before, in the order given: what ended in one
+        // write keeps that order (`ended_in_order`, a `first_of` decided later; M4B.4).
+        let times: Vec<String> = (0..updates.len())
+            .map(|k| {
+                let step = jiff::SignedDuration::from_micros(i64::try_from(k).unwrap_or(i64::MAX));
+                db_time(now.checked_add(step).unwrap_or(now))
+            })
+            .collect();
         // Many rows a statement, joined to a list of values (a finished task in a wide DAG
         // changes many at once, B18); `columnN` names the list's columns on both backends.
         in_tx!(self, |tx, backend| {
-            for chunk in updates.chunks(UPDATES_PER_STATEMENT) {
+            for (chunk, times) in updates
+                .chunks(UPDATES_PER_STATEMENT)
+                .zip(times.chunks(UPDATES_PER_STATEMENT))
+            {
                 let rows: Vec<String> = (0..chunk.len())
                     .map(|i| {
-                        let n = 2 + i * 8;
+                        let n = 1 + i * 9;
                         format!(
-                            "(${}, ${}, ${}, ${}{{ts}}, ${}, ${}, ${}, ${}{{json}})",
+                            "(${}, ${}, ${}, ${}{{ts}}, ${}, ${}, ${}, ${}{{json}}, ${}{{ts}})",
                             n + 1,
                             n + 2,
                             n + 3,
@@ -323,7 +333,8 @@ impl Database {
                             n + 5,
                             n + 6,
                             n + 7,
-                            n + 8
+                            n + 8,
+                            n + 9
                         )
                     })
                     .collect();
@@ -331,18 +342,16 @@ impl Database {
                     "UPDATE task_instances AS t SET state = v.column3, ready_at = v.column4, \
                      outcome = v.column5, retries_used = t.retries_used + v.column6, \
                      reason = COALESCE(v.column7, t.reason), \
-                     map_sizes = COALESCE(v.column8, t.map_sizes), updated_at = $1{{ts}}, \
+                     map_sizes = COALESCE(v.column8, t.map_sizes), updated_at = v.column9, \
                      ended_at = CASE WHEN v.column3 IN ('success', 'failed', 'upstream_failed', \
-                         'skipped', 'cancelled') THEN $1{{ts}} END \
+                         'skipped', 'cancelled') THEN v.column9 END \
                      FROM (VALUES {}) AS v \
-                     WHERE t.run_id = $2{{uuid}} AND t.task_id = v.column1 \
+                     WHERE t.run_id = $1{{uuid}} AND t.task_id = v.column1 \
                      AND t.map_index = v.column2",
                     rows.join(", ")
                 );
-                let mut update = sqlx::query(sql_text(backend, &text))
-                    .bind(&now)
-                    .bind(run_id);
-                for (one, retries) in chunk {
+                let mut update = sqlx::query(sql_text(backend, &text)).bind(run_id);
+                for ((one, retries), at) in chunk.iter().zip(times) {
                     update = update
                         .bind(one.task_id.as_str())
                         .bind(one.map_index)
@@ -351,7 +360,8 @@ impl Database {
                         .bind(one.outcome.as_deref())
                         .bind(*retries)
                         .bind(one.reason.as_deref())
-                        .bind(one.map_sizes.as_ref().map(to_json));
+                        .bind(one.map_sizes.as_ref().map(to_json))
+                        .bind(at);
                 }
                 update.execute(&mut *tx).await?;
             }

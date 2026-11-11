@@ -1513,6 +1513,106 @@ async fn a_first_of_held_back_chooses_by_when_they_ended_not_by_its_edges() {
     );
 }
 
+/// `first_of_dag`'s, every option counting (no `on`), with `extra` tasks and edges.
+fn first_of_dag_plain(count: Option<u32>, extra_tasks: &[Json], extra_edges: &[Json]) -> Dag {
+    let mut edges = serde_json::to_value(first_of_dag(count).edges).unwrap();
+    edges[0].as_object_mut().unwrap().remove("on");
+    edges
+        .as_array_mut()
+        .unwrap()
+        .extend(extra_edges.iter().cloned());
+    let mut tasks = serde_json::to_value(first_of_dag(count).tasks).unwrap();
+    tasks
+        .as_array_mut()
+        .unwrap()
+        .extend(extra_tasks.iter().cloned());
+    dag(&tasks, &edges)
+}
+
+/// The options' results, as one batch (a worker's turn) in the order given.
+async fn finish_together(execution: &Execution, run_id: &str, names: &[&str]) {
+    let ids: Vec<TaskId> = names.iter().map(|n| id(n)).collect();
+    let results: Vec<AttemptResult> = names
+        .iter()
+        .map(|n| succeeded_with(json!(n), "SUCCESS"))
+        .collect();
+    let batch: Vec<(&TaskId, i32, &AttemptResult)> = ids
+        .iter()
+        .zip(&results)
+        .map(|(id, r)| (id, -1, r))
+        .collect();
+    execution
+        .attempts_finished(run_id, &batch, ts(NOW))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_first_of_ended_by_one_batch_chooses_the_first_in_it_not_by_its_edges() {
+    // M4B.4: c, then a, then b in one batch; its edges are a, b, c.
+    let (execution, db, run_id) =
+        with_run(first_of_dag_plain(None, &[], &[]), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c"] {
+        start(&db, &run_id, name).await;
+    }
+    finish_together(&execution, &run_id, &["c", "a", "b"]).await;
+    assert_eq!(
+        first_output(&db, &run_id).await,
+        json!({"$value": "c", "winner": "c"})
+    );
+}
+
+#[tokio::test]
+async fn at_least_ended_by_one_batch_keeps_the_order_in_it() {
+    let (execution, db, run_id) =
+        with_run(first_of_dag_plain(Some(2), &[], &[]), RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c"] {
+        start(&db, &run_id, name).await;
+    }
+    finish_together(&execution, &run_id, &["c", "a", "b"]).await;
+    assert_eq!(
+        first_output(&db, &run_id).await,
+        json!({"$value": ["c", "a"], "winner": ["c", "a"]})
+    );
+}
+
+#[tokio::test]
+async fn a_first_of_held_back_after_one_batch_chooses_the_first_in_it_not_by_name() {
+    // Stored together, the batch's successes keep its order for a later gate.
+    let dag = first_of_dag_plain(
+        None,
+        &[task("gate", "python", 0)],
+        &[json!({"from": "gate", "to": "first", "kind": "requirement"})],
+    );
+    let (execution, db, run_id) = with_run(dag, RunState::Running).await;
+    execution.prepare_runs(ts(NOW)).await.unwrap();
+    for name in ["a", "b", "c", "gate"] {
+        start(&db, &run_id, name).await;
+    }
+    finish_together(&execution, &run_id, &["c", "b", "a"]).await;
+    assert_eq!(
+        state_of(&db, &run_id, "first").await,
+        S::Scheduled,
+        "held back"
+    );
+    execution
+        .attempt_finished(
+            &run_id,
+            &id("gate"),
+            -1,
+            &ended(AttemptStatus::Success),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first_output(&db, &run_id).await,
+        json!({"$value": "c", "winner": "c"})
+    );
+}
+
 #[tokio::test]
 async fn a_mapped_task_expands_over_what_a_first_of_chose() {
     let mut tasks = serde_json::to_value(first_of_dag(None).tasks).unwrap();

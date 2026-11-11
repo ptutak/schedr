@@ -383,7 +383,7 @@ impl Execution {
         self.db.create_instances(&run.run_id, &first, now).await?;
         let mut progress = RunProgress::new(&run.dag, BTreeMap::new());
         let before = progress.snapshot();
-        self.settle_all(&run.run_id, &run.dag, &mut progress)
+        self.settle_all(&run.run_id, &run.dag, &mut progress, &[])
             .await?;
         self.store(&run.run_id, &mut progress, &before, Vec::new(), now)
             .await?;
@@ -654,7 +654,8 @@ impl Execution {
         let before = progress.snapshot();
         let (_, running) = progress.cancel();
         // A mapped task whose instances are all cancelled now ends as a whole.
-        self.settle_all(run_id, &run.dag, &mut progress).await?;
+        self.settle_all(run_id, &run.dag, &mut progress, &[])
+            .await?;
         self.store(run_id, &mut progress, &before, Vec::new(), now)
             .await?;
         let run_result = progress.result();
@@ -693,7 +694,8 @@ impl Execution {
         let mut progress = progress_of(&run);
         let before = progress.snapshot();
         let _ = progress.cancel();
-        self.settle_all(run_id, &run.dag, &mut progress).await?;
+        self.settle_all(run_id, &run.dag, &mut progress, &[])
+            .await?;
         self.store(run_id, &mut progress, &before, Vec::new(), now)
             .await?;
         let result = progress.result();
@@ -767,7 +769,8 @@ impl Execution {
             if running {
                 self.db.request_task_cancel(run_id, task_id, now).await?;
             }
-            self.settle_all(run_id, &run.dag, &mut progress).await?;
+            self.settle_all(run_id, &run.dag, &mut progress, &[])
+                .await?;
             self.store(run_id, &mut progress, &before, Vec::new(), now)
                 .await?;
             let result = progress.result();
@@ -1027,7 +1030,14 @@ impl Execution {
                 progress.set_outcome(&change.task_id, outcome);
             }
         }
-        self.settle_all(run_id, &run.dag, &mut progress).await?;
+        // The successes now, in the order they arrived: after every stored one (M4B.4).
+        let ending: Vec<TaskId> = first
+            .iter()
+            .filter(|u| u.map_index == -1 && u.state == TaskInstanceState::Success)
+            .map(|u| u.task_id.clone())
+            .collect();
+        self.settle_all(run_id, &run.dag, &mut progress, &ending)
+            .await?;
         let stops = self
             .store(run_id, &mut progress, &before, first, now)
             .await?;
@@ -1044,10 +1054,13 @@ impl Execution {
         run_id: &str,
         dag: &Dag,
         progress: &mut RunProgress<'_>,
+        ending: &[TaskId],
     ) -> Result<(), ExecutionError> {
         loop {
             progress.settle();
-            let chose = self.store_first_of_outputs(run_id, progress).await?;
+            let chose = self
+                .store_first_of_outputs(run_id, progress, ending)
+                .await?;
             let ready = progress.take_expansions();
             if ready.is_empty() {
                 if chose {
@@ -1167,11 +1180,13 @@ impl Execution {
     /// the first of what can have ended it in the order they ended. At once, as a mapped task
     /// after it expands over it (a crash here stores it again: nothing has read it).
     /// Returns whether one ended. One whose values are over what its options may give together
-    /// (the sum of their `max_output_size`) fails instead.
+    /// (the sum of their `max_output_size`) fails instead. `ending` are the successes not
+    /// stored yet, in the order they arrived: they ended after the stored ones.
     async fn store_first_of_outputs(
         &self,
         run_id: &str,
         progress: &mut RunProgress<'_>,
+        ending: &[TaskId],
     ) -> Result<bool, ExecutionError> {
         let ended = progress.take_winners();
         let chose = !ended.is_empty();
@@ -1194,8 +1209,17 @@ impl Execution {
             };
             let names: Vec<&TaskId> = winners.iter().collect();
             let order = self.db.ended_in_order(run_id, &names).await?;
-            winners
-                .sort_by_key(|winner| order.iter().position(|e| e == winner).unwrap_or(usize::MAX));
+            let rank = |winner: &TaskId| {
+                order
+                    .iter()
+                    .position(|e| e == winner)
+                    .or_else(|| {
+                        let at = ending.iter().position(|e| e == winner)?;
+                        Some(order.len() + at)
+                    })
+                    .unwrap_or(usize::MAX)
+            };
+            winners.sort_by_key(rank);
             winners.truncate(crate::progress::need_of(at_least));
             let names: Vec<&TaskId> = winners.iter().collect();
             let outputs = self.db.outputs_of(run_id, &names).await?;

@@ -1465,8 +1465,9 @@ impl Database {
         Ok(outputs)
     }
 
-    /// `tasks` of a run whose success is stored, in the order they ended (one succeeding now
-    /// isn't among them yet: it ended last).
+    /// `tasks` of a run whose success is stored, in the order they ended (`ended_at`: each row
+    /// of one write a microsecond apart, in its order; a later cleanup result moves only
+    /// `updated_at`). Those succeeding now aren't among them yet: they ended last.
     ///
     /// # Errors
     ///
@@ -1483,7 +1484,7 @@ impl Database {
         let text = format!(
             "SELECT task_id FROM task_instances \
              WHERE run_id = $1{{uuid}} AND map_index = -1 AND state = 'success' \
-             AND task_id IN ({}) ORDER BY updated_at, task_id",
+             AND task_id IN ({}) ORDER BY ended_at, task_id",
             wanted.join(", ")
         );
         if tasks.is_empty() {

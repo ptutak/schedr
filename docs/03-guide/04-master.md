@@ -200,7 +200,9 @@ the rest. [Routing by outcome](../02-dags/08-outcomes.md) is how a DAG sets the 
 An empty task the rule marks ready is completed by the master (`success`, outcome
 `SUCCESS`); no worker is assigned. The master also ends
 [`first_of` and `at_least`](../02-dags/20-first-of.md) itself when enough options succeed,
-without waiting for the others. They need no worker or slot.
+without waiting for the others. They need no worker or slot. Which options ended first is the
+order the master recorded their results; results handled in one turn count in the order they
+arrived.
 It starts and advances [`TriggerDagOperator`](../02-dags/23-chained-runs.md) attempts,
 creating their target runs and waiting for them when requested, without a worker or slot.
 It also ends [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) when the other run or
