@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D250"
 step = "M4.8b"
 also = ["workers", "configuration"]
 code = ["crates/schedr-agent/src/agent.rs::warned_room"]
-checked = 2026-11-10
+checked = 2026-11-11

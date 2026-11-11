@@ -216,6 +216,7 @@ pub fn load(
         .merge(override_provider(overrides));
     let mut config: Config = figment.extract()?;
     config.timings = hidden_timings(env)?;
+    check_lease(&config.timings)?;
     config.limits = hidden_limits(env)?;
     check_secrets_in_file(&figment, &config)?;
     let worker = &config.worker;
@@ -416,6 +417,85 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
     Ok(limits)
 }
 
+/// The timing a hidden variable's `<SECTION>__<NAME>` names.
+fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::time::Duration> {
+    let timing = match key {
+        "MASTER__TICK_INTERVAL" => &mut timings.tick_interval,
+        "MASTER__HEARTBEAT_INTERVAL" => &mut timings.heartbeat_interval,
+        "MASTER__LEASE_TIMEOUT" => &mut timings.lease_timeout,
+        "MASTER__SCRIPT_ROOT_GRACE" => &mut timings.script_root_grace,
+        "MASTER__EVENT_LOOKBACK" => &mut timings.event_lookback,
+        "MASTER__LEASE_PERIOD" => &mut timings.lease_period,
+        "MASTER__READ_BACK_WINDOW" => &mut timings.read_back_window,
+        "MASTER__READ_BACK_INTERVAL" => &mut timings.read_back_interval,
+        "DATABASE__QUERY_TIMEOUT" => &mut timings.query_timeout,
+        "OPS__LOOP_STALL_TIMEOUT" => &mut timings.loop_stall_timeout,
+        "MASTER__SET_ASIDE" => &mut timings.set_aside,
+        "MASTER__HANDED_CALL_MIN" => &mut timings.handed_call_min,
+        "MASTER__CLEANUP_MOVE_WAIT" => &mut timings.cleanup_move_wait,
+        "MASTER__LISTEN_RETRY" => &mut timings.listen_retry,
+        "MASTER__QUIET_DAG_AFTER" => &mut timings.quiet_dag_after,
+        "MASTER__QUIET_DAG_WAKE_AHEAD" => &mut timings.quiet_dag_wake_ahead,
+        "MASTER__QUIET_DAG_FULL_PASS_INTERVAL" => &mut timings.quiet_dag_full_pass_interval,
+        "WEBSERVER__REFRESH_INTERVAL" => &mut timings.refresh_interval,
+        "WEBSERVER__WORKER_CONNECT_TIMEOUT" => &mut timings.worker_connect_timeout,
+        "WORKER__DRAIN_REPORT_PERIOD" => &mut timings.drain_report_period,
+        "WORKER__MEMORY_CHECK_INTERVAL" => &mut timings.memory_check_interval,
+        "TLS__HANDSHAKE_TIMEOUT" => &mut timings.handshake_timeout,
+        "WORKER__OUTPUT_DRAIN_TIMEOUT" => &mut timings.output_drain_timeout,
+        "WORKER__FORK_ANSWER_TIMEOUT" => &mut timings.fork_answer_timeout,
+        "WORKER__FORK_BACKOFF_FIRST" => &mut timings.fork_backoff_first,
+        "WORKER__FORK_BACKOFF_MAX" => &mut timings.fork_backoff_max,
+        "WORKER__FORK_BACKOFF_RESET_AFTER" => &mut timings.fork_backoff_reset_after,
+        "WORKER__LOG_SWEEP_INTERVAL" => &mut timings.log_sweep_interval,
+        "WORKER__ORPHAN_POLL" => &mut timings.orphan_poll,
+        "WORKER__ORPHAN_KILL_WAIT" => &mut timings.orphan_kill_wait,
+        "WORKER__ORPHAN_GRACE" => &mut timings.orphan_grace,
+        "WORKER__RECONNECT_BACKOFF_FIRST" => &mut timings.reconnect_backoff_first,
+        "WORKER__RECONNECT_BACKOFF_MAX" => &mut timings.reconnect_backoff_max,
+        "WORKER__ALIVE_INTERVAL" => &mut timings.worker_alive_interval,
+        "WORKER__DEREGISTER_WAIT" => &mut timings.deregister_wait,
+        "WORKER__DRAIN_TICK" => &mut timings.drain_tick,
+        "WORKER__DRAIN_ACK_WAIT" => &mut timings.drain_ack_wait,
+        "WORKER__STOP_POLL" => &mut timings.stop_poll,
+        "WORKER__CONNECTION_JOB_CANCEL_GRACE" => &mut timings.connection_job_cancel_grace,
+        "WORKER__VAULT_MIN_RENEW_WAIT" => &mut timings.vault_min_renew_wait,
+        "WORKER__VAULT_RENEW_CHECK" => &mut timings.vault_renew_check,
+        "WORKER__VAULT_RENEW_RETRY" => &mut timings.vault_renew_retry,
+        "MASTER__ROUND_GAP" => &mut timings.round_gap,
+        "MASTER__NOTIFICATION_RETRY" => &mut timings.notification_retry,
+        "MASTER__ALIVE_INTERVAL" => &mut timings.master_alive_interval,
+        "MASTER__GAUGE_REFRESH" => &mut timings.gauge_refresh,
+        "MASTER__OUTBOX_POLL" => &mut timings.outbox_poll,
+        "MASTER__OUTBOX_RETRY_FIRST" => &mut timings.outbox_retry_first,
+        "MASTER__OUTBOX_RETRY_MAX" => &mut timings.outbox_retry_max,
+        "MASTER__RETENTION_INTERVAL" => &mut timings.retention_interval,
+        "MASTER__PARSE_RETRY_FIRST" => &mut timings.parse_retry_first,
+        "MASTER__PARSE_RETRY_MAX" => &mut timings.parse_retry_max,
+        "MASTER__NODE_HEARTBEAT" => &mut timings.node_heartbeat,
+        "DATABASE__CHANGES_POLL_INTERVAL" => &mut timings.changes_poll_interval,
+        "WEBSERVER__EVENTS_RECHECK" => &mut timings.events_recheck,
+        "WEBSERVER__EVENTS_KEEP_ALIVE" => &mut timings.events_keep_alive,
+        "WEBSERVER__EVENTS_RETRY" => &mut timings.events_retry,
+        "WEBSERVER__AUTH_RECHECK" => &mut timings.auth_recheck,
+        "WEBSERVER__AUTH_REMEMBERED" => &mut timings.auth_remembered,
+        "WEBSERVER__REQUESTS_GRACE" => &mut timings.requests_grace,
+        "WEBSERVER__SCHEMA_RETRY" => &mut timings.schema_retry,
+        "UI__KEEP_ALIVE" => &mut timings.ui_keep_alive,
+        "UI__COALESCE" => &mut timings.ui_coalesce,
+        "UI__TAIL_INTERVAL" => &mut timings.ui_tail_interval,
+        "UI__TAIL_GIVE_UP" => &mut timings.ui_tail_give_up,
+        "UI__RELAY_RETRY_FIRST" => &mut timings.ui_relay_retry_first,
+        "UI__RELAY_RETRY_MAX" => &mut timings.ui_relay_retry_max,
+        "STANDALONE__WORKER_STOP_AFTER_FAILURE" => &mut timings.worker_stop_after_failure,
+        "TLS__ACCEPT_RETRY" => &mut timings.accept_retry,
+        "MASTER__TRIGGER_RESTART_BACKOFF" => &mut timings.trigger_restart_backoff,
+        "MASTER__TRIGGER_RESTART_BACKOFF_MAX" => &mut timings.trigger_restart_backoff_max,
+        _ => return None,
+    };
+    Some(timing)
+}
+
 /// The fixed timings, with what `SCHEDR_HIDDEN__*` variables set.
 fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError> {
     let mut timings = Timings::default();
@@ -426,84 +506,11 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
         if HIDDEN_LIMITS.contains(&key) {
             continue;
         }
-        let timing = match key {
-            "MASTER__TICK_INTERVAL" => &mut timings.tick_interval,
-            "MASTER__HEARTBEAT_INTERVAL" => &mut timings.heartbeat_interval,
-            "MASTER__LEASE_TIMEOUT" => &mut timings.lease_timeout,
-            "MASTER__SCRIPT_ROOT_GRACE" => &mut timings.script_root_grace,
-            "MASTER__EVENT_LOOKBACK" => &mut timings.event_lookback,
-            "MASTER__LEASE_PERIOD" => &mut timings.lease_period,
-            "MASTER__READ_BACK_WINDOW" => &mut timings.read_back_window,
-            "MASTER__READ_BACK_INTERVAL" => &mut timings.read_back_interval,
-            "DATABASE__QUERY_TIMEOUT" => &mut timings.query_timeout,
-            "OPS__LOOP_STALL_TIMEOUT" => &mut timings.loop_stall_timeout,
-            "MASTER__SET_ASIDE" => &mut timings.set_aside,
-            "MASTER__HANDED_CALL_MIN" => &mut timings.handed_call_min,
-            "MASTER__CLEANUP_MOVE_WAIT" => &mut timings.cleanup_move_wait,
-            "MASTER__LISTEN_RETRY" => &mut timings.listen_retry,
-            "MASTER__QUIET_DAG_AFTER" => &mut timings.quiet_dag_after,
-            "MASTER__QUIET_DAG_WAKE_AHEAD" => &mut timings.quiet_dag_wake_ahead,
-            "MASTER__QUIET_DAG_FULL_PASS_INTERVAL" => &mut timings.quiet_dag_full_pass_interval,
-            "WEBSERVER__REFRESH_INTERVAL" => &mut timings.refresh_interval,
-            "WEBSERVER__WORKER_CONNECT_TIMEOUT" => &mut timings.worker_connect_timeout,
-            "WORKER__DRAIN_REPORT_PERIOD" => &mut timings.drain_report_period,
-            "WORKER__MEMORY_CHECK_INTERVAL" => &mut timings.memory_check_interval,
-            "TLS__HANDSHAKE_TIMEOUT" => &mut timings.handshake_timeout,
-            "WORKER__OUTPUT_DRAIN_TIMEOUT" => &mut timings.output_drain_timeout,
-            "WORKER__FORK_ANSWER_TIMEOUT" => &mut timings.fork_answer_timeout,
-            "WORKER__FORK_BACKOFF_FIRST" => &mut timings.fork_backoff_first,
-            "WORKER__FORK_BACKOFF_MAX" => &mut timings.fork_backoff_max,
-            "WORKER__FORK_BACKOFF_RESET_AFTER" => &mut timings.fork_backoff_reset_after,
-            "WORKER__LOG_SWEEP_INTERVAL" => &mut timings.log_sweep_interval,
-            "WORKER__ORPHAN_POLL" => &mut timings.orphan_poll,
-            "WORKER__ORPHAN_KILL_WAIT" => &mut timings.orphan_kill_wait,
-            "WORKER__ORPHAN_GRACE" => &mut timings.orphan_grace,
-            "WORKER__RECONNECT_BACKOFF_FIRST" => &mut timings.reconnect_backoff_first,
-            "WORKER__RECONNECT_BACKOFF_MAX" => &mut timings.reconnect_backoff_max,
-            "WORKER__ALIVE_INTERVAL" => &mut timings.worker_alive_interval,
-            "WORKER__DEREGISTER_WAIT" => &mut timings.deregister_wait,
-            "WORKER__DRAIN_TICK" => &mut timings.drain_tick,
-            "WORKER__DRAIN_ACK_WAIT" => &mut timings.drain_ack_wait,
-            "WORKER__STOP_POLL" => &mut timings.stop_poll,
-            "WORKER__CONNECTION_JOB_CANCEL_GRACE" => &mut timings.connection_job_cancel_grace,
-            "WORKER__VAULT_MIN_RENEW_WAIT" => &mut timings.vault_min_renew_wait,
-            "WORKER__VAULT_RENEW_CHECK" => &mut timings.vault_renew_check,
-            "WORKER__VAULT_RENEW_RETRY" => &mut timings.vault_renew_retry,
-            "MASTER__ROUND_GAP" => &mut timings.round_gap,
-            "MASTER__NOTIFICATION_RETRY" => &mut timings.notification_retry,
-            "MASTER__ALIVE_INTERVAL" => &mut timings.master_alive_interval,
-            "MASTER__GAUGE_REFRESH" => &mut timings.gauge_refresh,
-            "MASTER__OUTBOX_POLL" => &mut timings.outbox_poll,
-            "MASTER__OUTBOX_RETRY_FIRST" => &mut timings.outbox_retry_first,
-            "MASTER__OUTBOX_RETRY_MAX" => &mut timings.outbox_retry_max,
-            "MASTER__RETENTION_INTERVAL" => &mut timings.retention_interval,
-            "MASTER__PARSE_RETRY_FIRST" => &mut timings.parse_retry_first,
-            "MASTER__PARSE_RETRY_MAX" => &mut timings.parse_retry_max,
-            "MASTER__NODE_HEARTBEAT" => &mut timings.node_heartbeat,
-            "DATABASE__CHANGES_POLL_INTERVAL" => &mut timings.changes_poll_interval,
-            "WEBSERVER__EVENTS_RECHECK" => &mut timings.events_recheck,
-            "WEBSERVER__EVENTS_KEEP_ALIVE" => &mut timings.events_keep_alive,
-            "WEBSERVER__EVENTS_RETRY" => &mut timings.events_retry,
-            "WEBSERVER__AUTH_RECHECK" => &mut timings.auth_recheck,
-            "WEBSERVER__AUTH_REMEMBERED" => &mut timings.auth_remembered,
-            "WEBSERVER__REQUESTS_GRACE" => &mut timings.requests_grace,
-            "WEBSERVER__SCHEMA_RETRY" => &mut timings.schema_retry,
-            "UI__KEEP_ALIVE" => &mut timings.ui_keep_alive,
-            "UI__COALESCE" => &mut timings.ui_coalesce,
-            "UI__TAIL_INTERVAL" => &mut timings.ui_tail_interval,
-            "UI__TAIL_GIVE_UP" => &mut timings.ui_tail_give_up,
-            "UI__RELAY_RETRY_FIRST" => &mut timings.ui_relay_retry_first,
-            "UI__RELAY_RETRY_MAX" => &mut timings.ui_relay_retry_max,
-            "STANDALONE__WORKER_STOP_AFTER_FAILURE" => &mut timings.worker_stop_after_failure,
-            "TLS__ACCEPT_RETRY" => &mut timings.accept_retry,
-            "MASTER__TRIGGER_RESTART_BACKOFF" => &mut timings.trigger_restart_backoff,
-            "MASTER__TRIGGER_RESTART_BACKOFF_MAX" => &mut timings.trigger_restart_backoff_max,
-            _ => {
-                return Err(ConfigError::BadHiddenTiming {
-                    name: name.clone(),
-                    reason: "no such timing".to_owned(),
-                });
-            }
+        let Some(timing) = timing_named(&mut timings, key) else {
+            return Err(ConfigError::BadHiddenTiming {
+                name: name.clone(),
+                reason: "no such timing".to_owned(),
+            });
         };
         *timing = parse_duration(text).map_err(|e| ConfigError::BadHiddenTiming {
             name: name.clone(),
@@ -518,6 +525,23 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
         timings.overridden.push(name.clone());
     }
     Ok(timings)
+}
+
+/// The lease at least four heartbeats: under one, a worker is lost between two beats; a
+/// worker keeps two of an assignment's start timeout (the lease) for its `Started` to arrive
+/// (B225, B226, B227), reads master time from a heartbeat sent up to one before, and needs one
+/// left to start it.
+fn check_lease(timings: &Timings) -> Result<(), ConfigError> {
+    if timings.lease_timeout < timings.heartbeat_interval.saturating_mul(4) {
+        return Err(ConfigError::BadHiddenTiming {
+            name: format!("{HIDDEN_PREFIX}MASTER__LEASE_TIMEOUT"),
+            reason: format!(
+                "must be at least four times `{HIDDEN_PREFIX}MASTER__HEARTBEAT_INTERVAL` ({:?}), got {:?}",
+                timings.heartbeat_interval, timings.lease_timeout
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The secret storage name every standalone has (`[secret_storage]`'s `db`).

@@ -656,6 +656,7 @@ fn connection_job(
             worker_id: worker.to_owned(),
             message: pb::MasterMessage {
                 message: Some(master_message::Message::ConnectionJob(message)),
+                clock: None,
             },
         },
         ConnectionJobResult {

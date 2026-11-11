@@ -76,6 +76,8 @@ pub struct ParseJobs {
     retry_max: Duration,
     jobs: BTreeMap<ParseKey, Job>,
     metrics: MasterMetrics,
+    /// Master time, which its timers count on (B228; see [`crate::clock`]).
+    steady: crate::clock::Steady,
 }
 
 impl ParseJobs {
@@ -88,7 +90,13 @@ impl ParseJobs {
             retry_max: MAX_RETRY_DELAY,
             jobs: BTreeMap::new(),
             metrics: MasterMetrics::default(),
+            steady: crate::clock::as_given,
         }
+    }
+
+    /// Times these jobs on `steady` (production: [`crate::clock::monotonic`]).
+    pub fn set_steady(&mut self, steady: crate::clock::Steady) {
+        self.steady = steady;
     }
 
     /// These jobs, a failed one tried again after `first`, doubling up to `max`.
@@ -112,6 +120,7 @@ impl ParseJobs {
         worker_id: &str,
         now: Timestamp,
     ) -> Option<ParseAssignment> {
+        let now = (self.steady)(now);
         let metrics = &self.metrics;
         let job = self
             .jobs
@@ -162,6 +171,7 @@ impl ParseJobs {
         failed_on: Option<&str>,
         now: Timestamp,
     ) {
+        let now = (self.steady)(now);
         // The first retry when the job failing wasn't one itself.
         let retries = self
             .jobs
@@ -186,6 +196,7 @@ impl ParseJobs {
     /// If the job was its, it is handed out again at the next round ([`Self::expire`]); the
     /// agent drops a job for code it no longer has, without an answer.
     pub fn moved_away(&mut self, key: &ParseKey, worker_id: &str, now: Timestamp) {
+        let now = (self.steady)(now);
         let Some(job) = self.jobs.get_mut(key) else {
             return;
         };
@@ -210,6 +221,7 @@ impl ParseJobs {
     /// A worker is gone: it is no longer a candidate, and its jobs go to other candidates
     /// (or wait for one).
     pub fn worker_lost(&mut self, worker_id: &str, now: Timestamp) -> Vec<ParseAssignment> {
+        let now = (self.steady)(now);
         let mut assignments = Vec::new();
         for (key, job) in &mut self.jobs {
             job.candidates.remove(worker_id);
@@ -230,6 +242,7 @@ impl ParseJobs {
     /// same worker if it is the only one); retries whose delay is over go to a candidate other
     /// than the worker that failed, if there is one.
     pub fn expire(&mut self, now: Timestamp) -> Vec<ParseAssignment> {
+        let now = (self.steady)(now);
         let mut assignments = Vec::new();
         for (key, job) in &mut self.jobs {
             let Some((worker, since)) = &job.worker else {

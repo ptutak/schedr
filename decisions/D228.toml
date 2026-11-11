@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D228"
 step = "M4.8a"
 also = ["task-context"]
 code = ["crates/schedr-master/src/dispatch.rs", "crates/schedr-agent/src/handles.rs::MAX_HANDLES_SIZE"]
-checked = 2026-11-10
+checked = 2026-11-11

@@ -734,6 +734,7 @@ impl MasterCore {
                         seq: event.seq,
                     },
                 )),
+                clock: None,
             },
         };
         let record = self.db.trigger(&event.dag_id).await?;
@@ -1351,6 +1352,7 @@ fn cancel_trigger(worker_id: &str, instance: &str) -> Outgoing {
             message: Some(master_message::Message::CancelTrigger(pb::CancelTrigger {
                 instance_id: instance.to_owned(),
             })),
+            clock: None,
         },
     }
 }

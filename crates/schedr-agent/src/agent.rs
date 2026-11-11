@@ -63,6 +63,7 @@ use crate::journal::{
 };
 use crate::launch::{AGENT_VERSION, ProcessParseRunner, PythonTask, run_command, run_python};
 use crate::mask::Mask;
+use crate::master_time::{Local, MasterTime};
 use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
 use crate::metrics::AgentMetrics;
 use crate::process::ProcessSpec;
@@ -1021,6 +1022,8 @@ pub struct Agent<E> {
     executor: E,
     incarnation: String,
     journal: Journal,
+    /// Master time as this session knows it (B225; see [`crate::master_time`]).
+    master_time: MasterTime,
     /// How long an attempt's first journal write takes (tests: a stalled disk, F14), and how
     /// many were delayed so.
     #[cfg(test)]
@@ -1181,6 +1184,7 @@ impl<E: Executor> Agent<E> {
         Self {
             settings,
             executor,
+            master_time: MasterTime::default(),
             #[cfg(test)]
             journal_stall: (Duration::ZERO, Arc::default()),
             warnings,
@@ -1375,7 +1379,7 @@ impl<E: Executor> Agent<E> {
                     };
                 }
                 _ = heartbeat.tick() => {
-                    let _ = to_master.send(self.heartbeat_message());
+                    self.send_beat(to_master);
                     self.send_poke_reports(to_master);
                 }
                 () = at(give_up_at) => {
@@ -1963,7 +1967,7 @@ impl<E: Executor> Agent<E> {
         {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
-        let opened = tokio::time::Instant::now();
+        let opened = self.master_time.open();
         let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
         let control = tokio::select! {
             control = client.control(UnboundedReceiverStream::new(outbound)) => control,
@@ -2017,7 +2021,7 @@ impl<E: Executor> Agent<E> {
                     }
                 }
                 message = inbound.message() => match message {
-                    Ok(Some(pb::MasterMessage { message: Some(message) })) => {
+                    Ok(Some(pb::MasterMessage { message: Some(message), clock })) => {
                         if Self::answer_too_late(&message, opened.elapsed()) {
                             return SessionEnd::Lost(TOO_LATE.to_owned());
                         }
@@ -2027,8 +2031,7 @@ impl<E: Executor> Agent<E> {
                         if self.silent_too_long(opened) {
                             return SessionEnd::Lost(NO_WORD.to_owned());
                         }
-                        self.heard = tokio::time::Instant::now();
-                        self.publish_deadline();
+                        self.heard_master(clock.as_ref());
                         self.on_master(message, &to_master, &mut client, (&mut heartbeat, opened)).await;
                         // Past the lease while handling it (a slow fetch of inputs).
                         if self.cut_off || self.gone_silent(opened) {
@@ -2063,10 +2066,27 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// A master message arrived on the live stream: the master's word, and its clock read
+    /// (B225).
+    fn heard_master(&mut self, clock: Option<&pb::MasterClock>) {
+        self.heard = tokio::time::Instant::now();
+        self.publish_deadline();
+        if let Some(clock) = clock {
+            self.master_time.heard(clock);
+        }
+    }
+
+    /// Sends a heartbeat, numbered for the master's clock to name it (B225).
+    fn send_beat(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        let sequence = self.master_time.sent(Local::now());
+        let _ = to_master.send(self.heartbeat_message(sequence));
+    }
+
     /// A heartbeat, and the unacknowledged results due to be sent again; the session's end
     /// if one was sent too often already.
-    fn heartbeat_message(&self) -> pb::WorkerMessage {
+    fn heartbeat_message(&self, sequence: u64) -> pb::WorkerMessage {
         wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
+            sequence,
             free_slots: self.free_slots(),
             free_watcher_slots: self.free_watcher_slots(),
             running_attempt_ids: self.running(),
@@ -2080,7 +2100,7 @@ impl<E: Executor> Agent<E> {
         resends: &mut Resends,
         to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
     ) -> Option<SessionEnd> {
-        let _ = to_master.send(self.heartbeat_message());
+        self.send_beat(to_master);
         self.send_poke_reports(to_master);
         let Some(due) = resends.due(self.unacked.keys()) else {
             return Some(SessionEnd::Lost(format!(
@@ -2145,7 +2165,7 @@ impl<E: Executor> Agent<E> {
                     .await;
             }
             master_message::Message::AssignParse(job) => self.parse(job),
-            // Heard: that is all it says.
+            // Heard: its clock was read as it arrived (B225).
             master_message::Message::HeartbeatAck(_) => {}
             master_message::Message::ConnectionJob(job) => self.connection_job(job),
             master_message::Message::AssignTrigger(assign) => {
@@ -2329,6 +2349,8 @@ impl<E: Executor> Agent<E> {
         timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
         let opened = timers.1;
+        // Its start deadline, in master time (B225).
+        let start_by = assign.start_by_ms;
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
                 attempt_id: assign.attempt_id.clone(),
@@ -2384,13 +2406,13 @@ impl<E: Executor> Agent<E> {
         let journaled = match planned {
             Err(NotRun::Rejected { .. }) => Ok(()),
             _ => {
-                self.journal_start(&spec, &assign, external.as_deref(), opened)
+                self.journal_start(&spec, &assign, external.as_deref(), (opened, start_by))
                     .await
             }
         };
         if let Err(why) = journaled {
-            if let Some(detail) = why {
-                let _ = to_master.send(reject(pb::RejectReason::DiskNotWritable, detail));
+            if let Some((reason, detail)) = why {
+                let _ = to_master.send(reject(reason, detail));
             }
             return;
         }
@@ -2752,7 +2774,8 @@ impl<E: Executor> Agent<E> {
     }
 
     /// Journals an attempt about to start: first what its cleanup would need after a restart.
-    /// Journals an attempt about to start: `Err(Some(why))` when the journal can't be written,
+    /// Journals an attempt about to start: `Err(Some((reason, why)))` when the journal can't be
+    /// written or the assignment came past its start budget (B225, rejected `TOO_LATE`),
     /// `Err(None)` when the lease ran out meanwhile (a stalled disk, F14): the master has taken
     /// the attempt back and may have run it elsewhere, so it isn't started here, nor left in
     /// the journal to be reported as started when this worker connects again.
@@ -2761,13 +2784,14 @@ impl<E: Executor> Agent<E> {
         spec: &AttemptSpec,
         assign: &pb::AssignTask,
         external: Option<&[u8]>,
-        opened: tokio::time::Instant,
-    ) -> Result<(), Option<String>> {
+        (opened, start_by): (tokio::time::Instant, Option<i64>),
+    ) -> Result<(), Option<(pb::RejectReason, String)>> {
         if let Err(error) = self.record_start(spec, assign, external).await {
-            return Err(Some(format!(
+            let detail = format!(
                 "can't write the journal in `{}`: {error}; check the worker's data directory",
                 self.journal.dir().display()
-            )));
+            );
+            return Err(Some((pb::RejectReason::DiskNotWritable, detail)));
         }
         if self.gone_silent(opened) {
             tracing::warn!(
@@ -2776,6 +2800,19 @@ impl<E: Executor> Agent<E> {
             );
             self.forget(&spec.attempt_id).await;
             return Err(None);
+        }
+        // Past its start deadline in master time, two heartbeat intervals kept for its
+        // `Started` to arrive (B225, B227): the master may have taken it back and given it to
+        // another worker. Rejected, it is queued again at once if it hadn't.
+        let reserve = self.heartbeat * 2;
+        if start_by.is_some_and(|by| self.master_time.past(by, reserve, Local::now())) {
+            tracing::warn!(
+                attempt_id = spec.attempt_id.as_str(),
+                "the assignment came too late to start; rejected"
+            );
+            self.forget(&spec.attempt_id).await;
+            let detail = "it came too late to start: past its start budget".to_owned();
+            return Err(Some((pb::RejectReason::TooLate, detail)));
         }
         Ok(())
     }

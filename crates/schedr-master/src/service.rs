@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -75,6 +76,12 @@ pub struct Hub {
     problems: Problems,
     /// How its loop is paced.
     timings: crate::core::MasterTimings,
+    /// Master time (see [`crate::clock`]), stamped on every message.
+    steady: crate::clock::Steady,
+    /// The heartbeats heard on each worker's current stream: the latest's number goes on every
+    /// message to it (`MasterClock.heard_sequence`). One count per stream, so a replaced
+    /// stream's reader can't put its numbers on the new one's messages.
+    heard: Arc<std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>>,
 }
 
 /// Another master took the lease over: this one's view is stale, and it must end.
@@ -100,12 +107,13 @@ impl Hub {
     /// A hub over `core`, with the system clock.
     #[must_use]
     pub fn new(core: MasterCore) -> Self {
-        Self::with_clock(core, Timestamp::now)
+        Self::with_clock(core.with_steady(crate::clock::monotonic), Timestamp::now)
     }
 
     /// A hub over `core` with another clock (tests).
     #[must_use]
     pub fn with_clock(core: MasterCore, clock: fn() -> Timestamp) -> Self {
+        let core_steady = core.steady_clock();
         Self {
             beat: Beat::default(),
             refresh_limit: DEFAULT_REFRESH_LIMIT,
@@ -121,6 +129,8 @@ impl Hub {
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             closing: Arc::new(watch::channel(false).0),
+            steady: core_steady,
+            heard: Arc::default(),
             clock,
         }
     }
@@ -579,14 +589,21 @@ impl Hub {
     /// Its stream is dropped and the worker disconnected, so it registers again and its
     /// journal is reconciled; it never holds up the master's rounds, registrations or other
     /// workers' messages, nor its messages pile up.
+    ///
+    /// Each is stamped with the master's clock as it is sent (B225).
     async fn deliver(&self, outgoing: Vec<Outgoing>) {
         let mut stuck = Vec::new();
         let mut streams = self.streams.lock().await;
-        for Outgoing { worker_id, message } in outgoing {
+        for Outgoing {
+            worker_id,
+            mut message,
+        } in outgoing
+        {
             let Some(stream) = streams.get(&worker_id) else {
                 tracing::warn!(worker_id, "no stream for worker; message dropped");
                 continue;
             };
+            message.clock = Some(self.stamp(self.heard_on(&worker_id)));
             match stream.try_send(Ok(message)) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
@@ -608,6 +625,19 @@ impl Hub {
             // Not here: the caller may hold the core's lock.
             tokio::spawn(self.clone().disconnect_stuck(worker_id));
         }
+    }
+
+    /// The master's clock to stamp on a message (B225), `heard` the latest heartbeat heard on
+    /// the worker's stream.
+    fn stamp(&self, heard: u64) -> pb::MasterClock {
+        stamp_of((self.clock, self.steady), heard)
+    }
+
+    /// The latest heartbeat heard on `worker_id`'s current stream (0: none yet, or no stream).
+    fn heard_on(&self, worker_id: &str) -> u64 {
+        lock_heard(&self.heard)
+            .get(worker_id)
+            .map_or(0, |heard| heard.load(Ordering::SeqCst))
     }
 
     /// Disconnects a worker whose stream was dropped for not being read, unless it has
@@ -672,6 +702,7 @@ impl Hub {
         worker_id: String,
         stream: Outbound,
         inbound: Streaming<pb::WorkerMessage>,
+        heard: Arc<AtomicU64>,
     ) {
         // Read apart from handling: while the master is stuck behind its lock, the worker's
         // messages still arrive, are recorded and wait in order (B6).
@@ -680,11 +711,12 @@ impl Hub {
             worker_id.clone(),
             inbound,
             self.arrivals.clone(),
-            self.clock,
             queue,
             HeartbeatAcks {
                 stream: stream.downgrade(),
                 leading: self.leading.subscribe(),
+                clocks: (self.clock, self.steady),
+                heard,
             },
         ));
         let mut unhandled = false;
@@ -801,7 +833,8 @@ impl Hub {
         // a stall); and the attempts its journal reports have started, so none is taken back
         // for want of a `Started` meanwhile (B50: lost with the old stream). Adopted, they are
         // marked started, after which the reconciliation's decision stands.
-        self.arrivals.arrived(&register.worker_id, (self.clock)());
+        self.arrivals
+            .arrived(&register.worker_id, (self.steady)((self.clock)()));
         let added: Vec<&str> = register
             .journal
             .iter()
@@ -851,8 +884,11 @@ impl Hub {
             .filter(|message| message.worker_id == register.worker_id)
             .count();
         let (stream, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
+        // A new count of heartbeats for the new stream: its `Register` is heartbeat 0.
+        let heard = Arc::new(AtomicU64::new(0));
         let first = pb::MasterMessage {
             message: Some(master_message::Message::Registered(registered)),
+            clock: Some(self.stamp(0)),
         };
         stream
             .try_send(Ok(first))
@@ -869,12 +905,13 @@ impl Hub {
                 return Err(Status::unavailable(NOT_LEADING));
             }
             streams.insert(register.worker_id.clone(), stream.clone());
+            lock_heard(&self.heard).insert(register.worker_id.clone(), Arc::clone(&heard));
         }
         drop(core);
         self.deliver(outgoing).await;
         tokio::spawn(
             self.clone()
-                .serve_stream(register.worker_id, stream, inbound),
+                .serve_stream(register.worker_id, stream, inbound, heard),
         );
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
@@ -919,23 +956,64 @@ const STOPPING: &str = "this master is stopping: connect again";
 const NOT_LEADING: &str = "this master isn't leading (its database lease isn't renewed, or another \
      master took it over): connect again";
 
+/// The master's clock to stamp on a message (B225): this process's timeline, master time
+/// and the wall clock now, and the latest heartbeat heard on the worker's stream.
+fn stamp_of(
+    (wall, steady): (fn() -> Timestamp, crate::clock::Steady),
+    heard: u64,
+) -> pb::MasterClock {
+    let wall = wall();
+    pb::MasterClock {
+        timeline: crate::clock::timeline(),
+        master_ms: steady(wall).as_millisecond(),
+        heard_sequence: heard,
+        wall_ms: wall.as_millisecond(),
+    }
+}
+
+fn lock_heard(
+    heard: &std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>,
+) -> std::sync::MutexGuard<'_, BTreeMap<String, Arc<AtomicU64>>> {
+    heard
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Answers a worker's heartbeats as they arrive, before they wait for the lock: a busy master
 /// isn't a lost one. Not while paused: another master may be leading, and may count the worker
 /// lost. The stream is held weakly, for this reader not to keep it open.
 struct HeartbeatAcks {
     stream: mpsc::WeakSender<Result<pb::MasterMessage, Status>>,
     leading: watch::Receiver<bool>,
+    /// The master's wall clock and master time, for the stamp.
+    clocks: (fn() -> Timestamp, crate::clock::Steady),
+    /// The heartbeats heard on this stream: the latest's number.
+    heard: Arc<AtomicU64>,
 }
 
 impl HeartbeatAcks {
-    fn answer(&self) {
+    /// The heartbeat numbered `sequence` arrived: noted, and answered, its number on the
+    /// answer's stamp.
+    fn answer(&self, sequence: u64) {
+        let heard = self
+            .heard
+            .fetch_max(sequence, Ordering::SeqCst)
+            .max(sequence);
         if *self.leading.borrow()
             && let Some(stream) = self.stream.upgrade()
         {
-            let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
+            let ack = pb::MasterMessage {
+                message: Some(master_message::Message::HeartbeatAck(pb::HeartbeatAck {})),
+                clock: Some(stamp_of(self.clocks, heard)),
+            };
             // Full, the worker isn't reading: the next heartbeat tries again.
-            let _ = stream.try_send(Ok(pb::MasterMessage { message: Some(ack) }));
+            let _ = stream.try_send(Ok(ack));
         }
+    }
+
+    /// Master time now (a message's arrival).
+    fn steady_now(&self) -> Timestamp {
+        (self.clocks.1)((self.clocks.0)())
     }
 }
 
@@ -945,16 +1023,15 @@ async fn read_stream(
     worker_id: String,
     mut inbound: Streaming<pb::WorkerMessage>,
     arrivals: Arrivals,
-    clock: fn() -> Timestamp,
     queue: mpsc::UnboundedSender<worker_message::Message>,
     acks: HeartbeatAcks,
 ) {
     loop {
         match inbound.message().await {
             Ok(Some(message)) => {
-                arrivals.arrived(&worker_id, clock());
-                if matches!(message.message, Some(worker_message::Message::Heartbeat(_))) {
-                    acks.answer();
+                arrivals.arrived(&worker_id, acks.steady_now());
+                if let Some(worker_message::Message::Heartbeat(beat)) = &message.message {
+                    acks.answer(beat.sequence);
                 }
                 if let Some(
                     worker_message::Message::Started(pb::Started { attempt_id, .. })

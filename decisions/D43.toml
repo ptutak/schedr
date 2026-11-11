@@ -11,5 +11,5 @@ A new worker’s registration waits for the next regular tick.
 history = "archive/PROJECT.md#D43"
 step = "M3.6"
 also = ["assignment"]
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["crates/schedr-master/src/service.rs::ROUND_GAP", "crates/schedr-master/src/service.rs::Wake"]

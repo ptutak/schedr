@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D293"
 step = "M4.9b"
 also = ["code-delivery"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/parse.rs::ScriptDeclaration", "crates/schedr-agent/src/jobs.rs::read_root"]
-checked = 2026-11-10
+checked = 2026-11-11

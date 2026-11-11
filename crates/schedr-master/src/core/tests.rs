@@ -649,6 +649,38 @@ async fn a_registration_goes_on_when_adopting_an_attempt_is_refused_for_its_data
     assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
 }
 
+/// Master time for [`a_wall_clock_jump_takes_nothing_back_and_loses_no_one`]: [`NOW`] plus
+/// [`STEADY_S`] seconds, whatever wall-clock time the core is handed.
+static STEADY_S: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn steady_from_now(_wall: Timestamp) -> Timestamp {
+    later(STEADY_S.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+#[tokio::test]
+async fn a_wall_clock_jump_takes_nothing_back_and_loses_no_one() {
+    // B228: liveness reads master time, never the wall clock. The wall clock jumps 2 min
+    // ahead while master time moves 5 s: the assignment stays, the worker too; once master time
+    // is past the lease, both go as usual.
+    STEADY_S.store(0, std::sync::atomic::Ordering::SeqCst);
+    let mut core = with_dag().await.with_steady(steady_from_now);
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    STEADY_S.store(5, std::sync::atomic::Ordering::SeqCst);
+    core.tick(later(120)).await.unwrap();
+    let open = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(open.status, None);
+    assert!(core.is_live("w1"));
+    STEADY_S.store(70, std::sync::atomic::Ordering::SeqCst);
+    core.tick(later(121)).await.unwrap();
+    assert!(!core.is_live("w1"));
+    let ended = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert!(ended.status.is_some(), "{ended:?}");
+}
+
 #[tokio::test]
 async fn an_attempt_adopted_unrecorded_isnt_taken_back_while_its_worker_runs_it() {
     // Codex's review of B128: the start left unrecorded, the attempt counted as never started

@@ -171,6 +171,9 @@ message Heartbeat {
   repeated string running_attempt_ids = 2;
   uint32 free_watcher_slots = 3;
   repeated WatcherHost watcher_hosts = 4;
+  // Its number in the session, from 1 (the `Register` is 0), echoed by the master's messages'
+  // `clock.heard_sequence` (B225). 0 on a heartbeat: unnumbered (an older worker).
+  uint64 sequence = 6;
 }
 
 // A process running a worker's wait steps, or a code set whose hosts were lost: for people.
@@ -222,6 +225,9 @@ enum RejectReason {
   // The worker's code of the task's root isn't the hash the master expects (it hasn't synced
   // yet, or synced past it): "code not there yet".
   REJECT_REASON_CODE_MISMATCH = 10;
+  // The assignment came too late to start: past its `start_by_ms` (B225). Queued again at
+  // once, any worker (a moved cleanup set aside first, as for any rejection).
+  REJECT_REASON_TOO_LATE = 11;
 }
 
 message Rejected {
@@ -359,6 +365,25 @@ message MasterMessage {
     TriggerEventAck trigger_event_ack = 11;
     ApiAnswer api_answer = 12;
   }
+  // When the master sent it, on its own clock (B225): every message carries it.
+  MasterClock clock = 20;
+}
+
+// The master's clock as a message left it (B225, B228). Master time is the leading master's
+// monotonic clock, one timeline per master process: every deadline the master and its workers
+// must agree on is a master time, and no decision reads a wall clock.
+message MasterClock {
+  // The master process's timeline: master times of different timelines aren't compared.
+  uint64 timeline = 1;
+  // Master time, in milliseconds on that timeline.
+  int64 master_ms = 2;
+  // The latest heartbeat `sequence` the master had from this worker's stream when it sent this
+  // (0: only its `Register`): the heartbeat was sent before this message, so the worker reads
+  // master time from it, conservatively.
+  uint64 heard_sequence = 3;
+  // The master's wall clock, Unix milliseconds: for a clock-skew warning only, never a
+  // deadline.
+  int64 wall_ms = 4;
 }
 
 // The answer to an `ApiCall`: the HTTP status and body the router gave, or the master's refusal
@@ -398,6 +423,7 @@ message TriggerEventAck {
 
 // Sent as a heartbeat arrives, while this master leads: how a worker tells a silent network from
 // a quiet master, with no other message due.
+// Its `clock.heard_sequence` names the heartbeat it answers.
 message HeartbeatAck {}
 
 // Timing is owned by the master's configuration so all workers behave the same.
@@ -503,6 +529,13 @@ message AssignTask {
   // When the task's first try started, for a wait step tried again: `delay` counts from it
   // (M4.11g). Unset on its first try, which counts from its own start.
   google.protobuf.Timestamp first_started = 18;
+  // The master time (on the message's `clock.timeline`) by which the worker must start it: its
+  // start timeout from when the master stored it (B225). Past it the master may have taken it
+  // back and given it to another worker, so the worker doesn't start it (it rejects it as
+  // `TOO_LATE`); it reads master time conservatively from the clocks on the master's messages
+  // and keeps two heartbeat intervals for its `Started` to arrive (B227). Unset (an older
+  // master): no limit.
+  optional int64 start_by_ms = 19;
 }
 
 message CleanupOnly {

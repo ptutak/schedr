@@ -1,0 +1,18 @@
+title = "One monotonic clock for the cluster: master time"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+Every liveness deadline is a master time: the leading master's monotonic clock, stamped with
+its timeline on every master message along with the latest heartbeat heard. `AssignTask`
+carries `start_by_ms`; the worker reads master time from when it sent that heartbeat, keeps two
+heartbeat intervals for `Started` and rejects `TOO_LATE` past it. The master's expiries count
+on its own clock; a lease under four heartbeats is refused. Not chosen: an acknowledged
+`Started` before launch; a hold after a wall-clock jump.
+'''
+history = "JOURNAL.md#D442"
+step = "B225"
+code = ["crates/schedr-agent/src/master_time.rs::MasterTime", "crates/schedr-master/src/clock.rs::monotonic", "crates/schedr-master/src/service.rs::stamp_of", "crates/schedr-config/src/loader.rs::check_lease"]
+checked = 2026-11-11

@@ -1,0 +1,13 @@
+title = "a deposed master can still answer heartbeats after another took over: a worker's lease outlasts what the new master counts"
+severity = "high"
+probability = "rare"
+kind = "correctness"
+summary = '''leadership expires on the database's wall clock, while a master leads until its own monotonic `until` and answers heartbeats outside the database fence; a database clock step, or the old master's host suspended (its monotonic clock stopped), lets a new master take over while the old one still answers, so a worker's lease runs on past `leading_since + lease`, when the new master counts it lost and moves its `cleanup_anywhere` cleanups or retries its tasks'''
+found = 2026-11-11
+suspected = false
+details = '''
+- **Found:** 2026-11-11, by Grok's review of the liveness design draft (session ac32cff4, finding 1), from the code; not reproduced.
+- **Where:** `crates/schedr-master/src/lease.rs` (`until`, renewals on `CLOCK_MONOTONIC`), `crates/schedr-master/src/service.rs` (`HeartbeatAcks::answer`), `crates/schedr-master/src/core.rs` (`restore`: a fresh lease from `leading_since`).
+- **Not affected:** starts: an assignment's deadline is a master time on its master's timeline, which answers don't extend (D442).
+- **The options, likely:** a new leader counts a worker it hasn't answered lost only after `leading_since + lead time + lease` (lead time: `lease_period - query_timeout`); the master's lead clock counting suspend (`CLOCK_BOOTTIME`); the worker refusing an older timeline's messages once it has registered with a newer one. Part of the liveness redesign's questions.
+'''

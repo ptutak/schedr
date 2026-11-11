@@ -853,6 +853,39 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
     assert_eq!(outputs.get(&id("extract")), Some(&json!(7)));
 }
 
+/// Master time 30 s later at every read, from [`NOW`] (Grok's review of D442: the reads around
+/// a moved cleanup's awaits).
+static STEPS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn stepping(_wall: Timestamp) -> Timestamp {
+    later(STEPS.fetch_add(30, std::sync::atomic::Ordering::SeqCst))
+}
+
+#[tokio::test]
+async fn a_moved_cleanups_deadline_is_the_one_its_expiry_keeps() {
+    // Grok's review of D442: master time was read for the expiry, then again for the deadline
+    // after the awaits building the message, so the worker's deadline was later.
+    let (mut dispatcher, _db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
+    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.set_steady(stepping);
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let assigned = assignment(&out[0]);
+    assert!(assigned.cleanup_only.is_some());
+    let since = dispatcher.unstarted_since[&attempt];
+    let expires = since.checked_add(dispatcher.start_timeout).unwrap();
+    assert_eq!(assigned.start_by_ms, Some(expires.as_millisecond()));
+}
+
 #[tokio::test]
 async fn a_task_lost_with_its_worker_is_retried_after_its_moved_cleanup() {
     let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
@@ -4061,6 +4094,7 @@ fn an_assignment_over_what_a_worker_takes_is_never_sent() {
             task_json: vec![b'x'; 2000],
             ..pb::AssignTask::default()
         })),
+        clock: None,
     };
     let size = prost::Message::encoded_len(&message);
     assert_eq!(

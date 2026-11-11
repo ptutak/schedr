@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D229"
 step = "M4.8b2"
 also = ["protocol", "outcomes", "workers"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/core.rs", "crates/schedr-agent/src/agent.rs::kept_cleanup"]
-checked = 2026-11-10
+checked = 2026-11-11

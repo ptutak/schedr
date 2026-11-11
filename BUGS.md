@@ -53,45 +53,69 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B225: an assignment delivered late and journaled slowly can start after the master took it back | 4 | critical | rare | correctness |
-| 2 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
-| 3 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
-| 4 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 5 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 6 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
-| 7 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
-| 8 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
-| 9 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 10 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 11 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 12 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 13 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 14 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 15 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 16 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 17 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 18 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 19 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
-| 20 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
-| 21 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 22 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 23 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 24 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 25 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 26 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 27 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 28 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 29 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 30 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 31 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 1 | B192: a removed DAG's queued tasks are still dispatched, not cancelled (Suspected) | 4 | medium | possible | correctness |
+| 2 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
+| 3 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
+| 4 | B231: a deposed master can still answer heartbeats after another took over: a worker's lease outlasts what the new master counts | 3 | high | rare | correctness |
+| 5 | B230: a worker's new incarnation is accepted while the old process may still run within its lease: a retry or a moved cleanup can overlap it | 3 | high | rare | correctness |
+| 6 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 7 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
+| 8 | B193: a DAG in an ID conflict still has its queued tasks assigned (Suspected) | 2 | medium | rare | correctness |
+| 9 | B185: an @sensor(wait_for=EventNamed) that returned NOT_YET never sees an event committed late with an earlier posted_at | 2 | medium | rare | correctness |
+| 10 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
+| 11 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 12 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
+| 13 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 14 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 15 | B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning | 2 | low | possible | usability |
+| 16 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
+| 17 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 18 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 19 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 20 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 21 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 22 | B195: a moved cleanup's take-back checks the worker it last moved from, not its origin (Suspected) | 1 | low | rare | correctness |
+| 23 | B191: a worker's Finished that failed to store still wakes the master's loop | 1 | low | rare | correctness |
+| 24 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 25 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 26 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 27 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 28 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 29 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 30 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 31 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 32 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 33 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 34 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 
-## B225: an assignment delivered late and journaled slowly can start after the master took it back
+## B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning
 
-- **Rating:** severity **critical**, probability **rare**, correctness (score 4): the master's start timeout counts from `assigned_at`, the worker's lease from the master's last word: an AssignTask delayed on its way (near a lease, while the worker's heartbeats still reach the master) and a slow journal write leave the worker within its lease when the master has already expired the attempt and assigned it again, so both run it.
-- **Found:** 2026-11-10, by Codex's review of batch A (session 01a1c665), with a paused-clock harness over the real dispatcher and agent: assigned at 0 s, delivered at 55 s, journaled 10 s, expired at 61 s, reassigned at 62 s, started on the first worker at 65 s.
-- **Where:** `crates/schedr-agent/src/agent.rs` (`journal_start`: `gone_silent` is the worker's own lease, refreshed by the assignment's arrival); `crates/schedr-master/src/dispatch.rs` (`expire`: from `assigned_at`). An `AssignTask` carries no time of the master's.
-- **Decided:** 2026-11-10, the user: a budget in the assignment (how long it may still wait to start, from the master's start timeout and its age when sent), counted by the worker conservatively against the link's delay; no extra round trip.
-- **The options were:** e.g. the assignment carries how long it may wait before starting (the master's start timeout less its age when sent) and the worker counts it from the arrival of the master's last earlier word; or the worker's `Started` is acknowledged before it launches (a round trip per task); or the master answers a late `Started` for a taken-back attempt by stopping it (both may already run).
+- **Rating:** severity **low**, probability **possible**, usability (score 2): every master message carries the master's wall clock (`MasterClock.wall_ms`, D442) for a worker to warn when its own wall clock differs by more than a few seconds (cron times, logs and shown times come from wall clocks); the agent doesn't compare them yet, as its warnings come only from the executor.
+- **Found:** 2026-11-11, by Claude, building D442 (the user asked to carry the master's wall clock too).
+- **Where:** `crates/schedr-agent/src/agent.rs` (`heard_master`, `warnings`), `crates/schedr-agent/src/master_time.rs`.
+- **The fix, likely:** the agent's own warnings beside the executor's, a `clock_skew` warning when `|worker wall - master wall|` passes a hidden threshold (allowing the message's delay), shown on the Deployments page.
+
+## B231: a deposed master can still answer heartbeats after another took over: a worker's lease outlasts what the new master counts
+
+- **Rating:** severity **high**, probability **rare**, correctness (score 3): leadership expires on the database's wall clock, while a master leads until its own monotonic `until` and answers heartbeats outside the database fence; a database clock step, or the old master's host suspended (its monotonic clock stopped), lets a new master take over while the old one still answers, so a worker's lease runs on past `leading_since + lease`, when the new master counts it lost and moves its `cleanup_anywhere` cleanups or retries its tasks.
+- **Found:** 2026-11-11, by Grok's review of the liveness design draft (session ac32cff4, finding 1), from the code; not reproduced.
+- **Where:** `crates/schedr-master/src/lease.rs` (`until`, renewals on `CLOCK_MONOTONIC`), `crates/schedr-master/src/service.rs` (`HeartbeatAcks::answer`), `crates/schedr-master/src/core.rs` (`restore`: a fresh lease from `leading_since`).
+- **Not affected:** starts: an assignment's deadline is a master time on its master's timeline, which answers don't extend (D442).
+- **The options, likely:** a new leader counts a worker it hasn't answered lost only after `leading_since + lead time + lease` (lead time: `lease_period - query_timeout`); the master's lead clock counting suspend (`CLOCK_BOOTTIME`); the worker refusing an older timeline's messages once it has registered with a newer one. Part of the liveness redesign's questions.
+
+## B230: a worker's new incarnation is accepted while the old process may still run within its lease: a retry or a moved cleanup can overlap it
+
+- **Rating:** severity **high**, probability **rare**, correctness (score 3): `register` takes a new incarnation of a worker as soon as the old stream isn't live, and `incarnation_replaced` ends its unreported started attempts at once, retried, a moved cleanup eligible 40 s later; the old process, alive (its pod not gone yet, or a second agent with the same name), stops its `cleanup_anywhere` tasks only at its own lease, up to 60 s after the master's last word: both run.
+- **Found:** 2026-11-11, by Grok's review of the liveness design draft (session ac32cff4, finding 6), from the code; not reproduced.
+- **Where:** `crates/schedr-master/src/core.rs` (`register`, `incarnation_replaced`), `crates/schedr-master/src/dispatch.rs` (`incarnation_replaced`, `end_unreported`, `move_cleanup`); `crates/schedr-agent/src/agent.rs` (`cut_off_at`).
+- **The options, likely:** the new incarnation's retries and moves wait until the old one's lease is over in master time (from the last word the master sent it); or a new incarnation is refused until the old one is lost, unless it proves the old process is gone (same host, PID dead). A decision for the user: a restarted pod comes back fast with the same name.
+
+## B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected)
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): in one run of the config, agent, proto and master crates together (77 s against the usual 53 s: the machine loaded) both failed, after 5.1 s and 8.5 s; alone they passed three runs out of three, and the next full run passed; the failure output wasn't kept.
+- **Found:** 2026-11-11, by Claude, running the tests of B225's fixes; nothing in that change touches watchers.
+- **Where:** `crates/schedr-agent/tests/watchers.rs`.
+- **Next:** reproduce under load (for example with `stress-ng` beside the test, or many runs in parallel), keep the failure's output, then find the limit that is too tight.
 
 ## B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up
 
@@ -161,6 +185,7 @@ step touches their code or the user schedules them.
 
 - **Rating:** severity **medium**, probability **possible**, correctness (score 4): TaskKind has no deny_unknown_fields and both ends are protocol 0.1: a worker of 0.1.0 under a newer master (the supported upgrade order) drops what it doesn't know, e.g. batch_ms, and runs a batched poke as one event per item, the run's data then not the list its tasks take.
 - **Decided:** 2026-11-10, the user: left until 1.0's protocol freeze (no 0.1.0 workers in production); fixed then, not before M4B.
+- **Also, 2026-11-11** (Grok's review of B225's fixes, the user: with this bug, until 1.0): a worker of an earlier build ignores `AssignTask.start_within_ms` and `Heartbeat.sequence`, so during a rolling upgrade (master first) it keeps B225's race (a late assignment started after the master took it back) until every worker is upgraded.
 - **Found:** Grok's security review of M4.11f, by parsing DAG JSON with the fields of 0.1.0
   (`batch_ms` dropped, the runner then telling one event per item).
 - **Cause:** `PROTOCOL_VERSION` is still 0.1, raised for nothing added in M4 (14 changes to the

@@ -11,5 +11,5 @@ The master announces it to workers in `Registered`.
 history = "archive/PROJECT.md#D58"
 step = "M4.2a"
 also = ["configuration"]
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["crates/schedr-config/src/loader.rs::MIN_MESSAGE_SIZE", "crates/schedr-config/src/config.rs::max_message_size"]

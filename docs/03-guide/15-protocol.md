@@ -133,8 +133,10 @@ sequenceDiagram
     M->>W: AssignTask (inputs_external)
     W->>M: FetchInputs (attempt ID)
     M-->>W: InputChunk stream
-    alt Fetch succeeds
+    alt Fetch succeeds before the assignment's deadline
         W->>M: Started
+    else Fetch succeeds past the deadline
+        W->>M: Rejected (TOO_LATE); queued again at once
     else Fetch fails or does not finish in time
         Note over M: Assignment expiry: worker lease, 60 s default without Started; assignment is taken back
     end
@@ -470,12 +472,18 @@ identical effects.
 
 ### Master to worker on `Control`
 
+Every master message carries the master's clock (`MasterClock`): its process's timeline,
+master time (its monotonic clock) as it was sent, the latest heartbeat number it had from this
+stream (`0`: only the `Register`), and its wall clock. Every deadline the master and its
+workers must agree on is a master time; a worker reads master time from these, counting from
+when it sent the heartbeat a message names. No deadline reads the wall clock it carries.
+
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
-| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard; silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
+| `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads | Note the master as heard (its clock, as on every master message, names the heartbeat it answers); silence for the worker lease ends the stream and stops `cleanup_anywhere` tasks | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `Registered` | Master after `Register` | Apply timing, journal decisions and `script_uses` (`RootUses` per DAG root); ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `ScriptUses` | Master when the script roots sent for DAG roots change | Replace the uses (`RootUses` per DAG root); fold the used script roots' hashes into each DAG root's reported hash, withdrawing a DAG root that uses a script root this worker lacks (decisions 301, 303, 304) | Yes, it replaces; an omitted root uses none | — |
-| `AssignTask` | Master after storing assignment | Validate and start attempt; `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `AssignTask` | Master after storing assignment | Validate and start attempt, or reject it `TOO_LATE` past `start_by_ms` (its start timeout from when it was stored, in master time, read from the master's clock on its messages, two heartbeat intervals kept for `Started`); `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | Job results are matched to the assigned job | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
 | `AssignTrigger` | Master when a DAG's trigger should run and has no worker | Run it on a watcher slot from its bookmark, with the previous consecutive `failures`, without an attempt | Yes | — |

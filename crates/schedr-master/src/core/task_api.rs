@@ -105,6 +105,7 @@ fn answer(worker_id: &str, request_id: u64, status: u16, body: Vec<u8>) -> Outgo
                 status: u32::from(status),
                 body_json: body,
             })),
+            clock: None,
         },
     }
 }

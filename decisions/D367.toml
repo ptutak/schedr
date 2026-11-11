@@ -13,4 +13,4 @@ in the `project-docs` skill.
 history = "JOURNAL.md#D367"
 step = "n/a"
 code = ["scripts/records.py", "STATUS.md", "design/README.md", "JOURNAL.md"]
-checked = 2026-11-10
+checked = 2026-11-11

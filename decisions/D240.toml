@@ -11,5 +11,5 @@ They also include listeners’ retry after a failed accept.
 history = "archive/PROJECT.md#D240"
 step = "M4.8u"
 also = ["workers", "secrets", "connections"]
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["crates/schedr-config/src/config.rs::vault_renew_check", "crates/schedr-config/src/config.rs::stop_poll", "crates/schedr-config/src/config.rs::connection_job_cancel_grace"]

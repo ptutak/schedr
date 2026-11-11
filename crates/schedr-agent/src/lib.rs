@@ -21,6 +21,7 @@ pub mod journal;
 pub mod launch;
 pub mod logs;
 pub mod mask;
+pub mod master_time;
 pub mod memory;
 pub mod metrics;
 pub mod output;

@@ -58,6 +58,12 @@ async fn connected_on_with(
 ) -> (Hub, Database, MasterClient<Channel>) {
     db.migrate().await.unwrap();
     let hub = Hub::with_clock(MasterCore::new(db.clone(), *settings), clock);
+    let client = served(&hub).await;
+    (hub, db, client)
+}
+
+/// A client to `hub`, served over an in-memory connection.
+async fn served(hub: &Hub) -> MasterClient<Channel> {
     let (client_io, server_io) = tokio::io::duplex(1 << 20);
     let service = hub.service();
     tokio::spawn(async move {
@@ -78,7 +84,7 @@ async fn connected_on_with(
         }))
         .await
         .unwrap();
-    (hub, db, MasterClient::new(channel))
+    MasterClient::new(channel)
 }
 
 fn root() -> pb::RootHash {
@@ -363,6 +369,82 @@ async fn the_loop_ticks_until_stopped() {
         "{text}"
     );
     assert!(text.contains("command_latency_seconds_count 1"), "{text}");
+}
+
+#[tokio::test]
+async fn every_message_carries_the_masters_clock_and_an_assignment_its_deadline() {
+    // B225: the clock on every message names this master's timeline, master time and the
+    // latest heartbeat heard on the stream; an assignment is due by its start timeout (the
+    // lease) in master time from when it was stored.
+    let (hub, db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let clock_of = |message: &pb::MasterMessage| message.clock.expect("a clock");
+    let registered = tokio::time::timeout(Duration::from_secs(5), stream.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first = clock_of(&registered);
+    assert_eq!(first.timeline, crate::clock::timeline());
+    assert_eq!(first.master_ms, fixed_now().as_millisecond());
+    assert_eq!(first.heard_sequence, 0);
+    assert_eq!(first.wall_ms, fixed_now().as_millisecond());
+    let beat = pb::Heartbeat {
+        sequence: 3,
+        ..pb::Heartbeat::default()
+    };
+    to_master
+        .send(wrap(worker_message::Message::Heartbeat(beat)))
+        .await
+        .unwrap();
+    let mut parse_seen = false;
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(5), stream.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        match &message.message {
+            Some(master_message::Message::AssignParse(_)) => parse_seen = true,
+            Some(master_message::Message::HeartbeatAck(_)) => {
+                assert_eq!(clock_of(&message).heard_sequence, 3);
+                break;
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert!(parse_seen);
+    upload(&mut client, parse_result()).await.unwrap();
+    let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
+        params: None,
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    };
+    db.insert_command(&trigger, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let message = tokio::time::timeout(Duration::from_secs(5), stream.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let Some(master_message::Message::AssignTask(assign)) = &message.message else {
+        panic!("expected AssignTask")
+    };
+    let lease = jiff::SignedDuration::try_from(Settings::default().lease_timeout).unwrap();
+    assert_eq!(
+        assign.start_by_ms,
+        Some((fixed_now() + lease).as_millisecond())
+    );
+    assert_eq!(clock_of(&message).heard_sequence, 3);
 }
 
 #[tokio::test]

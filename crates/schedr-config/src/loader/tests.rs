@@ -633,6 +633,23 @@ fn a_hidden_variable_sets_its_timing_and_is_remembered() {
     );
 }
 
+#[rstest]
+#[case(&[("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "39s")])]
+#[case(&[("SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL", "16s")])]
+fn a_lease_under_four_heartbeats_is_refused(#[case] vars: &[(&str, &str)]) {
+    let error = load(None, &env(vars), &[]).unwrap_err().to_string();
+    assert!(
+        error.contains("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT")
+            && error.contains("at least four times `SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`"),
+        "{error}"
+    );
+    let at_four = env(&[
+        ("SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL", "10s"),
+        ("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "40s"),
+    ]);
+    assert!(load(None, &at_four, &[]).is_ok());
+}
+
 #[test]
 fn without_a_hidden_variable_the_timings_are_the_fixed_ones() {
     assert_eq!(
@@ -797,7 +814,13 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .collect();
     assert_eq!(names.len(), 74, "{names:?}");
     for name in names {
-        let loaded = load(None, &env(&[(name, "1s")]), &[]);
+        // The lease at least four heartbeats (B226).
+        let value = if name.ends_with("LEASE_TIMEOUT") {
+            "1m"
+        } else {
+            "1s"
+        };
+        let loaded = load(None, &env(&[(name, value)]), &[]);
         if HIDDEN_LIMITS.iter().any(|limit| name.ends_with(limit)) {
             let limits = load(None, &env(&[(name, "1")]), &[]).unwrap().limits;
             assert_eq!(limits.overridden, [name]);

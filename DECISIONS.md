@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D442 | 2026-11-11 | user | built (B225 fixed) | workers | One monotonic clock for the cluster: master time |
 | D441 | 2026-11-10 | user | built M4.15b | deployment | A DAG that no longer parses after a major upgrade is held |
 | D440 | 2026-11-10 | claude | built M4.14 | state | Retention also keeps the runs catchup counts as done, and runs still read |
 | D439 | 2026-11-10 | user | built M4.15 | deployment | Upgrade-rule gaps: the clear ones fixed, the others asked |
@@ -957,6 +958,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D442: One monotonic clock for the cluster: master time
 - D438: The hard memory cap is `RLIMIT_DATA`
 - D437: A task's budget is placed within a worker's pod limit
 - D436: A task's own memory budget is `memory=`; the hard cap `hard_memory_limit=`

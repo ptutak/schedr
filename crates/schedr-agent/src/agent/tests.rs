@@ -464,6 +464,9 @@ struct Scripted {
     answer_after: Duration,
     /// Messages sent after the script, this long after it (held on their way, B163).
     late: Option<(Duration, Vec<pb::MasterMessage>)>,
+    /// Each heartbeat answered with a `HeartbeatAck`, as the master does, once this long has
+    /// passed since the stream opened (before it, none: a paused master).
+    ack_heartbeats: Option<Duration>,
 }
 
 #[tonic::async_trait]
@@ -478,8 +481,24 @@ impl pb::master_server::Master for Scripted {
         let mut inbound = request.into_inner();
         tokio::time::sleep(self.answer_after).await;
         let (sender, stream) = mpsc::channel(64);
+        // Master time: milliseconds since the stream opened, on one timeline; each message
+        // names the latest heartbeat heard (B225), as the master's do.
+        let opened = Instant::now();
+        let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stamp = {
+            let heard = Arc::clone(&heard);
+            move |mut message: pb::MasterMessage| {
+                message.clock = Some(pb::MasterClock {
+                    timeline: 7,
+                    master_ms: i64::try_from(opened.elapsed().as_millis()).unwrap(),
+                    heard_sequence: heard.load(std::sync::atomic::Ordering::SeqCst),
+                    wall_ms: 0,
+                });
+                message
+            }
+        };
         for message in self.script.clone() {
-            sender.send(Ok(message)).await.unwrap();
+            sender.send(Ok(stamp(message))).await.unwrap();
         }
         if self.parse_registered {
             let first = inbound.message().await?.expect("a register first");
@@ -489,7 +508,7 @@ impl pb::master_server::Master for Scripted {
                         parse_job_id: format!("job-{}", root.root),
                         root: Some(root.clone()),
                     });
-                    sender.send(Ok(to_worker(job))).await.unwrap();
+                    sender.send(Ok(stamp(to_worker(job)))).await.unwrap();
                 }
             }
             self.received.lock().unwrap().push(first);
@@ -497,17 +516,28 @@ impl pb::master_server::Master for Scripted {
         let received = Arc::clone(&self.received);
         if let Some((after, late)) = self.late.clone() {
             let sender = sender.clone();
+            let stamp = stamp.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(after).await;
                 for message in late {
-                    let _ = sender.send(Ok(message)).await;
+                    let _ = sender.send(Ok(stamp(message))).await;
                 }
             });
         }
+        let ack_heartbeats = self.ack_heartbeats;
         tokio::spawn(async move {
-            let _keep_open = sender;
             while let Ok(Some(message)) = inbound.message().await {
+                let beat = match &message.message {
+                    Some(worker_message::Message::Heartbeat(beat)) => Some(beat.sequence),
+                    _ => None,
+                };
                 received.lock().unwrap().push(message);
+                let acking = ack_heartbeats.is_some_and(|after| opened.elapsed() >= after);
+                if let Some(sequence) = beat.filter(|_| acking) {
+                    heard.fetch_max(sequence, std::sync::atomic::Ordering::SeqCst);
+                    let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
+                    let _ = sender.send(Ok(stamp(to_worker(ack)))).await;
+                }
             }
         });
         Ok(tonic::Response::new(ReceiverStream::new(stream)))
@@ -554,6 +584,7 @@ impl pb::master_server::Master for Scripted {
 fn to_worker(message: master_message::Message) -> pb::MasterMessage {
     pb::MasterMessage {
         message: Some(message),
+        clock: None,
     }
 }
 
@@ -2092,6 +2123,7 @@ fn command_needing_secret(
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
+        start_by_ms: None,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2333,6 +2365,7 @@ async fn command_with_connection(
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
+        start_by_ms: None,
     };
     let mut spec = crate::attempt::AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2633,6 +2666,7 @@ fn attempt_with_timed_cleanup(
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
+        start_by_ms: None,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -3290,6 +3324,277 @@ async fn an_assignment_journaled_past_the_lease_isnt_started() {
         "{:?}",
         kinds(&seen)
     );
+}
+
+#[tokio::test]
+async fn an_assignment_past_its_start_budget_isnt_started_and_is_rejected_too_late() {
+    // B225: delivered late, then journaled slowly, an assignment the master had already taken
+    // back (its start timeout counts from when it assigned it) started here as well; the
+    // worker's own lease, long, hadn't run out. Its budget is counted from the stream's
+    // opening (no heartbeat answered yet), so 100 ms is spent by the 250 ms write.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("late");
+    let mut late = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut late.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(100);
+    script[1] = late;
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(800);
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let stalled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen_stalls = Arc::clone(&stalled);
+    let (seen, left) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+        agent.journal_stall = (Duration::from_millis(250), seen_stalls);
+    })
+    .await;
+    assert_eq!(stalled.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(left, Vec::<String>::new());
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    let rejected: Vec<i32> = seen
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Rejected(r)) => Some(r.reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rejected,
+        [i32::from(pb::RejectReason::TooLate)],
+        "{:?}",
+        kinds(&seen)
+    );
+}
+
+#[tokio::test]
+async fn an_assignment_starts_by_its_deadline_in_master_time() {
+    // B225: the master answers the worker's heartbeats (every 20 ms) and sends an assignment
+    // 400 ms after the stream opened (its master time), due by 700: it starts.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("anchored");
+    let mut later = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(700);
+    script.truncate(1);
+    let master = Scripted {
+        script,
+        late: Some((Duration::from_millis(400), vec![later])),
+        ack_heartbeats: Some(Duration::ZERO),
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let watched = Arc::clone(&launched);
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| {
+        !watched.lock().unwrap().is_empty() || started.elapsed() > Duration::from_secs(3)
+    };
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert!(heartbeats(&seen) > 5, "{:?}", kinds(&seen));
+    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
+}
+
+#[tokio::test]
+async fn an_assignment_arriving_past_its_deadline_in_master_time_is_too_late() {
+    // B225: delivered late (sent at master time 400, due by 300 - stored long before), it
+    // arrives fresh but is rejected, never started: its deadline is the master's, not counted
+    // from its arrival.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("anchored");
+    let mut later = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(300);
+    script.truncate(1);
+    let master = Scripted {
+        script,
+        late: Some((Duration::from_millis(400), vec![later])),
+        ack_heartbeats: Some(Duration::ZERO),
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let watched = Arc::clone(&launched);
+    let started = Instant::now();
+    let done = move |seen: &[pb::WorkerMessage]| {
+        !watched.lock().unwrap().is_empty()
+            || seen
+                .iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
+            || started.elapsed() > Duration::from_secs(3)
+    };
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    let rejected: Vec<i32> = seen
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Rejected(r)) => Some(r.reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rejected, [i32::from(pb::RejectReason::TooLate)]);
+}
+
+#[tokio::test]
+async fn heartbeats_never_answered_dont_hold_back_the_start_budget() {
+    // B225 (Grok's review): a paused master answers no heartbeat; once it leads again, the
+    // answers paired with the oldest unanswered heartbeats left the count that far behind for
+    // the session, and every assignment was too late. Unanswered for 300 ms (about 15
+    // heartbeats), then answered: 200 ms sent at 500 ms start.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("after_pause");
+    let mut later = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(700);
+    script.truncate(1);
+    let master = Scripted {
+        script,
+        late: Some((Duration::from_millis(500), vec![later])),
+        ack_heartbeats: Some(Duration::from_millis(300)),
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let watched = Arc::clone(&launched);
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| {
+        !watched.lock().unwrap().is_empty() || started.elapsed() > Duration::from_secs(3)
+    };
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
+}
+
+#[tokio::test]
+async fn a_start_budget_over_two_heartbeats_starts() {
+    // B227: two heartbeat intervals are kept off the budget, no more: 2.5 s with a 1 s
+    // heartbeat leaves 0.5 s, and it starts.
+    let mut script = silent_master_leased(false, 5000);
+    let Some(master_message::Message::Registered(registered)) = &mut script[0].message else {
+        panic!("expected Registered")
+    };
+    registered.timing.as_mut().unwrap().heartbeat_interval_ms = 1000;
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("enough");
+    let mut enough = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut enough.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(2500);
+    script[1] = enough;
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let watched = Arc::clone(&launched);
+    let started = Instant::now();
+    let done = move |seen: &[pb::WorkerMessage]| {
+        !watched.lock().unwrap().is_empty()
+            || seen
+                .iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
+            || started.elapsed() > Duration::from_secs(3)
+    };
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
+}
+
+#[tokio::test]
+async fn a_start_budget_keeps_a_heartbeat_for_the_started_to_arrive() {
+    // B227: a `Started` sent just before the master's time ran out could arrive after it took
+    // the attempt back. A budget under two heartbeat intervals (1 s each here) leaves no time.
+    let mut script = silent_master_leased(false, 5000);
+    let Some(master_message::Message::Registered(registered)) = &mut script[0].message else {
+        panic!("expected Registered")
+    };
+    registered.timing.as_mut().unwrap().heartbeat_interval_ms = 1000;
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("short");
+    let mut short = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut short.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(1900);
+    script[1] = short;
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let done = |seen: &[pb::WorkerMessage]| {
+        seen.iter()
+            .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
+    };
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    let rejected: Vec<i32> = seen
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Rejected(r)) => Some(r.reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rejected, [i32::from(pb::RejectReason::TooLate)]);
+}
+
+#[tokio::test]
+async fn an_assignment_within_its_start_budget_starts() {
+    // B225: the budget leaves an assignment in time alone.
+    let mut script = silent_master_leased(false, 5000);
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("in_time");
+    let mut in_time = assign("a1", &task, "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut in_time.message else {
+        panic!("expected an assignment")
+    };
+    assigned.start_by_ms = Some(60_000);
+    script[1] = in_time;
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let watched = Arc::clone(&launched);
+    let done = move |_: &[pb::WorkerMessage]| !watched.lock().unwrap().is_empty();
+    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.dirs = seen_launches;
+    })
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
 }
 
 #[tokio::test]

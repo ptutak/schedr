@@ -328,8 +328,10 @@ fn not_stored(finished: &pb::Finished, error: &CoreError) -> pb::Finished {
 struct Connection {
     incarnation: String,
     schedr_version: String,
-    last_seen: Timestamp,
-    /// When `last_seen` was last written to the registry (at most once per heartbeat
+    /// When it was last heard from, in master time (B228; see [`crate::clock`]): its lease
+    /// counts from it.
+    heard: Timestamp,
+    /// When its last sign of life was last written to the registry (at most once per heartbeat
     /// interval).
     persisted: Timestamp,
     live: bool,
@@ -456,6 +458,8 @@ pub struct MasterCore {
     task_api: Option<Arc<dyn task_api::TaskApi>>,
     /// `[notifications]`.
     notifications: Arc<crate::notifications::Notifications>,
+    /// Master time, which its liveness decisions read (B228; see [`crate::clock`]).
+    steady: crate::clock::Steady,
 }
 
 impl MasterCore {
@@ -509,11 +513,28 @@ impl MasterCore {
             stopping_triggers: BTreeMap::new(),
             task_api: None,
             notifications: Arc::default(),
+            steady: crate::clock::as_given,
             settings,
             db,
         }
         // One set shared by every part, replaced by the caller's to register them.
         .with_metrics(MasterMetrics::default())
+    }
+
+    /// The master deciding liveness on `steady` (production: [`crate::clock::monotonic`], set
+    /// by [`crate::service::Hub::new`]; tests: the times they pass).
+    #[must_use]
+    pub fn with_steady(mut self, steady: crate::clock::Steady) -> Self {
+        self.steady = steady;
+        self.dispatcher.set_steady(steady);
+        self.discovery.jobs_mut().set_steady(steady);
+        self
+    }
+
+    /// How it reads master time (see [`crate::clock`]).
+    #[must_use]
+    pub const fn steady_clock(&self) -> crate::clock::Steady {
+        self.steady
     }
 
     /// The master sending notifications as `notifications` says (`[notifications]`): what
@@ -600,7 +621,7 @@ impl MasterCore {
                 Connection {
                     incarnation: worker.incarnation,
                     schedr_version: worker.schedr_version,
-                    last_seen: now,
+                    heard: (self.steady)(now),
                     persisted: now,
                     live: false,
                     secret_storages: None,
@@ -756,7 +777,7 @@ impl MasterCore {
             Connection {
                 incarnation: register.incarnation_id.clone(),
                 schedr_version: register.schedr_version.clone(),
-                last_seen: now,
+                heard: (self.steady)(now),
                 persisted: now,
                 live: true,
                 secret_storages: Some(register.secret_storages.iter().cloned().collect()),
@@ -871,8 +892,9 @@ impl MasterCore {
     async fn heard_from(&mut self, worker_id: &str, now: Timestamp) {
         let heartbeat = SignedDuration::try_from(self.settings.heartbeat_interval)
             .unwrap_or(SignedDuration::MAX);
+        let steady = (self.steady)(now);
         if let Some(connection) = self.connections.get_mut(worker_id) {
-            connection.last_seen = now;
+            connection.heard = steady;
             if now.duration_since(connection.persisted) >= heartbeat {
                 connection.persisted = now;
                 // A sign of life in the registry is for people: a failed write mustn't cost
@@ -1170,7 +1192,7 @@ impl MasterCore {
         let overdue: Vec<(String, String)> = self
             .connection_jobs
             .iter()
-            .filter(|(_, (_, deadline))| *deadline <= now)
+            .filter(|(_, (_, deadline))| *deadline <= (self.steady)(now))
             .map(|(job, (worker, _))| (job.clone(), worker.clone()))
             .collect();
         for (job_id, worker_id) in overdue {
@@ -1232,7 +1254,7 @@ impl MasterCore {
             .await;
         outgoing.append(&mut applied.outgoing);
         for job in applied.connection_jobs.drain(..) {
-            let deadline = now
+            let deadline = (self.steady)(now)
                 .checked_add(job.allowed + Duration::from_millis(CONNECTION_ANSWER_MARGIN_MS))
                 .unwrap_or(now);
             self.connection_jobs
@@ -1283,16 +1305,14 @@ impl MasterCore {
         outgoing.extend(expired.into_iter().map(assign_parse));
         let lease =
             SignedDuration::try_from(self.settings.lease_timeout).unwrap_or(SignedDuration::MAX);
+        let steady = (self.steady)(now);
         let lost: Vec<String> = self
             .connections
             .iter()
             .filter(|(id, c)| {
                 // The later of its last handled message and its last arrived one.
-                let seen = self
-                    .arrivals
-                    .last(id)
-                    .map_or(c.last_seen, |a| a.max(c.last_seen));
-                now.duration_since(seen) > lease
+                let seen = self.arrivals.last(id).map_or(c.heard, |a| a.max(c.heard));
+                steady.duration_since(seen) > lease
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -1581,6 +1601,7 @@ impl MasterCore {
                             interrupted: moving,
                             attempt_id: attempt.id.clone(),
                         })),
+                        clock: None,
                     },
                 });
                 (pb::AttemptDecision::Continue, cancel)
@@ -1763,6 +1784,7 @@ impl MasterCore {
                         message: Some(master_message::Message::ScriptUses(pb::ScriptUses {
                             roots: roots.clone(),
                         })),
+                        clock: None,
                     },
                 });
             }
@@ -1792,6 +1814,7 @@ fn assign_parse(assignment: ParseAssignment) -> Outgoing {
                     content_hash: assignment.key.content_hash,
                 }),
             })),
+            clock: None,
         },
     }
 }

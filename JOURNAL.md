@@ -442,3 +442,27 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   good version keeps running") at odds with D72 (a file failing to import holds its DAGs).
 - **Chosen (the user's):** held, as D72; the reason names the schedr version and says to fix the
   file or roll back. Not chosen: keeping the older parse in use.
+
+### <a id="D442"></a>2026-11-11: one monotonic clock for the cluster (decision 442, B225-B228)
+
+- **Question:** B225 (Codex, batch A's review): an assignment delivered late and journaled
+  slowly started on a worker after the master had taken it back and given it to another.
+- **Chosen (the user's):** a deadline in the assignment, counted by the worker conservatively
+  against the link's delay; no extra round trip. Not chosen: acknowledging `Started` before the
+  launch (a round trip per task); answering a late `Started` by stopping the task (both may
+  already run).
+- **Then, after Grok's three reviews found holes in each step (a budget spent at delivery,
+  numbered heartbeats, a hold after a wall-clock jump):** the user: "one monotonic clock for
+  all". Master time is the leading master's monotonic clock; every master message carries it
+  with its timeline and the latest heartbeat heard (also its wall clock, for people); every
+  liveness deadline (an assignment's start, worker loss, parse and connection jobs, a moved
+  cleanup's wait) is a master time, and the master's own expiries count on it, never on stored
+  wall-clock times. The worker reads master time from when it sent the heartbeat a message
+  names (Cristian's bound, less 0.1 % drift, on its boot clock), keeps two heartbeat intervals
+  for `Started` (B227), and treats a pause its boot clock didn't count (its wall clock ran
+  ahead) as a passed deadline. A lease under four heartbeat intervals is refused at load
+  (B226). The B228 hold after a jump was dropped: nothing reads the wall clock for liveness. An
+  earlier build's worker ignores the deadline, left with B187 until 1.0.
+- **Known limits:** a `Started` held up more than two heartbeat intervals; a master whose
+  monotonic clock jumps (some VM migrations); the holes in leadership and incarnations Grok's
+  design review found (B230, B231).

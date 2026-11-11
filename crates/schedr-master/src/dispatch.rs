@@ -83,6 +83,7 @@ pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
             message: Some(pb::master_message::Message::FinishedAck(pb::FinishedAck {
                 attempt_id: attempt_id.to_owned(),
             })),
+            clock: None,
         },
     }
 }
@@ -294,6 +295,15 @@ pub struct Dispatcher {
     cleanup_move_wait: SignedDuration,
     /// How long a worker has to report `Started` before its assignment is taken back.
     start_timeout: SignedDuration,
+    /// Master time, which its timers count on (B228; see [`crate::clock`]).
+    steady: crate::clock::Steady,
+    /// When each unstarted assignment was stored, in master time: it is taken back a start
+    /// timeout after that (B228), the deadline it was sent with. One this master didn't store
+    /// (after a restart) counts from when it first sees it: later, never earlier.
+    unstarted_since: BTreeMap<String, Timestamp>,
+    /// When each cleanup waiting to move may go to another worker, in master time (D256, B228);
+    /// after a restart, a whole wait from when it is first seen.
+    move_not_before: BTreeMap<String, Timestamp>,
     /// How a commit cut off is read back.
     read_back: ReadBack,
     /// `CancelAttempt`s for running instances whose mapped task's step failed (75a), sent
@@ -378,6 +388,9 @@ impl Dispatcher {
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
                 .unwrap_or(SignedDuration::MAX),
             start_timeout: START_TIMEOUT,
+            steady: crate::clock::as_given,
+            unstarted_since: BTreeMap::new(),
+            move_not_before: BTreeMap::new(),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
             read_back: ReadBack::default(),
@@ -794,6 +807,7 @@ impl Dispatcher {
                             interrupted: true,
                         },
                     )),
+                    clock: None,
                 },
             })
             .collect()
@@ -1469,6 +1483,7 @@ impl Dispatcher {
             try_number,
             (inputs, outcomes, params),
         );
+        message.start_by_ms = Some(self.unstarted(&attempt_id, now));
         self.add_event(ready, &mut message).await?;
         self.keep_deadline(ready, task, &mut message, now).await?;
         let Some(message) = self.if_it_fits(ready, &attempt_id, message, now).await? else {
@@ -1510,6 +1525,23 @@ impl Dispatcher {
             return Ok(None);
         }
         Ok(Some(cancel(worker_id, &started.attempt_id)))
+    }
+
+    /// An assignment stored at `now`: noted in master time for `expire`, and the master time
+    /// by which it must start (B225), from the same reading, so the deadline sent is the one
+    /// `expire` keeps.
+    fn unstarted(&mut self, attempt_id: &str, now: Timestamp) -> i64 {
+        let since = (self.steady)(now);
+        self.unstarted_since.insert(attempt_id.to_owned(), since);
+        since
+            .checked_add(self.start_timeout)
+            .unwrap_or(Timestamp::MAX)
+            .as_millisecond()
+    }
+
+    /// Times this dispatcher on `steady` (see [`crate::clock`]).
+    pub fn set_steady(&mut self, steady: crate::clock::Steady) {
+        self.steady = steady;
     }
 
     /// A worker rejected an assignment.
@@ -1839,6 +1871,7 @@ impl Dispatcher {
     ) -> Result<Option<pb::MasterMessage>, DispatchError> {
         let message = pb::MasterMessage {
             message: Some(pb::master_message::Message::AssignTask(assign)),
+            clock: None,
         };
         let Some(why) = too_big_to_send(&message, self.max_message_size) else {
             return Ok(Some(message));
@@ -2055,48 +2088,63 @@ impl Dispatcher {
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn expire(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
-        let cutoff = now
-            .checked_sub(self.start_timeout)
-            .unwrap_or(Timestamp::MIN);
-        // At most so many a round (several writes each): after an outage, over a few (B18).
-        // Read only so many, and as many more as starts wait in memory, which are left out
-        // after reading: they can't fill the round's share (B52).
+        // On master time (B228): each unstarted assignment counts from when this master first
+        // saw it, never from a stored wall-clock time. All of them are read (no more than the
+        // workers' slots), and at most so many end a round (several writes each, B18).
+        let steady = (self.steady)(now);
         // Adopted attempts whose start wasn't recorded are kept while a worker holds them.
         let workers = &self.workers;
         self.adopted_unrecorded
             .retain(|attempt| workers.all().any(|w| w.attempts.contains(attempt)));
-        let limit =
-            EXPIRIES_PER_ROUND + self.arrivals.starts_waiting() + self.adopted_unrecorded.len();
-        let limit = u32::try_from(limit).unwrap_or(u32::MAX);
         // Nor those of a worker that may come back (F14): it may have run the task and
         // finished, the `Started` lost with the old master or stream; its journal says so when
         // it registers. Its lease run out, it is lost and they end with it. Left out by the
-        // query, so they can't fill a round's share.
+        // query.
         let coming_back = self.may_come_back();
-        let mut expired = self
+        let unstarted = self
             .db
-            .unstarted_attempts(cutoff, &coming_back, limit)
+            .unstarted_attempts(Timestamp::MAX, &coming_back, u32::MAX)
             .await?;
-        expired.retain(|attempt| {
-            !self.arrivals.start_waiting(&attempt.id)
-                && !self.adopted_unrecorded.contains(&attempt.id)
-        });
-        expired.truncate(EXPIRIES_PER_ROUND);
-        // A moved cleanup never started: it goes on waiting.
-        // A moved cleanup's too: its worker may come back with it finished (F14's review).
-        for attempt in self
+        let cleanups = self
             .db
-            .unstarted_cleanups(cutoff, &coming_back, limit)
-            .await?
+            .unstarted_cleanups(Timestamp::MAX, &coming_back, u32::MAX)
+            .await?;
+        let seen: BTreeSet<&str> = unstarted
+            .iter()
+            .chain(&cleanups)
+            .map(|attempt| attempt.id.as_str())
+            .collect();
+        self.unstarted_since
+            .retain(|id, _| seen.contains(id.as_str()));
+        let mut expired = Vec::new();
+        let mut taken_back = Vec::new();
+        for (attempt, cleanup) in unstarted
+            .into_iter()
+            .map(|a| (a, false))
+            .chain(cleanups.into_iter().map(|a| (a, true)))
         {
-            // Its `Started` is here, waiting its turn, or it was adopted though that couldn't be
-            // recorded (batch A's review): the worker has it.
-            if self.arrivals.start_waiting(&attempt.id)
+            let since = *self
+                .unstarted_since
+                .entry(attempt.id.clone())
+                .or_insert(steady);
+            // Its `Started` is here, waiting its turn, or it was adopted though that couldn't
+            // be recorded (batch A's review): the worker has it.
+            if steady.duration_since(since) <= self.start_timeout
+                || self.arrivals.start_waiting(&attempt.id)
                 || self.adopted_unrecorded.contains(&attempt.id)
             {
                 continue;
             }
-            self.take_back_cleanup(&attempt, now).await?;
+            if cleanup {
+                // A moved cleanup never started goes on waiting.
+                taken_back.push(attempt);
+            } else if expired.len() < EXPIRIES_PER_ROUND {
+                expired.push(attempt);
+            }
+        }
+        for attempt in &taken_back {
+            self.unstarted_since.remove(&attempt.id);
+            self.take_back_cleanup(attempt, now).await?;
         }
         for attempt in &expired {
             let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
@@ -2317,10 +2365,15 @@ impl Dispatcher {
             error_summary_json: summary.as_bytes().to_vec(),
             ..pb::Finished::default()
         };
-        // A worker only cut off is stopping the task meanwhile.
+        // A worker only cut off is stopping the task meanwhile. Kept in master time (B228);
+        // the stored one is for people.
         let not_before = now
             .checked_add(self.cleanup_move_wait)
             .unwrap_or(Timestamp::MAX);
+        let steady = (self.steady)(now)
+            .checked_add(self.cleanup_move_wait)
+            .unwrap_or(Timestamp::MAX);
+        self.move_not_before.insert(attempt.id.clone(), steady);
         self.db
             .move_cleanup(&attempt.id, &lost.encode_to_vec(), not_before)
             .await?;
@@ -2354,8 +2407,21 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         let mut reasons = Vec::new();
-        for (attempt_id, ready) in self.db.waiting_cleanups(now).await? {
-            if self.set_aside.contains_key(&ready.instance_id) {
+        // All that wait, each moving once its wait in master time is over (B228): after a
+        // restart, a whole wait from when this master first sees it.
+        let waiting = self.db.waiting_cleanups(Timestamp::MAX).await?;
+        let steady = (self.steady)(now);
+        let first_seen = steady
+            .checked_add(self.cleanup_move_wait)
+            .unwrap_or(Timestamp::MAX);
+        self.move_not_before
+            .retain(|id, _| waiting.iter().any(|(waiting, _)| waiting == id));
+        for (attempt_id, ready) in waiting {
+            let not_before = *self
+                .move_not_before
+                .entry(attempt_id.clone())
+                .or_insert(first_seen);
+            if steady < not_before || self.set_aside.contains_key(&ready.instance_id) {
                 continue;
             }
             let Some(task) = ready.dag.task(&ready.task_id) else {
@@ -2382,14 +2448,19 @@ impl Dispatcher {
             if !self.db.assign_cleanup(&attempt_id, &worker_id, now).await? {
                 continue;
             }
-            let message = self
+            // One reading of master time for its deadline and its expiry, before the reads
+            // that build its message (Grok's review of D442).
+            let start_by = self.unstarted(&attempt_id, now);
+            let mut message = self
                 .cleanup_message(&ready, &worker_id, &attempt_id)
                 .await?;
+            message.start_by_ms = Some(start_by);
             self.workers.reserve(&worker_id, &attempt_id, now);
             outgoing.push(Outgoing {
                 worker_id,
                 message: pb::MasterMessage {
                     message: Some(pb::master_message::Message::AssignTask(message)),
+                    clock: None,
                 },
             });
         }
@@ -2902,6 +2973,7 @@ impl Dispatcher {
             worker_id,
             message: pb::MasterMessage {
                 message: Some(pb::master_message::Message::AssignTrigger(message)),
+                clock: None,
             },
         };
         Some((outgoing, code))
@@ -3004,6 +3076,8 @@ impl Dispatcher {
             cleanup_only: None,
             resource_cleanup: ready.dag.resource_of_cleanup(&ready.task_id).is_some(),
             first_started: None,
+            // Set by who sends it, from when it was stored (`Self::start_by`).
+            start_by_ms: None,
         }
     }
 }
@@ -3041,6 +3115,7 @@ fn cancel(worker_id: &str, attempt_id: &str) -> Outgoing {
                     attempt_id: attempt_id.to_owned(),
                 },
             )),
+            clock: None,
         },
     }
 }
