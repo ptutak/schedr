@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D123"
 step = "M4.4b"
 also = ["deployment"]
 code = ["crates/schedr-db/migrations/postgres/0001_initial.sql::masters", "crates/schedr-db/migrations/sqlite/0001_initial.sql::masters"]
-checked = 2026-11-10
+checked = 2026-11-11

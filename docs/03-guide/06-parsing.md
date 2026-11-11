@@ -254,10 +254,11 @@ counts.
 
 A DAG no longer defined (its file deleted, or no longer defining it) is removed: its history is
 kept, and its runs in progress finish the attempts they started. Everything else they haven't
-started is cancelled at the next round: queued tasks, tasks waiting for upstream ones, retries
-and unschedulable tasks; a queued run ends `cancelled`. A resource's cleanup still runs. A run
-whose last attempt then finishes ends `cancelled`, or `failed` if a task failed. If the DAG
-comes back, nothing it cancelled starts again.
+started is cancelled at the next round: queued tasks, tasks waiting for upstream ones, retries,
+unschedulable tasks, and assignments a worker hasn't started yet (it is told not to); a queued
+run ends `cancelled`. A resource's cleanup still runs. A run with a task cancelled this way
+ends `cancelled` (or `failed`, if a task failed); one whose tasks had all started ends as they
+do. If the DAG comes back, nothing it cancelled starts again.
 
 A conflict is resolved by removing one of the places. If the file left fails to import at
 that moment, and the version stored came from the file removed, the DAG stays in conflict

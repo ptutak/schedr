@@ -77,7 +77,8 @@ pub struct Changes {
 
 #[derive(Debug)]
 enum Source {
-    Listen(PgListener),
+    /// A listening connection; `lost`: it was lost and isn't listening again yet.
+    Listen { listener: PgListener, lost: bool },
     Poll {
         db: Database,
         after: i64,
@@ -112,9 +113,16 @@ impl Database {
             }
             Listening::Off | Listening::Unsafe { .. } => Ok(None),
             Listening::Ready(mut listener) => {
+                // A lost connection is re-established by `next`, not inside the read that finds
+                // it lost: a read cut short there (the drain's zero timeout, a caller's) would
+                // drop the loss (B85).
+                listener.eager_reconnect(false);
                 listener.listen(CHANGES_CHANNEL).await?;
                 Ok(Some(Changes {
-                    source: Source::Listen(listener),
+                    source: Source::Listen {
+                        listener,
+                        lost: false,
+                    },
                 }))
             }
         }
@@ -214,26 +222,36 @@ fn triggers() -> impl Iterator<Item = (&'static str, &'static str)> {
 
 impl Changes {
     /// Waits for the next changes, each once, in order. A lost listening connection is
-    /// re-established, and what changed meanwhile comes as [`Change::Missed`].
+    /// re-established, and what changed meanwhile comes as [`Change::Missed`], once the
+    /// connection listens again.
     ///
     /// # Errors
     ///
     /// [`DbError`] if the database fails (polling) or the connection can't be re-established.
     pub async fn next(&mut self) -> Result<Vec<Change>, DbError> {
         match &mut self.source {
-            Source::Listen(listener) => {
+            Source::Listen { listener, lost } => {
                 let mut changes = BTreeSet::new();
-                match listener.try_recv().await? {
-                    Some(first) => changes.extend(Change::parse(first.payload())),
-                    // The connection was lost (and is re-established by the next call).
-                    None => return Ok(vec![Change::Missed]),
+                if !*lost {
+                    match listener.try_recv().await? {
+                        Some(first) => changes.extend(Change::parse(first.payload())),
+                        None => *lost = true,
+                    }
                 }
-                // Those that already arrived come with it.
-                while let Ok(Ok(Some(more))) =
-                    tokio::time::timeout(Duration::ZERO, listener.try_recv()).await
-                {
-                    changes.extend(Change::parse(more.payload()));
+                // Those that already arrived come with it. A connection lost meanwhile is
+                // missed changes too (B85): the loss is read only once.
+                while !*lost {
+                    match tokio::time::timeout(Duration::ZERO, listener.try_recv()).await {
+                        Ok(Ok(Some(more))) => changes.extend(Change::parse(more.payload())),
+                        Ok(Ok(None) | Err(_)) => *lost = true,
+                        Err(_) => return Ok(changes.into_iter().collect()),
+                    }
                 }
+                // Listening again before the loss is reported, so what changes after the
+                // report is heard; a call cut short here reports it the next time.
+                listener.listen_all(std::iter::empty::<&str>()).await?;
+                *lost = false;
+                changes.insert(Change::Missed);
                 Ok(changes.into_iter().collect())
             }
             Source::Poll {

@@ -559,8 +559,9 @@ impl Database {
     }
 
     /// The unfinished runs of removed DAGs with something not started yet (B192): queued runs,
-    /// and running ones with a task scheduled, queued, up for retry or unschedulable. The
-    /// master cancels what they haven't started; their running attempts finish.
+    /// and running ones with a task scheduled, queued, up for retry or unschedulable, or with
+    /// an assignment not started whose cancel isn't asked yet. The master cancels what they
+    /// haven't started; their running attempts finish.
     ///
     /// # Errors
     ///
@@ -570,7 +571,11 @@ impl Database {
             WHERE d.removed_at IS NOT NULL AND r.state IN ('queued', 'running') \
             AND (r.state = 'queued' OR EXISTS (SELECT 1 FROM task_instances t \
                 WHERE t.run_id = r.id \
-                AND t.state IN ('scheduled', 'queued', 'up_for_retry', 'unschedulable'))) \
+                AND t.state IN ('scheduled', 'queued', 'up_for_retry', 'unschedulable')) \
+            OR EXISTS (SELECT 1 FROM attempts a JOIN task_instances t \
+                ON t.id = a.task_instance_id WHERE t.run_id = r.id AND t.state = 'running' \
+                AND a.status IS NULL AND a.started_at IS NULL \
+                AND t.cancel_requested_at IS NULL)) \
             ORDER BY r.triggered_at, r.id";
         Ok(on_pool!(self, |pool, backend| {
             sqlx::query_scalar(sql(backend, RUNS))

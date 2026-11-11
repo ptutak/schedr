@@ -361,3 +361,47 @@ fn a_backfills_runs_created_at_once_start_oldest_first_whatever_their_ids() {
         .collect();
     assert_eq!(ids, ["c", "b", "a"]);
 }
+
+#[test]
+fn a_ranges_windows_are_each_fire_times_own() {
+    // B199 (Codex's review): a backfill computed each run's window on its own, a walk of hours
+    // of a secondly cron's matches each near a daylight-saving change.
+    for (expression, initial_since, from, n, span_secs) in [
+        ("0 3 * * *", None, "2026-09-28T00:00:00Z", 40, 40 * 86_400),
+        (
+            "0 3 * * *",
+            Some("2020-01-01T00:00:00Z"),
+            "2026-09-28T00:00:00Z",
+            40,
+            40 * 86_400,
+        ),
+        ("* * * * * *", None, "2026-10-25T00:59:00Z", 1000, 1000),
+    ] {
+        let trigger = daily(&json!({"expression": expression, "timezone": "Europe/Warsaw"}));
+        let dag = dag(&json!({"trigger": trigger, "initial_since": initial_since}));
+        with_plan(&dag, |plan| {
+            let to = ts(from)
+                .checked_add(jiff::SignedDuration::from_secs(span_secs))
+                .unwrap();
+            let mut times = plan.fire_times.between(ts(from), to, usize::MAX).unwrap();
+            times.truncate(n);
+            let started = std::time::Instant::now();
+            let sinces = plan.fire_time_sinces(&times);
+            let took = started.elapsed();
+            let each: Vec<Timestamp> = [0, 1, times.len() / 2, times.len() - 1]
+                .into_iter()
+                .map(|i| plan.fire_time_since(times[i]))
+                .collect();
+            assert_eq!(
+                each,
+                [0, 1, times.len() / 2, times.len() - 1].map(|i| sinces[i]),
+                "{expression}"
+            );
+            if expression.starts_with("0 3") {
+                let all: Vec<Timestamp> = times.iter().map(|t| plan.fire_time_since(*t)).collect();
+                assert_eq!(sinces, all, "{expression} {initial_since:?}");
+            }
+            assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+        });
+    }
+}

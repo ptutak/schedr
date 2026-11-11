@@ -338,6 +338,41 @@ proptest! {
         prop_assert_eq!(times.previous_before(t), times.walk_before(t));
     }
 
+    /// B199: a range's fire times in one walk are those one lookup after another gives,
+    /// across both 2026 changes in Warsaw, with `max` cutting it off the same way.
+    #[test]
+    fn a_ranges_fire_times_are_the_lookups_one_after_another(
+        expression in prop::sample::select(vec![
+            "30 2 * * *", "0 3 * * *", "*/15 * * * *", "*/20 2 * * *", "0 * * * *",
+            "45 1-3 * * *", "@daily", "0 0 2 * * *", "*/7 * * * *", "*/50 * 2 * * *",
+        ]),
+        start_minutes in 0i64..(3 * 24 * 60),
+        length_minutes in 0i64..(12 * 60),
+        millis in prop::sample::select(vec![0i64, 1, 999]),
+        max in prop::sample::select(vec![0usize, 1, 3, 40, 10_000]),
+        autumn in any::<bool>(),
+    ) {
+        let times = warsaw(expression);
+        let base = if autumn { ts("2026-10-23T12:00:00Z") } else { ts("2026-03-27T12:00:00Z") };
+        let from = base
+            .checked_add(SignedDuration::from_mins(start_minutes) + SignedDuration::from_millis(millis))
+            .unwrap();
+        let to = from.checked_add(SignedDuration::from_mins(length_minutes)).unwrap();
+        let mut stepped = Vec::new();
+        let mut next = times.next_at_or_after(from);
+        let mut over = false;
+        while let Some(at) = next.filter(|at| *at <= to) {
+            if stepped.len() == max {
+                over = true;
+                break;
+            }
+            stepped.push(at);
+            next = times.next_after(at);
+        }
+        let expected = (!over).then_some(stepped);
+        prop_assert_eq!(times.between(from, to, max), expected);
+    }
+
     /// Around both 2026 changes in Warsaw, fire times strictly increase and going back from
     /// each one gives the one before.
     #[test]
@@ -399,4 +434,21 @@ fn the_fire_time_in_the_same_second_is_before(#[case] at: &str, #[case] before: 
         unreachable!()
     };
     assert_eq!(times.previous_before(ts(at)), Some(ts(before)));
+}
+
+#[test]
+fn a_secondly_crons_range_over_a_change_is_found_in_one_walk() {
+    // B199: a 1000-run backfill of a secondly cron over the autumn change looked each fire time
+    // up on its own, walking ~21,600 matches each: 119 s in a debug build.
+    let times = warsaw("* * * * * *");
+    let from = ts("2026-10-25T00:59:00Z");
+    let to = ts("2026-10-25T01:15:39Z");
+    let started = std::time::Instant::now();
+    let found = times.between(from, to, 1000).unwrap();
+    let took = started.elapsed();
+    assert_eq!(found.len(), 1000);
+    assert_eq!((found[0], found[999]), (from, to));
+    assert!(found.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(times.between(from, to, 999), None);
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
 }

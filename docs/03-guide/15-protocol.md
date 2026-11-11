@@ -126,6 +126,12 @@ sequenceDiagram
 
 ## Large inputs
 
+A task's inputs travel inside `AssignTask` up to 4 MiB, and only while the whole assignment
+(the task, its run's parameters and connections, the master's clock) stays within what a
+worker takes (`[grpc] max_message_size`). Otherwise the assignment says its inputs are
+external and the worker fetches them. An assignment still too big without them fails the task
+`inputs_too_large`.
+
 ```{mermaid}
 sequenceDiagram
     participant M as Master

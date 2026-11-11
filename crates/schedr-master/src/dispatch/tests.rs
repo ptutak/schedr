@@ -1982,6 +1982,32 @@ async fn a_removed_dags_running_task_finishes_and_nothing_after_it_starts() {
 }
 
 #[tokio::test]
+async fn a_removed_dags_assignment_not_started_is_cancelled() {
+    // Codex's review of B192: an assignment whose `Started` hadn't come was left running, so
+    // the worker could still start it after the removal.
+    let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let extract = assignment(&out[0]).attempt_id.clone();
+    let gone = DagChange::Remove {
+        dag_id: DagId::new("sync").unwrap(),
+    };
+    db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
+    let out = dispatcher.step(later(1)).await.unwrap();
+    let cancels: Vec<&str> = out
+        .iter()
+        .filter_map(|o| match &o.message.message {
+            Some(Message::CancelAttempt(c)) => Some(c.attempt_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cancels, [extract.as_str()], "{out:?}");
+    assert!(
+        dispatcher.step(later(2)).await.unwrap().is_empty(),
+        "asked once"
+    );
+}
+
+#[tokio::test]
 async fn a_dag_in_an_id_conflict_keeps_its_tasks_queued_until_it_is_resolved() {
     // B193 (decision 107): no task of it is assigned while two places define it; once one
     // does again, they are.
@@ -4189,14 +4215,62 @@ fn an_assignment_over_what_a_worker_takes_is_never_sent() {
         })),
         clock: None,
     };
-    let size = prost::Message::encoded_len(&message);
+    // The clock `deliver` stamps on it counts, at its largest (B157).
+    let stamped = pb::MasterMessage {
+        clock: Some(pb::MasterClock {
+            timeline: u64::MAX,
+            master_ms: i64::MIN,
+            heard_sequence: u64::MAX,
+            wall_ms: i64::MIN,
+        }),
+        ..message.clone()
+    };
+    let size = prost::Message::encoded_len(&stamped);
     assert_eq!(
         super::too_big_to_send(&message, size),
         None,
         "exactly the limit fits"
     );
+    assert_eq!(super::too_big_to_send(&stamped, size), None);
     let why = super::too_big_to_send(&message, size - 1).unwrap();
     assert!(why.contains(&format!("{size} bytes")) && why.contains("[grpc] max_message_size"));
+}
+
+#[tokio::test]
+async fn inputs_under_the_inline_limit_that_take_the_assignment_over_go_separately() {
+    // B157: inputs inline up to 4 MiB, the task and its run on top: over what a worker takes,
+    // the task failed `inputs_too_large`; the worker fetches them instead.
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_max_message_size(64 * 1024);
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let extract = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&extract), ts(NOW))
+        .await
+        .unwrap();
+    let big = json!("x".repeat(70 * 1024));
+    dispatcher
+        .finished(
+            "w1",
+            &finished(&extract, pb::AttemptStatus::Success, &big),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let load = assignment(&out[0]);
+    assert_eq!(load.task_id, "load");
+    assert!(load.inputs_external && load.inputs_json.is_empty());
+    assert_ne!(
+        state_of(&db, &run_id, "load").await.0,
+        TaskInstanceState::Failed
+    );
+    let fetched = super::attempt_inputs(&db, &load.attempt_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let inputs: Json = serde_json::from_slice(&fetched).unwrap();
+    assert_eq!(inputs, json!({"extract": big}));
 }
 
 #[tokio::test]

@@ -12,4 +12,4 @@ A backfill takes a DAG whose trigger has fire times: `Cron` (its presets include
 history = "JOURNAL.md#D404"
 step = "M4.12b"
 code = ["crates/schedr-master/src/scheduler/backfill.rs::backfill"]
-checked = 2026-11-09
+checked = 2026-11-11

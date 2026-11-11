@@ -178,8 +178,12 @@ pub const DEFAULT_CODE_WAIT: Duration = Duration::from_mins(10);
 /// DAG changed after the run started, its error summary says how.
 pub const CODE_GONE_ERRORS: [&str; 2] = [TASK_NOT_FOUND, DAG_FILE_MISSING];
 
-/// Inputs up to this size travel inside `AssignTask`; bigger ones are fetched separately.
+/// Inputs up to this size travel inside `AssignTask`, while the whole message stays within what
+/// a worker takes (B157); bigger ones are fetched separately.
 pub const INLINE_INPUTS_LIMIT: usize = 4 * 1024 * 1024;
+
+/// `MasterMessage.clock`'s field number.
+const CLOCK_FIELD: u32 = 20;
 
 /// Inputs over this size make the task fail (`inputs_too_large`, never retried).
 pub const MAX_INPUTS: usize = 64 * 1024 * 1024;
@@ -918,7 +922,7 @@ impl Dispatcher {
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
-        self.wind_down_removed(now).await?;
+        self.wind_down_removed(now, outgoing).await?;
         let ready = self.db.ready_instances(now).await?;
         let ready = self.unless_held(ready, now).await?;
         let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
@@ -977,16 +981,64 @@ impl Dispatcher {
     /// Cancels what the runs of removed DAGs haven't started (B192): each run whole or not at
     /// all, so a run that fails is found again the next round, never left with its tasks
     /// ended and itself running (Codex's review).
-    async fn wind_down_removed(&mut self, now: Timestamp) -> Result<(), DispatchError> {
-        for run_id in self.db.removed_dags_runs().await? {
+    async fn wind_down_removed(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
+        let runs = self.db.removed_dags_runs().await?;
+        if runs.is_empty() {
+            return Ok(());
+        }
+        let open = self.db.open_attempts(None).await?;
+        for run_id in runs {
             // One run that can't be wound down holds no other assignment up.
-            if let Err(error) =
-                Box::pin(self.db.atomically(self.execution.wind_down(&run_id, now))).await
-            {
-                tracing::warn!(run_id, %error, "a removed DAG's run not wound down yet");
+            let wound = Box::pin(self.db.atomically(self.execution.wind_down(&run_id, now))).await;
+            let stopped = match wound {
+                Ok(_) => self.cancel_unstarted(&run_id, &open, now).await,
+                Err(error) => Err(error.into()),
+            };
+            match stopped {
+                Ok(stops) => outgoing.extend(stops),
+                Err(error) => {
+                    tracing::warn!(run_id, %error, "a removed DAG's run not wound down yet");
+                }
             }
         }
         Ok(())
+    }
+
+    /// A removed DAG's assignments of `run_id` that haven't started (no `Started` stored or
+    /// waiting) are cancelled as a task cancel is (Codex's review of B192): the worker is told
+    /// not to start them. Resources' cleanups and moved cleanups go on.
+    async fn cancel_unstarted(
+        &mut self,
+        run_id: &str,
+        open: &[schedr_db::attempts::StoredAttempt],
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
+        let Some(run) = self.db.run_tasks(run_id).await? else {
+            return Ok(Vec::new());
+        };
+        let mut stops = Vec::new();
+        for attempt in open.iter().filter(|a| a.run_id == run_id) {
+            let unstarted = !attempt.started
+                && !attempt.moving
+                && !self.arrivals.start_waiting(&attempt.id)
+                && run.dag.resource_of_cleanup(&attempt.task_id).is_none();
+            let instance = run
+                .instances
+                .iter()
+                .find(|i| i.task_id == attempt.task_id && i.map_index == attempt.map_index);
+            let running = instance.is_some_and(|i| {
+                i.state == schedr_model::TaskInstanceState::Running && !run.cancels(i)
+            });
+            if unstarted && running {
+                let key = (&attempt.task_id, Some(attempt.map_index));
+                stops.extend(self.cancel_task(run_id, key, now).await?.1);
+            }
+        }
+        Ok(stops)
     }
 
     /// The ready tasks but those of a held DAG (its resources' cleanups still run): a removed
@@ -1933,10 +1985,19 @@ impl Dispatcher {
         assign: pb::AssignTask,
         now: Timestamp,
     ) -> Result<Option<pb::MasterMessage>, DispatchError> {
-        let message = pb::MasterMessage {
+        let mut message = pb::MasterMessage {
             message: Some(pb::master_message::Message::AssignTask(assign)),
             clock: None,
         };
+        // Inputs under the inline limit can still take the whole message over what a worker
+        // takes, with the task, its params and connections (B157): then they go separately.
+        if too_big_to_send(&message, self.max_message_size).is_some()
+            && let Some(pb::master_message::Message::AssignTask(assign)) = &mut message.message
+            && !assign.inputs_external
+        {
+            assign.inputs_json = Vec::new();
+            assign.inputs_external = true;
+        }
         let Some(why) = too_big_to_send(&message, self.max_message_size) else {
             return Ok(Some(message));
         };
@@ -3340,7 +3401,17 @@ fn with_context(summary: Option<&str>, context: &str) -> String {
 /// Why `message` can't go to a worker that takes at most `limit` bytes, if it can't: a run
 /// handed to a `wait_for=` function rides in it (decision 353; Grok's and Codex's reviews).
 pub(crate) fn too_big_to_send(message: &pb::MasterMessage, limit: usize) -> Option<String> {
-    let size = prost::Message::encoded_len(message);
+    // Unstamped yet: the clock `deliver` adds counts too, at its largest.
+    let stamp = message.clock.is_none().then_some(pb::MasterClock {
+        timeline: u64::MAX,
+        master_ms: i64::MIN,
+        heard_sequence: u64::MAX,
+        wall_ms: i64::MIN,
+    });
+    let size = prost::Message::encoded_len(message)
+        + stamp.map_or(0, |clock| {
+            prost::encoding::message::encoded_len(CLOCK_FIELD, &clock)
+        });
     (size > limit).then(|| {
         format!(
             "its assignment, with the run it is given, is {size} bytes, over the {limit} a \

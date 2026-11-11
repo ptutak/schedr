@@ -901,6 +901,69 @@ async fn writes_announce_what_changed_once_per_run_dag_and_the_workers() {
     assert_eq!(next(&mut changes).await, [Change::Workers]);
 }
 
+/// B85: a listening connection lost while a notification waits to be read is reported as
+/// missed changes along with it, not swallowed by the read of what already arrived.
+#[tokio::test]
+async fn a_connection_lost_behind_a_queued_notification_reports_missed_changes() {
+    use schedr_db::changes::{CHANGES_CHANNEL, Change};
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let mut changes = db
+        .changes(schedr_db::changes::POLL_INTERVAL)
+        .await
+        .unwrap()
+        .expect("Postgres listens");
+    let other = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::query("SELECT pg_notify($1, 'workers')")
+        .bind(CHANGES_CHANNEL)
+        .execute(&other)
+        .await
+        .unwrap();
+    let listening = async || -> Vec<i32> {
+        sqlx::query_scalar(
+            "SELECT pid FROM pg_stat_activity WHERE datname = current_database() \
+             AND pid <> pg_backend_pid() AND query LIKE 'LISTEN %'",
+        )
+        .fetch_all(&other)
+        .await
+        .unwrap()
+    };
+    let pids = listening().await;
+    assert_eq!(pids.len(), 1, "one listening connection: {pids:?}");
+    // The notification is on the listener's socket before the server ends the connection.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sqlx::query("SELECT pg_terminate_backend($1)")
+        .bind(pids[0])
+        .execute(&other)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let within = std::time::Duration::from_secs(10);
+    let mut seen = tokio::time::timeout(within, changes.next())
+        .await
+        .expect("changes within 10 s")
+        .unwrap();
+    assert!(seen.contains(&Change::Workers), "{seen:?}");
+    if !seen.contains(&Change::Missed) {
+        // The loss may be read on its own, right after; it must not be skipped.
+        let quiet = tokio::time::timeout(std::time::Duration::from_secs(2), changes.next()).await;
+        seen.extend(quiet.ok().map(Result::unwrap).unwrap_or_default());
+    }
+    assert!(seen.contains(&Change::Missed), "{seen:?}");
+    // The feed listens again afterwards.
+    sqlx::query("SELECT pg_notify($1, 'workers')")
+        .bind(CHANGES_CHANNEL)
+        .execute(&other)
+        .await
+        .unwrap();
+    let again = tokio::time::timeout(within, changes.next())
+        .await
+        .expect("changes within 10 s after the loss")
+        .unwrap();
+    assert_eq!(again, [Change::Workers]);
+}
+
 #[tokio::test]
 async fn the_switch_disables_and_enables_the_change_triggers() {
     use schedr_db::changes::Change;

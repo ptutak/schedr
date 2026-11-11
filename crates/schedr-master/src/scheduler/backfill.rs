@@ -142,19 +142,25 @@ impl Scheduler {
             fire_times: count(None).fire_times,
             created_runs: count(None).created,
         };
-        self.store(&active, &fire_times, &backfill, (&missing, &params), now)
-            .await?;
+        self.store(
+            &active,
+            &fire_times,
+            &backfill,
+            (&times, &missing, &params),
+            now,
+        )
+        .await?;
         Ok(count(Some(id.to_owned())))
     }
 
-    /// Stores `backfill` and a queued run per `missing` fire time, in one transaction, then
-    /// starts those that fit `max_active_runs`.
+    /// Stores `backfill` and a queued run per `missing` fire time (of the range's `times`), in
+    /// one transaction, then starts those that fit `max_active_runs`.
     async fn store(
         &self,
         active: &schedr_db::runs::ActiveDag,
         fire_times: &FireTimes,
         backfill: &NewBackfill<'_>,
-        (missing, params): (&[Timestamp], &serde_json::Value),
+        (times, missing, params): (&[Timestamp], &[Timestamp], &serde_json::Value),
         now: Timestamp,
     ) -> Result<(), SchedulerError> {
         let plan = Plan {
@@ -162,6 +168,11 @@ impl Scheduler {
             fire_times,
             first_seen: active.first_seen,
         };
+        let sinces: std::collections::BTreeMap<Timestamp, Timestamp> = times
+            .iter()
+            .copied()
+            .zip(plan.fire_time_sinces(times))
+            .collect();
         let db = self.db.clone();
         // The backfill and its runs together: all of them or none.
         Box::pin(db.atomically(async {
@@ -172,7 +183,10 @@ impl Scheduler {
             for planned_for in missing {
                 let window = RunTimes {
                     planned_for: *planned_for,
-                    since: plan.fire_time_since(*planned_for),
+                    since: sinces
+                        .get(planned_for)
+                        .copied()
+                        .unwrap_or_else(|| plan.fire_time_since(*planned_for)),
                 };
                 let by = backfill.requested_by;
                 let mut new = new_run(active, RunKind::Backfill, window, now, by, params);
@@ -199,15 +213,5 @@ fn fire_times_in(
     to: Timestamp,
     max: u32,
 ) -> Option<Vec<Timestamp>> {
-    let max = usize::try_from(max).unwrap_or(usize::MAX);
-    let mut found = Vec::new();
-    let mut next = fire_times.next_at_or_after(from);
-    while let Some(at) = next.filter(|at| *at <= to) {
-        if found.len() == max {
-            return None;
-        }
-        found.push(at);
-        next = fire_times.next_after(at);
-    }
-    Some(found)
+    fire_times.between(from, to, usize::try_from(max).unwrap_or(usize::MAX))
 }

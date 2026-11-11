@@ -98,6 +98,27 @@ impl Plan<'_> {
             .unwrap_or(planned_for)
     }
 
+    /// [`Self::fire_time_since`] of each of `times`, consecutive fire times oldest first (a
+    /// backfill's range): each window starts at the fire time before it, so the range costs
+    /// one lookup, not one per fire time, which near a daylight-saving change walks hours of a
+    /// sub-minute cron's matches each (B199).
+    #[must_use]
+    pub fn fire_time_sinces(&self, times: &[Timestamp]) -> Vec<Timestamp> {
+        let first_fire = self
+            .dag
+            .initial_since
+            .and_then(|_| self.fire_times.next_at_or_after(self.effective_start()));
+        times
+            .iter()
+            .enumerate()
+            .map(|(i, t)| match (self.dag.initial_since, i.checked_sub(1)) {
+                (Some(initial), _) if first_fire == Some(*t) => initial,
+                (_, Some(before)) => times[before],
+                (_, None) => self.fire_time_since(*t),
+            })
+            .collect()
+    }
+
     /// The times of a manual run: for `requested` (`--for`) or `now`. On a fire time it gets
     /// one schedule period; otherwise it covers what happened since `nearest_earlier` (the
     /// `planned_for` of the nearest earlier run of any kind, before [`manual_planned_for`]),

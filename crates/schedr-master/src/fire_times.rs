@@ -160,6 +160,26 @@ impl FireTimes {
         }
     }
 
+    /// The fire times from `from` to `to`, both included, in order; `None` when there are
+    /// more than `max`. A cron's are found in one walk over the range's matches (B199), not a
+    /// lookup per fire time, which near a daylight-saving change walks hours of matches each.
+    #[must_use]
+    pub fn between(&self, from: Timestamp, to: Timestamp, max: usize) -> Option<Vec<Timestamp>> {
+        if let Self::Cron(cron) = self {
+            return cron.between(from, to, max);
+        }
+        let mut found = Vec::new();
+        let mut next = self.next_at_or_after(from);
+        while let Some(at) = next.filter(|at| *at <= to) {
+            if found.len() == max {
+                return None;
+            }
+            found.push(at);
+            next = self.next_after(at);
+        }
+        Some(found)
+    }
+
     /// Whether `t` is a fire time.
     #[must_use]
     pub fn is_fire_time(&self, t: Timestamp) -> bool {
@@ -231,6 +251,43 @@ impl CronTimes {
             Some(change) if change.timestamp() >= from => None,
             _ => Some(at),
         }
+    }
+
+    /// [`FireTimes::between`]: the moments of every match from `from` to `to`, sorted and
+    /// deduplicated (a gap's matches collapse into one). Near a time zone change the matches
+    /// [`MARGIN`] either side are looked at too, whose moments can fall inside the range.
+    fn between(&self, from: Timestamp, to: Timestamp, max: usize) -> Option<Vec<Timestamp>> {
+        let change_near = from.checked_sub(MARGIN).ok().is_none_or(|start| {
+            self.tz.following(start).next().is_some_and(|change| {
+                to.checked_add(MARGIN)
+                    .ok()
+                    .is_none_or(|until| change.timestamp() <= until)
+            })
+        });
+        let margin = if change_near {
+            MARGIN
+        } else {
+            SignedDuration::ZERO
+        };
+        let first = self
+            .civil(from)
+            .checked_sub(margin)
+            .unwrap_or(DateTime::MIN);
+        let last = self.civil(to).checked_add(margin).unwrap_or(DateTime::MAX);
+        let mut found = std::collections::BTreeSet::new();
+        let mut matched = self.cron.find_next_occurrence(&first, true).ok();
+        while let Some(civil) = matched.filter(|civil| *civil <= last) {
+            found.extend(
+                self.moments(civil)
+                    .into_iter()
+                    .filter(|moment| (from..=to).contains(moment)),
+            );
+            if found.len() > max {
+                return None;
+            }
+            matched = self.cron.find_next_occurrence(&civil, false).ok();
+        }
+        Some(found.into_iter().collect())
     }
 
     /// The moment of a wall-clock time that has exactly one.

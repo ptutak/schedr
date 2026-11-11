@@ -11,4 +11,4 @@ no newest-first ordering is offered.
 history = "archive/PROJECT.md#D364"
 step = "M4.12b"
 code = ["crates/schedr-master/src/planning.rs::runs_to_start", "crates/schedr-master/src/scheduler/backfill.rs::fire_times_in"]
-checked = 2026-11-09
+checked = 2026-11-11

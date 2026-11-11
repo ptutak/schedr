@@ -58,30 +58,27 @@ step touches their code or the user schedules them.
 | 3 | B231: a deposed master can still answer heartbeats after another took over: a worker's lease outlasts what the new master counts | 3 | high | rare | correctness |
 | 4 | B230: a worker's new incarnation is accepted while the old process may still run within its lease: a retry or a moved cleanup can overlap it | 3 | high | rare | correctness |
 | 5 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 6 | B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up | 2 | medium | rare | performance |
-| 7 | B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected) | 2 | medium | rare | reliability |
-| 8 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 9 | B85: disconnects during notification draining can silently lose changes | 2 | medium | rare | correctness |
-| 10 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 11 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 12 | B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning | 2 | low | possible | usability |
-| 13 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
-| 14 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 15 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 16 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 17 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 18 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 19 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 20 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 21 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 22 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 23 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 24 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 25 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 26 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 27 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 28 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 29 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 6 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 7 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 8 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
+| 9 | B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning | 2 | low | possible | usability |
+| 10 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
+| 11 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 12 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 13 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 14 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 15 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 16 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 17 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 18 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 19 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 20 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 21 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 22 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 23 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 24 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 25 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 26 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 
 ## B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning
 
@@ -111,20 +108,6 @@ step touches their code or the user schedules them.
 - **Found:** 2026-11-11, by Claude, running the tests of B225's fixes; nothing in that change touches watchers.
 - **Where:** `crates/schedr-agent/tests/watchers.rs`.
 - **Next:** reproduce under load (for example with `stress-ng` beside the test, or many runs in parallel), keep the failure's output, then find the limit that is too tight.
-
-## B199: a backfill over a daylight-saving change of a sub-minute cron holds the master up
-
-- **Rating:** severity **medium**, probability **rare**, performance (score 2): each fire time near an offset change walks hours of wall-clock matches; a 1000-run backfill (or its dry run) of a per-second cron over one blocks the master core for minutes.
-- **Found:** 2026-11-09, by Codex's review of M4.12b, measured: a dry run of
-  `Cron("* * * * * *", tz="Europe/Warsaw")` from `2026-10-25T00:59:00Z` to `01:15:39Z`
-  (1000 fire times) took 119 s in a debug build (12 ms in UTC). `fire_times_in`
-  (`crates/schedr-master/src/scheduler/backfill.rs`) calls `FireTimes::next_after` per fire
-  time; near an offset change `walk_after` (`crates/schedr-master/src/fire_times.rs`) walks
-  every match from `MARGIN` (3 h) before the moment, about 21600 for a per-second cron, under
-  the core's lock. A per-minute cron walks about 360 per lookup: fine.
-- **A fix:** enumerate a range's fire times in one walk (`FireTimes::between`: every match
-  from `from - MARGIN` to `to + MARGIN`, their moments by the same rules, sorted, deduped,
-  stopping past `max`), so the work is the range's matches, not matches times fire times.
 
 ## B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised
 
@@ -182,20 +165,6 @@ step touches their code or the user schedules them.
   the other declared secrets, and whether the reader (`tasks logs`) masks again.
 - **Why it matters:** over-masking makes a log mislead (an error reads as a secret); not a
   leak.
-
-## B157: Inputs just under the inline limit push an assignment past the worker's 4 MiB message (Suspected)
-
-- **Rating:** severity **medium**, probability **rare**, reliability (score 2): `AssignTask` keeps inputs inline up to `INLINE_INPUTS_LIMIT` (4 MiB), the worker's whole gRPC message limit; the task's JSON, its run's params and its connections come on top, so inputs of a little under 4 MiB make a message the worker can't decode: its control stream ends, the task is never started and goes back to the queue after the start timeout, again and again.
-- **Found:** 2026-11-03, by Claude checking Grok's M4.7a security finding (a root's whole
-  connection registry rode in each assignment; fixed there: only the task's declared ones go).
-  Read in `crates/schedr-master/src/dispatch.rs`: `external = inputs.len() >
-  INLINE_INPUTS_LIMIT`, with `INLINE_INPUTS_LIMIT = 4 * 1024 * 1024`; the worker's
-  `MasterClient` keeps tonic's default 4 MiB receive limit (`crates/schedr/src/roles.rs`,
-  which `schedr-config`'s `MIN_MESSAGE_SIZE` says workers rely on). Not reproduced yet.
-- **When:** rare: an upstream output of a little under 4 MiB passed whole to a task.
-- **A fix:** the inline decision on the whole message's encoded size (inputs, task JSON,
-  params, connections) with a margin, e.g. inputs inline only while the message stays under
-  4 MiB less 64 KiB; a test with inputs of 4 MiB less a few bytes.
 
 ## B156: An action's status stops being followed after an error answer
 
@@ -281,13 +250,6 @@ step touches their code or the user schedules them.
 - **A fix:** a DAG that doesn't read is the API's error (a 500 naming the run), not an
   unmapped DAG; or keep reading it leniently for `get_run` only. Before 1.0.0 the stored
   JSON follows the model (edited in place); after it, migrations must keep it readable.
-
-## B85: disconnects during notification draining can silently lose changes
-
-- **Rating:** severity **medium**, probability **rare**, correctness (score 2): the UI's live feed misses changes until the next one; the database listener disconnecting with a notification queued.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F4 (the database layer),
-  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-db/src/changes.rs:220`. Only the first receive handles `None` as `Change::Missed`. The subsequent drain accepts only notifications: This discards a disconnect result or cancels reconnection after the listener has consumed its disconnect state. **Scenario:** one notification is queued → the listening connection dies → another change occurs while disconnected → draining consumes the disconnect → following resumes without reporting `Missed`. The API feed sends a refresh for `Missed` (`schedr-api/src/events.rs:122`), so clients can retain stale data. **
-- **A fix:** to decide when it is scheduled.
 
 ## B82: settling can perform cubic work on a chain
 
