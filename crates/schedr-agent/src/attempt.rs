@@ -401,6 +401,12 @@ pub struct WorkerTimeouts {
     pub connection_cancel_grace: Duration,
     /// How long the log endpoint waits after a failed accept (`accept_retry`).
     pub accept_retry: Duration,
+    /// How far back the tightest master-time sample is looked for (`master_sample_window`,
+    /// decision 447).
+    pub master_sample_window: Duration,
+    /// The wall-clock difference from the master, beyond the round trip, that is warned about
+    /// (`clock_skew_warning`, decision 449).
+    pub clock_skew_warning: Duration,
 }
 
 impl Default for WorkerTimeouts {
@@ -429,6 +435,8 @@ impl Default for WorkerTimeouts {
             stop_poll: crate::supervise::STOP_POLL,
             connection_cancel_grace: crate::connection_jobs::CANCEL_GRACE,
             accept_retry: Duration::from_millis(100),
+            master_sample_window: crate::master_time::DEFAULT_SAMPLE_WINDOW,
+            clock_skew_warning: crate::master_time::DEFAULT_SKEW_WARNING,
         }
     }
 }

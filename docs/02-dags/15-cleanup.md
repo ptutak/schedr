@@ -57,8 +57,9 @@ idempotence alone does not make a cleanup safe on another pod.
 
 A worker that hears nothing from the master for the [worker
 lease](../03-guide/14-timings.md#fixed-timings)
-(60 s by default) stops its running tasks with `cleanup_anywhere`. They end `lost` and use a
-retry. A master outage longer than the lease therefore stops these tasks. When the connection
+(60 s by default) stops its running tasks with `cleanup_anywhere`, or sooner once the
+master's own count of that lease may have run out (its last message held on the way). They
+end `lost` and use a retry. A master outage longer than the lease therefore stops these tasks. When the connection
 is lost, their cleanup waits for the master's answer, including when a task ends by itself
 while disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles
 than the returning

@@ -46,9 +46,12 @@ the stamp names was sent first, so master time `master_ms` is already past that 
 Master time `X` is no earlier than the send plus `X - master_ms`, less 0.1 % (one part in a
 thousand: each clock slews by at most 500 ppm, so the two by at most 1000 ppm). That is
 Cristian's bound, from the worker's boot clock, which keeps counting through a suspend. The
-worker keeps the tightest sample. An equally tight later sample replaces an old one, so the
-0.1 % is taken from a recent sample. A looser sample is kept only when a pause has made the
-old one unusable. With no sample yet, every deadline counts as already passed.
+worker keeps the tightest sample of the last 10 minutes (decision 447,
+`SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW`): an older one, however tight, has drifted its
+0.1 % from further back. An equally tight later sample replaces an old one, so the 0.1 % is
+taken from a recent sample. A looser sample counts once the tighter ones have left the
+window, or a pause has made them unusable. With no sample yet, every deadline counts as
+already passed.
 
 A pause the boot clock did not count (a frozen VM: the wall clock ran ahead of the boot
 clock, past a second of slack and 0.2 % of the span) makes every deadline passed. The next
@@ -64,6 +67,16 @@ sequenceDiagram
     Note over W: Master time X is no earlier than T + (X - M), less 0.1 percent
     Note over W: The tightest such sample wins. Hours later, a new sample just as tight replaces it.
     Note over W: No sample, or the wall clock ran ahead of the boot clock: the deadline has passed.
+```
+
+```{mermaid}
+flowchart LR
+    newSample[A stamped answer to a heartbeat] --> tighter{At least as tight as the newest kept?}
+    tighter -->|yes| dropLoose[Drop the looser ones before it] --> keep[Keep it last]
+    tighter -->|no| keep
+    keep --> old{Oldest kept sent more than 10 min ago?}
+    old -->|yes| dropOld[Drop it] --> old
+    old -->|no| best[The first kept is the tightest of the window]
 ```
 
 `AssignTask.start_by_ms` is master time on that timeline: the start timeout (the worker
@@ -94,8 +107,9 @@ sequenceDiagram
 
 After, the worker starts the task only while its bound of `start_by_ms` is more than two
 heartbeat intervals ahead (20 s). Otherwise it rejects the assignment `TOO_LATE` and does not
-leave it in the journal. The master takes it back when its own master time passes the same
-deadline, unless `Started` has already arrived and is waiting to be handled.
+leave it in the journal. The master takes it back two heartbeat intervals (20 s) after its own
+master time passes the same deadline, unless `Started` has arrived by then (decision 450): a
+`Started` sent at the last moment has the worker's reserve and that grace, 40 s, to arrive.
 
 ```{mermaid}
 sequenceDiagram
@@ -105,7 +119,7 @@ sequenceDiagram
     M->>W: AssignTask, stamp names the heartbeat sent at T
     Note over W: Start only while T + (start_by - master_ms) - 0.1 percent is more than 20 s ahead.
     W-->>M: Otherwise Rejected TOO_LATE, and the journal entry is dropped
-    Note over M: Past S plus 60 s, with no Started waiting, the attempt is taken back.
+    Note over M: Past S plus 60 s plus 20 s grace, with no Started waiting, the attempt is taken back.
 ```
 
 ### A start budget that outlived the expiry
@@ -223,6 +237,77 @@ sequenceDiagram
     Note over L: 2. At least one interval, 10 s, left to start
     Note over L: 3 and 4. Two intervals, 20 s, kept so Started arrives before expiry
     Note over L: Under 40 s the process refuses to start
+```
+
+### A worker cut off by the clock of its own receipts (decision 445)
+
+A worker counted its cutoff (the time it stops `cleanup_anywhere` tasks and triggers, as the
+master may move them) only from when it received the master's last message, by its own
+clock: a message held on its way left that cutoff late in master time. Now the cutoff is the
+earlier of the two: a lease after the last receipt, or the moment master time may have
+passed the last stamp plus a lease, by the bound above.
+
+```{mermaid}
+sequenceDiagram
+    participant M as Master time
+    participant W as Worker
+    M->>W: A message stamped at master time 100 s, held 30 s on its way
+    Note over W: Received at 130 s by master time. By receipt, cut off at 190 s.
+    Note over W: By the stamp, master time may pass 160 s (stamp plus lease) at 160 s. Cut off then.
+    Note over M: The master counts its lease from the worker's last message it received.
+```
+
+When the last stamp answers the worker's last message, the worker has stopped before the
+master loses it. When the worker's messages are lost on the way while the master's still arrive,
+it can stop later than the master moves its cleanup: an open bug (B233).
+
+## Checked by a simulator (decision 446)
+
+The worker's real `MasterTime` runs against a master on a virtual clock in a property test
+(`crates/schedr-agent/tests/clock_sim.rs`): rate drift up to 0.1 %, delays both ways up to
+5 s, answers lost, assignments delivered up to 30 s late, and stalls the boot clock missed.
+At every event it checks that a start is at least the reserve before its deadline in master
+time, and that a worker not yet cut off is within a lease of the last stamp. Removing the
+drift allowance makes it fail at once. The master's side of the rules (the take-back two
+heartbeats after the deadline, a replaced incarnation's hold) is checked by the dispatcher's
+tests; running the master's core and dispatcher in the simulator too, with restarts and
+takeovers, as decision 446 has it, is still to come.
+
+```{mermaid}
+flowchart LR
+    gen[Random scenario: drift, delays, losses, stalls, late assignments] --> sim[Worker MasterTime on virtual clocks]
+    sim --> rule1{Started at least the reserve before start_by?}
+    sim --> rule3{Not cut off only within a lease of the last stamp?}
+    rule1 -->|no| fail[Fails, with the smallest scenario]
+    rule3 -->|no| fail
+```
+
+## Watching it (decisions 448 and 449)
+
+| Metric | What it shows |
+|---|---|
+| `worker_master_sample_age_seconds` | The age of the heartbeat master time is read from; growing past a few heartbeats, the master isn't answering. |
+| `worker_master_round_trip_seconds` | That heartbeat's round trip: what a deadline loses to the link. |
+| `worker_start_slack_seconds` | How long before its deadline (less the reserve) each assignment started; near zero, assignments arrive late. |
+| `worker_too_late_rejections` | Assignments rejected `TOO_LATE`. |
+| `worker_older_epoch_refusals` | Streams ended for a lower lease epoch: a deposed master still answering. |
+| `master_replaced_attempts_held` | Attempts of replaced incarnations held for a lease (decision 443). |
+
+A worker compares the master's wall clock on each stamped answer with its own over the round
+trip. More than 2 s outside it (`SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING`), it logs a
+warning once a session and reports a `clock_skew` warning, shown with the worker on the
+Deployments page. Wall clocks only touch what people read (cron times, logs, shown times);
+no deadline uses them.
+
+```{mermaid}
+sequenceDiagram
+    participant W as Worker wall clock
+    participant M as Master
+    Note over W: Heartbeat sent at wall time A
+    W->>M: Heartbeat
+    M-->>W: Answer stamped with the master's wall time
+    Note over W: Arrives at wall time B. Inside A to B: no skew. 30 s past B: 30 s skew.
+    Note over W: Past 2 s: one clock_skew warning this session.
 ```
 
 ## One clock, and what still uses the wall clock
@@ -352,8 +437,8 @@ The defaults pass: 60 s is six heartbeats, and the lead is 20 s. A 90 s master l
 
 ## Known limits
 
-A `Started` held up for more than two heartbeat intervals (20 s), the stream still up, can
-arrive after the master has taken the attempt back. The master answers it with a cancel. The
+A `Started` held up for more than four heartbeat intervals (40 s: the worker's reserve and the
+master's grace), the stream still up, can arrive after the master has taken the attempt back. The master answers it with a cancel. The
 task may already have been given to another worker (decision 442).
 
 ```{mermaid}
@@ -361,14 +446,26 @@ sequenceDiagram
     participant W as Worker
     participant M as Master
     Note over W: Started inside the budget, with the 20 s reserve
-    W->>M: Started, held more than 20 s
-    Note over M: The attempt was taken back at 60 s and given to another worker
+    W->>M: Started, held more than 40 s
+    Note over M: The attempt was taken back at 80 s and given to another worker
     M-->>W: CancelAttempt
     Note over W,M: Both may have run it
 ```
 
 A jump of the master's monotonic clock (some moves of a virtual machine) is not caught.
 Wall-clock steps are.
+
+The worker's timers run on a clock that a suspend stops; the cutoff is read again from the
+boot clock at least every 5 s (the worker's alive tick), so a worker resumed after a suspend
+stops its `cleanup_anywhere` tasks up to 5 s late.
+
+A cutoff the last session's stamps set stands over a reconnect, until the new session's first
+stamped message: a new stream doesn't move it later.
+
+A stall that even the worker's boot clock missed shows only once its wall clock has run 1 s
+(plus 0.2 % of the time since the sample) ahead, so that a wall-clock step isn't taken for
+one. A shorter stall goes unseen and leaves the worker's reading that much late; the
+simulator allows exactly that.
 
 At the end of a replaced incarnation's lease, the old process stops its `cleanup_anywhere`
 tasks and its triggers. An ordinary task still running there can overlap the retry, as it can

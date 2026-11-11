@@ -73,6 +73,18 @@ to think about"; found while chasing M4.8z's stress 05 and B165):
 '''
 
 [[steps]]
+id = "M4B.0"
+title = "Master time hardened (the clock step)"
+scope = '''
+(decisions 445-450, the user's, 2026-11-11, before the batching): a simulator on virtual clocks checking four liveness rules (446); the worker's cutoff also on master time (445); the best sample over a 10-minute window (447); clock and fencing metrics (448); B232's skew warning (449); the master taking an unstarted assignment back two heartbeats after `start_by` (450); an invariant page in `design/` (Grok)
+'''
+done_when = '''
+the simulator's four rules hold over its proptest cases, and fail when one of the protections is removed; the cutoff, window, metrics, warning and grace each with a test; the invariant page written and reviewed
+'''
+status = "done"
+done = 2026-11-11
+
+[[steps]]
 id = "M4B.1"
 title = "Measure first"
 scope = '''

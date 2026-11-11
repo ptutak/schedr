@@ -6,26 +6,26 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-11)
 
 - **Milestone:** M4B, Batched worker messages (a milestone after M4).
-- **Next step:** M4B.3, A turn's messages in groups (decisions D397). Done when: a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
+- **Next step:** M4B.3, A turn's messages in groups (decisions D397, D451). Done when: a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
 - **Then:** M4B.4, M4B.5, M4B.6, R1.0a.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 24; first: B187 (medium/possible), B184 (medium/possible), B152 (low/likely), B148 (medium/rare), B82 (medium/rare) (`BUGS.md`).
+- **Open bugs:** 24; first: B187 (medium/possible), B184 (medium/possible), B233 (high/rare), B152 (low/likely), B148 (medium/rare) (`BUGS.md`).
 
 ## Recent
 
+- D445 (2026-11-11): the clock step before M4B (decisions 445-452)
 - D444 (2026-11-11): a new leader waits out the deposed one; workers fence older epochs (decision 444, B231)
 - D443 (2026-11-11): a replaced incarnation's lost attempts wait out its lease (decision 443, B230)
 - D442 (2026-11-11): one monotonic clock for the cluster (decision 442, B225-B228)
 - D441 (2026-11-10): a DAG that no longer parses after a major upgrade (decision 441, Q26)
-- D440 (2026-11-10): what retention keeps beyond the three newest runs
+- M4B.0 (2026-11-11): Master time hardened (the clock step)
 - M4.15b (2026-11-10): Upgrade rules completed
 - M4.15a (2026-11-10): Per-task memory
-- M4.15 (2026-11-10): Per-task memory and upgrade rules
 
 ## In progress
 
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user.
-- M4 done 2026-11-10. Codex's full review done (F12-F14) 2026-11-10. The bug round before M4B (accepted 2026-11-10, commits pre-accepted): batch A (F14's two critical fixes, B205, B221-B224), D (CLI: B212-B215) and E (flaky tests: B22, B40, B150, B159, B166, B197, B4) done; B225-B228 rewritten 2026-11-11 on one monotonic clock (D442, the user's: master time on every message, deadlines in master time, a lease at least four heartbeats), committed 2026-11-11; B230 and B231 (high, from Grok's design review) fixed 2026-11-11 (D443: a replaced incarnation's attempts end lost a lease after, stored; D444: a new leader waits out the deposed one's lead, workers fence older lease epochs; three Grok rounds); B (B192, B193, B185, B191, B195) and C (B85, B157, B199; with B192's review fixes: a removed DAG's runs wound down each round, its unstarted assignments cancelled) done 2026-11-11, each reviewed by Codex; B48 goes into M4B.3 (the user, 2026-11-11: one memory snapshot per group). The bug round is done. Next (the user, 2026-11-11, decisions recorded at its start): a clock step before M4B: a deterministic simulator of master time, the worker's cutoff on master time, a windowed best sample, metrics, B232's skew warning, an invariant page in design/, the master expiring an assignment two heartbeats after its start_by; then M4B, with a Grok review of the whole of M4B at its end. Unattended to the end of M4B (the user), commits pre-accepted, decisions set aside. B187 left until 1.0 (the user).
+- M4 done 2026-11-10; Codex's full review (F12-F14) 2026-11-10; the bug round before M4B done 2026-11-11 (B230/B231 last, D443/D444). The clock step M4B.0 done 2026-11-11 (D445-D450: the cutoff on master time too, kept over a reconnect and read by the cleanup gates; the best sample over a 10-minute window; clock metrics; B232's skew warning; the take-back two heartbeats after start_by; a worker-side simulator; design/workers.md's invariants by Grok), reviewed by Grok (6 findings fixed). Next: M4B.3 (built in schedr-m4b3, Grok reviewing), M4B.4, M4B.5, then Grok's review of the whole of M4B. Unattended to the end of M4B (the user), commits pre-accepted, decisions set aside. B187 left until 1.0 (the user).
 - The greenhouse showcase done 2026-11-10 (examples/showcase, docs/02-dags/25-showcase.md; asked by the user: IoT, a test and a guide page): `make standalone DAGS=examples/showcase/dags`, then `make showcase`; its code review cancelled by the user.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).
@@ -35,7 +35,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Waiting for the user
 
-Nothing.
+- B233 (high, rare, found by Grok in the clock step): a worker cut off one way keeps a cleanup_anywhere task past its cleanup's move; the proposed fix (the cutoff from the send of the last heartbeat the master heard) stops workers up to a heartbeat earlier: the user's to decide.
+- D446: the simulator built covers the worker's side; the master's core and dispatcher in it, with restarts and takeovers, are not built: build it later, or narrow the record (the user's).
 
 ## Rules in force
 

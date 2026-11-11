@@ -41,6 +41,40 @@ const TASK_START: MetricDoc = MetricDoc {
         (runner: from starting the process to the runner's hello; import: from sending the \
         task to the DAG file imported, not counted when that fails)",
 };
+const MASTER_SAMPLE_AGE: MetricDoc = MetricDoc {
+    name: "worker_master_sample_age_seconds",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "How old the heartbeat is that the worker reads master time from (decision 447: the \
+        tightest of its window; growing past a few heartbeats means the master isn't answering)",
+};
+const MASTER_ROUND_TRIP: MetricDoc = MetricDoc {
+    name: "worker_master_round_trip_seconds",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "That heartbeat's round trip, from its send to the master's answer naming it: how much \
+        a start deadline loses to the link",
+};
+const START_SLACK: MetricDoc = MetricDoc {
+    name: "worker_start_slack_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "How long before an assignment's start deadline (less the two heartbeats kept for \
+        its `Started`) the worker started it: near zero means assignments arrive late",
+};
+const TOO_LATE: MetricDoc = MetricDoc {
+    name: "worker_too_late_rejections",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Assignments rejected `TOO_LATE`: past their start deadline in master time (B225)",
+};
+const OLDER_EPOCH: MetricDoc = MetricDoc {
+    name: "worker_older_epoch_refusals",
+    kind: MetricKind::Counter,
+    labels: &[],
+    help: "Streams ended because their master leads with a lower lease epoch than one seen \
+        (decision 444: a deposed master still answering)",
+};
 const WATCHDOG_KILLS: MetricDoc = MetricDoc {
     name: "worker_watchdog_kills",
     kind: MetricKind::Counter,
@@ -151,6 +185,11 @@ pub const METRICS: &[MetricDoc] = &[
     SLOTS_USED,
     ATTEMPTS,
     TASK_START,
+    MASTER_SAMPLE_AGE,
+    MASTER_ROUND_TRIP,
+    START_SLACK,
+    TOO_LATE,
+    OLDER_EPOCH,
     WATCHDOG_KILLS,
     JOURNAL_RECORDS,
     LOG_BYTES,
@@ -333,6 +372,16 @@ pub struct AgentMetrics {
     pub attempts: Family<StatusLabels, Counter>,
     /// How long Python tasks took to start, by start method and phase.
     pub task_start: StartHistograms,
+    /// The age of the heartbeat master time is read from, in seconds (decision 448).
+    pub master_sample_age: Gauge<f64, std::sync::atomic::AtomicU64>,
+    /// Its round trip, in seconds.
+    pub master_round_trip: Gauge<f64, std::sync::atomic::AtomicU64>,
+    /// How long before its deadline each assignment started.
+    pub start_slack: Histogram,
+    /// Assignments rejected `TOO_LATE`.
+    pub too_late: Counter,
+    /// Streams ended for a lower lease epoch.
+    pub older_epoch: Counter,
     /// Tasks and parse runners the memory watchdog killed.
     pub watchdog_kills: Counter,
     /// Attempts in the journal (running, or results not acknowledged).
@@ -357,6 +406,12 @@ impl Default for AgentMetrics {
             task_start: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(0.01, 2.0, 13))
             }),
+            master_sample_age: Gauge::default(),
+            master_round_trip: Gauge::default(),
+            // 10 ms to about 160 s.
+            start_slack: Histogram::new(exponential_buckets(0.01, 2.0, 15)),
+            too_late: Counter::default(),
+            older_epoch: Counter::default(),
             watchdog_kills: Counter::default(),
             journal_records: Gauge::default(),
             log_bytes: Gauge::default(),
@@ -376,6 +431,19 @@ impl AgentMetrics {
         r.register(SLOTS_USED.name, SLOTS_USED.help, self.slots_used.clone());
         r.register(ATTEMPTS.name, ATTEMPTS.help, self.attempts.clone());
         r.register(TASK_START.name, TASK_START.help, self.task_start.clone());
+        r.register(
+            MASTER_SAMPLE_AGE.name,
+            MASTER_SAMPLE_AGE.help,
+            self.master_sample_age.clone(),
+        );
+        r.register(
+            MASTER_ROUND_TRIP.name,
+            MASTER_ROUND_TRIP.help,
+            self.master_round_trip.clone(),
+        );
+        r.register(START_SLACK.name, START_SLACK.help, self.start_slack.clone());
+        r.register(TOO_LATE.name, TOO_LATE.help, self.too_late.clone());
+        r.register(OLDER_EPOCH.name, OLDER_EPOCH.help, self.older_epoch.clone());
         r.register(
             WATCHDOG_KILLS.name,
             WATCHDOG_KILLS.help,

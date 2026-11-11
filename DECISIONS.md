@@ -29,6 +29,14 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
+| D451 | 2026-11-11 | user | planned (M4B.3) | components | B48 is fixed by M4B's per-group memory snapshot |
+| D450 | 2026-11-11 | user | built M4B.0 | workers | The master expires an assignment two heartbeats after its deadline |
+| D449 | 2026-11-11 | user | built M4B.0 | workers | A clock-skew warning from the master's wall clock |
+| D448 | 2026-11-11 | user | built M4B.0 | observability | Clock and fencing metrics on workers and the master |
+| D447 | 2026-11-11 | user | built M4B.0 | workers | The worker's best clock sample is taken over a window |
+| D446 | 2026-11-11 | user | built M4B.0 | workers | A simulator checks the liveness rules on virtual clocks |
+| D445 | 2026-11-11 | user | built M4B.0 | workers | The worker's cutoff on master time as well |
 | D444 | 2026-11-11 | user | built (B231 fixed) | workers | A new leader waits out the deposed one; workers fence older epochs |
 | D443 | 2026-11-11 | user | built (B230 fixed) | workers | A replaced incarnation's lost attempts wait out its lease |
 | D442 | 2026-11-11 | user | built (B225 fixed) | workers | One monotonic clock for the cluster: master time |
@@ -591,6 +599,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### components
 
+- D452: A master that isn't leading names the leader
+- D451: B48 is fixed by M4B's per-group memory snapshot
 - D382: One leading master per deployment; scale by more deployments
 - D297: A master that is not leading is unready and refuses streams
 - D43: Task finishes and commands wake a scheduler round
@@ -707,6 +717,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### observability
 
+- D448: Clock and fencing metrics on workers and the master
 - D387: Wait steps aren't isolated after host losses
 - D386: No OpenTelemetry
 - D343: The UI shows watcher hosts and switched-off sensors
@@ -960,6 +971,11 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D450: The master expires an assignment two heartbeats after its deadline
+- D449: A clock-skew warning from the master's wall clock
+- D447: The worker's best clock sample is taken over a window
+- D446: A simulator checks the liveness rules on virtual clocks
+- D445: The worker's cutoff on master time as well
 - D444: A new leader waits out the deposed one; workers fence older epochs
 - D443: A replaced incarnation's lost attempts wait out its lease
 - D442: One monotonic clock for the cluster: master time

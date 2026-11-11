@@ -469,6 +469,8 @@ struct Scripted {
     ack_heartbeats: Option<Duration>,
     /// The lease epoch on its stamps (decision 444).
     epoch: i64,
+    /// How far its wall clock runs ahead of the worker's, in milliseconds (decision 449).
+    wall_ahead_ms: i64,
 }
 
 #[tonic::async_trait]
@@ -488,6 +490,7 @@ impl pb::master_server::Master for Scripted {
         let opened = Instant::now();
         let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let epoch = self.epoch;
+        let wall_ahead_ms = self.wall_ahead_ms;
         let stamp = {
             let heard = Arc::clone(&heard);
             move |mut message: pb::MasterMessage| {
@@ -495,7 +498,14 @@ impl pb::master_server::Master for Scripted {
                     timeline: 7,
                     master_ms: i64::try_from(opened.elapsed().as_millis()).unwrap(),
                     heard_sequence: heard.load(std::sync::atomic::Ordering::SeqCst),
-                    wall_ms: 0,
+                    wall_ms: i64::try_from(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis(),
+                    )
+                    .unwrap()
+                        + wall_ahead_ms,
                     lease_epoch: epoch,
                 });
                 message
@@ -1201,6 +1211,43 @@ async fn the_workers_warnings_go_after_register_and_on_every_change() {
         reported(&seen),
         [vec!["at the start".to_owned()], Vec::<String>::new()]
     );
+}
+
+#[tokio::test]
+async fn a_master_wall_clock_far_off_is_warned_of_once_a_session() {
+    // Decision 449 (B232): 30 s ahead, past the 2 s threshold: one `clock_skew` warning in the
+    // report, however many heartbeats are answered.
+    let mut script = silent_master_leased(false, 5000);
+    script.truncate(1);
+    let master = Scripted {
+        script,
+        ack_heartbeats: Some(Duration::ZERO),
+        wall_ahead_ms: 30_000,
+        ..Scripted::default()
+    };
+    let started = Instant::now();
+    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(800);
+    let (seen, _) = against_master(1, Start::With(vec![]), master, done, |_| {}).await;
+    let reports: Vec<Vec<String>> = seen
+        .iter()
+        .filter_map(|m| match m.message.as_ref()? {
+            worker_message::Message::Warnings(w) => {
+                Some(w.warnings.iter().map(|w| w.kind.clone()).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reports,
+        [vec![], vec!["clock_skew".to_owned()]],
+        "{:?}",
+        kinds(&seen)
+    );
+    let beats = seen
+        .iter()
+        .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+        .count();
+    assert!(beats >= 3, "answered more than once: {:?}", kinds(&seen));
 }
 
 #[tokio::test]
@@ -3443,10 +3490,14 @@ async fn an_assignment_arriving_past_its_deadline_in_master_time_is_too_late() {
                 .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
             || started.elapsed() > Duration::from_secs(3)
     };
+    let too_late = prometheus_client::metrics::counter::Counter::<u64>::default();
+    let counted = too_late.clone();
     let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
         agent.executor.dirs = seen_launches;
+        agent.metrics.too_late = counted;
     })
     .await;
+    assert_eq!(too_late.get(), 1, "counted (decision 448)");
     assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
     let rejected: Vec<i32> = seen
         .iter()
@@ -3512,11 +3563,15 @@ async fn a_deposed_masters_stream_is_ended_and_nothing_of_it_counts() {
     let seen_launches = Arc::clone(&launched);
     let started = Instant::now();
     let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(600);
+    let refused = prometheus_client::metrics::counter::Counter::<u64>::default();
+    let counted = refused.clone();
     let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
         agent.executor.dirs = seen_launches;
         agent.leader_epoch = (5, Some(tokio::time::Instant::now()));
+        agent.metrics.older_epoch = counted;
     })
     .await;
+    assert!(refused.get() >= 1, "counted (decision 448)");
     assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
     // It did connect and register, more than once (Grok's review: silence passed too): each
     // session ended at the deposed master's `Registered`, before a heartbeat.
@@ -4273,4 +4328,84 @@ async fn an_api_call_gets_a_fresh_id_and_one_too_large_or_given_up_isnt_sent() {
         [id],
         "neither the one given up nor the one too large kept to be sent again"
     );
+}
+
+/// An agent whose master time was last read from a heartbeat sent `ago`, stamped then (the
+/// master's last word reached it only now), with a 60 s lease.
+fn stamped_long_ago(dir: &Path, ago: Duration) -> Agent<Fake> {
+    let mut agent = offline_agent(dir);
+    agent.lease = Some(Duration::from_secs(60));
+    let now = Local::now();
+    let then = Local {
+        boot: now.boot.checked_sub(ago).unwrap(),
+        wall: now.wall.checked_sub(ago).unwrap(),
+    };
+    let sequence = agent.master_time.sent(then);
+    let clock = pb::MasterClock {
+        timeline: 7,
+        master_ms: 1_000,
+        heard_sequence: sequence,
+        wall_ms: 0,
+        lease_epoch: 1,
+    };
+    agent.master_time.heard(&clock, then);
+    agent.heard = tokio::time::Instant::now();
+    agent
+}
+
+fn left(at: Option<tokio::time::Instant>) -> Duration {
+    at.unwrap()
+        .saturating_duration_since(tokio::time::Instant::now())
+}
+
+#[test]
+fn a_reconnect_keeps_the_cutoff_the_last_stamps_set() {
+    // Grok's review of D445: the last stamp was 30 s ago in master time, so the cutoff is in
+    // about 30 s, not the receipt's 60 s; a new session's opening kept it there only until
+    // this fix (it moved out to 60 s). A stamp of the new session counts from then on.
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(30));
+    assert!(left(agent.lease_deadline()) < Duration::from_secs(31));
+    agent.open_session();
+    assert!(
+        left(agent.lease_deadline()) < Duration::from_secs(31),
+        "kept over the reconnect"
+    );
+    let (to_master, _from_agent) = mpsc::unbounded_channel();
+    let clock = pb::MasterClock {
+        timeline: 8,
+        master_ms: 5_000,
+        heard_sequence: 0,
+        wall_ms: 0,
+        lease_epoch: 1,
+    };
+    agent.heard_master(Some(&clock), &to_master);
+    assert!(
+        left(agent.lease_deadline()) > Duration::from_secs(55),
+        "the new stamp counts"
+    );
+}
+
+#[test]
+fn the_cleanup_gates_read_the_master_time_cutoff() {
+    // Grok's review of D445: the deadline the executor's cleanup gates read was the receipt's
+    // alone, 60 s out while the master-time cutoff was 30 s.
+    let dir = TempDir::new().unwrap();
+    let agent = stamped_long_ago(dir.path(), Duration::from_secs(30));
+    agent.publish_deadline();
+    assert!(left(*agent.deadline.borrow()) < Duration::from_secs(31));
+}
+
+#[test]
+fn the_sample_age_grows_while_no_sample_is_kept() {
+    // Grok's review of D448: between sessions the gauge stayed at the last sample's age.
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(30));
+    agent.publish_master_reading();
+    let before = agent.metrics.master_sample_age.get();
+    assert!(before >= 30.0, "{before}");
+    agent.open_session();
+    std::thread::sleep(Duration::from_millis(20));
+    agent.publish_master_reading();
+    assert!(agent.metrics.master_sample_age.get() > before);
 }

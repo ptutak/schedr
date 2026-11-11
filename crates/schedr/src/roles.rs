@@ -128,6 +128,8 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         stop_poll: config.timings.stop_poll,
         connection_cancel_grace: config.timings.connection_job_cancel_grace,
         accept_retry: config.timings.accept_retry,
+        master_sample_window: config.timings.master_sample_window,
+        clock_skew_warning: config.timings.clock_skew_warning,
     }
 }
 

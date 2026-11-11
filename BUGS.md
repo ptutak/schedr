@@ -55,11 +55,11 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
 | 2 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 5 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 6 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
-| 7 | B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning | 2 | low | possible | usability |
+| 3 | B233: a worker cut off one way (its messages lost, the master's arriving) keeps a `cleanup_anywhere` task past the moment its cleanup moves (Suspected) | 3 | high | rare | correctness |
+| 4 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 5 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 6 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 7 | B48: every attempt message copies the master's whole worker registry under its lock | 2 | medium | rare | performance |
 | 8 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
 | 9 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
 | 10 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
@@ -78,12 +78,13 @@ step touches their code or the user schedules them.
 | 23 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
 | 24 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 
-## B232: the master's wall clock on its messages isn't compared with the worker's: no clock-skew warning
+## B233: a worker cut off one way (its messages lost, the master's arriving) keeps a `cleanup_anywhere` task past the moment its cleanup moves (Suspected)
 
-- **Rating:** severity **low**, probability **possible**, usability (score 2): every master message carries the master's wall clock (`MasterClock.wall_ms`, D442) for a worker to warn when its own wall clock differs by more than a few seconds (cron times, logs and shown times come from wall clocks); the agent doesn't compare them yet, as its warnings come only from the executor.
-- **Found:** 2026-11-11, by Claude, building D442 (the user asked to carry the master's wall clock too).
-- **Where:** `crates/schedr-agent/src/agent.rs` (`heard_master`, `warnings`), `crates/schedr-agent/src/master_time.rs`.
-- **The fix, likely:** the agent's own warnings beside the executor's, a `clock_skew` warning when `|worker wall - master wall|` passes a hidden threshold (allowing the message's delay), shown on the Deployments page.
+- **Rating:** severity **high**, probability **rare**, correctness (score 3): the master counts a worker lost from the last message it received from it, the worker its cutoff from the last message it received (and, since D445, from that message's stamp); with the worker's messages lost on the way and the master still sending (an assignment while the worker looks idle), the worker's cutoff runs from the master's later send while the master loses it earlier, and moves its cleanup a grace and a move wait (40 s by default) after that: a send more than 40 s after the worker's last arrived message leaves the task running beside its moved cleanup.
+- **Found:** 2026-11-11, by Grok, writing the invariants section of `design/workers.md` for the clock step; checked by Claude against the code (`core::heard_from`, `core::tick_into`, `service::deliver` stamping at send). Not reproduced by a test yet. It predates the clock step: the cutoff by receipt alone (decision 252) was as late or later.
+- **Where:** `crates/schedr-agent/src/agent.rs` (`lease_deadline`, `master_cutoff`), `crates/schedr-agent/src/master_time.rs`; `crates/schedr-master/src/core.rs` (`tick_into`).
+- **A fix, proposed (for the user to decide):** the worker counts its cutoff from the send of the latest heartbeat the master says it heard (`MasterClock.heard_sequence`): the master received it no earlier, so it loses the worker no earlier than that send plus the lease. The cutoff is then `min(that send + lease, the receipt bound)` on the worker's boot clock, less the drift allowance; normally about a heartbeat interval earlier than now. Not chosen yet: the master counting its lease from its own last send too (keeps a silent worker alive while the master writes to it).
+- **Also:** `docs/03-guide/17-master-clock.md`'s cutoff diagram says the worker has stopped first; true only while the last stamp answers the worker's last message.
 
 ## B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected)
 

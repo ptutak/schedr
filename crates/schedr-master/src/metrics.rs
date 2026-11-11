@@ -138,6 +138,13 @@ const LEADING: MetricDoc = MetricDoc {
     labels: &[],
     help: "1 while this master holds the lease and schedules, 0 while it waits or is paused",
 };
+const REPLACED_HELD: MetricDoc = MetricDoc {
+    name: "master_replaced_attempts_held",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "Started attempts of a replaced worker incarnation the master holds for a lease before \
+        ending them lost (decision 443): its old process may still run them",
+};
 const WORKERS: MetricDoc = MetricDoc {
     name: "workers",
     kind: MetricKind::Gauge,
@@ -233,6 +240,7 @@ pub const METRICS: &[MetricDoc] = &[
     COMMAND_LATENCY,
     WORKERS,
     LEADING,
+    REPLACED_HELD,
     DAGS,
     DAG_WAKES,
 ];
@@ -349,6 +357,8 @@ pub struct MasterMetrics {
     pub workers: Family<StateLabels, Gauge>,
     /// 1 while this master leads (holds the lease), 0 while it waits or is paused.
     pub leading: Gauge,
+    /// Started attempts of replaced incarnations still held (decision 443).
+    pub replaced_held: Gauge,
     /// DAGs that can run, by `busy` / `quiet`.
     pub dags: Family<StateLabels, Gauge>,
     /// Quiet DAGs woken, by reason.
@@ -399,6 +409,7 @@ impl Default for MasterMetrics {
             command_latency: Histogram::new(exponential_buckets(0.01, 2.0, 14)),
             workers: Family::default(),
             leading: Gauge::default(),
+            replaced_held: Gauge::default(),
             dags: Family::default(),
             dag_wakes: Family::default(),
             triggers: Family::default(),
@@ -482,6 +493,11 @@ impl MasterMetrics {
         );
         r.register(WORKERS.name, WORKERS.help, self.workers.clone());
         r.register(LEADING.name, LEADING.help, self.leading.clone());
+        r.register(
+            REPLACED_HELD.name,
+            REPLACED_HELD.help,
+            self.replaced_held.clone(),
+        );
         r.register(DAGS.name, DAGS.help, self.dags.clone());
         r.register(DAG_WAKES.name, DAG_WAKES.help, self.dag_wakes.clone());
         r.register(TRIGGERS.name, TRIGGERS.help, self.triggers.clone());

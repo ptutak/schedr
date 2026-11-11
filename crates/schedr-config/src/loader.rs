@@ -460,6 +460,8 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "WORKER__STOP_POLL" => &mut timings.stop_poll,
         "WORKER__CONNECTION_JOB_CANCEL_GRACE" => &mut timings.connection_job_cancel_grace,
         "WORKER__VAULT_MIN_RENEW_WAIT" => &mut timings.vault_min_renew_wait,
+        "WORKER__MASTER_SAMPLE_WINDOW" => &mut timings.master_sample_window,
+        "WORKER__CLOCK_SKEW_WARNING" => &mut timings.clock_skew_warning,
         "WORKER__VAULT_RENEW_CHECK" => &mut timings.vault_renew_check,
         "WORKER__VAULT_RENEW_RETRY" => &mut timings.vault_renew_retry,
         "MASTER__ROUND_GAP" => &mut timings.round_gap,

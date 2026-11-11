@@ -500,3 +500,24 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   the worker lease, which a legal configuration could break (a 90 s lease period, 10 s queries:
   an 80 s lead against a 60 s lease); such a configuration is refused at load. Not chosen:
   sending the lead to workers for the fence to wait it out.
+
+### <a id="D445"></a>2026-11-11: the clock step before M4B (decisions 445-452)
+
+- **Question:** after the bug round, how to harden master time (decision 442) instead of finding
+  its holes one review at a time; Claude's list of eight ideas.
+- **Chosen (the user's, "C7 B, the rest accepted recommendations"; ideas 1-7 as one step before
+  M4B):** a simulator on virtual clocks checking four rules (446); the worker's cutoff also on
+  master time, never later than before (445); the best sample over a 10-minute window (447);
+  clock and fencing metrics (448); B232's skew warning (449); the master taking an assignment
+  back two heartbeats after its deadline (450, option B: two intervals, not one); an invariant
+  page in `design/`. For M4B: B48 fixed by M4B.3's one snapshot per group (451); a master that
+  isn't leading names the leader (452); the takeover gap, a slow `Register` and reconnect storms
+  checked by stress 05 and 23, no code; reviews by Grok while Codex is out.
+
+2026-11-11, later (Claude): the first build of decision 446 covers the worker's side only: the
+real `MasterTime` against a virtual master (`crates/schedr-agent/tests/clock_sim.rs`), the
+master's rules taken from the dispatcher's tests. The core and dispatcher in the simulator,
+with restarts and takeovers, are left open for the user to decide (built later, or the record
+narrowed). Grok's review of the step: a reconnect forgot the master-time cutoff, the cleanup
+gates read only the receipt's, the alive tick didn't recheck it after a suspend, the age gauge
+froze between sessions, overlapping stalls in the simulator; all fixed, each with a test.

@@ -1,0 +1,17 @@
+title = "The worker's cutoff on master time as well"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+After a worker lease without word from the master, the worker stops its tasks with
+`cleanup_anywhere` at the earlier of two moments: a lease after the last message it received
+(decision 252), and when master time may have passed the last stamp's master time plus the
+lease, by the same bound as a start deadline. Never later than before. Not chosen: master time
+only; leaving the cutoff on receipt.
+'''
+history = "JOURNAL.md#D445"
+step = "M4B.0"
+code = ["crates/schedr-agent/src/agent.rs::cut_off_at", "crates/schedr-agent/src/master_time.rs::cutoff_in"]
+checked = 2026-11-11

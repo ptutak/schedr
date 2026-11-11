@@ -302,6 +302,9 @@ pub struct Dispatcher {
     cleanup_move_wait: SignedDuration,
     /// How long a worker has to report `Started` before its assignment is taken back.
     start_timeout: SignedDuration,
+    /// How long past an assignment's `start_by` the master still waits for its `Started`
+    /// (decision 450: two heartbeat intervals), the worker refusing to start it two before.
+    start_grace: SignedDuration,
     /// Master time, which its timers count on (B228; see [`crate::clock`]).
     steady: crate::clock::Steady,
     /// When each unstarted assignment was stored, in master time: it is taken back a start
@@ -402,6 +405,7 @@ impl Dispatcher {
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
                 .unwrap_or(SignedDuration::MAX),
             start_timeout: START_TIMEOUT,
+            start_grace: SignedDuration::ZERO,
             steady: crate::clock::as_given,
             unstarted_since: BTreeMap::new(),
             move_not_before: BTreeMap::new(),
@@ -530,6 +534,15 @@ impl Dispatcher {
     #[must_use]
     pub fn with_start_timeout(mut self, timeout: Duration) -> Self {
         self.start_timeout = SignedDuration::try_from(timeout).unwrap_or(SignedDuration::MAX);
+        self
+    }
+
+    /// The dispatcher taking an unstarted assignment back only `grace` after its `start_by`
+    /// (decision 450): a `Started` the worker sent just before its own reserve ran out has that
+    /// long to arrive on top. The deadline sent stays the start timeout's.
+    #[must_use]
+    pub fn with_start_grace(mut self, grace: Duration) -> Self {
+        self.start_grace = SignedDuration::try_from(grace).unwrap_or(SignedDuration::MAX);
         self
     }
 
@@ -2260,7 +2273,8 @@ impl Dispatcher {
                 .or_insert(steady);
             // Its `Started` is here, waiting its turn, or it was adopted though that couldn't
             // be recorded (batch A's review): the worker has it.
-            if steady.duration_since(since) <= self.start_timeout
+            let timeout = self.start_timeout.saturating_add(self.start_grace);
+            if steady.duration_since(since) <= timeout
                 || self.arrivals.start_waiting(&attempt.id)
                 || self.adopted_unrecorded.contains(&attempt.id)
             {
@@ -2405,6 +2419,9 @@ impl Dispatcher {
             self.replaced_since.remove(&attempt_id);
             ended += 1;
         }
+        self.metrics
+            .replaced_held
+            .set(i64::try_from(self.replaced_since.len()).unwrap_or(i64::MAX));
         Ok(ended)
     }
 

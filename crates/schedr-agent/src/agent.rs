@@ -1029,6 +1029,16 @@ pub struct Agent<E> {
     /// until a lease passes without word from that epoch (a database restored, its epoch
     /// set back; that leader has counted this worker lost by then).
     leader_epoch: (i64, Option<tokio::time::Instant>),
+    /// This session's clock-skew warning, once one sample was past the threshold (decision
+    /// 449); sent beside the executor's.
+    clock_skew: Option<pb::WorkerWarning>,
+    /// The master-time cutoff of the session before, kept over a reconnect until the new one
+    /// has a stamp to count from (Grok's review of D445: `open` forgot it, and the cutoff
+    /// moved out to the receipt lease).
+    carried_cutoff: Option<tokio::time::Instant>,
+    /// When the heartbeat of the last sample master time was read from left, on the boot
+    /// clock: the sample-age gauge grows from it while no sample is kept (an outage).
+    sample_sent: Option<Duration>,
     /// How long an attempt's first journal write takes (tests: a stalled disk, F14), and how
     /// many were delayed so.
     #[cfg(test)]
@@ -1170,6 +1180,7 @@ impl<E: Executor> Agent<E> {
     /// An agent with a new incarnation ID.
     #[must_use]
     pub fn new(settings: AgentSettings, executor: E, incarnation: String) -> Self {
+        let sample_window = settings.setup.timeouts.master_sample_window;
         let watchers = settings
             .setup
             .roots
@@ -1189,8 +1200,11 @@ impl<E: Executor> Agent<E> {
         Self {
             settings,
             executor,
-            master_time: MasterTime::default(),
+            master_time: MasterTime::with_window(sample_window),
             leader_epoch: (0, None),
+            clock_skew: None,
+            carried_cutoff: None,
+            sample_sent: None,
             #[cfg(test)]
             journal_stall: (Duration::ZERO, Arc::default()),
             warnings,
@@ -1339,7 +1353,7 @@ impl<E: Executor> Agent<E> {
         loop {
             let cut_off_at = self.cut_off_at();
             tokio::select! {
-                _ = alive.tick() => self.alive(),
+                _ = alive.tick() => self.on_alive(),
                 () = at(cut_off_at) => self.stop_cut_off(),
                 out = &mut work => return Some(out),
                 Some(done) = self.done_rx.recv() => self.on_done(done, None).await,
@@ -1431,7 +1445,13 @@ impl<E: Executor> Agent<E> {
             let _ = to_master.send(wrap(worker_message::Message::Draining(pb::Draining {})));
         }
         // All of them, after every registration: each report replaces the master's record.
-        let warnings = self.warnings.borrow_and_update().clone();
+        self.report_warnings(to_master);
+    }
+
+    /// The executor's warnings and this session's clock-skew one, to the master.
+    fn report_warnings(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        let mut warnings = self.warnings.borrow_and_update().clone();
+        warnings.extend(self.clock_skew.clone());
         let _ = to_master.send(wrap(worker_message::Message::Warnings(pb::Warnings {
             warnings,
         })));
@@ -1476,7 +1496,7 @@ impl<E: Executor> Agent<E> {
 
     /// Tells the cleanup gates when the master's word runs out (`heard` plus the lease).
     fn publish_deadline(&self) {
-        let deadline = self.lease.map(|lease| self.heard + lease);
+        let deadline = self.lease_deadline();
         self.deadline.send_if_modified(|now| {
             let changed = *now != deadline;
             *now = deadline;
@@ -1490,7 +1510,50 @@ impl<E: Executor> Agent<E> {
         if self.cut_off || self.gates.is_empty() {
             return None;
         }
-        self.lease.map(|lease| self.heard + lease)
+        self.lease_deadline()
+    }
+
+    /// The earlier of the worker lease after the last message received and the moment master
+    /// time may have passed the last stamp plus the lease (decision 445): a message held on
+    /// its way moved the receipt later than the master's own count. What the cleanup gates
+    /// read too (Grok's review: they had only the receipt).
+    fn lease_deadline(&self) -> Option<tokio::time::Instant> {
+        let lease = self.lease?;
+        let received = self.heard + lease;
+        Some(
+            self.master_cutoff(lease)
+                .map_or(received, |at| at.min(received)),
+        )
+    }
+
+    /// The master-time cutoff: this session's bound, or the one carried over a reconnect.
+    fn master_cutoff(&self, lease: Duration) -> Option<tokio::time::Instant> {
+        let now = tokio::time::Instant::now();
+        let by_master = self
+            .master_time
+            .cutoff_in(lease, Local::now())
+            .map(|wait| now + wait);
+        match (by_master, self.carried_cutoff) {
+            (Some(at), Some(carried)) => Some(at.min(carried)),
+            (at, carried) => at.or(carried),
+        }
+    }
+
+    /// A session opens: master time starts afresh, the cutoff the last session's stamps set
+    /// standing until this one's (Grok's review); its opening on the timer clock.
+    fn open_session(&mut self) -> tokio::time::Instant {
+        self.carried_cutoff = self.lease.and_then(|lease| self.master_cutoff(lease));
+        self.clock_skew = None;
+        self.master_time.open()
+    }
+
+    /// The alive tick's checks: the lease deadline again (a suspend the timer clock didn't
+    /// count leaves a timer late, Grok's review), the cutoff if due, the sample's age.
+    fn on_alive(&mut self) {
+        self.alive();
+        self.publish_master_reading();
+        self.publish_deadline();
+        self.cut_off_if_late();
     }
 
     /// When a stream opened at `opened` is given up with no word from the master, whatever
@@ -1973,7 +2036,7 @@ impl<E: Executor> Agent<E> {
         {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
-        let opened = self.master_time.open();
+        let opened = self.open_session();
         let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
         let control = tokio::select! {
             control = client.control(UnboundedReceiverStream::new(outbound)) => control,
@@ -2037,7 +2100,7 @@ impl<E: Executor> Agent<E> {
                         if self.silent_too_long(opened) {
                             return SessionEnd::Lost(NO_WORD.to_owned());
                         }
-                        self.heard_master(clock.as_ref());
+                        self.heard_master(clock.as_ref(), &to_master);
                         self.on_master(message, &to_master, &mut client, (&mut heartbeat, opened)).await;
                         // Past the lease while handling it (a slow fetch of inputs).
                         if self.cut_off || self.gone_silent(opened) {
@@ -2057,12 +2120,10 @@ impl<E: Executor> Agent<E> {
                     }
                 }
                 _ = watch.tick() => self.watch(&to_master),
-                _ = alive.tick() => self.alive(),
+                _ = alive.tick() => self.on_alive(),
                 changed = self.warnings.changed(), if warnings_open => {
                     if changed.is_ok() {
-                        let warnings = self.warnings.borrow_and_update().clone();
-                        let report = pb::Warnings { warnings };
-                        let _ = to_master.send(wrap(worker_message::Message::Warnings(report)));
+                        self.report_warnings(&to_master);
                     } else {
                         // No one reports any more: nothing will change.
                         warnings_open = false;
@@ -2099,6 +2160,7 @@ impl<E: Executor> Agent<E> {
                 _ => true,
             };
             if fenced {
+                self.metrics.older_epoch.inc();
                 return Some(format!(
                     "a master leading with lease epoch {epoch}, after epoch {highest}: deposed, \
                      connecting again"
@@ -2117,16 +2179,64 @@ impl<E: Executor> Agent<E> {
 
     /// A master message arrived on the live stream: the master's word, and its clock read
     /// (B225).
-    fn heard_master(&mut self, clock: Option<&pb::MasterClock>) {
+    fn heard_master(
+        &mut self,
+        clock: Option<&pb::MasterClock>,
+        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+    ) {
         self.heard = tokio::time::Instant::now();
+        let skew = clock.and_then(|clock| self.master_time.heard(clock, Local::now()));
+        if self
+            .lease
+            .is_some_and(|lease| self.master_time.cutoff_in(lease, Local::now()).is_some())
+        {
+            self.carried_cutoff = None;
+        }
         self.publish_deadline();
-        if let Some(clock) = clock {
-            self.master_time.heard(clock);
+        self.publish_master_reading();
+        let threshold = self.settings.setup.timeouts.clock_skew_warning;
+        if let Some(skew) = skew
+            && skew > threshold
+            && self.clock_skew.is_none()
+        {
+            // Once a session: wall clocks are for people (cron times, logs), never a deadline.
+            tracing::warn!(
+                skew_ms = skew.as_millis(),
+                "this worker's wall clock differs from the master's beyond the round trip"
+            );
+            self.clock_skew = Some(pb::WorkerWarning {
+                kind: "clock_skew".to_owned(),
+                interpreter: String::new(),
+                message: format!(
+                    "this worker's wall clock differs from the master's by {:.1} s beyond the \
+                     round trip: times it shows and logs are off by that much (sync its clock)",
+                    skew.as_secs_f64()
+                ),
+            });
+            self.report_warnings(to_master);
+        }
+    }
+
+    /// The age and round trip of the sample master time is read from, as gauges (decision 448).
+    fn publish_master_reading(&mut self) {
+        let now = Local::now();
+        if let Some(reading) = self.master_time.reading(now) {
+            self.sample_sent = Some(now.boot.saturating_sub(reading.age));
+            self.metrics
+                .master_round_trip
+                .set(reading.round_trip.as_secs_f64());
+        }
+        // With no sample kept (between sessions), the age grows from the last one's.
+        if let Some(sent) = self.sample_sent {
+            self.metrics
+                .master_sample_age
+                .set(now.boot.saturating_sub(sent).as_secs_f64());
         }
     }
 
     /// Sends a heartbeat, numbered for the master's clock to name it (B225).
     fn send_beat(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+        self.publish_master_reading();
         let sequence = self.master_time.sent(Local::now());
         let _ = to_master.send(self.heartbeat_message(sequence));
     }
@@ -2854,7 +2964,12 @@ impl<E: Executor> Agent<E> {
         // `Started` to arrive (B225, B227): the master may have taken it back and given it to
         // another worker. Rejected, it is queued again at once if it hadn't.
         let reserve = self.heartbeat * 2;
-        if start_by.is_some_and(|by| self.master_time.past(by, reserve, Local::now())) {
+        let slack = start_by.map(|by| self.master_time.slack(by, reserve, Local::now()));
+        if let Some(Some(slack)) = slack {
+            self.metrics.start_slack.observe(slack.as_secs_f64());
+        }
+        if matches!(slack, Some(None)) {
+            self.metrics.too_late.inc();
             tracing::warn!(
                 attempt_id = spec.attempt_id.as_str(),
                 "the assignment came too late to start; rejected"

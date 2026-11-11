@@ -1,0 +1,15 @@
+title = "A clock-skew warning from the master's wall clock"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+A worker warns once per session when the master's wall clock, as stamped, differs from its own
+by more than 2 s beyond the round trip's bound (`SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING`): for
+people, never a deadline (B232). Not chosen: leaving B232 for later.
+'''
+history = "JOURNAL.md#D445"
+step = "M4B.0"
+code = ["crates/schedr-agent/src/master_time.rs::wall_skew", "crates/schedr-agent/src/agent.rs::heard_master"]
+checked = 2026-11-11

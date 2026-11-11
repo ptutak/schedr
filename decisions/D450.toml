@@ -1,0 +1,16 @@
+title = "The master expires an assignment two heartbeats after its deadline"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+The master takes back an unstarted assignment two heartbeat intervals after its `start_by`,
+while the worker still refuses to start it two intervals before: four intervals between the last
+start and the take-back, for a `Started` held on its way. A reassignment comes 20 s later by
+default. Not chosen: one interval; none.
+'''
+history = "JOURNAL.md#D445"
+step = "M4B.0"
+code = ["crates/schedr-master/src/dispatch.rs::expire", "crates/schedr-master/src/dispatch.rs::with_start_grace"]
+checked = 2026-11-11

@@ -60,7 +60,7 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF` | 5 s | First wait before restarting a failed event trigger; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF_MAX` | 5 min | Longest wait before restarting a failed event trigger. |
 | `SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL` | 10 s | How often workers send heartbeats, set by the master and sent to workers; worker liveness depends on messages arriving. |
-| `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` | 60 s | A worker silent this long is lost; its attempts are ended. An unstarted assignment is taken back after this time, and a worker rejects one it can no longer start within it; a worker also ends a stream silent this long. At least four times the heartbeat interval, or schedr refuses to start. |
+| `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` | 60 s | A worker silent this long is lost; its attempts are ended. An unstarted assignment is taken back two heartbeat intervals after this time (decision 450), and a worker rejects one it can no longer start within it, less two heartbeat intervals; a worker also ends a stream silent this long. At least four times the heartbeat interval, or schedr refuses to start. |
 | `SCHEDR_HIDDEN__MASTER__SCRIPT_ROOT_GRACE` | 5 min | Time without a report from any alive worker before a script root is omitted from the uses sent to workers, counted from master startup too. |
 | `SCHEDR_HIDDEN__MASTER__LEASE_PERIOD` | 30 s | Master's database lease; renewed every third of it. A standby takes over at most this long after a crash. It must fit the query and stall limits below. |
 | `SCHEDR_HIDDEN__MASTER__READ_BACK_WINDOW` | 3 s | After a commit is cut off or the connection lost, the master checks whether it was stored for this long, holding its lock; rounds and worker messages wait. If not seen, it is taken as not stored. |
@@ -122,6 +122,8 @@ migration connection timing, which has no query timeout to tie it to.
 | Variable | Default | What it does and what depends on it |
 |---|---|---|
 | `SCHEDR_HIDDEN__WORKER__DRAIN_REPORT_PERIOD` | 2 s | Time from a drain's SIGKILL until the grace period ends, to report interruptions and deregister; results may otherwise end lost. It must fit with the termination period. |
+| `SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW` | 10 min | How far back a worker looks for its tightest reading of master time (decision 447); a longer window keeps an older sample, whose drift allowance grows with its age. |
+| `SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING` | 2 s | How far the master's wall clock may differ from a worker's, beyond the round trip, before the worker warns, once a session (decision 449). Only for people: no deadline reads a wall clock. |
 | `SCHEDR_HIDDEN__WORKER__MEMORY_CHECK_INTERVAL` | 1 s | How often the watchdog samples each task's memory; budget enforcement depends on samples. |
 | `SCHEDR_HIDDEN__WORKER__OUTPUT_DRAIN_TIMEOUT` | 5 s | How long a stopped process's output may take to reach its log when another process holds its pipes open. |
 | `SCHEDR_HIDDEN__WORKER__FORK_ANSWER_TIMEOUT` | 30 s | How long a fork server may take to answer; then it is restarted and the task spawned. |

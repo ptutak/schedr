@@ -1,0 +1,16 @@
+title = "Clock and fencing metrics on workers and the master"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "observability"
+section = ""
+summary = '''
+Workers export the age of their master-time sample, the round trip it was measured over,
+the slack left on the last start deadline, and counts of `TOO_LATE` rejections and of streams
+ended for an older lease epoch; the master exports the attempts held for a replaced incarnation.
+Not chosen: worker metrics only.
+'''
+history = "JOURNAL.md#D445"
+step = "M4B.0"
+code = ["crates/schedr-agent/src/metrics.rs::register", "crates/schedr-agent/src/agent.rs::publish_master_reading", "crates/schedr-master/src/dispatch.rs::end_replaced"]
+checked = 2026-11-11

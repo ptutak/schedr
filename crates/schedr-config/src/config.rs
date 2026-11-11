@@ -149,6 +149,11 @@ pub struct Timings {
     pub connection_job_cancel_grace: Duration,
     /// A Vault token's renewal never comes sooner than this.
     pub vault_min_renew_wait: Duration,
+    /// How far back a worker looks for its tightest master-time sample (decision 447).
+    pub master_sample_window: Duration,
+    /// How far apart the master's wall clock and a worker's may be, beyond the round trip, before
+    /// the worker warns (decision 449, B232).
+    pub clock_skew_warning: Duration,
     /// How often a Vault session with nothing to renew is looked at again.
     pub vault_renew_check: Duration,
     /// How soon a failed Vault renewal is tried again, while the token lasts.
@@ -267,6 +272,8 @@ impl Default for Timings {
             stop_poll: Duration::from_millis(100),
             connection_job_cancel_grace: Duration::from_secs(5),
             vault_min_renew_wait: Duration::from_secs(1),
+            master_sample_window: Duration::from_mins(10),
+            clock_skew_warning: Duration::from_secs(2),
             vault_renew_check: Duration::from_mins(1),
             vault_renew_retry: Duration::from_secs(10),
             round_gap: Duration::from_millis(50),

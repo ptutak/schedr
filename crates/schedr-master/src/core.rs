@@ -435,7 +435,8 @@ impl Arrivals {
 #[derive(Debug)]
 pub struct MasterCore {
     db: Database,
-    settings: Settings,
+    /// Boxed: kept off the core's futures, which are large already.
+    settings: Box<Settings>,
     discovery: Discovery,
     dispatcher: Dispatcher,
     scheduler: Scheduler,
@@ -498,6 +499,7 @@ impl MasterCore {
                     .saturating_add(settings.cleanup_move_wait),
             )
             .with_start_timeout(settings.lease_timeout)
+            .with_start_grace(settings.heartbeat_interval.saturating_mul(2))
             .with_event_lookback(settings.event_lookback)
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
@@ -521,7 +523,7 @@ impl MasterCore {
             task_api: None,
             notifications: Arc::default(),
             steady: crate::clock::as_given,
-            settings,
+            settings: Box::new(settings),
             db,
         }
         // One set shared by every part, replaced by the caller's to register them.
@@ -589,8 +591,8 @@ impl MasterCore {
 
     /// The master's timing.
     #[must_use]
-    pub const fn settings(&self) -> Settings {
-        self.settings
+    pub fn settings(&self) -> Settings {
+        *self.settings
     }
 
     /// The dispatcher (its workers, for status and tests).

@@ -1,0 +1,14 @@
+title = "A master that isn't leading names the leader"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "components"
+section = ""
+summary = '''
+A master that isn't leading refuses a worker's stream with UNAVAILABLE naming the lease holder
+and when its lease expires, for operators reading the worker's log. Not chosen: as before, "not
+leading" alone.
+'''
+history = "JOURNAL.md#D445"
+step = "M4B"
+code = []

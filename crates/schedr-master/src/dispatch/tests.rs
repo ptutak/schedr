@@ -1354,6 +1354,29 @@ async fn cancelling_a_run_cancels_its_running_attempts() {
 }
 
 #[tokio::test]
+async fn an_unstarted_assignment_is_taken_back_only_its_grace_after_start_by() {
+    // Decision 450: the worker refuses two heartbeats before `start_by`; the master waits two
+    // after it (here 4 s past the 10 s start timeout) for a `Started` on its way.
+    let (dispatcher, db, _run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_start_grace(std::time::Duration::from_secs(4));
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let assign = assignment(&out[0]);
+    assert_eq!(
+        assign.start_by_ms,
+        Some(later(10).as_millisecond()),
+        "the deadline sent is the start timeout's"
+    );
+    let attempt = assign.attempt_id.clone();
+    dispatcher.expire(later(14)).await.unwrap();
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    dispatcher.expire(later(15)).await.unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
 async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
@@ -1391,7 +1414,9 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     // timeout, 10 s here) is over in master time.
     assert_eq!(dispatcher.end_replaced(later(9)).await.unwrap(), 0);
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    assert_eq!(dispatcher.metrics.replaced_held.get(), 1, "held, and shown");
     assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
+    assert_eq!(dispatcher.metrics.replaced_held.get(), 0);
     let ended = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(AttemptStatus::Lost));
     let task = assignment(&out[0]).task_id.clone();

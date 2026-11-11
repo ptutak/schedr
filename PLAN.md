@@ -206,9 +206,10 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
+| M4B.0 | Master time hardened (the clock step) | done 2026-11-11 | D445, D446, D447, D448, D449, D450 |
 | M4B.1 | Measure first | dropped |  |
 | M4B.2 | Savepoints in `schedr-db` | dropped |  |
-| M4B.3 | A turn's messages in groups | **next** | D397 |
+| M4B.3 | A turn's messages in groups | **next** | D397, D451 |
 | M4B.4 | A turn's `Finished`s written together | planned |  |
 | M4B.5 | The agent's journal in groups | planned | D396 |
 | M4B.6 | The turn in one transaction, savepoints per group | planned |  |

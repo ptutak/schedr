@@ -1,0 +1,15 @@
+title = "The worker's best clock sample is taken over a window"
+date = 2026-11-11
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+The worker's best master-time sample is the tightest of the last 10 minutes
+(`SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW`), so the drift allowance comes from a recent sample
+by construction. Not chosen: a fixed constant.
+'''
+history = "JOURNAL.md#D445"
+step = "M4B.0"
+code = ["crates/schedr-agent/src/master_time.rs::heard", "crates/schedr-agent/src/master_time.rs::with_window"]
+checked = 2026-11-11
