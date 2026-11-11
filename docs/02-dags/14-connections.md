@@ -250,7 +250,7 @@ Each client's library is an extra, installed where tasks run: `schedr[http]`,
 `schedr[connections]`. It is imported only when a connection of its type is opened; without
 it, the attempt fails saying which extra to install. The base image has them all, and the
 command-line clients the commands above use (psql, mysql and mariadb with their dump tools,
-Mongo's database tools, ssh and scp, curl); Alpine has no mongosh.
+Mongo's database tools, ssh and scp, curl), on glibc and on Alpine; neither has mongosh.
 
 **SSH trusts only the host keys it is given.** `known_hosts` holds them as `known_hosts`
 lines (`ssh-keyscan HOST` prints them; `[host]:port` for another port than 22), and any other

@@ -222,6 +222,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 |---|---|---|---|
 | R1.0a | A slim image | planned | D383 |
 | R1.0b | The master's side in the clock simulator | planned |  |
+| R1.0c | Images on glibc beside Alpine | planned | D454 |
 
 ## M5: Airflow layer
 

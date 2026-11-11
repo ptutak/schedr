@@ -162,18 +162,24 @@ worker without a drain is a separate check, below.
 Production starts with **standalone in one pod**: first on SQLite, then on Postgres, and the
 separate roles only if the load needs them (a full switch: the history stays in Postgres).
 
-**The images.** Each release pushes two, for x86_64, built from its musllinux wheel:
-`ghcr.io/ptutak/schedr` (this section's base image, for standalone and workers) and
-`ghcr.io/ptutak/schedr-server` (the binary alone, for the master, the webserver and
-`schedr ui`; below).
+**The images.** Each release pushes three, for x86_64, each in two kinds (decision 454): on
+glibc (Debian, `python:3.14.8-slim`) from its manylinux wheel, the plain tag, and on Alpine
+from its musllinux wheel, the tag with `-alpine` (`1.0.0-alpine`):
+`ghcr.io/ptutak/schedr` (this section's base image, for standalone and workers),
+`ghcr.io/ptutak/schedr-slim` (Python and the package only, without the base image's task
+libraries and connection clients: for tasks that need none of them, or an image of your own
+with just what they use; `make image-slim`) and `ghcr.io/ptutak/schedr-server` (the binary
+alone, for the master, the webserver and `schedr ui`; below). `make image`, `make image-slim`
+and `make server-image` build the glibc ones; `make image-alpine`, `make image-slim-alpine`
+and `make server-image-alpine` the Alpine ones. In 0.1.0 the plain tag was Alpine's.
 Their tags are the version (`0.1.0`) and its series (`0.1`); a release candidate has only
 its own (`0.1.0rc1`). There is no `latest`: until 1.0.0 a new minor version needs a fresh
 database, and a moving tag would take a deployment there unasked. The chart uses them by
 default, tagged with its `appVersion` (`image`, and `master.image`, `webserver.image` and
 `ui.image` for the server roles).
 
-**The image.** `images/schedr/Dockerfile` builds the base image (`make image`): Alpine with
-Python 3.14 and the `schedr` package, `tini` as PID 1, a data directory writable by group 0
+**The image.** `images/schedr/Dockerfile` builds the base image (`make image`; on Alpine,
+`Dockerfile.alpine`): Python 3.14 and the `schedr` package, `tini` as PID 1, a data directory writable by group 0
 for OpenShift's arbitrary UID, and **libraries for tasks** (about 410 MB in all, `polars` the
 largest):
 
@@ -182,7 +188,7 @@ largest):
 | API calls | `requests`, `httpx`, `aiohttp`, `tenacity` |
 | Data | `polars`, `orjson`, `pyyaml`, `python-dateutil` |
 | Networking | `paramiko` (SSH, SFTP), `netmiko` (device CLIs), `ncclient` (NETCONF), `dnspython`, `netaddr` |
-| MongoDB | `pymongo` (compiled in the image's builder stage, with its C extensions: it has no wheel for Alpine) |
+| MongoDB | `pymongo` (with its C extensions; on Alpine compiled in the image's builder stage: it has no musl wheel) |
 
 They are listed in `images/schedr/requirements.in` and pinned with their dependencies in
 `requirements.txt` (`make image-requirements`, no version newer than two weeks). The
@@ -195,7 +201,8 @@ environment; installing `uvloop` selects it automatically
 ([the event loop](../02-dags/02-tasks.md#the-event-loop)). Your DAGs' libraries go in an
 image of your own built `FROM` it:
 `examples/kubernetes/Dockerfile` does it in two stages, compiling in a builder stage what has
-no musl wheel, so no compiler ends up in your image.
+no wheel, so no compiler ends up in your image (on the glibc base nearly every library has
+one; on `-alpine`, the builder takes its packages from apk and looks for musl wheels).
 
 **The chart.** `charts/schedr/` with `mode: standalone`:
 
@@ -388,7 +395,9 @@ server, as in the chart's pods (see [The fork server](05-workers.md#the-fork-ser
 `FORK_SERVER=false` spawns them, as the configuration's default does. It signs no one in
 (auth mode `none`): on a network you don't trust, run `make standalone LISTEN=127.0.0.1`.
 Ctrl-C stops it, after cutting the pages' open event streams about 3 seconds after the stop;
-`rm -rf .schedr` starts afresh.
+`make standalone-clean` starts afresh. A worker's code copies are read-only, so a task can't
+change the code it runs; to delete a worker's `data_dir` by hand, make it writable first
+(`chmod -R u+w <data_dir> && rm -r <data_dir>`).
 
 **`make standalone-separate-ui`** runs a small federation the same way, to see one UI over
 several deployments. Two standalones are started with `--no-ui`: `main` on the DAGs of

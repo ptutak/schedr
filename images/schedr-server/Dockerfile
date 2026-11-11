@@ -1,36 +1,38 @@
-# The schedr server image (see archive/PROJECT.md, Components and roles: the distributed chart): the
-# binary only, for `schedr master` and `schedr webserver`, which never run user code: no
-# Python. Workers use the base image (images/schedr/Dockerfile), which has Python and the
-# libraries for tasks.
+# The schedr server image on glibc (decision 454; see archive/PROJECT.md, Components and roles:
+# the distributed chart): the binary only, for `schedr master`, `schedr webserver` and `schedr
+# ui`, which never run user code: no Python. Workers use the base image
+# (images/schedr/Dockerfile), which has Python and the libraries for tasks. The same image on
+# Alpine is Dockerfile.alpine, tagged `-alpine`.
 #
-# The binary is the musllinux wheel's (statically linked: no second build). `make
-# server-image` builds the wheel into dist/ and this image from it. From the repository root:
-#   podman build -f images/schedr-server/Dockerfile -t schedr-server:0.1.0 .
-# alpine:3.24, created 2026-10-21 (a rebuild of the chosen tag; archive/PROJECT.md, CI supply-chain pins).
-FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS wheel
-COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
-RUN cd /tmp && unzip -q schedr-*.whl 'schedr-*.data/scripts/schedr' \
-        'schedr-*.dist-info/licenses/*' \
-    && mv schedr-*.data/scripts/schedr /schedr \
-    && mv schedr-*.dist-info/licenses /licenses
+# The binary is the manylinux wheel's. `make server-image` builds the wheel into dist/ and this
+# image from it. From the repository root:
+#   podman build -f images/schedr-server/Dockerfile -t schedr-server:1.0.0 .
+# The wheel unpacked with Python's zipfile (Debian slim has no unzip): the base image's
+# python:3.14.8-slim digest.
+FROM docker.io/library/python:3.14.8-slim@sha256:fbecd461fc72d21b2143c6eaba25143738079154a6d0ea3da3aec724f50eed4a AS wheel
+COPY dist/schedr-*-manylinux*_x86_64.whl /tmp/
+RUN cd /tmp && python -m zipfile -e schedr-*.whl /tmp/wheel \
+    && mv /tmp/wheel/schedr-*.data/scripts/schedr /schedr \
+    && chmod 0755 /schedr \
+    && mv /tmp/wheel/schedr-*.dist-info/licenses /licenses
 
-# Same digest as the wheel stage.
-FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
-# tini as PID 1 forwards signals and reaps; CA certificates for Postgres over TLS and the like.
-RUN apk add --no-cache tini ca-certificates
+# debian:trixie-20261027-slim, created 2026-10-28 (archive/PROJECT.md, CI supply-chain pins:
+# the newest at least two weeks old).
+FROM docker.io/library/debian:trixie-20261027-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+# tini as PID 1 (signals and orphans); CA certificates for TLS to the database.
+RUN --mount=type=tmpfs,target=/var/cache/apt \
+    apt-get update \
+    && apt-get install -y --no-install-recommends tini ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=wheel /schedr /usr/local/bin/schedr
-# schedr's licence and its crates' (LICENSE-THIRD-PARTY), as the wheel carries them.
 COPY --from=wheel /licenses /usr/share/licenses/schedr
-# The documentation, served by the web UI at /docs (scripts/docs-dist.sh made it).
+# The documentation, served by `schedr ui` at /docs (scripts/docs-dist.sh made it).
 COPY dist/docs /usr/share/schedr/docs
-# OpenShift runs containers under an arbitrary UID in group 0: HOME writable by group 0.
 RUN mkdir -p /var/lib/schedr \
     && chgrp -R 0 /var/lib/schedr \
     && chmod -R g=u /var/lib/schedr
 ENV HOME=/var/lib/schedr
 USER 1001
-# The master's gRPC port, the webserver's API (no authentication of its own until the UI,
-# milestone M3), and the ops port of both.
 EXPOSE 8070 8080 8090
-ENTRYPOINT ["/sbin/tini", "--", "schedr"]
+ENTRYPOINT ["/usr/bin/tini", "--", "schedr"]
 CMD ["master"]

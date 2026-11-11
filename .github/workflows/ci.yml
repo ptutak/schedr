@@ -281,12 +281,19 @@ jobs:
           name: docs-site
           path: site
       - run: scripts/docs-dist.sh site
-      # The base image from that wheel, run as a pod would (pushed to a registry with releases).
-      - run: docker build -f images/schedr/Dockerfile -t schedr:ci .
-      - run: scripts/smoke-image.sh docker schedr:ci
-      # The server image (master, webserver: the binary from the same wheel, no Python).
-      - run: docker build -f images/schedr-server/Dockerfile -t schedr-server:ci .
-      - run: scripts/smoke-server-image.sh docker schedr-server:ci
+      # The images (decision 454), each on glibc from the manylinux wheel and on Alpine from the
+      # musllinux one, run as a pod would (pushed to a registry with releases): the base image,
+      # the slim one (decision 383: Python and schedr, no task libraries or clients) and the
+      # server one (the binary, no Python).
+      - run: |
+          for kind in "" .alpine; do
+            docker build -f images/schedr/Dockerfile$kind -t schedr:ci$kind .
+            scripts/smoke-image.sh docker schedr:ci$kind
+            docker build -f images/schedr-slim/Dockerfile$kind -t schedr-slim:ci$kind .
+            scripts/smoke-image.sh docker schedr-slim:ci$kind slim
+            docker build -f images/schedr-server/Dockerfile$kind -t schedr-server:ci$kind .
+            scripts/smoke-server-image.sh docker schedr-server:ci$kind
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels-linux-x86_64

@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D454 | 2026-11-11 | user | planned (R1.0c) | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
 | D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
 | D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
 | D451 | 2026-11-11 | user | built M4B.3 | components | B48 is fixed by M4B's per-group memory snapshot |
@@ -667,6 +668,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### deployment
 
+- D454: Images on glibc beside Alpine; Alpine tagged -alpine
 - D441: A DAG that no longer parses after a major upgrade is held
 - D439: Upgrade-rule gaps: the clear ones fixed, the others asked
 - D383: A slim image beside the full one

@@ -11,5 +11,5 @@ To act on the first of several, use a `first_of` node.
 history = "archive/PROJECT.md#D345"
 step = "M4.11c"
 also = ["wait-steps"]
-checked = 2026-11-09
+checked = 2026-11-11
 code = ["crates/schedr-master/src/progress.rs::readiness"]

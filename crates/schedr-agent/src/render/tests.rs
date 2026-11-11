@@ -173,6 +173,8 @@ fn floats_are_written_like_python(#[case] value: f64, #[case] expected: &str) {
 #[case(json!({"$timedelta": 3_600_000_000_i64}), None, "3600")]
 #[case(json!({"$timedelta": 1_500_000}), None, "1.5")]
 #[case(json!({"$timedelta": -86_400_000_000_i64}), None, "-86400")]
+// B77: past i64, as Python stores up to 2**64 - 1 microseconds (about 213,503,982 days).
+#[case(json!({"$timedelta": 17_280_000_000_000_000_000_u64}), None, "17280000000000")]
 #[case(json!("x"), Some(""), "x")]
 fn values_as_text(#[case] value: Value, #[case] spec: Option<&str>, #[case] expected: &str) {
     assert_eq!(to_text(&value, spec, "r").unwrap(), expected);

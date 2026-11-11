@@ -11,4 +11,4 @@ The workflow builds and smoke-tests four wheels, publishes them and creates a Gi
 history = "archive/PROJECT.md#D154"
 step = "R0.1"
 code = ["scripts/release.py::check", ".github/workflows/release.yml::tags"]
-checked = 2026-11-09
+checked = 2026-11-11

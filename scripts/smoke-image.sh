@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Smoke-tests the schedr base image as a pod runs it: `schedr standalone` under an arbitrary
 # UID in group 0 (as OpenShift does), ready on the ops port, its CLI answering, and SIGTERM
-# stopping it cleanly. Usage: scripts/smoke-image.sh <container tool> <image>
+# stopping it cleanly. Usage: scripts/smoke-image.sh <container tool> <image> [slim]
+# `slim` (images/schedr-slim, decision 383): no task libraries and no connection clients, and
+# a DAG without connections runs.
 set -euo pipefail
 tool=$1
 image=$2
+kind=${3:-full}
 name=schedr-smoke-$$
 cleanup() { "$tool" rm -f "$name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -40,9 +43,45 @@ curl -sf "http://127.0.0.1:$port/metrics" | grep -q '^schedr_master_leading 1' |
 }
 "$tool" exec "$name" schedr workers list --server http://127.0.0.1:8080 >/dev/null
 "$tool" exec "$name" python3 -c 'import schedr'
+if [ "$kind" = slim ]; then
+    for client in psql mariadb mongoexport ssh curl; do
+        if "$tool" exec "$name" sh -c "command -v $client" >/dev/null 2>&1; then
+            echo "the slim image has $client"; exit 1
+        fi
+    done
+    # A DAG without connections runs to its end.
+    "$tool" exec "$name" sh -c 'mkdir -p /tmp/dags && cat > /tmp/dags/hello.py <<PY
+from schedr import CommandOperator, Dag, task
+
+
+@task
+def greet() -> str:
+    return "hello"
+
+
+with Dag("hello"):
+    CommandOperator("echo", ["echo", "slim"]) >> greet()
+PY
+cd /tmp/dags && schedr dags test hello' | grep -q "run .*: success" || {
+        echo "the slim image didn't run a DAG"; exit 1
+    }
+fi
+# The full image has every connection's command-line client (on glibc and on Alpine alike).
+if [ "$kind" != slim ]; then
+    for client in psql mysql mariadb mysqldump mongoexport mongodump ssh scp curl; do
+        "$tool" exec "$name" sh -c "command -v $client" >/dev/null 2>&1 || {
+            echo "the image has no $client"; exit 1
+        }
+    done
+    # pg_dump refuses a server of a newer major version: 18, as the newest Postgres.
+    "$tool" exec "$name" pg_dump --version | grep -q ' 18\.' || {
+        echo "the image's pg_dump isn't PostgreSQL 18's: $("$tool" exec "$name" pg_dump --version)"
+        exit 1
+    }
+fi
 # Every library of the image imports (a native library missing on Alpine shows here), and
 # pymongo has its C extensions.
-"$tool" exec "$name" python3 -c '
+[ "$kind" = slim ] || "$tool" exec "$name" python3 -c '
 import aiohttp, dateutil, dns.resolver, httpx, ncclient, netaddr, netmiko, orjson, paramiko
 import polars, pymongo, requests, tenacity, yaml, bson
 assert pymongo.has_c() and bson.has_c(), "pymongo without its C extensions"
@@ -51,4 +90,8 @@ polars.DataFrame({"a": [1, 2]}).select(polars.col("a").sum())
 "$tool" stop --time 30 "$name" >/dev/null
 code=$("$tool" inspect --format '{{.State.ExitCode}}' "$name")
 [ "$code" = 0 ] || { echo "exit code $code after SIGTERM:"; "$tool" logs "$name"; exit 1; }
-echo "image ok: ready, leading, CLI answering, the libraries importing, stopped cleanly"
+if [ "$kind" = slim ]; then
+    echo "slim image ok: ready, leading, CLI answering, no clients, a DAG run, stopped cleanly"
+else
+    echo "image ok: ready, leading, CLI answering, the libraries importing, stopped cleanly"
+fi

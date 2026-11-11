@@ -22,7 +22,7 @@
 //!
 //! The dispatcher only builds messages; the gRPC server sends them (milestone 1.14).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,7 +31,6 @@ use prost::Message as _;
 use schedr_db::attempts::{AttemptEnd, CleanupEnd, ReadyInstance, StoredAttempt};
 use schedr_db::run_of::{Matching, OtherRun};
 use schedr_db::{Database, DbError};
-use schedr_model::TaskKind;
 use schedr_model::connection::Registry;
 use schedr_model::ctx::MAX_CTX_MESSAGE_SIZE;
 use schedr_model::runner::{
@@ -42,6 +41,7 @@ use schedr_model::task::{SensorWaitFor, WaitSource};
 use schedr_model::{
     AttemptStatus, CleanupResult, Dag, DagId, Reference, SchedrVersion, TaskId, TaskInstanceState,
 };
+use schedr_model::{Task, TaskKind};
 use schedr_proto::convert::{
     RejectReaction, attempt_status_from_proto, cleanup_result_from_proto, reject_reaction,
     run_kind_to_proto,
@@ -381,6 +381,25 @@ struct Tally {
     /// Waiting reasons to write, `(instance ID, reason)`: at most [`REASONS_PER_ROUND`],
     /// written together at the step's end.
     reasons: Vec<(String, String)>,
+    /// Each DAG version's tasks by ID (their places in its list), made once a step: a ready
+    /// task is looked up, not searched for (B148).
+    places: HashMap<String, HashMap<TaskId, usize>>,
+}
+
+impl Tally {
+    /// `id` in `dag`, the version `version_id`, by its index (made on its first use).
+    fn task_in<'d>(&mut self, version_id: &str, dag: &'d Dag, id: &TaskId) -> Option<&'d Task> {
+        if !self.places.contains_key(version_id) {
+            let places = dag
+                .tasks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (t.id.clone(), i))
+                .collect();
+            self.places.insert(version_id.to_owned(), places);
+        }
+        self.places[version_id].get(id).map(|&i| &dag.tasks[i])
+    }
 }
 
 /// A task's code missing on workers.
@@ -1379,22 +1398,27 @@ impl Dispatcher {
 
     /// The DAG version whose limits across runs hold for `ready`: its DAG's current one, or
     /// its run's own if the DAG has none now (removed, in conflict) or it can't be read.
-    async fn current_dag(&self, ready: &ReadyInstance) -> Result<Arc<Dag>, DispatchError> {
+    /// With its version's ID.
+    async fn current_dag(
+        &self,
+        ready: &ReadyInstance,
+    ) -> Result<(Arc<Dag>, String), DispatchError> {
+        let own = || Ok((Arc::clone(&ready.dag), ready.version_id.clone()));
         let Some(current) = self.current_versions.get(&ready.dag.id) else {
-            return Ok(Arc::clone(&ready.dag));
+            return own();
         };
         if *current == ready.version_id {
-            return Ok(Arc::clone(&ready.dag));
+            return own();
         }
         match self.db.dag_version(current).await {
-            Ok(dag) => Ok(dag),
+            Ok(dag) => Ok((dag, current.clone())),
             Err(error) if error.is_data_fault() => {
                 tracing::warn!(
                     %error,
                     dag_id = %ready.dag.id,
                     "the DAG's current version doesn't read: its run's own limits hold"
                 );
-                Ok(Arc::clone(&ready.dag))
+                own()
             }
             Err(error) => Err(error.into()),
         }
@@ -1405,17 +1429,25 @@ impl Dispatcher {
     async fn held_back(
         &self,
         ready: &ReadyInstance,
+        task: &Task,
         tally: &mut Tally,
     ) -> Result<bool, DispatchError> {
         if ready.dag.resource_of_cleanup(&ready.task_id).is_some() {
             // A resource's cleanup isn't held by any limit (decision 225); it needs a slot.
             return Ok(false);
         }
-        let current = self.current_dag(ready).await?;
-        let Some(reached) =
-            self.active
-                .reached((&current, &ready.dag), &ready.run_id, &ready.task_id)
-        else {
+        let (current, current_id) = self.current_dag(ready).await?;
+        let in_current = if current_id == ready.version_id {
+            Some(task)
+        } else {
+            tally.task_in(&current_id, &current, &ready.task_id)
+        };
+        let Some(reached) = self.active.reached_with(
+            (&current, &ready.dag),
+            (in_current, Some(task)),
+            &ready.run_id,
+            &ready.task_id,
+        ) else {
             return Ok(false);
         };
         *tally.waiting.entry(reached.name).or_default() += 1;
@@ -1552,14 +1584,15 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
         tally: &mut Tally,
     ) -> Result<(), DispatchError> {
-        let Some(task) = ready.dag.task(&ready.task_id) else {
+        let dag = Arc::clone(&ready.dag);
+        let Some(task) = tally.task_in(&ready.version_id, &dag, &ready.task_id) else {
             return Ok(());
         };
         if self.ended_before_its_call(ready, task, now).await? {
             return Ok(());
         }
         // Its concurrency limits first: a task over one waits for it, whatever the workers.
-        if self.held_back(ready, tally).await? {
+        if self.held_back(ready, task, tally).await? {
             return Ok(());
         }
         let excluded: BTreeSet<String> = self

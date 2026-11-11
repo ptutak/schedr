@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D99"
 step = "M4.3e"
 also = ["task-processes"]
 code = ["python/schedr/_model/tasks.py", "crates/schedr-master/src/validate.rs::shell_problems", "crates/schedr-agent/src/render.rs::ShellPlaceholder"]
-checked = 2026-11-10
+checked = 2026-11-11

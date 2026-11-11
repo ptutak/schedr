@@ -25,7 +25,7 @@
 //!   failed) fails the step at once: the others are cancelled, running ones stopped. Once
 //!   every instance has finished, the task applies its own `run_if` to them as to edges.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use jiff::{SignedDuration, Timestamp};
 use schedr_model::{
@@ -291,9 +291,65 @@ pub struct RunProgress<'a> {
     instance_moved: bool,
     /// The `first_of` tasks that ended now, with the upstream tasks that can have ended them.
     winners: BTreeMap<TaskId, Vec<TaskId>>,
+    /// The DAG's tasks (their places in `dag.tasks`) upstream before downstream: a pass in
+    /// this order moves a chain all the way, however it is listed (B82).
+    order: Vec<usize>,
+    /// Each task's edges in (their places in `dag.edges`), in order: looked up once,
+    /// not searched for each task each pass (B82).
+    incoming: HashMap<TaskId, Vec<usize>>,
+    /// Each task's place in `dag.tasks`.
+    places: HashMap<TaskId, usize>,
+    /// Passes [`Self::settle`] made over the tasks (for the tests).
+    passes: usize,
+}
+
+/// The places of `dag`'s tasks, upstream before downstream (Kahn's, ties in listing order);
+/// any a cycle would leave out come last, as listed.
+fn upstream_first(dag: &Dag, places: &HashMap<TaskId, usize>) -> Vec<usize> {
+    let mut waiting = vec![0_usize; dag.tasks.len()];
+    let mut downstream: Vec<Vec<usize>> = vec![Vec::new(); dag.tasks.len()];
+    for edge in &dag.edges {
+        if let (Some(&from), Some(&to)) = (places.get(&edge.from), places.get(&edge.to)) {
+            waiting[to] += 1;
+            downstream[from].push(to);
+        }
+    }
+    let mut ready: std::collections::VecDeque<usize> =
+        (0..dag.tasks.len()).filter(|&i| waiting[i] == 0).collect();
+    let mut order = Vec::with_capacity(dag.tasks.len());
+    while let Some(i) = ready.pop_front() {
+        order.push(i);
+        for &next in &downstream[i] {
+            waiting[next] -= 1;
+            if waiting[next] == 0 {
+                ready.push_back(next);
+            }
+        }
+    }
+    if order.len() < dag.tasks.len() {
+        let ordered: BTreeSet<usize> = order.iter().copied().collect();
+        order.extend((0..dag.tasks.len()).filter(|i| !ordered.contains(i)));
+    }
+    order
 }
 
 impl<'a> RunProgress<'a> {
+    /// The edges into `id`, in order (the DAG's `edges_into`, from the index).
+    fn edges_into(&self, id: &TaskId) -> impl Iterator<Item = &'a Edge> + use<'a, '_> {
+        let dag = self.dag;
+        self.incoming
+            .get(id)
+            .into_iter()
+            .flatten()
+            .map(move |&i| &dag.edges[i])
+    }
+
+    /// The task `id` (the DAG's `task`, from the index).
+    fn task_of(&self, id: &TaskId) -> Option<&'a Task> {
+        let dag = self.dag;
+        self.places.get(id).map(|&i| &dag.tasks[i])
+    }
+
     /// The progress of a run of `dag` with the given task states (tasks not given are
     /// `scheduled`).
     #[must_use]
@@ -304,8 +360,23 @@ impl<'a> RunProgress<'a> {
             .map(|t| (t.id.clone(), TaskInstanceState::Scheduled))
             .collect();
         all.extend(states);
+        let places: HashMap<TaskId, usize> = dag
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id.clone(), i))
+            .collect();
+        let mut incoming: HashMap<TaskId, Vec<usize>> = HashMap::new();
+        for (i, edge) in dag.edges.iter().enumerate() {
+            incoming.entry(edge.to.clone()).or_default().push(i);
+        }
+        let order = upstream_first(dag, &places);
         Self {
             dag,
+            order,
+            incoming,
+            places,
+            passes: 0,
             states: all,
             outcomes: BTreeMap::new(),
             chosen: BTreeMap::new(),
@@ -492,7 +563,7 @@ impl<'a> RunProgress<'a> {
         // A mapped task's own outcome only says its instances ended: its `.on(...)` is
         // decided per instance ([`Self::edge_states`]); with none, the edge is taken, as the
         // task with an empty list succeeds.
-        let mapped = self.dag.task(&edge.from).is_some_and(mapping::is_mapped);
+        let mapped = self.task_of(&edge.from).is_some_and(mapping::is_mapped);
         if state == TaskInstanceState::Success && !mapped {
             let outcome = self
                 .outcomes
@@ -564,8 +635,10 @@ impl<'a> RunProgress<'a> {
         let mut changes: Vec<(TaskId, TaskInstanceState)> = Vec::new();
         let dag = self.dag;
         loop {
+            self.passes += 1;
             let mut progressed = false;
-            for task in &dag.tasks {
+            for k in 0..self.order.len() {
+                let task = &dag.tasks[self.order[k]];
                 if mapping::is_mapped(task) {
                     if let Some(next) = self.settle_mapped(task) {
                         self.states.insert(task.id.clone(), next);
@@ -580,7 +653,6 @@ impl<'a> RunProgress<'a> {
                     continue;
                 }
                 let edges: Vec<TaskInstanceState> = self
-                    .dag
                     .edges_into(&task.id)
                     .flat_map(|edge| self.edge_states(edge))
                     .collect();
@@ -627,7 +699,6 @@ impl<'a> RunProgress<'a> {
     /// order of its edges. Which of them did is told by when they ended ([`Self::take_winners`]).
     fn record_winners(&mut self, task: &Task) {
         let candidates: Vec<TaskId> = self
-            .dag
             .edges_into(&task.id)
             .filter(|edge| edge.kind != EdgeKind::Requirement)
             .filter(|edge| self.edge_state(edge) == TaskInstanceState::Success)
@@ -736,7 +807,6 @@ impl<'a> RunProgress<'a> {
         match self.states[&task.id] {
             S::Scheduled => {
                 let edges: Vec<TaskInstanceState> = self
-                    .dag
                     .edges_into(&task.id)
                     .flat_map(|edge| self.whole_edge_state(edge))
                     .collect();
@@ -790,7 +860,7 @@ impl<'a> RunProgress<'a> {
             });
             let mut edges = Vec::new();
             let dag = self.dag;
-            for edge in dag.edges_into(&task.id) {
+            for edge in self.edges_into(&task.id) {
                 if edge.kind == EdgeKind::Requirement || !mapping::is_lane(dag, edge) {
                     edges.extend(self.whole_edge(edge));
                     continue;
@@ -859,7 +929,6 @@ impl<'a> RunProgress<'a> {
         use TaskInstanceState as S;
         let state = |id: &TaskId| self.states.get(id).copied().unwrap_or(S::Scheduled);
         let required: Vec<S> = self
-            .dag
             .edges_into(&task.id)
             .filter(|e| e.kind == EdgeKind::Requirement)
             .map(|e| state(&e.from))

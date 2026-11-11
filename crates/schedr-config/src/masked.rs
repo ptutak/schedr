@@ -435,6 +435,12 @@ fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     while from < chars.len() && chars[from] == ' ' {
         from += 1;
     }
+    // An OS error after a file's name (`…/caching_sha2_password.so: No such file or
+    // directory`) is no value: no secret reads so (B161). Anything else stays hidden, a file
+    // named after a secret too (`/run/secrets/api_key.txt: …`).
+    if chars[at] == ':' && starts_os_error(&chars[from..]) {
+        return;
+    }
     let quote = chars.get(from).copied().filter(|c| matches!(c, '"' | '\''));
     if quote.is_some() {
         from += 1;
@@ -457,6 +463,22 @@ fn hide_value_after(chars: &[char], at: usize, hidden: &mut [bool]) {
     }
     let to = to.min(chars.len());
     hidden[from..to].iter_mut().for_each(|flag| *flag = true);
+}
+
+/// Whether `text` starts with one of the C library's file errors, as `strerror` writes them.
+fn starts_os_error(text: &[char]) -> bool {
+    const ERRORS: [&str; 6] = [
+        "No such file or directory",
+        "Permission denied",
+        "Is a directory",
+        "Not a directory",
+        "cannot open shared object file",
+        "File exists",
+    ];
+    ERRORS.iter().any(|error| {
+        let error: Vec<char> = error.chars().collect();
+        text.starts_with(&error)
+    })
 }
 
 /// `text` with its `%XX` escapes decoded (a bad one kept as it is), its tabs and line

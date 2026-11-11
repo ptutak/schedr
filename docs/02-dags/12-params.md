@@ -97,10 +97,9 @@ For type checkers a field is `Any`. `dag_ctx.params(ReportParams)` is that class
 locals it passes on.
 
 A command reads a field with a t-string: `t"{dag_ctx.params.region}"`, when the field is
-`str`, `bool`, `int`, `float`, `date`, `datetime`, `timedelta` or `Any`. A `Literal` is
-refused at import (``a value of type `Literal['eu', 'us']` can't be rendered into text``):
-pass it to a task, or declare the field `str`. A dataclass date or datetime takes a format
-spec (`t"{dag_ctx.params.start:%Y-%m-%d}"`). A dataclass duration renders as seconds
+`str`, `bool`, `int`, `float`, `date`, `datetime`, `timedelta` or `Any`, or a `Literal` of
+text, whole numbers or booleans (`Literal["eu", "us"]` renders as `eu`). A dataclass date or
+datetime takes a format spec (`t"{dag_ctx.params.start:%Y-%m-%d}"`). A dataclass duration renders as seconds
 (`3600` for one hour), and a format spec does not apply to it. `None`, a list and an
 object can't be rendered. A date a Pydantic model holds is text, so a format spec does not
 apply to it ([Pydantic models](03-data-flow.md#pydantic-models)). A t-string fills the

@@ -11,5 +11,5 @@ Schedr tags in the data are first written in Pydantic's JSON representation.
 history = "archive/PROJECT.md#D111"
 step = "M4.3e"
 also = ["python-api"]
-checked = 2026-11-09
+checked = 2026-11-11
 code = ["python/schedr/_serialization/models.py::validate"]

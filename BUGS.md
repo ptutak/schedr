@@ -54,33 +54,8 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
-| 2 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 3 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 4 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 5 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
-| 6 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 7 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 8 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 9 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 10 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 11 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 12 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 13 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 14 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 15 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 16 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 17 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 18 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 19 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 20 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 21 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
-
-## B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected)
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): in one run of the config, agent, proto and master crates together (77 s against the usual 53 s: the machine loaded) both failed, after 5.1 s and 8.5 s; alone they passed three runs out of three, and the next full run passed; the failure output wasn't kept.
-- **Found:** 2026-11-11, by Claude, running the tests of B225's fixes; nothing in that change touches watchers.
-- **Where:** `crates/schedr-agent/tests/watchers.rs`.
-- **Next:** reproduce under load (for example with `stress-ng` beside the test, or many runs in parallel), keep the failure's output, then find the limit that is too tight.
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
 
 ## B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised
 
@@ -95,160 +70,6 @@ step touches their code or the user schedules them.
 - **Fix proposed:** raise the protocol's minor at the next release, and have the master assign a
   task, trigger or wait step using a newer feature only to workers of that minor or later (or
   refuse such a DAG while an older worker serves its queue); a test with a worker saying 0.1.
-
-## B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): The demo's MySQL client task logged `...caching_sha2_password.so: **** such file or directory`: `No` masked, though none of the attempt's secrets (`dev_app`, a 24-character password, `dev`, too short to mask) is `No`; the mask set alone doesn't reproduce it.
-- **Found:** 2026-11-03, running the connections demo (M4.7d): `mysql_from_its_client`, its
-  connection `orders_db` as `MY` (the MySQL option file), the client failing for a missing
-  plugin; read with `schedr tasks logs`.
-- **Not reproduced:** a `MaskSet` (min 5) holding the attempt's values masks nothing in the
-  exact line (`mask_text` and `mask`). Left to check: the stream masking across chunks
-  (the client's stderr written in pieces), the derived forms (`cnf_escaped`), the values of
-  the other declared secrets, and whether the reader (`tasks logs`) masks again.
-- **Why it matters:** over-masking makes a log mislead (an error reads as a secret); not a
-  leak.
-
-## B156: An action's status stops being followed after an error answer
-
-- **Rating:** severity **low**, probability **possible**, usability (score 2): the UI's pending-command note replaces itself with whatever its poll gets: an HTTP error (a proxy's 502 while the UI restarts, a lapsed sign-in's 401) ends the following, the note showing the error page.
-- **Found:** 2026-11-03, by Grok reviewing M4.6f (the log tail had the same shape, fixed
-  there); confirmed by Claude reading `crates/schedr-ui/templates/command.html`: the note polls
-  itself (`hx-trigger="load delay:…"`, `hx-swap="outerHTML"`), htmx swaps every status but 204
-  (`templates/base.html`'s `responseHandling`), and neither the live parts' guard nor the log
-  tail's retry covers it.
-- **When:** possible: an action is sent while the UI restarts behind a proxy, or as a sign-in
-  lapses; the master still decides the command, only the page stops saying so.
-- **A fix:** as the log tail's: an error answer isn't swapped in; the poll is asked again a
-  second later (a `retry` trigger on the note).
-
-## B154: The scheduler's skipped DAGs are never logged
-
-- **Rating:** severity **low**, probability **rare**, reliability (score 1): a DAG whose fire times or default params fail in a scheduler pass creates no run, and nothing says why.
-- **Found:** 2026-11-01, by Grok writing the params docs; confirmed by Claude: `Pass.skipped`
-  (`crates/schedr-master/src/scheduler.rs`) gets `SchedulerError::FireTimes` and, since M4.5a,
-  `SchedulerError::Params` (a scheduled run's defaults refused), but nothing in the master reads
-  it.
-- **When:** rare: both are checked when the DAG is validated, so it takes a master whose checks
-  changed after the DAG was stored (an upgrade), or a bug in them.
-- **A fix:** log each skipped DAG once (warn) with the reason, and perhaps show it as the DAG's
-  problem, as a hold is shown.
-
-## B153: A `Literal` field can't be rendered into a command's t-string
-
-- **Rating:** severity **low**, probability **possible**, usability (score 2): `t"{dag_ctx.params.region}"` with `region: Literal["eu", "us"]` is refused at parse time, though its values are text.
-- **Found:** 2026-11-01, by Grok writing the params docs: archive/PROJECT.md's own example
-  (`region: Literal["eu", "us"]` in `t"{dag_ctx.params.region}"`) fails to import with
-  ``a value of type `Literal['eu', 'us']` can't be rendered into text``.
-- **Cause:** `python/schedr/_build.py` `is_renderable` takes scalars, `Any`, unions of them and
-  a model's scalar field; a `LiteralType` is none of these. The same holds for a task output
-  typed `Literal[...]`.
-- **A fix:** a `Literal` whose values are all text, numbers or booleans is renderable (the agent
-  renders the stored JSON scalar); check the agent's render of such a value, and a format spec
-  on it.
-
-## B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store
-
-- **Rating:** severity **low**, probability **likely**, usability (score 3): the worker's code copies are read-only directories: `rm -rf` can't delete their files.
-- **Found:** 2026-11-01, by Claude, deleting a `make standalone-separate-ui` data directory:
-  `rm: cannot remove '…/code/localhost/examples-c590b3c9/sha256-…/sync.py': Permission
-  denied`, for every file of every copy.
-- **Cause:** the code store makes each copy's directories read-only (`dr-xr-xr-x`), so a task
-  can't change the code it runs (decision 101). Deleting a file needs its directory writable.
-- **Affected:** the guide's "`rm -rf .schedr` starts afresh" (`make standalone`, Deployment),
-  and anyone deleting a worker's `data_dir` by hand.
-- **A fix:** say `chmod -R u+w .schedr && rm -rf .schedr` (or a `make standalone-clean`
-  target doing it), or find what the store could do instead.
-
-## B151: standalone once didn't exit after its master was taken over (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, reliability (score 1): `standalone_ends_when_its_master_is_taken_over` failed once in `make check` (2026-11-01, check18): the master logged "the master failed: standalone stops", then nothing for 20 s, and the process didn't exit. A standalone left running so would serve its API and worker with no master, never restarted.
-- **Found:** check18, during the bug batch B135-B138/B147 (`FAIL [41.139s]`). Passes alone (4 of 4, 15 s each).
-- **Where to look:** after the master fails, `request` 2 stops the worker, whose end sends `stop` to the API (`standalone.rs`); something there didn't end: the worker's interrupt, the API's open streams (the client's stream tasks changed for B138 in that batch), or the ops server.
-- **Bounded (2026-11-01):** once the master failed, standalone gives its worker
-  `WORKER_STOP_AFTER_FAILURE` (10 s) to stop, then stops anyway, logging "the worker didn't
-  stop within 10s of the master's failure" (`standalone::ended_within`, unit-tested on paused
-  time). So the process exits; the cause is not found (not reproduced: the agent's awaits
-  outside its select (`hashes()` while a root settles, `client.control()` opening the stream)
-  are the candidates). Lowered to low: what is left is a slower exit, and the log line to
-  find the cause the next time it happens.
-
-## B148: the limit check searches a DAG's task list for each ready task, every round
-
-- **Rating:** severity **medium**, probability **rare**, performance (score 2): with thousands of ready tasks in one DAG under a task limit, each round looks every one up twice in the DAG's task list (`Dag::task` is a linear search): quadratic work under the master's lock.
-- **Found:** 2026-11-01, by Codex's review of M4.4 (finding 3), measured in a debug build: limit checks alone took 25 ms for 1,000 ready tasks, 379 ms for 4,000, 2.1 s for 8,000. `crates/schedr-master/src/limits.rs` (`Active::reached`).
-- **Done meanwhile:** the DAG's `max_active_tasks` is checked first, with no lookup; once it is reached, every ready task of the DAG is held back without a search. What remains is a DAG under its cap with many ready tasks that have their own limits.
-- **A fix:** look the task up once (`assign_one` already has it) and pass its settings in, or index a DAG's tasks by ID when its version is read.
-
-## B89: a run whose stored DAG no longer reads looks unmapped to the API
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): a mapped task's instances refused as unmapped and a missing task given an empty list; a stored DAG JSON that no longer deserializes (a field the model lost).
-- **Found:** 2026-10-30, by Grok's follow-up review of M4.3d (`324d99d5`), with a probe that
-  added an unknown field to a run's `dag_versions.dag_json` (`Dag` is `deny_unknown_fields`).
-  `run_tasks` (`crates/schedr-api/src/routes.rs`) turns the serde error into `None` (`.ok()`),
-  so `mapped_count` treats every task as unmapped and known: a missing task's attempts are
-  200 `{"attempts": []}`, `?map_index=0` on a mapped task is a 400 "isn't mapped", `retry`
-  without an index is accepted; `get_run` shows the whole task's `instances` as null. A
-  value that isn't JSON at all is a 500. The earlier `mapped_tasks` behaved the same.
-- **A fix:** a DAG that doesn't read is the API's error (a 500 naming the run), not an
-  unmapped DAG; or keep reading it leniently for `get_run` only. Before 1.0.0 the stored
-  JSON follows the model (edited in place); after it, migrations must keep it readable.
-
-## B82: settling can perform cubic work on a chain
-
-- **Rating:** severity **medium**, probability **rare**, performance (score 2): the master's lock held for seconds; a long chain listed in reverse order.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F3 (runs moving forward),
-  medium severity, confirmed by Codex's failing test, not yet re-checked by Claude; at `crates/schedr-master/src/progress.rs:454`. Each pass visits all tasks and calls `edges_into()` for scheduled tasks. That helper scans the entire edge vector (`crates/schedr-model/src/dag.rs:116`): The outer loop repeats until nothing changes. A chain listed in reverse dependency order advances one task per pass, yielding Θ(T²E) work—Θ(T³) for a chain. **Scenario:** preparing an 800-task empty chain occupies the master’s core lock for seconds; the service holds that lock while ticking. Batch measurement `f3_settle_scaling`, unoptimized test build: Both task orders produced the same successful result. The same edge-scanning helper is used in mapped settling at `progress.rs:554` and `:600`. **Confidence: high for the complexity; measured timings are debug-build figures.**
-- **A fix:** to decide when it is scheduled.
-
-## B77: valid large timedeltas cannot render in agent templates
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): a timedelta beyond ~292,000 years can't be rendered into a command.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), low severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/codec.py:159`. Python stores the full supported timedelta range as integer microseconds. Agent rendering accepts the tag only through `Value::as_i64` at `crates/schedr-agent/src/render.rs:261`. `timedelta(days=200000000)` encodes successfully and its microsecond count survives the channel exactly, but rendering treats it as an unsupported object.
-- **A fix:** to decide when it is scheduled.
-
-## B74: `Literal` compatibility conflates booleans with integers
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): `Literal[True]` accepted for `Literal[1]` at load, failing at run time.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/compatibility.py:151`. The check uses `v in target.values`, so Python equality makes `True` fit `1`. The runtime Literal codec requires both equal value and equal type. A `Literal[True]` producer therefore connects successfully to a `Literal[1]` parameter, then fails at execution.
-- **A fix:** to decide when it is scheduled.
-
-## B73: optional TypedDict keys are falsely promised as present
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): an optional nested TypedDict key accepted as required at load.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/models.py:105`. `_all_required()` sets `copied["required"] = list(node["properties"])` on every nested object schema. A model’s nested TypedDict can legitimately omit `NotRequired` keys; dumping the model does not add them. A model containing `row: {x: NotRequired[int]}` is consequently accepted for one requiring `row.x`.
-- **A fix:** to decide when it is scheduled.
-
-## B72: approximate divisibility admits incompatible `multipleOf` constraints
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): huge `multipleOf` constraints compared approximately at load.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:538`. The proof uses `math.isclose(ratio, round(ratio))`. Its relative tolerance accepts nonintegral ratios at sufficiently large magnitudes. A source with `multiple_of=10**12` is accepted for a target with `multiple_of=3`, although `10**12` itself fails that target.
-- **A fix:** to decide when it is scheduled.
-
-## B71: integer constraint comparisons lose precision
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): integer bounds above 2^53 compared as floats at load.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:517`. `_limit()` converts integer boundaries with `float(schema[plain])`. This collapses distinct boundaries above the exact integer range of a float. A source allowing `x >= 9007199254740992` is accepted for a target requiring `x >= 9007199254740993`. The source’s minimum value then fails decoding.
-- **A fix:** to decide when it is scheduled.
-
-## B70: reference memoization skips comparisons against different inline target schemas
-
-- **Rating:** severity **low**, probability **rare**, correctness (score 1): one reference compared against two different inline targets, cached as one.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:246`. The cache key contains only reference strings:
-- **A fix:** to decide when it is scheduled.
-
-## B69: embedding a model descriptor loses its `$ref` resolution context
-
-- **Rating:** severity **low**, probability **possible**, correctness (score 2): a wrong `list[Model]` connection accepted at load, failing at run time.
-- **Found:** 2026-10-30, by Codex's whole-repository review, section F8 (the Python runner
-  and serialization), medium severity, with a failing check; Codex's check, not yet re-checked by Claude; at `python/schedr/_serialization/schemas.py:132`. `from_desc()` nests a model’s schema and `$defs` under `items` or another enclosing schema. `_Compare` continues resolving references from the outer root. At `schemas.py:444`, a missing definition becomes `{}`, which `fits()` accepts as unrestricted. Thus `list[TextBox]`, containing a model field `x: str`, is accepted for `list[IntBox]`, whose corresponding field is `x: int`. The same comparison without the enclosing list correctly rejects it.
-- **A fix:** to decide when it is scheduled.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 
@@ -287,7 +108,7 @@ step touches their code or the user schedules them.
   PLAN.md M6. It affects only how DAGs with many groups are drawn, nothing that runs; each
   review round of the repair approach found the next shape.
 
-## B38: an edge between two tasks outside a group can be drawn through its box
+## B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39)
 
 - **Rating:** severity **low**, probability **possible**, usability (score 2): an edge drawn through a group's box (M6).
 - **Found:** 2026-10-30, by Grok's review of M4.2b's graph layout. On a layer a group spans
@@ -297,20 +118,3 @@ step touches their code or the user schedules them.
   `A = {A0, A1}`, `B = {B0, B1}`: `U` lands right of `B`, its edges cross `B`'s box.
 - **Cosmetic:** every task is in the right box. **A fix:** route such edges around boxes,
   or order layers so that it can't happen; with B39.
-
-## B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, usability (score 1): a forked attempt shown as `spawn` after a reconnect (suspected).
-- **Found:** 2026-10-27, by Grok's review of M2.5.4a (by reading; not executed). The agent
-  sends `Started` before the process exists, with `spawn`, and a second `Started` with
-  `fork` once a fork server has forked it (`Done::Spawned` in
-  `crates/schedr-agent/src/agent.rs`). That second message is sent only while the master
-  link is up (`if forked && let Some((to_master, _)) = &link`); when it is down, it is
-  skipped, and the `Register` sent on reconnecting carries the attempt's journal state but no
-  start method (`journal_entries`).
-- **Effect:** the attempt shows `start_method: spawn` in the attempts API although it was
-  forked; nothing else (the start-time metric is the agent's own and counts `fork`).
-- **To confirm:** an agent test that forks an attempt while disconnected, then reconnects,
-  and checks the methods the master gets. **A fix:** keep the method in the journal record
-  (`JournalRecord::Running` with the process identity) and send it with the journal entries on
-  `Register`, or send `Started{fork}` again on reconnecting.

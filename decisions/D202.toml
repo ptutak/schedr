@@ -11,5 +11,5 @@ start scripts. Until a release includes connections, the first run builds the ba
 '''
 history = "archive/PROJECT.md#D202"
 step = "M4.7d"
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["examples/demo/compose.yaml::services", "Makefile::demo"]

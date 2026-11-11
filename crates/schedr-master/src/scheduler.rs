@@ -9,7 +9,7 @@
 //! Which DAGs a pass looks at is [`QuietDags`]'s choice: every DAG, or the busy ones and the
 //! quiet ones woken (see archive/PROJECT.md, "Quiet DAGs").
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
@@ -137,8 +137,11 @@ pub struct Pass {
     pub created: Vec<CreatedRun>,
     /// Queued runs started, by ID.
     pub started: Vec<String>,
-    /// DAGs skipped because their schedule can't be evaluated.
+    /// DAGs skipped because their schedule can't be evaluated or their defaults are refused.
     pub skipped: Vec<SchedulerError>,
+    /// Those of them logged by this pass: skipped for the first time, or for another reason
+    /// (B154: each once, not every round it stays skipped).
+    pub newly_skipped: Vec<DagId>,
 }
 
 /// The scheduler over a database (cheap to clone; clones share which DAGs are quiet).
@@ -147,6 +150,8 @@ pub struct Scheduler {
     db: Database,
     quiet: Arc<Mutex<QuietDags>>,
     wakes: Wakes,
+    /// The DAGs skipped, with why, as last logged; one that passes again is forgotten.
+    skipped: Arc<Mutex<HashMap<DagId, String>>>,
 }
 
 impl Scheduler {
@@ -164,7 +169,32 @@ impl Scheduler {
             db,
             quiet: Arc::new(Mutex::new(QuietDags::new(settings, wakes.clone()))),
             wakes,
+            skipped: Arc::default(),
         }
+    }
+
+    /// `error` skips `dag_id` in `pass`: logged when it is new for that DAG.
+    fn skip(&self, pass: &mut Pass, dag_id: &DagId, error: SchedulerError) {
+        let reason = error.to_string();
+        let mut skipped = self.skipped.lock().unwrap_or_else(PoisonError::into_inner);
+        if skipped.get(dag_id) != Some(&reason) {
+            tracing::warn!(
+                %dag_id,
+                %error,
+                "the scheduler skips the DAG: no scheduled run is created until this is fixed"
+            );
+            skipped.insert(dag_id.clone(), reason);
+            pass.newly_skipped.push(dag_id.clone());
+        }
+        pass.skipped.push(error);
+    }
+
+    /// `dag_id` went through a pass unskipped: a later skip is logged again.
+    fn passed(&self, dag_id: &DagId) {
+        self.skipped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(dag_id);
     }
 
     /// Counts busy and quiet DAGs, and wakes, in `metrics`.
@@ -237,10 +267,11 @@ impl Scheduler {
             let fire_times = match FireTimes::new(&active.dag.trigger) {
                 Ok(fire_times) => fire_times,
                 Err(error) => {
-                    pass.skipped.push(SchedulerError::FireTimes {
+                    let error = SchedulerError::FireTimes {
                         dag_id: active.dag.id.clone(),
                         error,
-                    });
+                    };
+                    self.skip(&mut pass, &active.dag.id, error);
                     continue;
                 }
             };
@@ -252,6 +283,7 @@ impl Scheduler {
             let mut running = overview.running(&active.dag.id);
             let queued = overview.queued(&active.dag.id);
             let mut new_runs = 0;
+            let mut skipped = false;
             // Held (decision 72): its fire times create nothing (missed, as when paused) and
             // its queued runs wait.
             let held = active.held.as_ref();
@@ -264,7 +296,8 @@ impl Scheduler {
                     let params = match run_params(&active, None) {
                         Ok(params) => params,
                         Err(error) => {
-                            pass.skipped.push(error);
+                            self.skip(&mut pass, &active.dag.id, error);
+                            skipped = true;
                             break;
                         }
                     };
@@ -276,6 +309,9 @@ impl Scheduler {
                             .push(created(&active, run_id, RunKind::Scheduled, times));
                     }
                 }
+            }
+            if !skipped {
+                self.passed(&active.dag.id);
             }
             if held.is_none() {
                 pass.started

@@ -923,3 +923,31 @@ fn what_a_first_of_waits_for(
 ) {
     assert_eq!(first_of_readiness(edges, need), decided);
 }
+
+/// A chain of `n` empty tasks `t0 → t1 → …`, listed last first.
+fn reversed_chain(n: usize) -> Dag {
+    let tasks: Vec<Json> = (0..n)
+        .rev()
+        .map(|i| task(&format!("t{i}"), "empty"))
+        .collect();
+    let edges: Vec<Json> = (1..n)
+        .map(|i| json!({"from": format!("t{}", i - 1), "to": format!("t{i}"), "kind": "order"}))
+        .collect();
+    serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "chain", "location": {"root": "etl", "path": "a.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "tasks": tasks, "edges": edges
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_chain_listed_last_first_settles_in_one_pass() {
+    // B82: one task a pass, each pass every task's edges searched: cubic on a chain.
+    let dag = reversed_chain(300);
+    let mut run = RunProgress::new(&dag, BTreeMap::new());
+    let changed = run.settle();
+    assert_eq!(changed.len(), 300, "every empty task completed");
+    assert!(changed.iter().all(|(_, state)| *state == S::Success));
+    assert!(run.passes <= 2, "{} passes over the tasks", run.passes);
+}

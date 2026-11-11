@@ -365,6 +365,11 @@ async fn a_dag_whose_schedule_cant_be_evaluated_is_skipped() {
         pass.skipped[0].to_string(),
         "DAG `sync`: unknown time zone `Mars/Base`"
     );
+    // B154: logged once, not every round it stays skipped.
+    assert_eq!(pass.newly_skipped, [sync()]);
+    let again = scheduler.pass(ts("2026-10-21T08:01:00Z")).await.unwrap();
+    assert_eq!(again.skipped.len(), 1);
+    assert_eq!(again.newly_skipped, []);
     let error = scheduler
         .trigger(&sync(), None, "anna", ts("2026-10-21T08:00:00Z"))
         .await

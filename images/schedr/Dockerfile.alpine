@@ -1,0 +1,80 @@
+# The schedr base image (see archive/PROJECT.md, Components and roles: production path): the binary,
+# Python, the `schedr` package, a set of libraries for tasks (requirements.in: API calls,
+# data, networking, every connection type's client) and the command-line clients a command
+# uses its connections with, running `schedr standalone` by default. More libraries go in an
+# image of your own built FROM this one (examples/kubernetes/Dockerfile).
+#
+# Alpine, for a small system to keep patched; it uses musl, so the musllinux wheel:
+# `make image-alpine` builds it into dist/ and this image from it (tagged `-alpine`;
+# images/schedr/Dockerfile is the same on glibc, decision 454). From the repository root:
+#   podman build -f images/schedr/Dockerfile.alpine -t schedr:1.0.0-alpine .
+# (.dockerignore keeps the build context to the wheels in dist/ and the requirements here.)
+
+# The builder: every library as a wheel in /wheels. Most come as musllinux wheels; pymongo has
+# none, so it is compiled here, its C extensions required (PYMONGO_C_EXT_MUST_BUILD: without
+# them it would fall back to pure Python, with only a warning), with the pinned build tools
+# (no build isolation: nothing unpinned fetched).
+# python:3.14.8-alpine3.24, created 2026-10-01 (archive/PROJECT.md, CI supply-chain pins).
+FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS builder
+RUN apk add --no-cache build-base
+COPY images/schedr/requirements.txt images/schedr/build-requirements.txt /tmp/
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore \
+        -r /tmp/build-requirements.txt \
+    && PYMONGO_C_EXT_MUST_BUILD=1 pip wheel --no-cache-dir --disable-pip-version-check \
+        --no-build-isolation --wheel-dir /wheels -r /tmp/requirements.txt
+
+# Same digest as the builder stage.
+FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
+
+# tini as PID 1 reaps orphaned processes (a task's child that outlives it), which schedr, not
+# being an init, wouldn't.
+RUN apk add --no-cache tini
+
+# The clients commands use their connections with (docs/02-dags/14-connections.md): psql,
+# MySQL's and MariaDB's (Alpine's MySQL client is MariaDB's; mariadb-connector-c has the
+# caching_sha2_password plugin MySQL 8 logs in with), Mongo's database tools (Alpine has no
+# mongosh, a Node.js program: mongoexport and the others read the same tools config file),
+# ssh and scp, curl.
+RUN apk add --no-cache postgresql18-client mariadb-client mariadb-connector-c mongodb-tools \
+    openssh-client curl
+
+# The libraries, only from the builder's wheels (no compiler in this image), mounted rather
+# than copied: a copied layer would keep the wheels (80 MB) though deleted after.
+RUN --mount=type=bind,from=builder,source=/wheels,target=/tmp/wheels \
+    --mount=type=bind,source=images/schedr/requirements.txt,target=/tmp/requirements.txt \
+    pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore --no-index \
+        --find-links /tmp/wheels -r /tmp/requirements.txt
+
+# The worker runs DAG tasks with this Python (found next to the schedr binary).
+COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore /tmp/schedr-*.whl \
+    && rm /tmp/schedr-*.whl
+
+# The documentation, served by the web UI at /docs (scripts/docs-dist.sh made it).
+COPY dist/docs /usr/share/schedr/docs
+
+# The fork server's preload list must leave a single thread: forking with threads can deadlock
+# the child, and the fork server would be disabled at every start. Imported here, the build
+# fails on a library that starts one (with the threads' names).
+RUN --mount=type=bind,source=images/schedr/preload.txt,target=/tmp/preload.txt \
+    python -c 'import importlib, sys, time; from schedr.runner.fork_server import thread_names; \
+mods = [m for m in (l.strip() for l in open("/tmp/preload.txt")) if m and not m.startswith("#")]; \
+[importlib.import_module(m) for m in mods]; time.sleep(1); names = thread_names(); \
+sys.exit(f"the preload list starts threads: {names}" if names else 0)'
+
+# OpenShift runs containers under an arbitrary UID in group 0: the data directory (the SQLite
+# database, task logs, the journal, the standalone lock) must be writable by group 0.
+RUN mkdir -p /var/lib/schedr \
+    && chgrp -R 0 /var/lib/schedr \
+    && chmod -R g=u /var/lib/schedr
+ENV HOME=/var/lib/schedr \
+    SCHEDR_CONFIG__WORKER__DATA_DIR=/var/lib/schedr
+USER 1001
+
+# The REST API (no authentication of its own until the UI, milestone M3: keep the Service
+# internal, or behind an authenticating proxy or mesh), and the ops port (probes, metrics).
+EXPOSE 8080 8090
+ENTRYPOINT ["/sbin/tini", "--", "schedr"]
+# Not `--migrate`: the schema is migrated as a step of its own (`schedr db migrate`, the
+# chart's init container); add it to try the image out on a fresh database.
+CMD ["standalone", "--listen", "0.0.0.0"]

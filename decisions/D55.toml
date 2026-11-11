@@ -11,5 +11,5 @@ The target’s trigger rule considers its other edges, and an empty selection is
 history = "archive/PROJECT.md#D55"
 step = "M4.2a"
 also = ["python-api"]
-checked = 2026-11-09
+checked = 2026-11-11
 code = ["crates/schedr-master/src/progress.rs::edge_state"]

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D91"
 step = "M4.4"
 also = ["assignment"]
 code = ["crates/schedr-master/src/limits.rs::Reached"]
-checked = 2026-11-09
+checked = 2026-11-11

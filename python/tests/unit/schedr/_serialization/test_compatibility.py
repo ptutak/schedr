@@ -106,3 +106,11 @@ def test_follow_path(
 )
 def test_is_assignable(source: TypeDesc, target: TypeDesc, expected: bool) -> None:
     assert is_assignable(source, target) is expected
+
+
+def test_a_literal_true_doesnt_fit_a_literal_one() -> None:
+    # B74: the codec requires the same value and the same type.
+    assert not is_assignable(LiteralType([True]), LiteralType([1]))
+    assert not is_assignable(LiteralType([1]), LiteralType([True]))
+    assert not is_assignable(LiteralType([0]), LiteralType([False]))
+    assert is_assignable(LiteralType([1]), LiteralType([1, 2]))

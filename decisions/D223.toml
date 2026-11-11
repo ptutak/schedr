@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D223"
 step = "M4.8c1"
 also = ["python-api"]
 code = ["python/schedr/_build.py::refuse_second_setup"]
-checked = 2026-11-10
+checked = 2026-11-11

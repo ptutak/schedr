@@ -28,6 +28,7 @@ from schedr._model import (
     IdError,
     ListType,
     ListValue,
+    LiteralType,
     LiteralValue,
     MapValue,
     ModelType,
@@ -1878,6 +1879,9 @@ def is_renderable(desc: TypeDesc) -> bool:
     if isinstance(desc, ModelType):
         # A model's field as Pydantic writes it: text, a number or a boolean.
         return schemas.is_scalar(desc)
+    if isinstance(desc, LiteralType):
+        # Its value as stored, a JSON scalar the agent renders as any other (B153).
+        return all(isinstance(v, str | int | float) for v in desc.values)
     return isinstance(desc, ScalarType) and desc.name in _RENDERABLE
 
 

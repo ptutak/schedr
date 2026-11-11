@@ -11,5 +11,5 @@ Manual runs supply an event; test helpers and the DAG page expose trigger events
 history = "archive/PROJECT.md#D350"
 step = "M4.11b"
 also = ["ui-cli"]
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["crates/schedr-api/src/routes.rs::restart_trigger", "python/schedr/testing.py::run_trigger"]

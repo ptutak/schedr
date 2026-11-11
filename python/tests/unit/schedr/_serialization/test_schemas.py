@@ -337,3 +337,98 @@ def test_tuples_compare_element_by_element() -> None:
     assert fit_problem(TupleType([stamped]), TupleType([ScalarType("int")])) == (
         "`[0]`: the output may be a str; the parameter takes `integer`"
     )
+
+
+def _box(name: str, x_type: str) -> ModelType:
+    return model(
+        {
+            "$defs": {
+                "Inner": {
+                    "type": "object",
+                    "properties": {"x": {"type": x_type}},
+                    "required": ["x"],
+                }
+            },
+            "type": "object",
+            "properties": {"inner": {"$ref": "#/$defs/Inner"}},
+            "required": ["inner"],
+        },
+        name,
+    )
+
+
+def test_a_model_inside_a_list_keeps_its_own_definitions() -> None:
+    # B69: nested under `items`, a model's `$ref`s resolve against its own `$defs`.
+    text, number = _box("TextBox", "string"), _box("IntBox", "integer")
+    assert fit_problem(text, number) is not None
+    assert fit_problem(ListType(text), ListType(number)) is not None
+    assert fit_problem(ListType(number), ListType(number)) is None
+
+
+def test_a_reference_that_resolves_to_nothing_fits_nothing() -> None:
+    dangling = {"type": "object", "properties": {"x": {"$ref": "#/$defs/Gone"}}, "required": ["x"]}
+    target = {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]}
+    assert problem(dangling, target) is not None
+
+
+def test_one_reference_against_two_different_inline_targets_compares_both() -> None:
+    # B70: the pair `(#/$defs/V, "")` met twice, against two different inline schemas.
+    out = {
+        "$defs": {"V": {"type": "string"}},
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/V"}, "b": {"$ref": "#/$defs/V"}},
+        "required": ["a", "b"],
+    }
+    in_ = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+        "required": ["a", "b"],
+    }
+    assert problem(out, in_) is not None
+
+
+def test_a_union_member_that_failed_doesnt_count_as_fitting_later() -> None:
+    out = {
+        "$defs": {"V": {"type": "string"}},
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/V"}},
+        "required": ["a"],
+    }
+    in_ = {
+        "$defs": {"W": {"type": "integer"}},
+        "anyOf": [
+            {"type": "object", "properties": {"a": {"$ref": "#/$defs/W"}}, "required": ["a"]},
+            {
+                "type": "object",
+                "properties": {"a": {"$ref": "#/$defs/W"}, "c": {}},
+                "required": ["a"],
+            },
+        ],
+    }
+    assert problem(out, in_) is not None
+
+
+def test_integer_bounds_above_two_to_the_53_compare_exactly() -> None:
+    # B71
+    out = {"type": "integer", "minimum": 2**53}
+    in_ = {"type": "integer", "minimum": 2**53 + 1}
+    assert problem(out, in_) is not None
+    assert problem({"type": "integer", "minimum": 2**53 + 1}, in_) is None
+    assert problem({"const": 2**53}, in_) is not None
+
+
+def test_multiple_of_is_checked_exactly() -> None:
+    # B72: 10**12 is no multiple of 3, nor of 7.
+    assert (
+        problem({"type": "integer", "multipleOf": 10**12}, {"type": "integer", "multipleOf": 3})
+        is not None
+    )
+    assert problem({"const": 10**12}, {"type": "integer", "multipleOf": 7}) is not None
+    assert (
+        problem({"type": "integer", "multipleOf": 6}, {"type": "integer", "multipleOf": 3}) is None
+    )
+    # Decimal steps as written: 0.3 is a multiple of 0.1.
+    assert (
+        problem({"type": "number", "multipleOf": 0.3}, {"type": "number", "multipleOf": 0.1})
+        is None
+    )

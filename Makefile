@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -205,7 +205,7 @@ test-ui:         ## Run the web UI's browser tests (Playwright, Chromium)
 # the DAGs of DAGS (default examples/). The API on LISTEN:8080, all addresses by default so it
 # can be reached from outside WSL (it signs no one in, auth mode none: LISTEN=127.0.0.1 on a
 # network you don't trust; `schedr dags list` works without --server with either), ops on 8090.
-# Ctrl-C stops it; `rm -rf .schedr` starts afresh. Python tasks fork from a fork server as the chart's do
+# Ctrl-C stops it; `make standalone-clean` starts afresh. Python tasks fork from a fork server as the chart's do
 # (FORK_SERVER=false: spawned, as the configuration's default; Linux only), the preloaded one
 # importing PRELOAD (the libraries the examples' DAG files use; a JSON list, `[]` for the bare
 # server alone), so a forked task doesn't import them itself. Both servers load all of schedr,
@@ -270,6 +270,11 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 # stops them all.
 DAGS2 ?= examples/docs
 PORT_OFFSET ?= 0
+
+# The code store's copies are read-only (decision 101): writable again first, or `rm` can't
+# delete their files (B152).
+standalone-clean: ## Remove standalone's data (STANDALONE_DIR, .schedr/), its read-only code copies too
+	@if [ -d "$(STANDALONE_DIR)" ]; then chmod -R u+w "$(STANDALONE_DIR)" && rm -r "$(STANDALONE_DIR)"; fi
 
 standalone-separate-ui: SHELL := /bin/bash
 standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the first with a standby master) and one `schedr ui` over both, on 8082
@@ -443,13 +448,33 @@ SERVER_IMAGE ?= schedr-server:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.
 docs-dist: docs    ## The documentation the images serve at /docs, into dist/docs
 	scripts/docs-dist.sh
 
-server-image: smoke-musl docs-dist ## Build the server image (master, webserver, ui: no Python) and smoke-test it
+# The images (decision 454): on glibc from the manylinux wheel, the plain tag; on Alpine from
+# the musllinux wheel, tagged -alpine.
+server-image: smoke docs-dist ## Build the server image on glibc (master, webserver, ui: no Python) and smoke-test it
 	$(CONTAINER) build -f images/schedr-server/Dockerfile -t $(SERVER_IMAGE) .
 	scripts/smoke-server-image.sh $(CONTAINER) $(SERVER_IMAGE)
 
-image: smoke-musl docs-dist ## Build the base image from the musllinux wheel and smoke-test it
+server-image-alpine: smoke-musl docs-dist ## The server image on Alpine (tagged -alpine)
+	$(CONTAINER) build -f images/schedr-server/Dockerfile.alpine -t $(SERVER_IMAGE)-alpine .
+	scripts/smoke-server-image.sh $(CONTAINER) $(SERVER_IMAGE)-alpine
+
+image: smoke docs-dist ## Build the base image on glibc from the manylinux wheel and smoke-test it
 	$(CONTAINER) build -f images/schedr/Dockerfile -t $(IMAGE) .
 	scripts/smoke-image.sh $(CONTAINER) $(IMAGE)
+
+image-alpine: smoke-musl docs-dist ## The base image on Alpine from the musllinux wheel (tagged -alpine)
+	$(CONTAINER) build -f images/schedr/Dockerfile.alpine -t $(IMAGE)-alpine .
+	scripts/smoke-image.sh $(CONTAINER) $(IMAGE)-alpine
+
+SLIM_IMAGE ?= schedr-slim:$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+
+image-slim: smoke docs-dist ## Build the slim image on glibc (Python and schedr, no task libraries or connection clients) and smoke-test it
+	$(CONTAINER) build -f images/schedr-slim/Dockerfile -t $(SLIM_IMAGE) .
+	scripts/smoke-image.sh $(CONTAINER) $(SLIM_IMAGE) slim
+
+image-slim-alpine: smoke-musl docs-dist ## The slim image on Alpine (tagged -alpine)
+	$(CONTAINER) build -f images/schedr-slim/Dockerfile.alpine -t $(SLIM_IMAGE)-alpine .
+	scripts/smoke-image.sh $(CONTAINER) $(SLIM_IMAGE)-alpine slim
 
 chart-check:     ## Lint the Helm chart and render it with its main combinations of values
 	helm lint charts/schedr

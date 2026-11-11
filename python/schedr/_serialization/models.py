@@ -77,34 +77,38 @@ def schema(cls: type, side: Side) -> dict[str, Any]:
     check_version()
     mode = "serialization" if side == "output" else "validation"
     try:
-        made: dict[str, Any] = cls.model_json_schema(by_alias=False, mode=mode)  # type: ignore[attr-defined]
+        made: dict[str, Any] = cls.model_json_schema(  # type: ignore[attr-defined]
+            by_alias=False, mode=mode, schema_generator=_generator()
+        )
     except Exception as e:  # Pydantic's errors for types without a JSON Schema
         raise TypeModelError(
             f"`{cls.__name__}`: Pydantic can't describe it as JSON Schema ({e})"
         ) from None
-    return _all_required(made) if side == "output" else made
+    return made
 
 
-def _all_required(node: Any) -> Any:
-    """Every object's properties marked required.
+def _generator() -> type:
+    """Pydantic's schema generator, an output's model fields with defaults counted as present.
 
-    ``model_dump`` writes each field, defaults too, but Pydantic's serialization schema leaves
-    fields with defaults out of ``required``.
+    ``model_dump`` writes each field of a model or dataclass, defaults too, but Pydantic's
+    serialization schema leaves those with defaults out of ``required``; a TypedDict's
+    ``NotRequired`` key stays optional, as a dump leaves it out when absent (B73). Imported
+    here: a model's class has loaded Pydantic already.
     """
-    if isinstance(node, list):
-        return [_all_required(n) for n in node]
-    if not isinstance(node, dict):
-        return node
-    copied: dict[str, Any] = {}
-    for key, value in node.items():
-        if key in {"properties", "$defs"} and isinstance(value, dict):
-            # Maps of names to schemas: each value is a schema, the keys are names.
-            copied[key] = {name: _all_required(sub) for name, sub in value.items()}
-        else:
-            copied[key] = _all_required(value)
-    if isinstance(node.get("properties"), dict):
-        copied["required"] = list(node["properties"])
-    return copied
+    from pydantic.json_schema import GenerateJsonSchema  # noqa: PLC0415
+
+    class _Present(GenerateJsonSchema):
+        def field_is_required(self, field: Any, total: bool) -> bool:
+            if self.mode != "serialization":
+                return super().field_is_required(field, total)
+            kept = field.get("serialization_exclude_if") is None
+            if field.get("type") == "typed-dict-field":
+                # Decided here: Pydantic's `json_schema_serialization_defaults_required` would
+                # count an absent key present (Grok's review).
+                return kept and bool(field.get("required", total))
+            return kept
+
+    return _Present
 
 
 def dump(value: object) -> Any:

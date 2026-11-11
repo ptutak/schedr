@@ -984,16 +984,24 @@ async fn mapped_count(
     Ok(Some(state.db.mapped_instances(run_id, task_id).await?))
 }
 
-/// The run's tasks and, of those, its mapped ones, from the DAG version it runs (`None` when
-/// that version can't be read).
+/// The run's tasks and, of those, its mapped ones, from the DAG version it runs (`None` for no
+/// such run).
 async fn run_tasks(
     state: &ApiState,
     run_id: &str,
 ) -> Result<Option<(BTreeSet<TaskId>, BTreeSet<TaskId>)>, ApiError> {
-    // Parsed once per version (B137); one that doesn't read is `None`, as before.
+    // Parsed once per version (B137). One that doesn't read is the request's error: as an
+    // unmapped DAG, a missing task would look known and a mapped one plain (B89).
     let dag = match state.db.run_dag(run_id).await {
         Ok(dag) => dag,
-        Err(schedr_db::DbError::InvalidData { .. }) => None,
+        Err(schedr_db::DbError::InvalidData { reason, .. }) => {
+            // Why, in the log only: serde's message can quote a stored value (Grok's review).
+            tracing::error!(run_id, reason, "a run's DAG version doesn't read");
+            return Err(ApiError::Unreadable(format!(
+                "run `{run_id}`: its DAG version doesn't read (the webserver's log says why); \
+                 a schedr upgrade should have kept it readable"
+            )));
+        }
         Err(error) => return Err(error.into()),
     };
     Ok(dag.map(|dag| {

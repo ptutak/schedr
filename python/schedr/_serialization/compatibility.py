@@ -148,7 +148,10 @@ def is_assignable(source: TypeDesc, target: TypeDesc) -> bool:  # noqa: PLR0911
         return all(is_assignable(v, target) for v in source.variants)
     if isinstance(source, LiteralType):
         if isinstance(target, LiteralType):
-            return all(v in target.values for v in source.values)
+            # The same value of the same type, as the codec reads it: `True` isn't `1` (B74).
+            return all(
+                any(v == t and type(v) is type(t) for t in target.values) for v in source.values
+            )
         return all(is_assignable(_literal_type(v), target) for v in source.values)
     if isinstance(target, UnionType):
         return any(is_assignable(source, v) for v in target.variants)

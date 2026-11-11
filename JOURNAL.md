@@ -542,3 +542,15 @@ half on Postgres. The time to a start rose (assigned → started p99 in scenario
 stress 23's `all_in_s`), within an overlapping range over four reruns: a `Started` waits for a
 whole turn of `Finished`s. Not fixed before 1.0.0: the user put the start path into M5 as its
 first steps, profile first (M5.0a-e).
+
+### <a id="D454"></a>2026-11-11: images on glibc beside Alpine (decision 454)
+
+The user, preparing 1.0.0: release x86_64 images on glibc alongside the Alpine ones. Asked
+which, how named and on what: all three images, glibc the plain tag and Alpine `-alpine` (as
+the official Python images name theirs), on `python:3.14.8-slim` (Debian). The chart's default
+tag is then glibc. Not chosen: base and slim only; a suffix for glibc (nothing changing for
+0.1.0's users); separate image names; Ubuntu; distroless.
+A side note then: Debian 13's PostgreSQL client is 17, and `pg_dump` 17 refuses a Postgres 18
+server, while the Alpine image has 18. The user chose PostgreSQL's own apt source
+(apt.postgresql.org, its key pinned by hash) over copying the binaries from the `postgres:18`
+image or documenting the gap.

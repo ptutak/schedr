@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D119"
 step = "M4.3e"
 also = ["python-api"]
 code = ["crates/schedr-master/src/mapping.rs::narrows_per_element", "crates/schedr-master/src/progress.rs::instance_taken"]
-checked = 2026-11-09
+checked = 2026-11-11

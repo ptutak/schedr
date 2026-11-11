@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D180"
 step = "M4.7a"
 also = ["python-api", "code-delivery"]
 code = ["python/schedr/_build.py", "python/schedr/connections.py::defined_values", "python/schedr/connections.py::take_connections"]
-checked = 2026-11-10
+checked = 2026-11-11

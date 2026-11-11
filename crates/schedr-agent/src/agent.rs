@@ -1056,6 +1056,10 @@ pub struct Agent<E> {
     triggers_ended: BTreeMap<String, pb::TriggerStopped>,
     /// The attempts running, with the way to stop each (taken once it is asked to stop).
     running: BTreeMap<String, StopSender>,
+    /// The attempts a fork server forked, until their result is acknowledged: each new session
+    /// is told so again, before a result sent again, as that `Started` may not have reached
+    /// the master (sent while disconnected, B24).
+    forked: BTreeSet<String>,
     /// Those of them that are wait steps, on watcher slots: whether each is a poke.
     wait_steps: BTreeMap<String, bool>,
     /// The attempts in their cleanup, with the task's result (sent again on a reconnect).
@@ -1216,6 +1220,7 @@ impl<E: Executor> Agent<E> {
             journal,
             watchers,
             running: BTreeMap::new(),
+            forked: BTreeSet::new(),
             triggers: BTreeMap::new(),
             triggers_ended: BTreeMap::new(),
             wait_steps: BTreeMap::new(),
@@ -1350,6 +1355,17 @@ impl<E: Executor> Agent<E> {
     /// Waits for `work` without a master: what ends meanwhile is still journalled (results
     /// are reported in the next `Register`), and a drain goes on. `None` once drained.
     async fn offline<T>(&mut self, work: impl Future<Output = T>) -> Option<T> {
+        self.waiting_for(work, false).await
+    }
+
+    /// [`Self::offline`] while a session is being opened (`connecting`): a drain then waits for
+    /// unacknowledged results as in a session, a while, since they are about to be sent again
+    /// (Grok's review of B151).
+    async fn waiting_for<T>(
+        &mut self,
+        work: impl Future<Output = T>,
+        connecting: bool,
+    ) -> Option<T> {
         tokio::pin!(work);
         let timeouts = self.settings.setup.timeouts;
         let mut tick = tokio::time::interval(timeouts.drain_tick);
@@ -1365,7 +1381,7 @@ impl<E: Executor> Agent<E> {
                     self.on_shutdown(count);
                 }
                 _ = tick.tick(), if self.drain.is_some() => {
-                    if self.drain_step(false) == DrainStep::Finish {
+                    if self.drain_step(connecting) == DrainStep::Finish {
                         return None;
                     }
                 }
@@ -1906,19 +1922,59 @@ impl<E: Executor> Agent<E> {
 
     /// The roots' reported hashes, waiting for each to settle the first time; a DAG root
     /// using a script root this worker lacks is left out (decision 303).
-    async fn hashes(&mut self) -> Vec<pb::RootHash> {
-        for (name, watcher) in &mut self.watchers {
-            loop {
+    /// The session's stream to the master opened, `outbound` its messages; the session's end
+    /// if it doesn't open: given up at the cutoff or a lease of silence, or stopped. Through
+    /// [`Self::offline`]: a stop asked for meanwhile is heard, and a drain that finishes ends
+    /// the wait (B151).
+    async fn open_stream(
+        &mut self,
+        client: &mut MasterClient<Channel>,
+        outbound: mpsc::UnboundedReceiver<pb::WorkerMessage>,
+        opened: tokio::time::Instant,
+    ) -> Result<tonic::Streaming<pb::MasterMessage>, SessionEnd> {
+        let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
+        let opening = async {
+            tokio::select! {
+                control = client.control(UnboundedReceiverStream::new(outbound)) => Some(control),
+                () = at(give_up_at) => None,
+            }
+        };
+        match self.waiting_for(opening, true).await {
+            None => Err(SessionEnd::Stopped),
+            Some(Some(Ok(response))) => Ok(response.into_inner()),
+            Some(Some(Err(status))) => Err(SessionEnd::Lost(status.to_string())),
+            Some(None) => {
+                self.cut_off_if_late();
+                Err(SessionEnd::Lost(NO_WORD.to_owned()))
+            }
+        }
+    }
+
+    /// The roots' hashes once each has settled; `None` once a drain finished meanwhile: the
+    /// waits go through [`Self::offline`], so a root that never settles doesn't hold a stop
+    /// (B151).
+    async fn hashes(&mut self) -> Option<Vec<pb::RootHash>> {
+        let names: Vec<String> = self.watchers.keys().cloned().collect();
+        for name in names {
+            while let Some(watcher) = self.watchers.get_mut(&name) {
                 if watcher.hash().is_some() {
                     break;
                 }
-                match watcher.poll(Instant::now()) {
-                    Ok(Poll::Settling(wait)) => tokio::time::sleep(wait).await,
-                    Ok(_) => {}
+                let wait = match watcher.poll(Instant::now()) {
+                    Ok(Poll::Settling(wait)) => Some(wait),
+                    Ok(_) => None,
                     Err(error) => {
                         tracing::warn!(root = name.as_str(), %error, "can't scan the root");
-                        tokio::time::sleep(self.settings.poll_interval).await;
+                        Some(self.settings.poll_interval)
                     }
+                };
+                if let Some(wait) = wait
+                    && self
+                        .waiting_for(tokio::time::sleep(wait), true)
+                        .await
+                        .is_none()
+                {
+                    return None;
                 }
             }
         }
@@ -1927,10 +1983,12 @@ impl<E: Executor> Agent<E> {
             .keys()
             .filter_map(|name| Some((name.clone(), self.reported_hash(name)?)))
             .collect();
-        self.reported
-            .iter()
-            .map(|(name, hash)| root_hash(&self.settings.setup, name, hash))
-            .collect()
+        Some(
+            self.reported
+                .iter()
+                .map(|(name, hash)| root_hash(&self.settings.setup, name, hash))
+                .collect(),
+        )
     }
 
     /// The hash this worker reports for root `name`, `None` before its first scan or for a
@@ -2029,7 +2087,9 @@ impl<E: Executor> Agent<E> {
 
     /// One session with the master: register, then handle messages until the connection ends.
     pub async fn session(&mut self, mut client: MasterClient<Channel>) -> SessionEnd {
-        let roots = self.hashes().await;
+        let Some(roots) = self.hashes().await else {
+            return SessionEnd::Stopped;
+        };
         // Unbounded: the loop never waits on the master (its liveness is the agent's own); the
         // messages are few and small (heartbeats, results, reports).
         let (to_master, outbound) = mpsc::unbounded_channel::<pb::WorkerMessage>();
@@ -2041,17 +2101,9 @@ impl<E: Executor> Agent<E> {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
         let opened = self.open_session();
-        let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
-        let control = tokio::select! {
-            control = client.control(UnboundedReceiverStream::new(outbound)) => control,
-            () = at(give_up_at) => {
-                self.cut_off_if_late();
-                return SessionEnd::Lost(NO_WORD.to_owned());
-            }
-        };
-        let mut inbound = match control {
-            Ok(response) => response.into_inner(),
-            Err(status) => return SessionEnd::Lost(status.to_string()),
+        let mut inbound = match self.open_stream(&mut client, outbound, opened).await {
+            Ok(inbound) => inbound,
+            Err(end) => return end,
         };
         self.send_state(&to_master);
         let mut warnings_open = true;
@@ -2363,6 +2415,7 @@ impl<E: Executor> Agent<E> {
                 }
             }
             master_message::Message::FinishedAck(ack) => {
+                self.forked.remove(&ack.attempt_id);
                 if self.unacked.remove(&ack.attempt_id).is_some() {
                     self.forget(&ack.attempt_id).await;
                 }
@@ -2378,6 +2431,7 @@ impl<E: Executor> Agent<E> {
         let id = &decision.attempt_id;
         match pb::AttemptDecision::try_from(decision.decision) {
             Ok(pb::AttemptDecision::Ack) => {
+                self.forked.remove(id);
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
                 }
@@ -2402,6 +2456,7 @@ impl<E: Executor> Agent<E> {
                 }
             }
             Ok(pb::AttemptDecision::Kill) => {
+                self.forked.remove(id);
                 if self.unacked.remove(id).is_some() {
                     self.forget(id).await;
                 }
@@ -2424,6 +2479,9 @@ impl<E: Executor> Agent<E> {
                     gate.send_replace(Gate::Open);
                 }
                 if self.running.contains_key(id) {
+                    if self.forked.contains(id) {
+                        let _ = to_master.send(forked_started(id));
+                    }
                     self.send_handles(id, to_master).await;
                 }
                 if let Some(waiting) = self.waiting.remove(id) {
@@ -2435,6 +2493,9 @@ impl<E: Executor> Agent<E> {
                     fit_result(&mut ended, self.master_limit);
                     let _ = to_master.send(task_ended_message(ended));
                 } else {
+                    if self.unacked.contains_key(id) && self.forked.contains(id) {
+                        let _ = to_master.send(forked_started(id));
+                    }
                     self.send_again(id, to_master);
                 }
             }
@@ -3624,14 +3685,11 @@ impl<E: Executor> Agent<E> {
                 // `Started` went before the process existed, as `spawn`; a repeat sets the
                 // method (the master keeps the first start time).
                 let ended = self.cleaning.get(&attempt_id).cloned();
-                if forked
-                    && ended.is_none()
-                    && let Some((to_master, _)) = &link
-                {
-                    let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
-                        attempt_id: attempt_id.clone(),
-                        start_method: pb::StartMethod::Fork.into(),
-                    })));
+                if forked && ended.is_none() {
+                    self.forked.insert(attempt_id.clone());
+                    if let Some((to_master, _)) = &link {
+                        let _ = to_master.send(forked_started(&attempt_id));
+                    }
                 }
                 let record = match ended {
                     Some(ended) => JournalRecord::Cleaning(ended, Some(identity)),
@@ -3866,6 +3924,15 @@ impl<E: Executor> Agent<E> {
     fn tasks_running(&self) -> usize {
         self.running.len().saturating_sub(self.wait_steps.len())
     }
+}
+
+/// The `Started` saying a fork server forked `attempt_id` (the master keeps the first start
+/// time and takes the method).
+fn forked_started(attempt_id: &str) -> pb::WorkerMessage {
+    wrap(worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.to_owned(),
+        start_method: pb::StartMethod::Fork.into(),
+    }))
 }
 
 /// What a trigger did.

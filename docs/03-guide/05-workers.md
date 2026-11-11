@@ -109,7 +109,8 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    running. `Started` carries `start_method`: `spawn` for a new process (the interpreter, or
    the command itself), or `fork` for a process from the fork server. The first `Started` is
    `spawn`, sent before the process exists. A Python task that was forked sends a second
-   `Started` with `fork` once its process exists. The master keeps the first start time,
+   `Started` with `fork` once its process exists, and again on each reconnect while it runs
+   (one forked while the link was down is told so then). The master keeps the first start time,
    stores `fork`, and the attempts API shows `fork` from then on (see
    [The fork server](#the-fork-server)). A command, and a Python task that was spawned, stay
    `spawn`.

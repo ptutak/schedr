@@ -36,3 +36,14 @@ done_when = '''
 the simulator drives the master's core and the worker together; removing the start grace, the hold or the move wait makes it fail
 '''
 status = "planned"
+
+[[steps]]
+id = "R1.0c"
+title = "Images on glibc beside Alpine"
+scope = '''
+(decision 454): `schedr`, `schedr-slim` and `schedr-server` also built on `python:3.14.8-slim` (Debian) from the manylinux wheel, the plain tag; the Alpine ones tagged `-alpine`; CI builds and smoke-tests both; the release pushes both; the chart, README and guide say so
+'''
+done_when = '''
+both kinds of each image pass the smoke tests in CI and are pushed with 1.0.0
+'''
+status = "planned"

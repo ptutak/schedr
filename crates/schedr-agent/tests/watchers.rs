@@ -901,7 +901,14 @@ async fn what_new_code_raises_is_masked_in_the_note_about_it() {
     let changing = async {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         worker.hosts.code_changed(&copies);
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        // Until the new host's failure is noted, not a fixed wait: under load it came after
+        // the run had ended (B229).
+        let noted = async {
+            while !worker.log("polls").contains("RuntimeError") {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(30), noted).await;
         std::fs::write(worker.dir.path().join("ready"), "").unwrap();
     };
     let (ran, ()) = tokio::join!(
@@ -1297,9 +1304,16 @@ async fn one_starting_again_keeps_its_deadline_whatever_its_new_host_takes() {
     let starts = std::fs::read_to_string(&starts).unwrap();
     let times: Vec<f64> = starts.lines().map(|line| line.parse().unwrap()).collect();
     assert_eq!(times.len(), 2, "{starts}");
-    // A fresh count on the new host would end over 5 s after the first call.
-    let took = ended - times[0];
-    assert!(took < 4.5, "{took} s for a `max_wait` of 3 s");
+    // A fresh count on the new host would end `max_wait` (3 s) after its own start, which the
+    // slow import puts 2 s or more after the first: kept, it ends before that (B229: a fixed
+    // 4.5 s left a loaded machine 1.5 s).
+    let fresh = times[1] + 3.0;
+    assert!(
+        ended < fresh,
+        "ended {:.2} s after the first call; a fresh count ends {:.2} s after it",
+        ended - times[0],
+        fresh - times[0]
+    );
 }
 
 #[tokio::test]

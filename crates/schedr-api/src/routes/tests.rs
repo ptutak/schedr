@@ -2214,3 +2214,35 @@ fn a_types_message_in_serdes_words_is_replaced() {
         assert!(shown.starts_with(start), "{body}: {shown}");
     }
 }
+
+#[tokio::test]
+async fn a_run_whose_dag_doesnt_read_is_an_error_naming_it_not_an_unmapped_dag() {
+    // B89: a stored DAG that no longer reads made every task look unmapped and known: a
+    // missing task's attempts were an empty list.
+    let (app, db, run_id) = api().await;
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite in memory")
+    };
+    // A version not read yet (the setup's is in the cache), with a field the model lost.
+    for statement in [
+        "INSERT INTO dags (dag_id, paused, current_version_id, first_seen_at) \
+         VALUES ('other', 1, '01a1cc00-0000-7000-8000-000000000001', \
+         '2026-10-15T00:00:00.000000Z')",
+        "INSERT INTO dag_versions (id, dag_id, parse_result_id, dag_json, created_at) \
+         SELECT '01a1cc00-0000-7000-8000-000000000001', 'other', parse_result_id, \
+         json_set(dag_json, '$.lost_field', 1), created_at FROM dag_versions LIMIT 1",
+        "UPDATE runs SET dag_version_id = '01a1cc00-0000-7000-8000-000000000001'",
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+    }
+    let (status, body) = get(&app, &format!("/api/v1/runs/{run_id}/tasks/ghost/attempts")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error.contains(&run_id) && error.contains("doesn't read"),
+        "{error}"
+    );
+    // The run itself still shows, its tasks' instances unknown.
+    let (status, body) = get(&app, &format!("/api/v1/runs/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

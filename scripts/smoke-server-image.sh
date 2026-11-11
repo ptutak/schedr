@@ -21,7 +21,9 @@ fi
 }
 # The roles on one SQLite file in one container (one host, as SQLite needs), in mesh mode
 # (no certificates).
-"$tool" run -d --name "$name" --user 54321:0 -p 127.0.0.1::8090 \
+# The webserver's ports published too, probed from here: the glibc image has no wget or curl.
+"$tool" run -d --name "$name" --user 54321:0 -p 127.0.0.1::8090 -p 127.0.0.1::8080 \
+    -p 127.0.0.1::8091 \
     -e SCHEDR_CONFIG__DATABASE__URL=sqlite:///var/lib/schedr/schedr.db \
     -e SCHEDR_CONFIG__TLS__MODE=mesh "$image" master --migrate >/dev/null
 port=$("$tool" port "$name" 8090/tcp | head -1 | sed 's/.*://')
@@ -34,11 +36,13 @@ curl -sf "http://127.0.0.1:$port/metrics" | grep -q '^schedr_master_leading 1' |
 }
 "$tool" exec -d -e SCHEDR_CONFIG__OPS__PORT=8091 -e SCHEDR_CONFIG__WEBSERVER__PORT=8080 \
     "$name" schedr webserver
+web_ops=$("$tool" port "$name" 8091/tcp | head -1 | sed 's/.*://')
+web=$("$tool" port "$name" 8080/tcp | head -1 | sed 's/.*://')
 for _ in $(seq 1 60); do
-    "$tool" exec "$name" wget -qO- http://127.0.0.1:8091/readyz >/dev/null 2>&1 && break
+    curl -sf "http://127.0.0.1:$web_ops/readyz" >/dev/null 2>&1 && break
     sleep 0.5
 done
-"$tool" exec "$name" wget -qO- http://127.0.0.1:8080/api/v1/dags | grep -q '"dags"' || {
+curl -sf "http://127.0.0.1:$web/api/v1/dags" | grep -q '"dags"' || {
     echo "the webserver doesn't answer:"; "$tool" logs "$name"; exit 1
 }
 "$tool" stop --time 30 "$name" >/dev/null

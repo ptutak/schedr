@@ -37,6 +37,10 @@ pub enum ApiError {
     /// It was there and was deleted for good (an output `[retention] outputs` removed).
     #[error("{0}")]
     Gone(String),
+    /// Something stored doesn't read (a run's DAG version a model change left behind): a 500
+    /// that says what, logged too (B89).
+    #[error("{0}")]
+    Unreadable(String),
     /// The database failed (logged; the client gets a generic message).
     #[error(transparent)]
     Db(#[from] DbError),
@@ -55,7 +59,7 @@ impl ApiError {
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Gone(_) => StatusCode::GONE,
-            Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unreadable(_) | Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -63,11 +67,13 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
-        let error = if let Self::Db(error) = &self {
-            tracing::error!(%error, "API request failed");
-            "the database failed; see the webserver's log".to_owned()
-        } else {
-            self.to_string()
+        let error = match &self {
+            Self::Db(error) => {
+                tracing::error!(%error, "API request failed");
+                "the database failed; see the webserver's log".to_owned()
+            }
+            Self::Unreadable(what) => what.clone(),
+            _ => self.to_string(),
         };
         (status, Json(ErrorBody { error })).into_response()
     }

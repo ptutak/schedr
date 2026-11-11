@@ -118,7 +118,8 @@ jobs:
           exit 1
       - run: scripts/smoke-wheel.sh from-index/schedr-*.whl python
 
-  # The images from the musllinux wheel (decision 157), smoke-tested again, then pushed.
+  # The images from the manylinux wheel (glibc) and the musllinux one (Alpine, `-alpine`;
+  # decisions 157, 454), smoke-tested again, then pushed.
   images:
     needs: [version, from-index]
     runs-on: ubuntu-latest
@@ -140,24 +141,33 @@ jobs:
           name: docs-site
           path: site
       - run: scripts/docs-dist.sh site
+      # Each on glibc (the plain tag) and on Alpine (`-alpine`), decision 454.
       - run: |
           source=org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY
-          docker build -f images/schedr/Dockerfile --label "$source" \
-            --label org.opencontainers.image.version="$VERSION" -t schedr:release .
-          docker build -f images/schedr-server/Dockerfile --label "$source" \
-            --label org.opencontainers.image.version="$VERSION" -t schedr-server:release .
-      - run: scripts/smoke-image.sh docker schedr:release
-      - run: scripts/smoke-server-image.sh docker schedr-server:release
+          for image in schedr schedr-slim schedr-server; do
+            for kind in "" .alpine; do
+              docker build -f "images/$image/Dockerfile$kind" --label "$source" \
+                --label org.opencontainers.image.version="$VERSION" -t "$image:release$kind" .
+            done
+          done
+      - run: |
+          for kind in "" .alpine; do
+            scripts/smoke-image.sh docker schedr:release$kind
+            scripts/smoke-image.sh docker schedr-slim:release$kind slim
+            scripts/smoke-server-image.sh docker schedr-server:release$kind
+          done
       - run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: |
           tags=("$VERSION")
           [[ $PRERELEASE == true ]] || tags+=("$SERIES")
-          for image in schedr schedr-server; do
+          for image in schedr schedr-slim schedr-server; do
             for tag in "${tags[@]}"; do
               docker tag "$image:release" "ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$tag"
               docker push "ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$tag"
+              docker tag "$image:release.alpine" "ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$tag-alpine"
+              docker push "ghcr.io/$GITHUB_REPOSITORY_OWNER/$image:$tag-alpine"
             done
           done
 

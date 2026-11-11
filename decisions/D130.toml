@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D130"
 step = "M4.4b"
 also = ["ui-cli", "observability"]
 code = ["crates/schedr-api/src/routes.rs::worker_problems"]
-checked = 2026-11-10
+checked = 2026-11-11

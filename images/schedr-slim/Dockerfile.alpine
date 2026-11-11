@@ -1,0 +1,41 @@
+# The slim schedr image (decision 383): the binary, Python and the `schedr` package, without
+# the base image's task libraries and the command-line clients a command uses its connections
+# with (psql, MySQL's and MariaDB's, Mongo's tools, ssh, curl). For DAGs whose tasks need none
+# of them, or an image of your own built FROM this one with only what they use. The full
+# image (images/schedr, decision 212) stays the default.
+#
+# Alpine, for a small system to keep patched; it uses musl, so the musllinux wheel:
+# `make image-slim-alpine` builds it into dist/ and this image from it (tagged `-alpine`;
+# Dockerfile is the same on glibc, decision 454). From the repository root:
+#   podman build -f images/schedr-slim/Dockerfile.alpine -t schedr-slim:1.0.0-alpine .
+# python:3.14.8-alpine3.24, created 2026-10-01 (archive/PROJECT.md, CI supply-chain pins); the
+# base image's digest.
+FROM docker.io/library/python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
+
+# tini as PID 1 reaps orphaned processes (a task's child that outlives it), which schedr, not
+# being an init, wouldn't.
+RUN apk add --no-cache tini
+
+# The worker runs DAG tasks with this Python (found next to the schedr binary).
+COPY dist/schedr-*-musllinux_1_2_x86_64.whl /tmp/
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore /tmp/schedr-*.whl \
+    && rm /tmp/schedr-*.whl
+
+# The documentation, served by the web UI at /docs (scripts/docs-dist.sh made it).
+COPY dist/docs /usr/share/schedr/docs
+
+# OpenShift runs containers under an arbitrary UID in group 0: the data directory (the SQLite
+# database, task logs, the journal, the standalone lock) must be writable by group 0.
+RUN mkdir -p /var/lib/schedr \
+    && chgrp -R 0 /var/lib/schedr \
+    && chmod -R g=u /var/lib/schedr
+ENV HOME=/var/lib/schedr \
+    SCHEDR_CONFIG__WORKER__DATA_DIR=/var/lib/schedr
+USER 1001
+
+# The REST API and the ops port (probes, metrics).
+EXPOSE 8080 8090
+ENTRYPOINT ["/sbin/tini", "--", "schedr"]
+# Not `--migrate`: the schema is migrated as a step of its own (`schedr db migrate`, the
+# chart's init container); add it to try the image out on a fresh database.
+CMD ["standalone", "--listen", "0.0.0.0"]

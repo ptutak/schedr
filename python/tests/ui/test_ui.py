@@ -108,6 +108,38 @@ def test_a_running_log_is_read_part_by_part_without_holding_a_connection(
     assert asked == ["from=1", "from=1", "from=2", "from=2"]
 
 
+def test_a_commands_note_keeps_polling_through_an_error_answer(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    # B156: the note polled itself and was swapped for whatever came, an error page too.
+    page.goto(f"{standalone['url']}/d/default/runs/{standalone['run']}")
+    asked: list[int] = []
+
+    def answer(route: Route) -> None:
+        asked.append(1)
+        if len(asked) == 1:
+            route.fulfill(status=502, content_type="text/html", body="<h1>502 Bad Gateway</h1>")
+            return
+        route.fulfill(
+            content_type="text/html",
+            body='<div class="command applied"><strong>Retry</strong>: applied.</div>',
+        )
+
+    page.route("**/fake/command", answer)
+    page.evaluate(
+        """() => {
+            document.body.insertAdjacentHTML("beforeend",
+                '<div id="note" class="command pending" data-poll hx-get="/fake/command" '
+                + 'hx-trigger="load delay:0ms, retry delay:1s" hx-swap="outerHTML">'
+                + '<strong>Retry</strong>: sent; waiting for the master to decide.</div>');
+            htmx.process(document.body.lastElementChild);
+        }"""
+    )
+    expect(page.locator(".command.applied")).to_have_text("Retry: applied.")
+    expect(page.locator("body")).not_to_contain_text("Bad Gateway")
+    assert len(asked) == 2
+
+
 def test_the_runs_list_shows_the_run_and_links_it(page: Page, standalone: dict[str, str]) -> None:
     page.goto(standalone["url"] + "/runs")
     # Unpaused, the DAG has its scheduled runs too: the one triggered is among them.

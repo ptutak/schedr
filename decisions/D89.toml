@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D89"
 step = "M4.4"
 also = ["python-api"]
 code = ["crates/schedr-master/src/limits.rs::of_task"]
-checked = 2026-11-09
+checked = 2026-11-11

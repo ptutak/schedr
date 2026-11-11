@@ -1,4 +1,4 @@
-title = "an edge between two tasks outside a group can be drawn through its box"
+title = "an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39)"
 severity = "low"
 probability = "possible"
 kind = "usability"

@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 import pydantic
 import pytest
@@ -50,6 +50,31 @@ def test_a_model_is_stored_by_attribute_names_and_read_back() -> None:
 def test_the_schema_on_each_side() -> None:
     assert schema(Point, "output")["required"] == ["x", "y"]
     assert schema(Point, "input")["required"] == ["x"]
+
+
+def test_an_outputs_typed_dict_keeps_its_optional_keys_optional() -> None:
+    # B73: model_dump writes a model's fields with defaults, but not a TypedDict's absent keys.
+    class Row(TypedDict):
+        x: NotRequired[int]
+        y: int
+
+    class Holder(BaseModel):
+        row: Row
+        n: int = 0
+
+    made = schema(Holder, "output")
+    assert made["required"] == ["row", "n"]
+    row = made["$defs"]["Row"] if "$defs" in made else made["properties"]["row"]
+    assert row["required"] == ["y"]
+
+    # The same with the model's own setting that counts defaults as present (Grok's review).
+    class Configured(BaseModel):
+        model_config = pydantic.ConfigDict(json_schema_serialization_defaults_required=True)
+        row: Row
+
+    made = schema(Configured, "output")
+    row = made["$defs"]["Row"] if "$defs" in made else made["properties"]["row"]
+    assert row["required"] == ["y"]
 
 
 class Handle:

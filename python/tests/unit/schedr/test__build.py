@@ -14,6 +14,7 @@ from schedr._model import (
     IdError,
     ListType,
     ListValue,
+    LiteralType,
     LiteralValue,
     MapValue,
     OutputRef,
@@ -292,6 +293,10 @@ def test_reference_label(reference: object, text: str) -> None:
         (ListType(ScalarType("str")), False),
         (UnionType([ScalarType("int"), ScalarType("str")]), True),
         (UnionType([ScalarType("int"), ScalarType("none")]), False),
+        # B153: a Literal of text, numbers or booleans renders as its value.
+        (LiteralType(["eu", "us"]), True),
+        (LiteralType([1, 2.5, True]), True),
+        (LiteralType([None]), False),
     ],
 )
 def test_is_renderable(desc: object, renderable: bool) -> None:

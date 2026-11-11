@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use schedr_db::attempts::{ActiveAttempt, ReadyInstance};
-use schedr_model::{Dag, DagId, TaskId};
+use schedr_model::{Dag, DagId, Task, TaskId};
 
 #[cfg(test)]
 mod tests;
@@ -178,6 +178,25 @@ impl Active {
         run_id: &str,
         task_id: &TaskId,
     ) -> Option<Reached> {
+        self.reached_with(
+            (current, own),
+            (current.task(task_id), own.task(task_id)),
+            run_id,
+            task_id,
+        )
+    }
+
+    /// [`Self::reached`], with the task already looked up in each version (`None`: that
+    /// version doesn't have it): a round looks each task up once, not by searching the DAG's
+    /// list for every ready task (B148).
+    #[must_use]
+    pub fn reached_with(
+        &self,
+        (current, own): (&Dag, &Dag),
+        (in_current, in_own): (Option<&Task>, Option<&Task>),
+        run_id: &str,
+        task_id: &TaskId,
+    ) -> Option<Reached> {
         let dag_id = &own.id;
         let reached = |name, limit: Option<u32>, count: u32| {
             limit
@@ -194,16 +213,11 @@ impl Active {
         ) {
             return Some(cap);
         }
-        let task_limit = current
-            .task(task_id)
-            .or_else(|| own.task(task_id))
-            .and_then(|t| t.settings.max_active);
+        let task_limit = in_current.or(in_own).and_then(|t| t.settings.max_active);
         if let Some(task) = reached("max_active", task_limit, self.of_task(dag_id, task_id)) {
             return Some(task);
         }
-        let per_run = own
-            .task(task_id)
-            .and_then(|t| t.settings.max_active_per_run);
+        let per_run = in_own.and_then(|t| t.settings.max_active_per_run);
         reached(
             "max_active_per_run",
             per_run,

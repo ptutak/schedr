@@ -335,7 +335,13 @@ pub fn to_text(value: &Value, spec: Option<&str>, label: &str) -> Result<String,
                 }
             };
         }
-        if let Some(micros) = object.get("$timedelta").and_then(Value::as_i64) {
+        // As i64 or u64: Python stores up to 2**64 - 1 microseconds (B77).
+        let micros = object.get("$timedelta").and_then(|v| {
+            v.as_i64()
+                .map(i128::from)
+                .or_else(|| v.as_u64().map(i128::from))
+        });
+        if let Some(micros) = micros {
             if spec.is_some() {
                 return Err(bad("durations are written as seconds"));
             }

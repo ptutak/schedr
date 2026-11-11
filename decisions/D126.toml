@@ -13,5 +13,5 @@ delivery ‘may have arrived’.
 '''
 history = "archive/PROJECT.md#D126"
 step = "M4.4"
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["crates/schedr-api/src/routes.rs::RequestKey", "crates/schedr-api/src/routes.rs::submit"]

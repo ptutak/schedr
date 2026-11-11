@@ -10,8 +10,10 @@ the task receives them (decision 60). schedr's own descriptors are turned into J
 models, dataclasses and plain types meet in one comparison.
 """
 
+import json
 import math
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Any
 
 from schedr._model import (
@@ -100,8 +102,12 @@ def contains_model(desc: TypeDesc) -> bool:
     return False
 
 
-def from_desc(desc: TypeDesc, *, output: bool) -> dict[str, Any]:  # noqa: PLR0911, PLR0912
+def from_desc(desc: TypeDesc, *, output: bool) -> dict[str, Any]:
     """A descriptor as JSON Schema, for the comparison.
+
+    A model inside schedr's own types (``list[Model]``) brings its ``$defs`` to the root, each
+    under a name of its own, its references renamed with them (B69): they resolve from the
+    root, and two models' ``Inner`` stay two.
 
     Args:
         desc: The descriptor.
@@ -111,9 +117,48 @@ def from_desc(desc: TypeDesc, *, output: bool) -> dict[str, Any]:  # noqa: PLR09
     Returns:
         The schema; schedr's tagged types become a marker only they match.
     """
+    if isinstance(desc, ModelType):
+        return dict(desc.schema)
+    hoisted: dict[str, Any] = {}
+    made = _from_desc(desc, output=output, hoisted=hoisted)
+    if hoisted:
+        made["$defs"] = hoisted
+    return made
+
+
+_DEFS = "#/$defs/"
+
+
+def _hoisted(schema: Schema, hoisted: dict[str, Any]) -> dict[str, Any]:
+    """A nested model's schema, its definitions moved into ``hoisted`` under a new prefix."""
+    prefix = f"m{len({name.split('.', 1)[0] for name in hoisted})}."
+
+    def renamed(node: Any) -> Any:
+        if isinstance(node, Mapping):
+            return {
+                key: (
+                    _DEFS + prefix + value.removeprefix(_DEFS)
+                    if key == "$ref" and isinstance(value, str) and value.startswith(_DEFS)
+                    else renamed(value)
+                )
+                for key, value in node.items()
+            }
+        if isinstance(node, list):
+            return [renamed(n) for n in node]
+        return node
+
+    for name, definition in schema.get("$defs", {}).items():
+        hoisted[prefix + name] = renamed(definition)
+    body: dict[str, Any] = renamed({k: v for k, v in schema.items() if k != "$defs"})
+    return body
+
+
+def _from_desc(  # noqa: PLR0911, PLR0912
+    desc: TypeDesc, *, output: bool, hoisted: dict[str, Any]
+) -> dict[str, Any]:
     match desc:
         case ModelType(schema=schema):
-            return dict(schema)
+            return _hoisted(schema, hoisted)
         case ScalarType(name="any"):
             return {}
         case ScalarType(name="none"):
@@ -129,19 +174,27 @@ def from_desc(desc: TypeDesc, *, output: bool) -> dict[str, Any]:  # noqa: PLR09
         case ScalarType(name=name):
             return {"$schedr": name}
         case ListType(item=item):
-            return {"type": "array", "items": from_desc(item, output=output)}
+            return {"type": "array", "items": _from_desc(item, output=output, hoisted=hoisted)}
         case TupleType(items=items):
-            return {"$schedr": "tuple", "prefixItems": [from_desc(i, output=output) for i in items]}
+            return {
+                "$schedr": "tuple",
+                "prefixItems": [_from_desc(i, output=output, hoisted=hoisted) for i in items],
+            }
         case DictType(value=value):
-            return {"type": "object", "additionalProperties": from_desc(value, output=output)}
+            return {
+                "type": "object",
+                "additionalProperties": _from_desc(value, output=output, hoisted=hoisted),
+            }
         case LiteralType(values=values):
             return {"enum": list(values)}
         case UnionType(variants=variants):
-            return {"anyOf": [from_desc(v, output=output) for v in variants]}
+            return {"anyOf": [_from_desc(v, output=output, hoisted=hoisted) for v in variants]}
         case TypedDictType(fields=fields) | DataclassType(fields=fields):
             return {
                 "type": "object",
-                "properties": {f.name: from_desc(f.type, output=output) for f in fields},
+                "properties": {
+                    f.name: _from_desc(f.type, output=output, hoisted=hoisted) for f in fields
+                },
                 "required": [f.name for f in fields if output or f.required],
                 "additionalProperties": False,
             }
@@ -239,18 +292,28 @@ class _Compare:
     def __init__(self, out_root: Schema, in_root: Schema) -> None:
         self.out_root = out_root
         self.in_root = in_root
+        # Equal schemas fit only when their references read the same definitions.
+        self.one_root = out_root.get("$defs") == in_root.get("$defs")
         self.assumed: set[tuple[str, str]] = set()
+        """Pairs (each by its ``$ref``, or its JSON when inline) fitted or being fitted."""
 
     def fits(self, out: Schema, in_: Schema, at: str) -> str | None:
         """Why ``out`` doesn't fit ``in_`` at ``at`` (``None`` when it does)."""
-        refs = (out.get("$ref", ""), in_.get("$ref", ""))
-        if any(refs):
-            if refs in self.assumed:
-                return None  # recursion: this pair is being checked further up
-            self.assumed.add(refs)
+        pair = (_key(out), _key(in_))
+        if "$ref" in out or "$ref" in in_:
+            if pair in self.assumed:
+                return None  # recursion: this pair is being checked further up, or fitted
+            self.assumed.add(pair)
+            problem = self._fits(out, in_, at)
+            if problem is not None:
+                self.assumed.discard(pair)  # B70: a union may try another member with it
+            return problem
+        return self._fits(out, in_, at)
+
+    def _fits(self, out: Schema, in_: Schema, at: str) -> str | None:
         out = _strip(_resolve(out, self.out_root))
         in_ = _strip(_resolve(in_, self.in_root))
-        if not in_ or not out or out == in_:
+        if not in_ or not out or (out == in_ and self.one_root):
             return None
         where = f"`{at}`: " if at else ""
         out_members = out.get("anyOf") or out.get("oneOf")
@@ -441,9 +504,17 @@ def _resolve(schema: Schema, root: Schema) -> Schema:
         seen.add(ref)
         target: Any = root
         for key in ref[2:].split("/"):
-            target = target.get(key, {}) if isinstance(target, Mapping) else {}
+            target = target.get(key) if isinstance(target, Mapping) else None
+        if not isinstance(target, Mapping):
+            # Nothing there: a schema no value is known to fit, never "anything" (B69).
+            return {"$unresolved": ref}
         schema = {**{k: v for k, v in schema.items() if k != "$ref"}, **target}
     return schema
+
+
+def _key(schema: Schema) -> str:
+    ref = schema.get("$ref")
+    return str(ref) if ref is not None else json.dumps(schema, sort_keys=True, default=str)
 
 
 def _strip(schema: Schema) -> dict[str, Any]:
@@ -515,10 +586,11 @@ def _numbers(out: Schema, in_: Schema) -> str | None:
 
 
 def _limit(schema: Schema, plain: str, exclusive: str) -> tuple[float, bool] | None:
+    # As written: an int stays an int, compared exactly past 2**53 (B71).
     if exclusive in schema:
-        return (float(schema[exclusive]), True)
+        return (schema[exclusive], True)
     if plain in schema:
-        return (float(schema[plain]), False)
+        return (schema[plain], False)
     return None
 
 
@@ -531,13 +603,18 @@ def _within(has: tuple[float, bool], needed: tuple[float, bool], *, lower: bool)
 
 def _show_limit(limit: tuple[float, bool], plain: str, exclusive: str) -> str:
     value, open_ = limit
-    shown = int(value) if value.is_integer() else value
+    shown = int(value) if isinstance(value, float) and value.is_integer() else value
     return f"{exclusive if open_ else plain} {shown}"
 
 
 def _is_multiple(mine: float, step: float) -> bool:
-    ratio = mine / step
-    return math.isclose(ratio, round(ratio))
+    # Exactly, a float by its decimal text as written: 0.3 of 0.1 is, 10**12 of 3 isn't (B72).
+    ratio = _exact(mine) / _exact(step)
+    return ratio.denominator == 1
+
+
+def _exact(number: float) -> Fraction:
+    return Fraction(number) if isinstance(number, int) else Fraction(repr(number))
 
 
 def _value_problem(value: Any, in_: Schema) -> str | None:
@@ -568,7 +645,7 @@ def _number_problem(value: float, in_: Schema) -> str | None:
     limits = (("minimum", "exclusiveMinimum", True), ("maximum", "exclusiveMaximum", False))
     for plain, exclusive, lower in limits:
         needed = _limit(in_, plain, exclusive)
-        if needed is not None and not _within((float(value), False), needed, lower=lower):
+        if needed is not None and not _within((value, False), needed, lower=lower):
             return f"outside the parameter's {_show_limit(needed, plain, exclusive)}"
     if "multipleOf" in in_ and not _is_multiple(value, in_["multipleOf"]):
         return f"not a multiple of {in_['multipleOf']}"

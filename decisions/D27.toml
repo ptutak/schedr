@@ -11,5 +11,5 @@ A Python Playwright suite checks the theme, zone cookie, htmx swap and live upda
 history = "archive/PROJECT.md#D27"
 step = "M3.2b"
 also = ["ui-cli"]
-checked = 2026-11-10
+checked = 2026-11-11
 code = ["python/tests/ui/test_ui.py::test_the_theme_toggle_switches_and_is_remembered", "Makefile::test-ui"]

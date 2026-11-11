@@ -4409,3 +4409,160 @@ fn the_sample_age_grows_while_no_sample_is_kept() {
     agent.publish_master_reading();
     assert!(agent.metrics.master_sample_age.get() > before);
 }
+
+#[tokio::test]
+async fn a_fork_while_disconnected_is_told_to_the_next_session() {
+    // B24: the second `Started` (fork) went only on a link up; the next session's `Register`
+    // carries no method, so the master kept `spawn`.
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    let (stop, _stopped) = mpsc::unbounded_channel();
+    agent.running.insert("a1".to_owned(), stop);
+    agent
+        .on_done(
+            Done::Spawned {
+                attempt_id: "a1".to_owned(),
+                identity: NO_PROCESS,
+                forked: true,
+            },
+            None,
+        )
+        .await;
+    let (to_master, mut sent) = mpsc::unbounded_channel();
+    let decision = pb::JournalDecision {
+        attempt_id: "a1".to_owned(),
+        decision: pb::AttemptDecision::Continue.into(),
+        ..pb::JournalDecision::default()
+    };
+    agent.decide(&decision, &to_master).await;
+    let mut methods = Vec::new();
+    while let Ok(message) = sent.try_recv() {
+        if let Some(worker_message::Message::Started(started)) = message.message {
+            methods.push((started.attempt_id, started.start_method));
+        }
+    }
+    assert_eq!(
+        methods,
+        [("a1".to_owned(), i32::from(pb::StartMethod::Fork))]
+    );
+}
+
+#[tokio::test]
+async fn a_stop_ends_a_session_whose_stream_never_opens() {
+    // B151: opening the stream waited for the master (up to a lease) without hearing a stop.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    // Accepts and holds each connection, answering nothing: the stream never opens.
+    let held = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            sockets.push(socket);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.drain.grace = Duration::ZERO;
+    let (requests, shutdown) = watch::channel(0);
+    agent.shutdown = Some(shutdown);
+    let channel = Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect_lazy();
+    let asking = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = requests.send(2);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    });
+    let ended = tokio::time::timeout(
+        Duration::from_secs(10),
+        agent.session(MasterClient::new(channel)),
+    )
+    .await;
+    asking.abort();
+    held.abort();
+    assert!(
+        matches!(ended, Ok(SessionEnd::Stopped)),
+        "the session didn't end on the stop: {:?}",
+        ended.map(|end| matches!(end, SessionEnd::Lost(_)))
+    );
+}
+
+#[tokio::test]
+async fn a_stop_while_connecting_waits_for_an_unacknowledged_result() {
+    // Grok's review of B151: a drain finished at once while the stream opened, though a
+    // result was still to be acknowledged.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let held = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            sockets.push(socket);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.drain.grace = Duration::from_secs(30);
+    let JournalRecord::Finished(finished) = success("a1") else {
+        unreachable!()
+    };
+    agent.unacked.insert("a1".to_owned(), finished);
+    let (requests, shutdown) = watch::channel(0);
+    agent.shutdown = Some(shutdown);
+    let channel = Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect_lazy();
+    let asking = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = requests.send(1);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    });
+    let ended = tokio::time::timeout(
+        Duration::from_secs(2),
+        agent.session(MasterClient::new(channel)),
+    )
+    .await;
+    asking.abort();
+    held.abort();
+    assert!(ended.is_err(), "it stopped with the result unacknowledged");
+}
+
+#[tokio::test]
+async fn a_fork_that_finished_while_disconnected_is_told_before_its_result() {
+    // Grok's review of B24: a forked attempt that ended before the reconnect kept `spawn`.
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    let (stop, _stopped) = mpsc::unbounded_channel();
+    agent.running.insert("a1".to_owned(), stop);
+    agent
+        .on_done(
+            Done::Spawned {
+                attempt_id: "a1".to_owned(),
+                identity: NO_PROCESS,
+                forked: true,
+            },
+            None,
+        )
+        .await;
+    let JournalRecord::Finished(finished) = success("a1") else {
+        unreachable!()
+    };
+    agent.on_done(Done::Attempt(finished), None).await;
+    let (to_master, mut sent) = mpsc::unbounded_channel();
+    let decision = pb::JournalDecision {
+        attempt_id: "a1".to_owned(),
+        decision: pb::AttemptDecision::Continue.into(),
+        ..pb::JournalDecision::default()
+    };
+    agent.decide(&decision, &to_master).await;
+    let mut kinds = Vec::new();
+    while let Ok(message) = sent.try_recv() {
+        match message.message {
+            Some(worker_message::Message::Started(s)) => {
+                kinds.push(format!("started {}", s.start_method));
+            }
+            Some(worker_message::Message::Finished(_)) => kinds.push("finished".to_owned()),
+            _ => {}
+        }
+    }
+    let fork = i32::from(pb::StartMethod::Fork);
+    assert_eq!(kinds, [format!("started {fork}"), "finished".to_owned()]);
+}

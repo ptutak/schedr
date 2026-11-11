@@ -389,3 +389,34 @@ fn many_quotes_are_masked_in_linear_time() {
         "{small:?} → {large:?}"
     );
 }
+
+#[test]
+fn a_file_named_after_a_password_doesnt_mask_the_message_after_it() {
+    // B161: MySQL's client: the plugin's file name holds `password`, so `: No` read as a value.
+    let line = "plugin 'caching_sha2_password' cannot be loaded: \
+                /usr/lib/mysql/plugin/caching_sha2_password.so: No such file or directory";
+    assert_eq!(mask_text(line), line);
+}
+
+#[test]
+fn a_secrets_file_named_in_a_path_still_hides_its_value() {
+    // Grok's review of B161: exempting dotted file names left these values in clear.
+    for (line, value) in [
+        ("/opt/app/db.password=s3cret", "s3cret"),
+        (
+            "/home/user/.ssh/private.key: BEGIN-PRIVATE-MATERIAL",
+            "BEGIN-PRIVATE-MATERIAL",
+        ),
+        (
+            "/run/secrets/api_key.txt: s3cret-token-value",
+            "s3cret-token-value",
+        ),
+        ("/home/user/.password: hunter2", "hunter2"),
+    ] {
+        assert!(
+            !mask_text(line).contains(value),
+            "{line}: {}",
+            mask_text(line)
+        );
+    }
+}
