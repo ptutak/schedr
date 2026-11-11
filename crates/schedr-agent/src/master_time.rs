@@ -54,10 +54,15 @@ impl Local {
     }
 }
 
-/// The boot clock: time since boot, suspend included.
+/// The boot clock: time since boot, suspend included. Linux's `CLOCK_BOOTTIME`; elsewhere
+/// (macOS) `CLOCK_MONOTONIC`, which counts a suspend there too.
 #[must_use]
 pub fn boot_now() -> Duration {
-    let now = rustix::time::clock_gettime(rustix::time::ClockId::Boottime);
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let clock = rustix::time::ClockId::Boottime;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let clock = rustix::time::ClockId::Monotonic;
+    let now = rustix::time::clock_gettime(clock);
     Duration::new(
         u64::try_from(now.tv_sec).unwrap_or(0),
         u32::try_from(now.tv_nsec).unwrap_or(0),
