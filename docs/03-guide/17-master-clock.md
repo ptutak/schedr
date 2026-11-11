@@ -435,6 +435,12 @@ flowchart TD
 The defaults pass: 60 s is six heartbeats, and the lead is 20 s. A 90 s master lease with a
 10 s query timeout is an 80 s lead against a 60 s worker lease, and is refused.
 
+The lease period must also be at least three query timeouts, so the lead is at least two: the
+worker lease must be longer than twice the query timeout. A deployment that shortened its worker
+lease to 20 s or less (to notice a dead worker sooner), keeping the default lease period and
+query timeout, is refused at start until it also shortens those. Schedr's own tests run a 5 s worker lease with
+a 6 s lease period and a 2 s query timeout: a 4 s lead.
+
 ## Known limits
 
 A `Started` held up for more than four heartbeat intervals (40 s: the worker's reserve and the

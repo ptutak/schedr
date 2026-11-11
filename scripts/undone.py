@@ -77,7 +77,12 @@ def check_working_tree() -> int:
     found = undone(recent("HEAD"), git("diff", "--unified=0", "HEAD", "--", *PATHS))
     if len(found) <= LIMIT or os.environ.get("SCHEDR_UNDO_OK") == "1":
         return 0
-    report(found, "the uncommitted change", "run with SCHEDR_UNDO_OK=1 and say so in the commit")
+    report(
+        found,
+        "the uncommitted change",
+        "run with SCHEDR_UNDO_OK=1 and give the commit message a line `Undoes: <what, why>` "
+        "(CI checks for that line, not the variable)",
+    )
     return 1
 
 

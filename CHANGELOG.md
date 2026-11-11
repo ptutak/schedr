@@ -7,6 +7,16 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
 
 ## Unreleased
 
+- **Upgrading: a shortened worker lease may now be refused at start** (decision 444). A master
+  keeps acting for its lead after its last lease renewal: `SCHEDR_HIDDEN__MASTER__LEASE_PERIOD`
+  less `SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT` (30 s less 10 s, 20 s by default). The worker
+  lease (`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`, 60 s) must now be longer than that lead, or
+  schedr refuses to start. The lease period must already be at least three query timeouts, so
+  the worker lease must be longer than twice the query timeout (20 s by default). Anyone who
+  lowered the worker lease to 20 s or less, keeping the default lease period and query timeout,
+  must also lower those before upgrading: for example a 15 s worker lease with a 3 s heartbeat
+  interval (the lease must stay at least four heartbeats), a 6 s lease period and a 2 s query
+  timeout (a 4 s lead).
 - **Connections in the web UI** (M4.7e, decisions 207-211): a **Connections** page (every
   deployment's, by DAG root) and a section on each DAG's page (those its tasks declare), with
   **Check all** per root and **Test** per connection (after a confirmation), the results
