@@ -7,17 +7,17 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M4B, Batched worker messages (a milestone after M4).
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
-- **Then:** R1.0a, R1.0b.
+- **Then:** R1.0a, R1.0b, M5.0a, M5.0b, M5.0c.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 22; first: B187 (medium/possible), B184 (medium/possible), B152 (low/likely), B148 (medium/rare), B82 (medium/rare) (`BUGS.md`).
+- **Open bugs:** 21; first: B187 (medium/possible), B152 (low/likely), B148 (medium/rare), B82 (medium/rare), B229 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- N2 (2026-11-11): B184 met; the stress comparison before and after M4B
 - D453 (2026-11-11): the cutoff from what the master heard (decision 453, B233)
 - D445 (2026-11-11): the clock step before M4B (decisions 445-452)
 - D444 (2026-11-11): a new leader waits out the deposed one; workers fence older epochs (decision 444, B231)
 - D443 (2026-11-11): a replaced incarnation's lost attempts wait out its lease (decision 443, B230)
-- D442 (2026-11-11): one monotonic clock for the cluster (decision 442, B225-B228)
 - M4B.5 (2026-11-11): The agent's journal in groups
 - M4B.4 (2026-11-11): A turn's `Finished`s written together
 - M4B.3 (2026-11-11): A turn's messages in groups

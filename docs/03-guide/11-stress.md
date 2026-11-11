@@ -275,3 +275,85 @@ the second.
 
 Scenario 15c (the triggers on and off under the Python load) is new; its first result comes
 from the nightly run.
+
+## After M4B (2026-11-11)
+
+M4B stores a worker's messages in turns of groups (its `Started`s in one transaction, then its
+`Finished`s, set-based) and writes the agent's journal in groups. Measured the same evening on
+this laptop under WSL (quick profile), the code before M4B's batching (`0da885f`) and after it
+(`afb1b9e`), one tree after the other. Scenario 13's rows are its second rerun (each run
+overwrites the tree's report); the first run gave spawned 7.8 → 7.9 tasks a second (start p99
+1.8 s → 4.4 s) and forked 10.4 → 11.4 (1.7 s → 5.0 s). "Noise" marks a change under about 5 %,
+or one the reruns showed swinging as far either way.
+
+| Scenario | Metric | Better | Before | After | Change | Verdict |
+|---|---|---|---|---|---|---|
+| 1 throughput | tasks_per_s | more | 11.10 | 16.79 | +51 % | better |
+| | run_p50_s | less | 139.2 | 91.4 | −34 % | better |
+| | run_p99_s | less | 211.5 | 135.3 | −36 % | better |
+| | wall_s | less | 251.5 | 173.0 | −31 % | better |
+| | round_p99_s | less | 2.90 | 2.05 | −29 % | better |
+| | assigned_to_started_p99_s | less | 4.44 | 3.98 | −10 % | better |
+| | parse_all_s | less | 18.13 | 16.60 | −8 % | better |
+| | tasks | (count) | 2,501 | 2,501 | | same |
+| 2 command burst | command_decided_p99_s | less | 0.70 | 0.50 | −29 % | better |
+| | trigger_calls_per_s | more | 13.76 | 14.20 | +3 % | better (noise) |
+| | wall_s | less | 303.1 | 303.8 | 0 % | same (fixed length) |
+| 6 through PgBouncer | tasks_per_s | more | 10.22 | 15.41 | +51 % | better |
+| | run_p50_s | less | 150.2 | 99.3 | −34 % | better |
+| | run_p99_s | less | 228.1 | 146.7 | −36 % | better |
+| | wall_s | less | 270.8 | 187.8 | −31 % | better |
+| | round_p99_s | less | 2.90 | 2.90 | 0 % | same |
+| | assigned_to_started_p99_s | less | 4.62 | 4.41 | −4 % | better (noise) |
+| | parse_all_s | less | 17.72 | 17.55 | −1 % | same |
+| | tasks | (count) | 2,501 | 2,501 | | same |
+| 9 standalone on SQLite | tasks_per_s | more | 16.93 | 18.04 | +7 % | better |
+| | run_p50_s | less | 15.5 | 14.2 | −8 % | better |
+| | run_p99_s | less | 21.9 | 19.9 | −9 % | better |
+| | wall_s | less | 35.4 | 34.5 | −3 % | better (noise) |
+| | round_p99_s | less | 1.02 | 1.02 | 0 % | same |
+| | assigned_to_started_p99_s | less | 2.10 | 3.48 | +66 % | **worse** |
+| | tasks | (count) | 440 | 440 | | same |
+| 13 Python, spawned (rerun 2) | tasks_per_s | more | 5.46 | 6.17 | +13 % | better |
+| | run_p50_s | less | 112.5 | 99.6 | −12 % | better |
+| | run_p99_s | less | 114.5 | 101.2 | −12 % | better |
+| | wall_s | less | 128.6 | 116.6 | −9 % | better |
+| | round_p99_s | less | 4.10 | 2.05 | −50 % | better |
+| | assigned_to_started_p99_s | less | 3.67 | 7.84 | +114 % | **worse** |
+| | start_runner p50 / p99 | less | 1.28 / 2.56 | 1.28 / 2.56 | 0 % | same |
+| | spawn_share | 1.0 (all spawned, as meant) | 1.0 | 1.0 | | same |
+| | tasks | (count) | 640 | 640 | | same |
+| 13 Python, forked (rerun 2) | tasks_per_s | more | 9.92 | 11.89 | +20 % | better |
+| | run_p50_s | less | 60.8 | 50.7 | −17 % | better |
+| | run_p99_s | less | 63.2 | 51.8 | −18 % | better |
+| | wall_s | less | 72.0 | 60.9 | −15 % | better |
+| | round_p99_s | less | 2.05 | 1.45 | −29 % | better |
+| | assigned_to_started_p99_s | less | 3.12 | 3.39 | +9 % | worse (noise) |
+| | start_runner p50 / p99 | less | 0.04 / 0.16 | 0.04 / 0.16 | 0 % | same |
+| | fork_share | 1.0 (all forked, as meant) | 1.0 | 1.0 | | same |
+| | tasks | (count) | 640 | 640 | | same |
+| 23 many sensors | await_response_p50_s | less | 12.41 | 2.50 | −80 % | better |
+| | await_response_p99_s | less | 26.32 | 4.80 | −82 % | better (B184 met) |
+| | await_response_max_s | less | 26.56 | 4.80 | −82 % | better |
+| | poke_response_p50_s | less | 27.96 | 7.64 | −73 % | better |
+| | poke_response_p99_s | less | 34.98 | 11.09 | −68 % | better |
+| | poke_response_max_s | less | 35.01 | 11.09 | −68 % | better |
+| | wall_s | less | 76.8 | 63.3 | −18 % | better |
+| | all_in_s (all 500 started) | less | 17.43 | 25.68 | +47 % | **worse** |
+| | worker_held_mib | less | 94.9 | 94.2 | −1 % | same |
+| | worker_idle_mib | less | 25.9 | 25.9 | 0 % | same |
+| | per_wait_step_kib | less | 141.3 | 140.1 | −1 % | same |
+| | hosts_reported_mib | less | 41.6 | 41.4 | 0 % | same |
+| | wait_steps, watcher_hosts | (count) | 500, 1 | 500, 1 | | same |
+
+Throughput rose by half on Postgres, with PgBouncer or without, and by 7 to 20 % elsewhere.
+Runs are about a third shorter, and so are the rounds. Memory didn't move. B184 counted as
+fixed when stress 23 records its 500 ends within 5 s on Postgres (decision 396): p99 4.8 s, met.
+
+**What got worse is the time to a start**: assigned → started in scenarios 9 and 13, and
+scenario 23's `all_in_s`. Over four runs of scenario 13 on each code, alternating, it ranged
+3.1 to 4.8 s before and 3.4 to 7.8 s after: overlapping, the average higher. A `Started`
+arriving while the master handles a turn of up to 40 `Finished`s waits for the whole turn,
+where it waited behind one message before. It stays well inside the worker's reserve for a
+start (two heartbeats, 20 s). The turn's size is `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`
+([Timings](14-timings.md)).

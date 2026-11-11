@@ -227,6 +227,14 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 **Done when:** Not set yet (archive/PROJECT.md, Roadmap). Scope, criteria and notes: `plan/M5.toml`.
 
+| Step | Title | State | Decisions |
+|---|---|---|---|
+| M5.0a | Profile the start path | planned |  |
+| M5.0b | Starts not held behind a turn | planned |  |
+| M5.0c | The start rate | planned |  |
+| M5.0d | Pokes and rounds through PgBouncer | planned |  |
+| M5.0e | The turn size from data | planned |  |
+
 ## M6: sign-in against LDAP
 
 **Done when:** A person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests. Scope, criteria and notes: `plan/M6.toml`.

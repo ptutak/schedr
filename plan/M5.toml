@@ -5,4 +5,64 @@ notes = '''
 Thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation,
 `xcom_pull`; the placeholder and macro design (deferred until the first version works); the
 migration tool. After M4B (archive/PROJECT.md, Roadmap; Airflow compatibility).
+
+First, the start path (the user, 2026-11-11, after 1.0.0): M4B's stress comparison (guide,
+Stress tests, After M4B) made finishing faster and starting slower (assigned → started p99 up
+66-114 % in scenarios 9 and 13, stress 23's 500 starts in 25.7 s against its ends in 4.8 s).
+Profile first; the other four steps follow what it finds.
 '''
+
+[[steps]]
+id = "M5.0a"
+title = "Profile the start path"
+scope = '''
+under a burst (stress 23, scenario 13): where the time from assignment to `Started` goes: the round's assignments, `AssignTask` delivery, the worker's journal write before `Started`, the master's `Started` group, waiting for the core lock
+'''
+done_when = '''
+a written breakdown of assigned → started p50/p99 by stage, from a run with timings per stage; the next steps' order set from it
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.0b"
+title = "Starts not held behind a turn"
+scope = '''
+a `Started` arriving during a long turn of `Finished`s handled sooner: `Started`s first across turns, or a turn capped by time as well as by count
+'''
+done_when = '''
+assigned → started p99 in scenarios 9 and 13 back at or under the pre-M4B numbers (2.1 s, 1.8 s) without losing M4B's throughput
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.0c"
+title = "The start rate"
+scope = '''
+whatever the profile shows runs one at a time on the start path, batched
+'''
+done_when = '''
+stress 23 starts its 500 wait steps in under 10 s (25.7 s after M4B)
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.0d"
+title = "Pokes and rounds through PgBouncer"
+scope = '''
+re-measure stress 23's pokes (p99 11.1 s at a 5 s interval) after M5.0b/c; find what a round still does per item behind the pooler (scenario 6's round p99 unchanged at 2.9 s)
+'''
+done_when = '''
+pokes p99 under 7 s; scenario 6's round p99 at scenario 1's
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.0e"
+title = "The turn size from data"
+scope = '''
+one stress session comparing 10, 20, 40 and 80 messages a turn (`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`)
+'''
+done_when = '''
+the default set from the measured trade-off between start latency and throughput, the numbers in the stress guide
+'''
+status = "planned"

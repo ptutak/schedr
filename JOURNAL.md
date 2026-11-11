@@ -532,3 +532,13 @@ its moved cleanup. The user chose to count the cutoff from the send of the last 
 names as heard, over the master counting from its own sends. With answered heartbeats the new
 bound and the stamp's are within milliseconds; the simulator now loses heartbeats one way and
 checks the worker against the master's loss, and fails without the bound.
+
+### <a id="N2"></a>2026-11-11: B184 met; the stress comparison before and after M4B (note 2)
+
+Stress run on this laptop, the code before M4B's batching (`0da885f`) and after (`afb1b9e`),
+one after the other (the guide, Stress tests, After M4B). Stress 23 records its 500 ends with
+p99 4.8 s (26.3 s before): decision 396's bar for B184, met; B184 closed. Throughput rose by
+half on Postgres. The time to a start rose (assigned → started p99 in scenarios 9 and 13,
+stress 23's `all_in_s`), within an overlapping range over four reruns: a `Started` waits for a
+whole turn of `Finished`s. Not fixed before 1.0.0: the user put the start path into M5 as its
+first steps, profile first (M5.0a-e).

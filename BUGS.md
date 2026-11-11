@@ -54,27 +54,26 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B187: a 0.1 worker given a DAG with fields added since 0.1.0 runs it without them, as the protocol's minor version wasn't raised | 4 | medium | possible | correctness |
-| 2 | B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second | 4 | medium | possible | performance |
-| 3 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
-| 4 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
-| 5 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
-| 6 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
-| 7 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
-| 8 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
-| 9 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
-| 10 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 11 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
-| 12 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
-| 13 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
-| 14 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
-| 15 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
-| 16 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
-| 17 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
-| 18 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
-| 19 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
-| 20 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
-| 21 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
-| 22 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
+| 2 | B152: `rm -rf .schedr`, which the guide gives to start afresh, fails on the code store | 3 | low | likely | usability |
+| 3 | B148: the limit check searches a DAG's task list for each ready task, every round | 2 | medium | rare | performance |
+| 4 | B82: settling can perform cubic work on a chain | 2 | medium | rare | performance |
+| 5 | B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected) | 2 | low | possible | tests |
+| 6 | B156: An action's status stops being followed after an error answer | 2 | low | possible | usability |
+| 7 | B153: A `Literal` field can't be rendered into a command's t-string | 2 | low | possible | usability |
+| 8 | B69: embedding a model descriptor loses its `$ref` resolution context | 2 | low | possible | correctness |
+| 9 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 10 | B38: an edge between two tasks outside a group can be drawn through its box | 2 | low | possible | usability |
+| 11 | B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected) | 1 | low | rare | correctness |
+| 12 | B154: The scheduler's skipped DAGs are never logged | 1 | low | rare | reliability |
+| 13 | B151: standalone once didn't exit after its master was taken over (Suspected) | 1 | low | rare | reliability |
+| 14 | B89: a run whose stored DAG no longer reads looks unmapped to the API | 1 | low | rare | correctness |
+| 15 | B77: valid large timedeltas cannot render in agent templates | 1 | low | rare | correctness |
+| 16 | B74: `Literal` compatibility conflates booleans with integers | 1 | low | rare | correctness |
+| 17 | B73: optional TypedDict keys are falsely promised as present | 1 | low | rare | correctness |
+| 18 | B72: approximate divisibility admits incompatible `multipleOf` constraints | 1 | low | rare | correctness |
+| 19 | B71: integer constraint comparisons lose precision | 1 | low | rare | correctness |
+| 20 | B70: reference memoization skips comparisons against different inline target schemas | 1 | low | rare | correctness |
+| 21 | B24: a forked attempt started while the master link is down is recorded as `spawn` (Suspected) | 1 | low | rare | usability |
 
 ## B229: two watcher tests fail under a loaded parallel run: `what_new_code_raises_is_masked_in_the_note_about_it`, `one_starting_again_keeps_its_deadline_whatever_its_new_host_takes` (Suspected)
 
@@ -96,36 +95,6 @@ step touches their code or the user schedules them.
 - **Fix proposed:** raise the protocol's minor at the next release, and have the master assign a
   task, trigger or wait step using a newer feature only to workers of that minor or later (or
   refuse such a DAG while an older worker serves its queue); a test with a worker saying 0.1.
-
-## B184: 500 wait steps ending at once take about 23 s to be recorded, about 22 a second
-
-- **Rating:** severity **medium**, probability **possible**, performance (score 4): Stress scenario 23 (`23_many_sensors`): 500 wait steps on one worker, released together by a file; each awaiting `@sensor` checks every 1 s, yet their ends spread evenly over 0 to 23 s after the file (p50 10.6 s, p99 22.6 s), and the pokes (every 5 s) come later still (p50 24 s, p99 35 s). A throughput limit on a burst of ends, somewhere between the watcher host, the agent and the master's recording.
-- **Found:** 2026-11-08, `make stress STRESS=23_many_sensors` (quick profile) on the M4.11d2
-  part 2 tree: all 500 succeed; memory is fine (about 135 KiB a wait step, one host at 41 MiB).
-- **To find:** where the time goes when many wait steps end in the same second: the host's
-  results sent one by one, the agent forwarding them, or the master recording each `Finished`
-  (attempt, output, instance, and a run when its last step ends) in transactions of its own.
-  One step noticing a change alone is fast.
-- **Cause (Grok's investigation, 2026-11-08; checked against `core.rs`):** the master. Each
-  `Started` and each `Finished` is its own `db.atomically` (`MasterCore::finished`, and the
-  `Started` arm of `handle`): on file SQLite about 15 ms each (an 8 ms durable commit plus the
-  statements), so a burst records at about 67 a second alone and 53 in `schedr standalone`, the
-  `Finished`s queued behind the `Started`s still committing. The host sends the burst at about
-  1400 a second and the agent's journal writes one in about 5 ms: neither is the limit.
-  Postgres (the stress run's 22 a second) not measured.
-- **Postponed to M4B** (the user, 2026-11-08): batching the whole turn's messages is M4B's
-  work anyway.
-- **Fix proposed (for M4B):** the messages of one worker's turn (`MESSAGES_PER_TURN`, 10) that
-  are `Finished` (and a leading run of `Started`) committed in one transaction, ending the batch at
-  any other message so the order holds; a data fault taken out of it and stored on its own (B106);
-  a failed commit stores and acks none (the journal resends); `CommitUnknown` settles every
-  attempt of the batch. A test counts the write transactions (`count_writes`): today one per
-  message, then about one per ten.
-- **Why it matters:** a sensor's point is reacting soon; a burst of events (a shared file, a
-  run many steps wait for) delays the last by tens of seconds.
-- **To be fixed in M4B** (decisions 395, D396, the user, 2026-11-09): a turn in one transaction,
-  its `Finished`s written together, each run settled once per turn, the agent's journal in groups
-  (M4B.4, M4B.5); fixed when stress 23 records its 500 ends within 5 s on Postgres.
 
 ## B161: A task's log showed `No` masked in a client's error, matching no secret (Suspected)
 
