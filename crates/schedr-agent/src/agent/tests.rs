@@ -3458,8 +3458,9 @@ async fn an_assignment_arriving_past_its_deadline_in_master_time_is_too_late() {
 async fn heartbeats_never_answered_dont_hold_back_the_start_budget() {
     // B225 (Grok's review): a paused master answers no heartbeat; once it leads again, the
     // answers paired with the oldest unanswered heartbeats left the count that far behind for
-    // the session, and every assignment was too late. Unanswered for 300 ms (about 15
-    // heartbeats), then answered: 200 ms sent at 500 ms start.
+    // the session, and every assignment was too late. Unanswered for 1.5 s, then answered: a
+    // deadline 600 ms after the assignment starts, which the count left 1.5 s behind refuses
+    // (wide margins both ways: CI's coverage build is slow).
     let mut script = silent_master_leased(false, 5000);
     let mut task = task_json(&json!({"kind": "python"}));
     task["id"] = json!("after_pause");
@@ -3467,12 +3468,12 @@ async fn heartbeats_never_answered_dont_hold_back_the_start_budget() {
     let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
         panic!("expected an assignment")
     };
-    assigned.start_by_ms = Some(700);
+    assigned.start_by_ms = Some(2300);
     script.truncate(1);
     let master = Scripted {
         script,
-        late: Some((Duration::from_millis(500), vec![later])),
-        ack_heartbeats: Some(Duration::from_millis(300)),
+        late: Some((Duration::from_millis(1700), vec![later])),
+        ack_heartbeats: Some(Duration::from_millis(1500)),
         ..Scripted::default()
     };
     let launched = Arc::new(Mutex::new(Vec::new()));
@@ -3480,7 +3481,7 @@ async fn heartbeats_never_answered_dont_hold_back_the_start_budget() {
     let watched = Arc::clone(&launched);
     let started = Instant::now();
     let done = move |_: &[pb::WorkerMessage]| {
-        !watched.lock().unwrap().is_empty() || started.elapsed() > Duration::from_secs(3)
+        !watched.lock().unwrap().is_empty() || started.elapsed() > Duration::from_secs(6)
     };
     let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
         agent.executor.dirs = seen_launches;
