@@ -594,6 +594,57 @@ impl Database {
         Ok(())
     }
 
+    /// Stores several instances' outputs, as [`Self::store_output`] does each, in statements of
+    /// up to `UPDATES_PER_STATEMENT` rows (M4B.4, B184). An instance named twice keeps the
+    /// later.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn store_outputs(
+        &self,
+        outputs: &[(&str, &str, &serde_json::Value)],
+    ) -> Result<(), DbError> {
+        // One row per instance: a statement may not change a row twice (Postgres refuses).
+        let mut rows: Vec<(&str, &str, String)> = Vec::with_capacity(outputs.len());
+        for (instance_id, outcome, value) in outputs {
+            rows.retain(|(id, _, _)| id != instance_id);
+            rows.push((instance_id, outcome, to_json(value)));
+        }
+        in_tx!(self, |tx, backend| {
+            for chunk in rows.chunks(UPDATES_PER_STATEMENT) {
+                let values: Vec<String> = (0..chunk.len())
+                    .map(|i| {
+                        let n = i * 4;
+                        format!(
+                            "(${}{{uuid}}, ${}, ${}{{json}}, ${})",
+                            n + 1,
+                            n + 2,
+                            n + 3,
+                            n + 4
+                        )
+                    })
+                    .collect();
+                let text = format!(
+                    "INSERT INTO outputs (task_instance_id, outcome, value, size_bytes) VALUES {} \
+                     ON CONFLICT (task_instance_id) DO UPDATE SET outcome = excluded.outcome, \
+                     value = excluded.value, size_bytes = excluded.size_bytes",
+                    values.join(", ")
+                );
+                let mut insert = sqlx::query(sql_text(backend, &text));
+                for (instance_id, outcome, text) in chunk {
+                    insert = insert
+                        .bind(*instance_id)
+                        .bind(*outcome)
+                        .bind(text)
+                        .bind(i64::try_from(text.len()).unwrap_or(i64::MAX));
+                }
+                insert.execute(&mut *tx).await?;
+            }
+        });
+        Ok(())
+    }
+
     /// Stores the output of a task that isn't mapped, by its ID in the run (a task the master
     /// ended itself: no attempt knows its instance).
     ///

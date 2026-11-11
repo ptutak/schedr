@@ -373,6 +373,8 @@ pub struct MasterMetrics {
     pub trigger_idle_restarts: Counter,
     /// The label sets the gauges have had: one that is gone reads 0 rather than vanishing.
     seen: Arc<Mutex<Seen>>,
+    /// Counts held while a group of worker messages is in its transaction (M4B.3).
+    staged: Arc<Mutex<Option<Vec<Staged>>>>,
 }
 
 #[derive(Debug, Default)]
@@ -417,6 +419,7 @@ impl Default for MasterMetrics {
             trigger_back_pressure_stops: Counter::default(),
             trigger_idle_restarts: Counter::default(),
             seen: Arc::default(),
+            staged: Arc::default(),
         }
     }
 }
@@ -592,6 +595,9 @@ impl MasterMetrics {
 
     /// Counts one ended attempt.
     pub fn attempt_ended(&self, status: &impl ToString) {
+        if self.held(|| Staged::AttemptEnded(status.to_string())) {
+            return;
+        }
         self.attempts_ended
             .get_or_create(&StatusLabels {
                 status: status.to_string(),
@@ -601,6 +607,9 @@ impl MasterMetrics {
 
     /// Counts one run turned a yellow success (decision 309).
     pub fn run_late_failed(&self, dag_id: &str, reason: &str) {
+        if self.held(|| Staged::RunLateFailed(dag_id.to_owned(), reason.to_owned())) {
+            return;
+        }
         self.runs_late_failed
             .get_or_create(&LateLabels {
                 dag_id: dag_id.to_owned(),
@@ -640,12 +649,69 @@ impl MasterMetrics {
 
     /// Counts one finished run.
     pub fn run_finished(&self, dag_id: &str, result: &impl ToString) {
+        if self.held(|| Staged::RunFinished(dag_id.to_owned(), result.to_string())) {
+            return;
+        }
         self.runs_finished
             .get_or_create(&ResultLabels {
                 dag_id: dag_id.to_owned(),
                 result: result.to_string(),
             })
             .inc();
+    }
+}
+
+/// A count held while a transaction is open ([`MasterMetrics::stage`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Staged {
+    AttemptEnded(String),
+    RunFinished(String, String),
+    RunLateFailed(String, String),
+}
+
+impl MasterMetrics {
+    /// From now on attempt ends and run results are held instead of counted, until
+    /// [`Self::count_staged`] counts them (the transaction committed) or [`Self::drop_staged`]
+    /// drops them (it rolled back, and its messages will be handled again: M4B.3, so no
+    /// result is counted twice).
+    pub fn stage(&self) {
+        *self
+            .staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Vec::new());
+    }
+
+    /// Counts what was held, and stops holding.
+    pub fn count_staged(&self) {
+        let held = self
+            .staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        for staged in held.unwrap_or_default() {
+            match staged {
+                Staged::AttemptEnded(status) => self.attempt_ended(&status),
+                Staged::RunFinished(dag_id, result) => self.run_finished(&dag_id, &result),
+                Staged::RunLateFailed(dag_id, reason) => self.run_late_failed(&dag_id, &reason),
+            }
+        }
+    }
+
+    /// Drops what was held, and stops holding.
+    pub fn drop_staged(&self) {
+        self.staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
+    /// Holds a count while staging; whether it was held.
+    fn held(&self, staged: impl FnOnce() -> Staged) -> bool {
+        let mut held = self
+            .staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.as_mut().map(|held| held.push(staged())).is_some()
     }
 }
 

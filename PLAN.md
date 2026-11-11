@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M4B.3, A turn's messages in groups.
+**Next:** M4B.6, The turn in one transaction, savepoints per group.
 
 ## M0: Foundations
 
@@ -209,10 +209,10 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4B.0 | Master time hardened (the clock step) | done 2026-11-11 | D445, D446, D447, D448, D449, D450 |
 | M4B.1 | Measure first | dropped |  |
 | M4B.2 | Savepoints in `schedr-db` | dropped |  |
-| M4B.3 | A turn's messages in groups | **next** | D397, D451 |
-| M4B.4 | A turn's `Finished`s written together | planned |  |
-| M4B.5 | The agent's journal in groups | planned | D396 |
-| M4B.6 | The turn in one transaction, savepoints per group | planned |  |
+| M4B.3 | A turn's messages in groups | done 2026-11-11 | D397, D451 |
+| M4B.4 | A turn's `Finished`s written together | done 2026-11-11 |  |
+| M4B.5 | The agent's journal in groups | done 2026-11-11 | D396 |
+| M4B.6 | The turn in one transaction, savepoints per group | **next** |  |
 
 ## 1.0.0: after M4B
 

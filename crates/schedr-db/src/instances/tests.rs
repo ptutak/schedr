@@ -485,3 +485,36 @@ async fn a_task_updated_twice_at_once_ends_as_its_last_update_with_both_retries(
         (TaskInstanceState::Success, None, 2)
     );
 }
+
+#[tokio::test]
+async fn outputs_are_stored_together_the_later_of_one_instance_kept() {
+    // M4B.4: a turn's outputs in one statement; an instance named twice keeps the later, and
+    // one stored before is replaced.
+    let (db, run_id) = with_run(RunState::Running).await;
+    db.create_instances(
+        &run_id,
+        &[
+            (id("extract"), -1, TaskInstanceState::Running),
+            (id("load"), -1, TaskInstanceState::Running),
+        ],
+        ts("2026-10-21T08:00:01Z"),
+    )
+    .await
+    .unwrap();
+    let instances = db.run_tasks(&run_id).await.unwrap().unwrap().instances;
+    let (a, b) = (instances[0].id.as_str(), instances[1].id.as_str());
+    db.store_output(b, "SUCCESS", &json!(0)).await.unwrap();
+    let (one, two, three) = (json!({"rows": 1}), json!({"rows": 2}), json!({"rows": 3}));
+    db.store_outputs(&[
+        (a, "SUCCESS", &one),
+        (b, "SKIP", &two),
+        (a, "SUCCESS", &three),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(
+        db.output(a).await.unwrap(),
+        Some(("SUCCESS".to_owned(), three))
+    );
+    assert_eq!(db.output(b).await.unwrap(), Some(("SKIP".to_owned(), two)));
+}

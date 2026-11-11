@@ -409,3 +409,24 @@ fn the_journals_files_are_its_owners_alone() {
         assert_eq!(mode & 0o777, 0o600, "{name}");
     }
 }
+
+#[test]
+fn results_are_written_together_and_read_back_as_one_by_one() {
+    // M4B.5: a group's records, side by side, replacing what each attempt had; an unsafe ID
+    // writes nothing of the group.
+    let (_dir, journal) = journal();
+    journal.write("a1", &JournalRecord::Running(None)).unwrap();
+    let (one, two) = (
+        JournalRecord::Finished(finished("a1")),
+        JournalRecord::Finished(finished("a2")),
+    );
+    journal.write_many(&[("a1", &one), ("a2", &two)]).unwrap();
+    assert_eq!(names(&journal), ["a1.json", "a2.json"]);
+    assert_eq!(
+        journal.recover().unwrap(),
+        [("a1".to_owned(), one), ("a2".to_owned(), two.clone())]
+    );
+    let refused = journal.write_many(&[("a3", &two), ("../a4", &two)]);
+    assert_eq!(refused.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(names(&journal), ["a1.json", "a2.json"]);
+}

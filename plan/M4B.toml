@@ -111,7 +111,8 @@ scope = '''
 done_when = '''
 a turn of 40 `Started`s and `Finished`s is two transactions; a failed group redone one by one while the next turn's messages wait; an attempt's `Started` always stored before its `Finished`; no metric counted twice
 '''
-status = "planned"
+status = "done"
+done = 2026-11-11
 
 [[steps]]
 id = "M4B.4"
@@ -122,7 +123,8 @@ scope = '''
 done_when = '''
 a unit test counts the statements of a turn of 20 `Finished`s: a few per turn, not about six per message; each run read once per turn
 '''
-status = "planned"
+status = "done"
+done = 2026-11-11
 
 [[steps]]
 id = "M4B.5"
@@ -133,7 +135,8 @@ scope = '''
 done_when = '''
 a burst of results costs one fsync per group; stress 23 records its 500 ends within 5 s on Postgres (B184 fixed)
 '''
-status = "planned"
+status = "done"
+done = 2026-11-11
 
 [[steps]]
 id = "M4B.6"

@@ -963,6 +963,10 @@ pub enum SessionEnd {
 }
 
 /// Something happened in the background.
+/// The most results kept in the journal as one group (M4B.5): each a thread writing its file
+/// meanwhile.
+const RESULTS_PER_GROUP: usize = 32;
+
 enum Done {
     Spawned {
         attempt_id: String,
@@ -1356,7 +1360,7 @@ impl<E: Executor> Agent<E> {
                 _ = alive.tick() => self.on_alive(),
                 () = at(cut_off_at) => self.stop_cut_off(),
                 out = &mut work => return Some(out),
-                Some(done) = self.done_rx.recv() => self.on_done(done, None).await,
+                Some(done) = self.done_rx.recv() => self.on_done_group(done, None, None).await,
                 count = next_request(&mut self.shutdown) => {
                     self.on_shutdown(count);
                 }
@@ -2112,7 +2116,7 @@ impl<E: Executor> Agent<E> {
                     Err(status) => return SessionEnd::Lost(status.to_string()),
                 },
                 Some(done) = self.done_rx.recv() => {
-                    self.on_done(done, Some((&to_master, &mut client))).await;
+                    self.on_done_group(done, Some(&to_master), Some(&mut client)).await;
                 }
                 _ = heartbeat.tick() => {
                     if let Some(end) = self.send_heartbeat(&mut resends, &to_master) {
@@ -2742,8 +2746,104 @@ impl<E: Executor> Agent<E> {
         });
     }
 
+    /// A task's result made ready to keep and send: fitted to the master's limit, counted, its
+    /// code hash named and its copy of the code let go.
+    fn result_ready(&mut self, mut finished: pb::Finished) -> pb::Finished {
+        fit_result(&mut finished, self.master_limit);
+        let status = attempt_status_from_proto(finished.status)
+            .map_or_else(|_| "unknown".to_owned(), |s| s.to_string());
+        self.metrics.attempt_ended(&status);
+        if let Some(hash) = self.release_code(&finished.attempt_id) {
+            with_code_hash(&mut finished, hash);
+            self.collect_code();
+        }
+        finished
+    }
+
+    /// A result in the journal: the attempt is done here, and the result goes to the master.
+    fn result_recorded(
+        &mut self,
+        finished: pb::Finished,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+    ) {
+        self.ended_running(&finished.attempt_id);
+        self.cleaning.remove(&finished.attempt_id);
+        self.cleanup_room.remove(&finished.attempt_id);
+        self.stopped.remove(&finished.attempt_id);
+        self.gates.remove(&finished.attempt_id);
+        self.unacked
+            .insert(finished.attempt_id.clone(), finished.clone());
+        if let Some(to_master) = to_master {
+            let _ = to_master.send(wrap(worker_message::Message::Finished(finished)));
+        }
+    }
+
+    /// What ended, with the results waiting behind it (M4B.5, B184): those results, up to
+    /// [`RESULTS_PER_GROUP`] in a row, are kept in the journal as one group
+    /// ([`Journal::write_many`]), then each goes on as alone; the first other news after them
+    /// is handled next.
+    async fn on_done_group(
+        &mut self,
+        done: Done,
+        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        client: Option<&mut MasterClient<Channel>>,
+    ) {
+        let link = to_master.zip(client);
+        let Done::Attempt(first) = done else {
+            return self.on_done(done, link).await;
+        };
+        let mut results = vec![self.result_ready(first)];
+        let mut next = None;
+        while results.len() < RESULTS_PER_GROUP {
+            match self.done_rx.try_recv() {
+                Ok(Done::Attempt(finished)) => results.push(self.result_ready(finished)),
+                Ok(other) => {
+                    next = Some(other);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        self.record_results(&results).await;
+        let to_master = link.as_ref().map(|(to_master, _)| *to_master);
+        for finished in results {
+            self.result_recorded(finished, to_master);
+        }
+        if let Some(next) = next {
+            Box::pin(self.on_done(next, link)).await;
+        }
+    }
+
+    /// Keeps results in the journal until the master has them, as one group.
+    async fn record_results(&self, results: &[pb::Finished]) {
+        if let [one] = results {
+            return self.record_finished(one).await;
+        }
+        let journal = self.journal.clone();
+        let records: Vec<(String, JournalRecord)> = results
+            .iter()
+            .map(|f| (f.attempt_id.clone(), JournalRecord::Finished(f.clone())))
+            .collect();
+        let written = tokio::task::spawn_blocking(move || {
+            let refs: Vec<(&str, &JournalRecord)> =
+                records.iter().map(|(id, r)| (id.as_str(), r)).collect();
+            journal.write_many(&refs)
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|written| written);
+        if let Err(error) = written {
+            tracing::warn!(
+                results = results.len(),
+                %error,
+                "can't record the results; they are lost if the agent restarts before the \
+                 master acknowledges them"
+            );
+        }
+    }
+
     /// Keeps a result in the journal until the master has it.
-    async fn record_finished(&mut self, finished: &pb::Finished) {
+    async fn record_finished(&self, finished: &pb::Finished) {
         if let Err(error) = self
             .record(
                 &finished.attempt_id,
@@ -3554,26 +3654,10 @@ impl<E: Executor> Agent<E> {
                     let _ = to_master.send(handles_message(attempt_id, position, &[handle]));
                 }
             }
-            Done::Attempt(mut finished) => {
-                fit_result(&mut finished, self.master_limit);
-                let status = attempt_status_from_proto(finished.status)
-                    .map_or_else(|_| "unknown".to_owned(), |s| s.to_string());
-                self.metrics.attempt_ended(&status);
-                if let Some(hash) = self.release_code(&finished.attempt_id) {
-                    with_code_hash(&mut finished, hash);
-                    self.collect_code();
-                }
+            Done::Attempt(finished) => {
+                let finished = self.result_ready(finished);
                 self.record_finished(&finished).await;
-                self.ended_running(&finished.attempt_id);
-                self.cleaning.remove(&finished.attempt_id);
-                self.cleanup_room.remove(&finished.attempt_id);
-                self.stopped.remove(&finished.attempt_id);
-                self.gates.remove(&finished.attempt_id);
-                self.unacked
-                    .insert(finished.attempt_id.clone(), finished.clone());
-                if let Some((to_master, _)) = link {
-                    let _ = to_master.send(wrap(worker_message::Message::Finished(finished)));
-                }
+                self.result_recorded(finished, link.map(|(to_master, _)| to_master));
             }
             Done::Trigger(done) => self.trigger_done(done, link.map(|(to, _)| to)),
             Done::ApiCall { call, answer } => {

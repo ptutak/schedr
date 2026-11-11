@@ -119,6 +119,13 @@ impl Database {
         if result.is_ok() && scoped.broken {
             result = Err(DbError::TransactionFailed.into());
         }
+        // A test's commit cut off before it stored: rolled back, its answer lost (see
+        // `Database::lose_commit_unstored`).
+        #[cfg(any(test, feature = "testing"))]
+        if result.is_ok() && self.faults().commit_lost_unstored() {
+            let _ = scoped.end("ROLLBACK").await;
+            return Err(DbError::CommitUnknown.into());
+        }
         if result.is_ok() {
             self.limited(self.query_timeout(), async {
                 Ok(scoped.end("COMMIT").await?)
@@ -126,6 +133,8 @@ impl Database {
             .await
             .map_err(DbError::from_commit)?;
             // A test's commit stored, its answer lost (see `Database::lose_commit_answer`).
+            #[cfg(any(test, feature = "testing"))]
+            self.faults().committed();
             #[cfg(any(test, feature = "testing"))]
             if self.faults().commit_answer_lost() {
                 return Err(DbError::CommitUnknown.into());

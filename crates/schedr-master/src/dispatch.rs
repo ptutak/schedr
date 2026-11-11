@@ -292,6 +292,10 @@ pub struct Dispatcher {
     /// content hash: a connections job goes to a worker having the root at it.
     connections: BTreeMap<String, (Option<String>, Arc<Registry>)>,
     metrics: MasterMetrics,
+    /// The attempts this dispatcher's writes started or ended, in order, since
+    /// [`Self::take_witnesses`]: what a group's commit cut off is read back by (M4B.3, Grok's
+    /// review: the group's last message may have changed nothing).
+    witnesses: Vec<(String, Witness)>,
     /// Attempts whose `Started` arrived but waits for the master: never taken back (B11).
     arrivals: Arrivals,
     /// Task instances whose assignment failed on its own, and until when they are left out.
@@ -358,6 +362,15 @@ pub struct Memory {
     active: Active,
 }
 
+/// What a write did to an attempt, for a commit cut off to be read back by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Witness {
+    /// It recorded the attempt's first start.
+    Started,
+    /// It recorded the attempt's end.
+    Ended,
+}
+
 /// What a step's assignments count as they go.
 #[derive(Debug, Default)]
 struct Tally {
@@ -396,6 +409,7 @@ impl Dispatcher {
             current_code: BTreeMap::new(),
             connections: BTreeMap::new(),
             metrics: MasterMetrics::default(),
+            witnesses: Vec::new(),
             arrivals: Arrivals::default(),
             adopted_unrecorded: BTreeSet::new(),
             set_aside: BTreeMap::new(),
@@ -486,6 +500,11 @@ impl Dispatcher {
         if error.commit_unknown() {
             self.recount();
         }
+    }
+
+    /// The attempts started or ended since the last call (see `witnesses`), and none from now.
+    pub fn take_witnesses(&mut self) -> Vec<(String, Witness)> {
+        std::mem::take(&mut self.witnesses)
     }
 
     /// Puts back a copy taken by [`Self::memory`].
@@ -907,6 +926,8 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         outgoing.append(&mut self.stops);
         self.resolved.clear();
+        // Only a group's own writes are read back by (M4B.3); a round's aren't kept.
+        self.witnesses.clear();
         self.execution.prepare_runs(now).await?;
         self.execution.queue_due_retries(now).await?;
         self.expire(now).await?;
@@ -1654,6 +1675,10 @@ impl Dispatcher {
                 .mark_started(&started.attempt_id, method, now)
                 .await?
         {
+            // A start already recorded changes only the method: no witness of this write.
+            if !attempt.started {
+                self.witnesses.push((attempt.id.clone(), Witness::Started));
+            }
             // It found a worker: who rejected it before doesn't matter any more.
             self.rejections.remove(&attempt.instance_id);
             self.code_missing.remove(&attempt.instance_id);
@@ -1869,6 +1894,116 @@ impl Dispatcher {
             self.record(&attempt, &end, &result, now).await?;
         }
         Ok(finished_ack(worker_id, &finished.attempt_id))
+    }
+
+    /// Common `Finished`s, as one batch (see [`Self::finished_group`]).
+    async fn finish_common(
+        &mut self,
+        worker_id: &str,
+        common: &[(&StoredAttempt, &pb::Finished)],
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        if common.is_empty() {
+            return Ok(());
+        }
+        let mut ends = Vec::with_capacity(common.len());
+        let mut results = Vec::with_capacity(common.len());
+        for &(attempt, finished) in common {
+            let status = attempt_status_from_proto(finished.status).map_err(|e| {
+                DispatchError::BadMessage {
+                    worker_id: worker_id.to_owned(),
+                    reason: e.to_string(),
+                }
+            })?;
+            self.count_strike(attempt, finished, status, now).await?;
+            let cleanup = finished
+                .cleanup
+                .as_ref()
+                .map(|c| cleanup_end(c, worker_id))
+                .transpose()?;
+            let (end, result) = ended(finished, status, summary_of(finished), cleanup);
+            self.workers.release(&attempt.id);
+            self.active.remove(&attempt.id);
+            ends.push(end);
+            results.push((attempt, result));
+        }
+        let rows: Vec<(&str, &AttemptEnd)> = common
+            .iter()
+            .zip(&ends)
+            .map(|((attempt, _), end)| (attempt.id.as_str(), end))
+            .collect();
+        let recorded = self.db.end_attempts(&rows, now).await?;
+        let mut by_run: BTreeMap<&str, Vec<(&TaskId, i32, &AttemptResult)>> = BTreeMap::new();
+        for ((attempt, result), end) in results.iter().zip(&ends) {
+            if recorded.contains(&attempt.id) {
+                self.witnesses.push((attempt.id.clone(), Witness::Ended));
+                self.metrics.attempt_ended(&end.status);
+                by_run.entry(attempt.run_id.as_str()).or_default().push((
+                    &attempt.task_id,
+                    attempt.map_index,
+                    result,
+                ));
+            }
+        }
+        for (run_id, results) in by_run {
+            let done = self
+                .execution
+                .attempts_finished(run_id, &results, now)
+                .await?;
+            self.stop(run_id, &done.stops).await?;
+        }
+        Ok(())
+    }
+
+    /// A turn's `Finished`s together (M4B.4, B184): the attempts read in one query, the
+    /// common case (the worker's own attempt, not moved, its first result) ended in one
+    /// statement, its outputs in another, each run read and moved forward once. Any other
+    /// (a moved cleanup's, a rest, another worker's, code gone missing, a repeat) goes through
+    /// [`Self::finished`] alone, first. Each is acknowledged.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if a message is malformed or the database fails: the caller's
+    /// transaction rolls back, and the messages are handled one by one.
+    pub async fn finished_group(
+        &mut self,
+        worker_id: &str,
+        group: &[pb::Finished],
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
+        let ids: Vec<&str> = group.iter().map(|f| f.attempt_id.as_str()).collect();
+        let attempts: BTreeMap<String, StoredAttempt> = self
+            .db
+            .attempts_by_ids(&ids)
+            .await?
+            .into_iter()
+            .map(|a| (a.id.clone(), a))
+            .collect();
+        let mut seen = BTreeSet::new();
+        let mut common = Vec::new();
+        for finished in group {
+            let first = seen.insert(finished.attempt_id.as_str());
+            match attempts.get(&finished.attempt_id) {
+                Some(attempt) if first && is_common(attempt, finished, worker_id) => {
+                    common.push((attempt, finished));
+                }
+                // Gone, or a repeat: acknowledged only (as `finished` does).
+                None => {}
+                Some(_) if !first => {}
+                // In its place (Grok's review): what came before it stored first, so a mapped
+                // sibling's success before an uncommon failure stays a success, as one by one.
+                Some(_) => {
+                    self.finish_common(worker_id, &std::mem::take(&mut common), now)
+                        .await?;
+                    self.finished(worker_id, finished, now).await?;
+                }
+            }
+        }
+        self.finish_common(worker_id, &common, now).await?;
+        Ok(group
+            .iter()
+            .map(|f| finished_ack(worker_id, &f.attempt_id))
+            .collect())
     }
 
     /// Whether a wait step ended here, without a call: switched off, or out of time. A sensor
@@ -2887,6 +3022,7 @@ impl Dispatcher {
         self.workers.release(&attempt.id);
         self.active.remove(&attempt.id);
         if self.db.end_attempt(&attempt.id, end, now).await? {
+            self.witnesses.push((attempt.id.clone(), Witness::Ended));
             self.metrics.attempt_ended(&end.status);
             let recorded = self
                 .execution
@@ -2940,6 +3076,7 @@ impl Dispatcher {
         };
         self.active.remove(attempt_id);
         if self.db.end_attempt(attempt_id, &end, now).await? {
+            self.witnesses.push((attempt_id.to_owned(), Witness::Ended));
             self.metrics.attempt_ended(&end.status);
             let recorded = self
                 .execution
@@ -3350,6 +3487,16 @@ const fn by_master(status: AttemptStatus) -> AttemptResult {
 }
 
 /// An attempt's end and result as `finished` says, with `error_summary` and `cleanup` as read.
+/// Whether a `Finished` takes the common path of [`Dispatcher::finished_group`]: its worker's
+/// own attempt, not ended, never moved, its whole result (not a rest), its code there.
+fn is_common(attempt: &StoredAttempt, finished: &pb::Finished, worker_id: &str) -> bool {
+    attempt.worker_id == worker_id
+        && attempt.status.is_none()
+        && attempt.cleanup_moves == 0
+        && !finished.cleanup.as_ref().is_some_and(|c| c.rest)
+        && !CODE_GONE_ERRORS.contains(&finished.error_kind.as_str())
+}
+
 fn ended(
     finished: &pb::Finished,
     status: AttemptStatus,

@@ -174,6 +174,62 @@ impl Journal {
     /// attempt ID that isn't a safe file name.
     pub fn write(&self, attempt_id: &str, record: &JournalRecord) -> io::Result<()> {
         let path = self.path(attempt_id)?;
+        let json = encoded(attempt_id, record)?;
+        self.replace(attempt_id, &path, &json)
+    }
+
+    /// Records several attempts' records, as [`Self::write`] does each, with their files
+    /// written and flushed to disk side by side and the directory flushed once (M4B.5, B184):
+    /// a burst of results costs about one flush's time, not two flushes each. On disk when this
+    /// returns, all of them; an error leaves those written before it.
+    ///
+    /// # Errors
+    ///
+    /// The first I/O error, or `InvalidInput` for an attempt ID that isn't a safe file name
+    /// (then nothing is written).
+    pub fn write_many(&self, records: &[(&str, &JournalRecord)]) -> io::Result<()> {
+        let files = records
+            .iter()
+            .map(|(attempt_id, record)| {
+                Ok((
+                    *attempt_id,
+                    self.path(attempt_id)?,
+                    encoded(attempt_id, record)?,
+                ))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        fs::create_dir_all(&self.dir)?;
+        let written: Vec<io::Result<()>> = std::thread::scope(|scope| {
+            let threads: Vec<_> = files
+                .iter()
+                .map(|(attempt_id, _, json)| {
+                    let temp = self.dir.join(format!("{TEMP_PREFIX}{attempt_id}"));
+                    scope.spawn(move || -> io::Result<()> {
+                        let mut file = private_file().truncate(true).open(&temp)?;
+                        file.write_all(json)?;
+                        file.sync_all()
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|t| {
+                    t.join()
+                        .unwrap_or_else(|_| Err(io::Error::other("a write panicked")))
+                })
+                .collect()
+        });
+        for ((attempt_id, path, _), done) in files.iter().zip(written) {
+            done?;
+            fs::rename(self.dir.join(format!("{TEMP_PREFIX}{attempt_id}")), path)?;
+        }
+        self.sync_dir()
+    }
+}
+
+/// A record as its file holds it.
+fn encoded(attempt_id: &str, record: &JournalRecord) -> io::Result<Vec<u8>> {
+    {
         let stored = match record {
             JournalRecord::Running(process) => Stored::Running {
                 attempt_id: attempt_id.to_owned(),
@@ -189,10 +245,11 @@ impl Journal {
                 process: *process,
             },
         };
-        let json = serde_json::to_vec(&stored).map_err(io::Error::other)?;
-        self.replace(attempt_id, &path, &json)
+        serde_json::to_vec(&stored).map_err(io::Error::other)
     }
+}
 
+impl Journal {
     /// Replaces `path` with `content`, atomically; on disk when this returns.
     fn replace(&self, attempt_id: &str, path: &Path, content: &[u8]) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;

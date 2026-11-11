@@ -385,11 +385,12 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 4] = [
+const HIDDEN_LIMITS: [&str; 5] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
     "MASTER__NOTIFICATION_BODY",
     "MASTER__RETENTION_BATCH",
+    "MASTER__MESSAGES_PER_TURN",
 ];
 
 /// The fixed limits, with what `SCHEDR_HIDDEN__*` variables set: whole numbers above zero.
@@ -401,6 +402,7 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             Some("MASTER__WORKER_REPORT_TEXT") => &mut limits.worker_report_text,
             Some("MASTER__NOTIFICATION_BODY") => &mut limits.notification_body,
             Some("MASTER__RETENTION_BATCH") => &mut limits.retention_batch,
+            Some("MASTER__MESSAGES_PER_TURN") => &mut limits.messages_per_turn,
             _ => continue,
         };
         *limit = text

@@ -5,7 +5,7 @@ updated = 2026-11-11
 
 in_progress = [
     "A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user.",
-    "M4 done 2026-11-10; Codex's full review (F12-F14) 2026-11-10; the bug round before M4B done 2026-11-11 (B230/B231 last, D443/D444). The clock step M4B.0 done 2026-11-11 (D445-D450: the cutoff on master time too, kept over a reconnect and read by the cleanup gates; the best sample over a 10-minute window; clock metrics; B232's skew warning; the take-back two heartbeats after start_by; a worker-side simulator; design/workers.md's invariants by Grok), reviewed by Grok (6 findings fixed). Next: M4B.3 (built in schedr-m4b3, Grok reviewing), M4B.4, M4B.5, then Grok's review of the whole of M4B. Unattended to the end of M4B (the user), commits pre-accepted, decisions set aside. B187 left until 1.0 (the user).",
+    "M4 done 2026-11-10; the bug round before M4B done 2026-11-11. M4B.0 (the clock step, D445-D450) committed 2026-11-11. M4B.3-M4B.5 and D452 done 2026-11-11: a worker's turn stored in groups (Started, then Finished; read back by the writes' witnesses; at most 10 redone alone a turn), a group's Finished written together (set-based ends and outputs, each run moved forward once), the agent's results journalled as a group, a standby naming the leader; Grok reviewed M4B.3/4 twice (6 findings fixed). B184 stays open until stress 23 shows 500 ends within 5 s. Next: B233 (the user's choice: the cutoff also from the send of the last heartbeat the master heard), the guarantees guide page (Grok), Grok's review of the whole of M4B, then a plan step for D446's master side (the user's choice). Commits pre-accepted to the end of M4B. B187 left until 1.0 (the user).",
     "The greenhouse showcase done 2026-11-10 (examples/showcase, docs/02-dags/25-showcase.md; asked by the user: IoT, a test and a guide page): `make standalone DAGS=examples/showcase/dags`, then `make showcase`; its code review cancelled by the user.",
     "For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).",
     "For the user: M4.14's CI failed on `make docs` only (a public doc linking a private item, fixed in M4.15a's commit); retention's Postgres row lock became FOR NO KEY UPDATE after a side note (new runs of the DAG no longer wait for a batch).",
@@ -14,10 +14,7 @@ in_progress = [
     "Fork servers load all of schedr before forking, the bare one too (asked by the user 2026-11-10): a child's import of the showcase's ingest.py 241 ms -> 23 ms; `make standalone` preloads the showcase's libraries (PRELOAD).",
 ]
 
-waiting = [
-    "B233 (high, rare, found by Grok in the clock step): a worker cut off one way keeps a cleanup_anywhere task past its cleanup's move; the proposed fix (the cutoff from the send of the last heartbeat the master heard) stops workers up to a heartbeat earlier: the user's to decide.",
-    "D446: the simulator built covers the worker's side; the master's core and dispatcher in it, with restarts and takeovers, are not built: build it later, or narrow the record (the user's).",
-]
+waiting = []
 
 rules = [
     "Commits and pushes pre-accepted (2026-11-10) after each review, `make check` and `make docs`; stop at any decision that is the user's.",

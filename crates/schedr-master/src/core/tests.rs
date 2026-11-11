@@ -1796,6 +1796,92 @@ mod faults {
         }
     }
 
+    /// `w1`'s turn (M4B.3, M4B.4): its `Started` as a group, then its `Finished` as another;
+    /// a group that fails is redone message by message, as the hub does.
+    struct TurnOfGroups {
+        core: MasterCore,
+        run_id: String,
+        attempt_id: String,
+        failed: Vec<crate::core::Group>,
+    }
+
+    impl Scenario for TurnOfGroups {
+        async fn setup() -> Self {
+            let mut core = with_dag().await;
+            trigger(&mut core).await;
+            let out = core.tick(ts(NOW)).await.unwrap();
+            let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+                panic!("expected AssignTask, got {out:?}")
+            };
+            let run_id = assign.run.as_ref().unwrap().run_id.clone();
+            Self {
+                core,
+                run_id,
+                attempt_id: assign.attempt_id.clone(),
+                failed: Vec::new(),
+            }
+        }
+        async fn run(&mut self) {
+            let started = crate::core::Group {
+                started: vec![pb::Started {
+                    attempt_id: self.attempt_id.clone(),
+                    start_method: pb::StartMethod::Spawn.into(),
+                }],
+                finished: Vec::new(),
+            };
+            let finished = crate::core::Group {
+                started: Vec::new(),
+                finished: vec![pb::Finished {
+                    attempt_id: self.attempt_id.clone(),
+                    status: pb::AttemptStatus::Success.into(),
+                    ..pb::Finished::default()
+                }],
+            };
+            for group in [started, finished] {
+                if !self.failed.is_empty() {
+                    // Behind a failed group: carried, as the hub does.
+                    self.failed.push(group);
+                    continue;
+                }
+                if let Err(group) = self.core.handle_group("w1", group, ts(NOW)).await {
+                    self.failed.push(group);
+                }
+            }
+        }
+        /// The failed groups' messages, one by one, as the hub redoes them.
+        async fn recover(&mut self) {
+            for group in std::mem::take(&mut self.failed) {
+                for message in group.into_messages() {
+                    let _ = self.core.handle("w1", message, ts(NOW)).await;
+                }
+            }
+        }
+        fn db(&self) -> &Database {
+            &self.core.db
+        }
+        fn run_id(&self) -> &str {
+            &self.run_id
+        }
+        fn dispatcher(&self) -> &Dispatcher {
+            &self.core.dispatcher
+        }
+        /// Redone, the attempt is stored ended, whichever write failed.
+        async fn extra(&self) -> Vec<String> {
+            let attempt = self.core.db.attempt(&self.attempt_id).await.unwrap();
+            match attempt.and_then(|a| a.status) {
+                Some(_) => Vec::new(),
+                None => vec![format!("attempt `{}` left open", self.attempt_id)],
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turns_groups_leave_nothing_half_done_whichever_write_fails() {
+        // Decision 98 for M4B.3 and M4B.4's group paths.
+        let (writes, found) = Box::pin(fail_each_write::<TurnOfGroups>()).await;
+        assert!(found.is_empty(), "{writes} writes:\n{}", found.join("\n"));
+    }
+
     #[tokio::test]
     async fn a_lease_running_out_leaves_nothing_half_done_whichever_write_fails() {
         let (writes, found) = Box::pin(fail_each_write::<LeaseRunsOut>()).await;

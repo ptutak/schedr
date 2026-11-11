@@ -4695,3 +4695,182 @@ async fn a_moved_cleanup_adopted_unrecorded_isnt_taken_back() {
     dispatcher.expire(later(1200)).await.unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }
+
+/// Twenty independent tasks, each with a downstream reading its output, all started on `w1`
+/// (20 slots): the dispatcher, the database, the run and the attempts.
+async fn twenty_started() -> (Dispatcher, Database, String, Vec<String>) {
+    let rows = |n: usize| json!({"rows": {"ref": {"kind": "output", "task": format!("e{n}")}}});
+    let mut tasks = Vec::new();
+    let mut edges = Vec::new();
+    for n in 0..20 {
+        tasks.push(task(&format!("e{n}"), &json!({}), 0));
+        tasks.push(task(&format!("l{n}"), &rows(n), 0));
+        edges.push(json!({"from": format!("e{n}"), "to": format!("l{n}"), "kind": "data"}));
+    }
+    let dag: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "tasks": tasks, "edges": edges
+    }))
+    .unwrap();
+    let (mut dispatcher, db, run_id) = with_run(dag).await;
+    dispatcher
+        .register("w1", "i1", &[], 20, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempts: Vec<String> = out
+        .iter()
+        .map(|o| assignment(o).attempt_id.clone())
+        .collect();
+    assert_eq!(attempts.len(), 20);
+    for attempt in &attempts {
+        dispatcher
+            .started("w1", &started(attempt), ts(NOW))
+            .await
+            .unwrap();
+    }
+    (dispatcher, db, run_id, attempts)
+}
+
+#[tokio::test]
+async fn a_turns_finishes_take_a_few_writes_not_a_few_each() {
+    // M4B.4 (decision 396, B184): twenty `Finished`s of one run, together: ended in one
+    // statement, their outputs in one, the run moved forward once; one by one, several writes
+    // each. Both leave the run the same.
+    let (mut alone, alone_db, alone_run, attempts) = twenty_started().await;
+    alone_db.count_writes();
+    for attempt in &attempts {
+        alone
+            .finished(
+                "w1",
+                &finished(attempt, pb::AttemptStatus::Success, &json!(1)),
+                ts(NOW),
+            )
+            .await
+            .unwrap();
+    }
+    let one_by_one = alone_db.writes();
+    let (mut together, db, run_id, attempts) = twenty_started().await;
+    let group: Vec<pb::Finished> = attempts
+        .iter()
+        .map(|a| finished(a, pb::AttemptStatus::Success, &json!(1)))
+        .collect();
+    db.count_writes();
+    let acks = together
+        .finished_group("w1", &group, ts(NOW))
+        .await
+        .unwrap();
+    let grouped = db.writes();
+    assert_eq!(acks.len(), 20);
+    assert!(grouped <= 5, "{grouped} writes for 20 together");
+    assert!(one_by_one >= 3 * 20, "{one_by_one} writes one by one");
+    let states = |run: Option<schedr_db::instances::RunTasks>| -> Vec<(String, i32, String)> {
+        let mut states: Vec<_> = run
+            .unwrap()
+            .instances
+            .into_iter()
+            .map(|i| (i.task_id.to_string(), i.map_index, i.state.to_string()))
+            .collect();
+        states.sort();
+        states
+    };
+    assert_eq!(
+        states(db.run_tasks(&run_id).await.unwrap()),
+        states(alone_db.run_tasks(&alone_run).await.unwrap())
+    );
+    assert_eq!(
+        db.run_task_output(&run_id, &id("e7")).await.unwrap(),
+        Some(("SUCCESS".to_owned(), json!(1)))
+    );
+}
+
+#[tokio::test]
+async fn a_group_of_finishes_takes_the_uncommon_ones_alone_and_a_repeat_once() {
+    // M4B.4: another worker's result is ignored (B46), a repeat acknowledged, both still
+    // answered; the rest stored together.
+    let (mut dispatcher, db, run_id, attempts) = twenty_started().await;
+    let success = |a: &str| finished(a, pb::AttemptStatus::Success, &json!(1));
+    let group = vec![
+        success(&attempts[0]),
+        success(&attempts[0]),
+        success(&attempts[1]),
+    ];
+    let acks = dispatcher
+        .finished_group("w1", &group, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(acks.len(), 3);
+    let foreign = dispatcher
+        .finished_group("w2", &[success(&attempts[2])], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(foreign.len(), 1);
+    assert_eq!(
+        state_of(&db, &run_id, "e0").await.0,
+        TaskInstanceState::Success
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "e1").await.0,
+        TaskInstanceState::Success
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "e2").await.0,
+        TaskInstanceState::Running
+    );
+    assert_eq!(
+        db.attempts_by_ids(&[attempts[2].as_str()]).await.unwrap()[0].status,
+        None
+    );
+}
+
+#[tokio::test]
+async fn an_uncommon_failure_after_a_mapped_siblings_success_leaves_the_success() {
+    // Grok's review of M4B.4: instance 1's success, then instance 0's `task_not_found` (no
+    // retries left: off the common path, it fails the step). Together, the failure was taken
+    // first and the success stored `cancelled`, its output dropped; as one by one, it stays.
+    let mut fetch = task("fetch", &json!({}), 0);
+    fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
+    let mapped: Dag = serde_json::from_value(json!({
+        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": [fetch], "edges": []
+    }))
+    .unwrap();
+    let (mut dispatcher, db, run_id) = with_run(mapped).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let ids: Vec<String> = out
+        .iter()
+        .map(|o| assignment(o).attempt_id.clone())
+        .collect();
+    for id in &ids {
+        dispatcher
+            .started("w1", &started(id), ts(NOW))
+            .await
+            .unwrap();
+    }
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let by_index: BTreeMap<i32, String> = db
+        .attempts_by_ids(&refs)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.map_index, a.id))
+        .collect();
+    let success = finished(&by_index[&1], pb::AttemptStatus::Success, &json!(7));
+    let gone = pb::Finished {
+        error_kind: schedr_model::runner::TASK_NOT_FOUND.to_owned(),
+        ..finished(&by_index[&0], pb::AttemptStatus::Failed, &json!(null))
+    };
+    dispatcher
+        .finished_group("w1", &[success, gone], ts(NOW))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let one = run.instances.iter().find(|i| i.map_index == 1).unwrap();
+    assert_eq!(one.state, TaskInstanceState::Success);
+    assert_eq!(
+        db.output(&one.id).await.unwrap(),
+        Some(("SUCCESS".to_owned(), json!(7)))
+    );
+}

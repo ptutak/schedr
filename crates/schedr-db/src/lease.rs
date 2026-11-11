@@ -77,6 +77,12 @@ const HOLDER_SQLITE: &str = "SELECT holder FROM master_lease
 const HOLDER_POSTGRES: &str =
     "SELECT holder FROM master_lease WHERE expires_at > clock_timestamp()";
 
+const HELD_SQLITE: &str = "SELECT holder, expires_at FROM master_lease
+    WHERE expires_at > strftime('%Y-%m-%dT%H:%M:%f', 'now') || '000Z'";
+
+const HELD_POSTGRES: &str = "SELECT holder, to_char(expires_at AT TIME ZONE 'UTC', \
+    'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM master_lease WHERE expires_at > clock_timestamp()";
+
 const RELEASE_SQLITE: &str = "UPDATE master_lease
     SET expires_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '-1 seconds') || '000Z'
     WHERE holder = $1";
@@ -222,6 +228,23 @@ impl Database {
                         .fetch_optional(pool)
                         .await?
                 }
+            })
+        })
+        .await
+    }
+
+    /// The master holding the lease now and when its lease runs out (UTC, as stored), by the
+    /// database's clock: `None` if none does (decision 452: a master that isn't leading names
+    /// the leader to its workers).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails, [`DbError::QueryTimeout`] past the limit.
+    pub async fn lease_held(&self) -> Result<Option<(String, String)>, DbError> {
+        self.limited(self.query_timeout(), async {
+            Ok(match self.pool() {
+                Pool::Sqlite(pool) => sqlx::query_as(HELD_SQLITE).fetch_optional(pool).await?,
+                Pool::Postgres(pool) => sqlx::query_as(HELD_POSTGRES).fetch_optional(pool).await?,
             })
         })
         .await

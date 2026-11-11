@@ -89,6 +89,9 @@ pub struct Settings {
     pub quiet: QuietSettings,
     /// The largest message a worker may send (`[grpc] max_message_size`).
     pub max_message_size: usize,
+    /// The most messages of one worker handled in one turn of the core's lock
+    /// (`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`, M4B.3).
+    pub messages_per_turn: usize,
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub max_instances: usize,
     /// The most fire times a backfill's range may have (`[backfill] max_runs`).
@@ -140,6 +143,45 @@ impl Default for MasterTimings {
     }
 }
 
+/// A turn's `Started`s and `Finished`s, each kind in its order (M4B.3): stored together by
+/// [`MasterCore::handle_group`].
+#[derive(Debug, Default)]
+pub struct Group {
+    /// Its `Started`s, stored first.
+    pub started: Vec<pb::Started>,
+    /// Its `Finished`s, after them.
+    pub finished: Vec<pb::Finished>,
+}
+
+impl Group {
+    /// Whether it holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.started.is_empty() && self.finished.is_empty()
+    }
+
+    /// Its messages, `Started`s first, to be handled one by one.
+    #[must_use]
+    pub fn into_messages(self) -> Vec<worker_message::Message> {
+        self.started
+            .into_iter()
+            .map(worker_message::Message::Started)
+            .chain(
+                self.finished
+                    .into_iter()
+                    .map(worker_message::Message::Finished),
+            )
+            .collect()
+    }
+
+    fn attempt_ids(&self) -> impl Iterator<Item = &str> {
+        self.started
+            .iter()
+            .map(|s| s.attempt_id.as_str())
+            .chain(self.finished.iter().map(|f| f.attempt_id.as_str()))
+    }
+}
+
 impl Default for Settings {
     /// Heartbeat every 10 s, lost after 60 s, 30 s cancel grace, 10 min per parse job, 10 min
     /// for missing code, messages up to 64 MiB.
@@ -166,6 +208,7 @@ impl Default for Settings {
             timings: MasterTimings::default(),
             quiet: QuietSettings::default(),
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
+            messages_per_turn: crate::service::MESSAGES_PER_TURN,
             max_instances: crate::execution::DEFAULT_MAX_INSTANCES,
             backfill_max_runs: crate::scheduler::backfill::DEFAULT_MAX_RUNS,
             worker_report: ReportLimits::default(),
@@ -1421,6 +1464,87 @@ impl MasterCore {
             a.is_some_and(|a| a.status.is_some())
         })
         .await
+    }
+
+    /// A turn's `Started`s, then its `Finished`s (M4B.3, decision 397): one transaction, one
+    /// lease check and one commit, with one memory snapshot for the group (B48). Counts, wakes
+    /// and `arrivals` only once it is stored. A commit cut off is read back once, by the last
+    /// message: the group lands whole or not at all.
+    ///
+    /// # Errors
+    ///
+    /// The group handed back, its memory put back and nothing of it counted, when it failed
+    /// (any message's error, the lease, the commit): the caller handles its messages one by
+    /// one, which decides each one's fate as before.
+    pub async fn handle_group(
+        &mut self,
+        worker_id: &str,
+        group: Group,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, Group> {
+        self.heard_from(worker_id, now).await;
+        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+        self.metrics.stage();
+        self.dispatcher.take_witnesses();
+        let dispatcher = &mut self.dispatcher;
+        // What the group sends, kept for a commit whose answer is lost: stored, it is all sent
+        // (Grok's review: a `Started` that started nothing is answered with a cancel).
+        let mut out = Vec::new();
+        let handled = Box::pin(db.atomically(async {
+            for started in &group.started {
+                out.extend(dispatcher.started(worker_id, started, now).await?);
+            }
+            if !group.finished.is_empty() {
+                out.extend(
+                    dispatcher
+                        .finished_group(worker_id, &group.finished, now)
+                        .await?,
+                );
+            }
+            Ok::<_, DispatchError>(())
+        }))
+        .await;
+        match handled {
+            Ok(()) => {}
+            // Read back by the first attempt its writes started or ended (they land together).
+            Err(DispatchError::Db(DbError::CommitUnknown)) if self.group_landed().await => {}
+            Err(error) => {
+                self.metrics.drop_staged();
+                self.dispatcher.undo(memory, &error);
+                tracing::warn!(
+                    worker_id,
+                    %error,
+                    messages = group.started.len() + group.finished.len(),
+                    "a turn's group of messages failed: handled one by one"
+                );
+                return Err(group);
+            }
+        }
+        self.metrics.count_staged();
+        for id in group.attempt_ids() {
+            self.arrivals.start_handled(id);
+        }
+        Ok(out)
+    }
+
+    /// Whether a group whose commit was cut off was stored: by the first attempt its writes
+    /// started or ended (all of them land or none). With none, it changed no attempt and is
+    /// redone one by one, which changes nothing twice.
+    async fn group_landed(&mut self) -> bool {
+        let Some((id, witness)) = self.dispatcher.take_witnesses().into_iter().next() else {
+            return false;
+        };
+        self.settings
+            .read_back
+            .stored(|| async {
+                self.db.attempt(&id).await.is_ok_and(|attempt| {
+                    attempt.is_some_and(|a| match witness {
+                        crate::dispatch::Witness::Started => a.started,
+                        crate::dispatch::Witness::Ended => a.status.is_some(),
+                    })
+                })
+            })
+            .await
     }
 
     async fn settle<T>(

@@ -316,15 +316,15 @@ Each is one line; the reader's page has the diagrams.
 ### Messages and transactions
 
 - **B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups**
-  (D396, planned (M4B.5)): With a turn's messages in groups (D397), M4B writes a turn's `Finished`s
-  with set-based statements, reads and settles each run once per turn, and writes the agent's
-  journal in groups. B184 counts as fixed when stress 23 records its 500 ends within 5 s on
-  Postgres; a unit test counts a turn's statements.
-- **A turn's messages are stored in groups by type; savepoints later** (D397, planned (M4B.3)): A
-  worker's turn (up to 40 messages, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`) is reordered,
-  `Started`s then `Finished`s, and each group is stored as one batch in one transaction; a failed
-  group is redone one by one, at most 10 in a turn. The turn in one transaction with savepoints per
-  group comes later, only if needed.
+  (D396): With a turn's messages in groups (D397), M4B writes a turn's `Finished`s with set-based
+  statements, reads and settles each run once per turn, and writes the agent's journal in groups.
+  B184 counts as fixed when stress 23 records its 500 ends within 5 s on Postgres; a unit test
+  counts a turn's statements.
+- **A turn's messages are stored in groups by type; savepoints later** (D397): A worker's turn (up
+  to 40 messages, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`) is reordered, `Started`s then
+  `Finished`s, and each group is stored as one batch in one transaction; a failed group is redone
+  one by one, at most 10 in a turn. The turn in one transaction with savepoints per group comes
+  later, only if needed.
 
 ### From other topics
 
@@ -384,6 +384,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs::heard_master` (D449)
 - `crates/schedr-agent/src/agent.rs::kept_cleanup` (D229)
 - `crates/schedr-agent/src/agent.rs::older_leader` (D444)
+- `crates/schedr-agent/src/agent.rs::on_done_group` (D396)
 - `crates/schedr-agent/src/agent.rs::reconnect_cap` (D307)
 - `crates/schedr-agent/src/agent.rs::report_changes` (D303)
 - `crates/schedr-agent/src/agent.rs::send_handles` (D242)
@@ -396,6 +397,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/env.rs::task_environment` (D333)
 - `crates/schedr-agent/src/fork.rs::pass_env` (D333)
 - `crates/schedr-agent/src/jobs.rs` (D297)
+- `crates/schedr-agent/src/journal.rs::write_many` (D396)
 - `crates/schedr-agent/src/master_time.rs::MasterTime` (D442)
 - `crates/schedr-agent/src/master_time.rs::cutoff_in` (D445)
 - `crates/schedr-agent/src/master_time.rs::heard` (D447)
@@ -423,15 +425,18 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-db/migrations/sqlite/0001_initial.sql::cleanup_moves` (D247)
 - `crates/schedr-db/src/attempts.rs` (D229, D282)
 - `crates/schedr-db/src/attempts.rs::cleanup_moves` (D247)
+- `crates/schedr-db/src/attempts.rs::end_attempts` (D396)
 - `crates/schedr-db/src/attempts.rs::mark_replaced` (D443)
 - `crates/schedr-db/src/attempts.rs::move_cleanup` (D243)
 - `crates/schedr-db/src/database.rs::is_data_fault` (D108, D115)
+- `crates/schedr-db/src/instances.rs::store_outputs` (D396)
 - `crates/schedr-db/src/nodes.rs::NodeProblem` (D129)
 - `crates/schedr-master/src/clock.rs::monotonic` (D442)
 - `crates/schedr-master/src/commands.rs::check_connections` (D193)
 - `crates/schedr-master/src/core.rs` (D229, D282)
 - `crates/schedr-master/src/core.rs::CoreError` (D108)
 - `crates/schedr-master/src/core.rs::DEFAULT_SCRIPT_ROOT_GRACE` (D303)
+- `crates/schedr-master/src/core.rs::handle_group` (D397)
 - `crates/schedr-master/src/core.rs::take_back` (D308)
 - `crates/schedr-master/src/core.rs::takeover_wait` (D444)
 - `crates/schedr-master/src/dispatch.rs` (D242, D243, D255, D282)
@@ -442,14 +447,18 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/dispatch.rs::end_lost` (D220)
 - `crates/schedr-master/src/dispatch.rs::end_replaced` (D443)
 - `crates/schedr-master/src/dispatch.rs::expire` (D450)
+- `crates/schedr-master/src/dispatch.rs::finished_group` (D396)
 - `crates/schedr-master/src/dispatch.rs::incarnation_replaced` (D443)
 - `crates/schedr-master/src/dispatch.rs::resume` (D109)
 - `crates/schedr-master/src/dispatch.rs::with_start_grace` (D450)
 - `crates/schedr-master/src/dispatch/tests.rs` (D220, D221)
+- `crates/schedr-master/src/execution.rs::attempts_finished` (D396)
+- `crates/schedr-master/src/metrics.rs::stage` (D397)
 - `crates/schedr-master/src/service.rs::HeartbeatAcks` (D258)
 - `crates/schedr-master/src/service.rs::NOT_LEADING` (D297)
 - `crates/schedr-master/src/service.rs::is_current` (D443)
 - `crates/schedr-master/src/service.rs::stamp_of` (D442)
+- `crates/schedr-master/src/service.rs::turn` (D397)
 - `crates/schedr-master/src/service.rs::with_epoch` (D444)
 - `crates/schedr-model/src/commands.rs::MAX_CONNECTION_TEST_MS` (D200)
 - `crates/schedr-model/src/runner.rs::WatchersRequest` (D320)

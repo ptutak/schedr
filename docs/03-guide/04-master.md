@@ -212,14 +212,47 @@ gets the same item; `NOT_YET` waits for a later match.
 ## Between rounds: messages from workers
 
 Messages from workers are handled as they arrive, under the same lock, in order for each
-worker. A worker's messages that are already waiting are handled together, up to 10 in one turn
-of the lock; then the round and other workers get their turns, and the rest follow in the
-worker's next turn. (A task sends `Started` and `Finished`. A forked Python task sends
-`Started` twice, the second with `start_method` `fork`.)
+worker. A worker's messages that are already waiting are handled together, up to 40 in one turn
+of the lock (`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`); then the round and other workers get
+their turns, and the rest follow in the worker's next turn. (A task sends `Started` and
+`Finished`. A forked Python task sends `Started` twice, the second with `start_method` `fork`.)
 
-Each message's writes are one transaction too, stored **whole or not at all**: a `Finished`
-whose last write fails leaves nothing of it stored (the worker sends it again when it
-reconnects), never an ended attempt with its run left behind.
+In a turn, the `Started`s are stored together in one transaction, then the `Finished`s in
+another: one lease check and one commit for each group instead of one per message. Heartbeats
+and warnings are handled after them. Any other message (`Rejected`, `Draining`, a code
+report, a trigger's) is a barrier: what came before it is stored first, then it is handled
+alone, as before.
+
+```{mermaid}
+flowchart LR
+    turn[A turn: up to 40 waiting messages] --> sort{Message}
+    sort -->|Started| startGroup[Started group]
+    sort -->|Finished| finishGroup[Finished group]
+    sort -->|Heartbeat, Warnings| after[After the groups]
+    sort -->|anything else| barrier[Barrier]
+    barrier --> flush[Store the groups so far, then handle it alone]
+    startGroup --> tx1[One transaction]
+    finishGroup --> tx2[One transaction, after the first]
+```
+
+The `Finished`s of a group are written together too: their attempts read in one query, their
+ends in one statement, their outputs in another, and each run read and moved forward once for
+all of its results (B184). A result off the common path (a moved cleanup's, a rest of handles,
+another worker's, code gone missing) is handled alone in its place, in the same transaction,
+after the results before it are stored, as one by one. Two common results of one mapped task
+arriving together are taken in the order that keeps both: one instance's success beside
+another's failure stays a success.
+
+A group's writes are stored **whole or not at all**: a `Finished` whose last write fails leaves
+nothing of the group stored, never an ended attempt with its run left behind. The group is then
+redone one message at a time, as every message was before: at most 10 in this turn, the rest
+first in the next, before anything newer, so a `Finished` is never stored before its `Started`.
+A message the database refuses for its data is handled as before, alone (a `Finished` stored as
+the attempt's failure). Attempt ends and run results are counted once the group is stored, so a
+group rolled back and redone counts nothing twice. A commit whose answer is lost is read back
+once for the group, by the first attempt its writes started or ended: a group lands whole or
+not at all. A group that started or ended none is redone one message at a time, which changes
+nothing twice.
 
 Tasks' API calls arrive from the agent on the Control stream. Under the master's lease, the
 master runs them in process through the API router as the task or trigger, only for an open
@@ -281,7 +314,9 @@ counter).
 - **Losing it for a while** (the database slow or unreachable): the master **pauses**. No
   rounds; worker messages and parse uploads wait in their queues. `/readyz` returns 503
   ("starting: master"), and a new control stream is refused with `UNAVAILABLE` ("not leading"),
-  including a `Register` that waited for the lock as it paused. Workers reconnect. Running
+  including a `Register` that waited for the lock as it paused; the refusal names the master
+  holding the lease and when its lease runs out (or that none holds it), for the worker's log
+  (decision 452). Workers reconnect. Running
   tasks go on. When a renewal succeeds again, it resumes. `schedr_master_leading` on
   `/metrics` is 0 meanwhile.
 - **Taken over** (the lease expired and another master took it): the paused master's view is

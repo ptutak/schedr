@@ -475,19 +475,23 @@ pub struct HiddenLimits {
     /// The most runs the retention job deletes in one transaction (`MASTER__RETENTION_BATCH`,
     /// decision 432): one run can hold thousands of rows, and a transaction holds its locks.
     pub retention_batch: usize,
+    /// The most messages of one worker the master handles in one turn of its lock
+    /// (`MASTER__MESSAGES_PER_TURN`, M4B.3): its `Started`s and `Finished`s stored together.
+    pub messages_per_turn: usize,
     /// The `SCHEDR_HIDDEN__*` variables that changed one.
     pub overridden: Vec<String>,
 }
 
 impl Default for HiddenLimits {
     /// 256 records of each kind, 4096 characters of each text, 1 MiB a notification, 100 runs
-    /// a retention transaction.
+    /// a retention transaction, 40 messages a turn.
     fn default() -> Self {
         Self {
             worker_report_records: 256,
             worker_report_text: 4096,
             notification_body: 1 << 20,
             retention_batch: 100,
+            messages_per_turn: 40,
             overridden: Vec::new(),
         }
     }

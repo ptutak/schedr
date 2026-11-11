@@ -554,3 +554,62 @@ async fn each_rounds_reads_of_pending_work_dont_scan_the_history() {
     .await;
     assert!(due.contains("task_instances_retry_due"), "{due}");
 }
+
+#[tokio::test]
+async fn attempts_are_read_and_ended_together() {
+    // M4B.4: a turn's attempts read by their IDs, and ended in one statement.
+    let (db, run_id) = with_run().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (first, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let found = db
+        .attempts_by_ids(&[first.as_str(), "01a00000-0000-7000-8000-000000000000"])
+        .await
+        .unwrap();
+    assert_eq!(
+        found.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        [first.as_str()]
+    );
+    let end = AttemptEnd {
+        exit_code: Some(3),
+        error_kind: Some("input_mismatch".to_owned()),
+        error_summary: Some("{}".to_owned()),
+        usage: Some(schedr_model::runner::ProcessUsage {
+            user_cpu_micros: 1_500_000,
+            system_cpu_micros: 250_000,
+            peak_rss_bytes: None,
+            major_faults: 3,
+            voluntary_context_switches: Some(40),
+            involuntary_context_switches: Some(7),
+        }),
+        core_dumped: true,
+        ..AttemptEnd::by_master(AttemptStatus::Failed)
+    };
+    let recorded = db
+        .end_attempts(&[(first.as_str(), &end)], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded.into_iter().collect::<Vec<_>>(),
+        std::slice::from_ref(&first)
+    );
+    let stored = db.attempt(&first).await.unwrap().unwrap();
+    assert_eq!(stored.status, Some(AttemptStatus::Failed));
+    let shown = &db.task_attempts(&run_id, &id("extract")).await.unwrap()[0];
+    assert_eq!((shown.usage, shown.core_dumped), (end.usage, true));
+    // Ended already: not recorded again.
+    let lost = AttemptEnd::by_master(AttemptStatus::Lost);
+    assert!(
+        db.end_attempts(&[(first.as_str(), &lost)], ts(NOW))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        db.attempt(&first).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Failed)
+    );
+}

@@ -14,6 +14,10 @@ pub(crate) struct Faults {
     fail_at: AtomicU64,
     /// Whether the next commit's answer is lost (it stores).
     lose_commit: AtomicBool,
+    /// The transactions committed (M4B.3: a turn's groups counted).
+    commits: AtomicU64,
+    /// Whether the next commit is cut off before it stores, its answer lost.
+    lose_unstored: AtomicBool,
 }
 
 impl Faults {
@@ -26,6 +30,16 @@ impl Faults {
             ))));
         }
         Ok(())
+    }
+
+    /// Whether this commit is to be cut off unstored (once).
+    pub(crate) fn commit_lost_unstored(&self) -> bool {
+        self.lose_unstored.swap(false, Ordering::SeqCst)
+    }
+
+    /// Counts a transaction committed.
+    pub(crate) fn committed(&self) {
+        self.commits.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Whether this commit's answer is to be lost (once).
@@ -41,6 +55,12 @@ impl Database {
         self.faults().lose_commit.store(true, Ordering::SeqCst);
     }
 
+    /// Makes the next transaction's commit store nothing and fail with
+    /// [`DbError::CommitUnknown`], as when the connection drops before the commit lands.
+    pub fn lose_commit_unstored(&self) {
+        self.faults().lose_unstored.store(true, Ordering::SeqCst);
+    }
+
     /// Counts the writes from now on, failing none (see [`Self::writes`]).
     pub fn count_writes(&self) {
         self.faults().fail_at.store(0, Ordering::SeqCst);
@@ -52,6 +72,12 @@ impl Database {
     pub fn fail_write(&self, nth: u64) {
         self.faults().writes.store(0, Ordering::SeqCst);
         self.faults().fail_at.store(nth, Ordering::SeqCst);
+    }
+
+    /// The transactions committed by [`Database::atomically`] so far.
+    #[must_use]
+    pub fn commits(&self) -> u64 {
+        self.faults().commits.load(Ordering::SeqCst)
     }
 
     /// The writes since [`Self::count_writes`] or [`Self::fail_write`], the failed one

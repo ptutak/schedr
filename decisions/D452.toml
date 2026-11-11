@@ -11,4 +11,5 @@ leading" alone.
 '''
 history = "JOURNAL.md#D445"
 step = "M4B"
-code = []
+code = ["crates/schedr-master/src/service.rs::not_leading", "crates/schedr-db/src/lease.rs::lease_held"]
+checked = 2026-11-11

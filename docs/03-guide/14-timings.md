@@ -167,7 +167,7 @@ API's maximum; an invalid value stops startup.
 
 ## Fixed limits
 
-Four limits are set the same way, with the same warning: whole numbers above zero, in the
+Five limits are set the same way, with the same warning: whole numbers above zero, in the
 environment only.
 
 | Variable | Default | What it does and what depends on it |
@@ -176,3 +176,4 @@ environment only.
 | `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT` | 4096 | The most characters of each text in them (a host's code, a warning's message); longer ones are cut. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |
+| `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 40 | The most messages of one worker the master handles in one turn of its lock; its `Started`s are stored together in one transaction, then its `Finished`s in another. More holds rounds and other workers up longer. |

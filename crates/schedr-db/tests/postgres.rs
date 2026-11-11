@@ -2467,3 +2467,89 @@ async fn retentions_lock_on_a_dag_lets_its_new_runs_in() {
     assert!(held.is_err(), "it waits");
     batch.rollback().await.unwrap();
 }
+
+#[tokio::test]
+async fn attempts_are_read_and_ended_together_on_postgres() {
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (first, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let found = db
+        .attempts_by_ids(&[first.as_str(), "01a00000-0000-7000-8000-000000000000"])
+        .await
+        .unwrap();
+    assert_eq!(
+        found.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        [first.as_str()]
+    );
+    let end = AttemptEnd {
+        exit_code: Some(3),
+        error_kind: Some("input_mismatch".to_owned()),
+        error_summary: Some("{}".to_owned()),
+        usage: Some(schedr_model::runner::ProcessUsage {
+            user_cpu_micros: 1_500_000,
+            system_cpu_micros: 250_000,
+            peak_rss_bytes: None,
+            major_faults: 3,
+            voluntary_context_switches: Some(40),
+            involuntary_context_switches: Some(7),
+        }),
+        core_dumped: true,
+        ..AttemptEnd::by_master(AttemptStatus::Failed)
+    };
+    let recorded = db
+        .end_attempts(&[(first.as_str(), &end)], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded.into_iter().collect::<Vec<_>>(),
+        std::slice::from_ref(&first)
+    );
+    let stored = db.attempt(&first).await.unwrap().unwrap();
+    assert_eq!(stored.status, Some(AttemptStatus::Failed));
+    let shown = &db.task_attempts(&run_id, &id("extract")).await.unwrap()[0];
+    assert_eq!((shown.usage, shown.core_dumped), (end.usage, true));
+    // Ended already: not recorded again.
+    let lost = AttemptEnd::by_master(AttemptStatus::Lost);
+    assert!(
+        db.end_attempts(&[(first.as_str(), &lost)], ts(NOW))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        db.attempt(&first).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Failed)
+    );
+}
+
+#[tokio::test]
+async fn outputs_are_stored_together_on_postgres() {
+    let (db, _run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let a = ready[0].instance_id.as_str();
+    db.store_output(a, "SUCCESS", &json!(0)).await.unwrap();
+    let (one, two) = (json!({"rows": 1}), json!({"rows": 2}));
+    db.store_outputs(&[(a, "SUCCESS", &one), (a, "SKIP", &two)])
+        .await
+        .unwrap();
+    assert_eq!(db.output(a).await.unwrap(), Some(("SKIP".to_owned(), two)));
+}
+
+#[tokio::test]
+async fn the_lease_holder_and_its_expiry_are_read_on_postgres() {
+    // Decision 452: what a master that isn't leading names.
+    let db = fresh().await;
+    db.create_lease_table().await.unwrap();
+    assert_eq!(db.lease_held().await.unwrap(), None);
+    db.take_lease("m1:1", std::time::Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
+    let (holder, until) = db.lease_held().await.unwrap().unwrap();
+    assert_eq!(holder, "m1:1");
+    assert!(until.parse::<Timestamp>().is_ok(), "{until}");
+}

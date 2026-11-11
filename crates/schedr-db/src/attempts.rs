@@ -251,6 +251,10 @@ type AttemptRow = (
 );
 
 /// The attempt queries (sqlx needs `'static` text, so the shared columns are written out).
+/// The most attempt ends one statement records (16 parameters each: well under either
+/// database's limit).
+pub const ENDS_PER_STATEMENT: usize = 100;
+
 const ATTEMPT_BY_ID: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
     t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
@@ -1127,6 +1131,134 @@ impl Database {
                 .rows_affected()
         });
         Ok(())
+    }
+
+    /// Several attempts by ID (M4B.4: a turn's `Finished`s read in one query); those that
+    /// don't exist are left out.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn attempts_by_ids(&self, ids: &[&str]) -> Result<Vec<StoredAttempt>, DbError> {
+        const BY_IDS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
+            t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
+            t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+            a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+            WHERE a.id IN (SELECT value{uuid} FROM {json_each}($1{json}))";
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let list = crate::query::to_json(&ids);
+        let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, BY_IDS))
+                .bind(&list)
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(stored_attempt).collect()
+    }
+
+    /// Records how several attempts ended, as [`Self::end_attempt`] does each, in statements of
+    /// up to [`ENDS_PER_STATEMENT`] (M4B.4, B184). Returns the IDs whose end this call recorded
+    /// (not those ended already). Each ID at most once.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn end_attempts(
+        &self,
+        ends: &[(&str, &AttemptEnd)],
+        now: Timestamp,
+    ) -> Result<BTreeSet<String>, DbError> {
+        let now = db_time(now);
+        let mut recorded = BTreeSet::new();
+        in_tx!(self, |tx, backend| {
+            for chunk in ends.chunks(ENDS_PER_STATEMENT) {
+                let rows: Vec<String> = (0..chunk.len())
+                    .map(|i| {
+                        let n = 1 + i * 16;
+                        format!(
+                            "(${}{{uuid}}, ${}, ${}, ${}, ${}, ${}, ${}{{json}}, ${}, ${}, \
+                             ${}{{json}}, ${}, ${}, ${}, ${}, ${}, ${}{{json}})",
+                            n + 1,
+                            n + 2,
+                            n + 3,
+                            n + 4,
+                            n + 5,
+                            n + 6,
+                            n + 7,
+                            n + 8,
+                            n + 9,
+                            n + 10,
+                            n + 11,
+                            n + 12,
+                            n + 13,
+                            n + 14,
+                            n + 15,
+                            n + 16
+                        )
+                    })
+                    .collect();
+                // As `end_attempt`'s, joined to a list of values: `columnN` names them.
+                let text = format!(
+                    "UPDATE attempts AS t SET status = v.column2, exit_code = v.column3, \
+                     signal = v.column4, peak_memory_bytes = v.column5, error_kind = v.column6, \
+                     error_summary = v.column7, code_hash = v.column8, ended_at = $1{{ts}}, \
+                     duration_ms = v.column9, usage = v.column10, core_dumped = v.column11, \
+                     cleanup_result = CASE WHEN NOT t.rest_cleaned THEN v.column12 \
+                         WHEN t.cleanup_result IN ('failed', 'worker_lost') THEN t.cleanup_result \
+                         WHEN v.column12 IN ('failed', 'worker_lost') THEN v.column12 \
+                         WHEN t.cleanup_result = 'ok' OR v.column12 = 'ok' THEN 'ok' \
+                         ELSE COALESCE(v.column12, t.cleanup_result) END, \
+                     cleanup_tries = CASE WHEN NOT t.rest_cleaned THEN v.column13 \
+                         ELSE COALESCE(t.cleanup_tries, 0) + COALESCE(v.column13, 0) END, \
+                     cleanup_duration_ms = CASE WHEN NOT t.rest_cleaned THEN v.column14 \
+                         ELSE COALESCE(t.cleanup_duration_ms, 0) + COALESCE(v.column14, 0) END, \
+                     cleanup_error_kind = CASE WHEN NOT t.rest_cleaned THEN v.column15 \
+                         ELSE COALESCE(t.cleanup_error_kind, v.column15) END, \
+                     cleanup_error_summary = CASE WHEN NOT t.rest_cleaned THEN v.column16 \
+                         ELSE COALESCE(t.cleanup_error_summary, v.column16) END, \
+                     task_result = NULL \
+                     FROM (VALUES {}) AS v \
+                     WHERE t.id = v.column1 AND t.status IS NULL RETURNING id{{text}}",
+                    rows.join(", ")
+                );
+                let mut update =
+                    sqlx::query_scalar::<_, String>(sql_text(backend, &text)).bind(&now);
+                for (attempt_id, end) in chunk {
+                    let cleanup = end.cleanup.as_ref();
+                    update = update
+                        .bind(*attempt_id)
+                        .bind(end.status.to_string())
+                        .bind(end.exit_code)
+                        .bind(end.signal)
+                        .bind(
+                            end.peak_memory_bytes
+                                .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+                        )
+                        .bind(end.error_kind.as_deref())
+                        .bind(end.error_summary.clone().map(crate::query::storable_json))
+                        .bind(end.code_hash.as_deref())
+                        .bind(
+                            end.duration_ms
+                                .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX)),
+                        )
+                        .bind(end.usage.as_ref().map(crate::query::to_json))
+                        .bind(end.core_dumped)
+                        .bind(cleanup.map(|c| c.result.to_string()))
+                        .bind(cleanup.map(|c| i64::from(c.tries)))
+                        .bind(cleanup.map(|c| i64::try_from(c.duration_ms).unwrap_or(i64::MAX)))
+                        .bind(cleanup.and_then(|c| c.error_kind.as_deref()))
+                        .bind(
+                            cleanup
+                                .and_then(|c| c.error_summary.clone())
+                                .map(crate::query::storable_json),
+                        );
+                }
+                recorded.extend(update.fetch_all(&mut *tx).await?);
+            }
+        });
+        Ok(recorded)
     }
 
     /// Records how an attempt ended, unless an end is already recorded. Returns whether this

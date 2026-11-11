@@ -137,6 +137,13 @@ pub struct Recorded {
     pub stops: Vec<(TaskId, i32)>,
 }
 
+/// One result's change to its instance ([`Execution::result_update`]).
+struct Planned {
+    update: InstanceUpdate,
+    /// `(instance ID, outcome, value)`, for a success.
+    output: Option<(String, String, serde_json::Value)>,
+}
+
 /// What cancelling a run did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cancelled {
@@ -401,7 +408,84 @@ impl Execution {
         result: &AttemptResult,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
+        self.attempts_finished(run_id, &[(task_id, map_index, result)], now)
+            .await
+    }
+
+    /// Records how several attempts of one run's running instances ended, as
+    /// [`Self::attempt_finished`] does one, reading the run once and moving it forward once
+    /// (M4B.4, B184): their outputs stored in one statement, their instances and what follows
+    /// from them in one advance. `state` is the last result's. A result for an instance that
+    /// isn't running, or for one already given here, is ignored.
+    ///
+    /// Results that arrived together are taken as if in the order that keeps each: a mapped
+    /// instance's success beside another's failure of the same step stays a success (in turn,
+    /// had the failure come first, it was cancelled, decision 75a); either order is what
+    /// arrived.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or task, or a database failure.
+    pub async fn attempts_finished(
+        &self,
+        run_id: &str,
+        results: &[(&TaskId, i32, &AttemptResult)],
+        now: Timestamp,
+    ) -> Result<Recorded, ExecutionError> {
         let mut run = self.run(run_id).await?;
+        let mut updates = Vec::with_capacity(results.len());
+        let mut outputs: Vec<(String, String, serde_json::Value)> = Vec::new();
+        let mut state_now = None;
+        for &(task_id, map_index, result) in results {
+            if updates
+                .iter()
+                .any(|u: &InstanceUpdate| &u.task_id == task_id && u.map_index == map_index)
+            {
+                continue;
+            }
+            let Some(planned) = self
+                .result_update(run_id, &mut run, (task_id, map_index), result, now)
+                .await?
+            else {
+                continue;
+            };
+            state_now = Some(planned.update.state);
+            outputs.extend(planned.output);
+            updates.push(planned.update);
+        }
+        if updates.is_empty() {
+            return Ok(Recorded {
+                state: None,
+                run_result: None,
+                stops: Vec::new(),
+            });
+        }
+        if !outputs.is_empty() {
+            let rows: Vec<(&str, &str, &serde_json::Value)> = outputs
+                .iter()
+                .map(|(id, outcome, value)| (id.as_str(), outcome.as_str(), value))
+                .collect();
+            self.db.store_outputs(&rows).await?;
+        }
+        let (run_result, stops) = self.advance(run_id, &run, updates, now).await?;
+        Ok(Recorded {
+            state: state_now,
+            run_result,
+            stops,
+        })
+    }
+
+    /// What one result changes of its instance: its update, and its output to store; `None`
+    /// for an instance that isn't running. Its cleanup's result, an `@sensor(wait_for=...)`'s
+    /// `NOT_YET` and a notification are written here.
+    async fn result_update(
+        &self,
+        run_id: &str,
+        run: &mut RunTasks,
+        (task_id, map_index): (&TaskId, i32),
+        result: &AttemptResult,
+        now: Timestamp,
+    ) -> Result<Option<Planned>, ExecutionError> {
         let unknown = || ExecutionError::UnknownTask {
             run_id: run_id.to_owned(),
             task_id: task_id.clone(),
@@ -415,11 +499,7 @@ impl Execution {
             instance.state,
             TaskInstanceState::Running | TaskInstanceState::CleaningUp
         ) {
-            return Ok(Recorded {
-                state: None,
-                run_result: None,
-                stops: Vec::new(),
-            });
+            return Ok(None);
         }
         if let Some(cleanup) = result.cleanup {
             self.db
@@ -466,43 +546,8 @@ impl Execution {
             .as_deref()
             .filter(|o| !o.is_empty())
             .unwrap_or(SUCCESS);
-        if let Some(recorded) = self
-            .not_yet((run_id, &run, &instance), task, state, outcome, now)
-            .await?
-        {
-            return Ok(recorded);
-        }
-        if state == TaskInstanceState::Success {
-            let value = result.output.clone().unwrap_or(serde_json::Value::Null);
-            self.db.store_output(&instance.id, outcome, &value).await?;
-        }
-        self.notify_task((run_id, &run.dag), &instance, state, now)
-            .await?;
-        let first = InstanceUpdate {
-            ready_at,
-            outcome: (state == TaskInstanceState::Success).then(|| outcome.to_owned()),
-            used_retry: next.uses_retry(),
-            ..update(task_id, map_index, state)
-        };
-        let (run_result, stops) = self.advance(run_id, &run, vec![first], now).await?;
-        Ok(Recorded {
-            state: Some(state),
-            run_result,
-            stops,
-        })
-    }
-
-    /// An `@sensor(wait_for=...)` saying `NOT_YET` to its run waits for a later one, as it
-    /// waited for the first: queued again, no retry used (decision 353). `None` for any other
-    /// result.
-    async fn not_yet(
-        &self,
-        (run_id, run, instance): (&str, &RunTasks, &schedr_db::instances::StoredInstance),
-        task: &schedr_model::Task,
-        state: TaskInstanceState,
-        outcome: &str,
-        now: Timestamp,
-    ) -> Result<Option<Recorded>, ExecutionError> {
+        // An `@sensor(wait_for=...)` saying `NOT_YET` to its run waits for a later one, as it
+        // waited for the first: queued again, no retry used (decision 353).
         let waits = matches!(
             task.kind,
             TaskKind::Sensor {
@@ -510,23 +555,33 @@ impl Execution {
                 ..
             }
         );
-        if !(waits && state == TaskInstanceState::Success && outcome == NOT_YET_OUTCOME) {
-            return Ok(None);
+        if waits && state == TaskInstanceState::Success && outcome == NOT_YET_OUTCOME {
+            self.db.not_yet(&instance.id).await?;
+            return Ok(Some(Planned {
+                update: InstanceUpdate {
+                    ready_at: Some(now),
+                    ..update(task_id, map_index, TaskInstanceState::Queued)
+                },
+                output: None,
+            }));
         }
-        self.db.not_yet(&instance.id).await?;
-        let waiting = InstanceUpdate {
-            ready_at: Some(now),
-            ..update(
-                &instance.task_id,
-                instance.map_index,
-                TaskInstanceState::Queued,
+        self.notify_task((run_id, &run.dag), &instance, state, now)
+            .await?;
+        let output = (state == TaskInstanceState::Success).then(|| {
+            (
+                instance.id.clone(),
+                outcome.to_owned(),
+                result.output.clone().unwrap_or(serde_json::Value::Null),
             )
-        };
-        let (run_result, stops) = self.advance(run_id, run, vec![waiting], now).await?;
-        Ok(Some(Recorded {
-            state: Some(TaskInstanceState::Queued),
-            run_result,
-            stops,
+        });
+        Ok(Some(Planned {
+            update: InstanceUpdate {
+                ready_at,
+                outcome: (state == TaskInstanceState::Success).then(|| outcome.to_owned()),
+                used_retry: next.uses_retry(),
+                ..update(task_id, map_index, state)
+            },
+            output,
         }))
     }
 

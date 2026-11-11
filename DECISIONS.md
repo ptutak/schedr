@@ -30,7 +30,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
 | D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
-| D451 | 2026-11-11 | user | planned (M4B.3) | components | B48 is fixed by M4B's per-group memory snapshot |
+| D451 | 2026-11-11 | user | built M4B.3 | components | B48 is fixed by M4B's per-group memory snapshot |
 | D450 | 2026-11-11 | user | built M4B.0 | workers | The master expires an assignment two heartbeats after its deadline |
 | D449 | 2026-11-11 | user | built M4B.0 | workers | A clock-skew warning from the master's wall clock |
 | D448 | 2026-11-11 | user | built M4B.0 | observability | Clock and fencing metrics on workers and the master |
@@ -84,8 +84,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D400 | 2026-11-09 | user | built M4.12b | runs | A backfill skips fire times with a successful or unfinished run |
 | D399 | 2026-11-09 | user | built M4.12a | chained-runs | Cycles between DAGs are allowed; only a cycle inside a DAG is refused |
 | D398 | 2026-11-09 | user | built M4.12a | chained-runs | A TriggerDagOperator starts only a DAG with `trigger=Chained()` |
-| D397 | 2026-11-09 | user | planned (M4B.3) | workers | A turn's messages are stored in groups by type; savepoints later |
-| D396 | 2026-11-09 | user | planned (M4B.5) | workers | B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups |
+| D397 | 2026-11-09 | user | built M4B.3 | workers | A turn's messages are stored in groups by type; savepoints later |
+| D396 | 2026-11-09 | user | built M4B.5 | workers | B184 is fixed in M4B: set-based writes, a run settled once per turn, the journal in groups |
 | D395 | 2026-11-09 | user | superseded by D397 | workers | M4B without a measuring step; 20 messages a turn |
 | D394 | 2026-11-09 | user | rule | triggers | A cycle through trigger=RunOf across DAGs isn't caught |
 | D393 | 2026-11-09 | user | rule | wait-steps | first_of doesn't cancel the tasks that didn't win |
