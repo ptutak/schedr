@@ -52,7 +52,7 @@ Crates
 - clap_lex 1.1.1: MIT OR Apache-2.0 (https://github.com/clap-rs/clap)
 - cmov 0.5.4: Apache-2.0 OR MIT (https://github.com/RustCrypto/utils)
 - colorchoice 1.0.5: MIT OR Apache-2.0 (https://github.com/rust-cli/anstyle.git)
-- const-oid 0.10.3: Apache-2.0 OR MIT (https://github.com/RustCrypto/formats)
+- const-oid 0.10.2: Apache-2.0 OR MIT (https://github.com/RustCrypto/formats)
 - core-foundation 0.10.1: MIT OR Apache-2.0 (https://github.com/servo/core-foundation-rs)
 - core-foundation 0.9.4: MIT OR Apache-2.0 (https://github.com/servo/core-foundation-rs)
 - core-foundation-sys 0.8.7: MIT OR Apache-2.0 (https://github.com/servo/core-foundation-rs)
@@ -81,12 +81,12 @@ Crates
 - dtoa 1.0.11: MIT OR Apache-2.0 (https://github.com/dtolnay/dtoa)
 - dyn-clone 1.0.20: MIT OR Apache-2.0 (https://github.com/dtolnay/dyn-clone)
 - either 1.19.0: MIT OR Apache-2.0 (https://github.com/rayon-rs/either)
-- email-encoding 0.4.3: MIT OR Apache-2.0 (https://github.com/lettre/email-encoding)
+- email-encoding 0.4.2: MIT OR Apache-2.0 (https://github.com/lettre/email-encoding)
 - email_address 0.2.9: MIT (https://github.com/johnstonskj/rust-email_address.git)
 - equivalent 1.0.3: Apache-2.0 OR MIT (https://github.com/indexmap-rs/equivalent)
 - errno 0.3.14: MIT OR Apache-2.0 (https://github.com/lambda-fairy/rust-errno)
 - event-listener 5.4.2: Apache-2.0 OR MIT (https://github.com/smol-rs/event-listener)
-- fancy-regex 0.20.2: MIT (https://github.com/fancy-regex/fancy-regex)
+- fancy-regex 0.19.2: MIT (https://github.com/fancy-regex/fancy-regex)
 - fastrand 2.5.0: Apache-2.0 OR MIT (https://github.com/smol-rs/fastrand)
 - figment 0.10.19: MIT OR Apache-2.0 (https://github.com/SergioBenitez/Figment)
 - fluent-uri 0.4.1: MIT (https://github.com/yescallop/fluent-uri-rs)
@@ -144,14 +144,14 @@ Crates
 - inout 0.2.6: MIT OR Apache-2.0 (https://github.com/RustCrypto/utils)
 - ipnet 2.12.2: MIT OR Apache-2.0 (https://github.com/krisprice/ipnet)
 - is_terminal_polyfill 1.70.2: MIT OR Apache-2.0 (https://github.com/polyfill-rs/is_terminal_polyfill)
-- itertools 0.15.0: MIT OR Apache-2.0 (https://github.com/rust-itertools/itertools)
+- itertools 0.14.0: MIT OR Apache-2.0 (https://github.com/rust-itertools/itertools)
 - itoa 1.0.19: MIT OR Apache-2.0 (https://github.com/dtolnay/itoa)
-- jiff 0.2.43: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
-- jiff-core 0.1.5: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
+- jiff 0.2.41: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
+- jiff-core 0.1.4: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
 - jiff-tzdb 0.1.9: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
-- jsonschema 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
-- jsonschema-regex 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
-- jsonschema-value 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
+- jsonschema 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
+- jsonschema-regex 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
+- jsonschema-value 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
 - lazy_static 1.5.1: MIT OR Apache-2.0 (https://github.com/rust-lang-nursery/lazy-static.rs)
 - lettre 0.11.23: MIT (https://github.com/lettre/lettre)
 - libc 0.2.191: MIT OR Apache-2.0 (https://github.com/rust-lang/libc)
@@ -199,9 +199,9 @@ Crates
 - powerfmt 0.2.1: MIT OR Apache-2.0 (https://github.com/jhpratt/powerfmt)
 - proc-macro2 1.0.107: MIT OR Apache-2.0 (https://github.com/dtolnay/proc-macro2)
 - proc-macro2-diagnostics 0.10.1: MIT/Apache-2.0 (https://github.com/SergioBenitez/proc-macro2-diagnostics)
-- prometheus-client 0.26.0: Apache-2.0 OR MIT (https://github.com/prometheus/client_rust)
-- prost 0.14.5: Apache-2.0 (https://github.com/tokio-rs/prost)
-- prost-types 0.14.5: Apache-2.0 (https://github.com/tokio-rs/prost)
+- prometheus-client 0.25.2: Apache-2.0 OR MIT (https://github.com/prometheus/client_rust)
+- prost 0.14.4: Apache-2.0 (https://github.com/tokio-rs/prost)
+- prost-types 0.14.4: Apache-2.0 (https://github.com/tokio-rs/prost)
 - quinn 0.11.12: MIT OR Apache-2.0 (https://github.com/quinn-rs/quinn)
 - quinn-proto 0.11.19: MIT OR Apache-2.0 (https://github.com/quinn-rs/quinn)
 - quinn-udp 0.5.16: MIT OR Apache-2.0 (https://github.com/quinn-rs/quinn)
@@ -212,7 +212,7 @@ Crates
 - rand_pcg 0.10.2: MIT OR Apache-2.0 (https://github.com/rust-random/rngs)
 - rcgen 0.14.10: MIT OR Apache-2.0 (https://github.com/rustls/rcgen)
 - ref-cast 1.0.27: MIT OR Apache-2.0 (https://github.com/dtolnay/ref-cast)
-- referencing 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
+- referencing 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
 - regex 1.13.1: MIT OR Apache-2.0 (https://github.com/rust-lang/regex)
 - regex-automata 0.4.18: MIT OR Apache-2.0 (https://github.com/rust-lang/regex)
 - regex-syntax 0.8.11: MIT OR Apache-2.0 (https://github.com/rust-lang/regex)
@@ -223,7 +223,7 @@ Crates
 - rustix 1.1.6: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT (https://github.com/bytecodealliance/rustix)
 - rustls 0.23.46: Apache-2.0 OR ISC OR MIT (https://github.com/rustls/rustls)
 - rustls-native-certs 0.8.5: Apache-2.0 OR ISC OR MIT (https://github.com/rustls/rustls-native-certs)
-- rustls-pki-types 1.16.0: MIT OR Apache-2.0 (https://github.com/rustls/pki-types)
+- rustls-pki-types 1.15.1: MIT OR Apache-2.0 (https://github.com/rustls/pki-types)
 - rustls-platform-verifier 0.7.1: MIT OR Apache-2.0 (https://github.com/rustls/rustls-platform-verifier)
 - rustls-webpki 0.103.16: ISC (https://github.com/rustls/webpki)
 - ryu 1.0.23: Apache-2.0 OR BSL-1.0 (https://github.com/dtolnay/ryu)
@@ -347,8 +347,8 @@ These crates ship no licence text; the standard text of the licence they state
 applies.
 
 - crc-catalog 2.5.0
-- jsonschema-regex 0.61.1
-- jsonschema-value 0.61.1
+- jsonschema-regex 0.60.2
+- jsonschema-value 0.60.2
 - pear 0.2.9
 - tonic-prost 0.14.9
 - uuid-simd 0.8.0
@@ -379,7 +379,7 @@ Used by:
   chacha20poly1305 0.11.0 (LICENSE-APACHE)
   cipher 0.5.2 (LICENSE-APACHE)
   cmov 0.5.4 (LICENSE-APACHE)
-  const-oid 0.10.3 (LICENSE-APACHE)
+  const-oid 0.10.2 (LICENSE-APACHE)
   core-foundation 0.10.1 (LICENSE-APACHE)
   core-foundation 0.9.4 (LICENSE-APACHE)
   core-foundation-sys 0.8.7 (LICENSE-APACHE)
@@ -396,7 +396,7 @@ Used by:
   digest 0.10.7 (LICENSE-APACHE)
   digest 0.11.3 (LICENSE-APACHE)
   either 1.19.0 (LICENSE-APACHE)
-  email-encoding 0.4.3 (LICENSE-APACHE)
+  email-encoding 0.4.2 (LICENSE-APACHE)
   equivalent 1.0.3 (LICENSE-APACHE)
   errno 0.3.14 (LICENSE-APACHE)
   event-listener 5.4.2 (LICENSE-APACHE)
@@ -422,7 +422,7 @@ Used by:
   indexmap 2.14.2 (LICENSE-APACHE)
   inlinable_string 0.1.15 (LICENSE-APACHE)
   inout 0.2.6 (LICENSE-APACHE)
-  itertools 0.15.0 (LICENSE-APACHE)
+  itertools 0.14.0 (LICENSE-APACHE)
   lazy_static 1.5.1 (LICENSE-APACHE)
   linux-raw-sys 0.12.1 (LICENSE-APACHE)
   lock_api 0.4.14 (LICENSE-APACHE)
@@ -446,9 +446,9 @@ Used by:
   parking_lot_core 0.9.12 (LICENSE-APACHE)
   percent-encoding 2.3.2 (LICENSE-APACHE)
   poly1305 0.9.1 (LICENSE-APACHE)
-  prometheus-client 0.26.0 (LICENSE-APACHE)
-  prost 0.14.5 (LICENSE)
-  prost-types 0.14.5 (LICENSE)
+  prometheus-client 0.25.2 (LICENSE-APACHE)
+  prost 0.14.4 (LICENSE)
+  prost-types 0.14.4 (LICENSE)
   quinn 0.11.12 (LICENSE-APACHE)
   quinn-proto 0.11.19 (LICENSE-APACHE)
   quinn-udp 0.5.16 (LICENSE-APACHE)
@@ -761,8 +761,8 @@ Used by:
   byteorder 1.5.0 (COPYING)
   globset 0.4.21 (COPYING)
   ignore 0.4.34 (COPYING)
-  jiff 0.2.43 (COPYING)
-  jiff-core 0.1.5 (COPYING)
+  jiff 0.2.41 (COPYING)
+  jiff-core 0.1.4 (COPYING)
   jiff-tzdb 0.1.9 (COPYING)
   memchr 2.8.3 (COPYING)
   same-file 1.0.6 (COPYING)
@@ -779,8 +779,8 @@ Used by:
   byteorder 1.5.0 (LICENSE-MIT)
   globset 0.4.21 (LICENSE-MIT)
   ignore 0.4.34 (LICENSE-MIT)
-  jiff 0.2.43 (LICENSE-MIT)
-  jiff-core 0.1.5 (LICENSE-MIT)
+  jiff 0.2.41 (LICENSE-MIT)
+  jiff-core 0.1.4 (LICENSE-MIT)
   jiff-tzdb 0.1.9 (LICENSE-MIT)
   memchr 2.8.3 (LICENSE-MIT)
   walkdir 2.5.0 (LICENSE-MIT)
@@ -814,8 +814,8 @@ Used by:
   byteorder 1.5.0 (UNLICENSE)
   globset 0.4.21 (UNLICENSE)
   ignore 0.4.34 (UNLICENSE)
-  jiff 0.2.43 (UNLICENSE)
-  jiff-core 0.1.5 (UNLICENSE)
+  jiff 0.2.41 (UNLICENSE)
+  jiff-core 0.1.4 (UNLICENSE)
   jiff-tzdb 0.1.9 (UNLICENSE)
   memchr 2.8.3 (UNLICENSE)
   same-file 1.0.6 (UNLICENSE)
@@ -3055,7 +3055,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  const-oid 0.10.3 (LICENSE-MIT)
+  const-oid 0.10.2 (LICENSE-MIT)
   cpufeatures 0.3.1 (LICENSE-MIT)
 
 Copyright (c) 2020-2026 The RustCrypto Project Developers
@@ -3948,7 +3948,7 @@ THE SOFTWARE.
 
 Used by:
   either 1.19.0 (LICENSE-MIT)
-  itertools 0.15.0 (LICENSE-MIT)
+  itertools 0.14.0 (LICENSE-MIT)
 
 Copyright (c) 2015
 
@@ -3979,11 +3979,11 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  email-encoding 0.4.3 (LICENSE-MIT)
+  email-encoding 0.4.2 (LICENSE-MIT)
 
 MIT License
 
-Copyright (c) 2021-2026 Paolo Barbolini <paolo@paolobarbolini.it>
+Copyright (c) 2021-2024 Paolo Barbolini <paolo@paolo565.org>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -4095,7 +4095,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  fancy-regex 0.20.2 (LICENSE)
+  fancy-regex 0.19.2 (LICENSE)
 
 The MIT License
 
@@ -6220,8 +6220,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ==============================================================================
 
 Used by:
-  jsonschema 0.61.1 (LICENSE)
-  referencing 0.61.1 (LICENSE)
+  jsonschema 0.60.2 (LICENSE)
+  referencing 0.60.2 (LICENSE)
 
 MIT License
 
@@ -7770,7 +7770,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  prometheus-client 0.26.0 (LICENSE-MIT)
+  prometheus-client 0.25.2 (LICENSE-MIT)
 
 MIT License
 
@@ -9148,7 +9148,7 @@ of these licenses, at your option.
 ==============================================================================
 
 Used by:
-  rustls-pki-types 1.16.0 (LICENSE-APACHE)
+  rustls-pki-types 1.15.1 (LICENSE-APACHE)
 
 Apache License
                         Version 2.0, January 2004
@@ -9355,7 +9355,7 @@ limitations under the License.
 ==============================================================================
 
 Used by:
-  rustls-pki-types 1.16.0 (LICENSE-MIT)
+  rustls-pki-types 1.15.1 (LICENSE-MIT)
 
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
 
