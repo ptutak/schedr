@@ -5,7 +5,7 @@ status = "active"
 topic = "workers"
 section = "Identity and connection"
 summary = '''
-A deterministic simulator in `crates/schedr/tests` runs the master's core and dispatcher and
+A deterministic simulator in `crates/schedr-agent/tests/clock_sim.rs` runs the master's core and dispatcher and
 the worker's master-time bound and cutoff on virtual clocks, proptest choosing delays, pauses,
 drift, restarts, takeovers and incarnations. It checks four rules: no attempt starts after the
 master expired it; no attempt stays open for ever; no retry within a replaced incarnation's
@@ -14,4 +14,5 @@ tokio's paused time; fewer rules.
 '''
 history = "JOURNAL.md#D445"
 step = "M4B.0"
-code = ["crates/schedr-agent/tests/clock_sim.rs::run"]
+code = ["crates/schedr-agent/tests/clock_sim.rs::run", "crates/schedr-agent/tests/clock_sim/master.rs::simulate", "crates/schedr-master/src/dispatch.rs::Weakened"]
+checked = 2026-11-12

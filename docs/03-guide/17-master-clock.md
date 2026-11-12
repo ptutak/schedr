@@ -292,10 +292,24 @@ Heartbeats are also lost on their way to the master while its messages still arr
 the last heartbeat it heard. At every event it checks that a start is at least the reserve
 before its deadline in master time, and that a worker not yet cut off is within a lease of when
 the master last heard it (so of the last stamp too). Removing the third bound above, or the
-drift allowance makes it fail at once. The master's side of the rules (the take-back two
-heartbeats after the deadline, a replaced incarnation's hold) is checked by the dispatcher's
-tests; running the master's core and dispatcher in the simulator too, with restarts and
-takeovers, as decision 446 has it, is still to come.
+drift allowance makes it fail at once.
+
+The master's side runs in the same test (`clock_sim/master.rs`): the real master core over an
+in-memory database, and two workers, each with its own `MasterTime` on a drifting clock,
+connected by streams that delay messages, hold them up and break. Workers are cut off one way
+or both, or replaced by a new incarnation while the old process runs on. Masters restart, or are
+taken over while the deposed one still answers heartbeats. Its DAG has two tasks: one with a
+`cleanup_anywhere` cleanup, which a worker cut off stops, and an ordinary one, which it keeps
+running. The test checks three things:
+
+- no worker starts an attempt the master has ended;
+- no two processes of one task instance run at once, so no retry within a replaced
+  incarnation's hold and no moved cleanup beside the worker it left (the ordinary task may run
+  again only beside an attempt the master ended `lost`, at least once);
+- once the faults are over, every attempt and run has ended.
+
+Switching off the take-back's grace, the replaced incarnation's hold or the cleanup's move
+wait makes it fail, each in scenarios aimed at it.
 
 ```{mermaid}
 flowchart LR
@@ -304,6 +318,11 @@ flowchart LR
     sim --> rule3{Not cut off only within a lease of the last heartbeat the master heard?}
     rule1 -->|no| fail[Fails, with the smallest scenario]
     rule3 -->|no| fail
+    faults[Random faults: cuts, lags, replaced workers, takeovers] --> both[Master core and two workers on one clock]
+    both --> alone{One process per task instance at a time?}
+    both --> ended{Nothing started after the master ended it; all ended at the end?}
+    alone -->|no| fail
+    ended -->|no| fail
 ```
 
 ## Watching it (decisions 448 and 449)

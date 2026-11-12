@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D455 | 2026-11-12 | claude | built R1.0b | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
 | D454 | 2026-11-11 | user | planned (R1.0c) | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
 | D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
 | D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
@@ -974,6 +975,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D455: A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would
 - D453: A worker's cutoff counts from the send of the last heartbeat the master heard
 - D450: The master expires an assignment two heartbeats after its deadline
 - D449: A clock-skew warning from the master's wall clock

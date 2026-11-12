@@ -750,6 +750,132 @@ async fn a_worker_silent_past_its_lease_is_lost_and_its_attempts_with_it() {
 }
 
 #[tokio::test]
+async fn a_lost_workers_unstarted_attempt_whose_cleanup_may_move_waits_as_its_cleanup_would() {
+    // B234: cut off as the assignment reached it, the worker may have started it, its
+    // `Started` held up, and be stopping it; taken back at the loss, it ran beside itself.
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    // Lost at 61 s: the cancel grace (30 s) and the move wait (10 s) from then.
+    core.tick(later(61)).await.unwrap();
+    assert!(core.dispatcher().workers().get("w1").is_none());
+    let status = |core: &MasterCore| {
+        let (db, id) = (core.db.clone(), assign.attempt_id.clone());
+        async move { db.attempt(&id).await.unwrap().unwrap().status }
+    };
+    core.tick(later(100)).await.unwrap();
+    assert_eq!(status(&core).await, None, "within the wait");
+    core.tick(later(102)).await.unwrap();
+    assert_eq!(
+        status(&core).await,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
+async fn a_new_incarnations_old_unstarted_attempt_whose_cleanup_may_move_waits_for_its_stop() {
+    // Grok's review of B234: the `Started` lost with the old stream, a new incarnation back
+    // at once: never lost, the attempt was taken back on the start timeout (81 s) while the
+    // old process, its cutoff a lease after the assignment, ran on until its kill (90 s).
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", later(1)).await.unwrap();
+    core.register(&register("w1", "i2", vec![]), later(2))
+        .await
+        .unwrap();
+    let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    let status = |core: &MasterCore| {
+        let (db, id) = (core.db.clone(), assign.attempt_id.clone());
+        async move { db.attempt(&id).await.unwrap().unwrap().status }
+    };
+    // From the registration at 2 s: the lease (60 s), then the grace and the move wait (40 s).
+    for at in (10..=100).step_by(10) {
+        core.handle("w1", heartbeat(), later(at)).await.unwrap();
+        core.tick(later(at)).await.unwrap();
+        assert_eq!(status(&core).await, None, "at {at} s");
+    }
+    core.handle("w1", heartbeat(), later(103)).await.unwrap();
+    core.tick(later(103)).await.unwrap();
+    assert_eq!(
+        status(&core).await,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_master_takes_back_a_lost_workers_unstarted_attempt_only_after_its_stop() {
+    // Grok's review of B234: the wait armed at the loss is in memory; a restart counted only
+    // the start timeout from first sight, short of a long cancel grace (120 s here).
+    let settings = Settings {
+        cancel_grace: Duration::from_secs(120),
+        ..Settings::default()
+    };
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let mut core = MasterCore::new(db.clone(), settings);
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    core.upload(upload_of(&job.parse_job_id, &anywhere_file()), ts(NOW))
+        .await
+        .unwrap();
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    // Killed by 180 s (its cutoff at 60 s, then the grace); a new master from 62 s.
+    let mut core = MasterCore::new(db, settings);
+    core.restore(later(62)).await.unwrap();
+    let status = |core: &MasterCore| {
+        let (db, id) = (core.db.clone(), assign.attempt_id.clone());
+        async move { db.attempt(&id).await.unwrap().unwrap().status }
+    };
+    core.tick(later(62)).await.unwrap();
+    for at in [100, 144, 181, 250] {
+        core.tick(later(at)).await.unwrap();
+        assert_eq!(status(&core).await, None, "at {at} s");
+    }
+    // First seen at 62 s: the lease (60 s), the grace and the move wait (130 s).
+    core.tick(later(253)).await.unwrap();
+    assert_eq!(
+        status(&core).await,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
+async fn a_lost_workers_unstarted_attempt_of_an_ordinary_task_is_taken_back_at_once() {
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        attempt.status,
+        Some(schedr_model::AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
 async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_back() {
     // Codex's review of decision 282: the journal's `Finished` of a cleanup waiting to move
     // was answered `Kill`, the worker dropped the result, and the cleanup ran again elsewhere.

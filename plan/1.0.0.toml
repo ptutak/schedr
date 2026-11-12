@@ -35,7 +35,8 @@ scope = '''
 done_when = '''
 the simulator drives the master's core and the worker together; removing the start grace, the hold or the move wait makes it fail
 '''
-status = "planned"
+status = "done"
+done = 2026-11-12
 
 [[steps]]
 id = "R1.0c"

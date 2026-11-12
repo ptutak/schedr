@@ -1,0 +1,23 @@
+title = "A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would"
+date = 2026-11-12
+by = "claude"
+status = "active"  # active, superseded, dropped, untraced
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+When a worker is lost, an attempt of a task with `cleanup_anywhere` that it was never heard
+starting is taken back (`assignment_expired`, no retry used) only once the wait a started one's
+cleanup gets before it moves is over (the cancel grace and the cleanup move wait, 40 s by
+default): the worker may have started it as it was cut off, its `Started` held up, and be
+stopping it (B234). A replaced incarnation's are held the same way from the new one's
+registration: a lease (the old process's cutoff), then that wait; and a restarted master, which
+doesn't keep the wait, takes one back no sooner than the start timeout plus that wait after it
+first sees it. Other tasks' are taken back at the loss, as before: a worker cut off keeps
+running them (decision 252). Not chosen: waiting for every task; only the deadline plus the
+grace of decision 450 (short of a task's stop when the cancel grace is longer than two
+heartbeats).
+'''
+history = "JOURNAL.md#D455"  # <a id="D455"></a> starts its JOURNAL.md entry
+step = "R1.0b"
+code = ["crates/schedr-master/src/dispatch.rs::forget_worker", "crates/schedr-master/src/dispatch.rs::expire", "crates/schedr-master/src/dispatch.rs::incarnation_replaced"]
+checked = 2026-11-12

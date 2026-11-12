@@ -583,6 +583,13 @@ impl MasterCore {
         self
     }
 
+    /// Switches one of its liveness safeguards off (the clock simulator's mutation tests,
+    /// decision 446). Never in a master.
+    #[doc(hidden)]
+    pub fn weaken(&mut self, safeguard: crate::dispatch::Weakened) {
+        self.dispatcher.weaken(safeguard);
+    }
+
     /// How it reads master time (see [`crate::clock`]).
     #[must_use]
     pub const fn steady_clock(&self) -> crate::clock::Steady {

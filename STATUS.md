@@ -7,7 +7,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M4B, Batched worker messages (a milestone after M4).
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
-- **Then:** R1.0a, R1.0b, R1.0c, M5.0a, M5.0b.
+- **Then:** R1.0a, R1.0c, M5.0a, M5.0b, M5.0c.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 3; first: B187 (medium/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
@@ -15,12 +15,12 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - D454 (2026-11-11): images on glibc beside Alpine
 - N2 (2026-11-11): B184 met; the stress comparison before and after M4B
+- D455 (2026-11-12): a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
 - D453 (2026-11-11): the cutoff from what the master heard (decision 453, B233)
 - D445 (2026-11-11): the clock step before M4B (decisions 445-452)
-- D444 (2026-11-11): a new leader waits out the deposed one; workers fence older epochs (decision 444, B231)
+- R1.0b (2026-11-12): The master's side in the clock simulator
 - M4B.5 (2026-11-11): The agent's journal in groups
 - M4B.4 (2026-11-11): A turn's `Finished`s written together
-- M4B.3 (2026-11-11): A turn's messages in groups
 
 ## In progress
 

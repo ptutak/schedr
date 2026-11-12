@@ -263,6 +263,19 @@ impl DispatchError {
     }
 }
 
+/// A liveness safeguard switched off by [`Dispatcher::weaken`]: the clock simulator's mutation
+/// tests (decision 446) show each is needed. Never in a master.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Weakened {
+    /// No grace past an assignment's `start_by` (decision 450).
+    StartGrace,
+    /// A replaced incarnation's attempts end at once, with no hold (decision 443).
+    Hold,
+    /// A lost worker's cleanup moves at once (decisions 256 and 445).
+    MoveWait,
+}
+
 /// Tasks given to workers and their reports handled.
 #[derive(Debug)]
 pub struct Dispatcher {
@@ -322,6 +335,13 @@ pub struct Dispatcher {
     /// (decision 443): it ends `lost` a lease after; after a restart, from when it is first
     /// seen.
     replaced_since: BTreeMap<String, Timestamp>,
+    /// No hold for a replaced incarnation's attempts ([`Weakened::Hold`]).
+    no_hold: bool,
+    /// A lost worker's attempts it was never heard starting, of tasks whose cleanup may move,
+    /// and when each may be taken back, in master time (B234): it may have started one, its
+    /// `Started` held up, and be stopping it, so each waits as a started one's cleanup would
+    /// before it moves. After a restart, an ordinary expiry from when it is first seen.
+    lost_unstarted: BTreeMap<String, Timestamp>,
     /// How far behind its cursor an event sensor reads back, for an event committed late
     /// (B185; the triggers' `event_lookback`).
     event_lookback: SignedDuration,
@@ -360,6 +380,8 @@ pub struct Memory {
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
     stops: Vec<Outgoing>,
     active: Active,
+    /// A lost worker's attempts waiting to be taken back (B234): a rolled-back loss keeps none.
+    lost_unstarted: BTreeMap<String, Timestamp>,
 }
 
 /// What a write did to an attempt, for a commit cut off to be read back by.
@@ -443,6 +465,8 @@ impl Dispatcher {
             unstarted_since: BTreeMap::new(),
             move_not_before: BTreeMap::new(),
             replaced_since: BTreeMap::new(),
+            no_hold: false,
+            lost_unstarted: BTreeMap::new(),
             event_lookback: SignedDuration::from_mins(1),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
@@ -500,6 +524,7 @@ impl Dispatcher {
             code_missing: self.code_missing.clone(),
             stops: self.stops.clone(),
             active: self.active.clone(),
+            lost_unstarted: self.lost_unstarted.clone(),
         }
     }
 
@@ -534,6 +559,7 @@ impl Dispatcher {
         self.code_missing = memory.code_missing;
         self.stops = memory.stops;
         self.active = memory.active;
+        self.lost_unstarted = memory.lost_unstarted;
     }
 
     /// The attempts a `CancelAttempt` is queued for, sent at the next step (for the
@@ -582,6 +608,16 @@ impl Dispatcher {
     pub fn with_start_grace(mut self, grace: Duration) -> Self {
         self.start_grace = SignedDuration::try_from(grace).unwrap_or(SignedDuration::MAX);
         self
+    }
+
+    /// Switches `safeguard` off (the clock simulator's mutation tests, decision 446).
+    #[doc(hidden)]
+    pub fn weaken(&mut self, safeguard: Weakened) {
+        match safeguard {
+            Weakened::StartGrace => self.start_grace = SignedDuration::ZERO,
+            Weakened::Hold => self.no_hold = true,
+            Weakened::MoveWait => self.cleanup_move_wait = SignedDuration::ZERO,
+        }
     }
 
     /// The dispatcher waiting `wait` before a lost worker's cleanup moves.
@@ -2428,6 +2464,8 @@ impl Dispatcher {
             .collect();
         self.unstarted_since
             .retain(|id, _| seen.contains(id.as_str()));
+        self.lost_unstarted
+            .retain(|id, _| seen.contains(id.as_str()));
         let mut expired = Vec::new();
         let mut taken_back = Vec::new();
         for (attempt, cleanup) in unstarted
@@ -2442,7 +2480,22 @@ impl Dispatcher {
             // Its `Started` is here, waiting its turn, or it was adopted though that couldn't
             // be recorded (batch A's review): the worker has it.
             let timeout = self.start_timeout.saturating_add(self.start_grace);
-            if steady.duration_since(since) <= timeout
+            let waits = if let Some(not_before) = self.lost_unstarted.get(&attempt.id) {
+                steady < *not_before
+            } else {
+                let waited = steady.duration_since(since);
+                // One whose cleanup may move waits at least the move wait past the start
+                // timeout, as one taken back from a lost worker does: after a restart,
+                // which forgets that wait, counting from when this master first saw it,
+                // after the loss (Grok's review of B234). Looked up only past the timeout.
+                waited <= timeout
+                    || (waited <= self.start_timeout.saturating_add(self.cleanup_move_wait)
+                        && self
+                            .task_cleanup(&attempt)
+                            .await?
+                            .is_some_and(|wanted| wanted.anywhere))
+            };
+            if waits
                 || self.arrivals.start_waiting(&attempt.id)
                 || self.adopted_unrecorded.contains(&attempt.id)
             {
@@ -2460,7 +2513,14 @@ impl Dispatcher {
             self.take_back_cleanup(attempt, now).await?;
         }
         for attempt in &expired {
-            let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
+            let end = AttemptEnd {
+                // Its worker lost before it was heard starting it (B234).
+                error_summary: self
+                    .lost_unstarted
+                    .remove(&attempt.id)
+                    .map(|_| not_started_summary(&attempt.worker_id)),
+                ..AttemptEnd::by_master(AttemptStatus::AssignmentExpired)
+            };
             let result = by_master(AttemptStatus::AssignmentExpired);
             // Whole or not at all, memory with it (B49): ending the attempt and moving its
             // task are separate writes, and the slot is freed in memory before them.
@@ -2503,6 +2563,31 @@ impl Dispatcher {
             self.replaced_since
                 .entry(attempt_id.clone())
                 .or_insert(since);
+        }
+        // One never heard starting, whose cleanup may move: the old process may have started
+        // it, its `Started` lost with its stream, and be stopping it. Taken back only once its
+        // cutoff (a lease after the master's last word, no later than this registration) and
+        // its stop (the move wait) are over (Grok's review of B234).
+        let unstarted: Vec<StoredAttempt> = self
+            .db
+            .open_attempts(Some(worker_id))
+            .await?
+            .into_iter()
+            .filter(|a| !a.started && !a.moving && !reported.contains(a.id.as_str()))
+            .collect();
+        let not_before = since
+            .checked_add(self.start_timeout)
+            .and_then(|at| at.checked_add(self.cleanup_move_wait))
+            .unwrap_or(Timestamp::MAX);
+        for attempt in unstarted {
+            if self
+                .task_cleanup(&attempt)
+                .await?
+                .is_some_and(|wanted| wanted.anywhere)
+            {
+                let armed = self.lost_unstarted.entry(attempt.id).or_insert(not_before);
+                *armed = (*armed).max(not_before);
+            }
         }
         Ok(left.len())
     }
@@ -2556,7 +2641,7 @@ impl Dispatcher {
                 .replaced_since
                 .entry(attempt_id.clone())
                 .or_insert(steady);
-            if steady.duration_since(since) < self.start_timeout {
+            if !self.no_hold && steady.duration_since(since) < self.start_timeout {
                 continue;
             }
             let Some(attempt) = self.db.attempt(&attempt_id).await? else {
@@ -2625,8 +2710,23 @@ impl Dispatcher {
                     .await?;
                 continue;
             }
-            // One it never started (sent as it began draining, say) never ran there: taken
-            // back like an expired assignment, queued again without using a retry (B17).
+            // One whose cleanup may move may have started there, its `Started` held up as the
+            // worker was cut off, which is stopping it: taken back once the wait a started
+            // one's cleanup gets is over, by `expire` (B234).
+            if self
+                .task_cleanup(&attempt)
+                .await?
+                .is_some_and(|wanted| wanted.anywhere)
+            {
+                let not_before = (self.steady)(now)
+                    .checked_add(self.cleanup_move_wait)
+                    .unwrap_or(Timestamp::MAX);
+                self.lost_unstarted.insert(attempt.id.clone(), not_before);
+                continue;
+            }
+            // Any other it never started (sent as it began draining, say) never ran there, or
+            // runs on there whatever happens (decision 252): taken back like an expired
+            // assignment, queued again without using a retry (B17).
             let status = AttemptStatus::AssignmentExpired;
             let end = AttemptEnd {
                 error_summary: Some(not_started_summary(worker_id)),

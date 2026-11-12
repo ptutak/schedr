@@ -1,7 +1,8 @@
 name: Stress
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): nightly when main changed since
-# the last passing run, and by hand (any profile). Not on each push: see ci.yml.
+# the last passing run, and by hand (any profile). Not on each push: see ci.yml. Beside it,
+# the clock simulator (decision 446) with many more scenarios than a push runs.
 on:
   schedule:
     - cron: "17 2 * * *"
@@ -118,3 +119,25 @@ jobs:
           name: stress-report-${{ github.run_id }}
           path: target/stress/
           if-no-files-found: warn
+
+  # The clock simulator's master side with 600 fresh scenarios every night, whether main changed
+  # or not (each push runs the same dozen): the faults that break a rule need rare timings
+  # (B234 came from 60). A failure prints the smallest scenario.
+  simulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.149
+      - name: Clock simulator, 600 scenarios
+        env:
+          PROPTEST_CASES: "600"
+        run: >-
+          cargo nextest run -p schedr-agent --test clock_sim --no-capture
+          -E 'test(the_master_and_its_workers_keep_the_rules_whatever_the_faults)'

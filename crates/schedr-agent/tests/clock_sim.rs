@@ -28,7 +28,9 @@
 use std::time::{Duration, SystemTime};
 
 use proptest::prelude::*;
+use proptest::strategy::ValueTree;
 use schedr_agent::master_time::{Local, MasterTime};
+use schedr_master::dispatch::Weakened;
 use schedr_proto::pb;
 
 const MS: u64 = 1_000_000;
@@ -344,4 +346,126 @@ fn a_stall_the_boot_clock_missed_counts_every_deadline_as_passed() {
         ],
     };
     assert_eq!(run(&s), Ok(()));
+}
+
+#[path = "clock_sim/master.rs"]
+mod master;
+
+#[test]
+fn without_faults_every_run_ends_and_no_rule_breaks() {
+    let s = master::Scenario {
+        timings: master::Timings::SCALED,
+        ppm: [0, 0],
+        seed: 1,
+        faults: vec![],
+    };
+    assert_eq!(master::simulate(&s, None), Ok(()));
+}
+
+/// The master's simulation: a dozen scenarios from a fixed seed by default (each runs the
+/// master's core for minutes of virtual time, the same ones on every push); with
+/// `PROPTEST_CASES` (the nightly run), that many fresh ones.
+fn master_config() -> ProptestConfig {
+    let cases = std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|n| n.parse().ok());
+    ProptestConfig {
+        max_shrink_iters: 20,
+        rng_seed: if cases.is_some() {
+            proptest::test_runner::RngSeed::Random
+        } else {
+            proptest::test_runner::RngSeed::Fixed(446)
+        },
+        ..ProptestConfig::with_cases(cases.unwrap_or(12))
+    }
+}
+
+#[test]
+fn an_assignment_started_as_its_worker_was_cut_off_isnt_run_again_beside_it() {
+    // B234: the proptest's smallest scenario (60 cases): w1 cut off both ways just after an
+    // assignment reached it; taken back at the loss, it ran on w2 while w1 stopped it.
+    let cut = |at, len| {
+        let way = master::Way::Both;
+        (
+            at,
+            master::Fault::Cut {
+                worker: 0,
+                len,
+                way,
+            },
+        )
+    };
+    let s = master::Scenario {
+        timings: master::Timings::SCALED,
+        ppm: [0, 0],
+        seed: 14_284_326_171_064_715_806,
+        faults: vec![cut(11_818, 20_494), cut(36_525, 22_733)],
+    };
+    assert_eq!(master::simulate(&s, None), Ok(()));
+}
+
+proptest! {
+    #![proptest_config(master_config())]
+
+    #[test]
+    fn the_master_and_its_workers_keep_the_rules_whatever_the_faults(s in master::any_scenario()) {
+        prop_assert_eq!(master::simulate(&s, None), Ok(()), "{:?}", s);
+    }
+}
+
+/// The first of up to `cases` scenarios from a fixed seed that breaks a rule with `safeguard`
+/// switched off: its number and the rule broken.
+fn broken_without(safeguard: Weakened, cases: u32) -> Option<(u32, String)> {
+    use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+    let mut runner = TestRunner::new_with_rng(
+        ProptestConfig::default(),
+        TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+    );
+    (0..cases).find_map(|case| {
+        let s = master::aimed_at(safeguard)
+            .new_tree(&mut runner)
+            .unwrap()
+            .current();
+        master::simulate(&s, Some(safeguard))
+            .err()
+            .map(|why| (case, why))
+    })
+}
+
+#[test]
+fn without_the_start_grace_a_rule_breaks() {
+    let found = broken_without(Weakened::StartGrace, 32);
+    eprintln!("start grace: {found:?}");
+    assert!(found.is_some());
+}
+
+#[test]
+fn without_the_hold_a_rule_breaks() {
+    let found = broken_without(Weakened::Hold, 32);
+    eprintln!("hold: {found:?}");
+    assert!(found.is_some());
+}
+
+#[test]
+fn without_the_move_wait_a_rule_breaks() {
+    let found = broken_without(Weakened::MoveWait, 32);
+    eprintln!("move wait: {found:?}");
+    assert!(found.is_some());
+}
+
+#[test]
+fn a_moved_cleanup_given_back_to_the_worker_whose_result_is_on_its_way_runs_once() {
+    // Both cut off, w1's result held up: its cleanup waits to move; back, w1 reports the result
+    // in its journal and is given the cleanup before the result arrives, which it ignores.
+    let cut = |at, worker, len| {
+        let way = master::Way::Both;
+        (at, master::Fault::Cut { worker, len, way })
+    };
+    let s = master::Scenario {
+        timings: master::Timings::SCALED,
+        ppm: [0, 0],
+        seed: 611_699_805_573_473_486,
+        faults: vec![cut(2_563, 1, 27_436), cut(15_662, 0, 15_934)],
+    };
+    assert_eq!(master::simulate(&s, None), Ok(()));
 }

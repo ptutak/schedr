@@ -78,9 +78,10 @@ Breaks `agent::tests::an_assignment_past_its_start_budget_isnt_started_and_is_re
 `dispatch::tests::an_unstarted_assignment_is_taken_back_only_its_grace_after_start_by`,
 `loader::tests::a_lease_under_four_heartbeats_is_refused`,
 `core::tests::a_restarted_master_takes_back_no_assignment_within_its_workers_lease`. The simulator
-checks only the worker's half (a start it would allow is at least the reserve before `start_by`,
-plus the unseen-stall allowance). Decision 446's run of the core and the dispatcher, with restarts
-and takeovers, is not built.
+checks the worker's half (a start it would allow is at least the reserve before `start_by`, plus
+the unseen-stall allowance) and, in `clock_sim/master.rs`, the master's: the real core and two
+workers on one clock, where no worker starts an attempt the master ended, and removing the grace
+(`Weakened::StartGrace`) makes it fail.
 
 ### The worker's cutoff is the earliest of the receipt, the stamp and what the master heard
 
@@ -121,8 +122,9 @@ recomputes it. Decisions 445 and 252. Breaks
 `a_master_gone_silent_stops_a_task_whose_cleanup_may_move`, and the simulator's check that a worker
 still inside `cutoff_in` is within a lease of when the master last heard it (heartbeats lost one
 way included). The move wait breaks
-`dispatch::tests::a_lost_workers_cleanup_waits_for_a_task_it_cant_see_to_stop`. No test runs the
-worker's cutoff and the master's move against one clock.
+`dispatch::tests::a_lost_workers_cleanup_waits_for_a_task_it_cant_see_to_stop`, and
+`clock_sim/master.rs` runs the worker's cutoff and the master's move on one clock
+(`Weakened::MoveWait` makes it fail).
 
 ### A replaced incarnation's attempts stay held for a lease
 
@@ -145,9 +147,10 @@ attempt; the suspend and unseen-stall limits below can make that stop late. Deci
 `dispatch::tests::a_replaced_incarnation_loses_only_its_started_unreported_attempts` (still open at
 one second under the lease, ended on it),
 `core::tests::a_replaced_incarnations_hold_survives_a_master_restart`,
-`service::tests::a_replaced_stream_gets_no_more_heartbeat_answers`. The simulator does not run an
-incarnation; decision 446's check of "no retry inside the hold" is this dispatch test, not
-`clock_sim`.
+`service::tests::a_replaced_stream_gets_no_more_heartbeat_answers`, and `clock_sim/master.rs`:
+an incarnation replaced while the old process runs on, no two processes of a task instance at
+once; without the hold (`Weakened::Hold`) it fails, as without the move wait
+(`Weakened::MoveWait`).
 
 ### A new leader waits out the deposed one, and a worker fences an older epoch
 
@@ -292,11 +295,12 @@ Each is one line; the reader's page has the diagrams.
   stamp's master time plus the lease, by the same bound as a start deadline. Never later than
   before. Not chosen: master time only; leaving the cutoff on receipt.
 - **A simulator checks the liveness rules on virtual clocks** (D446): A deterministic simulator in
-  `crates/schedr/tests` runs the master's core and dispatcher and the worker's master-time bound and
-  cutoff on virtual clocks, proptest choosing delays, pauses, drift, restarts, takeovers and
-  incarnations. It checks four rules: no attempt starts after the master expired it; no attempt
-  stays open for ever; no retry within a replaced incarnation's hold; a moved cleanup never runs
-  beside the worker it left. Not chosen: the full stack under tokio's paused time; fewer rules.
+  `crates/schedr-agent/tests/clock_sim.rs` runs the master's core and dispatcher and the worker's
+  master-time bound and cutoff on virtual clocks, proptest choosing delays, pauses, drift, restarts,
+  takeovers and incarnations. It checks four rules: no attempt starts after the master expired it;
+  no attempt stays open for ever; no retry within a replaced incarnation's hold; a moved cleanup
+  never runs beside the worker it left. Not chosen: the full stack under tokio's paused time; fewer
+  rules.
 - **The worker's best clock sample is taken over a window** (D447): The worker's best master-time
   sample is the tightest of the last 10 minutes (`SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW`), so
   the drift allowance comes from a recent sample by construction. Not chosen: a fixed constant.
@@ -305,16 +309,27 @@ Each is one line; the reader's page has the diagrams.
   bound (`SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING`): for people, never a deadline (B232). Not
   chosen: leaving B232 for later.
 - **The master expires an assignment two heartbeats after its deadline** (D450): The master takes
-  back an unstarted assignment two heartbeat intervals after its `start_by`, while the worker still
-  refuses to start it two intervals before: four intervals between the last start and the take-back,
-  for a `Started` held on its way. A reassignment comes 20 s later by default. Not chosen: one
-  interval; none.
+  back an unstarted assignment two heartbeat intervals after its `start_by` (one whose task has
+  `cleanup_anywhere` later still, decision 455), while the worker still refuses to start it two
+  intervals before: four intervals between the last start and the take-back, for a `Started` held on
+  its way. A reassignment comes 20 s later by default. Not chosen: one interval; none.
 - **A worker's cutoff counts from the send of the last heartbeat the master heard** (D453): The
   worker's cutoff is also at most a lease, less 0.1 %, after it sent the latest heartbeat a master
   stamp names as heard (`heard_sequence`): the master received it no earlier and counts the worker
   lost from it, so a worker whose messages are lost one way stops before its cleanup moves, whatever
   the master still sends (B233). Not chosen: the master counting its lease from its own last send
   too (a silent worker kept alive while the master writes to it).
+- **A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would** (D455):
+  When a worker is lost, an attempt of a task with `cleanup_anywhere` that it was never heard
+  starting is taken back (`assignment_expired`, no retry used) only once the wait a started one's
+  cleanup gets before it moves is over (the cancel grace and the cleanup move wait, 40 s by
+  default): the worker may have started it as it was cut off, its `Started` held up, and be stopping
+  it (B234). A replaced incarnation's are held the same way from the new one's registration: a lease
+  (the old process's cutoff), then that wait; and a restarted master, which doesn't keep the wait,
+  takes one back no sooner than the start timeout plus that wait after it first sees it. Other
+  tasks' are taken back at the loss, as before: a worker cut off keeps running them (decision 252).
+  Not chosen: waiting for every task; only the deadline plus the grace of decision 450 (short of a
+  task's stop when the cancel grace is longer than two heartbeats).
 
 ### Drain
 
@@ -416,6 +431,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/supervise.rs::left_after_leader` (D100)
 - `crates/schedr-agent/src/watchers.rs::WatcherHosts` (D320, D334)
 - `crates/schedr-agent/tests/clock_sim.rs::run` (D446)
+- `crates/schedr-agent/tests/clock_sim/master.rs::simulate` (D446)
 - `crates/schedr-api/src/routes.rs` (D129)
 - `crates/schedr-api/src/routes.rs::test_connection` (D200)
 - `crates/schedr-api/src/routes.rs::worker_problems` (D130)
@@ -451,13 +467,15 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/dispatch.rs` (D242, D243, D255, D282)
 - `crates/schedr-master/src/dispatch.rs::NO_CLEANUP_WORKER` (D221)
 - `crates/schedr-master/src/dispatch.rs::RESULT_NOT_STORED` (D115)
+- `crates/schedr-master/src/dispatch.rs::Weakened` (D446)
 - `crates/schedr-master/src/dispatch.rs::cleanup_move_wait` (D256)
 - `crates/schedr-master/src/dispatch.rs::connection_worker` (D193)
 - `crates/schedr-master/src/dispatch.rs::end_lost` (D220)
 - `crates/schedr-master/src/dispatch.rs::end_replaced` (D443)
-- `crates/schedr-master/src/dispatch.rs::expire` (D450)
+- `crates/schedr-master/src/dispatch.rs::expire` (D450, D455)
 - `crates/schedr-master/src/dispatch.rs::finished_group` (D396)
-- `crates/schedr-master/src/dispatch.rs::incarnation_replaced` (D443)
+- `crates/schedr-master/src/dispatch.rs::forget_worker` (D455)
+- `crates/schedr-master/src/dispatch.rs::incarnation_replaced` (D443, D455)
 - `crates/schedr-master/src/dispatch.rs::resume` (D109)
 - `crates/schedr-master/src/dispatch.rs::with_start_grace` (D450)
 - `crates/schedr-master/src/dispatch/tests.rs` (D220, D221)
@@ -487,6 +505,6 @@ None.
 <!-- generated by scripts/records.py: details -->
 Details and edge cases, with the reasons; read them before changing this:
 
-- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453
+- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453, D455
 - archive/PROJECT.md: Cleanup and resources, DAG code delivery, Master–worker protocol, Web UI and CLI, Worker lifecycle, Worker memory protection and crash recovery
 <!-- end of details -->

@@ -533,6 +533,22 @@ names as heard, over the master counting from its own sends. With answered heart
 bound and the stamp's are within milliseconds; the simulator now loses heartbeats one way and
 checks the worker against the master's loss, and fails without the bound.
 
+### <a id="D455"></a>2026-11-12: a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
+
+The master's side of the clock simulator (R1.0b) found, at 60 scenarios with every safeguard on,
+a worker cut off both ways just after an assignment reached it: it started the task, its
+`Started` held up; the master counted it lost a lease later and queued the attempt again at once
+(B17's rule: never started there), and the task ran on the other worker while the first, cut off
+at the same moment, was still stopping it. The user asked for the fix; Claude chose the narrow
+one: only tasks with `cleanup_anywhere` (the ones a worker cut off stops) wait, as long as a
+started one's cleanup waits before it moves; ordinary tasks run at least once anyway (decision
+252) and are taken back at the loss as before. The simulator's smallest scenario is now a test
+of its own, and the simulator runs 600 fresh scenarios nightly (the user's suggestion). Grok's
+review of the fix found two more ways to the same overlap, both fixed with tests: a new
+incarnation registering before the lease left the old one's unstarted attempts on the start
+timeout (the worker never lost), and a restart forgot the wait (a cancel grace over the lease
+plus two heartbeats then too long); a scenario now runs with the defaults' ratios too.
+
 ### <a id="N2"></a>2026-11-11: B184 met; the stress comparison before and after M4B (note 2)
 
 Stress run on this laptop, the code before M4B's batching (`0da885f`) and after (`afb1b9e`),

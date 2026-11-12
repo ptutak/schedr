@@ -15,4 +15,4 @@ step = "M4.9b"
 unverified = ["a worker that withdrew the root is not given its parse"]
 also = ["code-delivery", "workers"]
 code = ["crates/schedr-config/src/config.rs", "crates/schedr-agent/src/agent.rs::report_changes", "crates/schedr-master/src/core.rs::DEFAULT_SCRIPT_ROOT_GRACE"]
-checked = 2026-11-11
+checked = 2026-11-12

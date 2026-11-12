@@ -13,4 +13,4 @@ Not chosen: worker metrics only.
 history = "JOURNAL.md#D445"
 step = "M4B.0"
 code = ["crates/schedr-agent/src/metrics.rs::register", "crates/schedr-agent/src/agent.rs::publish_master_reading", "crates/schedr-master/src/dispatch.rs::end_replaced"]
-checked = 2026-11-11
+checked = 2026-11-12

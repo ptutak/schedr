@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D88"
 step = "M4.4"
 also = ["state"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/dispatch.rs", "crates/schedr-master/src/faults.rs", "crates/schedr-master/src/limits.rs::load", "crates/schedr-master/src/limits.rs::add"]
-checked = 2026-11-11
+checked = 2026-11-12

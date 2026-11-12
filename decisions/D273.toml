@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D273"
 step = "M4.8c2"
 also = ["assignment"]
 code = ["crates/schedr-db/src/attempts.rs", "crates/schedr-master/src/execution.rs", "crates/schedr-master/src/dispatch.rs::unschedulable_timeout_ms", "crates/schedr-model/src/dag.rs::unschedulable_timeout_ms"]
-checked = 2026-11-11
+checked = 2026-11-12
