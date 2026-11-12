@@ -24,18 +24,32 @@ with Dag(
 ):
     bounds(dag_ctx.run.since, dag_ctx.run.planned_for)
 
-with Dag("daily_warsaw", trigger=DAILY.override(tz="Europe/Warsaw")):
+with Dag(
+    "daily_warsaw",
+    description="Runs daily at midnight Warsaw time.",
+    trigger=DAILY.override(tz="Europe/Warsaw"),
+):
     bounds(dag_ctx.run.since, dag_ctx.run.planned_for)
 
-with Dag("every_hour", trigger=Every(timedelta(hours=1), start="2026-01-01")):
+with Dag(
+    "every_hour",
+    description="Runs every hour.",
+    trigger=Every(timedelta(hours=1), start="2026-01-01"),
+):
     bounds(dag_ctx.run.since, dag_ctx.run.planned_for)
 
 with Dag(
     "once",
+    description="Runs once, on Christmas Eve 2026 at midnight Warsaw time.",
     trigger=Once("2026-12-24T23:00", tz="Europe/Warsaw"),
     initial_since="2026-12-24T22:00",
 ):
     bounds(dag_ctx.run.since, dag_ctx.run.planned_for)
 
-with Dag("manual_only", trigger=None, initial_since="2026-01-01"):
+with Dag(
+    "manual_only",
+    description="Runs only when started by hand.",
+    trigger=None,
+    initial_since="2026-01-01",
+):
     bounds(dag_ctx.run.since, dag_ctx.run.planned_for)

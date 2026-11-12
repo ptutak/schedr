@@ -32,7 +32,11 @@ class Check(Outcome):
     UNCHANGED = 1
 
 
-with Dag("route_by_outcome", trigger=None):
+with Dag(
+    "route_by_outcome",
+    description="Routes work by a task's outcome and a command's exit code.",
+    trigger=None,
+):
 
     @task
     def fetch() -> Rows | Unavailable:

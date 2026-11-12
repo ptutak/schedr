@@ -13,5 +13,5 @@ def run_command(name: str) -> str:
     return completed.stdout
 
 
-with Dag("mapped_process"):
+with Dag("mapped_process", description="Runs a small command for each element of a list."):
     run_command.expand(name=["eu", "us"])

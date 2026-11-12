@@ -178,6 +178,7 @@ def summary(
 
 with Dag(
     "readings_ingest",
+    description="Checks batches of device files, stores or quarantines them, then finds anomalies.",
     trigger=inbox_files(),
     params=IngestParams,
     tags=["showcase"],

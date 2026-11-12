@@ -4,7 +4,11 @@ from datetime import timedelta
 
 from schedr import CommandOperator, Dag, EmptyOperator, task
 
-with Dag("tasks_demo", trigger=None):
+with Dag(
+    "tasks_demo",
+    description="Runs a Python task twice, a shell command, an argument list and an empty task.",
+    trigger=None,
+):
 
     @task
     def extract() -> list[str]:

@@ -24,7 +24,11 @@ def late(outcome: TimedOut) -> str:
     return "packing timed out"
 
 
-with Dag("ship_paid", trigger=EventNamed("paid")):
+with Dag(
+    "ship_paid",
+    description="Ships each paid order once its package is packed.",
+    trigger=EventNamed("paid"),
+):
     packed = wait_for(EventNamed("packed", key=dag_ctx.event.key), max_wait=timedelta(seconds=3))
     ship(packed.on(Event[Json]))
     late(packed.on(TimedOut))

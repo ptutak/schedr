@@ -221,6 +221,14 @@ async fn the_list_names_each_dags_kind_of_trigger() {
             "event paid"
         ]
     );
+    // A DAG without a trigger is `manual`, whatever its paused flag says: pausing
+    // stops nothing of it.
+    assert_eq!(
+        texts(&html, "table.dags .badge"),
+        [
+            "active", "active", "active", "active", "active", "active", "manual"
+        ]
+    );
     assert!(texts(&html, "table.dags th").contains(&"Trigger".to_owned()));
 }
 

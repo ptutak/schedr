@@ -4,7 +4,11 @@ from datetime import timedelta
 
 from schedr import Dag, EmptyOperator, StepDefaults, group, task
 
-with Dag("grouped_load", trigger=None):
+with Dag(
+    "grouped_load",
+    description="Loads each source with the same group of tasks, then waits for all of them.",
+    trigger=None,
+):
 
     @task
     def extract(source: str) -> list[str]:

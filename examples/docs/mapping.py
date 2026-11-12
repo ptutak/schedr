@@ -56,7 +56,9 @@ def report(results: list[Rows | Missing]) -> list[str]:
     return [r.reason for r in results if isinstance(r, Missing)]
 
 
-with Dag("mapped"):
+with Dag(
+    "mapped", description="Runs one task per element of a list, in lanes, and gathers the results."
+):
     # One `fetch` per file, the bucket fixed for all of them.
     results = fetch.partial(bucket="raw").expand(path=list_files())
 

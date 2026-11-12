@@ -43,7 +43,11 @@ def load(key: str, file: Arrived) -> str:
     return f"{key}: {file.size} bytes in {file.path}"
 
 
-with Dag("event_triggers", trigger=new_files(folder="/tmp/schedr-incoming")):
+with Dag(
+    "event_triggers",
+    description="Starts a run for each file that arrives in /tmp/schedr-incoming.",
+    trigger=new_files(folder="/tmp/schedr-incoming"),
+):
     load(dag_ctx.event.key, dag_ctx.event.data)  # pyright: ignore[reportAny]
 
 

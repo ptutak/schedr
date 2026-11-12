@@ -45,7 +45,11 @@ def export(day: str) -> None:
     cleanup_handle(ExportJob(f"job-{day}"))
 
 
-with Dag("cleanup", defaults=StepDefaults(cleanup_retries=1)):
+with Dag(
+    "cleanup",
+    description="Shows a task's cleanup running however the task ended, retried once if it fails.",
+    defaults=StepDefaults(cleanup_retries=1),
+):
     export("2026-11-04") >> CommandOperator(
         "publish",
         'id=$(date +%s); schedr task-ctx cleanup add Publication id="$id"',

@@ -400,6 +400,8 @@ async fn a_paused_dag_without_a_trigger_has_nothing_to_unpause() {
         ["/d/etl/dags/sync/trigger"],
         "no unpause dialog"
     );
+    // Its state is `manual`, not the paused flag it kept.
+    assert_eq!(texts(&html, "h1 .badge"), ["manual"]);
 }
 
 const BACKFILL: &str = "01a1c0a0-0000-7000-8000-000000000001";

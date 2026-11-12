@@ -4,7 +4,11 @@ from datetime import datetime
 
 from schedr import Cron, Dag, dag_ctx, task
 
-with Dag("report_window", trigger=Cron("0 3 * * *")):
+with Dag(
+    "report_window",
+    description="Builds a nightly report for the window the run covers.",
+    trigger=Cron("0 3 * * *"),
+):
 
     @task
     def bounds(since: datetime, until: datetime) -> str:

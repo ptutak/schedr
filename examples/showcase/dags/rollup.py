@@ -88,6 +88,7 @@ def quiet(timed_out: TimedOut, since: datetime, until: datetime) -> str:
 
 with Dag(
     "greenhouse_rollup",
+    description="Sums up each zone's readings every 5 minutes, and opens a warm zone's vents.",
     trigger=Every(timedelta(minutes=5)),
     tags=["showcase"],
 ):

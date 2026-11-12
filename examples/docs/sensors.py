@@ -81,7 +81,7 @@ def fast_report(value: str, winner: str) -> str:
     return said
 
 
-with Dag("sensors_demo"):
+with Dag("sensors_demo", description="Waits for a value, and routes on whether it came in time."):
     slow_task()
     slow = sees_slow_task()
     absent = sees_absent_task()

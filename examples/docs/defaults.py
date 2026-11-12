@@ -6,6 +6,7 @@ from schedr import Dag, MiB, StepDefaults, task
 
 with Dag(
     "defaults_demo",
+    description="Sets retries and timeouts for every task, with one task overriding two of them.",
     trigger=None,
     defaults=StepDefaults(
         retries=2,

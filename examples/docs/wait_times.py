@@ -11,7 +11,10 @@ def report(ended: datetime) -> None:
     print(f"Wait ended at {ended.isoformat()}")
 
 
-with Dag("wait_times"):
+with Dag(
+    "wait_times",
+    description="Waits for a duration and for a moment, then uses the times they ended.",
+):
     pause = delay(timedelta(milliseconds=100))
     scheduled = until(timedelta(milliseconds=100))
     past = until(datetime(2020, 1, 1, tzinfo=UTC))

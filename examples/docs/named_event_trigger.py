@@ -18,5 +18,9 @@ def handle(key: str) -> str:
     return f"handling {key}"
 
 
-with Dag("inspect_payment", trigger=paid_with_data()):
+with Dag(
+    "inspect_payment",
+    description="Starts a run for each paid event whose data passes a check.",
+    trigger=paid_with_data(),
+):
     handle(dag_ctx.event.key)

@@ -53,8 +53,26 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 1 | B239: a drained worker is still `draining` right after it exited, once, under an I/O stall (Suspected) | 2 | medium | rare | tests |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+
+## B239: a drained worker is still `draining` right after it exited, once, under an I/O stall (Suspected)
+
+- **Rating:** severity **medium**, probability **rare**, tests (score 2): drain test saw `draining`, not `offline`, under an I/O stall.
+- **Found:** 2026-11-12, `make check` on `4d8e88a` (B237's fixes, D457/D458), while the user
+  ran `make standalone` beside it: `a_draining_worker_stops_a_task_already_being_cancelled_near_its_grace_not_the_cancels`
+  (`crates/schedr/tests/roles.rs`) read `draining` where `offline` was expected. The worker
+  exited 0 within its grace; the log has a whole-system I/O stall of about 1.7 s, and no
+  master line about the worker leaving. `a_restarted_agent_runs_the_cleanup_of_the_task_it_lost`
+  failed in the same run ("waited too long for the run to end").
+- **Not reproduced:** both alone (8 of 8, 4 of 4), and the drain test under 12 busy loops (10
+  of 10).
+- **Not known:** whether the master took the `Deregister` and recorded it only after the
+  test's one read (a test that should wait briefly for `offline`), or never got it (the agent
+  exits after `deregister_by`, end of grace less a quarter of the report period, B237; with
+  this test's 8 s grace about 1.4 s after the stubborn task's SIGKILL). The next sighting:
+  keep its log, and look for the master's handling of the stream's end.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 

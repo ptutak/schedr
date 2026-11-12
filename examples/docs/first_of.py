@@ -57,7 +57,10 @@ def publish(report: Report) -> str:
     return f"published {report.path}"
 
 
-with Dag("first_of_demo"):
+with Dag(
+    "first_of_demo",
+    description="Goes on with the first of several sources to answer, and joins a branch's paths.",
+):
     value, winner = first_of(from_cache(), from_service(), with_winner=True)
     price(value, winner)
 

@@ -13,7 +13,11 @@ class Batch:
     source: str
 
 
-with Dag("data_flow", trigger=None):
+with Dag(
+    "data_flow",
+    description="Passes parts of one task's output to others, and orders tasks that share no data.",
+    trigger=None,
+):
 
     @task
     def fetch() -> Batch:

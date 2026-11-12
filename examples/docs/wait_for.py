@@ -53,7 +53,7 @@ def late(timed_out: TimedOut) -> str:
     return "no orders in time"
 
 
-with Dag("orders"):
+with Dag("orders", description="Collects the day's orders."):
     load()
 
 
@@ -64,10 +64,17 @@ def tally() -> str:
 
 
 # A run of `tally_orders` for each run of `orders` that succeeds, planned for the same moment.
-with Dag("tally_orders", trigger=RunOf("orders", lag=timedelta(0))):
+with Dag(
+    "tally_orders",
+    description="Tallies the orders after each orders run.",
+    trigger=RunOf("orders", lag=timedelta(0)),
+):
     tally()
 
-with Dag("report"):
+with Dag(
+    "report",
+    description="Builds a report on the orders of the same day, waiting for that orders run.",
+):
     loaded = wait_for(RunOf("orders", task="load", lag=timedelta(0)), max_wait=timedelta(seconds=3))
     build(loaded.on(str))
     say_failed(loaded.on(Failed))
@@ -88,7 +95,9 @@ def build_from(orders: int) -> str:
     return f"report of {orders} orders"
 
 
-with Dag("checked_report"):
+with Dag(
+    "checked_report", description="Builds a report once the same day's orders run has succeeded."
+):
     orders = loaded_orders(least=1)
     build_from(orders.on(int))
     late(orders.on(TimedOut))
@@ -108,5 +117,9 @@ def handle_big(orders: int) -> str:
     return f"{orders} orders: a big day"
 
 
-with Dag("big_orders", trigger=on_big_orders(least=40)):
+with Dag(
+    "big_orders",
+    description="Starts a run for each orders run with at least 40 orders.",
+    trigger=on_big_orders(least=40),
+):
     handle_big(dag_ctx.event.data)  # pyright: ignore[reportAny]

@@ -23,7 +23,10 @@ def call_api(tenant: str) -> str:
     return f"{tenant}: a key of {len(key)} characters, a token of {len(token)}"
 
 
-with Dag("secrets_demo"):
+with Dag(
+    "secrets_demo",
+    description="Reads secrets: passed to a task, read inside one, and in a command's environment.",
+):
     connect(text(t"postgresql://etl:{secrets['etl/db']['password']}@db.example.com/etl"))
     call_api("acme")
     CommandOperator(

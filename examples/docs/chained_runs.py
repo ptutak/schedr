@@ -34,11 +34,16 @@ def late(result: TimedOut) -> str:
     return "load is still going or finished late"
 
 
-with Dag("chained_load", trigger=Chained(by=["chained_report"]), params=LoadParams):
+with Dag(
+    "chained_load",
+    description="Loads the region a chained_report run asks for.",
+    trigger=Chained(by=["chained_report"]),
+    params=LoadParams,
+):
     region: str = dag_ctx.params.region  # pyright: ignore[reportAny]
     load(region)
 
-with Dag("chained_report"):
+with Dag("chained_report", description="Builds a report, then starts chained_load for its region."):
     started = TriggerDagOperator(
         "start_load", dag="chained_load", params={"region": "eu"}, max_wait=timedelta(minutes=5)
     )

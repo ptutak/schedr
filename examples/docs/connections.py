@@ -36,5 +36,8 @@ def fetch_orders() -> str:
         return api.get("/orders")
 
 
-with Dag("connections_demo"):
+with Dag(
+    "connections_demo",
+    description="Opens connections that are defined once and filled in per environment.",
+):
     fetch_orders()

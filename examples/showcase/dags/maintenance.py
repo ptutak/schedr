@@ -69,6 +69,7 @@ def fixed_report(device: str, action: str) -> str:
 
 with Dag(
     "device_maintenance",
+    description="Maintains one device, once an operator acknowledged its anomaly.",
     trigger=Chained(by=["anomaly_response"]),
     params=MaintenanceParams,
     defaults=StepDefaults(retries=1, retry_delay=timedelta(seconds=5)),

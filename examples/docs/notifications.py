@@ -34,6 +34,7 @@ def prepare() -> str:
 
 with Dag(
     "notifications_demo",
+    description="Sends notifications to Slack and email when a run fails or recovers.",
     notify={
         "ops-slack": [Notify.RUN_FAILED, Notify.RUN_RECOVERED],
         relay: [Notify.TASK_FAILED],

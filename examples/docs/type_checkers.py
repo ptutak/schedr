@@ -36,7 +36,11 @@ class Disk(Outcome):
     FULL = 1
 
 
-with Dag("typed_flow", trigger=None):
+with Dag(
+    "typed_flow",
+    description="A flow written so that type checkers read each task's output type.",
+    trigger=None,
+):
 
     @task
     def find(day: datetime) -> Found | Empty:

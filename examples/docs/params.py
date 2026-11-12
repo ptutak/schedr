@@ -32,7 +32,12 @@ def summary(params: ReportParams) -> str:
     return text
 
 
-with Dag("report_params", trigger=Cron("0 3 * * *"), params=ReportParams):
+with Dag(
+    "report_params",
+    description="Builds a nightly report; a manual run can pick its parameters.",
+    trigger=Cron("0 3 * * *"),
+    params=ReportParams,
+):
     # A field is untyped (Any), so a strict checker reports the read; the names below are typed.
     region: str = dag_ctx.params.region  # pyright: ignore[reportAny]
     day: date | None = dag_ctx.params.day  # pyright: ignore[reportAny]

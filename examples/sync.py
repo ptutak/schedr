@@ -6,6 +6,7 @@ from schedr import CommandOperator, Cron, Dag, StepDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
+    description="Syncs customers daily at 03:00 Warsaw time: extract, load, notify.",
     trigger=Cron("0 3 * * *", tz="Europe/Warsaw", start="2026-01-01"),
     defaults=StepDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):

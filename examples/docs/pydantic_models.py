@@ -29,7 +29,11 @@ class Missing(Model):
     reason: str
 
 
-with Dag("pydantic_models", trigger=None):
+with Dag(
+    "pydantic_models",
+    description="Passes Pydantic models between tasks: a whole model, a field, a date.",
+    trigger=None,
+):
 
     @task
     def settings() -> Settings:

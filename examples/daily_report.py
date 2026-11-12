@@ -14,7 +14,11 @@ class Report:
     path: str
 
 
-with Dag("daily_report", trigger=Cron("0 6 * * *", tz="Europe/Warsaw")):
+with Dag(
+    "daily_report",
+    description="Writes a report daily at 06:00 Warsaw time, from Python and from a command.",
+    trigger=Cron("0 6 * * *", tz="Europe/Warsaw"),
+):
 
     @task
     def plan() -> Report:

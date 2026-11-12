@@ -34,7 +34,7 @@ async def cancel_export(handles: list[Export]) -> None:
         print(f"cancelling {handle.job_id}")
 
 
-with Dag("async_orders"):
+with Dag("async_orders", description="Fetches orders with concurrent async waits inside one task."):
 
     @task(
         connections=[async_orders_api],

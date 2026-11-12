@@ -20,7 +20,10 @@ def load(made: Cluster) -> int:
     return made.size
 
 
-with Dag("command_cluster_job"):
+with Dag(
+    "command_cluster_job",
+    description="A command reports the cluster it made; its cleanup reads that value three ways.",
+):
     cluster = CommandResource(
         "cluster",
         [

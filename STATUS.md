@@ -9,7 +9,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
 - **Then:** R1.0a, R1.0c, M5.0a, M5.0b, M5.0c.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 3; first: B239 (medium/rare), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 

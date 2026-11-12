@@ -55,7 +55,10 @@ def report(rows: int) -> str:
     return f"imported {rows} rows"
 
 
-with Dag("workspace_import"):
+with Dag(
+    "workspace_import",
+    description="Imports files through a scratch directory made for the run, then removed.",
+):
     with group("work") as work:
         space = workspace()
         rows = count_rows(space, download(space))

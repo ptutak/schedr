@@ -20,7 +20,11 @@ def late(outcome: TimedOut) -> str:
     return "packing timed out"
 
 
-with Dag("inspect_packing", trigger=EventNamed("paid")):
+with Dag(
+    "inspect_packing",
+    description="For each paid order, waits until its package is packed.",
+    trigger=EventNamed("paid"),
+):
 
     @sensor(wait_for=EventNamed("packed", key=dag_ctx.event.key), max_wait=timedelta(seconds=3))
     async def packed(event: Event[Json]) -> str | NotYet:

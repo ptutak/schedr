@@ -22,7 +22,7 @@
   {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "Its trigger starts no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
   {% endif %}
 </div>
-<h1>{{ row.dag_id }} {% if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}{% if row.held.is_some() %} <span class="badge warning">held</span>{% endif %}</h1>
+<h1>{{ row.dag_id }} {% if row.manual_only() %}<span class="badge manual" title="No trigger: it runs only when started by hand">manual</span>{% else if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}{% if row.held.is_some() %} <span class="badge warning">held</span>{% endif %}</h1>
 {% if !description.is_empty() %}<p class="description">{{ description }}</p>{% endif %}
 {% if let Some(why) = row.held %}
 <div class="banner warning">

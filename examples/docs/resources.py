@@ -35,7 +35,10 @@ def warm_cache() -> None:
     """Needs the resource, not its value."""
 
 
-with Dag("cluster_job"):
+with Dag(
+    "cluster_job",
+    description="Makes a cluster for the run, and removes it once everything using it is done.",
+):
     with group("work") as work:
         made = cluster(8)
         load(made)

@@ -40,7 +40,9 @@ def bucket_names() -> list[str]:
         return [f"{values['name']}/{bucket}" for bucket in buckets]
 
 
-with Dag("typed_connections"):
+with Dag(
+    "typed_connections", description="Opens built-in connection types, each through its own client."
+):
     bucket_names()
     # A command gets each connection as variables (and the files its tools read), by
     # prefix: `{"DB": warehouse}` would give `psql "$DB_URL"` its URL and password file.

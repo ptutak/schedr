@@ -103,6 +103,7 @@ def maintenance_failed(result: Failed) -> None:
 # `pager` among the DAG's channels: its tasks' own `pager.send` posts there too.
 with Dag(
     "anomaly_response",
+    description="Diagnoses a hot device, waits for an operator, then maintains it or escalates.",
     trigger=EventNamed("anomaly"),
     tags=["showcase"],
     notify={pager: [Notify.RUN_FAILED]},
