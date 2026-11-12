@@ -106,7 +106,7 @@ A new DAG is stored paused, and so is a DAG that was removed and comes back.
 `schedr dags unpause <id>` lets the scheduler create runs. `schedr dags pause <id>` stops
 only that: fire times pass with no scheduled run, runs already going finish, and a manual
 run still starts. A paused `Chained` DAG refuses operators until unpaused. For
-`trigger=None`, the UI greys out Pause: it has only manual runs.
+`trigger=None`, the UI shows neither Pause nor Unpause: it has only manual runs.
 
 After unpause, `catchup` applies to the fire times that passed. With it off, only the
 latest one is created. With it on, the missed ones are created in order.

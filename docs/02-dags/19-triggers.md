@@ -42,7 +42,7 @@ In the plain forms you write the loop yourself; in the `.poke` forms schedr owns
 | Form | Your function is | It returns | Called again |
 |---|---|---|---|
 | `@sensor` | `async def`, its own waiting loop | Its value, once | Never: it is the whole wait, limited to `max_wait` |
-| `@sensor.poke(every=...)` | `async def`, one check | Its value, or `NOT_YET` | After `NOT_YET`, `every` after the last call started |
+| `@sensor.poke(every=...)` | `async def`, one check | Its value, or `NOT_YET` | After `NOT_YET`, `every` after the last call started, or as it ends when it ran past `every` |
 | [`@sensor(wait_for=...)`](21-wait-for.md#reading-the-run-sensorwait_for) | `async def`, one look at a run or event | Its value, or `NOT_YET` (not this item) | With a later match, until `max_wait`; each call limited by `timeout=` if given |
 | `@trigger` | An async generator, its own loop | Never returns: it yields an `Event` each time it finds one | Never: it runs while its DAG is live; returning or raising is an error on its status |
 | `@trigger.poke(every=...)` | `async def`, one check | `list[Event[T]]`, oldest first; `[]` for nothing | Every `every`, counted from when each call started |

@@ -687,7 +687,7 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
             Some("cron" | "every" | "once") => "Schedule",
             Some("run_of") => "Run of",
             Some("chained") => "Chained",
-            Some("event") => "Event",
+            Some("event" | "event_named") => "Event",
             Some(_) => "Other",
         },
         schedule: dag.trigger.as_ref().map_or_else(

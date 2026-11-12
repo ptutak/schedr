@@ -442,9 +442,10 @@ class _Sensor:
     def poke(self, *, every: timedelta, **options: Unpack[SensorOptions]) -> _PokeDecorator:
         """Makes an ``async def`` function a wait step that schedr calls every ``every``.
 
-        It returns its value, or ``NOT_YET`` until it has one: ``-> Path | NotYet``. Each call is
-        limited to ``every``, and calls never overlap: one that raises, or runs out its time, is
-        a failure with the usual retries.
+        It returns its value, or ``NOT_YET`` until it has one: ``-> Path | NotYet``. Calls never
+        overlap: one that runs past ``every`` delays the next, and the poke fails after
+        ``[watchers] poke_overruns`` of them in a row, or at once when a call reaches three times
+        ``every`` (decision 458). A call that raises is a failure with the usual retries.
 
         Args:
             every: How often to call it.

@@ -173,6 +173,10 @@ pub fn trigger_text(trigger: &serde_json::Value, local: &TimeZone) -> String {
             "@trigger {}",
             trigger["task"]["id"].as_str().unwrap_or_default()
         ),
+        Some("event_named") => format!(
+            "event {}",
+            trigger["event"]["name"].as_str().unwrap_or_default()
+        ),
         _ => "-".to_owned(),
     };
     let mut parts = vec![text];

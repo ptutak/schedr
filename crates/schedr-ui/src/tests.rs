@@ -193,7 +193,11 @@ async fn the_list_names_each_dags_kind_of_trigger() {
             "e_event",
             json!({"kind": "event", "task": {"id": "listen"}}),
         ),
-        with("f_manual", json!({"kind": "none"})),
+        with(
+            "f_posted",
+            json!({"kind": "event_named", "event": {"name": "paid"}}),
+        ),
+        with("g_manual", json!({"kind": "none"})),
     ];
     scripted
         .answers
@@ -203,7 +207,7 @@ async fn the_list_names_each_dags_kind_of_trigger() {
     assert_eq!(
         texts(&html, "table.dags td.trigger .trigger-kind"),
         [
-            "Schedule", "Schedule", "Run of", "Chained", "Event", "Manual"
+            "Schedule", "Schedule", "Run of", "Chained", "Event", "Event", "Manual"
         ]
     );
     assert_eq!(
@@ -213,7 +217,8 @@ async fn the_list_names_each_dags_kind_of_trigger() {
             "once at 2026-12-24 22:00Z",
             "after etl load",
             "chained from ingest",
-            "@trigger listen"
+            "@trigger listen",
+            "event paid"
         ]
     );
     assert!(texts(&html, "table.dags th").contains(&"Trigger".to_owned()));

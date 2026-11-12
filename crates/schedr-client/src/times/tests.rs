@@ -176,3 +176,12 @@ fn an_event_trigger_is_named_by_its_function() {
         "@trigger new_files"
     );
 }
+
+#[test]
+fn a_trigger_on_posted_events_is_named_by_their_name() {
+    let trigger = json!({"kind": "event_named", "event": {"name": "paid"}});
+    assert_eq!(
+        trigger_text(&trigger, &jiff::tz::TimeZone::UTC),
+        "event paid"
+    );
+}

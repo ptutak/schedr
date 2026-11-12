@@ -393,6 +393,17 @@ def test_a_call_within_every_starts_the_count_again_and_a_late_value_counts() ->
     assert _waited(_overrunning(takes, "ready"), max_wait_ms=60_000, every_ms=100) == "ready"
 
 
+def test_a_stall_after_a_call_by_something_else_on_the_loop_isnt_an_overrun() -> None:
+    # Another poke on the host blocks the loop after each call ends (Grok's review of D458).
+    left = [1, 1, 1, 1, 0]
+
+    async def poke() -> object:
+        asyncio.get_running_loop().call_soon(time.sleep, 0.05)
+        return "ready" if not left.pop(0) else NOT_YET
+
+    assert _waited(poke, max_wait_ms=60_000, every_ms=20) == "ready"
+
+
 def test_poke_overruns_1_fails_at_the_first_overrun(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(waiting, "_poke_overruns", 1)
     with pytest.raises(PokeTooSlowError, match="1 calls in a row"):

@@ -2047,7 +2047,7 @@ READY = "READY_FILE"
 CODE = "old"
 
 
-# Each call is limited to `every`: 100 ms failed the run under a loaded check (B238).
+# Calls running past `every` fail the poke (D458): 100 ms failed the run under a loaded check (B238).
 @sensor.poke(every=timedelta(seconds=1), max_wait=timedelta(seconds=60))
 async def polls() -> str | NotYet:
     Path(READY + ".called").write_text("yes")

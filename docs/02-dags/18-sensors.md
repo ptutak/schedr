@@ -14,7 +14,8 @@ compares every form.
 
 A poke returns its value when ready, or `NOT_YET` while waiting: annotate it
 `-> str | NotYet`. `None` is a value, not a signal to wait. Calls never overlap. A call
-that runs past `every` is an overrun: it may finish, and the next call comes right after it.
+that runs past `every` is an overrun (its own time counts, not a stall of the event loop
+after it): it may finish, and the next call comes right after it.
 The poke fails (`PokeTooSlowError`, with the usual retries) after `[watchers] poke_overruns`
 overruns in a row (3 by default), or at once when one call runs three times `every`, when it
 is cancelled. A call that raises is a failure with the usual retries too. A call that
@@ -103,7 +104,7 @@ while other wait steps keep the host alive, and a retry could overlap it. Use an
 This isn't a sandbox: C code gets past both, and what it leaves running lives until the host stops.
 
 `asyncio.to_thread` belongs to its wait step: its prints go to the step's log, `task_ctx` works in
-it, and it runs out of time with the step. When the call is cancelled (`max_wait`, `every`, a cancel,
+it, and it runs out of time with the step. When the call is cancelled (`max_wait`, three times `every`, a cancel,
 your own `asyncio.timeout`) or the step ends with the call still running, `StepEndedError` is raised
 in its thread at its next Python line. It isn't an `Exception`, so `except Exception` doesn't stop
 it, and `finally` runs. Python can't reach a thread blocked in C (`time.sleep(600)`, a read with no

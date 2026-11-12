@@ -115,7 +115,7 @@ class CallTimedOutError(Exception):
 
 async def _within(
     call: Coroutine[object, object, object], limit: float | None
-) -> tuple[bool, object]:
+) -> tuple[bool, object, float]:
     """Runs ``call`` for at most ``limit`` seconds.
 
     Args:
@@ -123,7 +123,8 @@ async def _within(
         limit: Seconds; ``None``: no limit.
 
     Returns:
-        ``(True, value)``, or ``(False, None)`` when it was cancelled at the limit.
+        ``(True, value, took)``, or ``(False, None, took)`` when it was cancelled at the
+        limit; ``took`` is the call's own time in seconds.
     """
     loop = asyncio.get_running_loop()
     took: list[float] = []
@@ -155,11 +156,11 @@ async def _within(
         raise
     if not late:
         # Its own `CancelledError`, not at the limit, is no timeout: it goes up.
-        return True, running.result()
+        return True, running.result(), took[0]
     # The limit decides, however it took the cancel: a value it then returned came too late.
     if not running.cancelled() and (error := running.exception()) is not None:
         print(f"warning: while being cancelled at its limit: {error!r}", file=sys.stderr)
-    return False, None
+    return False, None, took[0] if took else float(limit or 0.0)
 
 
 async def _until(moving: asyncio.Event | None, delay: float) -> None:
@@ -191,7 +192,7 @@ async def _poked(
             return TimedOut()
         # A call may run on past `every` (calls never overlap: the next one waits for it), to
         # its hard limit.
-        ended, value = await _within(call(), hard if left is None else min(hard, left))
+        ended, value, took = await _within(call(), hard if left is None else min(hard, left))
         if not ended:
             if left is not None and left <= hard:
                 return TimedOut()
@@ -201,7 +202,8 @@ async def _poked(
             )
         if value is not NOT_YET:
             return value
-        if loop.time() - started < every:
+        # Its own time, as for the hard limit: a stall after it, by another poke, isn't its.
+        if took < every:
             overruns = 0
         else:
             overruns += 1
@@ -270,13 +272,13 @@ async def _waited(
     if isinstance(call_ms, int) and (seconds is None or call_ms / 1000 < seconds):
         # Its own limit comes first: a call over it hung, a failure its retries cover (the
         # same run), not the end of the wait.
-        ended, value = await _within(function(**arguments), call_ms / 1000)
+        ended, value, _ = await _within(function(**arguments), call_ms / 1000)
         if not ended:
             raise CallTimedOutError(
                 f"a call took longer than its `timeout` ({call_ms / 1000:g} s), and was cancelled"
             )
         return value
-    ended, value = await _within(function(**arguments), seconds)
+    ended, value, _ = await _within(function(**arguments), seconds)
     return value if ended else TimedOut()
 
 
@@ -317,7 +319,7 @@ async def _poke_once(
     """One call of a trigger's poke: what it found, or its error as shown on its status."""
     try:
         call = cast("Coroutine[object, object, object]", function(after, **arguments))
-        ended, found = await _within(call, every)
+        ended, found, _ = await _within(call, every)
         if not ended:
             raise PokeTooSlowError(  # as what it raises is, below
                 f"a call took longer than `every` ({every:g} s): each call is limited to it, "
