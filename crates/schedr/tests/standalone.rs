@@ -2047,7 +2047,8 @@ READY = "READY_FILE"
 CODE = "old"
 
 
-@sensor.poke(every=timedelta(milliseconds=100), max_wait=timedelta(seconds=60))
+# Each call is limited to `every`: 100 ms failed the run under a loaded check (B238).
+@sensor.poke(every=timedelta(seconds=1), max_wait=timedelta(seconds=60))
 async def polls() -> str | NotYet:
     Path(READY + ".called").write_text("yes")
     return CODE if Path(READY).exists() else NOT_YET
@@ -2080,9 +2081,22 @@ fn poke_on_changing_code(
         ready.with_extension("called").exists()
     });
     std::fs::write(standalone.root().join("moves.py"), new_code(&old)).unwrap();
+    // Until the log says it, or the run ends without it: then the run says why (B238).
+    let mut ended = Value::Null;
     standalone.wait("the move to be made or refused", || {
+        let state = standalone.run(&run);
+        if ["success", "failed", "cancelled"]
+            .contains(&state["run"]["state"].as_str().unwrap_or(""))
+        {
+            ended = state;
+            return true;
+        }
         poke_log(&standalone, &run, "polls").contains(log_says)
     });
+    assert!(
+        ended.is_null(),
+        "the run ended before {log_says:?}: {ended}"
+    );
     std::fs::write(&ready, "").unwrap();
     standalone.wait_for_state(&run, "success");
     (standalone, run)
