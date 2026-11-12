@@ -5,7 +5,8 @@ status = "active"  # active, superseded, dropped, untraced
 topic = "wait-steps"
 section = "What a wait step is"
 summary = '''
-Calls of a sensor's poke never overlap. A call past `every` is an overrun: it may finish, and
+Calls of a sensor's poke never overlap. A call past `every`, by its own time (not a stall of
+the loop after it), is an overrun: it may finish, and
 the next call comes right after it. The poke fails (`PokeTooSlowError`, the usual retries)
 after `[watchers] poke_overruns` overruns in a row (3; 1 fails at the first, as decision 322
 did), or at once when one call runs three times `every`, when it is cancelled. A call that
