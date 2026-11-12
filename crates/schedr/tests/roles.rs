@@ -1222,7 +1222,12 @@ fn a_draining_worker_stops_a_task_already_being_cancelled_near_its_grace_not_the
         "the worker didn't stop within its grace and 5 s: {exited:?}\n{}",
         cluster.logs()
     );
-    assert_eq!(cluster.worker_state("w1").as_deref(), Some("offline"));
+    assert_eq!(
+        cluster.worker_state("w1").as_deref(),
+        Some("offline"),
+        "{}",
+        cluster.logs()
+    );
     let statuses: Vec<Value> = cluster
         .attempts(&run_id, "work")
         .iter()

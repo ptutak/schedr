@@ -2141,7 +2141,7 @@ impl<E: Executor> Agent<E> {
                         // (not waited for past the end of the grace period).
                         drop(to_master);
                         let left = self.drain.map_or(timeouts.deregister, |drain| {
-                            drain.finish_by().saturating_duration_since(Instant::now())
+                            drain.deregister_by().saturating_duration_since(Instant::now())
                         });
                         let _ = tokio::time::timeout(timeouts.deregister.min(left), async {
                             while let Ok(Some(_)) = inbound.message().await {}

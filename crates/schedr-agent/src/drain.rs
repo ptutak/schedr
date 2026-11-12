@@ -7,8 +7,9 @@
 //!   retry). The report period is left for the results to reach the master before the pod is
 //!   killed (B8). A second shutdown request moves the deadline to now.
 //! - Once nothing runs, the agent waits (at most [`ACK_WAIT`], never past half the report
-//!   period before the end of the grace period, so it still deregisters and exits within it,
-//!   B237) for the master to acknowledge the last results, then deregisters and ends; without
+//!   period before the end of the grace period) for the master to acknowledge the last
+//!   results, then deregisters, waiting for the master to take it until a quarter of the report
+//!   period before the end, and ends: the rest is for exiting within the grace (B237). Without
 //!   a master it ends at once (the journal keeps the results for the next start).
 
 use std::time::{Duration, Instant};
@@ -88,6 +89,7 @@ pub struct Drain {
     deadline: Instant,
     end: Instant,
     finish_by: Instant,
+    deregister_by: Instant,
     interrupted: bool,
     idle_since: Option<Instant>,
     ack_wait: Duration,
@@ -102,6 +104,7 @@ impl Drain {
             deadline: now + periods.grace.saturating_sub(stop_and_report),
             end: now + periods.grace,
             finish_by: now + periods.grace.saturating_sub(periods.report_period / 2),
+            deregister_by: now + periods.grace.saturating_sub(periods.report_period / 4),
             interrupted: false,
             idle_since: None,
             ack_wait: periods.ack_wait,
@@ -120,6 +123,13 @@ impl Drain {
     #[must_use]
     pub const fn finish_by(&self) -> Instant {
         self.finish_by
+    }
+
+    /// How long, at most, the master gets to take the `Deregister`: a quarter of the report
+    /// period before the end, the rest left for exiting (B237).
+    #[must_use]
+    pub const fn deregister_by(&self) -> Instant {
+        self.deregister_by
     }
 
     /// Whether an attempt whose cleanup needs `room` must be stopped now, leaving that room

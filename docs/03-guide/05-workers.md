@@ -594,7 +594,7 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 | Earlier, by one cleanup try | A task with cleanup gets SIGTERM early enough to leave room for that try, when possible. |
 | − the termination and report periods, 5 s by default | Other tasks still running get SIGTERM. Cleanups already running are left alone. |
 | − the fixed [report period](14-timings.md#fixed-timings), 2 s | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
-| until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, up to half the report period before the end (1 s by default), so it can still send `Deregister` and exit 0 within the grace period. |
+| until the end | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, up to half the report period before the end (1 s by default), sends `Deregister`, gives the master until a quarter of it before the end to take it, and exits 0 within the grace period. |
 
 A running cleanup may outlast the grace period: the agent waits for it, but a pod killed
 meanwhile

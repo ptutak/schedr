@@ -159,4 +159,6 @@ fn waiting_for_acknowledgements_leaves_time_to_deregister_and_exit() {
     assert_eq!(drain.step(start + secs(6), 0, 1, true), DrainStep::Wait);
     assert_eq!(drain.step(start + secs(7), 0, 1, true), DrainStep::Finish);
     assert_eq!(drain.finish_by(), start + secs(7));
+    // The master gets until 7.5 s to take the `Deregister`: 0.5 s is left to exit.
+    assert_eq!(drain.deregister_by(), start + Duration::from_millis(7500));
 }
