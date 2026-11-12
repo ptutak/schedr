@@ -33,9 +33,9 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 figment = { version = "0.10.19", features = ["toml", "parse-value"] }
 ignore = "0.4.33"
 # Run params against their JSON Schema (decision 133): no remote `$ref`s, so no default features.
-jsonschema = { version = "0.60.2", default-features = false }
+jsonschema = { version = "0.61.1", default-features = false }
 jiff = { version = "0.2.38", features = ["serde", "tzdb-bundle-always"] }
-prometheus-client = "0.25.1"
+prometheus-client = "0.26.0"
 prost = "0.14.4"
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "rustls-platform-verifier", "hostname"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "system-proxy"] }
@@ -57,7 +57,7 @@ sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "migrate", "macros"] }
 thiserror = "2.0.21"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
-toml = "0.8.23"
+toml = "1.2.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "fs", "net", "signal", "test-util"] }

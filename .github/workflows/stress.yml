@@ -75,7 +75,7 @@ jobs:
             echo "only=stress_21_random_chaos" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.changed.outputs.run == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: steps.changed.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
@@ -83,14 +83,14 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - if: steps.changed.outputs.run == 'true'
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest@0.9.149
       - if: steps.changed.outputs.run == 'true'
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.5"
-          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz. v4.2.0 does not know 0.13.5.
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz: checked whatever the action knows.
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       # As `make stress`: room for the suite's connections (a service container takes no
       # arguments, so set and restarted; PgBouncer reconnects on its own).
@@ -114,7 +114,7 @@ jobs:
           if [ -n "$FILTER" ]; then filter=(-E "test(/$FILTER/)"); fi
           cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast --no-capture "${filter[@]}"
       - if: always() && steps.changed.outputs.run == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stress-report-${{ github.run_id }}
           path: target/stress/
@@ -127,12 +127,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: "1.99.1"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest@0.9.149
       - name: Clock simulator, 600 scenarios

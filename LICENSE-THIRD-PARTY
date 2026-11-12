@@ -23,8 +23,8 @@ Crates
 - asn1-rs 0.7.2: MIT OR Apache-2.0 (https://github.com/rusticata/asn1-rs.git)
 - atoi 2.0.0: MIT (https://github.com/pacman82/atoi-rs)
 - atomic-waker 1.1.2: Apache-2.0 OR MIT (https://github.com/smol-rs/atomic-waker)
-- aws-lc-rs 1.18.2: ISC AND (Apache-2.0 OR ISC) (https://github.com/aws/aws-lc-rs)
-- aws-lc-sys 0.46.0: ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) (https://github.com/aws/aws-lc-rs)
+- aws-lc-rs 1.19.0: ISC AND (Apache-2.0 OR ISC) (https://github.com/aws/aws-lc-rs)
+- aws-lc-sys 0.47.0: ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) (https://github.com/aws/aws-lc-rs)
 - axum 0.8.9: MIT (https://github.com/tokio-rs/axum)
 - axum-core 0.5.6: MIT (https://github.com/tokio-rs/axum)
 - base64 0.22.1: MIT OR Apache-2.0 (https://github.com/marshallpierce/rust-base64)
@@ -34,7 +34,6 @@ Crates
 - bit-set 0.8.0: Apache-2.0 OR MIT (https://github.com/contain-rs/bit-set)
 - bit-vec 0.8.0: Apache-2.0 OR MIT (https://github.com/contain-rs/bit-vec)
 - bit-vec 0.9.1: Apache-2.0 OR MIT (https://github.com/contain-rs/bit-vec)
-- bitflags 1.3.2: MIT/Apache-2.0 (https://github.com/bitflags/bitflags)
 - bitflags 2.13.2: MIT OR Apache-2.0 (https://github.com/bitflags/bitflags)
 - block-buffer 0.10.4: MIT OR Apache-2.0 (https://github.com/RustCrypto/utils)
 - block-buffer 0.12.1: MIT OR Apache-2.0 (https://github.com/RustCrypto/utils)
@@ -53,7 +52,7 @@ Crates
 - clap_lex 1.1.1: MIT OR Apache-2.0 (https://github.com/clap-rs/clap)
 - cmov 0.5.4: Apache-2.0 OR MIT (https://github.com/RustCrypto/utils)
 - colorchoice 1.0.5: MIT OR Apache-2.0 (https://github.com/rust-cli/anstyle.git)
-- const-oid 0.10.2: Apache-2.0 OR MIT (https://github.com/RustCrypto/formats)
+- const-oid 0.10.3: Apache-2.0 OR MIT (https://github.com/RustCrypto/formats)
 - core-foundation 0.10.1: MIT OR Apache-2.0 (https://github.com/servo/core-foundation-rs)
 - core-foundation 0.9.4: MIT OR Apache-2.0 (https://github.com/servo/core-foundation-rs)
 - core-foundation-sys 0.8.7: MIT OR Apache-2.0 (https://github.com/servo/core-foundation-rs)
@@ -61,19 +60,17 @@ Crates
 - cpufeatures 0.3.1: MIT OR Apache-2.0 (https://github.com/RustCrypto/utils)
 - crc 3.4.0: MIT OR Apache-2.0 (https://github.com/mrhooray/crc-rs.git)
 - crc-catalog 2.5.0: MIT OR Apache-2.0 (https://github.com/akhilles/crc-catalog.git)
-- croner 4.0.2: MIT (https://github.com/hexagon/croner-rust)
+- croner 4.0.3: MIT (https://github.com/hexagon/croner-rust)
 - crossbeam-deque 0.8.8: MIT OR Apache-2.0 (https://github.com/crossbeam-rs/crossbeam)
 - crossbeam-epoch 0.9.21: MIT OR Apache-2.0 (https://github.com/crossbeam-rs/crossbeam)
 - crossbeam-queue 0.3.14: MIT OR Apache-2.0 (https://github.com/crossbeam-rs/crossbeam)
 - crossbeam-utils 0.8.23: MIT OR Apache-2.0 (https://github.com/crossbeam-rs/crossbeam)
 - crypto-common 0.1.6: MIT OR Apache-2.0 (https://github.com/RustCrypto/traits)
 - crypto-common 0.2.2: MIT OR Apache-2.0 (https://github.com/RustCrypto/traits)
-- ctutils 0.4.5: Apache-2.0 OR MIT (https://github.com/RustCrypto/utils)
+- ctutils 0.4.8: Apache-2.0 OR MIT (https://github.com/RustCrypto/utils)
 - darling 0.20.11: MIT (https://github.com/TedDriggs/darling)
 - darling_core 0.20.11: MIT (https://github.com/TedDriggs/darling)
 - data-encoding 2.11.1: MIT (https://github.com/ia0/data-encoding)
-- defmt 1.2.0: MIT OR Apache-2.0 (https://github.com/knurling-rs/defmt)
-- defmt-parser 1.1.0: MIT OR Apache-2.0 (https://github.com/knurling-rs/defmt)
 - der-parser 10.0.0: MIT OR Apache-2.0 (https://github.com/rusticata/der-parser.git)
 - deranged 0.5.9: MIT OR Apache-2.0 (https://github.com/jhpratt/deranged)
 - derive_builder 0.20.2: MIT OR Apache-2.0 (https://github.com/colin-kiegel/rust-derive-builder)
@@ -84,12 +81,12 @@ Crates
 - dtoa 1.0.11: MIT OR Apache-2.0 (https://github.com/dtolnay/dtoa)
 - dyn-clone 1.0.20: MIT OR Apache-2.0 (https://github.com/dtolnay/dyn-clone)
 - either 1.19.0: MIT OR Apache-2.0 (https://github.com/rayon-rs/either)
-- email-encoding 0.4.2: MIT OR Apache-2.0 (https://github.com/lettre/email-encoding)
+- email-encoding 0.4.3: MIT OR Apache-2.0 (https://github.com/lettre/email-encoding)
 - email_address 0.2.9: MIT (https://github.com/johnstonskj/rust-email_address.git)
 - equivalent 1.0.3: Apache-2.0 OR MIT (https://github.com/indexmap-rs/equivalent)
 - errno 0.3.14: MIT OR Apache-2.0 (https://github.com/lambda-fairy/rust-errno)
 - event-listener 5.4.2: Apache-2.0 OR MIT (https://github.com/smol-rs/event-listener)
-- fancy-regex 0.19.2: MIT (https://github.com/fancy-regex/fancy-regex)
+- fancy-regex 0.20.2: MIT (https://github.com/fancy-regex/fancy-regex)
 - fastrand 2.5.0: Apache-2.0 OR MIT (https://github.com/smol-rs/fastrand)
 - figment 0.10.19: MIT OR Apache-2.0 (https://github.com/SergioBenitez/Figment)
 - fluent-uri 0.4.1: MIT (https://github.com/yescallop/fluent-uri-rs)
@@ -111,7 +108,7 @@ Crates
 - getrandom 0.3.4: MIT OR Apache-2.0 (https://github.com/rust-random/getrandom)
 - getrandom 0.4.3: MIT OR Apache-2.0 (https://github.com/rust-random/getrandom)
 - glob 0.3.4: MIT OR Apache-2.0 (https://github.com/rust-lang/glob)
-- globset 0.4.20: Unlicense OR MIT (https://github.com/BurntSushi/ripgrep/tree/master/crates/globset)
+- globset 0.4.21: Unlicense OR MIT (https://github.com/BurntSushi/ripgrep/tree/master/crates/globset)
 - h2 0.4.20: MIT (https://github.com/hyperium/h2)
 - hashbrown 0.16.1: MIT OR Apache-2.0 (https://github.com/rust-lang/hashbrown)
 - hashbrown 0.17.1: MIT OR Apache-2.0 (https://github.com/rust-lang/hashbrown)
@@ -131,30 +128,30 @@ Crates
 - hyper-rustls 0.27.10: Apache-2.0 OR ISC OR MIT (https://github.com/rustls/hyper-rustls)
 - hyper-timeout 0.5.2: MIT OR Apache-2.0 (https://github.com/hjr3/hyper-timeout)
 - hyper-util 0.1.21: MIT (https://github.com/hyperium/hyper-util)
-- icu_collections 2.3.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
-- icu_locale_core 2.3.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
-- icu_normalizer 2.3.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
-- icu_normalizer_data 2.3.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
-- icu_properties 2.3.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
-- icu_properties_data 2.3.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
-- icu_provider 2.3.1: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_collections 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_locale_core 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_normalizer 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_normalizer_data 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_properties 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_properties_data 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
+- icu_provider 2.4.0: Unicode-3.0 (https://github.com/unicode-org/icu4x)
 - ident_case 1.0.1: MIT/Apache-2.0 (https://github.com/TedDriggs/ident_case)
 - idna 1.1.0: MIT OR Apache-2.0 (https://github.com/servo/rust-url/)
 - idna_adapter 1.2.2: Apache-2.0 OR MIT (https://github.com/hsivonen/idna_adapter)
-- ignore 0.4.33: Unlicense OR MIT (https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore)
+- ignore 0.4.34: Unlicense OR MIT (https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore)
 - indexmap 2.14.2: Apache-2.0 OR MIT (https://github.com/indexmap-rs/indexmap)
 - inlinable_string 0.1.15: Apache-2.0/MIT (https://github.com/fitzgen/inlinable_string)
-- inout 0.2.5: MIT OR Apache-2.0 (https://github.com/RustCrypto/utils)
+- inout 0.2.6: MIT OR Apache-2.0 (https://github.com/RustCrypto/utils)
 - ipnet 2.12.2: MIT OR Apache-2.0 (https://github.com/krisprice/ipnet)
 - is_terminal_polyfill 1.70.2: MIT OR Apache-2.0 (https://github.com/polyfill-rs/is_terminal_polyfill)
-- itertools 0.14.0: MIT OR Apache-2.0 (https://github.com/rust-itertools/itertools)
-- itoa 1.0.18: MIT OR Apache-2.0 (https://github.com/dtolnay/itoa)
-- jiff 0.2.38: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
-- jiff-core 0.1.1: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
+- itertools 0.15.0: MIT OR Apache-2.0 (https://github.com/rust-itertools/itertools)
+- itoa 1.0.19: MIT OR Apache-2.0 (https://github.com/dtolnay/itoa)
+- jiff 0.2.43: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
+- jiff-core 0.1.5: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
 - jiff-tzdb 0.1.9: Unlicense OR MIT (https://github.com/BurntSushi/jiff)
-- jsonschema 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
-- jsonschema-regex 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
-- jsonschema-value 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
+- jsonschema 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
+- jsonschema-regex 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
+- jsonschema-value 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
 - lazy_static 1.5.1: MIT OR Apache-2.0 (https://github.com/rust-lang-nursery/lazy-static.rs)
 - lettre 0.11.23: MIT (https://github.com/lettre/lettre)
 - libc 0.2.191: MIT OR Apache-2.0 (https://github.com/rust-lang/libc)
@@ -162,14 +159,14 @@ Crates
 - linux-raw-sys 0.12.1: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT (https://github.com/sunfishcode/linux-raw-sys)
 - litemap 0.8.3: Unicode-3.0 (https://github.com/unicode-org/icu4x)
 - lock_api 0.4.14: MIT OR Apache-2.0 (https://github.com/Amanieu/parking_lot)
-- log 0.4.34: MIT OR Apache-2.0 (https://github.com/rust-lang/log)
+- log 0.4.35: MIT OR Apache-2.0 (https://github.com/rust-lang/log)
 - lru-slab 0.1.3: MIT OR Apache-2.0 OR Zlib (https://github.com/Ralith/lru-slab)
 - matchers 0.2.0: MIT (https://github.com/hawkw/matchers)
 - matchit 0.8.4: MIT AND BSD-3-Clause (https://github.com/ibraheemdev/matchit)
 - md-5 0.11.0: MIT OR Apache-2.0 (https://github.com/RustCrypto/hashes)
 - memchr 2.8.3: Unlicense OR MIT (https://github.com/BurntSushi/memchr)
 - micromap 0.3.0: MIT (https://github.com/yegor256/micromap)
-- mime 0.3.17: MIT OR Apache-2.0 (https://github.com/hyperium/mime)
+- mime 0.3.18: MIT OR Apache-2.0 (https://github.com/hyperium/mime)
 - mime_guess 2.0.5: MIT (https://github.com/abonander/mime_guess)
 - minimal-lexical 0.2.1: MIT/Apache-2.0 (https://github.com/Alexhuszagh/minimal-lexical)
 - mio 1.2.4: MIT (https://github.com/tokio-rs/mio)
@@ -187,7 +184,7 @@ Crates
 - num-traits 0.2.19: MIT OR Apache-2.0 (https://github.com/rust-num/num-traits)
 - oid-registry 0.8.1: MIT OR Apache-2.0 (https://github.com/rusticata/oid-registry.git)
 - once_cell 1.21.4: MIT OR Apache-2.0 (https://github.com/matklad/once_cell)
-- openssl-probe 0.2.1: MIT OR Apache-2.0 (https://github.com/rustls/openssl-probe)
+- openssl-probe 0.2.2: MIT OR Apache-2.0 (https://github.com/rustls/openssl-probe)
 - outref 0.5.2: MIT (https://github.com/Nugine/outref)
 - parking 2.2.1: Apache-2.0 OR MIT (https://github.com/smol-rs/parking)
 - parking_lot 0.12.5: MIT OR Apache-2.0 (https://github.com/Amanieu/parking_lot)
@@ -202,9 +199,9 @@ Crates
 - powerfmt 0.2.1: MIT OR Apache-2.0 (https://github.com/jhpratt/powerfmt)
 - proc-macro2 1.0.107: MIT OR Apache-2.0 (https://github.com/dtolnay/proc-macro2)
 - proc-macro2-diagnostics 0.10.1: MIT/Apache-2.0 (https://github.com/SergioBenitez/proc-macro2-diagnostics)
-- prometheus-client 0.25.1: Apache-2.0 OR MIT (https://github.com/prometheus/client_rust)
-- prost 0.14.4: Apache-2.0 (https://github.com/tokio-rs/prost)
-- prost-types 0.14.4: Apache-2.0 (https://github.com/tokio-rs/prost)
+- prometheus-client 0.26.0: Apache-2.0 OR MIT (https://github.com/prometheus/client_rust)
+- prost 0.14.5: Apache-2.0 (https://github.com/tokio-rs/prost)
+- prost-types 0.14.5: Apache-2.0 (https://github.com/tokio-rs/prost)
 - quinn 0.11.12: MIT OR Apache-2.0 (https://github.com/quinn-rs/quinn)
 - quinn-proto 0.11.19: MIT OR Apache-2.0 (https://github.com/quinn-rs/quinn)
 - quinn-udp 0.5.16: MIT OR Apache-2.0 (https://github.com/quinn-rs/quinn)
@@ -215,7 +212,7 @@ Crates
 - rand_pcg 0.10.2: MIT OR Apache-2.0 (https://github.com/rust-random/rngs)
 - rcgen 0.14.10: MIT OR Apache-2.0 (https://github.com/rustls/rcgen)
 - ref-cast 1.0.27: MIT OR Apache-2.0 (https://github.com/dtolnay/ref-cast)
-- referencing 0.60.2: MIT (https://github.com/Stranger6667/jsonschema)
+- referencing 0.61.1: MIT (https://github.com/Stranger6667/jsonschema)
 - regex 1.13.1: MIT OR Apache-2.0 (https://github.com/rust-lang/regex)
 - regex-automata 0.4.18: MIT OR Apache-2.0 (https://github.com/rust-lang/regex)
 - regex-syntax 0.8.11: MIT OR Apache-2.0 (https://github.com/rust-lang/regex)
@@ -226,7 +223,7 @@ Crates
 - rustix 1.1.6: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT (https://github.com/bytecodealliance/rustix)
 - rustls 0.23.46: Apache-2.0 OR ISC OR MIT (https://github.com/rustls/rustls)
 - rustls-native-certs 0.8.5: Apache-2.0 OR ISC OR MIT (https://github.com/rustls/rustls-native-certs)
-- rustls-pki-types 1.15.1: MIT OR Apache-2.0 (https://github.com/rustls/pki-types)
+- rustls-pki-types 1.16.0: MIT OR Apache-2.0 (https://github.com/rustls/pki-types)
 - rustls-platform-verifier 0.7.1: MIT OR Apache-2.0 (https://github.com/rustls/rustls-platform-verifier)
 - rustls-webpki 0.103.16: ISC (https://github.com/rustls/webpki)
 - ryu 1.0.23: Apache-2.0 OR BSL-1.0 (https://github.com/dtolnay/ryu)
@@ -241,6 +238,7 @@ Crates
 - serde_json 1.0.154: MIT OR Apache-2.0 (https://github.com/serde-rs/json)
 - serde_path_to_error 0.1.20: MIT OR Apache-2.0 (https://github.com/dtolnay/path-to-error)
 - serde_spanned 0.6.9: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
+- serde_spanned 1.1.3: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
 - serde_urlencoded 0.7.1: MIT/Apache-2.0 (https://github.com/nox/serde_urlencoded)
 - sha1 0.11.0: MIT OR Apache-2.0 (https://github.com/RustCrypto/hashes)
 - sha2 0.10.9: MIT OR Apache-2.0 (https://github.com/RustCrypto/hashes)
@@ -248,7 +246,7 @@ Crates
 - sharded-slab 0.1.7: MIT (https://github.com/hawkw/sharded-slab)
 - signal-hook-registry 1.4.8: MIT OR Apache-2.0 (https://github.com/vorner/signal-hook)
 - slab 0.4.12: MIT (https://github.com/tokio-rs/slab)
-- smallvec 1.16.4: MIT OR Apache-2.0 (https://github.com/servo/rust-smallvec)
+- smallvec 1.16.5: MIT OR Apache-2.0 (https://github.com/servo/rust-smallvec)
 - socket2 0.6.5: MIT OR Apache-2.0 (https://github.com/rust-lang/socket2)
 - spin 0.9.9: MIT (https://github.com/mvdnes/spin-rs.git)
 - sqlx 0.9.0: MIT OR Apache-2.0 (https://github.com/launchbadge/sqlx)
@@ -264,7 +262,7 @@ Crates
 - strum 0.28.0: MIT (https://github.com/Peternator7/strum)
 - subtle 2.6.1: BSD-3-Clause (https://github.com/dalek-cryptography/subtle)
 - syn 2.0.119: MIT OR Apache-2.0 (https://github.com/dtolnay/syn)
-- syn 3.0.9: MIT OR Apache-2.0 (https://github.com/dtolnay/syn)
+- syn 3.0.10: MIT OR Apache-2.0 (https://github.com/dtolnay/syn)
 - sync_wrapper 1.0.2: Apache-2.0 (https://github.com/Actyx/sync_wrapper)
 - synstructure 0.13.2: MIT (https://github.com/mystor/synstructure)
 - synstructure 0.14.0: MIT (https://github.com/mystor/synstructure)
@@ -281,11 +279,15 @@ Crates
 - tokio-stream 0.1.19: MIT (https://github.com/tokio-rs/tokio)
 - tokio-util 0.7.20: MIT (https://github.com/tokio-rs/tokio)
 - toml 0.8.23: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
+- toml 1.2.1+spec-1.1.0: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
 - toml_datetime 0.6.11: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
+- toml_datetime 1.1.3+spec-1.1.0: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
 - toml_edit 0.22.27: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
+- toml_parser 1.1.5+spec-1.1.0: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
 - toml_write 0.1.2: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
-- tonic 0.14.6: MIT (https://github.com/hyperium/tonic)
-- tonic-prost 0.14.6: MIT (https://github.com/hyperium/tonic)
+- toml_writer 1.2.0+spec-1.1.0: MIT OR Apache-2.0 (https://github.com/toml-rs/toml)
+- tonic 0.14.9: MIT (https://github.com/grpc/grpc-rust)
+- tonic-prost 0.14.9: MIT (https://github.com/grpc/grpc-rust)
 - tower 0.5.3: MIT (https://github.com/tower-rs/tower)
 - tower-http 0.6.11: MIT (https://github.com/tower-rs/tower-http)
 - tower-layer 0.3.3: MIT (https://github.com/tower-rs/tower)
@@ -303,23 +305,24 @@ Crates
 - unicode-general-category 1.1.0: Apache-2.0 (https://github.com/yeslogic/unicode-general-category)
 - unicode-ident 1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0 (https://github.com/dtolnay/unicode-ident)
 - unicode-normalization 0.1.26: (MIT OR Apache-2.0) AND Unicode-3.0 (https://github.com/unicode-rs/unicode-normalization)
-- unicode-properties 0.1.4: MIT/Apache-2.0 (https://github.com/unicode-rs/unicode-properties)
+- unicode-properties 0.1.5: (MIT OR Apache-2.0) AND Unicode-3.0 (https://github.com/unicode-rs/unicode-properties)
 - universal-hash 0.6.1: MIT OR Apache-2.0 (https://github.com/RustCrypto/traits)
 - untrusted 0.7.1: ISC (https://github.com/briansmith/untrusted)
 - untrusted 0.9.0: ISC (https://github.com/briansmith/untrusted)
 - url 2.5.8: MIT OR Apache-2.0 (https://github.com/servo/rust-url)
-- utf8_iter 1.0.4: Apache-2.0 OR MIT (https://github.com/hsivonen/utf8_iter)
+- utf8_iter 1.1.0: Apache-2.0 OR MIT (https://github.com/hsivonen/utf8_iter)
 - utf8parse 0.2.2: Apache-2.0 OR MIT (https://github.com/alacritty/vte)
+- utf_types 1.0.0: Apache-2.0 OR MIT (https://github.com/hsivonen/utf_types)
 - utoipa 6.0.0: MIT OR Apache-2.0 (https://github.com/juhaku/utoipa)
 - utoipa-swagger-ui 10.0.2: MIT OR Apache-2.0 (https://github.com/juhaku/utoipa)
-- uuid 1.28.0: Apache-2.0 OR MIT (https://github.com/uuid-rs/uuid)
+- uuid 1.29.2: Apache-2.0 OR MIT (https://github.com/uuid-rs/uuid)
 - uuid-simd 0.8.0: MIT (https://github.com/Nugine/simd)
 - vsimd 0.8.0: MIT (https://github.com/Nugine/simd)
 - walkdir 2.5.0: Unlicense/MIT (https://github.com/BurntSushi/walkdir)
 - want 0.3.2: MIT (https://github.com/seanmonstar/want)
 - whoami 2.1.3: Apache-2.0 OR BSL-1.0 OR MIT (https://github.com/ardaku/whoami)
 - winnow 0.7.15: MIT (https://github.com/winnow-rs/winnow)
-- winnow 1.0.4: MIT (https://github.com/winnow-rs/winnow)
+- winnow 1.0.5: MIT (https://github.com/winnow-rs/winnow)
 - writeable 0.6.4: Unicode-3.0 (https://github.com/unicode-org/icu4x)
 - x509-parser 0.18.1: MIT OR Apache-2.0 (https://github.com/rusticata/x509-parser.git)
 - yansi 1.0.1: MIT OR Apache-2.0 (https://github.com/SergioBenitez/yansi)
@@ -344,10 +347,10 @@ These crates ship no licence text; the standard text of the licence they state
 applies.
 
 - crc-catalog 2.5.0
-- jsonschema-regex 0.60.2
-- jsonschema-value 0.60.2
+- jsonschema-regex 0.61.1
+- jsonschema-value 0.61.1
 - pear 0.2.9
-- tonic-prost 0.14.6
+- tonic-prost 0.14.9
 - uuid-simd 0.8.0
 - vsimd 0.8.0
 
@@ -366,7 +369,6 @@ Used by:
   bit-set 0.8.0 (LICENSE-APACHE)
   bit-vec 0.8.0 (LICENSE-APACHE)
   bit-vec 0.9.1 (LICENSE-APACHE)
-  bitflags 1.3.2 (LICENSE-APACHE)
   bitflags 2.13.2 (LICENSE-APACHE)
   block-buffer 0.10.4 (LICENSE-APACHE)
   block-buffer 0.12.1 (LICENSE-APACHE)
@@ -377,7 +379,7 @@ Used by:
   chacha20poly1305 0.11.0 (LICENSE-APACHE)
   cipher 0.5.2 (LICENSE-APACHE)
   cmov 0.5.4 (LICENSE-APACHE)
-  const-oid 0.10.2 (LICENSE-APACHE)
+  const-oid 0.10.3 (LICENSE-APACHE)
   core-foundation 0.10.1 (LICENSE-APACHE)
   core-foundation 0.9.4 (LICENSE-APACHE)
   core-foundation-sys 0.8.7 (LICENSE-APACHE)
@@ -389,14 +391,12 @@ Used by:
   crossbeam-utils 0.8.23 (LICENSE-APACHE)
   crypto-common 0.1.6 (LICENSE-APACHE)
   crypto-common 0.2.2 (LICENSE-APACHE)
-  ctutils 0.4.5 (LICENSE-APACHE)
-  defmt 1.2.0 (LICENSE-APACHE)
-  defmt-parser 1.1.0 (LICENSE-APACHE)
+  ctutils 0.4.8 (LICENSE-APACHE)
   der-parser 10.0.0 (LICENSE-APACHE)
   digest 0.10.7 (LICENSE-APACHE)
   digest 0.11.3 (LICENSE-APACHE)
   either 1.19.0 (LICENSE-APACHE)
-  email-encoding 0.4.2 (LICENSE-APACHE)
+  email-encoding 0.4.3 (LICENSE-APACHE)
   equivalent 1.0.3 (LICENSE-APACHE)
   errno 0.3.14 (LICENSE-APACHE)
   event-listener 5.4.2 (LICENSE-APACHE)
@@ -421,15 +421,15 @@ Used by:
   idna_adapter 1.2.2 (LICENSE-APACHE)
   indexmap 2.14.2 (LICENSE-APACHE)
   inlinable_string 0.1.15 (LICENSE-APACHE)
-  inout 0.2.5 (LICENSE-APACHE)
-  itertools 0.14.0 (LICENSE-APACHE)
+  inout 0.2.6 (LICENSE-APACHE)
+  itertools 0.15.0 (LICENSE-APACHE)
   lazy_static 1.5.1 (LICENSE-APACHE)
   linux-raw-sys 0.12.1 (LICENSE-APACHE)
   lock_api 0.4.14 (LICENSE-APACHE)
-  log 0.4.34 (LICENSE-APACHE)
+  log 0.4.35 (LICENSE-APACHE)
   lru-slab 0.1.3 (LICENSE-APACHE)
   md-5 0.11.0 (LICENSE-APACHE)
-  mime 0.3.17 (LICENSE-APACHE)
+  mime 0.3.18 (LICENSE-APACHE)
   minimal-lexical 0.2.1 (LICENSE-APACHE)
   num 0.4.3 (LICENSE-APACHE)
   num-bigint 0.4.8 (LICENSE-APACHE)
@@ -440,15 +440,15 @@ Used by:
   num-traits 0.2.19 (LICENSE-APACHE)
   oid-registry 0.8.1 (LICENSE-APACHE)
   once_cell 1.21.4 (LICENSE-APACHE)
-  openssl-probe 0.2.1 (LICENSE-APACHE)
+  openssl-probe 0.2.2 (LICENSE-APACHE)
   parking 2.2.1 (LICENSE-APACHE)
   parking_lot 0.12.5 (LICENSE-APACHE)
   parking_lot_core 0.9.12 (LICENSE-APACHE)
   percent-encoding 2.3.2 (LICENSE-APACHE)
   poly1305 0.9.1 (LICENSE-APACHE)
-  prometheus-client 0.25.1 (LICENSE-APACHE)
-  prost 0.14.4 (LICENSE)
-  prost-types 0.14.4 (LICENSE)
+  prometheus-client 0.26.0 (LICENSE-APACHE)
+  prost 0.14.5 (LICENSE)
+  prost-types 0.14.5 (LICENSE)
   quinn 0.11.12 (LICENSE-APACHE)
   quinn-proto 0.11.19 (LICENSE-APACHE)
   quinn-udp 0.5.16 (LICENSE-APACHE)
@@ -467,7 +467,7 @@ Used by:
   sha2 0.10.9 (LICENSE-APACHE)
   sha2 0.11.1 (LICENSE-APACHE)
   signal-hook-registry 1.4.8 (LICENSE-APACHE)
-  smallvec 1.16.4 (LICENSE-APACHE)
+  smallvec 1.16.5 (LICENSE-APACHE)
   socket2 0.6.5 (LICENSE-APACHE)
   stable_deref_trait 1.2.1 (LICENSE-APACHE)
   system-configuration 0.7.0 (LICENSE-APACHE)
@@ -477,13 +477,14 @@ Used by:
   unicase 2.10.0 (LICENSE-APACHE)
   unicode-bidi 0.3.18 (LICENSE-APACHE)
   unicode-normalization 0.1.26 (LICENSE-APACHE)
-  unicode-properties 0.1.4 (LICENSE-APACHE)
+  unicode-properties 0.1.5 (LICENSE-APACHE)
   universal-hash 0.6.1 (LICENSE-APACHE)
   url 2.5.8 (LICENSE-APACHE)
-  utf8_iter 1.0.4 (LICENSE-APACHE)
+  utf8_iter 1.1.0 (LICENSE-APACHE)
+  utf_types 1.0.0 (LICENSE-APACHE)
   utoipa 6.0.0 (LICENSE-APACHE)
   utoipa-swagger-ui 10.0.2 (LICENSE-APACHE)
-  uuid 1.28.0 (LICENSE-APACHE)
+  uuid 1.29.2 (LICENSE-APACHE)
   x509-parser 0.18.1 (LICENSE-APACHE)
   yasna 0.6.0 (LICENSE-APACHE)
   zeroize 1.9.1 (LICENSE-APACHE)
@@ -758,10 +759,10 @@ DEALINGS IN THE SOFTWARE.
 Used by:
   aho-corasick 1.1.5 (COPYING)
   byteorder 1.5.0 (COPYING)
-  globset 0.4.20 (COPYING)
-  ignore 0.4.33 (COPYING)
-  jiff 0.2.38 (COPYING)
-  jiff-core 0.1.1 (COPYING)
+  globset 0.4.21 (COPYING)
+  ignore 0.4.34 (COPYING)
+  jiff 0.2.43 (COPYING)
+  jiff-core 0.1.5 (COPYING)
   jiff-tzdb 0.1.9 (COPYING)
   memchr 2.8.3 (COPYING)
   same-file 1.0.6 (COPYING)
@@ -776,10 +777,10 @@ You may use this code under the terms of either license.
 Used by:
   aho-corasick 1.1.5 (LICENSE-MIT)
   byteorder 1.5.0 (LICENSE-MIT)
-  globset 0.4.20 (LICENSE-MIT)
-  ignore 0.4.33 (LICENSE-MIT)
-  jiff 0.2.38 (LICENSE-MIT)
-  jiff-core 0.1.1 (LICENSE-MIT)
+  globset 0.4.21 (LICENSE-MIT)
+  ignore 0.4.34 (LICENSE-MIT)
+  jiff 0.2.43 (LICENSE-MIT)
+  jiff-core 0.1.5 (LICENSE-MIT)
   jiff-tzdb 0.1.9 (LICENSE-MIT)
   memchr 2.8.3 (LICENSE-MIT)
   walkdir 2.5.0 (LICENSE-MIT)
@@ -811,10 +812,10 @@ THE SOFTWARE.
 Used by:
   aho-corasick 1.1.5 (UNLICENSE)
   byteorder 1.5.0 (UNLICENSE)
-  globset 0.4.20 (UNLICENSE)
-  ignore 0.4.33 (UNLICENSE)
-  jiff 0.2.38 (UNLICENSE)
-  jiff-core 0.1.1 (UNLICENSE)
+  globset 0.4.21 (UNLICENSE)
+  ignore 0.4.34 (UNLICENSE)
+  jiff 0.2.43 (UNLICENSE)
+  jiff-core 0.1.5 (UNLICENSE)
   jiff-tzdb 0.1.9 (UNLICENSE)
   memchr 2.8.3 (UNLICENSE)
   same-file 1.0.6 (UNLICENSE)
@@ -854,7 +855,7 @@ Used by:
   dtoa 1.0.11 (LICENSE-APACHE)
   dyn-clone 1.0.20 (LICENSE-APACHE)
   figment 0.10.19 (LICENSE-APACHE)
-  itoa 1.0.18 (LICENSE-APACHE)
+  itoa 1.0.19 (LICENSE-APACHE)
   libc 0.2.191 (LICENSE-APACHE)
   num-conv 0.2.2 (LICENSE-Apache)
   pin-project 1.1.13 (LICENSE-APACHE)
@@ -872,7 +873,7 @@ Used by:
   serde_path_to_error 0.1.20 (LICENSE-APACHE)
   serde_urlencoded 0.7.1 (LICENSE-APACHE)
   syn 2.0.119 (LICENSE-APACHE)
-  syn 3.0.9 (LICENSE-APACHE)
+  syn 3.0.10 (LICENSE-APACHE)
   sync_wrapper 1.0.2 (LICENSE)
   thiserror 2.0.21 (LICENSE-APACHE)
   time 0.3.55 (LICENSE-Apache)
@@ -1071,7 +1072,7 @@ Used by:
   event-listener 5.4.2 (LICENSE-MIT)
   fastrand 2.5.0 (LICENSE-MIT)
   flume 0.12.0 (LICENSE-MIT)
-  itoa 1.0.18 (LICENSE-MIT)
+  itoa 1.0.19 (LICENSE-MIT)
   lazy_static 1.5.1 (LICENSE-MIT)
   linux-raw-sys 0.12.1 (LICENSE-MIT)
   minimal-lexical 0.2.1 (LICENSE-MIT)
@@ -1090,12 +1091,12 @@ Used by:
   serde_json 1.0.154 (LICENSE-MIT)
   serde_path_to_error 0.1.20 (LICENSE-MIT)
   syn 2.0.119 (LICENSE-MIT)
-  syn 3.0.9 (LICENSE-MIT)
+  syn 3.0.10 (LICENSE-MIT)
   thiserror 2.0.21 (LICENSE-MIT)
   tinyvec 1.13.3 (LICENSE-MIT.md)
   unicode-ident 1.0.27 (LICENSE-MIT)
   winnow 0.7.15 (LICENSE-MIT)
-  winnow 1.0.4 (LICENSE-MIT)
+  winnow 1.0.5 (LICENSE-MIT)
   zmij 1.0.23 (LICENSE-MIT)
 
 Permission is hereby granted, free of charge, to any
@@ -1358,10 +1359,15 @@ Used by:
   colorchoice 1.0.5 (LICENSE-MIT)
   is_terminal_polyfill 1.70.2 (LICENSE-MIT)
   serde_spanned 0.6.9 (LICENSE-MIT)
+  serde_spanned 1.1.3 (LICENSE-MIT)
   toml 0.8.23 (LICENSE-MIT)
+  toml 1.2.1+spec-1.1.0 (LICENSE-MIT)
   toml_datetime 0.6.11 (LICENSE-MIT)
+  toml_datetime 1.1.3+spec-1.1.0 (LICENSE-MIT)
   toml_edit 0.22.27 (LICENSE-MIT)
+  toml_parser 1.1.5+spec-1.1.0 (LICENSE-MIT)
   toml_write 0.1.2 (LICENSE-MIT)
+  toml_writer 1.2.0+spec-1.1.0 (LICENSE-MIT)
 
 Copyright (c) Individual contributors
 
@@ -1741,7 +1747,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  aws-lc-rs 1.18.2 (LICENSE)
+  aws-lc-rs 1.19.0 (LICENSE)
 
 SPDX-License-Identifier: ISC AND (Apache-2.0 OR ISC)
 
@@ -1949,7 +1955,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ==============================================================================
 
 Used by:
-  aws-lc-sys 0.46.0 (LICENSE)
+  aws-lc-sys 0.47.0 (LICENSE)
 
 AWS Libcrypto (AWS-LC)
 
@@ -2449,11 +2455,10 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  bitflags 1.3.2 (LICENSE-MIT)
   bitflags 2.13.2 (LICENSE-MIT)
   fraction 0.17.0 (LICENSE-MIT)
   glob 0.3.4 (LICENSE-MIT)
-  log 0.4.34 (LICENSE-MIT)
+  log 0.4.35 (LICENSE-MIT)
   num 0.4.3 (LICENSE-MIT)
   num-bigint 0.4.8 (LICENSE-MIT)
   num-complex 0.4.6 (LICENSE-MIT)
@@ -2709,7 +2714,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
   cfg-if 1.0.5 (LICENSE-MIT)
-  openssl-probe 0.2.1 (LICENSE-MIT)
+  openssl-probe 0.2.2 (LICENSE-MIT)
   socket2 0.6.5 (LICENSE-MIT)
 
 Copyright (c) 2014 Alex Crichton
@@ -2807,6 +2812,11 @@ Used by:
   clap 4.6.7 (LICENSE-APACHE)
   clap_builder 4.6.7 (LICENSE-APACHE)
   clap_lex 1.1.1 (LICENSE-APACHE)
+  serde_spanned 1.1.3 (LICENSE-APACHE)
+  toml 1.2.1+spec-1.1.0 (LICENSE-APACHE)
+  toml_datetime 1.1.3+spec-1.1.0 (LICENSE-APACHE)
+  toml_parser 1.1.5+spec-1.1.0 (LICENSE-APACHE)
+  toml_writer 1.2.0+spec-1.1.0 (LICENSE-APACHE)
 
 Apache License
                            Version 2.0, January 2004
@@ -3045,7 +3055,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  const-oid 0.10.2 (LICENSE-MIT)
+  const-oid 0.10.3 (LICENSE-MIT)
   cpufeatures 0.3.1 (LICENSE-MIT)
 
 Copyright (c) 2020-2026 The RustCrypto Project Developers
@@ -3375,7 +3385,7 @@ SOFTWARE.
 ==============================================================================
 
 Used by:
-  croner 4.0.2 (LICENSE.md)
+  croner 4.0.3 (LICENSE.md)
 
 The MIT License (MIT)
 
@@ -3499,7 +3509,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  ctutils 0.4.5 (LICENSE-MIT)
+  ctutils 0.4.8 (LICENSE-MIT)
 
 Copyright (c) 2025-2026 The RustCrypto Project Developers
 
@@ -3582,38 +3592,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-==============================================================================
-
-Used by:
-  defmt 1.2.0 (LICENSE-MIT)
-  defmt-parser 1.1.0 (LICENSE-MIT)
-
-Copyright (c) Ferrous Systems
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 
@@ -3970,7 +3948,7 @@ THE SOFTWARE.
 
 Used by:
   either 1.19.0 (LICENSE-MIT)
-  itertools 0.14.0 (LICENSE-MIT)
+  itertools 0.15.0 (LICENSE-MIT)
 
 Copyright (c) 2015
 
@@ -4001,11 +3979,11 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  email-encoding 0.4.2 (LICENSE-MIT)
+  email-encoding 0.4.3 (LICENSE-MIT)
 
 MIT License
 
-Copyright (c) 2021-2024 Paolo Barbolini <paolo@paolo565.org>
+Copyright (c) 2021-2026 Paolo Barbolini <paolo@paolobarbolini.it>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -4117,7 +4095,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  fancy-regex 0.19.2 (LICENSE)
+  fancy-regex 0.20.2 (LICENSE)
 
 The MIT License
 
@@ -5205,7 +5183,7 @@ Used by:
   inlinable_string 0.1.15 (LICENSE-MIT)
   unicode-bidi 0.3.18 (LICENSE-MIT)
   unicode-normalization 0.1.26 (LICENSE-MIT)
-  unicode-properties 0.1.4 (LICENSE-MIT)
+  unicode-properties 0.1.5 (LICENSE-MIT)
 
 Copyright (c) 2015 The Rust Project Developers
 
@@ -5776,13 +5754,13 @@ THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  icu_collections 2.3.0 (LICENSE)
-  icu_locale_core 2.3.0 (LICENSE)
-  icu_normalizer 2.3.0 (LICENSE)
-  icu_normalizer_data 2.3.0 (LICENSE)
-  icu_properties 2.3.0 (LICENSE)
-  icu_properties_data 2.3.0 (LICENSE)
-  icu_provider 2.3.1 (LICENSE)
+  icu_collections 2.4.0 (LICENSE)
+  icu_locale_core 2.4.0 (LICENSE)
+  icu_normalizer 2.4.0 (LICENSE)
+  icu_normalizer_data 2.4.0 (LICENSE)
+  icu_properties 2.4.0 (LICENSE)
+  icu_properties_data 2.4.0 (LICENSE)
+  icu_provider 2.4.0 (LICENSE)
   litemap 0.8.3 (LICENSE)
   potential_utf 0.1.6 (LICENSE)
   tinystr 0.8.5 (LICENSE)
@@ -5990,7 +5968,7 @@ http://opensource.org/licenses/MIT>, at your option.
 ==============================================================================
 
 Used by:
-  inout 0.2.5 (LICENSE-MIT)
+  inout 0.2.6 (LICENSE-MIT)
 
 Copyright (c) 2022-2025 The RustCrypto Project Developers
 Copyright (c) 2022 Artyom Pavlov
@@ -6242,8 +6220,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ==============================================================================
 
 Used by:
-  jsonschema 0.60.2 (LICENSE)
-  referencing 0.60.2 (LICENSE)
+  jsonschema 0.61.1 (LICENSE)
+  referencing 0.61.1 (LICENSE)
 
 MIT License
 
@@ -6840,7 +6818,7 @@ SOFTWARE.
 ==============================================================================
 
 Used by:
-  mime 0.3.17 (LICENSE-MIT)
+  mime 0.3.18 (LICENSE-MIT)
 
 Copyright (c) 2014 Sean McArthur
 
@@ -7792,7 +7770,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  prometheus-client 0.25.1 (LICENSE-MIT)
+  prometheus-client 0.26.0 (LICENSE-MIT)
 
 MIT License
 
@@ -9170,7 +9148,7 @@ of these licenses, at your option.
 ==============================================================================
 
 Used by:
-  rustls-pki-types 1.15.1 (LICENSE-APACHE)
+  rustls-pki-types 1.16.0 (LICENSE-APACHE)
 
 Apache License
                         Version 2.0, January 2004
@@ -9377,7 +9355,7 @@ limitations under the License.
 ==============================================================================
 
 Used by:
-  rustls-pki-types 1.15.1 (LICENSE-MIT)
+  rustls-pki-types 1.16.0 (LICENSE-MIT)
 
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
 
@@ -9728,7 +9706,7 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  smallvec 1.16.4 (LICENSE-MIT)
+  smallvec 1.16.5 (LICENSE-MIT)
 
 Copyright (c) 2018 The Servo Project Developers
 
@@ -10552,9 +10530,9 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  tonic 0.14.6 (LICENSE)
+  tonic 0.14.9 (LICENSE)
 
-Copyright (c) 2025 Lucio Franco
+Copyright 2019 gRPC authors.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -11004,7 +10982,7 @@ authorization of the copyright holder.
 
 Used by:
   unicode-normalization 0.1.26 (COPYRIGHT)
-  unicode-properties 0.1.4 (COPYRIGHT)
+  unicode-properties 0.1.5 (COPYRIGHT)
 
 Licensed under the Apache License, Version 2.0
 <LICENSE-APACHE or
@@ -11013,6 +10991,51 @@ license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
 at your option. All files in the project carrying such
 notice may not be copied, modified, or distributed except
 according to those terms.
+
+==============================================================================
+
+Used by:
+  unicode-properties 0.1.5 (LICENSE-UNICODE)
+
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
 
 ==============================================================================
 
@@ -11068,7 +11091,7 @@ Used by:
 ==============================================================================
 
 Used by:
-  utf8_iter 1.0.4 (COPYRIGHT)
+  utf8_iter 1.1.0 (COPYRIGHT)
 
 Copyright Mozilla Foundation
 
@@ -11116,7 +11139,8 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 ==============================================================================
 
 Used by:
-  utf8_iter 1.0.4 (LICENSE-MIT)
+  utf8_iter 1.1.0 (LICENSE-MIT)
+  utf_types 1.0.0 (LICENSE-MIT)
 
 Copyright Mozilla Foundation
 
@@ -11178,6 +11202,32 @@ DEALINGS IN THE SOFTWARE.
 ==============================================================================
 
 Used by:
+  utf_types 1.0.0 (COPYRIGHT)
+
+Copyright Mozilla Foundation
+
+Licensed under the Apache License (Version 2.0), or the MIT license,
+(the "Licenses") at your option. You may not use this file except in
+compliance with one of the Licenses. You may obtain copies of the
+Licenses at:
+
+   https://www.apache.org/licenses/LICENSE-2.0
+   https://opensource.org/licenses/MIT
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the Licenses is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the Licenses for the specific language governing permissions and
+limitations under the Licenses.
+
+--
+
+Test code is dedicated to the Public Domain when so designated (see
+the individual files for PD/CC0-dedicated sections).
+
+==============================================================================
+
+Used by:
   utoipa 6.0.0 (LICENSE-MIT)
   utoipa-swagger-ui 10.0.2 (LICENSE-MIT)
 
@@ -11207,7 +11257,7 @@ THE SOFTWARE.
 ==============================================================================
 
 Used by:
-  uuid 1.28.0 (LICENSE-MIT)
+  uuid 1.29.2 (LICENSE-MIT)
 
 Copyright (c) 2014 The Rust Project Developers
 Copyright (c) 2018 Ashley Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon

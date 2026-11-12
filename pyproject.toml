@@ -52,7 +52,7 @@ dev = [
     # Type-checks DAG code as an editor does (`make lint`, over examples/; decision 57).
     "basedpyright==1.40.2",
     # Tests `schedr.pydantic.Model` and Pydantic outcome unions; never a runtime dependency.
-    "pydantic==2.14.1",
+    "pydantic==2.14.2",
     # The `uvloop` extra's loop, for the tests running on it.
     "uvloop==0.23.0",
     # The typed connections' clients (the extras above), for their tests and type checks.
