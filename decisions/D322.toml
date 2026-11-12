@@ -1,7 +1,8 @@
 title = "A poke that exceeds every fails"
 date = 2026-11-06
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 458
 topic = "wait-steps"
 section = "What a wait step is"
 summary = '''

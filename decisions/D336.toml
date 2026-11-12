@@ -15,4 +15,4 @@ history = "archive/PROJECT.md#D336"
 step = "M4.11a2"
 also = ["task-processes"]
 code = ["crates/schedr-agent/src/watchers.rs", "python/schedr/_wait_rules.py::refused_in", "python/schedr/runner/waiting.py::refuse_a_process"]
-checked = 2026-11-09
+checked = 2026-11-12

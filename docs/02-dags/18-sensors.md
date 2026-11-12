@@ -13,9 +13,12 @@ compares every form.
 ```
 
 A poke returns its value when ready, or `NOT_YET` while waiting: annotate it
-`-> str | NotYet`. `None` is a value, not a signal to wait. Each call is limited to
-`every`, and calls never overlap. A call that raises or runs out of that time is a
-failure with the usual retries.
+`-> str | NotYet`. `None` is a value, not a signal to wait. Calls never overlap. A call
+that runs past `every` is an overrun: it may finish, and the next call comes right after it.
+The poke fails (`PokeTooSlowError`, with the usual retries) after `[watchers] poke_overruns`
+overruns in a row (3 by default), or at once when one call runs three times `every`, when it
+is cancelled. A call that raises is a failure with the usual retries too. A call that
+holds the event loop is another limit: see below.
 
 `max_wait=` limits the wait. If omitted, `[sensors] default_max_wait` applies (24 hours by
 default), except for `delay` given a `timedelta` as described below; `max_wait` in `StepDefaults` sets it for a DAG or group, while `timeout` there is for tasks. When the wait expires, schedr

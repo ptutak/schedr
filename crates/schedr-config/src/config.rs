@@ -338,6 +338,10 @@ pub struct WatchersSection {
     /// attempts then fail at once, until it succeeds on new code or `schedr sensors switch-on`.
     /// 0: never.
     pub switch_off_after: u32,
+    /// After how many calls in a row that each ran past its `every` a sensor's poke fails
+    /// (`PokeTooSlowError`). A call may run on past `every` to three times it, then it is
+    /// cancelled and fails at once. 1 (or 0): at the first.
+    pub poke_overruns: u32,
 }
 
 impl Default for WatchersSection {
@@ -347,6 +351,7 @@ impl Default for WatchersSection {
             block_limit: Duration::from_secs(30),
             memory_budget: 1024 * 1024 * 1024,
             switch_off_after: 3,
+            poke_overruns: 3,
         }
     }
 }

@@ -370,6 +370,9 @@ pub struct WorkerTimeouts {
     pub watcher_import_limit: Duration,
     /// The memory of all watcher hosts together (`[watchers] memory_budget`).
     pub watcher_memory_budget: u64,
+    /// How many calls in a row may run past a sensor poke's `every` (`[watchers]
+    /// poke_overruns`).
+    pub watcher_poke_overruns: u32,
     /// One try of a resource's cleanup that sets no `timeout` (`resource_cleanup_timeout`).
     pub resource_cleanup: Duration,
     /// How long a stopped process's output may take to reach its log (`output_drain_timeout`).
@@ -420,6 +423,7 @@ impl Default for WorkerTimeouts {
             watcher_block_limit: Duration::from_secs(30),
             watcher_import_limit: Duration::from_mins(1),
             watcher_memory_budget: 1024 * 1024 * 1024,
+            watcher_poke_overruns: 3,
             resource_cleanup: Duration::from_mins(30),
             output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
             fork_answer: crate::fork::FORK_ANSWER_TIMEOUT,

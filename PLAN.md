@@ -167,7 +167,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4.9d | Libraries in roots | done 2026-11-06 | D305 |
 | M4.10 | Async task functions | done 2026-11-06 | D49, D53, D315, D316, D317, D318, D319 |
 | M4.11a | Wait steps | done 2026-11-07 |  |
-| M4.11a1 (part of M4.11a) | Part of M4.11a | done 2026-11-06 | D322, D323, D324, D325 |
+| M4.11a1 (part of M4.11a) | Part of M4.11a | done 2026-11-06 | D323, D324, D325 |
 | M4.11L | How DAG files load | done 2026-11-06 | D326, D327, D328, D329, D330, D331, D332, D333 |
 | M4.11a2 (part of M4.11a) | Part of M4.11a | done 2026-11-06 | D320, D334, D335, D336, D337 |
 | M4.11a3 (part of M4.11a) | Part of M4.11a | done 2026-11-06 | D338, D339, D340, D341, D342 |

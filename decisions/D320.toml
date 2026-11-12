@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D320"
 step = "M4.11a2"
 also = ["workers", "code-delivery"]
 code = ["python/schedr/runner/watchers.py", "crates/schedr-model/src/runner.rs::WatchersRequest", "crates/schedr-agent/src/watchers.rs::WatcherHosts"]
-checked = 2026-11-09
+checked = 2026-11-12

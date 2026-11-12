@@ -203,6 +203,12 @@
               "minimum": 0,
               "type": "integer"
             },
+            "poke_overruns": {
+              "description": "After how many calls in a row past its `every` a sensor's poke fails (`[watchers]\npoke_overruns`).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
             "sys_path": {
               "description": "Directories put first on `sys.path` (every DAG root's copy).",
               "items": {
@@ -219,7 +225,8 @@
             "type",
             "sys_path",
             "block_limit_ms",
-            "import_limit_ms"
+            "import_limit_ms",
+            "poke_overruns"
           ],
           "type": "object"
         },

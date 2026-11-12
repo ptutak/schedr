@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D334"
 step = "M4.11a2"
 also = ["workers"]
 code = ["crates/schedr-agent/src/watchers.rs::WatcherHosts"]
-checked = 2026-11-09
+checked = 2026-11-12

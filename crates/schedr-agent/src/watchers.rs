@@ -202,6 +202,7 @@ impl Host {
             sys_path: sys_path.to_vec(),
             block_limit_ms: millis(setup.timeouts.watcher_block_limit),
             import_limit_ms: millis(setup.timeouts.watcher_import_limit),
+            poke_overruns: setup.timeouts.watcher_poke_overruns,
         }));
         let stop = Arc::new(Notify::new());
         let routes = Routes::default();

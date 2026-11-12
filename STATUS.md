@@ -13,11 +13,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- D458 (2026-11-12): a sensor poke tolerates overruns of `every` (decision 458, supersedes 322)
 - D457 (2026-11-12): the UI names a DAG's trigger kind, shows descriptions, and has no Pause for a DAG without a trigger
 - D456 (2026-11-12): from 1.0.0 the schema and the protocol change only additively
 - D455 (2026-11-12): a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
 - D454 (2026-11-11): images on glibc beside Alpine
-- N2 (2026-11-11): B184 met; the stress comparison before and after M4B
 - R1.0b (2026-11-12): The master's side in the clock simulator
 - M4B.5 (2026-11-11): The agent's journal in groups
 - M4B.4 (2026-11-11): A turn's `Finished`s written together

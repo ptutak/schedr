@@ -589,3 +589,13 @@ would be - remove those buttons entirely for DAGs without triggers". For the dem
 user, a DAG's `description`, already shown on its page, shows in the list too. And "Schedule"
 became "Trigger", naming the kind, "Schedule is one of it": the user chose the plain names
 (Schedule, Run of, Chained, Event, Manual) over the API's (Cron, Every, Once, RunOf, None).
+
+### <a id="D458"></a>2026-11-12: a sensor poke tolerates overruns of `every` (decision 458, supersedes 322)
+
+Two integration tests failed under a loaded check (B238): their poke ran every 100 ms, and one
+call past it failed the run, as decision 322 said. A side agent pointed out the same would fail
+real runs on a busy machine. The user chose to tolerate a few overruns rather than fail at
+once, the count a public key beside `switch_off_after` (`[watchers] poke_overruns`, 3), and
+added a hard limit: "a hard time limit to reach await mainly so not to block the loop, but also
+a hard-limit on one poke-overrun I would say 3xevery interval". The first is `[watchers]
+block_limit`, already there; the second is the cancel at three times `every`.

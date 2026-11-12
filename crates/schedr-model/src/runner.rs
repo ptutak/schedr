@@ -600,6 +600,9 @@ pub struct WatchersRequest {
     pub block_limit_ms: u64,
     /// How long importing a DAG file may hold it (`[dags] parse_file_timeout`).
     pub import_limit_ms: u64,
+    /// After how many calls in a row past its `every` a sensor's poke fails (`[watchers]
+    /// poke_overruns`).
+    pub poke_overruns: u32,
 }
 
 /// A message from the agent to the runner.

@@ -23,6 +23,7 @@ from schedr import (
     task,
 )
 from schedr._model import registry
+from schedr.runner import waiting
 from schedr.runner.waiting import PokeTooSlowError, waited
 
 
@@ -364,8 +365,40 @@ def test_a_call_that_blocks_past_its_limit_is_late_whatever_it_returns() -> None
 
     assert _waited(blocks, max_wait_ms=10) == TimedOut()
     assert _waited(blocks, max_wait_ms=10, every_ms=1000) == TimedOut()
-    with pytest.raises(PokeTooSlowError, match="longer than `every`"):
+    with pytest.raises(PokeTooSlowError, match="longer than 3 times `every`"):
         _waited(blocks, max_wait_ms=60_000, every_ms=10)
+
+
+def _overrunning(
+    takes: list[float], then: object = NOT_YET
+) -> Callable[[], Coroutine[object, object, object]]:
+    """A poke whose calls take ``takes`` seconds in turn, returning ``then`` after the last."""
+    left = list(takes)
+
+    async def poke() -> object:
+        await asyncio.sleep(left.pop(0))
+        return then if not left else NOT_YET
+
+    return poke
+
+
+def test_a_poke_fails_after_poke_overruns_calls_in_a_row_past_every() -> None:
+    # every 100 ms: 150 ms calls run past it, well under the hard limit of 300 ms.
+    with pytest.raises(PokeTooSlowError, match="3 calls in a row took longer than `every`"):
+        _waited(_overrunning([0.15] * 5, "never"), max_wait_ms=60_000, every_ms=100)
+
+
+def test_a_call_within_every_starts_the_count_again_and_a_late_value_counts() -> None:
+    takes = [0.15, 0.15, 0.0, 0.15, 0.15]
+    assert _waited(_overrunning(takes, "ready"), max_wait_ms=60_000, every_ms=100) == "ready"
+
+
+def test_poke_overruns_1_fails_at_the_first_overrun(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(waiting, "_poke_overruns", 1)
+    with pytest.raises(PokeTooSlowError, match="1 calls in a row"):
+        _waited(_overrunning([0.15, 0.0], "ready"), max_wait_ms=60_000, every_ms=100)
+    waiting.set_poke_overruns(0)
+    assert waiting._poke_overruns == 1  # what the host's setting became
 
 
 def test_a_stop_during_the_cancel_at_the_limit_lets_its_finally_finish() -> None:

@@ -144,7 +144,7 @@ with Dag("d"):
     )
     assert result.state == "failed", result
     attempt = result.tasks["slow"].attempts[-1]
-    assert "took longer than `every`" in str(attempt.error), attempt
+    assert "took longer than 3 times `every`" in str(attempt.error), attempt
 
 
 def test_a_poke_that_raises_fails_with_the_usual_retries(tmp_path: Path) -> None:

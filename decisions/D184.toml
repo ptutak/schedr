@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D184"
 step = "M4.7b2"
 also = ["task-processes", "task-context"]
 code = ["crates/schedr-agent/src/secrets.rs", "crates/schedr-agent/src/connection_env.rs::write", "crates/schedr-agent/src/attempt.rs::add_connection_env"]
-checked = 2026-11-11
+checked = 2026-11-12

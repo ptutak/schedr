@@ -107,6 +107,7 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         watcher_block_limit: config.watchers.block_limit,
         watcher_import_limit: config.dags.parse_file_timeout,
         watcher_memory_budget: config.watchers.memory_budget,
+        watcher_poke_overruns: config.watchers.poke_overruns,
         output_drain: config.timings.output_drain_timeout,
         fork_answer: config.timings.fork_answer_timeout,
         fork_backoff: schedr_agent::fork::ForkBackoff {

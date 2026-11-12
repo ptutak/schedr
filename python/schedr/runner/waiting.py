@@ -57,6 +57,20 @@ _IN_WAIT_STEP: ContextVar[bool] = ContextVar("schedr_in_wait_step", default=Fals
 
 _guarded = False
 
+OVERRUN_LIMIT = 3
+"""How many times ``every`` one call of a sensor's poke may run before it is cancelled and
+fails the attempt (the user's number, 2026-11-12: a hard limit on one overrun)."""
+
+_poke_overruns = 3
+"""After how many calls in a row past ``every`` a sensor's poke fails (``[watchers]
+poke_overruns``, set by the host at its start)."""
+
+
+def set_poke_overruns(times: int) -> None:
+    """Sets ``[watchers] poke_overruns`` for this process's sensor pokes (0 counts as 1)."""
+    global _poke_overruns  # noqa: PLW0603  # the host's setting, set once at its start
+    _poke_overruns = max(1, times)
+
 
 def refuse_a_process() -> None:
     """Refuses to start a process, in a wait step's function.
@@ -92,7 +106,7 @@ class WatcherMovedError(Exception):
 
 
 class PokeTooSlowError(Exception):
-    """A ``@sensor.poke`` call ran out its ``every`` (decision 322)."""
+    """A ``@sensor.poke`` ran past ``every`` too often, or a call ran three times it (D458)."""
 
 
 class CallTimedOutError(Exception):
@@ -167,22 +181,35 @@ async def _poked(
     moving: asyncio.Event | None,
 ) -> object:
     loop = asyncio.get_running_loop()
+    hard = OVERRUN_LIMIT * every
+    overruns = 0
     while True:
         await _until(moving, 0.0)
         started = loop.time()
         left = None if deadline is None else deadline - started
         if left is not None and left <= 0:
             return TimedOut()
-        ended, value = await _within(call(), every if left is None else min(every, left))
+        # A call may run on past `every` (calls never overlap: the next one waits for it), to
+        # its hard limit.
+        ended, value = await _within(call(), hard if left is None else min(hard, left))
         if not ended:
-            if left is not None and left <= every:
+            if left is not None and left <= hard:
                 return TimedOut()
             raise PokeTooSlowError(
-                f"a call took longer than `every` ({every:g} s): each call is limited to it, as "
-                "calls never overlap. Make it faster, or poke less often"
+                f"a call took longer than {OVERRUN_LIMIT} times `every` ({hard:g} s), and was "
+                "cancelled. Make it faster, or poke less often"
             )
         if value is not NOT_YET:
             return value
+        if loop.time() - started < every:
+            overruns = 0
+        else:
+            overruns += 1
+            if overruns >= _poke_overruns:
+                raise PokeTooSlowError(
+                    f"{overruns} calls in a row took longer than `every` ({every:g} s; "
+                    "`[watchers] poke_overruns`). Make it faster, or poke less often"
+                )
         following = started + every
         if deadline is not None and following >= deadline:
             await _until(moving, max(0.0, deadline - loop.time()))
@@ -208,7 +235,8 @@ async def waited(
         Its value, or ``TimedOut()`` if its time ran out.
 
     Raises:
-        PokeTooSlowError: If a ``@sensor.poke`` call ran out its ``every``.
+        PokeTooSlowError: If a ``@sensor.poke``'s calls ran past ``every`` ``[watchers]
+            poke_overruns`` times in a row, or one ran three times it.
         CallTimedOutError: If an ``@sensor(wait_for=...)`` call ran out its ``timeout``.
         WatcherMovedError: If ``moving`` was set before a value came.
     """

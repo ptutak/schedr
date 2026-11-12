@@ -945,6 +945,7 @@ async fn losing_the_agent_ends_what_watchers_started() {
         sys_path,
         block_limit_ms: 30_000,
         import_limit_ms: 30_000,
+        poke_overruns: 3,
     });
     write_message(&mut runner.stream, &request).await.unwrap();
     let first = AgentMessage::StartWatcher {

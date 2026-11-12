@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D458 | 2026-11-12 | user | planned (1.0.0) | wait-steps | A sensor poke tolerates overruns of every: it fails after poke_overruns in a row, or one at three times every |
 | D457 | 2026-11-12 | user | planned (1.0.0) | ui-cli | The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger |
 | D456 | 2026-10-29 | user | rule | development | From 1.0.0 the schema and the protocol change only additively |
 | D455 | 2026-11-12 | claude | built R1.0b | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
@@ -164,7 +165,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D325 | 2026-11-06 | user | built M4.11a1 | wait-steps | Wait steps use max_wait and shared StepDefaults |
 | D324 | 2026-11-06 | user | built M4.11a1 | wait-steps | A wait step’s plain >> runs on its value |
 | D323 | 2026-11-06 | user | built M4.11a1 | wait-steps | Wait steps do not accept task cleanup options |
-| D322 | 2026-11-06 | user | built M4.11a1 | wait-steps | A poke that exceeds every fails |
+| D322 | 2026-11-06 | user | superseded by D458 | wait-steps | A poke that exceeds every fails |
 | D321 | 2026-11-06 | user | built M4.11a4 | wait-steps | A wait step keeps its deadline across retries and moves |
 | D320 | 2026-11-06 | user | built M4.11a2 | wait-steps | A watcher host serves one interpreter and code set |
 | D319 | 2026-11-06 | user | built M4.10 | async-tasks | Tests await an async task through its fn attribute |
@@ -955,6 +956,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### wait-steps
 
+- D458: A sensor poke tolerates overruns of every: it fails after poke_overruns in a row, or one at three times every
 - D393: first_of doesn't cancel the tasks that didn't win
 - D392: No by_deadline wait
 - D355: `delay` and `until` are plain Python wait steps
@@ -972,7 +974,6 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 - D325: Wait steps use max_wait and shared StepDefaults
 - D324: A wait step’s plain >> runs on its value
 - D323: Wait steps do not accept task cleanup options
-- D322: A poke that exceeds every fails
 - D321: A wait step keeps its deadline across retries and moves
 - D320: A watcher host serves one interpreter and code set
 

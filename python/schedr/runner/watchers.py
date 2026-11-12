@@ -38,7 +38,7 @@ from schedr.runner.coroutines import loop_factory
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError
 from schedr.runner.task import execute_trigger, execute_watcher, failure
-from schedr.runner.waiting import StepEndedError, refuse_a_process
+from schedr.runner.waiting import StepEndedError, refuse_a_process, set_poke_overruns
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -693,6 +693,7 @@ def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
             target=_read, args=(channel, host, loop), name="schedr-agent", daemon=True
         ).start()
         limits = (request["block_limit_ms"] / 1000, request["import_limit_ms"] / 1000)
+        set_poke_overruns(request["poke_overruns"])
         threading.Thread(
             target=_watch_the_loop, args=(host, loop, limits), name="schedr-watchdog", daemon=True
         ).start()
