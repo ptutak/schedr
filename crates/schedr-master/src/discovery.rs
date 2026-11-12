@@ -307,6 +307,7 @@ impl Discovery {
         keys: Vec<ParseKey>,
         now: Timestamp,
     ) -> Result<Vec<ParseAssignment>, DbError> {
+        self.jobs.stream_replaced(worker_id, now);
         let previous = self.reports.remove(worker_id).unwrap_or_default();
         let mut roots: BTreeSet<String> = previous.keys().cloned().collect();
         // A root it no longer has: it can't parse its code any more (B97).

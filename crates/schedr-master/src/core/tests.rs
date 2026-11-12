@@ -1753,6 +1753,37 @@ async fn tasks_go_to_the_worker_with_the_newest_code_until_it_leaves() {
     );
 }
 
+/// B235: the agent drops a parse job's result when its stream goes, so a worker registering
+/// again gets the job it held, not a wait for the job's timeout (ten minutes by default).
+#[tokio::test]
+async fn a_worker_registering_again_gets_the_parse_job_it_held_again() {
+    let mut core = core().await;
+    let (_, first) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(held) = message(&first[0]) else {
+        panic!("expected AssignParse, got {first:?}")
+    };
+    core.disconnected("w1", later(1)).await.unwrap();
+    let (_, again) = core
+        .register(&register("w1", "i1", vec![]), later(1))
+        .await
+        .unwrap();
+    let assigned: Vec<_> = again
+        .iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::AssignParse(job) => Some(job.parse_job_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        assigned,
+        std::slice::from_ref(&held.parse_job_id),
+        "{again:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_drained_worker_stays_drained_when_it_registers_again() {
     let mut core = with_dag().await;

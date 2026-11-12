@@ -212,6 +212,21 @@ impl ParseJobs {
         }
     }
 
+    /// A worker opened a new stream: the agent drops the jobs of its old one (their results
+    /// can't be sent), so none is its any more. Its reports on the new stream ask for them
+    /// again (B235: they waited for the timeout).
+    /// Due at once, as in [`Self::moved_away`]: if the worker doesn't take it back (drained,
+    /// or not reporting its hash any more), the next round hands it to another candidate.
+    pub fn stream_replaced(&mut self, worker_id: &str, now: Timestamp) {
+        let now = (self.steady)(now);
+        for job in self.jobs.values_mut() {
+            if job.worker.as_ref().is_some_and(|(w, _)| w == worker_id) {
+                job.worker = None;
+                job.not_before = Some(job.not_before.map_or(now, |at| at.min(now)));
+            }
+        }
+    }
+
     /// Whether `key` has a job (a retry included).
     #[must_use]
     pub fn has(&self, key: &ParseKey) -> bool {
