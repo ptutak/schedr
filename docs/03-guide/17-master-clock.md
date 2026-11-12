@@ -2,7 +2,7 @@
 
 Master time is the leading master's monotonic clock. A deadline the master and a worker both
 have to honour is a time on that clock, so the two machines never compare wall clocks to
-decide whether work is still alive. The numbers in the diagrams are the defaults (a 60 s
+decide whether work is still alive. The numbers in the examples are the defaults (a 60 s
 worker lease, a 10 s heartbeat, a 30 s master lease, a 10 s query timeout, and the 20 s lead
 those last two leave). The settings are in [Timings](14-timings.md#fixed-timings). The
 messages are in [Master–worker protocol](15-protocol.md). What each failure does to a run is
@@ -15,17 +15,12 @@ master time is that reading plus the monotonic time since. The timeline is this 
 own: another master's times are a different timeline and are never compared with it
 (decision 442).
 
-```{mermaid}
-sequenceDiagram
-    participant Wall as Wall clock
-    participant MT as Master time
-    Note over Wall,MT: The process starts and reads the wall clock. That reading is the origin of this timeline.
-    Wall->>MT: origin
-    Note over MT: Thirty seconds of monotonic time later, master time is the origin plus 30 s.
-    Note over Wall: The wall clock jumps forward an hour.
-    Note over MT: Master time is still the origin plus the monotonic time since. The jump moves no deadline.
-    Note over MT: A restarted process, or the other master, has a new timeline.
-```
+| When | Wall clock | Master time |
+|---|---|---|
+| The process starts | Read once: the origin of this timeline | The origin |
+| 30 s of monotonic time later | | The origin plus 30 s |
+| The wall clock jumps forward an hour | An hour ahead | Still the origin plus the monotonic time since: the jump moves no deadline |
+| A restarted process, or the other master | | A new timeline |
 
 Every master message carries a `MasterClock`: the timeline, master time as the message left,
 the latest heartbeat heard on that stream, the wall clock (for people), and the lease epoch
@@ -58,18 +53,6 @@ clock, past a second of slack and 0.2 % of the span) makes every deadline passed
 sample replaces the old one.
 
 ```{mermaid}
-sequenceDiagram
-    participant W as Worker boot clock
-    participant M as Master
-    Note over W: Heartbeat 1 leaves at boot time T
-    W->>M: Heartbeat 1
-    M-->>W: master_ms = M, heard_sequence = 1
-    Note over W: Master time X is no earlier than T + (X - M), less 0.1 percent
-    Note over W: The tightest such sample wins. Hours later, a new sample just as tight replaces it.
-    Note over W: No sample, or the wall clock ran ahead of the boot clock: the deadline has passed.
-```
-
-```{mermaid}
 flowchart LR
     newSample[A stamped answer to a heartbeat] --> tighter{At least as tight as the newest kept?}
     tighter -->|yes| dropLoose[Drop the looser ones before it] --> keep[Keep it last]
@@ -90,20 +73,15 @@ expiry keeps.
 Before, the master expired an assignment from the wall-clock time it stored (`assigned_at`
 plus the lease). The worker's lease was its own timer, and the assignment's arrival refreshed
 it. A late delivery and a slow journal then started the task on a worker the master had
-already replaced. The review that found it: stored at 0 s, delivered at 55 s, journaled for
-10 s, expired at 61 s, given to another worker at 62 s, started on the first at 65 s.
+already replaced. The review that found it:
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master wall clock
-    participant W as Worker
-    Note over M: t = 0 s. Assignment stored. Expiry is assigned_at plus 60 s.
-    M->>W: AssignTask arrives at 55 s
-    Note over W: Arrival refreshes the worker's own lease. The journal write takes 10 s.
-    Note over M: t = 61 s. Expired from assigned_at, and taken back.
-    Note over M: t = 62 s. Assigned to another worker.
-    Note over W: t = 65 s. Journal done, still inside the worker's lease. The task starts.
-```
+| Wall clock | Master | Worker |
+|---|---|---|
+| 0 s | Stores the assignment. Expiry is `assigned_at` plus 60 s. | |
+| 55 s | | `AssignTask` arrives and refreshes the worker's own lease. The journal write takes 10 s. |
+| 61 s | Expired from `assigned_at`: takes it back. | |
+| 62 s | Assigns it to another worker. | |
+| 65 s | | Journal done, still inside its own lease: starts the task. |
 
 After, the worker starts the task only while its bound of `start_by_ms` is more than two
 heartbeat intervals ahead (20 s). Otherwise it rejects the assignment `TOO_LATE` and does not
@@ -111,16 +89,12 @@ leave it in the journal. The master takes it back two heartbeat intervals (20 s)
 master time passes the same deadline, unless `Started` has arrived by then (decision 450): a
 `Started` sent at the last moment has the worker's reserve and that grace, 40 s, to arrive.
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master time
-    participant W as Worker
-    Note over M: Stored at master time S. start_by_ms is S plus 60 s. Expiry keeps S.
-    M->>W: AssignTask, stamp names the heartbeat sent at T
-    Note over W: Start only while T + (start_by - master_ms) - 0.1 percent is more than 20 s ahead.
-    W-->>M: Otherwise Rejected TOO_LATE, and the journal entry is dropped
-    Note over M: Past S plus 60 s plus 20 s grace, with no Started waiting, the attempt is taken back.
-```
+| When | Master | Worker |
+|---|---|---|
+| Master time S | Stores the attempt. `start_by_ms` is S plus 60 s; expiry keeps S. | |
+| On `AssignTask` | | Its stamp names the heartbeat sent at boot time T. The worker starts only while T + (`start_by_ms` − `master_ms`), less 0.1 %, is more than 20 s ahead. |
+| Otherwise | | Rejects `TOO_LATE`, and drops the journal entry. |
+| Past S + 60 s + 20 s, no `Started` waiting | Takes the attempt back. | |
 
 ### A start budget that outlived the expiry
 
@@ -128,17 +102,6 @@ The first patch put a remaining budget on the assignment, fixed when it was sent
 counted that budget from when the assignment arrived. The wait after the send sat outside the
 master's expiry, which still ran from when the attempt was stored, so the worker could start
 after the master had taken the attempt back (decision 442: a budget spent at delivery).
-
-```{mermaid}
-sequenceDiagram
-    participant M as Master
-    participant W as Worker
-    Note over M: Budget fixed at send: 60 s minus the age since the attempt was stored.
-    M->>W: AssignTask carries that budget, then waits on the way
-    Note over W: The whole budget is counted from arrival.
-    Note over M: Expiry still runs from storage. The trip after the send is outside it.
-    Note over W: The worker can still be inside its budget after the master took the attempt back.
-```
 
 Master time closes it by sending the deadline itself, the same reading `expire` keeps, rather
 than a duration the worker starts counting later.
@@ -149,32 +112,10 @@ Numbering heartbeats and treating the count as the clock left the worker behind 
 ack never went out (the master not leading, or the stream buffer full). The master's expiry
 moved on; the worker's count did not.
 
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    W->>M: Heartbeat 3
-    Note over M: No ack (not leading, or the send buffer is full)
-    Note over W: A clock made of answered heartbeats stays at 2
-    Note over M: Expiry has moved on
-    Note over W: The worker still has start budget left
-```
-
 The master records the heartbeat's number when it arrives, ack or no ack, and puts that
 number on every later message. The worker dates master time from when it sent that
 heartbeat. A run of messages with no sample at all counts every deadline as passed, so the
 task is not started.
-
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    Note over W: Heartbeat 3 leaves at boot time T. T is what the worker will use.
-    W->>M: Heartbeat 3
-    Note over M: Heard sequence becomes 3 as the heartbeat arrives
-    M-->>W: A later message names heard_sequence 3 and master_ms
-    Note over W: Master time is read from T. No sample at all means the deadline has passed.
-```
 
 ### A `Started` held up (B227)
 
@@ -183,24 +124,11 @@ the attempt back and given it to someone else. The worker keeps two heartbeat in
 of the 60 s) so that `Started` can reach the master first. The master notes it as it is read,
 before the message waits for the lock.
 
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    Note over W: Before: start at the end of the 60 s, then send Started
-    W->>M: Started, held on the way
-    Note over M: 60 s from storage, and Started is not here yet. Taken back, given to another worker.
-    Note over W: The first task is already running
-```
-
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    Note over W: After: the last 20 s (two heartbeats) is kept. The worker does not start inside it.
-    W->>M: Started, sent with 20 s of master time still to go
-    Note over M: The arrival is recorded before the lock. Expiry leaves the attempt alone.
-```
+| | Before | After |
+|---|---|---|
+| When the worker may start | Up to the end of the 60 s | Not inside the last 20 s (two heartbeats) |
+| Its `Started` | Sent at the very end, and held on the way | Sent with 20 s of master time still to go |
+| The master | At 60 s from storage, no `Started` yet: takes the attempt back and gives it to another worker, while the first task already runs | Records the arrival before the lock, so expiry leaves the attempt alone |
 
 A `Started` held longer than those two intervals is a known limit, below.
 
@@ -213,16 +141,6 @@ decides liveness reads the wall clock. A jump of two minutes while master time m
 seconds takes no assignment back and loses no worker. Both go only once master time itself
 passes the lease.
 
-```{mermaid}
-sequenceDiagram
-    participant Wall as Wall clock
-    participant Live as Liveness
-    Note over Wall: Jumps forward 2 minutes
-    Note over Live: Before: stored wall times compared with this clock. The assignment looks expired.
-    Note over Live: The hold after a jump was the patch. It was dropped.
-    Note over Live: After: master time moved 5 s during the jump. The assignment and the worker stay.
-```
-
 ### The minimum lease (B226)
 
 The worker keeps two heartbeat intervals for `Started`, reads master time from a heartbeat
@@ -230,14 +148,13 @@ sent up to one interval earlier, and still needs an interval in which to start. 
 four heartbeat intervals cannot cover that, and a lease under one interval loses a worker
 between two heartbeats. The load check is below.
 
-```{mermaid}
-sequenceDiagram
-    participant L as Worker lease, four heartbeats at least
-    Note over L: 1. The heartbeat the stamp names, up to 10 s old
-    Note over L: 2. At least one interval, 10 s, left to start
-    Note over L: 3 and 4. Two intervals, 20 s, kept so Started arrives before expiry
-    Note over L: Under 40 s the process refuses to start
-```
+A worker lease covers, at the least, four heartbeat intervals:
+
+- one: the heartbeat the stamp names, up to 10 s old;
+- one: at least 10 s left to start;
+- two: 20 s kept so `Started` arrives before the expiry.
+
+Under 40 s the process refuses to start.
 
 ### A worker cut off by the clock of its own receipts (decision 445)
 
@@ -247,15 +164,14 @@ clock: a message held on its way left that cutoff late in master time. Now the c
 earlier of the two: a lease after the last receipt, or the moment master time may have
 passed the last stamp plus a lease, by the bound above.
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master time
-    participant W as Worker
-    M->>W: A message stamped at master time 100 s, held 30 s on its way
-    Note over W: Received at 130 s by master time. By receipt, cut off at 190 s.
-    Note over W: By the stamp, master time may pass 160 s (stamp plus lease) at 160 s. Cut off then.
-    Note over M: The master counts its lease from the worker's last message it received.
-```
+A message stamped at master time 100 s is held 30 s on its way:
+
+| Bound | The worker stops its `cleanup_anywhere` tasks at |
+|---|---|
+| By receipt: a lease after it arrived, at 130 s | 190 s of master time |
+| By the stamp: when master time may pass 100 s + 60 s | 160 s: this one, the earlier |
+
+The master counts its own lease from the worker's last message it received.
 
 ### A worker cut off one way (decision 453)
 
@@ -267,18 +183,14 @@ every master message names the last heartbeat it heard (`heard_sequence`), the w
 it sent that heartbeat, and the master received it no earlier. The worker stops a lease after
 that send, less the drift allowance (0.1 %), on its own boot clock.
 
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    W->>M: Heartbeat 7, sent at 10 s (worker's clock)
-    Note over M: Heard at 10.02 s. Lost from 70.02 s (lease 60 s).
-    W-xM: Heartbeats 8, 9, ... lost on the way
-    M->>W: Assignment stamped at 50 s, heard_sequence 7
-    Note over W: By the stamp alone: stop near 110 s.
-    Note over W: By heartbeat 7's send: stop at 10 + 60 - 0.06 = 69.94 s. Stops then.
-    Note over M: Moves the cleanup a grace and a move wait after 70.02 s.
-```
+| When | Worker | Master |
+|---|---|---|
+| 10 s on the worker's clock | Sends heartbeat 7. | |
+| 10.02 s | | Hears it. Counts the worker lost from 70.02 s (a 60 s lease). |
+| After that | Heartbeats 8, 9, … are lost on the way. | |
+| Master time 50 s | | Sends an assignment stamped 50 s, `heard_sequence` 7. |
+| On that assignment | By the stamp alone it would stop near 110 s. By heartbeat 7's send it stops at 10 + 60 − 0.06 = 69.94 s, and does. | |
+| 70.02 s plus the cancel grace and the move wait | | Moves the cleanup. |
 
 When the master answers each heartbeat, this bound and the stamp's are within a few
 milliseconds of each other; it only matters when the worker's messages stop getting through.
@@ -311,19 +223,12 @@ running. The test checks three things:
 Switching off the take-back's grace, the replaced incarnation's hold or the cleanup's move
 wait makes it fail, each in scenarios aimed at it.
 
-```{mermaid}
-flowchart LR
-    gen[Random scenario: drift, delays, losses, stalls, late assignments] --> sim[Worker MasterTime on virtual clocks]
-    sim --> rule1{Started at least the reserve before start_by?}
-    sim --> rule3{Not cut off only within a lease of the last heartbeat the master heard?}
-    rule1 -->|no| fail[Fails, with the smallest scenario]
-    rule3 -->|no| fail
-    faults[Random faults: cuts, lags, replaced workers, takeovers] --> both[Master core and two workers on one clock]
-    both --> alone{One process per task instance at a time?}
-    both --> ended{Nothing started after the master ended it; all ended at the end?}
-    alone -->|no| fail
-    ended -->|no| fail
-```
+| Side | What it varies | What it checks |
+|---|---|---|
+| The worker's `MasterTime` on virtual clocks | Drift, delays, lost answers, stalls, late assignments | A start is at least the reserve before `start_by_ms`; a worker not cut off is within a lease of the last heartbeat the master heard |
+| The master core and two workers on one clock | Cuts, lags, replaced workers, restarts, takeovers | One process per task instance at a time; nothing started after the master ended it; all ended once the faults are over |
+
+A failure is reported with its smallest scenario.
 
 ## Watching it (decisions 448 and 449)
 
@@ -339,19 +244,9 @@ flowchart LR
 A worker compares the master's wall clock on each stamped answer with its own over the round
 trip. More than 2 s outside it (`SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING`), it logs a
 warning once a session and reports a `clock_skew` warning, shown with the worker on the
-Deployments page. Wall clocks only touch what people read (cron times, logs, shown times);
+Deployments page. A heartbeat sent at the worker's wall time A, its answer arriving at B: a
+master wall time between A and B is no skew, one 30 s past B is 30 s of it. Wall clocks only touch what people read (cron times, logs, shown times);
 no deadline uses them.
-
-```{mermaid}
-sequenceDiagram
-    participant W as Worker wall clock
-    participant M as Master
-    Note over W: Heartbeat sent at wall time A
-    W->>M: Heartbeat
-    M-->>W: Answer stamped with the master's wall time
-    Note over W: Arrives at wall time B. Inside A to B: no skew. 30 s past B: 30 s skew.
-    Note over W: Past 2 s: one clock_skew warning this session.
-```
 
 ## One clock, and what still uses the wall clock
 
@@ -359,26 +254,14 @@ Before, a deadline was a wall-clock time stored in the database and compared wit
 clock the master or the worker had. After, each liveness deadline is a master time, and the
 master's own expiries count on its monotonic clock.
 
-```{mermaid}
-sequenceDiagram
-    participant DB as Stored wall time
-    participant M as Master
-    participant W as Worker
-    Note over DB,W: Before
-    M->>DB: Expire when the master's wall clock passes assigned_at plus the lease
-    W->>W: The worker's lease is its own timer, refreshed when the assignment arrives
-    Note over M,W: The two clocks, and the two starting points, disagree
-```
+| | Before | After |
+|---|---|---|
+| A deadline is | A wall-clock time stored in the database (`assigned_at` plus the lease) | A master time, on the stamp's timeline |
+| The master expires it | When its wall clock passes that time | On its monotonic clock, from the reading the deadline was built with |
+| The worker counts | Its own lease timer, refreshed when the assignment arrives | A bound of that same master time, from the heartbeat the stamp names |
+| So | Two clocks, and two starting points, that disagree | One clock, and one starting point |
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master monotonic clock
-    participant W as Worker
-    Note over M: After
-    M->>W: The deadline is a master time, on the stamp's timeline
-    W->>W: The worker bounds that same master time from the heartbeat the stamp names
-    Note over M: Expiry counts on this clock, from the reading the deadline was built with
-```
+Each liveness deadline, and where its master time counts from:
 
 | Deadline | Counts on master time from |
 |---|---|
@@ -414,18 +297,12 @@ registration. The old stream is answered no more, so its heartbeats do not keep 
 The hold is stored on each attempt. A master that restarts keeps the hold and counts the
 lease afresh from when it first sees the attempt.
 
-```{mermaid}
-sequenceDiagram
-    participant Old as Old process
-    participant M as Master
-    participant New as New incarnation
-    New->>M: Register
-    Note over M: Accepted at once. The old stream gets no more heartbeat answers.
-    Note over M: Unreported started attempts are marked. The mark is stored with each attempt.
-    Note over M: They end lost 60 s of master time after the registration.
-    Note over M: A restart keeps the mark and counts the 60 s afresh.
-    Note over Old: Its cleanup_anywhere tasks stop at its own lease. An ordinary task may still be running.
-```
+| When | Master | Old process | New incarnation |
+|---|---|---|---|
+| The registration | Accepts it at once, and stops answering the old stream's heartbeats. Marks the started attempts the new journal does not report, the mark stored with each. | | Sends `Register`. |
+| Its own lease | | Its `cleanup_anywhere` tasks stop. An ordinary task may still be running. | |
+| 60 s of master time after the registration | Ends the marked attempts `lost`. | | |
+| After a restart | Keeps the mark, and counts the 60 s afresh. | | |
 
 Refusing the new incarnation until the old one was lost would make a fast restart wait a
 lease. Stopping every task at the lease would kill a worker's tasks on a network blip.
@@ -447,18 +324,13 @@ restored from a backup sets the epoch back; restarting every worker was not chos
 by timeline was not chosen either (timelines are not ordered). Counting the lead on a clock
 that includes suspend was not chosen: that covers only a paused master.
 
-```{mermaid}
-sequenceDiagram
-    participant Old as Deposed master
-    participant W as Worker
-    participant New as New leader
-    Note over Old: Answers heartbeats for its lead, 20 s on its monotonic clock
-    New->>New: Restored workers count as heard 20 s of master time from now
-    Note over New: A worker still unheard after that 20 s plus the 60 s lease is lost
-    New-->>W: Messages stamped with the new lease epoch
-    W->>W: A lower epoch ends the stream. The worker connects again.
-    Note over W: A whole lease with no word from the highest epoch, and the lower epoch is followed
-```
+| When | Deposed master | New leader | Worker |
+|---|---|---|---|
+| For its lead, 20 s on its monotonic clock | Answers heartbeats. | | |
+| On taking over | | Counts restored workers as heard 20 s of master time from now. | |
+| 20 s + 60 s later, on its master time | | Counts a worker still unheard as lost. | |
+| On the new leader's messages | | Stamps them with the new lease epoch. | A lower epoch then ends a stream, and the worker connects again. |
+| A lease with no word from the highest epoch, on its own clock | | | Follows the lower epoch. |
 
 ### The load checks
 
@@ -466,14 +338,10 @@ Both are refused when the configuration is loaded. The lead check is what makes 
 lease long enough: a deposed master must stop answering before a worker gives up on the
 higher epoch. Sending the lead to workers, for the fence to wait it out, was not chosen.
 
-```{mermaid}
-flowchart TD
-    startNode[Load] --> leaseOk{Worker lease at least four heartbeats?}
-    leaseOk -->|no| refuseLease[Refuse to start]
-    leaseOk -->|yes| leadOk{Lead shorter than the worker lease?}
-    leadOk -->|no| refuseLead[Refuse to start]
-    leadOk -->|yes| runNode[Start]
-```
+At load, the process refuses to start when:
+
+1. the worker lease is under four heartbeat intervals, or
+2. the lead is not shorter than the worker lease.
 
 The defaults pass: 60 s is six heartbeats, and the lead is 20 s. A 90 s master lease with a
 10 s query timeout is an 80 s lead against a 60 s worker lease, and is refused.
@@ -519,16 +387,6 @@ simulator allows exactly that.
 At the end of a replaced incarnation's lease, the old process stops its `cleanup_anywhere`
 tasks and its triggers. An ordinary task still running there can overlap the retry, as it can
 for a worker the master has lost (decision 443).
-
-```{mermaid}
-sequenceDiagram
-    participant Old as Old process
-    participant M as Master
-    Note over M: 60 s of master time after the new incarnation registered
-    M->>M: The unreported attempt ends lost, and may be retried
-    Note over Old: cleanup_anywhere tasks and triggers are stopped
-    Note over Old: An ordinary task can still be running beside the retry
-```
 
 Every worker honours the deadline: a worker of the 0.1 preview, which ignored it, is refused
 by a 1.0 master (another protocol major). An assignment without `start_by_ms` sets the worker

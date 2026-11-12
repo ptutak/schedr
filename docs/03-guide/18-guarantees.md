@@ -12,48 +12,33 @@ change has to keep are in
 ## The protocol, and which clock
 
 One master leads, the one that holds the database lease. Standbys wait. Workers keep a
-journal on their own disk and open the streams. Every message the master sends carries a
-`MasterClock`.
+journal on their own disk and open the streams.
 
 ```{mermaid}
-flowchart TB
-    subgraph masters [Masters on one database]
-        standby["Standby: refuses a stream, not leading"]
-        leader["Leading master"]
-        db[("Lease row: holder and epoch")]
-        standby -->|takes the lease when it is released or expired| db
-        leader -->|renews every 10 s; each write checks holder and epoch| db
-    end
-    worker["Worker, with its journal"]
-    worker -->|"Control: Register, heartbeats, results"| leader
-    leader -->|"Control: assignments, acks, cancels"| worker
-    worker -->|UploadParseResult| leader
-    worker -->|FetchInputs| leader
-    stamp["MasterClock on every master message: timeline, master_ms, heard_sequence, wall_ms, lease_epoch"]
-    leader --> stamp --> worker
-    mt["Master time: this process's monotonic clock"]
-    lead["That same monotonic clock, as a duration from the last renewal"]
-    boot["The worker's boot clock: its bound of a stamped master time"]
-    timer["The worker's own timer"]
-    wall["The wall clock"]
-    dbclock["The database clock"]
-    leader --- mt
-    leader --- lead
-    worker --- boot
-    worker --- timer
-    leader --- wall
-    db --- dbclock
-    mt --> live["Assignment expiry, worker loss, a parse job, a connection job, a moved cleanup's wait, a replaced incarnation's hold, a new leader's wait"]
-    lead --> deposed["How long a deposed master still answers"]
-    boot --> bound["start_by_ms, and the master-time half of the cleanup_anywhere cutoff"]
-    timer --> own["A stream silent for a lease, the epoch fence, the receipt half of the cutoff"]
-    wall --> people["Schedules, set-aside, a sensor's max_wait, the script-root grace, the skew warning"]
-    dbclock --> who["When a standby may take the lease"]
+flowchart LR
+    standby["Standby: refuses streams"] -->|"takes the lease when it is released or expired"| db[("Lease row: holder and epoch")]
+    leader["Leading master"] -->|"renews every 10 s, each write checks holder and epoch"| db
+    worker["Worker, with its journal"] <-->|"Control, UploadParseResult, FetchInputs"| leader
 ```
+
+On `Control` the worker sends `Register`, heartbeats and results; the master sends
+assignments, acks and cancels. Every message the master sends carries a `MasterClock`:
+`timeline`, `master_ms`, `heard_sequence`, `wall_ms` and `lease_epoch`.
+
+Each deadline counts on one of these:
+
+| Clock | Kept by | What it sets |
+|---|---|---|
+| Master time: this process's monotonic clock | The leader | Assignment expiry, worker loss, a parse job, a connection job, a moved cleanup's wait, a replaced incarnation's hold, a new leader's wait |
+| That same monotonic clock, as a duration from the last renewal | The leader | How long a deposed master still answers |
+| The boot clock: its bound of a stamped master time | The worker | `start_by_ms`, and the master-time half of the `cleanup_anywhere` cutoff |
+| Its own timer | The worker | A stream silent for a lease, the epoch fence, the receipt half of the cutoff |
+| The wall clock | The leader | Schedules, set-aside, a sensor's `max_wait`, the script-root grace, the skew warning |
+| The database clock | The database | When a standby may take the lease |
 
 `heard_sequence` is the latest heartbeat this stream has shown the master, and `0` is the
 worker's `Register`. `wall_ms` is there for people. `timeline` is this master process's own;
-another master's times are a different timeline. A deadline in the live list is a master
+another master's times are a different timeline. A deadline of the first row is a master
 time on that timeline.
 
 ## How master time limits a worker
