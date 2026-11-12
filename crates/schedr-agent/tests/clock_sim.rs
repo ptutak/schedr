@@ -394,6 +394,53 @@ fn an_assignment_whose_worker_cant_report_isnt_started_again_beside_it() {
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
 
+#[test]
+fn attempts_end_after_lags_drops_and_a_takeover() {
+    // The Stress workflow's simulator (2026-11-12, d8b6be3): attempts and runs still open once
+    // the faults were over.
+    use master::Fault::{Drop, Lag, Master};
+    let s = master::Scenario {
+        timings: master::Timings {
+            lease: 6_000,
+            cancel_grace: 3_000,
+            move_wait: 1_000,
+            takeover_wait: 2_000,
+        },
+        ppm: [0, 0],
+        seed: 6_472_495_785_907_584_957,
+        faults: vec![
+            (
+                5_336,
+                Lag {
+                    worker: 0,
+                    len: 12_239,
+                    up: 2_510,
+                    down: 7_776,
+                },
+            ),
+            (
+                9_653,
+                Lag {
+                    worker: 1,
+                    len: 27_448,
+                    up: 3_789,
+                    down: 7_282,
+                },
+            ),
+            (16_260, Drop { worker: 1 }),
+            (
+                47_651,
+                Master {
+                    deposed: 1_656,
+                    gap: 4_921,
+                },
+            ),
+            (51_282, Drop { worker: 0 }),
+        ],
+    };
+    assert_eq!(master::simulate(&s, None), Ok(()));
+}
+
 proptest! {
     #![proptest_config(master_config())]
 

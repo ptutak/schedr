@@ -883,7 +883,11 @@ impl Sim {
                 if let Some(sid) = self.instances[inst].stream() {
                     self.worker_end(inst, sid);
                     let worker = self.instances[inst].worker;
-                    self.master_end(worker, sid).await;
+                    // The master sees the end after what the stream sent before it, one due
+                    // this millisecond too: a `Register` on its way is answered, then ended
+                    // (else it stayed live).
+                    let last = self.fifo.get(&(sid, true)).copied().unwrap_or(0);
+                    self.at(last.max(self.now), Event::MasterSeesEnd(worker, sid));
                 }
             }
             Event::Fault(fault) => self.fault(&fault),

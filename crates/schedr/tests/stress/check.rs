@@ -418,7 +418,8 @@ struct CleanupRun {
 }
 
 /// What the tasks' and their cleanups' marks say is wrong (PLAN.md M4.8z): a cleanup that
-/// started while its try still ran; a try's cleanup run to its end more than once, unless the
+/// started while its try still ran (a try with no mark never ran: its work comes after its
+/// `start` mark, decision 460); a try's cleanup run to its end more than once, unless the
 /// earlier run's worker was in trouble then (decision 255: a cleanup under way when the master
 /// goes is left running, and the master moves it); and a try whose cleanup the database says
 /// ran (`ok`) without a mark of it ending. `seen` holds when each task process was last seen
@@ -484,14 +485,18 @@ pub fn cleanup_problems(
     let mut problems = Vec::new();
     for (key, runs) in &cleanups {
         let name = format!("{}/{} try {}", key.0, key.1, key.2);
+        // A try with no mark never ran (sent to a worker cut off, which the master lost
+        // not knowing, so it moved the cleanup as for one that may have run, decision 460):
+        // nothing for its cleanup to overlap. The database's end is no help there: a moved
+        // cleanup's attempt ends with the cleanup.
         let task_end = tasks
             .get(key)
-            .and_then(|(_, end)| *end)
-            .or_else(|| ended.get(key).copied());
+            .map(|(_, end)| end.or_else(|| ended.get(key).copied()));
         for run in runs.values() {
             match task_end {
-                Some(end) if end <= run.start => {}
-                end => problems.push(format!(
+                None => {}
+                Some(Some(end)) if end <= run.start => {}
+                Some(end) => problems.push(format!(
                     "{name}: its cleanup started on {} at {} while the try still ran (ended \
                      {end:?})",
                     run.worker, run.start
