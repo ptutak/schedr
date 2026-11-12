@@ -12,5 +12,5 @@ deposed master may still lead (decision 444).
 history = "archive/PROJECT.md#D307"
 step = "B168"
 also = ["workers"]
-checked = 2026-11-11
+checked = 2026-11-12
 code = ["crates/schedr-agent/src/agent.rs::reconnect_cap"]

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D168"
 step = "M4.6b"
 also = ["task-context"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/agent/tests.rs", "crates/schedr-agent/src/secrets.rs::failed_kind"]
-checked = 2026-11-11
+checked = 2026-11-12

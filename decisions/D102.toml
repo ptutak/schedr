@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D102"
 step = "M4.3e"
 also = ["task-processes"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/scan.rs::capture"]
-checked = 2026-11-11
+checked = 2026-11-12

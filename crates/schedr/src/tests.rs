@@ -118,6 +118,36 @@ fn db_migrate_and_status_work_against_the_configured_database() {
     );
 }
 
+/// B236: an earlier schedr's database: `db migrate` says a fresh one is needed, not sqlx's
+/// "previously applied but has been modified", and `db status` says why.
+#[test]
+fn db_migrate_and_status_name_an_earlier_schedrs_database() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let url = format!("sqlite://{}", dir.path().join("schedr.db").display());
+    let env = [("SCHEDR_CONFIG__DATABASE__URL", url.as_str())];
+    assert_eq!(schedr(&["db", "migrate"], &env, &[]).code, 0);
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::raw_sql("UPDATE _sqlx_migrations SET checksum = x'00'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    });
+    let result = schedr(&["db", "migrate"], &env, &[]);
+    assert_eq!(result.code, 1, "{}", result.out);
+    assert!(
+        result.err.contains("needs a fresh database"),
+        "{}",
+        result.err
+    );
+    let result = schedr(&["db", "status"], &env, &[]);
+    assert!(
+        result.out.contains("created by an earlier schedr"),
+        "{}",
+        result.out
+    );
+}
+
 #[test]
 fn db_migrate_refuses_while_a_master_holds_the_lease() {
     // Migrating under a running master (or a second migration) is ruled out by the master's

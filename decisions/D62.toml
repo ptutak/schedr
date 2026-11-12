@@ -11,5 +11,5 @@ An oversized file is uploaded as `ParseResultTooLarge`; uploads run independentl
 history = "archive/PROJECT.md#D62"
 step = "M4.1e"
 also = ["code-delivery"]
-checked = 2026-11-11
+checked = 2026-11-12
 code = ["crates/schedr-agent/src/agent.rs::fitted_file", "crates/schedr-model/src/runner.rs::PARSE_RESULT_TOO_LARGE_EXCEPTION"]

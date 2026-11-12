@@ -1105,6 +1105,10 @@ pub struct Agent<E> {
     reported: BTreeMap<String, String>,
     /// The parse jobs running, by the hash they parse (their copy is kept meanwhile).
     parsing: BTreeMap<String, usize>,
+    /// The roots and hashes being parsed: a job for one of them sent again (the master gives a
+    /// worker connecting again the jobs it held, B235) isn't started twice; the running parse
+    /// answers it, the master matching a result by root and hash.
+    parses_running: BTreeSet<(String, String)>,
     /// Held by the connections job running (decision 199: one at a time).
     connection_jobs: Arc<tokio::sync::Mutex<()>>,
     done_tx: mpsc::UnboundedSender<Done>,
@@ -1244,6 +1248,7 @@ impl<E: Executor> Agent<E> {
             uses: BTreeMap::new(),
             reported: BTreeMap::new(),
             parsing: BTreeMap::new(),
+            parses_running: BTreeSet::new(),
             connection_jobs: Arc::new(tokio::sync::Mutex::new(())),
             done_tx,
             done_rx,
@@ -3494,6 +3499,13 @@ impl<E: Executor> Agent<E> {
         let (Some(snapshot), Some(code)) = (watcher.snapshot(), watcher.code_dir()) else {
             return;
         };
+        if !self
+            .parses_running
+            .insert((root.root.clone(), root.content_hash.clone()))
+        {
+            tracing::debug!(root = root.root.as_str(), "parse job already running");
+            return;
+        }
         // The copy of the code that hash is of (decision 102), not the configured path, which
         // git-sync may have moved on (B58).
         let mut files = snapshot.python_files();
@@ -3727,6 +3739,8 @@ impl<E: Executor> Agent<E> {
                 copies,
                 files,
             } => {
+                self.parses_running
+                    .remove(&(root.root.clone(), root.content_hash.clone()));
                 for copy in copies {
                     if let Some(count) = self.parsing.get_mut(&copy) {
                         *count -= 1;

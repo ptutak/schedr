@@ -1593,6 +1593,8 @@ impl MasterCore {
     ) -> Result<Vec<Outgoing>, CoreError> {
         let worker_id = register.worker_id.as_str();
         let mut outgoing = Vec::new();
+        // Before anything hands jobs out, so one going back to it goes once (B235).
+        let released = self.discovery.release_jobs(worker_id);
         self.dispatcher
             .set_worker_version(worker_id, register.schedr_version.parse().ok());
         // Drained for maintenance stays drained, whatever restarted (until resumed).
@@ -1627,6 +1629,8 @@ impl MasterCore {
             .collect();
         let jobs = self.discovery.registered(worker_id, keys, now).await?;
         outgoing.extend(jobs.into_iter().map(assign_parse));
+        let handed = self.discovery.hand_out(&released, now);
+        outgoing.extend(handed.into_iter().map(assign_parse));
         self.sync_code();
         Ok(outgoing)
     }

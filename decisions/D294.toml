@@ -13,4 +13,4 @@ step = "M4.9b"
 unverified = ["scheduling keys are updated from the declaration"]
 also = ["code-delivery"]
 code = ["crates/schedr-agent/src/jobs.rs", "crates/schedr-agent/src/agent.rs::set_uses", "crates/schedr-agent/src/agent.rs::report_changes"]
-checked = 2026-11-11
+checked = 2026-11-12

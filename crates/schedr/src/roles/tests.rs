@@ -269,7 +269,33 @@ async fn a_webserver_waits_for_its_schema_to_be_migrated() {
     tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .expect("done once migrated")
+        .unwrap()
         .unwrap();
+}
+
+/// B236: an earlier schedr's schema is no migration away: the webserver stops, saying so.
+#[tokio::test]
+async fn a_webserver_stops_on_an_earlier_schedrs_schema() {
+    let tmp = TempDir::new().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        tmp.path().join("schedr.db").display()
+    );
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::raw_sql("UPDATE _sqlx_migrations SET checksum = x'00'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let waited = tokio::time::timeout(
+        Duration::from_secs(5),
+        wait_for_schema(&db, "webserver", Duration::from_millis(10)),
+    )
+    .await
+    .expect("not waited for");
+    let error = waited.unwrap_err().to_string();
+    assert!(error.contains("needs a fresh database"), "{error}");
 }
 
 #[tokio::test]

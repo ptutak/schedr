@@ -12,4 +12,4 @@ people, never a deadline (B232). Not chosen: leaving B232 for later.
 history = "JOURNAL.md#D445"
 step = "M4B.0"
 code = ["crates/schedr-agent/src/master_time.rs::wall_skew", "crates/schedr-agent/src/agent.rs::heard_master"]
-checked = 2026-11-11
+checked = 2026-11-12

@@ -218,3 +218,47 @@ fn a_timed_out_retry_skips_the_worker_that_failed_too() {
     let [next] = jobs.expire(at(30 + timeout)).try_into().unwrap();
     assert_eq!(next.worker_id, "c");
 }
+
+/// B235: a released job goes back to its worker when it reports the hash again, keeps no mark
+/// of a retry (its first transient failure waits the first delay), and is handed to another
+/// candidate when the worker doesn't take it back.
+#[test]
+fn a_released_job_goes_back_once_and_is_no_retry() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    let first = jobs.request(key("h1"), "w1", at(0)).unwrap();
+    assert_eq!(jobs.release("w1"), [key("h1")]);
+    let again = jobs.request(key("h1"), "w1", at(5)).unwrap();
+    assert_eq!(again.job_id, first.job_id);
+    assert_eq!(jobs.hand_out(&[key("h1")], at(5)), []);
+    jobs.retry(key("h1"), ["w1".to_owned()].into(), Some("w1"), at(10));
+    assert_eq!(jobs.expire(at(39)), []);
+    assert_eq!(jobs.expire(at(40)).len(), 1);
+}
+
+#[test]
+fn a_released_job_nobody_took_back_goes_to_another_candidate() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.request(key("h1"), "w1", at(0)).unwrap();
+    assert_eq!(jobs.request(key("h1"), "w2", at(0)), None);
+    let released = jobs.release("w1");
+    // w1 now reports other code.
+    jobs.moved_away(&key("h1"), "w1", at(1));
+    let [next] = jobs.hand_out(&released, at(1)).try_into().unwrap();
+    assert_eq!(next.worker_id, "w2");
+}
+
+#[test]
+fn a_released_first_parse_nobody_reports_any_more_is_dropped() {
+    let mut jobs = ParseJobs::new(PARSE_JOB_TIMEOUT);
+    jobs.request(key("h1"), "w1", at(0)).unwrap();
+    let released = jobs.release("w1");
+    jobs.moved_away(&key("h1"), "w1", at(1));
+    assert_eq!(jobs.hand_out(&released, at(1)), []);
+    assert!(jobs.is_empty());
+    // Lost instead: the same.
+    jobs.request(key("h2"), "w1", at(2)).unwrap();
+    let released = jobs.release("w1");
+    assert_eq!(jobs.worker_lost("w1", at(3)), []);
+    assert_eq!(jobs.hand_out(&released, at(3)), []);
+    assert!(jobs.is_empty());
+}

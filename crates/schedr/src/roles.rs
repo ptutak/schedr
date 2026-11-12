@@ -1228,16 +1228,17 @@ pub const SCHEMA_RETRY: Duration = Duration::from_secs(5);
 /// it waits for whenever that changes (the database unreachable, then a schema to migrate, …;
 /// the master, or `schedr db migrate`, migrates it), so a webserver started before the
 /// migration serves once it is done instead of failing.
-pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) {
+///
+/// # Errors
+///
+/// [`AppError::BadArgument`] for an earlier schedr's schema, which no migration makes usable.
+pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) -> Result<(), AppError> {
     let mut said = String::new();
     loop {
         let (waiting, error) = match db.schema_status().await {
-            Ok(status) if status.is_usable() => return,
-            // An earlier schedr's schema is no migration away: say it louder.
-            Ok(status) => (
-                describe_status(&status),
-                matches!(status, SchemaStatus::Modified { .. }),
-            ),
+            Ok(status) if status.is_usable() => return Ok(()),
+            Ok(status @ SchemaStatus::Modified { .. }) => return Err(modified(&status)),
+            Ok(status) => (describe_status(&status), false),
             Err(error) => (format!("unreadable ({error})"), true),
         };
         if waiting != said {
@@ -1255,6 +1256,14 @@ pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) {
         }
         tokio::time::sleep(retry).await;
     }
+}
+
+/// The error for an earlier schedr's schema (B236), which no migration makes usable.
+fn modified(status: &SchemaStatus) -> AppError {
+    AppError::BadArgument(format!(
+        "the database schema is {}",
+        describe_status(status)
+    ))
 }
 
 /// The warning for the REST API listening on `address` beyond loopback: it has no
@@ -1447,10 +1456,7 @@ pub async fn lead(
         })));
     }
     if let SchemaStatus::Modified { .. } = status {
-        return Err(AppError::BadArgument(format!(
-            "the database schema is {}",
-            describe_status(&status)
-        )));
+        return Err(modified(&status));
     }
     if !migrate {
         return Err(AppError::BadArgument(format!(
@@ -1541,6 +1547,11 @@ pub async fn migrate_holding(
     db: &Database,
     change_notifications: bool,
 ) -> Result<Leadership, AppError> {
+    // sqlx would refuse it too, without saying what to do (B236).
+    if let Ok(status @ SchemaStatus::Modified { .. }) = db.schema_status().await {
+        lead.release().await;
+        return Err(modified(&status));
+    }
     let applied = async {
         while_holding(&mut lead, async {
             db.migrate_as_lease_holder().await.map_err(AppError::from)
@@ -1789,8 +1800,9 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
     .await?;
     let db = connect_database(config, "webserver").await?;
     let waiting = wait_for_schema(&db, "webserver", config.timings.schema_retry);
-    if until_stopped(waiting, stop.clone()).await.is_none() {
-        return Ok(());
+    match until_stopped(waiting, stop.clone()).await {
+        None => return Ok(()),
+        Some(waited) => waited?,
     }
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;

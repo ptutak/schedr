@@ -212,19 +212,41 @@ impl ParseJobs {
         }
     }
 
-    /// A worker opened a new stream: the agent drops the jobs of its old one (their results
-    /// can't be sent), so none is its any more. Its reports on the new stream ask for them
-    /// again (B235: they waited for the timeout).
-    /// Due at once, as in [`Self::moved_away`]: if the worker doesn't take it back (drained,
-    /// or not reporting its hash any more), the next round hands it to another candidate.
-    pub fn stream_replaced(&mut self, worker_id: &str, now: Timestamp) {
-        let now = (self.steady)(now);
-        for job in self.jobs.values_mut() {
+    /// A worker opened a new stream: the agent drops a result its old one can't carry, so
+    /// none of its jobs is its any more (B235: they waited for the timeout). Returns their
+    /// keys, for [`Self::hand_out`] once its reports on the new stream are in.
+    pub fn release(&mut self, worker_id: &str) -> Vec<ParseKey> {
+        let mut released = Vec::new();
+        for (key, job) in &mut self.jobs {
             if job.worker.as_ref().is_some_and(|(w, _)| w == worker_id) {
                 job.worker = None;
-                job.not_before = Some(job.not_before.map_or(now, |at| at.min(now)));
+                released.push(key.clone());
             }
         }
+        released
+    }
+
+    /// Released jobs no report took back (the worker drained, or reporting other code): each
+    /// goes to its next candidate; a first parse nobody reports any more is dropped.
+    pub fn hand_out(&mut self, keys: &[ParseKey], now: Timestamp) -> Vec<ParseAssignment> {
+        let now = (self.steady)(now);
+        let mut assignments = Vec::new();
+        for key in keys {
+            let Some(job) = self.jobs.get_mut(key) else {
+                continue;
+            };
+            if job.worker.is_some() || job.not_before.is_some_and(|at| at > now) {
+                continue;
+            }
+            match next_candidate(job) {
+                Some(next) => assignments.push(assign(key, job, next, now)),
+                None if job.not_before.is_none() => {
+                    self.jobs.remove(key);
+                }
+                None => {}
+            }
+        }
+        assignments
     }
 
     /// Whether `key` has a job (a retry included).

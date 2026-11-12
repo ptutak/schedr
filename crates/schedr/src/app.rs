@@ -111,7 +111,7 @@ pub fn describe_status(status: &SchemaStatus) -> String {
             )
         }
         SchemaStatus::Modified { changed } => format!(
-            "created by an earlier schedr: {} migration(s) differ from this one's; schedr 1.0 needs a fresh database (see the CHANGELOG)",
+            "created by an earlier schedr: {} migration(s) differ from this one's, so it needs a fresh database (see the CHANGELOG)",
             changed.len()
         ),
         SchemaStatus::Newer { unknown } => format!(

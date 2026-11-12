@@ -15,7 +15,7 @@ every key. Workers find DAG roots through `SCHEDR_DAG_PATH` and script roots thr
 | Role | Replicas | Needs |
 |---|---|---|
 | `schedr master` | **exactly one** | `[database] url`, a migrated schema (or `--migrate`); its gRPC port behind a Service the workers reach |
-| `schedr webserver` | one or more | `[database] url` (it waits for the schema to be migrated); its REST port behind a Service |
+| `schedr webserver` | one or more | `[database] url` (it waits for the schema to be migrated, and stops on an earlier schedr's database, which needs a fresh one); its REST port behind a Service |
 | `schedr worker` | as many as the load needs | `[worker] master_url`, the DAG code (e.g. a git-sync sidecar), a disk for its journal and logs; a StatefulSet with a headless Service, each pod's `log_address` set to its DNS name |
 | `schedr ui` | one | `[ui] deployments` (each webserver's URL); no database. Listens on `[ui] port` (8082). The chart's distributed mode deploys it (`ui.enabled`); elsewhere, [run it yourself](#running-schedr-ui) |
 

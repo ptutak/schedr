@@ -79,7 +79,7 @@ fn invalid_configuration_is_a_config_error() {
 #[case(SchemaStatus::UpToDate, "up to date")]
 #[case(SchemaStatus::Uninitialized, "uninitialized: run `schedr db migrate`")]
 #[case(SchemaStatus::Outdated { missing: vec![2, 3] }, "outdated: 2 migration(s) missing; run `schedr db migrate`")]
-#[case(SchemaStatus::Modified { changed: vec![1] }, "created by an earlier schedr: 1 migration(s) differ from this one's; schedr 1.0 needs a fresh database (see the CHANGELOG)")]
+#[case(SchemaStatus::Modified { changed: vec![1] }, "created by an earlier schedr: 1 migration(s) differ from this one's, so it needs a fresh database (see the CHANGELOG)")]
 #[case(SchemaStatus::Newer { unknown: vec![9] }, "newer than this schedr (1 unknown migration(s)); usable within the same major version")]
 fn describes_every_schema_status(#[case] status: SchemaStatus, #[case] expected: &str) {
     assert_eq!(describe_status(&status), expected);

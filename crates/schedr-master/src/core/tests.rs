@@ -1784,6 +1784,28 @@ async fn a_worker_registering_again_gets_the_parse_job_it_held_again() {
     );
 }
 
+/// B235: a worker that said it drains, its stream gone before it deregistered, registering
+/// again gets its job once (resuming and registering each handed it out).
+#[tokio::test]
+async fn a_worker_that_said_it_drains_registering_again_gets_its_job_once() {
+    let mut core = core().await;
+    core.register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let draining = worker_message::Message::Draining(pb::Draining {});
+    core.handle("w1", draining, ts(NOW)).await.unwrap();
+    core.disconnected("w1", later(1)).await.unwrap();
+    let (_, again) = core
+        .register(&register("w1", "i1", vec![]), later(1))
+        .await
+        .unwrap();
+    let assigned = again
+        .iter()
+        .filter(|o| matches!(message(o), master_message::Message::AssignParse(_)))
+        .count();
+    assert_eq!(assigned, 1, "{again:?}");
+}
+
 #[tokio::test]
 async fn a_drained_worker_stays_drained_when_it_registers_again() {
     let mut core = with_dag().await;

@@ -73,8 +73,8 @@ problem prefixed by the job name, for example ``job `report_daily`:``. See [Plai
 
 A parse job that hasn't finished after `[master] parse_job_timeout` (10 minutes by default),
 or whose worker is lost, goes to the next
-worker that reported the same hash. A worker that connects again gets the jobs it held
-again: their results went with its old connection. Parse jobs live only in the master's memory. After a
+worker that reported the same hash. A worker that connects again gets back the jobs it held,
+since a result finished while it was away is dropped; one still running answers instead of a second parse. Parse jobs live only in the master's memory. After a
 master restart, workers report their hashes again and the jobs are created again. A
 stored parse is parsed again only when a file of it failed transiently
 ([Parsed again](#parsed-again)).

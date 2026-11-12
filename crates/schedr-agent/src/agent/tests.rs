@@ -450,6 +450,8 @@ struct Scripted {
     received: Arc<Mutex<Vec<pb::WorkerMessage>>>,
     /// Also assign a parse of each root `Register` reports, at the hash it reports.
     parse_registered: bool,
+    /// Each of those parses assigned twice, as to a worker connecting again (B235).
+    parse_twice: bool,
     /// How long an upload takes to answer.
     upload_delay: Duration,
     /// The heartbeats that arrived while each upload waited.
@@ -518,11 +520,13 @@ impl pb::master_server::Master for Scripted {
             let first = inbound.message().await?.expect("a register first");
             if let Some(worker_message::Message::Register(register)) = &first.message {
                 for root in &register.roots {
-                    let job = master_message::Message::AssignParse(pb::AssignParse {
-                        parse_job_id: format!("job-{}", root.root),
-                        root: Some(root.clone()),
-                    });
-                    sender.send(Ok(stamp(to_worker(job)))).await.unwrap();
+                    for _ in 0..if self.parse_twice { 2 } else { 1 } {
+                        let job = master_message::Message::AssignParse(pb::AssignParse {
+                            parse_job_id: format!("job-{}", root.root),
+                            root: Some(root.clone()),
+                        });
+                        sender.send(Ok(stamp(to_worker(job)))).await.unwrap();
+                    }
                 }
             }
             self.received.lock().unwrap().push(first);
@@ -1770,6 +1774,36 @@ async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
     // A 500 ms upload at a 20 ms heartbeat: about 25 expected, at least a few under load.
     let counts = during.lock().unwrap().clone();
     assert!(counts[0] >= 5, "heartbeats while uploading: {counts:?}");
+}
+
+/// B235: the master gives a worker connecting again the parse jobs it held; one still running
+/// answers, rather than a second parse of the same code.
+#[tokio::test]
+async fn a_parse_job_sent_again_while_it_runs_is_parsed_once() {
+    let master = Scripted {
+        parse_registered: true,
+        parse_twice: true,
+        ..Scripted::default()
+    };
+    let uploads = Arc::clone(&master.uploads);
+    let seen = Arc::clone(&master.uploads);
+    let since = Arc::new(Mutex::new(None::<Instant>));
+    against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        // A second parse would upload well within a second of the first.
+        move |_| {
+            if seen.lock().unwrap().is_empty() {
+                return false;
+            }
+            let mut since = since.lock().unwrap();
+            since.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(1)
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(uploads.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D122"
 step = "M4.4b"
 also = ["ui-cli", "deployment"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-agent/src/agent.rs", "crates/schedr-config/src/masked.rs::masked"]
-checked = 2026-11-11
+checked = 2026-11-12

@@ -212,6 +212,16 @@ impl Discovery {
         self.jobs.worker_lost(worker_id, now)
     }
 
+    /// A worker registers anew: its parse jobs are released ([`ParseJobs::release`]).
+    pub fn release_jobs(&mut self, worker_id: &str) -> Vec<ParseKey> {
+        self.jobs.release(worker_id)
+    }
+
+    /// The released jobs its registration didn't take back ([`ParseJobs::hand_out`]).
+    pub fn hand_out(&mut self, keys: &[ParseKey], now: Timestamp) -> Vec<ParseAssignment> {
+        self.jobs.hand_out(keys, now)
+    }
+
     /// A worker takes parse jobs again (resumed, or registered anew): the hashes it reports
     /// that have no parse yet are requested again. Returns the jobs it gets.
     ///
@@ -307,7 +317,6 @@ impl Discovery {
         keys: Vec<ParseKey>,
         now: Timestamp,
     ) -> Result<Vec<ParseAssignment>, DbError> {
-        self.jobs.stream_replaced(worker_id, now);
         let previous = self.reports.remove(worker_id).unwrap_or_default();
         let mut roots: BTreeSet<String> = previous.keys().cloned().collect();
         // A root it no longer has: it can't parse its code any more (B97).

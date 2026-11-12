@@ -14,4 +14,4 @@ only; leaving the cutoff on receipt.
 history = "JOURNAL.md#D445"
 step = "M4B.0"
 code = ["crates/schedr-agent/src/agent.rs::cut_off_at", "crates/schedr-agent/src/master_time.rs::cutoff_in"]
-checked = 2026-11-11
+checked = 2026-11-12
