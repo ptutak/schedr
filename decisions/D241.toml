@@ -11,5 +11,5 @@ Migration-connection timings remain fixed, without `query_timeout`; client,
 '''
 history = "archive/PROJECT.md#D241"
 step = "M4.8u"
-checked = 2026-11-11
+checked = 2026-11-12
 code = ["crates/schedr-config/src/config.rs::gauge_refresh", "crates/schedr-config/src/config.rs::loop_stall_timeout"]

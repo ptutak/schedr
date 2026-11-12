@@ -159,12 +159,13 @@ REST API and the configuration keep accepting what they accept now.
 
 ### Fixed
 
-Every bug known at the release, but the DAG page layout's (B38, B39: a redesign, in M6)
-and a test that may be too tight under load (B237, suspected).
+Every bug known at the release, but the DAG page layout's (B38, B39: a redesign, in M6).
 Among them: a worker lost just as an assignment reached it no longer has it
 queued again at once when its task has `cleanup_anywhere` (B234, decision 455).
 A worker connecting again gets back the parse jobs it held, instead of the DAG waiting
 `parse_job_timeout` (B235); a database of 0.1 is refused rather than read as current (B236).
+A draining worker whose master acknowledges its last results late still deregisters and
+exits within its grace period: the wait ends half the report period before it (B237).
 
 ## 0.1.0
 

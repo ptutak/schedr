@@ -141,7 +141,8 @@ pub struct Timings {
     pub deregister_wait: Duration,
     /// How often a drain looks at what is left.
     pub drain_tick: Duration,
-    /// How long a drained worker waits for the master to acknowledge its last results.
+    /// How long a drained worker waits for the master to acknowledge its last results; never
+    /// past half the report period before the grace period ends, left to deregister and exit.
     pub drain_ack_wait: Duration,
     /// How often a stopped task's process group is looked at until it is gone.
     pub stop_poll: Duration,

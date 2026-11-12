@@ -98,13 +98,14 @@ fn periods_of(grace: u64, terminate_period: u64, report_period: u64) -> DrainPer
 fn waiting_for_acknowledgements_never_runs_past_the_end_of_the_grace_period() {
     let start = Instant::now();
     let mut drain = Drain::new(start, periods(30));
-    // Interrupted at 25 s, the results sent at 29 s: 1 s is left, not ACK_WAIT.
+    // Interrupted at 25 s, the results sent at 28 s: 1 s is left, not ACK_WAIT, and the last
+    // second (half the 2 s report period) is for deregistering and exiting.
     assert_eq!(
         drain.step(start + secs(25), 1, 0, true),
         DrainStep::Interrupt
     );
-    assert_eq!(drain.step(start + secs(29), 0, 1, true), DrainStep::Wait);
-    assert_eq!(drain.step(start + secs(30), 0, 1, true), DrainStep::Finish);
+    assert_eq!(drain.step(start + secs(28), 0, 1, true), DrainStep::Wait);
+    assert_eq!(drain.step(start + secs(29), 0, 1, true), DrainStep::Finish);
 }
 
 #[test]
@@ -142,4 +143,20 @@ fn a_cleanup_fits_in_what_a_drain_leaves_of_its_grace_period() {
         ..drain
     };
     assert_eq!(chart.default_cleanup_warning(secs(300)), None);
+}
+
+/// B237: with an 8 s grace (SIGTERM at 3 s, SIGKILL at 6 s), a master slow to acknowledge kept
+/// the drain waiting to the grace's very end, so the worker deregistered and exited after it:
+/// a pod's kill came first. The wait ends half the report period before, time to exit.
+#[test]
+fn waiting_for_acknowledgements_leaves_time_to_deregister_and_exit() {
+    let start = Instant::now();
+    let mut drain = Drain::new(start, periods(8));
+    assert_eq!(
+        drain.step(start + secs(3), 1, 0, true),
+        DrainStep::Interrupt
+    );
+    assert_eq!(drain.step(start + secs(6), 0, 1, true), DrainStep::Wait);
+    assert_eq!(drain.step(start + secs(7), 0, 1, true), DrainStep::Finish);
+    assert_eq!(drain.finish_by(), start + secs(7));
 }

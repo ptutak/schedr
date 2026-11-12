@@ -6,9 +6,10 @@
 //!   SIGKILL after the terminate period, and ends `interrupted` (run again without using a
 //!   retry). The report period is left for the results to reach the master before the pod is
 //!   killed (B8). A second shutdown request moves the deadline to now.
-//! - Once nothing runs, the agent waits (at most [`ACK_WAIT`], never past the end of the grace
-//!   period) for the master to acknowledge the last results, then deregisters and ends;
-//!   without a master it ends at once (the journal keeps the results for the next start).
+//! - Once nothing runs, the agent waits (at most [`ACK_WAIT`], never past half the report
+//!   period before the end of the grace period, so it still deregisters and exits within it,
+//!   B237) for the master to acknowledge the last results, then deregisters and ends; without
+//!   a master it ends at once (the journal keeps the results for the next start).
 
 use std::time::{Duration, Instant};
 
@@ -86,6 +87,7 @@ pub enum DrainStep {
 pub struct Drain {
     deadline: Instant,
     end: Instant,
+    finish_by: Instant,
     interrupted: bool,
     idle_since: Option<Instant>,
     ack_wait: Duration,
@@ -99,6 +101,7 @@ impl Drain {
         Self {
             deadline: now + periods.grace.saturating_sub(stop_and_report),
             end: now + periods.grace,
+            finish_by: now + periods.grace.saturating_sub(periods.report_period / 2),
             interrupted: false,
             idle_since: None,
             ack_wait: periods.ack_wait,
@@ -109,6 +112,14 @@ impl Drain {
     #[must_use]
     pub const fn end(&self) -> Instant {
         self.end
+    }
+
+    /// When waiting for the master ends at the latest: half the report period before the end,
+    /// left for deregistering and exiting (B237: a wait to the very end left the exit after it,
+    /// where a pod's kill came first).
+    #[must_use]
+    pub const fn finish_by(&self) -> Instant {
+        self.finish_by
     }
 
     /// Whether an attempt whose cleanup needs `room` must be stopped now, leaving that room
@@ -145,7 +156,7 @@ impl Drain {
             return DrainStep::Finish;
         }
         let idle = *self.idle_since.get_or_insert(now);
-        if now.duration_since(idle) >= self.ack_wait || now >= self.end {
+        if now.duration_since(idle) >= self.ack_wait || now >= self.finish_by {
             DrainStep::Finish
         } else {
             DrainStep::Wait

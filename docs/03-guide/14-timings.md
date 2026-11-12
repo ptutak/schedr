@@ -139,7 +139,7 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__WORKER__ALIVE_INTERVAL` | 5 s | How often the agent's loop turns at least, even when quiet; it must stay shorter than the loop stall timeout, or a quiet agent looks stuck. |
 | `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` | 5 s | How long a stopping worker waits for the master to accept its deregistration. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_TICK` | 100 ms | How often a drain checks what is left. |
-| `SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT` | 5 s | How long a drained worker waits for the master to acknowledge its last results. |
+| `SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT` | 5 s | How long a drained worker waits for the master to acknowledge its last results; never past half the report period before the grace period ends, left to deregister and exit. |
 | `SCHEDR_HIDDEN__WORKER__STOP_POLL` | 100 ms | How often a stopped task's process group is checked until it is gone. |
 | `SCHEDR_HIDDEN__WORKER__CONNECTION_JOB_CANCEL_GRACE` | 5 s | Time a connection test's process gets from SIGTERM to SIGKILL. |
 | `SCHEDR_HIDDEN__WORKER__VAULT_MIN_RENEW_WAIT` | 1 s | Minimum wait before a Vault token renewal. |

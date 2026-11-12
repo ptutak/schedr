@@ -53,26 +53,8 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B237: a drained worker's exit can miss an 8 s grace period under load (a test flake) (Suspected) | 2 | low | possible | tests |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-
-## B237: a drained worker's exit can miss an 8 s grace period under load (a test flake) (Suspected)
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): the drain test's worker exits after its 8 s grace under a loaded full check.
-- **Found:** 2026-11-12, in v1's full `make check` (the first after a `cargo clean`, so a
-  loaded machine; 0.6 s of I/O stall): `a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_period`
-  failed at `roles.rs:1171`, "the worker didn't stop within the grace period: None". The
-  run itself was right: the attempt ended `interrupted` and its retry succeeded. Only the
-  worker process exited after `terminate_within`'s 8 s. Alone it passed 5/5 in about 11.6 s
-  (26.9 s in the failing run). Its first failure seen.
-- **Suspected:** load. With an 8 s grace the worker sends SIGTERM at 3 s, SIGKILL at 6 s
-  (`drain_terminate_period`), and keeps 2 s to report: little room for a slow journal flush
-  or stream close. Not shown: whether the exit was slow in the agent or in the test's
-  waiting. A 30 s production grace has far more room.
-- **Confirm:** time the worker's shutdown steps in the test's log on a loaded machine (the
-  drain's report, the stream's close, the process's exit), or run the test under `stress`.
-- **A fix:** if load, a test grace a few seconds longer than 8 s; if a slow step, that step.
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 
