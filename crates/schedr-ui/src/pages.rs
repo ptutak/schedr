@@ -53,10 +53,15 @@ pub struct DagRow {
     pub paused: bool,
     /// What starts its runs.
     pub starts: Starts,
+    /// Its trigger's kind, as the UI names it: `Schedule` (cron, every, once), `Run of`,
+    /// `Chained`, `Event`, or `Manual` (none).
+    pub trigger_kind: &'static str,
     /// Its trigger as people write it (`0 3 * * * (Europe/Warsaw)`, `every 1h`, `-`).
     pub schedule: String,
     /// Its tags.
     pub tags: Vec<String>,
+    /// What it does, as its author put it (`description`); empty when unset.
+    pub description: String,
     /// Where it is defined (`root:path`).
     pub location: String,
     /// Whether other files define the same ID.
@@ -677,11 +682,20 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
             Some("cron" | "every" | "once") => Starts::FireTimes,
             Some(_) => Starts::Other,
         },
+        trigger_kind: match dag.trigger.as_ref().and_then(|t| t["kind"].as_str()) {
+            None | Some("none") => "Manual",
+            Some("cron" | "every" | "once") => "Schedule",
+            Some("run_of") => "Run of",
+            Some("chained") => "Chained",
+            Some("event") => "Event",
+            Some(_) => "Other",
+        },
         schedule: dag.trigger.as_ref().map_or_else(
             || "-".to_owned(),
             |t| trigger_text(t, page.zone.as_ref().unwrap_or(&utc)),
         ),
         tags: dag.tags.clone(),
+        description: dag.description.clone().unwrap_or_default(),
         location: dag.location.as_ref().map(location).unwrap_or_default(),
         conflict: dag.conflict.as_ref().is_some_and(|c| !c.is_empty()),
         held: dag.held.as_ref().map(|h| h.reason.clone()),

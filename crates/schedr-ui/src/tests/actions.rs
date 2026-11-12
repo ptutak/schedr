@@ -371,14 +371,7 @@ async fn a_dag_without_a_trigger_has_nothing_to_pause_nor_to_backfill() {
         .insert("/api/v1/dags/sync".to_owned(), (200, sync));
     let app = ui(vec![deployment("etl", manual)]);
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
-    assert_eq!(
-        texts(&html, ".actions > button.action"),
-        ["Trigger", "Pause"]
-    );
-    assert_eq!(
-        attrs(&html, ".actions > button.action[disabled]", "title"),
-        ["It has no trigger: only manual runs, which pausing doesn't stop"]
-    );
+    assert_eq!(texts(&html, ".actions > button.action"), ["Trigger"]);
     assert_eq!(
         attrs(&html, ".actions dialog form", "hx-post"),
         ["/d/etl/dags/sync/trigger"],
@@ -387,6 +380,25 @@ async fn a_dag_without_a_trigger_has_nothing_to_pause_nor_to_backfill() {
     assert_eq!(
         attrs(&html, "table.backfills dialog form", "hx-post"),
         [format!("/d/etl/backfills/{BACKFILL}/cancel")]
+    );
+}
+
+#[tokio::test]
+async fn a_paused_dag_without_a_trigger_has_nothing_to_unpause() {
+    // Paused before new code dropped its trigger, say: unpausing would change nothing.
+    let mut manual = with_backfill();
+    let mut sync = dag("sync", true);
+    sync["trigger"] = json!({"kind": "none"});
+    manual
+        .answers
+        .insert("/api/v1/dags/sync".to_owned(), (200, sync));
+    let app = ui(vec![deployment("etl", manual)]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(texts(&html, ".actions > button.action"), ["Trigger"]);
+    assert_eq!(
+        attrs(&html, ".actions dialog form", "hx-post"),
+        ["/d/etl/dags/sync/trigger"],
+        "no unpause dialog"
     );
 }
 

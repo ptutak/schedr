@@ -95,6 +95,9 @@ h1 { font-size: 22px; margin: 8px 0 16px; }
 h2 { font-size: 17px; margin: 24px 0 8px; }
 .crumbs { margin: 0; color: var(--dim); }
 .description { color: var(--dim); max-width: 70ch; }
+/* A DAG's description in the list: one line, the whole of it in the tooltip. */
+.trigger-kind { font-weight: 600; }
+table.dags .summary { color: var(--dim); font-size: 0.9em; max-width: 50ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty, .dim, .note { color: var(--dim); }
 .note { padding: 0 24px 16px; font-size: 13px; }
 .mono, code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }

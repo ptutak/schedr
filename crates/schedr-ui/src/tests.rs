@@ -165,6 +165,80 @@ fn attrs(html: &str, selector: &str, attr: &str) -> Vec<String> {
         .collect()
 }
 
+/// The Trigger column names each trigger's kind before the trigger itself; a DAG without one
+/// is `Manual`, with nothing after it.
+#[tokio::test]
+async fn the_list_names_each_dags_kind_of_trigger() {
+    let mut scripted = etl();
+    let with = |id: &str, trigger: Value| {
+        let mut dag = dag(id, false);
+        dag["trigger"] = trigger;
+        dag
+    };
+    let dags = [
+        with(
+            "a_every",
+            json!({"kind": "every", "interval_ms": 3_600_000}),
+        ),
+        with(
+            "b_once",
+            json!({"kind": "once", "at": "2026-12-24T22:00:00Z"}),
+        ),
+        with(
+            "c_after",
+            json!({"kind": "run_of", "run_of": {"dag": "etl", "task": "load"}}),
+        ),
+        with("d_chained", json!({"kind": "chained", "by": ["ingest"]})),
+        with(
+            "e_event",
+            json!({"kind": "event", "task": {"id": "listen"}}),
+        ),
+        with("f_manual", json!({"kind": "none"})),
+    ];
+    scripted
+        .answers
+        .insert("/api/v1/dags".to_owned(), (200, json!({"dags": dags})));
+    let app = ui(vec![deployment("etl", scripted)]);
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(
+        texts(&html, "table.dags td.trigger .trigger-kind"),
+        [
+            "Schedule", "Schedule", "Run of", "Chained", "Event", "Manual"
+        ]
+    );
+    assert_eq!(
+        texts(&html, "table.dags td.trigger .mono"),
+        [
+            "every 1h",
+            "once at 2026-12-24 22:00Z",
+            "after etl load",
+            "chained from ingest",
+            "@trigger listen"
+        ]
+    );
+    assert!(texts(&html, "table.dags th").contains(&"Trigger".to_owned()));
+}
+
+/// A DAG's description shows under its ID in the list, a long one cut to a line with the
+/// whole of it in the tooltip; one without shows nothing there.
+#[tokio::test]
+async fn the_list_shows_each_dags_description() {
+    let mut scripted = etl();
+    let mut archive = dag("archive", true);
+    archive["description"] = Value::Null;
+    scripted.answers.insert(
+        "/api/v1/dags".to_owned(),
+        (200, json!({"dags": [archive, dag("sync", false)]})),
+    );
+    let app = ui(vec![deployment("etl", scripted)]);
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(texts(&html, "table.dags .summary"), ["Sync the orders."]);
+    assert_eq!(
+        attrs(&html, "table.dags .summary", "title"),
+        ["Sync the orders."]
+    );
+}
+
 #[tokio::test]
 async fn the_dags_are_listed_by_id_with_their_state_and_schedule() {
     let app = ui(vec![deployment("etl", etl())]);
@@ -179,8 +253,13 @@ async fn the_dags_are_listed_by_id_with_their_state_and_schedule() {
         ["/d/etl/dags/archive", "/d/etl/dags/sync"]
     );
     assert_eq!(texts(&html, "table.dags .badge"), ["paused", "active"]);
+    // The trigger's kind, then the trigger as people write it.
     assert_eq!(
-        texts(&html, "table.dags td.mono:not(.dim)"),
+        texts(&html, "table.dags td.trigger .trigger-kind"),
+        ["Schedule", "Schedule"]
+    );
+    assert_eq!(
+        texts(&html, "table.dags td.trigger .mono"),
         ["0 3 * * * (Europe/Warsaw)", "0 3 * * * (Europe/Warsaw)"]
     );
     // Where each is defined, as the CLI writes it.

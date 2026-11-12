@@ -74,7 +74,13 @@ def which_deployment() -> str:
         return str(values["name"])
 
 
-with Dag("connections_demo"):
+with Dag(
+    "connections_demo",
+    description=(
+        "Opens every kind of connection, from Python and from a command: each deployment "
+        "reads its own database, user, password, key and token from its own secrets."
+    ),
+):
     which_deployment()
     postgres_from_python()
     mysql_from_python()

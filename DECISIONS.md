@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D457 | 2026-11-12 | user | planned (1.0.0) | ui-cli | The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger |
 | D456 | 2026-10-29 | user | rule | development | From 1.0.0 the schema and the protocol change only additively |
 | D455 | 2026-11-12 | claude | built R1.0b | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
 | D454 | 2026-11-11 | user | planned (R1.0c) | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
@@ -911,6 +912,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### ui-cli
 
+- D457: The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger
 - D340: Sensors and resources have their own endpoints
 - D272: The graph shows which tasks a cleanup holds back
 - D262: Show a resource as two caps joined by a rail

@@ -1,0 +1,17 @@
+title = "The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger"
+date = 2026-11-12
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+The DAG list's and the DAG page's Schedule becomes Trigger: the kind (`Schedule` for cron,
+every and once, `Run of`, `Chained`, `Event`, `Manual` for none), then the trigger as the CLI
+writes it, nothing after `Manual`. The list shows a DAG's description under its id, one line,
+all of it on hover. A DAG without a trigger has neither Pause nor Unpause: it has only manual
+runs, which pausing doesn't stop. Not chosen: the API's kind names (`Cron`, `Every`, `RunOf`,
+`None`); a greyed-out button.
+'''
+history = "JOURNAL.md#D457"  # <a id="D457"></a> starts its JOURNAL.md entry
+step = "1.0.0"
+code = ["crates/schedr-ui/src/pages.rs::DagRow", "crates/schedr-ui/templates/dags.html", "crates/schedr-ui/templates/dag.html"]

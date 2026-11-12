@@ -580,3 +580,12 @@ configuration keep what they accept. The protocol's major moving from 0 to 1 ref
 worker under a 1.0 master, which closes B187 (the user, 2026-11-11: "Protocol 1.0"); the lesson
 stays in the rule: a later minor's field an older worker would drop goes only to workers that
 know it.
+
+### <a id="D457"></a>2026-11-12: the UI names a DAG's trigger kind, shows descriptions, and has no Pause for a DAG without a trigger (decision 457)
+
+The user, looking at the UI before 1.0.0. A DAG without a trigger showed a greyed-out Pause,
+but a working Unpause while paused (paused before new code dropped its trigger, say): "the best
+would be - remove those buttons entirely for DAGs without triggers". For the demo and the end
+user, a DAG's `description`, already shown on its page, shows in the list too. And "Schedule"
+became "Trigger", naming the kind, "Schedule is one of it": the user chose the plain names
+(Schedule, Run of, Chained, Event, Manual) over the API's (Cron, Every, Once, RunOf, None).

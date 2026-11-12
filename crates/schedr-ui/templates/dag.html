@@ -14,10 +14,10 @@
   {% if row.fire_times() && row.held.is_none() %}
   {% call confirm::action("Backfill", "Backfill " ~ row.dag_id ~ "?", "A run for each fire time of the range that has no successful, queued or running run, oldest first, after its other runs; they start even while it is paused.", actions ~ "/backfill", "backfill", page.base, backfill_params_html) %}{% endcall %}
   {% endif %}
-  {% if row.paused %}
+  {% if row.manual_only() %}
+  {# No trigger: only manual runs, which pausing doesn't stop, so nothing to pause or unpause. #}
+  {% else if row.paused %}
   {% call confirm::action("Unpause", "Unpause " ~ row.dag_id ~ "?", "Its trigger starts its runs again.", actions ~ "/unpause", "", page.base) %}{% endcall %}
-  {% else if row.manual_only() %}
-  <button type="button" class="action" disabled title="It has no trigger: only manual runs, which pausing doesn't stop">Pause</button>
   {% else %}
   {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "Its trigger starts no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
   {% endif %}
@@ -101,7 +101,7 @@
 {% endif %}
 {% endif %}
 <dl class="facts">
-  <dt>Schedule</dt><dd class="mono">{{ row.schedule }}</dd>
+  <dt>Trigger</dt><dd class="trigger"><span class="trigger-kind">{{ row.trigger_kind }}</span>{% if !row.manual_only() %} <span class="mono">{{ row.schedule }}</span>{% endif %}</dd>
   <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>
   {% if !row.tags.is_empty() %}<dt>Tags</dt><dd>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</dd>{% endif %}
   {% if !limits.is_empty() %}<dt>Limits</dt><dd><ul class="limits">{% for limit in limits %}<li{% if limit.reached %} class="reached"{% endif %}><code>{{ limit.name }}</code> {{ limit.value }} on {{ limit.of }}: {{ limit.running }}{% if limit.reached %} (reached: the rest wait){% endif %}</li>{% endfor %}</ul></dd>{% endif %}
