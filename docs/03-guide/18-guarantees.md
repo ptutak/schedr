@@ -58,8 +58,8 @@ time on that timeline.
 
 ## How master time limits a worker
 
-The worker's bound of a master time falls before that master time. The bound is what the
-timelines below call the worker's side. How it is taken from a stamp is in
+The worker's bound of a master time falls before that master time. That bound is the
+worker's side of the limits below. How it is taken from a stamp is in
 [The master clock](17-master-clock.md#what-master-time-is).
 
 ### A start deadline
@@ -67,17 +67,15 @@ timelines below call the worker's side. How it is taken from a stamp is in
 `start_by_ms` is the worker lease, 60 s, after the master stored the attempt, from the same
 reading the master's expiry keeps.
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master time
-    participant W as Worker bound
-    Note over M: 0 s. The attempt is stored. start_by_ms is 60 s.
-    Note over W: The worker starts only while its bound of those 60 s is more than 20 s ahead.
-    Note over W: The 20 s is two heartbeats, kept so Started can arrive. Otherwise it rejects TOO_LATE and drops the journal entry.
-    Note over M: A Started or Finished already read stays, including one still waiting for the lock.
-    Note over M: Held at 80 s. A round once master time is past 80 s, with none waiting, takes the attempt back.
-    Note over M,W: The bound is earlier than master time, so the last start falls before the take-back.
-```
+| When | Master | Worker |
+|---|---|---|
+| 0 s of master time | Stores the attempt, with `start_by_ms` at 60 s. | |
+| While its bound of those 60 s is more than 20 s ahead | | Starts the task. The 20 s is two heartbeats, kept so `Started` can arrive. |
+| Once it is not | | Rejects `TOO_LATE` and drops the journal entry. |
+| Until 80 s of master time | Holds the attempt. A `Started` or `Finished` already read keeps it, one still waiting for the lock included. | |
+| A round past 80 s of master time, none waiting | Takes the attempt back. | |
+
+The worker's bound is earlier than master time, so its last start falls before the take-back.
 
 The 80 s is the lease plus the same two heartbeats. While that worker may still come back
 with the attempt, the master leaves it out of the take-back. The lease must be at least four
@@ -90,19 +88,16 @@ readings: the last message's arrival, recorded as the bytes are read, and the la
 it has handled. The worker has three limits of its own, and the earliest wins for a
 `cleanup_anywhere` task.
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master time
-    participant R as Worker timer
-    participant B as Worker bound
-    Note over R: The stream ends 60 s after the last master message, or after the stream opened.
-    Note over R: Messages that arrive after that are ignored.
-    Note over B: The master-time cutoff is the bound of the last stamp's master_ms plus 60 s.
-    Note over B: And 60 s less 0.1 % after it sent the last heartbeat the stamp says the master heard.
-    Note over R,B: A cleanup_anywhere task stops at the earliest of the three. Its cleanup waits.
-    Note over M: The worker is still held at 60 s after its last message. A round past that marks it lost.
-    Note over B,M: The master heard that heartbeat no earlier than it was sent, so the stop falls before the loss.
-```
+| The worker's limit | On | When |
+|---|---|---|
+| The stream ends, and messages that arrive later are ignored | its own timer | 60 s after the last master message, or after the stream opened |
+| The master-time cutoff | its bound | the last stamp's `master_ms` plus 60 s |
+| The heard-heartbeat cutoff | its bound | 60 s less 0.1 % after it sent the last heartbeat the stamp says the master heard |
+
+A `cleanup_anywhere` task stops at the earliest of the three, and its cleanup waits. The
+master holds the worker until 60 s of master time after its last message, and a round past
+that marks it lost. It heard that heartbeat no earlier than it was sent, so the stop falls
+before the loss.
 
 The receipt half is what stops a message held on its way from pushing the cutoff later. A
 reconnect keeps the cutoff the last session computed until the new session has a stamp. A
@@ -114,16 +109,12 @@ running after the stream ends.
 The wait starts when a round marks the worker lost. It is the cancel grace plus the cleanup
 move wait, 30 s + 10 s.
 
-```{mermaid}
-sequenceDiagram
-    participant M as Master time
-    participant W as Worker
-    Note over M: The round that marks the worker lost.
-    Note over W: Its cleanup_anywhere tasks have already stopped, whatever the master sent since.
-    Note over M: For 40 s of master time the cleanup stays put.
-    Note over M: A round once that 40 s has passed may assign the cleanup to another worker.
-    Note over M: After a restart the wait is a whole 40 s from when this master first sees it.
-```
+| When, on master time | Master | Worker |
+|---|---|---|
+| The round that marks the worker lost | Marks it lost. | Its `cleanup_anywhere` tasks have already stopped, whatever the master sent since. |
+| For the next 40 s | Leaves the cleanup where it is. | |
+| A round past those 40 s | May assign the cleanup to another worker. | |
+| After a restart | Waits a whole 40 s from when this master first sees the cleanup. | |
 
 A cut one way, the worker's messages lost while the master's still arrive, is covered by the
 third limit: each master message names the last heartbeat it heard
@@ -134,40 +125,30 @@ third limit: each master message names the last heartbeat it heard
 A new incarnation registers at once. The old stream gets no further heartbeat answers, so
 its heartbeats do not push the hold out.
 
-```{mermaid}
-sequenceDiagram
-    participant Old as Old process
-    participant M as Master time
-    participant New as New incarnation
-    New->>M: Register
-    Note over M: 0 s. Started attempts the new journal does not report are marked.
-    Note over Old: Its last stamp is at or before that mark. Its cleanup_anywhere tasks stop by the bound of that stamp plus 60 s.
-    Note over M: Those attempts end lost at 60 s of master time after the mark.
-    Note over M: A restart keeps the mark and counts the 60 s from when this master first sees the attempt.
-    Note over Old: An ordinary task can still be running at 60 s.
-```
+| When | Master | Old process | New incarnation |
+|---|---|---|---|
+| 0 s of master time | Marks the started attempts the new journal does not report. | | Sends `Register`. |
+| By its bound of its last stamp plus 60 s | | Its `cleanup_anywhere` tasks stop. That stamp is at or before the mark. | |
+| 60 s of master time after the mark | Ends those attempts lost. | An ordinary task can still be running. | |
+| After a restart | Keeps the mark, and counts the 60 s from when this master first sees the attempt. | | |
 
 A journal that reports the attempt clears the mark, so a continue is not ended when the hold
 runs out.
 
 ### A new leader's wait, and the lease epoch
 
-Each lane is that process's own clock. The durations are the same settings: the lead is the
-master lease minus a query timeout, 30 s − 10 s = 20 s, and it has to be shorter than the
-60 s worker lease or the process refuses to start.
+Each process below counts on its own clock. The durations are the same settings: the lead
+is the master lease minus a query timeout, 30 s − 10 s = 20 s, and it has to be shorter than
+the 60 s worker lease or the process refuses to start.
 
-```{mermaid}
-sequenceDiagram
-    participant Old as Deposed master, monotonic clock
-    participant W as Worker, its own timer
-    participant New as New leader, master time
-    Note over Old: Answers heartbeats while this clock is before the last renewal plus 20 s.
-    Note over Old: A clean stop answers nothing more, and gives the lease up.
-    Note over New: A worker it has not heard from counts as heard 20 s ahead.
-    Note over New: Still held at 80 s from the restore. A round after that, still unheard, marks it lost.
-    Note over W: A lower lease epoch is refused while the highest has been silent for under 60 s.
-    Note over W: At 60 s of that silence the lower epoch is followed.
-```
+| When | Deposed master | New leader | Worker |
+|---|---|---|---|
+| Until its last renewal plus 20 s, on its monotonic clock | Answers heartbeats. A clean stop answers nothing more, and gives the lease up. | | |
+| From the restore, on its master time | | Counts a worker it has not heard from as heard 20 s ahead. | |
+| Until 80 s of master time from the restore | | Holds that worker. | |
+| A round past those 80 s | | Marks the worker lost if still unheard. | |
+| While the highest lease epoch has been silent under 60 s, on its own timer | | | Refuses a lower epoch. |
+| At 60 s of that silence | | | Follows the lower epoch. |
 
 The process refuses to start when that 20 s lead is at least the 60 s worker lease, so the
 time a deposed master may still answer is shorter than the time a worker keeps the higher
@@ -184,7 +165,7 @@ write once the lease row is another holder's, or the same holder's at a newer ep
 | A task is not started after the master took the attempt back | `start_by_ms` is 60 s of master time after the attempt was stored. The worker starts only while its bound of that deadline is more than 20 s ahead, and rejects `TOO_LATE` otherwise. The master takes the attempt back only once master time is past 80 s, and a `Started` or `Finished` already read keeps it. While the worker may come back, the attempt is left out of the take-back. | A `Started` held longer than 40 s, the stream still up, can arrive after the take-back. The master answers `CancelAttempt`, and both workers may have run the task. An older worker ignores `start_by_ms`. |
 
 The 40 s between the last start and the take-back is the worker's two heartbeats and the
-master's two. Both limits are drawn under
+master's two. Both limits are in the table under
 [A start deadline](#a-start-deadline). The late `Started` and the older worker are in
 [Known limits](17-master-clock.md#known-limits).
 
@@ -197,7 +178,7 @@ master's two. Both limits are drawn under
 
 The lease itself is in
 [One master per database](04-master.md#one-master-per-database-the-lease). The 20 s wait and
-the epoch fence are drawn
+the epoch fence are in the table
 [above](#a-new-leaders-wait-and-the-lease-epoch).
 
 ### A result
@@ -217,7 +198,7 @@ Repeats are in [Delivery](07-failures.md#delivery). The refused result is in
 | A stream silent for a lease ends | 60 s after the master's last message, on the worker's timer, the worker ends the stream and ignores what arrives later. A `Registered` at least that old on the first stream is ignored, and the worker registers again. | An ordinary task keeps running. A `cleanup_anywhere` task stops here, or sooner, at the cutoff below. |
 | A `cleanup_anywhere` task stops before its cleanup moves | The task stops at the earliest of 60 s after the last message received, the bound of the last stamp plus 60 s, and 60 s less 0.1 % after it sent the last heartbeat the master says it heard. The master loses the worker only once master time is past 60 s after the worker's last message it received, then waits 40 s before the cleanup can move. The stop falls first, a cut one way included. | A cleanup already running when the cut starts keeps running. A frozen VM does not stop. |
 
-The two limits are drawn under
+The two limits are in the tables under
 [The worker lease, and the cutoff](#the-worker-lease-and-the-cutoff) and
 [A moved cleanup's wait](#a-moved-cleanups-wait). A cleanup already running, and a frozen VM,
 are in [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker).
