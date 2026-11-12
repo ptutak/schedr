@@ -18,7 +18,7 @@ sequenceDiagram
             W->>M: Heartbeat (free slots, running attempts, running_triggers)
             M-->>W: HeartbeatAck (while leading)
         end
-        Note over W,M: Worker lease: 60 s default without any message; master marks worker lost
+        Note over W,M: Worker lease: 60 s default without any message, master marks worker lost
     else Incompatible version or duplicate live stream
         M-->>W: Registration refused
     end
@@ -79,7 +79,7 @@ sequenceDiagram
     W->>M: Started (spawn)
     W->>P: Start process
     opt Forked Python task
-        W->>M: Started (fork; first start time retained)
+        W->>M: Started (fork, first start time retained)
     end
     P-->>W: Result
     W->>W: Journal finished result
@@ -87,7 +87,7 @@ sequenceDiagram
     M->>M: Store result and advance run
     M-->>W: FinishedAck
     W->>W: Remove journal entry and free slot
-    Note over W,M: No ack: resend after one heartbeat interval (10 s default), then back off; reconnect after 8 resends
+    Note over W,M: No ack: resend after one heartbeat interval (10 s default), then back off, reconnect after 8 resends
 ```
 
 A command or script resource setup reports its value to the agent with `resource_set` over the
@@ -104,8 +104,8 @@ sequenceDiagram
     M->>W: AssignTask
     W->>W: Check slot, code and specification
     W-->>M: Rejected (reason and detail)
-    M->>M: Return task to waiting or try another worker; no retry used
-    Note over M: Code wait: 10 min default for missing eligible code; then task is unschedulable
+    M->>M: Return task to waiting or try another worker, no retry used
+    Note over M: Code wait: 10 min default for missing eligible code, then task is unschedulable
 ```
 
 ## An assignment never started
@@ -119,8 +119,8 @@ sequenceDiagram
         W->>M: Started
         Note over M: Arrival counts even while the message waits to be handled
     else No Started arrives
-        Note over M: Assignment expiry: worker lease, 60 s default; take it back in a round
-        M->>M: End assignment_expired; queue again without using a retry
+        Note over M: Assignment expiry: worker lease, 60 s default, take it back in a round
+        M->>M: End assignment_expired, queue again without using a retry
     end
 ```
 
@@ -142,9 +142,9 @@ sequenceDiagram
     alt Fetch succeeds before the assignment's deadline
         W->>M: Started
     else Fetch succeeds past the deadline
-        W->>M: Rejected (TOO_LATE); queued again at once
+        W->>M: Rejected (TOO_LATE), queued again at once
     else Fetch fails or does not finish in time
-        Note over M: Assignment expiry: worker lease (60 s default) plus two heartbeats without Started; assignment is taken back
+        Note over M: Assignment expiry: worker lease (60 s default) plus two heartbeats without Started, assignment is taken back
     end
 ```
 
@@ -161,7 +161,7 @@ sequenceDiagram
     M->>W: CancelAttempt
     alt Task is still running
         W->>P: SIGTERM
-        Note over W,P: cancel_grace: 30 s default; SIGKILL the remaining group when it expires
+        Note over W,P: cancel_grace: 30 s default, SIGKILL the remaining group when it expires
         P-->>W: Process ends
         W->>M: Finished (cancelled, after any cleanup)
         M-->>W: FinishedAck
@@ -183,10 +183,10 @@ sequenceDiagram
     P-->>W: Task result
     W->>W: Journal cleaning record
     W->>M: TaskEnded (task result)
-    M->>M: Keep result; instance cleaning_up
-    loop Cleanup tries and retry delays; slot remains held
+    M->>M: Keep result, instance cleaning_up
+    loop Cleanup tries and retry delays, slot remains held
         W->>W: Run cleanup with handles and secrets
-        Note over W: cleanup_timeout: 5 min default per try; stop a timed-out try
+        Note over W: cleanup_timeout: 5 min default per try, stop a timed-out try
     end
     W->>M: Finished (task and cleanup results)
     M-->>W: FinishedAck
@@ -198,7 +198,7 @@ sequenceDiagram
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    Note over W,M: Stream drops; task and cleanup continue
+    Note over W,M: Stream drops, task and cleanup continue
     Note over W: Reconnect backoff starts at 200 ms, up to 30 s default
     W->>M: Register (same incarnation, journal)
     alt Attempt still open
@@ -211,7 +211,7 @@ sequenceDiagram
         M-->>W: Registered (Kill for running, Ack for finished)
         W->>W: Stop or discard entry as directed
     end
-    Note over M: Worker lease: 60 s default without messages; worker and attempts become lost
+    Note over M: Worker lease: 60 s default without messages, worker and attempts become lost
 ```
 
 ## Agent restart and journal decisions
@@ -220,7 +220,7 @@ sequenceDiagram
 sequenceDiagram
     participant W as New agent
     participant M as Master
-    W->>W: Read journal; stop orphan process groups
+    W->>W: Read journal, stop orphan process groups
     Note over W: Orphan grace: 10 s default before SIGKILL
     W->>W: Hold slot for recoverable cleanup
     W->>M: Register (new incarnation, journal)
@@ -232,7 +232,7 @@ sequenceDiagram
             W->>M: TaskEnded (saved task result)
         end
         W->>W: Restart cleanup with saved handles, all tries and freshly read secrets
-        Note over W: cleanup_timeout: 5 min default per try; stop a timed-out try
+        Note over W: cleanup_timeout: 5 min default per try, stop a timed-out try
         W->>M: Finished (task and cleanup results)
         M-->>W: FinishedAck
     else Attempt already ended: Kill
@@ -256,16 +256,16 @@ sequenceDiagram
     opt Task ends before worker is lost
         W->>M: TaskEnded (task result)
     end
-    Note over M: Worker lease expires; worker is lost
+    Note over M: Worker lease expires, worker is lost
     alt Started task without cleanup_anywhere
         M->>M: Keep reported task result or mark task lost
         opt Task has cleanup
             M->>M: End cleanup worker_lost
         end
     else Unstarted assignment
-        M->>M: End assignment_expired; retry without using a task retry
+        M->>M: End assignment_expired, retry without using a task retry
     else Started task with cleanup_anywhere and moves remaining
-        M->>M: Keep task result or mark task lost; queue cleanup to move
+        M->>M: Keep task result or mark task lost, queue cleanup to move
     else Cleanup has exhausted its moves
         M->>M: End cleanup worker_lost
     end
@@ -284,18 +284,18 @@ sequenceDiagram
     participant M as Master
     participant W as Another worker
     O->>M: HandlesAdded (journaled handles)
-    Note over M: Worker lease expires; original worker is lost
-    M->>M: Keep task result or mark task lost; queue cleanup to move
+    Note over M: Worker lease expires, original worker is lost
+    M->>M: Keep task result or mark task lost, queue cleanup to move
     Note over M: Wait cancel_grace + cleanup_move_wait (30 s + 10 s default) after worker lost
     alt No eligible worker
-        M->>M: Remain cleaning_up; no worker for the cleanup
+        M->>M: Remain cleaning_up, no worker for the cleanup
     else Worker available
         M->>W: AssignTask (cleanup_only, handles)
         alt Refused
             W-->>M: Rejected
-            M->>M: Take back; prefer another worker next time
+            M->>M: Take back, prefer another worker next time
         else No Started
-            Note over M: Assignment expires; take back without another move
+            Note over M: Assignment expires, take back without another move
         else Started
             W->>M: Started
             W->>M: TaskEnded
@@ -332,19 +332,19 @@ sequenceDiagram
     participant O as Cut-off worker
     participant M as Master
     participant W as Another worker
-    Note over O: Task runs; connection lost, cleanup held
+    Note over O: Task runs, connection lost, cleanup held
     Note over O: No word for worker lease (60 s default)
-    O->>O: CutOff stops task (lost); cleanup waits
+    O->>O: CutOff stops task (lost), cleanup waits
     alt Move waiting and original worker has more handles
         O->>M: Register (attempt and handle count)
-        M->>M: Take back move; give cleanup to original worker
+        M->>M: Take back move, give cleanup to original worker
         M-->>O: Registered (Continue)
         O->>O: Run cleanup with all handles
     else Move assigned or ended and original worker has more handles
         M->>W: AssignTask (cleanup_only, known handles)
         O->>M: Register (attempt and handle count)
         M-->>O: Registered (CLEAN_REST, cleanup_from)
-        O->>O: Stop task if running; clean remaining handles
+        O->>O: Stop task if running, clean remaining handles
         O->>M: Finished (CleanupResult.rest)
     else Master still owns the attempt
         O->>M: Register (attempt)
@@ -362,22 +362,22 @@ sequenceDiagram
     participant P as Task process
     W->>M: Draining
     M->>M: Stop assigning work
-    Note over W,P: termination_grace_period: 30 s default; reserve 3 s termination and 2 s reporting
+    Note over W,P: termination_grace_period: 30 s default, reserve 3 s termination and 2 s reporting
     alt Task has cleanup
         Note over W,P: Stop early enough to leave one cleanup try before the stop deadline, when possible
         W->>P: SIGTERM, then SIGKILL if needed
         P-->>W: Interrupted
         W->>M: TaskEnded (interrupted)
-        W->>W: Run cleanup; do not stop cleanup at drain deadline
-        Note over W: cleanup_timeout: 5 min default per try; timeout stops that try
+        W->>W: Run cleanup, do not stop cleanup at drain deadline
+        Note over W: cleanup_timeout: 5 min default per try, timeout stops that try
     else Other task still running at stop deadline
         W->>P: SIGTERM
-        Note over W,P: drain_terminate_period: 3 s default; SIGKILL remaining process group
+        Note over W,P: drain_terminate_period: 3 s default, SIGKILL remaining process group
     end
     W->>M: Finished
     M-->>W: FinishedAck
     W->>M: Deregister
-    Note over W: Report period: 2 s default before grace ends; a cleanup may outlast it
+    Note over W: Report period: 2 s default before grace ends, a cleanup may outlast it
 ```
 
 The agent waits for an ongoing cleanup; if its container is killed first, the worker is lost.
@@ -390,14 +390,14 @@ sequenceDiagram
     participant A as Old master
     participant DB as Database
     participant B as Standby master
-    Note over A: Master crashes; worker tasks continue
-    Note over DB,B: Master lease: 30 s default; standby can take over after expiry (clean stop releases it)
+    Note over A: Master crashes, worker tasks continue
+    Note over DB,B: Master lease: 30 s default, standby can take over after expiry (clean stop releases it)
     B->>DB: Take lease and read state
-    B->>B: Mark workers disconnected; leases restart after the old master's lead time
+    B->>B: Mark workers disconnected, leases restart after the old master's lead time
     Note over W: Reconnect backoff: 200 ms first, up to 30 s default and half known lease
     W->>B: Register (journal and roots)
     B-->>W: Registered (Continue, Kill, Ack or CLEAN_REST per entry)
-    Note over B: 20 s default (lease period less query timeout), then the 60 s worker lease; absent worker becomes lost
+    Note over B: 20 s default (lease period less query timeout), then the 60 s worker lease, absent worker becomes lost
 ```
 
 ## Parse job
@@ -408,10 +408,10 @@ sequenceDiagram
     participant W as Worker
     M->>W: AssignParse (root and job ID)
     W->>W: Parse files
-    Note over W: parse_file_timeout: 60 s default per file; timed-out file becomes an import error
+    Note over W: parse_file_timeout: 60 s default per file, timed-out file becomes an import error
     W->>M: UploadParseResult (header, then one file per part)
     M-->>W: ParseResultAck
-    Note over M: parse_job_timeout: 10 min default; unfinished job is reassigned
+    Note over M: parse_job_timeout: 10 min default, unfinished job is reassigned
 ```
 
 A `ParsedFile` carries `script_roots`, the script roots its `ScriptOperator`s asked for,
@@ -431,12 +431,12 @@ sequenceDiagram
     M->>W: ConnectionJob (check or test)
     alt Test
         W->>W: Open connection and run check
-        Note over W: connection_test_timeout: 1 min default; stop a timed-out test
+        Note over W: connection_test_timeout: 1 min default, stop a timed-out test
     else Check
         W->>W: Render connection reports
     end
     W->>M: ConnectionJobDone (reports)
-    Note over M: Job time plus 30 s: no answer means lost; a late answer is dropped
+    Note over M: Job time plus 30 s: no answer means lost, a late answer is dropped
 ```
 
 ## Code changes and warnings
@@ -445,9 +445,9 @@ sequenceDiagram
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    Note over W: poll_interval 30 s and settle_time 5 s defaults; wait for stable code before reporting
+    Note over W: poll_interval 30 s and settle_time 5 s defaults, wait for stable code before reporting
     W->>M: CodeVersionChanged (root hash)
-    M->>M: Record hash; possibly create parse job
+    M->>M: Record hash, possibly create parse job
     W->>M: Warnings (replacement list when changed)
     M->>M: Replace stored warnings
 ```
