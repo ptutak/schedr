@@ -24,11 +24,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- Release 1.0.0 (the user, 2026-11-12: rc2 is mandatory, then v1.0.0 without asking if nothing breaks and nothing is to decide). rc1 published and smoke-tested. Uncommitted in main, to go as two commits after Grok's paranoid review (d2836aa9, worktree schedr-grok-b240) and `make check`: B240/D460 (protocol 2.0, numbered messages with an echo, no start deadline) and D459 + D461 (the trigger switch in `dag_triggers`, tables renamed, `trigger_state`; one row of actions, Restart for stopped, failing or stuck). Integration suite clean on both (289/289) before D461; the user approved the UI and the docs. Then push, CI, a nightly-style stress run, rc2, v1.0.0.
+- Release 1.0.0: rc2 released 2026-11-12 (CI, Stress and the release workflow green; the TestPyPI wheel and the six images checked by hand: 1.0.0rc2). Its Stress failures were the tests' (B243 the simulator's broken stream, B244 the cleanup check after D460), fixed in 84b5888. Then the 1.0.0 bump, `make check`, tag v1.0.0, the release workflow, a check of PyPI and the images.
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
-- After 1.0.0: M5.0a-e (the start path after M4B's regression in assigned->started p99, profile first); an idea (the user, 2026-11-12, left for later): a Status block on the deployment page from what that page already fetches (masters, workers by state, slots in use, problems), no Prometheus scraping (no process records its ops address).
+- After 1.0.0: M5.0a-e (the start path after M4B's regression in assigned->started p99, profile first); an idea (the user, 2026-11-12, left for later): a Status block on the deployment page from what that page already fetches (masters, workers by state, slots in use, problems), no Prometheus scraping (no process records its ops address); an Airflow translation tool (the user, 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
 
 ## Waiting for the user
 
@@ -39,7 +39,7 @@ Nothing.
 - Commits and pushes pre-accepted (2026-11-10; for 1.0.0 too, up to the v1.0.0 tag) after each review, `make check` and `make docs`; stop at any decision that is the user's.
 - One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10). After M4B, Grok also reviews the whole milestone's diff (brittle).
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
-- Stress runs only nightly, or when the user asks.
+- Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).
 - Before stating how something behaves, read the code or run it, and say which.
 - Work from a worktree reaches main through git only; read `git diff --cached --stat` before committing (D371).
 
