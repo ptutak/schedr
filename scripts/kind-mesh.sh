@@ -12,7 +12,7 @@
 #                                  binary for the CLI on this machine)
 #   CLUSTER=schedr-mesh  the kind cluster (created if missing, kept afterwards; delete it with
 #                        `kind delete cluster --name schedr-mesh`)
-#   IMAGE=schedr:0.1.0   the base image;  CONTAINER=podman  the container tool
+#   IMAGE=schedr:<version>   the base image;  CONTAINER=podman  the container tool
 #   SCHEDR_BIN=target/debug/schedr  the CLI;  ISTIO=1.31.1  istioctl, kept in target/tools
 #   ISTIO_SHA256=...  the istioctl archive's SHA-256, needed with another ISTIO (Istio
 #                     publishes it beside the archive, `.sha256`); the download is checked
@@ -24,8 +24,9 @@ set -euo pipefail
 CLUSTER=${CLUSTER:-schedr-mesh}
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr
-# Unqualified, so this stays schedr:0.1.0. kind-lib.sh would add podman's localhost/ prefix.
-IMAGE=${IMAGE:-schedr:0.1.0}
+# Unqualified, so this stays schedr:<version>. kind-lib.sh would add podman's localhost/ prefix.
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../Cargo.toml" | head -1)
+IMAGE=${IMAGE:-schedr:$version}
 ISTIO=${ISTIO:-1.31.1}
 # The archive's digest for the default version, checked before istioctl runs (B218).
 if [ "$ISTIO" = 1.31.1 ]; then

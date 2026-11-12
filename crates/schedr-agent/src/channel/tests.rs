@@ -96,8 +96,8 @@ async fn writing_an_oversize_message_is_rejected() {
 #[tokio::test]
 async fn a_runner_with_the_same_version_is_welcomed() {
     let (mut agent, mut runner) = duplex(1024);
-    write_message(&mut runner, &hello("0.1.0")).await.unwrap();
-    let mode = accept_runner(&mut agent, "0.1.0").await.unwrap();
+    write_message(&mut runner, &hello("1.0.0")).await.unwrap();
+    let mode = accept_runner(&mut agent, "1.0.0").await.unwrap();
     assert_eq!(mode, RunnerMode::Parse);
     let reply: AgentMessage = read_message(&mut runner).await.unwrap();
     assert_eq!(reply, AgentMessage::Welcome);
@@ -107,11 +107,11 @@ async fn a_runner_with_the_same_version_is_welcomed() {
 async fn a_runner_with_another_version_is_refused_with_the_reason() {
     let (mut agent, mut runner) = duplex(1024);
     write_message(&mut runner, &hello("0.2.0")).await.unwrap();
-    let err = accept_runner(&mut agent, "0.1.0").await.unwrap_err();
+    let err = accept_runner(&mut agent, "1.0.0").await.unwrap_err();
     let ChannelError::Refused(reason) = &err else {
         panic!("expected Refused, got {err:?}")
     };
-    assert!(reason.contains("install schedr==0.1.0"), "{reason}");
+    assert!(reason.contains("install schedr==1.0.0"), "{reason}");
     let reply: AgentMessage = read_message(&mut runner).await.unwrap();
     assert_eq!(
         reply,
@@ -127,7 +127,7 @@ async fn the_first_message_must_be_hello() {
     write_message(&mut runner, &RunnerMessage::ParseFinished)
         .await
         .unwrap();
-    let err = accept_runner(&mut agent, "0.1.0").await.unwrap_err();
+    let err = accept_runner(&mut agent, "1.0.0").await.unwrap_err();
     assert_eq!(err.to_string(), "expected hello, got parse_finished");
 }
 

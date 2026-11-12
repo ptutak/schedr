@@ -833,7 +833,7 @@ async fn a_dags_groups_are_drawn_as_labelled_boxes_around_their_tasks() {
 fn import_error(path: &str) -> Value {
     json!({
         "root": "etl", "path": path, "content_hash": "sha256:9f1c2b3a4d5e6f708192",
-        "parsed_at": "2026-10-29T10:42:00Z", "worker_id": "w1", "schedr_version": "0.1.0",
+        "parsed_at": "2026-10-29T10:42:00Z", "worker_id": "w1", "schedr_version": "1.0.0",
         "exception": "ModuleNotFoundError", "message": "No module named 'pandas'",
         "traceback": "  File \"broken.py\", line 1"
     })

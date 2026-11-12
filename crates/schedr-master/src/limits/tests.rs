@@ -21,7 +21,7 @@ fn dag(max_active_tasks: Option<u32>, a: &Json, b: &Json) -> Dag {
         })
     };
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "max_active_tasks": max_active_tasks,
         "tasks": [task("a", a), task("b", b)], "edges": []

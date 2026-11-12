@@ -357,7 +357,7 @@ fn worker(id: &str, state: &str, version: &str, drained: bool) -> schedr_api::vi
         "worker_id": id, "state": state,
         "incarnation_id": "0190a0a0-0000-7000-8000-000000000001",
         "queues": ["default"], "slots": 1, "running": 0,
-        "schedr_version": version, "protocol_version": "0.1", "log_endpoint": "",
+        "schedr_version": version, "protocol_version": "1.0", "log_endpoint": "",
         "registered_at": "2026-10-22T08:00:00Z",
         "last_heartbeat_at": "2026-10-22T08:00:00Z",
         "offline_at": null, "drained": drained
@@ -389,9 +389,9 @@ fn an_older_active_worker_is_named_and_a_drained_one_counts() {
     let workers = vec![
         worker("w-new", "active", "0.3.1", false),
         worker("w2", "active", "0.2.9", true),
-        worker("w-lost", "lost", "0.1.0", false),
+        worker("w-lost", "lost", "1.0.0", false),
         worker("w-gone", "disconnected", "0.0.1", false),
-        worker("w-leaving", "draining", "0.1.0", false),
+        worker("w-leaving", "draining", "1.0.0", false),
     ];
     let check = compare_active_workers(local_version(), "http://sched.example", &workers);
     assert!(!check.ok);
@@ -486,7 +486,7 @@ fn the_same_or_a_newer_minor_passes_and_no_active_worker_fails() {
          ok: this schedr is 0.3; 2 active workers at http://sched.example run 0.3 (w1), 0.4 (w2)\n"
     );
 
-    let gone = vec![worker("w1", "offline", "0.1.0", false)];
+    let gone = vec![worker("w1", "offline", "1.0.0", false)];
     let check = compare_active_workers(local_version(), "http://sched.example", &gone);
     assert_eq!(
         check.message.unwrap(),

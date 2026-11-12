@@ -533,22 +533,6 @@ names as heard, over the master counting from its own sends. With answered heart
 bound and the stamp's are within milliseconds; the simulator now loses heartbeats one way and
 checks the worker against the master's loss, and fails without the bound.
 
-### <a id="D455"></a>2026-11-12: a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
-
-The master's side of the clock simulator (R1.0b) found, at 60 scenarios with every safeguard on,
-a worker cut off both ways just after an assignment reached it: it started the task, its
-`Started` held up; the master counted it lost a lease later and queued the attempt again at once
-(B17's rule: never started there), and the task ran on the other worker while the first, cut off
-at the same moment, was still stopping it. The user asked for the fix; Claude chose the narrow
-one: only tasks with `cleanup_anywhere` (the ones a worker cut off stops) wait, as long as a
-started one's cleanup waits before it moves; ordinary tasks run at least once anyway (decision
-252) and are taken back at the loss as before. The simulator's smallest scenario is now a test
-of its own, and the simulator runs 600 fresh scenarios nightly (the user's suggestion). Grok's
-review of the fix found two more ways to the same overlap, both fixed with tests: a new
-incarnation registering before the lease left the old one's unstarted attempts on the start
-timeout (the worker never lost), and a restart forgot the wait (a cancel grace over the lease
-plus two heartbeats then too long); a scenario now runs with the defaults' ratios too.
-
 ### <a id="N2"></a>2026-11-11: B184 met; the stress comparison before and after M4B (note 2)
 
 Stress run on this laptop, the code before M4B's batching (`0da885f`) and after (`afb1b9e`),
@@ -570,3 +554,29 @@ A side note then: Debian 13's PostgreSQL client is 17, and `pg_dump` 17 refuses 
 server, while the Alpine image has 18. The user chose PostgreSQL's own apt source
 (apt.postgresql.org, its key pinned by hash) over copying the binaries from the `postgres:18`
 image or documenting the gap.
+
+### <a id="D455"></a>2026-11-12: a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
+
+The master's side of the clock simulator (R1.0b) found, at 60 scenarios with every safeguard on,
+a worker cut off both ways just after an assignment reached it: it started the task, its
+`Started` held up; the master counted it lost a lease later and queued the attempt again at once
+(B17's rule: never started there), and the task ran on the other worker while the first, cut off
+at the same moment, was still stopping it. The user asked for the fix; Claude chose the narrow
+one: only tasks with `cleanup_anywhere` (the ones a worker cut off stops) wait, as long as a
+started one's cleanup waits before it moves; ordinary tasks run at least once anyway (decision
+252) and are taken back at the loss as before. The simulator's smallest scenario is now a test
+of its own, and the simulator runs 600 fresh scenarios nightly (the user's suggestion). Grok's
+review of the fix found two more ways to the same overlap, both fixed with tests: a new
+incarnation registering before the lease left the old one's unstarted attempts on the start
+timeout (the worker never lost), and a restart forgot the wait (a cancel grace over the lease
+plus two heartbeats then too long); a scenario now runs with the defaults' ratios too.
+
+### <a id="D456"></a>2026-11-12: from 1.0.0 the schema and the protocol change only additively (decision 456)
+
+Decided by the user on 2026-10-29 with the 1.0.0 plan (`plan/1.0.0.toml`), recorded at the
+release: decision 156's edits in place end with 1.0.0. Schema changes become new migrations,
+the protocol is 1.0 and grows only additively within 1.x, and DAG JSON, the REST API and the
+configuration keep what they accept. The protocol's major moving from 0 to 1 refuses a 0.1
+worker under a 1.0 master, which closes B187 (the user, 2026-11-11: "Protocol 1.0"); the lesson
+stays in the rule: a later minor's field an older worker would drop goes only to workers that
+know it.

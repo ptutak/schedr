@@ -274,13 +274,13 @@ async fn connection_in(args: ConnectionArgs, files: &Path) -> Result<String, Str
     )
     .with_connection_dir(files.to_path_buf());
     let (ours, theirs) = channel().unwrap();
-    let mut served = info("0.1.0");
+    let mut served = info("1.0.0");
     served.secrets = Some(std::sync::Arc::new(secrets));
     let _serving = serve(ours, served);
     let env = BTreeMap::from([(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string())]);
     tokio::task::spawn_blocking(move || {
         let mut out = Vec::new();
-        let result = run_task_ctx_connection(&args, &env, "0.1.0", &mut out);
+        let result = run_task_ctx_connection(&args, &env, "1.0.0", &mut out);
         drop(theirs);
         result.map(|()| String::from_utf8(out).unwrap())
     })

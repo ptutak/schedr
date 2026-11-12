@@ -11,8 +11,7 @@ license = "MIT"
 license-files = ["LICENSE", "LICENSE-THIRD-PARTY"]
 authors = [{ name = "Piotr Tutak", email = "p.tutak@outlook.com" }]
 classifiers = [
-    # A preview until 1.0.0 (decision 156): no upgrade path between 0.x versions.
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Operating System :: POSIX :: Linux",

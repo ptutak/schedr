@@ -162,11 +162,11 @@ write once the lease row is another holder's, or the same holder's at a newer ep
 
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
-| A task is not started after the master took the attempt back | `start_by_ms` is 60 s of master time after the attempt was stored. The worker starts only while its bound of that deadline is more than 20 s ahead, and rejects `TOO_LATE` otherwise. The master takes the attempt back only once master time is past 80 s, and a `Started` or `Finished` already read keeps it. While the worker may come back, the attempt is left out of the take-back. | A `Started` held longer than 40 s, the stream still up, can arrive after the take-back. The master answers `CancelAttempt`, and both workers may have run the task. An older worker ignores `start_by_ms`. |
+| A task is not started after the master took the attempt back | `start_by_ms` is 60 s of master time after the attempt was stored. The worker starts only while its bound of that deadline is more than 20 s ahead, and rejects `TOO_LATE` otherwise. The master takes the attempt back only once master time is past 80 s, and a `Started` or `Finished` already read keeps it. While the worker may come back, the attempt is left out of the take-back. | A `Started` held longer than 40 s, the stream still up, can arrive after the take-back. The master answers `CancelAttempt`, and both workers may have run the task. |
 
 The 40 s between the last start and the take-back is the worker's two heartbeats and the
 master's two. Both limits are in the table under
-[A start deadline](#a-start-deadline). The late `Started` and the older worker are in
+[A start deadline](#a-start-deadline). The late `Started` is in
 [Known limits](17-master-clock.md#known-limits).
 
 ### One leader
@@ -217,7 +217,7 @@ Which four, and why they stay on the wall clock, is in
 Each line is a limit that is kept on purpose, or open for now.
 
 - A `Started` held longer than 40 s can arrive after the take-back, and both workers may have run the task ([Known limits](17-master-clock.md#known-limits)).
-- A worker of an earlier build ignores `start_by_ms`, and an assignment that leaves it unset has no master-time start limit, until protocol 1.0 ([Known limits](17-master-clock.md#known-limits)).
+- An assignment that leaves `start_by_ms` unset gives the worker no master-time start limit; a worker of the 0.1 preview, which ignored it, is refused by a 1.0 master ([Known limits](17-master-clock.md#known-limits)).
 - A cleanup already running at the cut, and a task on a frozen VM, can overlap the moved cleanup ([Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker)).
 - After a suspend, the cutoff is read again on the alive tick, every 5 s, so a `cleanup_anywhere` task can stop up to 5 s late ([Known limits](17-master-clock.md#known-limits)).
 - A stall under 1 s, plus 0.2 % of the time since the sample, leaves the worker's bound late by that much ([Known limits](17-master-clock.md#known-limits)).

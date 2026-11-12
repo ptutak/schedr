@@ -498,7 +498,7 @@ fn dag_file() -> ParsedFile {
     serde_json::from_value(json!({
         "path": "sync.py",
         "dags": [{
-            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+            "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
             "trigger": {"kind": "none"}, "initial_since": null,
             "max_active_runs": 2,
             "tasks": [{
@@ -539,7 +539,7 @@ fn register(worker: usize, incarnation: u32, journal: Vec<pb::JournalEntry>) -> 
         worker_id: WORKERS[worker].to_owned(),
         incarnation_id: format!("i{incarnation}"),
         protocol: Some(PROTOCOL_VERSION),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
         queues: vec![],
         slots: u32::try_from(SLOTS).unwrap(),
         log_endpoint: "127.0.0.1:8081".to_owned(),
@@ -580,7 +580,7 @@ async fn master(timings: Timings, weakened: Option<Weakened>) -> (Database, Mast
         parse_job_id: job.parse_job_id.clone(),
         worker_id: "w1".to_owned(),
         root: Some(root()),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
         files: vec![parsed_file_to_proto(&dag_file())],
     };
     core.upload(upload, ts(0)).await.unwrap();

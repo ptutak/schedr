@@ -28,7 +28,7 @@ fn task(name: &str, kind: &str, retries: u32) -> Json {
 
 fn dag(tasks: &Json, edges: &Json) -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": edges
     }))
@@ -60,7 +60,7 @@ async fn with_run(dag: Dag, state: RunState) -> (Execution, Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],

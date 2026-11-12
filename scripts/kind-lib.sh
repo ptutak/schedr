@@ -20,8 +20,10 @@ if [ "$TOOL" = podman ]; then
     local_prefix=localhost/
 fi
 export KIND_EXPERIMENTAL_PROVIDER=$TOOL
-IMAGE=${IMAGE:-${local_prefix}schedr:0.1.0}
-SERVER_IMAGE=${SERVER_IMAGE:-${local_prefix}schedr-server:0.1.0}
+# The images `make image` and `make server-image` build: tagged with the workspace version.
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../Cargo.toml" | head -1)
+IMAGE=${IMAGE:-${local_prefix}schedr:$version}
+SERVER_IMAGE=${SERVER_IMAGE:-${local_prefix}schedr-server:$version}
 
 k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
 h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }

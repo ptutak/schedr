@@ -28,7 +28,7 @@ fn task(name: &str, kind: &str) -> Json {
 /// `load` (also after `extract`); `report` joins `load` and `audit`.
 fn dag() -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [
@@ -98,7 +98,7 @@ fn routed() -> Dag {
     let mut both_strict = task("both_strict", "empty");
     both_strict["settings"]["run_if"] = json!("all_succeeded");
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "routed", "location": {"root": "etl", "path": "routed.py"},
+        "produced_by": "1.0", "id": "routed", "location": {"root": "etl", "path": "routed.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": [
             fetch, task("load", "empty"), task("report_outage", "empty"),
@@ -386,7 +386,7 @@ fn branched() -> Dag {
     let mut pick = task("pick", "python");
     pick["branch"] = json!(true);
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "branched", "location": {"root": "etl", "path": "b.py"},
+        "produced_by": "1.0", "id": "branched", "location": {"root": "etl", "path": "b.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": [pick, task("other", "empty"), task("a", "empty"), task("b", "empty"),
                   task("c", "empty")],
@@ -455,7 +455,7 @@ fn mapped_dag(check_run_if: &str, extra_edges: &Json) -> Dag {
     let mut total = mapped_task("total", None, "none_failed");
     total["arguments"] = json!({"all": output_of("check")});
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "m", "location": {"root": "etl", "path": "m.py"},
+        "produced_by": "1.0", "id": "m", "location": {"root": "etl", "path": "m.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": [
             mapped_task("size", Some(&json!({"literal": [1, 2, 3]})), "none_failed"),
@@ -686,7 +686,7 @@ fn an_order_edge_narrowed_from_a_mapped_task_is_decided_per_instance_by_the_rule
     let mut report = mapped_task("report", None, run_if);
     report["arguments"] = json!({});
     let dag: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "m", "location": {"root": "etl", "path": "m.py"},
+        "produced_by": "1.0", "id": "m", "location": {"root": "etl", "path": "m.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": [
             mapped_task("size", Some(&json!({"literal": [1, 2, 3]})), "none_failed"),
@@ -712,7 +712,7 @@ fn an_order_edge_narrowed_from_a_mapped_task_is_decided_per_instance_by_the_rule
 /// the cleanup (a group's wait, decision 266).
 fn resourced(cleanup_kind: &str) -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "res", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "res", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [
@@ -934,7 +934,7 @@ fn reversed_chain(n: usize) -> Dag {
         .map(|i| json!({"from": format!("t{}", i - 1), "to": format!("t{i}"), "kind": "order"}))
         .collect();
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "chain", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "chain", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": tasks, "edges": edges
     }))

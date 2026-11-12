@@ -337,7 +337,7 @@ async fn a_dag_version_is_read_and_parsed_once() {
     insert_dag(&db).await;
     execute(
         &db,
-        r#"UPDATE dag_versions SET dag_json = '{"produced_by": "0.1", "id": "sync",
+        r#"UPDATE dag_versions SET dag_json = '{"produced_by": "1.0", "id": "sync",
             "location": {"root": "etl", "path": "a.py"}, "trigger": {"kind": "none"},
             "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []}'"#,
     )

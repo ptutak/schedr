@@ -172,9 +172,10 @@ with just what they use; `make image-slim`) and `ghcr.io/ptutak/schedr-server` (
 alone, for the master, the webserver and `schedr ui`; below). `make image`, `make image-slim`
 and `make server-image` build the glibc ones; `make image-alpine`, `make image-slim-alpine`
 and `make server-image-alpine` the Alpine ones. In 0.1.0 the plain tag was Alpine's.
-Their tags are the version (`0.1.0`) and its series (`0.1`); a release candidate has only
-its own (`0.1.0rc1`). There is no `latest`: until 1.0.0 a new minor version needs a fresh
-database, and a moving tag would take a deployment there unasked. The chart uses them by
+Their tags are the version (`1.0.0`) and its series (`1.0`), and the same with `-alpine`
+(`1.0.0-alpine`, `1.0-alpine`); a release candidate has only its own (`1.0.0rc1`). There is
+no `latest`: a new version migrates the database (`schedr db migrate`), which a moving tag
+would start unasked. The chart uses them by
 default, tagged with its `appVersion` (`image`, and `master.image`, `webserver.image` and
 `ui.image` for the server roles).
 

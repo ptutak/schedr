@@ -26,7 +26,7 @@ fn dag() -> Dag {
         })
     };
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract"), task("load")],
@@ -43,7 +43,7 @@ async fn with_run(state: RunState) -> (Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts("2026-10-01T00:00:00Z"),
             files: &[],
@@ -124,7 +124,7 @@ async fn instances_are_read_back_with_the_run() {
     assert_eq!(run.state, RunState::Running);
     assert!(!run.cancel_requested);
     assert_eq!(*run.dag, dag());
-    assert_eq!(run.parse_version, "0.1.0");
+    assert_eq!(run.parse_version, "1.0.0");
     let summary: Vec<(&str, TaskInstanceState, Option<Timestamp>)> = run
         .instances
         .iter()

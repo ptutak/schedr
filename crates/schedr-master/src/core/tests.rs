@@ -40,7 +40,7 @@ fn register(worker: &str, incarnation: &str, journal: Vec<pb::JournalEntry>) -> 
         worker_id: worker.to_owned(),
         incarnation_id: incarnation.to_owned(),
         protocol: Some(PROTOCOL_VERSION),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
         queues: vec![],
         slots: 2,
         log_endpoint: "127.0.0.1:8081".to_owned(),
@@ -56,7 +56,7 @@ fn dag_file() -> ParsedFile {
     serde_json::from_value(json!({
         "path": "sync.py",
         "dags": [{
-            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+            "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
             "trigger": {"kind": "none"}, "initial_since": null,
             "max_active_runs": 1,
             "tasks": [{
@@ -83,7 +83,7 @@ fn upload_of(job_id: &str, file: &ParsedFile) -> pb::ParseResult {
         parse_job_id: job_id.to_owned(),
         worker_id: "w1".to_owned(),
         root: Some(root("h1")),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
         files: vec![parsed_file_to_proto(file)],
     }
 }
@@ -1710,7 +1710,7 @@ async fn a_registration_that_fails_half_way_leaves_no_live_stream() {
 async fn tasks_go_to_the_worker_with_the_newest_code_until_it_leaves() {
     let mut core = with_dag().await;
     let w1 = core.dispatcher().workers().get("w1").unwrap();
-    assert_eq!(w1.version, Some(SchedrVersion::new(0, 1)));
+    assert_eq!(w1.version, Some(SchedrVersion::new(1, 0)));
     assert_eq!(w1.roots.get("etl").map(String::as_str), Some("h1"));
     let mut newer = register("w2", "i1", vec![]);
     newer.roots = vec![root("h2")];

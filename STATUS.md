@@ -9,15 +9,15 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
 - **Then:** R1.0a, R1.0c, M5.0a, M5.0b, M5.0c.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 4; first: B187 (medium/possible), B237 (low/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 3; first: B237 (low/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D456 (2026-11-12): from 1.0.0 the schema and the protocol change only additively
+- D455 (2026-11-12): a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
 - D454 (2026-11-11): images on glibc beside Alpine
 - N2 (2026-11-11): B184 met; the stress comparison before and after M4B
-- D455 (2026-11-12): a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
 - D453 (2026-11-11): the cutoff from what the master heard (decision 453, B233)
-- D445 (2026-11-11): the clock step before M4B (decisions 445-452)
 - R1.0b (2026-11-12): The master's side in the clock simulator
 - M4B.5 (2026-11-11): The agent's journal in groups
 - M4B.4 (2026-11-11): A turn's `Finished`s written together

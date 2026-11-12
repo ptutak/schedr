@@ -32,7 +32,7 @@ fn now() -> Timestamp {
 
 fn dag(id: &str, path: &str) -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": id, "location": {"root": "etl", "path": path},
+        "produced_by": "1.0", "id": id, "location": {"root": "etl", "path": path},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": [], "edges": []
     }))
@@ -68,7 +68,7 @@ async fn store_parse(db: &Database, hash: &str, files: &[ParsedFile]) -> String 
     db.insert_parse(&NewParse {
         root: "etl",
         content_hash: hash,
-        schedr_version: "0.1.0",
+        schedr_version: "1.0.0",
         worker_id: "w1",
         parsed_at: now(),
         files,
@@ -99,12 +99,12 @@ async fn version_count(db: &Database) -> i64 {
 async fn parses_are_found_by_root_hash_and_version_and_keep_their_files() {
     let db = migrated().await;
     assert_eq!(
-        db.find_parse("etl", "sha256:a", "0.1.0").await.unwrap(),
+        db.find_parse("etl", "sha256:a", "1.0.0").await.unwrap(),
         None
     );
     let parse_id = store_parse(&db, "sha256:a", &files()).await;
     assert_eq!(
-        db.find_parse("etl", "sha256:a", "0.1.0").await.unwrap(),
+        db.find_parse("etl", "sha256:a", "1.0.0").await.unwrap(),
         Some(parse_id.clone())
     );
     assert_eq!(
@@ -332,7 +332,7 @@ async fn the_parses_of_a_hash_are_listed_oldest_first() {
         [
             StoredParse {
                 id: first,
-                schedr_version: "0.1.0".to_owned(),
+                schedr_version: "1.0.0".to_owned(),
                 parsed_at: now(),
             },
             StoredParse {
@@ -392,7 +392,7 @@ async fn the_current_parses_import_errors_are_listed_and_replaced_by_the_next_cu
         [ImportErrorRecord {
             root: "etl".to_owned(),
             content_hash: "h1".to_owned(),
-            schedr_version: "0.1.0".to_owned(),
+            schedr_version: "1.0.0".to_owned(),
             worker_id: "w1".to_owned(),
             master_id: None,
             parsed_at: now(),

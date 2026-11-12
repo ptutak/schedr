@@ -17,7 +17,7 @@ fn sync() -> DagId {
 /// A daily 03:00 UTC DAG from 2026-10-01, changed by `changes`.
 fn dag(changes: &Json) -> Dag {
     let mut dag = json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false, "start": "2026-10-01T00:00:00Z"},
         "initial_since": null,
         "max_active_runs": 1, "tasks": [], "edges": []
@@ -36,7 +36,7 @@ async fn scheduler_with(dag: Dag) -> (Scheduler, Database) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts("2026-09-15T00:00:00Z"),
             files: &[],
@@ -232,7 +232,7 @@ async fn current_parse(db: &Database, hash: &str, exception: Option<&str>) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: hash,
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts("2026-10-20T00:00:00Z"),
             files: &[file],
@@ -269,7 +269,7 @@ async fn a_dag_whose_file_fails_to_import_is_held() {
     assert_eq!(
         error.to_string(),
         "DAG `sync` is held, no runs are created and it can't be triggered: its file `a.py` \
-         fails to import with schedr 0.1.0 (ModuleNotFoundError: No module named 'pandas'), so \
+         fails to import with schedr 1.0.0 (ModuleNotFoundError: No module named 'pandas'), so \
          its tasks couldn't run. Every DAG of the file is held until it imports: fix the file, \
          or, if it stopped importing when schedr was upgraded, roll back"
     );
@@ -454,7 +454,7 @@ async fn timeline_db() -> Database {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts("2026-10-27T00:00:00Z"),
             files: &[],

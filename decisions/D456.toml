@@ -1,0 +1,19 @@
+title = "From 1.0.0 the schema and the protocol change only additively"
+date = 2026-10-29
+by = "user"
+status = "active"
+topic = "development"
+section = "Releases"
+summary = '''
+From 1.0.0 on, a schema change is a new migration (`0001_initial.sql` and those after it are
+never edited once released; sqlx's checksums refuse an edited one, and so does the schema status at start, B236), and the protocol changes
+only additively within a major version (`PROTOCOL_VERSION` 1.0; a new major for anything
+else; a field a worker of an older minor would ignore wrongly goes only to workers of its
+minor, as B187 showed). DAG JSON, the REST API and the configuration keep accepting what they
+accept. 1.0.0 itself starts afresh: a 0.1 database or worker isn't carried over.
+'''
+history = "JOURNAL.md#D456"
+step = "n/a"
+also = ["deployment", "state", "protocol"]
+code = ["crates/schedr-proto/src/version.rs::PROTOCOL_VERSION", "crates/schedr-db/src/status.rs", "scripts/release.py"]
+checked = 2026-11-12

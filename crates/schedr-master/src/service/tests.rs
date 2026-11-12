@@ -101,7 +101,7 @@ fn register(protocol: pb::ProtocolVersion) -> pb::WorkerMessage {
             worker_id: "w1".to_owned(),
             incarnation_id: "i1".to_owned(),
             protocol: Some(protocol),
-            schedr_version: "0.1.0".to_owned(),
+            schedr_version: "1.0.0".to_owned(),
             slots: 2,
             roots: vec![root()],
             ..pb::Register::default()
@@ -139,7 +139,7 @@ fn parse_result() -> pb::ParseResult {
     let file: ParsedFile = serde_json::from_value(json!({
         "path": "sync.py",
         "dags": [{
-            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+            "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
             "trigger": {"kind": "none"}, "initial_since": null,
             "max_active_runs": 1,
             "tasks": [{
@@ -159,7 +159,7 @@ fn parse_result() -> pb::ParseResult {
         parse_job_id: "j".to_owned(),
         worker_id: "w1".to_owned(),
         root: Some(root()),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
         files: vec![parsed_file_to_proto(&file)],
     }
 }
@@ -1667,7 +1667,7 @@ async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
     let file: ParsedFile = serde_json::from_value(json!({
         "path": "sync.py",
         "dags": [{
-            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+            "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
             "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
             "tasks": tasks,
             "edges": [{"from": "extract", "to": "load", "kind": "order"}]

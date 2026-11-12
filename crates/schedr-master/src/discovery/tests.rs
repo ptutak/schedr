@@ -12,7 +12,7 @@ async fn discovery() -> Discovery {
     db.migrate().await.unwrap();
     Discovery::new(
         db,
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     )
 }
@@ -26,13 +26,13 @@ fn key(hash: &str) -> ParseKey {
         kind: schedr_proto::pb::RootKind::Dag,
         root: "etl".to_owned(),
         content_hash: hash.to_owned(),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
     }
 }
 
 fn dag(id: &str, path: &str, max_active_runs: u32) -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": id, "location": {"root": "etl", "path": path},
+        "produced_by": "1.0", "id": id, "location": {"root": "etl", "path": path},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": max_active_runs, "tasks": [], "edges": []
     }))
@@ -177,7 +177,7 @@ async fn a_parse_of_a_hash_no_longer_reported_is_stored_but_not_used() {
         .unwrap();
     assert_eq!(dags(&discovery).await, []);
     assert_eq!(
-        discovery.db.find_parse("etl", "h1", "0.1.0").await.unwrap(),
+        discovery.db.find_parse("etl", "h1", "1.0.0").await.unwrap(),
         Some(late)
     );
     assert_eq!(discovery.jobs().len(), 1);
@@ -344,7 +344,7 @@ async fn a_restarted_master_decides_the_same_whatever_the_order_of_reports() {
     let first = two_workers().await;
     let mut restarted = Discovery::new(
         first.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     restarted
@@ -373,7 +373,7 @@ async fn after_an_upgrade_the_new_parse_takes_over_once_stored() {
         .await
         .unwrap();
     let job = discovery
-        .root_reported("w2", key_of("h1", "0.2.0"), now())
+        .root_reported("w2", key_of("h1", "1.1.0"), now())
         .await
         .unwrap();
     assert!(job.is_some(), "a newer version parses the hash again");
@@ -387,7 +387,7 @@ async fn after_an_upgrade_the_new_parse_takes_over_once_stored() {
         .parse_uploaded(
             ParseUpload {
                 worker_id: "w2".to_owned(),
-                key: key_of("h1", "0.2.0"),
+                key: key_of("h1", "1.1.0"),
                 ..upload("h1", vec![("a.py", vec![dag("a", "a.py", 1)])])
             },
             now(),
@@ -683,7 +683,7 @@ async fn a_known_dag_keeps_its_version_through_a_timeout_and_a_restart_plans_the
     // A restarted master knows of no retry until the worker reports the code again.
     let mut restarted = Discovery::new(
         discovery.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     assert_eq!(
@@ -926,7 +926,7 @@ async fn a_master_restarted_while_the_worker_drains_plans_the_retry_when_it_resu
     let discovery = timed_out_on_h2().await;
     let mut restarted = Discovery::new(
         discovery.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     // It registers drained (as `core` does it: parsing stopped first).
@@ -987,7 +987,7 @@ async fn a_restarted_master_still_avoids_the_worker_whose_parse_failed() {
         .unwrap();
     let mut restarted = Discovery::new(
         discovery.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     // `w1` (whose parse timed out, as stored with the file) comes first in order.
@@ -1134,7 +1134,7 @@ async fn new_code_reported_after_the_clock_stepped_back_is_still_the_newest() {
     // And so it stays, after a restart.
     let mut restarted = Discovery::new(
         discovery.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     for (worker, hash) in [("w2", "h1"), ("w1", "h2")] {
@@ -1173,7 +1173,7 @@ async fn a_restarted_master_keeps_a_conflict_with_a_root_not_reported_yet() {
     assert!(dags(&discovery).await[0].conflict.is_some());
     let mut restarted = Discovery::new(
         discovery.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     restarted
@@ -1202,7 +1202,7 @@ async fn a_worker_catching_up_after_a_restart_doesnt_rank_older_code_newest() {
     assert_eq!(code(&discovery), etl("h3"));
     let mut restarted = Discovery::new(
         discovery.db.clone(),
-        SchedrVersion::new(0, 1),
+        SchedrVersion::new(1, 0),
         ParseJobs::new(PARSE_JOB_TIMEOUT),
     );
     // w2, behind at h1, reconnects first and catches up to h2; then w1 is back, at h3.

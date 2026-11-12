@@ -75,7 +75,7 @@ fn dag() -> Dag {
         })
     };
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
         "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw", "catchup": false},
         "initial_since": null,
         "max_active_runs": 1,
@@ -121,7 +121,7 @@ async fn with_dag() -> (Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "sha256:h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &files,
@@ -175,7 +175,7 @@ async fn the_schema_migrates_and_reports_itself() {
 async fn parses_and_the_dag_list_are_stored() {
     let (db, _) = with_dag().await;
     let parse_id = db
-        .find_parse("etl", "sha256:h1", "0.1.0")
+        .find_parse("etl", "sha256:h1", "1.0.0")
         .await
         .unwrap()
         .unwrap();
@@ -183,7 +183,7 @@ async fn parses_and_the_dag_list_are_stored() {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "sha256:h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w2",
             parsed_at: ts(NOW),
             files: &[],
@@ -1745,7 +1745,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
             master_id: id,
             process_id: "p1",
             host: "node-a",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             config: &config,
             started_at: ts("2026-11-01T08:00:00Z"),
             problems: &problems,
@@ -1782,7 +1782,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
             id: "w1",
             incarnation: "0190a0a0-0000-7000-8000-000000000001",
             protocol_version: "1.0",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             queues: &queues,
             slots: 2,
             watcher_slots: 0,

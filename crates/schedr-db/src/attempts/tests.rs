@@ -29,7 +29,7 @@ fn dag() -> Dag {
         })
     };
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract"), task("load")],
@@ -46,7 +46,7 @@ async fn with_run() -> (Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -149,7 +149,7 @@ async fn ready_instances_are_the_queued_tasks_of_running_runs() {
     assert_eq!(*extract.dag, dag());
     assert_eq!(extract.content_hash, "h1");
     assert_eq!(extract.queued_reason, None);
-    assert_eq!(extract.parse_version, "0.1.0");
+    assert_eq!(extract.parse_version, "1.0.0");
     db.set_queued_reasons(
         &[(
             extract.instance_id.clone(),

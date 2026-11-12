@@ -14,7 +14,7 @@ async fn register(db: &Database, id: &str) -> Result<(), DbError> {
         id,
         incarnation: "0190a3e5-0000-7000-8000-000000000001",
         protocol_version: "1.0",
-        schedr_version: "0.1.0",
+        schedr_version: "1.0.0",
         queues: &[],
         slots: 1,
         watcher_slots: 0,

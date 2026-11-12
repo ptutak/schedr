@@ -6,10 +6,10 @@ use super::*;
 #[test]
 fn hello_is_tagged_by_type() {
     let message = RunnerMessage::Hello {
-        schedr_version: "0.1.0".into(),
+        schedr_version: "1.0.0".into(),
         mode: RunnerMode::Parse,
     };
-    let expected = json!({"type": "hello", "schedr_version": "0.1.0", "mode": "parse"});
+    let expected = json!({"type": "hello", "schedr_version": "1.0.0", "mode": "parse"});
     assert_eq!(serde_json::to_value(&message).unwrap(), expected);
     assert_eq!(
         serde_json::from_value::<RunnerMessage>(expected).unwrap(),
@@ -60,7 +60,7 @@ fn file_parsed_carries_typed_dags() {
     let json = json!({
         "type": "file_parsed", "path": "x.py", "error": null,
         "dags": [{
-            "produced_by": "0.1", "id": "x", "location": {"root": "r", "path": "x.py"},
+            "produced_by": "1.0", "id": "x", "location": {"root": "r", "path": "x.py"},
             "trigger": {"kind": "none"}, "initial_since": null,
             "max_active_runs": 1, "tasks": [], "edges": []
         }]
@@ -112,11 +112,11 @@ fn unknown_types_and_fields_are_rejected() {
 
 #[test]
 fn the_runner_version_must_match_exactly() {
-    assert_eq!(check_runner_version("0.1.0", "0.1.0"), Ok(()));
-    let err = check_runner_version("0.1.0", "0.1.1").unwrap_err();
+    assert_eq!(check_runner_version("1.0.0", "1.0.0"), Ok(()));
+    let err = check_runner_version("1.0.0", "0.1.1").unwrap_err();
     assert_eq!(
         err,
-        "the runner's schedr package is 0.1.1, the agent is 0.1.0: install schedr==0.1.0 in the \
+        "the runner's schedr package is 0.1.1, the agent is 1.0.0: install schedr==1.0.0 in the \
          interpreter's environment"
     );
 }
@@ -127,8 +127,8 @@ fn a_release_candidate_is_compared_as_python_writes_it() {
     assert_eq!(check_runner_version("0.1.0-rc1", "0.1.0rc1"), Ok(()));
     let err = check_runner_version("0.1.0-rc2", "0.1.0rc1").unwrap_err();
     assert!(err.contains("install schedr==0.1.0rc2 "), "{err}");
-    assert!(check_runner_version("0.1.0-rc1", "0.1.0").is_err());
-    assert_eq!(python_version("0.1.0"), "0.1.0");
+    assert!(check_runner_version("0.1.0-rc1", "1.0.0").is_err());
+    assert_eq!(python_version("1.0.0"), "1.0.0");
     assert_eq!(python_version("12.3.40-rc10"), "12.3.40rc10");
     // Not a form the release workflow allows: left as it is.
     assert_eq!(python_version("0.1.0-rc.1"), "0.1.0-rc.1");

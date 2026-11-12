@@ -14,7 +14,7 @@
 # scripts/kind-lib.sh.
 #
 # Usage: scripts/kind-kill.sh     (the images `make image` and `make server-image` built)
-#   IMAGE, SERVER_IMAGE  as the container tool names them (podman: localhost/schedr:0.1.0)
+#   IMAGE, SERVER_IMAGE  as the container tool names them (podman: localhost/schedr:<version>)
 #   CONTAINER=podman
 set -euo pipefail
 

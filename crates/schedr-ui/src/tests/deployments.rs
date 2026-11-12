@@ -14,14 +14,14 @@ const STANDBY: &str = "0190a0a0-0000-7000-8000-00000000000b";
 fn master(id: &str, role: &str, process: &str, config: &Value) -> Value {
     json!({
         "master_id": id, "role": role, "process_id": process, "host": format!("host-{process}"),
-        "schedr_version": "0.1.0", "config": config,
+        "schedr_version": "1.0.0", "config": config,
         "started_at": "2026-10-15T01:00:00Z", "heard_at": "2026-10-15T01:00:05Z"
     })
 }
 
 fn worker(id: &str, state: &str, master: Option<&str>, process: Option<&str>) -> Value {
     json!({
-        "worker_id": id, "state": state, "schedr_version": "0.1.0", "master_id": master,
+        "worker_id": id, "state": state, "schedr_version": "1.0.0", "master_id": master,
         "process_id": process, "config": process.map(|_| json!({"worker": {"slots": 2}}))
     })
 }
@@ -31,7 +31,7 @@ fn worker(id: &str, state: &str, master: Option<&str>, process: Option<&str>) ->
 fn distributed() -> Value {
     let secret = json!({"database": {"url": "postgres://schedr:****@db:5432/schedr"}});
     json!({
-        "webserver": {"process_id": "p-web", "host": "web-0", "schedr_version": "0.1.0",
+        "webserver": {"process_id": "p-web", "host": "web-0", "schedr_version": "1.0.0",
                       "config": {"webserver": {"port": 8080}}},
         "masters": [master(LEADER, "leader", "p-m1", &secret),
                     master(STANDBY, "standby", "p-m2", &secret)],
@@ -61,7 +61,7 @@ fn side(process_id: &str) -> UiSide {
     UiSide {
         process_id: process_id.to_owned(),
         host: "ui-host".to_owned(),
-        version: "0.1.0".to_owned(),
+        version: "1.0.0".to_owned(),
         user: "anna".to_owned(),
         config: json!({"ui": {"port": 8082, "docs_dir": null}}),
     }
@@ -69,7 +69,7 @@ fn side(process_id: &str) -> UiSide {
 
 fn standalone() -> Value {
     json!({
-        "webserver": {"process_id": "p", "host": "h", "schedr_version": "0.1.0", "config": {}},
+        "webserver": {"process_id": "p", "host": "h", "schedr_version": "1.0.0", "config": {}},
         "masters": [master(LEADER, "leader", "p", &json!({}))],
         "workers": [worker("standalone", "active", Some(LEADER), Some("p"))],
         "user": "anonymous"
@@ -191,7 +191,7 @@ fn an_unreachable_deployment_is_a_red_webserver_and_the_ui_says_so() {
         [
             (
                 false,
-                "`etl`'s webserver is version 9.9.9; this UI is 0.1.0"
+                "`etl`'s webserver is version 9.9.9; this UI is 1.0.0"
             ),
             (true, "can't reach `ml`'s webserver: connection refused")
         ]

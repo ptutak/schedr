@@ -7,11 +7,11 @@ use super::*;
 fn requests_are_tagged_by_type() {
     let hello = CtxRequest::Hello {
         protocol: CTX_PROTOCOL,
-        schedr_version: "0.1.0".into(),
+        schedr_version: "1.0.0".into(),
     };
     assert_eq!(
         serde_json::to_value(&hello).unwrap(),
-        json!({"type": "hello", "protocol": 1, "schedr_version": "0.1.0"})
+        json!({"type": "hello", "protocol": 1, "schedr_version": "1.0.0"})
     );
     assert_eq!(
         serde_json::from_value::<CtxRequest>(json!({"type": "params_get"})).unwrap(),

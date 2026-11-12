@@ -8,8 +8,17 @@ const fn v(major: u32, minor: u32) -> ProtocolVersion {
 }
 
 #[test]
-fn the_current_version_is_0_1() {
-    assert_eq!(PROTOCOL_VERSION, v(0, 1));
+fn the_current_version_is_1_0() {
+    assert_eq!(PROTOCOL_VERSION, v(1, 0));
+}
+
+#[test]
+fn a_1_0_master_refuses_a_worker_of_the_0_1_preview() {
+    // B187: a 0.1 worker would run a DAG with fields added since 0.1.0 without them.
+    assert!(matches!(
+        check_worker_version(PROTOCOL_VERSION, Some(v(0, 1))),
+        Err(VersionMismatch::Major { .. })
+    ));
 }
 
 #[rstest]

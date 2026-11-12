@@ -89,7 +89,7 @@ async fn api_of(
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -97,7 +97,7 @@ async fn api_of(
         .await
         .unwrap();
     let dag: schedr_model::Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": tasks,
@@ -733,7 +733,7 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
             id: "w1",
             incarnation: "0190a0a0-0000-7000-8000-000000000001",
             protocol_version: "1.0",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             queues: &queues,
             slots: 4,
             watcher_slots: 0,
@@ -758,7 +758,7 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
             "watcher_slots": 0, "watcher_hosts": [],
             "worker_id": "w1", "state": "lost",
             "incarnation_id": "0190a0a0-0000-7000-8000-000000000001",
-            "queues": ["large"], "slots": 4, "running": 0, "schedr_version": "0.1.0",
+            "queues": ["large"], "slots": 4, "running": 0, "schedr_version": "1.0.0",
             "protocol_version": "1.0", "log_endpoint": "",
             "registered_at": "2026-10-22T08:00:00Z",
             "last_heartbeat_at": "2026-10-22T08:00:00Z",
@@ -777,7 +777,7 @@ async fn deployment_workers(db: &schedr_db::Database) -> serde_json::Value {
                 id,
                 incarnation: "0190a0a0-0000-7000-8000-000000000001",
                 protocol_version: "1.0",
-                schedr_version: "0.1.0",
+                schedr_version: "1.0.0",
                 queues: &queues,
                 slots: 2,
                 watcher_slots: 0,
@@ -841,7 +841,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
                 master_id: id,
                 process_id: "p-1",
                 host: "node-a",
-                schedr_version: "0.1.0",
+                schedr_version: "1.0.0",
                 config: &config,
                 started_at: ts("2026-10-21T07:00:00Z"),
                 problems: if id == "m-a" { &late } else { &[] },
@@ -858,7 +858,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
     let mut state = ApiState::new(db.clone(), None).with_node(crate::views::NodeView {
         process_id: "p-3".to_owned(),
         host: "web".to_owned(),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
         config: json!({"webserver": {"port": 8080}}),
     });
     state.clock = fixed_now;
@@ -868,7 +868,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["webserver"],
-        json!({"process_id": "p-3", "host": "web", "schedr_version": "0.1.0",
+        json!({"process_id": "p-3", "host": "web", "schedr_version": "1.0.0",
                "config": {"webserver": {"port": 8080}}})
     );
     // Heard from in the last 30 s, the leader first.
@@ -876,11 +876,11 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
         body["masters"],
         json!([
             {"master_id": "m-b", "role": "leader", "process_id": "p-1", "host": "node-a",
-             "schedr_version": "0.1.0", "config": config,
+             "schedr_version": "1.0.0", "config": config,
              "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z",
              "problems": []},
             {"master_id": "m-a", "role": "standby", "process_id": "p-1", "host": "node-a",
-             "schedr_version": "0.1.0", "config": config,
+             "schedr_version": "1.0.0", "config": config,
              "started_at": "2026-10-21T07:00:00Z", "heard_at": "2026-10-21T07:59:55Z",
              "problems": [{"error": false,
                            "message": "its lease isn't renewed in time (postgres://u:****@db/s)"}]},
@@ -889,16 +889,16 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
     assert_eq!(
         body["workers"],
         json!([
-            {"worker_id": "w1", "state": "active", "schedr_version": "0.1.0",
+            {"worker_id": "w1", "state": "active", "schedr_version": "1.0.0",
              "master_id": "m-b", "process_id": "p-2", "config": worker,
              "queues": ["default", "large"],
              "problems": [{"error": false, "message": "tasks start slower"}]},
-            {"worker_id": "w2", "state": "lost", "schedr_version": "0.1.0",
+            {"worker_id": "w2", "state": "lost", "schedr_version": "1.0.0",
              "master_id": null, "process_id": null, "config": null,
              "queues": ["default", "large"],
              "problems": [{"error": true,
                            "message": "lost: it stopped answering, its attempts were given up"}]},
-            {"worker_id": "w3", "state": "offline", "schedr_version": "0.1.0",
+            {"worker_id": "w3", "state": "offline", "schedr_version": "1.0.0",
              "master_id": null, "process_id": null, "config": null,
              "queues": ["default", "large"], "problems": []},
         ])
@@ -963,7 +963,7 @@ async fn with_log(endpoint: &str) -> (axum::Router, Database, String, String, Ar
             id: "w1",
             incarnation: "0190a0a0-0000-7000-8000-000000000001",
             protocol_version: "1.0",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             queues: &queues,
             slots: 2,
             watcher_slots: 0,
@@ -1300,7 +1300,7 @@ async fn the_current_codes_import_errors_are_listed() {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h2",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w2",
             parsed_at: ts(NOW),
             files: &files,
@@ -1315,7 +1315,7 @@ async fn the_current_codes_import_errors_are_listed() {
         body,
         json!({"errors": [{
             "root": "etl", "path": "broken.py", "content_hash": "h2",
-            "parsed_at": NOW, "worker_id": "w2", "schedr_version": "0.1.0",
+            "parsed_at": NOW, "worker_id": "w2", "schedr_version": "1.0.0",
             "exception": "ModuleNotFoundError",
             "message": "No module named 'pandas' (from postgres://u:****@db/s)",
             "traceback": "  File \"broken.py\", line 1, password=****"
@@ -1844,7 +1844,7 @@ async fn each_roots_connections_are_listed_with_the_tasks_declaring_them() {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h2",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &files,

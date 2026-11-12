@@ -7,7 +7,7 @@ use super::*;
 
 fn dag(id: &str, root: &str, path: &str) -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": id, "location": {"root": root, "path": path},
+        "produced_by": "1.0", "id": id, "location": {"root": root, "path": path},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": [], "edges": []
     }))

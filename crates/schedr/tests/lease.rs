@@ -217,7 +217,7 @@ async fn a_registration_finishing_after_shutdown_is_refused() {
             worker_id: "review_worker".into(),
             incarnation_id: uuid::Uuid::now_v7().to_string(),
             protocol: Some(PROTOCOL_VERSION),
-            schedr_version: "0.1.0".into(),
+            schedr_version: "1.0.0".into(),
             slots: 1,
             ..Default::default()
         })),

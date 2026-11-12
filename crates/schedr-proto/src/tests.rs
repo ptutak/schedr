@@ -12,7 +12,7 @@ fn messages_encode_and_decode() {
             worker_id: "worker-1".into(),
             incarnation_id: "0192c4e1-7a3b-7c00-8000-000000000000".into(),
             protocol: Some(super::PROTOCOL_VERSION),
-            schedr_version: "0.1.0".into(),
+            schedr_version: "1.0.0".into(),
             queues: vec!["default".into()],
             slots: 2,
             log_endpoint: "10.0.0.7:8081".into(),

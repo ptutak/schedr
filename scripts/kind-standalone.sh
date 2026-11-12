@@ -10,13 +10,14 @@
 # Usage: scripts/kind-standalone.sh            (the base image `make image` built must exist)
 #   CLUSTER=schedr-test  the kind cluster (created if missing, kept afterwards; delete it with
 #                        `kind delete cluster --name schedr-test`)
-#   IMAGE=schedr:0.1.0   the base image;  CONTAINER=podman  the container tool
+#   IMAGE=schedr:<version>   the base image;  CONTAINER=podman  the container tool
 set -euo pipefail
 CLUSTER=${CLUSTER:-schedr-test}
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr
-# Unqualified, so this stays schedr:0.1.0. kind-lib.sh would add podman's localhost/ prefix.
-IMAGE=${IMAGE:-schedr:0.1.0}
+# Unqualified, so this stays schedr:<version>. kind-lib.sh would add podman's localhost/ prefix.
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../Cargo.toml" | head -1)
+IMAGE=${IMAGE:-schedr:$version}
 TEST_IMAGE=localhost/schedr-kind-test:1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck source-path=SCRIPTDIR

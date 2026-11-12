@@ -22,7 +22,7 @@ fn daily(changes: &Json) -> Json {
 /// A DAG with a daily 03:00 UTC trigger, changed by `changes`.
 fn dag(changes: &Json) -> Dag {
     let mut dag = json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": daily(&json!({})),
         "initial_since": null,
         "max_active_runs": 1, "tasks": [], "edges": []

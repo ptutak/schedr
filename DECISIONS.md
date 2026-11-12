@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D456 | 2026-10-29 | user | rule | development | From 1.0.0 the schema and the protocol change only additively |
 | D455 | 2026-11-12 | claude | built R1.0b | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
 | D454 | 2026-11-11 | user | planned (R1.0c) | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
 | D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
@@ -328,7 +329,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D159 | 2026-11-02 | user | built M4.5c | ui-cli | A stale trigger form is refused |
 | D158 | 2026-11-02 | user | built R0.1 | development | Release candidates publish to TestPyPI |
 | D157 | 2026-11-02 | user | built R0.1 | development | Releases push server and worker images while the chart stays in the repository |
-| D156 | 2026-11-02 | user | rule | development | The 0.x schema and protocol are edited in place |
+| D156 | 2026-11-02 | user | superseded by D456 | development | The 0.x schema and protocol are edited in place |
 | D155 | 2026-11-02 | user | built R0.1 | development | Releases carry notes, wheels, checksums and attestations |
 | D154 | 2026-11-02 | user | built R0.1 | development | A pushed version tag starts a release |
 | D153 | 2026-11-02 | user | built R0.1 | development | Releases use Trusted Publishing to PyPI |
@@ -677,6 +678,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### development
 
+- D456: From 1.0.0 the schema and the protocol change only additively
 - D377: JOURNAL.md holds notes (N) beside decisions (D)
 - D376: STATUS.md is generated from the records and status.toml
 - D375: Summaries follow the code: names checked, affected and stale decisions listed
@@ -697,7 +699,6 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 - D160: A release runs CI on its tag and publishes CI wheels
 - D158: Release candidates publish to TestPyPI
 - D157: Releases push server and worker images while the chart stays in the repository
-- D156: The 0.x schema and protocol are edited in place
 - D155: Releases carry notes, wheels, checksums and attestations
 - D154: A pushed version tag starts a release
 - D153: Releases use Trusted Publishing to PyPI

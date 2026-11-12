@@ -97,7 +97,7 @@ async fn world_of(
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -105,7 +105,7 @@ async fn world_of(
         .await
         .unwrap();
     let dag: schedr_model::Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": trigger,
         "initial_since": null,
         "max_active_runs": 1,
@@ -622,7 +622,7 @@ async fn workers_are_listed_as_a_table() {
                 id: "w1",
                 incarnation: "i1",
                 protocol_version: "1.0",
-                schedr_version: "0.1.0",
+                schedr_version: "1.0.0",
                 queues: &queues,
                 slots: 4,
                 watcher_slots: 0,
@@ -682,7 +682,7 @@ async fn a_worker_is_drained_and_resumed() {
                 id: "w1",
                 incarnation: "i1",
                 protocol_version: "1.0",
-                schedr_version: "0.1.0",
+                schedr_version: "1.0.0",
                 queues: &[],
                 slots: 2,
                 watcher_slots: 0,
@@ -848,8 +848,8 @@ async fn assigned_task(
         &schedr_db::workers::WorkerRegistration {
             id: "w1",
             incarnation: "i1",
-            protocol_version: "0.1",
-            schedr_version: "0.1.0",
+            protocol_version: "1.0",
+            schedr_version: "1.0.0",
             queues: &queues,
             slots: 2,
             watcher_slots: 0,

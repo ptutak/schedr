@@ -530,7 +530,6 @@ sequenceDiagram
     Note over Old: An ordinary task can still be running beside the retry
 ```
 
-A worker of an earlier build ignores the deadline. During a rolling upgrade, master first, it
-keeps the old race until every worker is new. That stays with the protocol's minor version
-until 1.0 (B187). An assignment from an older master leaves `start_by_ms` unset, and the
-worker then has no limit of this kind.
+Every worker honours the deadline: a worker of the 0.1 preview, which ignored it, is refused
+by a 1.0 master (another protocol major). An assignment without `start_by_ms` sets the worker
+no limit of this kind.

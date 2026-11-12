@@ -112,7 +112,7 @@ fn parsed_file() -> ParsedFile {
     serde_json::from_value(serde_json::json!({
         "path": "team/sync.py",
         "dags": [{
-            "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+            "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
             "trigger": {"kind": "none"}, "initial_since": null,
             "max_active_runs": 1, "tasks": [], "edges": []
         }],

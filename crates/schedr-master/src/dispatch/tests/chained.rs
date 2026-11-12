@@ -32,7 +32,7 @@ fn chaining_dag(extra: &Json, routed: bool, retries: u32) -> Dag {
         edges.push(json!({"from": "start", "to": "notify", "kind": "order", "on": ["Failed"]}));
     }
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": edges
     }))
@@ -45,7 +45,7 @@ async fn define_orders(db: &Database, trigger: &Json) {
         .insert_parse(&NewParse {
             root: "shop",
             content_hash: "h2",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -53,7 +53,7 @@ async fn define_orders(db: &Database, trigger: &Json) {
         .await
         .unwrap();
     let orders: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "orders", "location": {"root": "shop", "path": "orders.py"},
+        "produced_by": "1.0", "id": "orders", "location": {"root": "shop", "path": "orders.py"},
         "trigger": trigger, "initial_since": null, "max_active_runs": 5,
         "tasks": [task("load", &json!({}), 0)], "edges": []
     }))

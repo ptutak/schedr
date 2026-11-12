@@ -161,7 +161,7 @@ impl Executor for Fake {
                 serde_json::from_value(json!({
                     "path": path,
                     "dags": [{
-                        "produced_by": "0.1", "id": stem,
+                        "produced_by": "1.0", "id": stem,
                         "location": {"root": root, "path": path},
                         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
                         "tasks": [{

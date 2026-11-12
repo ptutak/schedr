@@ -13,7 +13,7 @@ fn ts(text: &str) -> Timestamp {
 #[test]
 fn a_dag_shows_its_current_version_or_its_conflict() {
     let dag: schedr_model::Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "description": "Daily sync", "tags": ["team-a"],
         "trigger": {"kind": "every", "interval_ms": 60_000, "catchup": false}, "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []
     }))
@@ -46,7 +46,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
         path: "a.py".to_owned(),
         exception: "ModuleNotFoundError".to_owned(),
         message: "No module named 'pandas'".to_owned(),
-        schedr_version: "0.1.0".to_owned(),
+        schedr_version: "1.0.0".to_owned(),
     };
     let by_file = HashMap::from([(("etl".to_owned(), "a.py".to_owned()), held)]);
     assert_eq!(
@@ -55,7 +55,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
             "path": "a.py", "exception": "ModuleNotFoundError",
             "message": "No module named 'pandas'",
             "reason": "DAG `sync` is held, no runs are created and it can't be triggered: its \
-                file `a.py` fails to import with schedr 0.1.0 (ModuleNotFoundError: No module \
+                file `a.py` fails to import with schedr 1.0.0 (ModuleNotFoundError: No module \
                 named 'pandas'), so its tasks couldn't run. Every DAG of the file is held until \
                 it imports: fix the file, or, if it stopped importing when schedr was upgraded, \
                 roll back"
@@ -244,7 +244,7 @@ fn limits_are_counted_by_what_they_limit() {
         s
     };
     let dag: schedr_model::Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 2,
         "max_active_tasks": 10,
         "tasks": [

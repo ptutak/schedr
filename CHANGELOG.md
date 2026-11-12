@@ -1,13 +1,35 @@
 # Changelog
 
-Each release's section is its release notes on GitHub (`scripts/release.py notes`). Until
-1.0.0 schedr is a preview: the database schema and the protocol between its processes are
-changed in place, so moving from one 0.x version to the next means a fresh database
-(PROJECT.md, decision 156).
+Each release's section is its release notes on GitHub (`scripts/release.py notes`). From 1.0.0
+on, the database schema changes only through new migrations and the protocol between schedr's
+processes only additively within a major version (decision 456); 0.1.0 was a preview, its
+schema and protocol changed in place (decision 156).
 
-## Unreleased
+## 1.0.0
 
-- **Upgrading: a shortened worker lease may now be refused at start** (decision 444). A master
+The first stable release (`Development Status :: 5 - Production/Stable`). From 1.0.0 on, the
+database schema changes only through new migrations, which `schedr db migrate` applies; the
+protocol between schedr's processes (now 1.0) changes only additively within 1.x; DAG JSON, the
+REST API and the configuration keep accepting what they accept now.
+
+### Upgrading from 0.1.0
+
+- **A fresh database, every node at once.** 0.1.0 was a preview: its schema and protocol were
+  changed in place since. A 1.0.0 master refuses a 0.1 worker (another protocol major), and the
+  schema starts afresh: `schedr db status` reports a 0.1 database as created by an earlier
+  schedr, and the master, the webserver and `schedr db migrate` refuse it.
+- **The images' plain tag is now glibc** (decision 454): `ghcr.io/ptutak/schedr`,
+  `schedr-slim` and `schedr-server` are built on Debian (`python:3.14.8-slim`) from the
+  manylinux wheel; the Alpine ones, the plain tag in 0.1.0, are tagged `-alpine`
+  (`schedr:1.0.0-alpine`). An image of your own built `FROM` the base takes `apt` (or `apk` on
+  `-alpine`); `examples/kubernetes/Dockerfile` shows both. The glibc base has PostgreSQL 18's
+  client from PostgreSQL's own apt source.
+- **A slim image** (decision 383): `ghcr.io/ptutak/schedr-slim`, Python and schedr without the
+  task libraries and connection clients; the full image stays the default.
+- **Timings a deployment rarely tunes left the configuration** (M4.8t, decisions 231-235): 18 of
+  them are set only by `SCHEDR_HIDDEN__<SECTION>__<NAME>` (environment only, warned about,
+  unsupported); the others are keys with today's values as defaults.
+- **A shortened worker lease may be refused at start** (decision 444). A master
   keeps acting for its lead after its last lease renewal: `SCHEDR_HIDDEN__MASTER__LEASE_PERIOD`
   less `SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT` (30 s less 10 s, 20 s by default). The worker
   lease (`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`, 60 s) must now be longer than that lead, or
@@ -17,6 +39,44 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
   must also lower those before upgrading: for example a 15 s worker lease with a 3 s heartbeat
   interval (the lease must stay at least four heartbeats), a 6 s lease period and a 2 s query
   timeout (a 4 s lead).
+
+### New since 0.1.0
+
+- **Cleanups and resources** (M4.8, decisions 214-230, 252-279): per-task `cleanup=` with
+  registered handles (masked, journaled), `cleanup_timeout` and retries, a failed cleanup
+  failing the run; `cleanup_anywhere`, a lost worker's cleanup moving to another, a worker cut
+  off stopping those tasks at its lease; `@resource` and `uses=`, `CommandResource` and
+  `ScriptResource`, `task-ctx cleanup` and `resource`; `schedr tasks cancel` stopping a hung
+  resource cleanup.
+- **Script roots and `schedr.toml`** (M4.9, decisions 292-305): `SCHEDR_SCRIPT_PATH`, standalone
+  jobs declared in TOML, the `script` task kind and `ScriptOperator`, libraries shipped in roots;
+  only `.py` files mentioning `schedr` are parsed.
+- **Async tasks** (M4.10, decision 316): `async def` tasks, cleanups and resources, on `uvloop`
+  when installed (`schedr[uvloop]`).
+- **Wait steps, triggers and events** (M4.11, decisions 320-356): `@sensor` and `@sensor.poke`
+  on a watcher host, `TimedOut`; `@trigger` and `@trigger.poke` (with `batch=`) starting event
+  runs; `first_of` and `at_least`; `RunOf` to wait for or start on another DAG's run; named
+  events posted through the API; the `delay` and `until` sensors; `schedr.api`, the REST API
+  from Python, inside a task through its agent.
+- **Runs between and over time** (M4.12, decisions 357-407): `TriggerDagOperator` (a target
+  needs `trigger=Chained()`), with `.partial()`/`.expand()`; backfills (`schedr runs backfill`,
+  the API and the DAG page's form).
+- **Notifications** (M4.13, decisions 408-429): eight events, webhooks and email through an
+  outbox, `Dag(notify=...)`, `channel.send` from tasks.
+- **Retention** (M4.14, decisions 430-435): `[retention]` for runs, outputs, events and
+  commands, never the latest run nor an unfinished one.
+- **Per-task memory** (M4.15a, decisions 50, 436-438): `memory=` budgets and
+  `hard_memory_limit=`.
+- **Master time** (M4B.0, decisions 443-453): liveness decided on the master's monotonic clock,
+  carried on every message; a worker's start deadline and cutoff on master time; a replaced
+  incarnation's attempts held for its lease; a new leader waiting out a deposed one (lease
+  epochs); metrics for the clock and the fencing.
+- **Throughput** (M4B, decisions 396, 397, 452): a worker's turn handled in groups, its results
+  written together, the agent's journal in groups: about half again as many tasks a second on
+  Postgres (the guide, Stress tests).
+- **A simulator** (decisions 446, 455): the real master and workers on one virtual clock,
+  through cuts, lags, restarts and takeovers, checking that no task instance runs twice;
+  600 fresh scenarios nightly.
 - **Connections in the web UI** (M4.7e, decisions 207-211): a **Connections** page (every
   deployment's, by DAG root) and a section on each DAG's page (those its tasks declare), with
   **Check all** per root and **Test** per connection (after a confirmation), the results
@@ -96,6 +156,15 @@ changed in place, so moving from one 0.x version to the next means a fresh datab
   the chart's `secretStorage.db` for standalone's key. A task can log in to Vault as its
   worker (decision 173): teams that must be kept apart run separate deployments, still in one
   federated UI.
+
+### Fixed
+
+Every bug known at the release, but the DAG page layout's (B38, B39: a redesign, in M6)
+and a test that may be too tight under load (B237, suspected).
+Among them: a worker lost just as an assignment reached it no longer has it
+queued again at once when its task has `cleanup_anywhere` (B234, decision 455).
+A worker connecting again gets back the parse jobs it held, instead of the DAG waiting
+`parse_job_timeout` (B235); a database of 0.1 is refused rather than read as current (B236).
 
 ## 0.1.0
 

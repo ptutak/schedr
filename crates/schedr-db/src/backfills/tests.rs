@@ -22,7 +22,7 @@ async fn with_dag() -> (Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts("2026-10-01T00:00:00Z"),
             files: &[],
@@ -30,7 +30,7 @@ async fn with_dag() -> (Database, String) {
         .await
         .unwrap();
     let dag: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC",
                     "catchup": false},
         "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []

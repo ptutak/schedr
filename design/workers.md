@@ -212,7 +212,7 @@ Each is one line; the reader's page has the diagrams.
 - A stall under 1 s plus 0.2 % of the boot time since the sample is unseen, and the bound stays late by that much (the guide's Known limits; `clock_sim` allows it and does not fail on it).
 - The cutoff the last session computed stands over a reconnect until the new session's first sample (the guide's Known limits; `a_reconnect_keeps_the_cutoff_the_last_stamps_set`).
 - At the end of a replaced incarnation's lease the old process has stopped only its `cleanup_anywhere` tasks and, when the cutoff fired, its triggers. An ordinary task can still overlap the retry, as with a lost worker (the guide's Known limits; decision 443; `agent::tests::a_master_gone_silent_ends_the_stream_and_leaves_other_tasks_running`).
-- A worker of an earlier build ignores `start_by_ms`, and an assignment that leaves it unset has no master-time start limit (`journal_start` checks only `Some`). Kept until protocol 1.0 (the guide's Known limits; B187). No test of an unset `start_by_ms` on purpose.
+- An assignment that leaves `start_by_ms` unset has no master-time start limit (`journal_start` checks only `Some`); a 0.1 worker, which ignored it, is refused by protocol 1.0 (the guide's Known limits; B187, decision 456). No test of an unset `start_by_ms` on purpose.
 
 
 ## Current

@@ -3,7 +3,7 @@ use serde_json::{Value as Json, json};
 
 use super::*;
 
-const MASTER: SchedrVersion = SchedrVersion::new(0, 1);
+const MASTER: SchedrVersion = SchedrVersion::new(1, 0);
 
 /// The master's message limit in these tests: the default, 64 MiB.
 const LIMIT: usize = 64 << 20;
@@ -36,7 +36,7 @@ fn edge(from: &str, to: &str, kind: &str) -> Json {
 
 fn dag_with(changes: &Json) -> Dag {
     let mut dag = json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract", &json!({})), task("load", &json!({"rows": output_of("extract")}))],
@@ -60,13 +60,14 @@ fn a_valid_dag_has_no_problems() {
 #[test]
 fn dag_json_from_a_newer_or_other_major_version_cant_be_read() {
     assert_eq!(
-        problems(&json!({"produced_by": "0.2"})),
-        ["produced by schedr 0.2, which this master (schedr 0.1) can't read"]
+        problems(&json!({"produced_by": "1.1"})),
+        ["produced by schedr 1.1, which this master (schedr 1.0) can't read"]
     );
-    assert_eq!(problems(&json!({"produced_by": "1.0"})).len(), 1);
-    let older = dag_with(&json!({"produced_by": "0.1"}));
+    assert_eq!(problems(&json!({"produced_by": "2.0"})).len(), 1);
+    assert_eq!(problems(&json!({"produced_by": "0.1"})).len(), 1);
+    let older = dag_with(&json!({"produced_by": "1.0"}));
     assert_eq!(
-        dag_problems(&older, "etl", "sync.py", SchedrVersion::new(0, 3)),
+        dag_problems(&older, "etl", "sync.py", SchedrVersion::new(1, 3)),
         Vec::<String>::new()
     );
 }
@@ -433,7 +434,7 @@ fn files_with_invalid_dags_become_import_errors() {
     assert_eq!(error.exception, INVALID_DAG_EXCEPTION);
     assert_eq!(
         error.message,
-        "DAG `sync`: produced by schedr 0.9, which this master (schedr 0.1) can't read\n\
+        "DAG `sync`: produced by schedr 0.9, which this master (schedr 1.0) can't read\n\
          DAG `sync`: max_active_runs must be at least 1"
     );
 }

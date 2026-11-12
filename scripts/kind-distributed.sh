@@ -10,7 +10,7 @@
 # Usage: scripts/kind-distributed.sh   (the images `make image` and `make server-image` built)
 #   CLUSTER=schedr-test  the kind cluster (created if missing, kept afterwards)
 #   IMAGE, SERVER_IMAGE  the images, as the container tool names them (podman:
-#                        localhost/schedr:0.1.0, localhost/schedr-server:0.1.0)
+#                        localhost/schedr:<version>, localhost/schedr-server:<version>)
 #   CONTAINER=podman
 #   MESH=1  on a cluster with Istio (scripts/kind-mesh.sh's, CLUSTER=schedr-mesh): tls.mode mesh,
 #           an account per role and the internal links allowed by account only

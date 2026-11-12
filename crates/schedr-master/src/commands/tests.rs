@@ -22,7 +22,7 @@ fn sync() -> DagId {
 
 fn dag() -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": false, "start": "2026-10-01T00:00:00Z"},
         "initial_since": null,
         "max_active_runs": 1,
@@ -59,7 +59,7 @@ async fn world_of(dag: Dag) -> World {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -529,8 +529,8 @@ async fn a_worker_is_drained_and_resumed_and_unknown_ones_are_rejected() {
             &schedr_db::workers::WorkerRegistration {
                 id: "w1",
                 incarnation: "0190a0a0-0000-7000-8000-000000000001",
-                protocol_version: "0.1",
-                schedr_version: "0.1.0",
+                protocol_version: "1.0",
+                schedr_version: "1.0.0",
                 queues: &[],
                 slots: 2,
                 watcher_slots: 0,

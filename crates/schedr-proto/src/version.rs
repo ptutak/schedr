@@ -10,7 +10,7 @@ use crate::pb::ProtocolVersion;
 mod tests;
 
 /// The protocol version this build speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 0, minor: 1 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
 
 /// Why the master refuses a worker's protocol version.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

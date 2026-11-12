@@ -22,7 +22,7 @@ fn extract() -> TaskId {
 
 fn dag() -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "a.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "a.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [{
@@ -46,7 +46,7 @@ async fn with_dag() -> (Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts("2026-10-01T00:00:00Z"),
             files: &[],
@@ -135,7 +135,7 @@ async fn add_other_dag(db: &Database) -> String {
             .insert_parse(&NewParse {
                 root: "etl",
                 content_hash: "h2",
-                schedr_version: "0.1.0",
+                schedr_version: "1.0.0",
                 worker_id: "w1",
                 parsed_at: ts("2026-10-01T00:00:00Z"),
                 files: &[],
@@ -477,7 +477,7 @@ async fn states_are_counted_for_the_masters_gauges() {
             id: "w1",
             incarnation: "0190a0a0-0000-7000-8000-000000000001",
             protocol_version: "1.0",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             queues: &[],
             slots: 2,
             watcher_slots: 0,

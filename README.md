@@ -37,36 +37,37 @@ with Dag(
 
 ## Status
 
-**0.1.0 is a preview** (`pip install schedr`; `CHANGELOG.md`), released with M1 to M4.5 of
-`PLAN.md` done: standalone and distributed, the fork server, the web UI, the native API up to
-run parameters. Until 1.0.0 the database schema and the protocol between schedr's processes
-change in place: a new 0.x version needs a fresh database, with no upgrade path.
+**1.0.0 is the first stable release** (`pip install schedr`; `CHANGELOG.md`), with M1 to M4B of
+`PLAN.md` done: standalone and distributed, the fork server, the web UI and the native API.
+From 1.0.0 on, the database schema changes only through new migrations and the protocol
+between schedr's processes only additively within 1.x; DAG JSON, the REST API and the
+configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a
+fresh database. Next: the Airflow layer (M5); see `PLAN.md`.
 
-`main` has more since, not released yet (`CHANGELOG.md`, "Unreleased"): M4.6 to M4.8 and
-M4.9a (secrets, connections, cleanups and resources; script roots read and listed). Next:
-plain script tasks and `ScriptOperator` (the rest of M4.9), then the rest of the native API
-(M4: async tasks, sensors and triggers, notifications, ...), batched worker messages (M4B),
-then 1.0.0. The Airflow layer is M5. See `PLAN.md` and the roadmap in `archive/PROJECT.md`.
+What works:
 
-What works on `main` (*main only* marks what came after 0.1.0):
-
-- **The native API:** `Dag`, `@task` (Python), `CommandOperator`, `EmptyOperator`, data flow
-  between tasks, `>>` and `chain`, `Cron` / `Every` / `Once` and presets, `StepDefaults`
-  (retries, timeouts, queues), `dag_ctx`; outcomes and `.on(...)`, `@branch`, task groups,
-  mapping (`.partial` / `.expand`), concurrency limits, run parameters (`Dag(params=)`, a form
-  in the UI); `schedr dag-ctx` (params, the run) for commands and plain scripts, over the
-  agent's socket; *main only:* `schedr task-ctx` (secrets, connections, cleanup handles,
-  resource values).
-- **Secrets and connections** (*main only*): `secrets[...]` in tasks and commands, from Vault (KV v2) or the
+- **The native API:** `Dag`, `@task` (Python, sync or `async`), `CommandOperator`,
+  `EmptyOperator`, data flow between tasks, `>>` and `chain`, `Cron` / `Every` / `Once` and
+  presets, `StepDefaults` (retries, timeouts, queues, memory), `dag_ctx`; outcomes and
+  `.on(...)`, `@branch`, `first_of`, task groups, mapping (`.partial` / `.expand`),
+  concurrency limits, run parameters (`Dag(params=)`, a form in the UI); `schedr dag-ctx` and
+  `schedr task-ctx` (secrets, connections, cleanup handles, resource values) for commands and
+  plain scripts, over the agent's socket.
+- **Waiting and starting:** wait steps (`@sensor`, `@sensor.poke`, the `delay` and `until`
+  sensors), triggers (`@trigger`, `@trigger.poke` with `batch=`) and named events through the
+  API, `RunOf` to wait for or start on another DAG's run, `TriggerDagOperator`, backfills.
+- **Secrets and connections:** `secrets[...]` in tasks and commands, from Vault (KV v2) or the
   database (`schedr secrets`, encrypted), masked in logs; `@connection` with typed clients
   (HTTP, SSH, SQL, Mongo, ...), given to commands as variables and files; `schedr connections
   check` / `test`.
-- **Cleanups and resources** (*main only*): a task's `cleanup=` run after each attempt, on its worker or,
-  with `cleanup_anywhere`, on another after its worker was lost; `@resource` and
-  `CommandResource`, set up for their users and cleaned once after the last one.
-- **Plain scripts** (*main only*, in progress): script roots (`SCHEDR_SCRIPT_PATH`) with `schedr.toml`
-  declarations, read and checked by the agent; a scheduled declaration is listed as a one-task
-  DAG. Workers run them from M4.9b.
+- **Cleanups and resources:** a task's `cleanup=` run after each attempt, on its worker or,
+  with `cleanup_anywhere`, on another after its worker was lost; `@resource`,
+  `CommandResource` and `ScriptResource`, set up for their users and cleaned once after the
+  last one.
+- **Plain scripts:** script roots (`SCHEDR_SCRIPT_PATH`) with `schedr.toml` declarations,
+  standalone jobs, the `script` task kind and `ScriptOperator`.
+- **Notifications and retention:** webhooks and email on eight events (`Dag(notify=...)`,
+  `channel.send` from tasks); `[retention]` for runs, outputs, events and commands.
 - **Testing DAGs:** `schedr dags check`, `schedr dags test`, and `schedr.testing`
   (`run_dag`, `task_context`) for pytest.
 - **One process or separate roles:** `schedr standalone` (master, webserver and one worker,
@@ -74,19 +75,22 @@ What works on `main` (*main only* marks what came after 0.1.0):
   `schedr webserver` as separate processes on Postgres, with mTLS between them.
 - **Surviving failures:** workers keep running tasks while the master restarts; a worker's
   journal survives its restarts; drains on SIGTERM; a standby master takes over through a
-  lease in the database; retries by rule (see the guide, "State and failures").
+  lease in the database; liveness decided on the master's monotonic clock; retries by rule
+  (see the guide, "State and failures").
 - **Operations:** the REST API (`/api/v1`, Swagger UI at `/api/v1/docs/`) used by the CLI
-  (`dags`, `runs`, `tasks`, `workers`; *main only:* `secrets`, `connections`); task logs through the webserver; a memory watchdog
-  per task; `/healthz`, `/readyz` and Prometheus `/metrics` on an ops port.
-- **Tested under faults:** a stress suite, nightly; *main only:* chaos scenarios (links cut
-  one way or both, slowed, a frozen worker, a seeded random schedule).
-- **Kubernetes:** images (`schedr` with Python for workers and standalone, `schedr-server`
-  without Python for the master and webserver) and a Helm chart (`charts/schedr`: standalone
-  or distributed, git-sync or DAGs from values, Istio, Vault), tested on kind.
-
+  (`dags`, `runs`, `tasks`, `workers`, `secrets`, `connections`) and by `schedr.api` from
+  Python; task logs through the webserver; a memory budget and watchdog per task;
+  `/healthz`, `/readyz` and Prometheus `/metrics` on an ops port.
+- **Tested under faults:** a stress suite and chaos scenarios (links cut one way or both,
+  slowed, a frozen worker, a seeded random schedule), and a simulator of the master and its
+  workers on one virtual clock, all nightly.
+- **Kubernetes:** images (`schedr` with Python for workers and standalone, `schedr-slim`
+  without the task libraries, `schedr-server` without Python for the master and webserver),
+  on glibc and on Alpine, and a Helm chart (`charts/schedr`: standalone or distributed,
+  git-sync or DAGs from values, Istio, Vault), tested on kind.
 - **Web UI:** `schedr ui` (in standalone too): DAGs, runs and their graphs (groups, mapped
-  tasks), logs and outputs live, import errors, actions with confirmations, several deployments
-  in one UI; *main only:* resources, cleanups and connections.
+  tasks), logs and outputs live, import errors, resources, cleanups and connections, actions
+  with confirmations, several deployments in one UI.
 
 ## Documentation
 
@@ -110,13 +114,12 @@ pip install schedr            # Python 3.14; add [pydantic] for Pydantic models
 ```
 
 Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each carries the
-`schedr` binary, so there is nothing to compile. 0.x is a preview: a new 0.x version needs a
-fresh database (`CHANGELOG.md`). The images, x86_64: `ghcr.io/ptutak/schedr` (Python and
+`schedr` binary, so there is nothing to compile. The images, x86_64: `ghcr.io/ptutak/schedr` (Python and
 the package: standalone and workers, the base for your own image), `ghcr.io/ptutak/schedr-slim`
 (the same without the task libraries and connection clients) and
-`ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), tagged with the
-version (`0.1.0`) and its series (`0.1`); there is no `latest`, since 0.2 won't read 0.1's
-database.
+`ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), on Debian
+(glibc), tagged with the version (`1.0.0`) and its series (`1.0`); the same on Alpine add
+`-alpine` (`1.0.0-alpine`). There is no `latest`: a deployment names the version it runs.
 
 ## Trying it
 

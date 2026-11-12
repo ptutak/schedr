@@ -39,7 +39,7 @@ fn task(name: &str, arguments: &Json, retries: u32) -> Json {
 fn dag(retries: u32) -> Dag {
     let rows = json!({"rows": {"ref": {"kind": "output", "task": "extract"}}});
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract", &json!({}), retries), task("load", &rows, 0)],
@@ -56,7 +56,7 @@ async fn with_run(dag: Dag) -> (Dispatcher, Database, String) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h1",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -265,7 +265,7 @@ async fn a_forked_start_is_stored_as_fork() {
 /// `extract` and `audit`, independent: both ready at once.
 fn two_independent() -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [task("extract", &json!({}), 0), task("audit", &json!({}), 0)],
@@ -1448,7 +1448,7 @@ async fn a_round_writes_at_most_so_many_waiting_reasons() {
         .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
         .collect();
     let wide: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": []
     }))
@@ -1648,7 +1648,7 @@ async fn a_mapped_task_cancelled_as_a_whole_stops_its_running_instances() {
     let mut fetch = task("fetch", &json!({}), 0);
     fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
     let mapped: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": [fetch], "edges": []
     }))
@@ -1685,7 +1685,7 @@ async fn an_expand_kwargs_element_that_isnt_a_dict_fails_its_instance_unretried(
     let mut load = task("load", &json!({}), 3);
     load["expand"] = json!({"kwargs": {"ref": {"kind": "output", "task": "nums"}}});
     let lanes: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": [nums, load],
         "edges": [{"from": "nums", "to": "load", "kind": "data"}]
@@ -1887,13 +1887,13 @@ async fn only_workers_with_the_newest_code_get_the_task_and_are_told_its_hash() 
 #[tokio::test]
 async fn a_worker_older_than_the_parse_doesnt_get_the_task() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 0)));
+    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 9)));
     assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
-        Some("no worker with schedr ≥ 0.1 serves queue `default`")
+        Some("no worker with schedr ≥ 1.0 serves queue `default`")
     );
-    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 1)));
+    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(1, 0)));
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     assert_eq!(
         assignment(&out[0]).expected_code_hash,
@@ -1905,17 +1905,17 @@ async fn a_worker_older_than_the_parse_doesnt_get_the_task() {
 #[tokio::test]
 async fn the_current_codes_version_counts_too() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 1)));
+    dispatcher.set_worker_version("w1", Some(SchedrVersion::new(1, 0)));
     dispatcher.report_root("w1", "etl", "h2");
     dispatcher.set_current_code(
         "etl",
         &BTreeSet::from(["h2".to_owned()]),
-        Some(SchedrVersion::new(0, 2)),
+        Some(SchedrVersion::new(1, 1)),
     );
     assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
-        Some("no worker with schedr ≥ 0.2 serves queue `default`")
+        Some("no worker with schedr ≥ 1.1 serves queue `default`")
     );
 }
 
@@ -1942,7 +1942,7 @@ async fn redefine(db: &Database, dag: Dag) {
         .insert_parse(&NewParse {
             root: "etl",
             content_hash: "h9",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -2218,7 +2218,7 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
         .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
         .collect();
     let wide: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": []
     }))
@@ -2260,7 +2260,7 @@ async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
         .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
         .collect();
     let wide: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": []
     }))
@@ -2472,7 +2472,7 @@ mod faults {
             let mut fetch = task("fetch", &json!({}), 0);
             fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2, 3]}}]});
             let mapped: Dag = serde_json::from_value(json!({
-                "produced_by": "0.1", "id": "sync",
+                "produced_by": "1.0", "id": "sync",
                 "location": {"root": "etl", "path": "team/sync.py"},
                 "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
                 "tasks": [fetch], "edges": []
@@ -2582,7 +2582,7 @@ mod faults {
             empty["kind"] = json!("empty");
             empty.as_object_mut().unwrap().remove("arguments");
             let only: Dag = serde_json::from_value(json!({
-                "produced_by": "0.1", "id": "sync",
+                "produced_by": "1.0", "id": "sync",
                 "location": {"root": "etl", "path": "team/sync.py"},
                 "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
                 "tasks": [empty], "edges": []
@@ -2676,7 +2676,7 @@ fn limited(settings: &Json, top: &Json) -> Dag {
         fetch["settings"][key] = value.clone();
     }
     let mut dag = json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 2, "tasks": [fetch], "edges": []
     });
@@ -2933,7 +2933,7 @@ fn tmp_resource(hold_uses: bool, top: &Json) -> Dag {
     };
     let hold_kind = if hold_uses { "requirement" } else { "order" };
     let mut dag = json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 2,
         "tasks": [empty, task("tmp.cleanup", &json!({}), 1), task("hold", &json!({}), 0)],
         "edges": [
@@ -3248,7 +3248,7 @@ fn sensor_dag() -> Dag {
     wait["kind"] = json!("sensor");
     wait["mode"] = json!("loop");
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1,
         "tasks": [wait],
@@ -3511,7 +3511,7 @@ fn waiting_dag(run_of: &Json, routed: bool) -> Dag {
         edges.push(json!({"from": "wait", "to": "notify", "kind": "order", "on": ["Failed"]}));
     }
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": edges
     }))
@@ -3651,7 +3651,7 @@ async fn orders_run(
         .insert_parse(&NewParse {
             root: "shop",
             content_hash: "h2",
-            schedr_version: "0.1.0",
+            schedr_version: "1.0.0",
             worker_id: "w1",
             parsed_at: ts(NOW),
             files: &[],
@@ -3659,7 +3659,7 @@ async fn orders_run(
         .await
         .unwrap();
     let orders: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "orders", "location": {"root": "shop", "path": "orders.py"},
+        "produced_by": "1.0", "id": "orders", "location": {"root": "shop", "path": "orders.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 5,
         "tasks": [task("load", &json!({}), 0)], "edges": []
     }))
@@ -4645,7 +4645,7 @@ async fn attempts_of_a_worker_that_may_come_back_dont_fill_a_rounds_expiries() {
         .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
         .collect();
     let wide: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": tasks, "edges": []
     }))
@@ -4708,7 +4708,7 @@ async fn twenty_started() -> (Dispatcher, Database, String, Vec<String>) {
         edges.push(json!({"from": format!("e{n}"), "to": format!("l{n}"), "kind": "data"}));
     }
     let dag: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": tasks, "edges": edges
     }))
@@ -4832,7 +4832,7 @@ async fn an_uncommon_failure_after_a_mapped_siblings_success_leaves_the_success(
     let mut fetch = task("fetch", &json!({}), 0);
     fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
     let mapped: Dag = serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
         "trigger": {"kind": "none"}, "initial_since": null,
         "max_active_runs": 1, "tasks": [fetch], "edges": []
     }))

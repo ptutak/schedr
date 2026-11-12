@@ -17,7 +17,7 @@ pub(crate) fn dag(tasks: &Json, edges: &Json) -> Dag {
         }
     }
     serde_json::from_value(json!({
-        "produced_by": "0.1", "id": "d", "location": {"root": "r", "path": "d.py"},
+        "produced_by": "1.0", "id": "d", "location": {"root": "r", "path": "d.py"},
         "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
         "tasks": tasks, "edges": edges
     }))

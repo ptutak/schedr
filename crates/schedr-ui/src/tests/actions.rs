@@ -565,7 +565,7 @@ async fn a_run_and_its_tasks_offer_what_their_state_allows() {
 pub(super) fn worker(id: &str, state: &str, drained: bool, warnings: &Value) -> Value {
     json!({
         "worker_id": id, "state": state, "incarnation_id": "i1", "queues": ["default", "gpu"],
-        "slots": 4, "running": 1, "schedr_version": "0.1.0", "protocol_version": "1.0",
+        "slots": 4, "running": 1, "schedr_version": "1.0.0", "protocol_version": "1.0",
         "log_endpoint": "w:8081", "registered_at": "2026-10-15T01:00:00Z",
         "last_heartbeat_at": "2026-10-15T01:00:00Z", "offline_at": null, "drained": drained,
         "warnings": warnings

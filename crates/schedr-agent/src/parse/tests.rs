@@ -105,7 +105,7 @@ impl FakeRunner {
 
 fn dag(id: &str, path: &str) -> Dag {
     serde_json::from_value(json!({
-        "produced_by": "0.1",
+        "produced_by": "1.0",
         "id": id,
         "location": {"root": "etl", "path": path},
         "trigger": {"kind": "none"},
