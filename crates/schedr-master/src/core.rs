@@ -397,7 +397,10 @@ struct Connection {
 /// - when each worker's latest message arrived: the lease counts from it, so a master stuck in
 ///   a slow write doesn't declare workers lost whose messages keep arriving (B6);
 /// - which attempts' `Started` (or `Finished`) arrived and wait to be handled: they aren't
-///   taken back as never started (B11).
+///   taken back as never started (B11);
+/// - on each worker's current stream, which number each assignment went out with, and the
+///   latest of the master's messages a message from it said it had handled (B240): an
+///   assignment it had handled without a `Started` before never started there.
 #[derive(Debug, Clone, Default)]
 pub struct Arrivals(Arc<std::sync::Mutex<Arrived>>);
 
@@ -406,6 +409,25 @@ struct Arrived {
     last: BTreeMap<String, Timestamp>,
     /// Attempts whose start arrived and waits to be handled, with their worker.
     started: BTreeMap<String, String>,
+    /// Each worker's current stream, as numbered (B240).
+    streams: BTreeMap<String, StreamRead>,
+    /// The last stream's ID handed out.
+    last_stream: u64,
+    /// Assignments the master never sent (no stream, or one full or closed), with the worker
+    /// they were for: surely never started there (Grok's review of B240).
+    unsent: BTreeMap<String, String>,
+}
+
+/// What is known of a worker's current stream's numbering (B240).
+#[derive(Debug, Default)]
+struct StreamRead {
+    id: u64,
+    /// The highest `MasterClock.sequence` a message from the worker said it had handled.
+    read: u64,
+    /// The number each assignment sent on it went out with, until it is heard starting or
+    /// refusing it, or the stream is replaced. (One the master expires stays: few, gone with
+    /// the stream.)
+    assigned: BTreeMap<String, u64>,
 }
 
 impl Arrivals {
@@ -434,6 +456,81 @@ impl Arrivals {
         let mut inner = self.inner();
         inner.last.remove(worker_id);
         inner.started.retain(|_, worker| worker != worker_id);
+        inner.streams.remove(worker_id);
+        inner.unsent.retain(|_, worker| worker != worker_id);
+    }
+
+    /// `worker_id` has a new stream (it registered): its ID; what was known of its earlier
+    /// stream's numbering is forgotten (B240), and its unsent assignments: its registration,
+    /// just before, has taken back or kept each (so the map doesn't grow on a long-lived worker).
+    #[must_use]
+    pub fn new_stream(&self, worker_id: &str) -> u64 {
+        let mut inner = self.inner();
+        inner.unsent.retain(|_, worker| worker != worker_id);
+        inner.last_stream += 1;
+        let id = inner.last_stream;
+        inner.streams.insert(
+            worker_id.to_owned(),
+            StreamRead {
+                id,
+                ..StreamRead::default()
+            },
+        );
+        id
+    }
+
+    /// `attempt_id`'s assignment went out as message `number` of `worker_id`'s stream `stream`.
+    pub fn assigned(&self, worker_id: &str, stream: u64, attempt_id: &str, number: u64) {
+        let mut inner = self.inner();
+        inner.unsent.remove(attempt_id);
+        if let Some(read) = inner.streams.get_mut(worker_id)
+            && read.id == stream
+        {
+            read.assigned.insert(attempt_id.to_owned(), number);
+        }
+    }
+
+    /// `attempt_id`'s assignment to `worker_id` was never sent: no stream to it, or one full
+    /// or closed (Grok's review of B240). It never started there.
+    pub fn unsent(&self, worker_id: &str, attempt_id: &str) {
+        self.inner()
+            .unsent
+            .insert(attempt_id.to_owned(), worker_id.to_owned());
+    }
+
+    /// A message of `worker_id`'s stream `stream` said it had handled the master's messages up
+    /// to `number`.
+    pub fn read(&self, worker_id: &str, stream: u64, number: u64) {
+        if let Some(read) = self.inner().streams.get_mut(worker_id)
+            && read.id == stream
+        {
+            read.read = read.read.max(number);
+        }
+    }
+
+    /// `worker_id` started or refused `attempt_id`, as heard: its assignment's number isn't
+    /// needed any more.
+    pub fn answered(&self, worker_id: &str, attempt_id: &str) {
+        if let Some(read) = self.inner().streams.get_mut(worker_id) {
+            read.assigned.remove(attempt_id);
+        }
+    }
+
+    /// Whether `worker_id` surely never started `attempt_id`: a message from it said it had
+    /// handled the assignment's message, and no start of it has arrived. What a worker sends
+    /// while handling an assignment (`Started`, `Rejected`) is queued before anything naming
+    /// it, so a start would have arrived first (B240). Not known (another stream, a message
+    /// not heard, an older worker): `false`, it may run there.
+    #[must_use]
+    pub fn never_started(&self, worker_id: &str, attempt_id: &str) -> bool {
+        let inner = self.inner();
+        !inner.started.contains_key(attempt_id)
+            && (inner.unsent.get(attempt_id).is_some_and(|w| w == worker_id)
+                || inner.streams.get(worker_id).is_some_and(|read| {
+                    read.assigned
+                        .get(attempt_id)
+                        .is_some_and(|number| *number <= read.read)
+                }))
     }
 
     /// A `Started` or `Finished` for `attempt_id` arrived from `worker_id`: the attempt started.
@@ -541,8 +638,7 @@ impl MasterCore {
                     .cancel_grace
                     .saturating_add(settings.cleanup_move_wait),
             )
-            .with_start_timeout(settings.lease_timeout)
-            .with_start_grace(settings.heartbeat_interval.saturating_mul(2))
+            .with_lease(settings.lease_timeout)
             .with_event_lookback(settings.event_lookback)
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
@@ -823,6 +919,33 @@ impl MasterCore {
         .await
     }
 
+    /// What a registering worker left open here from before: a replaced incarnation's, or the
+    /// same process's (or one with nothing open here), whose journal decides what it never
+    /// started (B240).
+    async fn reconcile(
+        &mut self,
+        register: &pb::Register,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let worker_id = register.worker_id.as_str();
+        let replaced = self
+            .connections
+            .get(worker_id)
+            .is_some_and(|known| known.incarnation != register.incarnation_id);
+        if replaced {
+            return self.incarnation_replaced(register, now).await;
+        }
+        let reported = register
+            .journal
+            .iter()
+            .map(|entry| entry.attempt_id.as_str())
+            .collect();
+        self.dispatcher
+            .unreported_unstarted(worker_id, &reported, now)
+            .await?;
+        Ok(())
+    }
+
     /// Accepts a registration that passed the checks: reconciles a replaced incarnation,
     /// records the worker, and decides on its journal.
     async fn accept(
@@ -831,13 +954,7 @@ impl MasterCore {
         now: Timestamp,
     ) -> Result<(pb::Registered, Vec<Outgoing>), CoreError> {
         let worker_id = register.worker_id.as_str();
-        let replaced = self
-            .connections
-            .get(worker_id)
-            .is_some_and(|known| known.incarnation != register.incarnation_id);
-        if replaced {
-            self.incarnation_replaced(register, now).await?;
-        }
+        self.reconcile(register, now).await?;
         self.connections.insert(
             worker_id.to_owned(),
             Connection {

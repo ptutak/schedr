@@ -599,3 +599,58 @@ once, the count a public key beside `switch_off_after` (`[watchers] poke_overrun
 added a hard limit: "a hard time limit to reach await mainly so not to block the loop, but also
 a hard-limit on one poke-overrun I would say 3xevery interval". The first is `[watchers]
 block_limit`, already there; the second is the cancel at three times `every`.
+
+### <a id="D459"></a>2026-11-12: a DAG's trigger has its own row with its switch (decision 459)
+
+A side agent noted that only the UI showed a DAG without a trigger as `manual`: `dags list`
+still had PAUSED, and pause and unpause still took such a DAG. The user asked why a manual DAG
+has a pause state at all, and then what "manual" (or a dash) would mean for a DAG with a
+trigger: "the model is wrong". Pausing switches a trigger off, so the switch is the
+trigger's, not the DAG's: "a different table called TRIGGER with one field PAUSED (bool) and
+Foreign Key to the DAG". Its rule, chosen with the user: a trigger that appears, or changes
+kind, starts paused (so an unpaused manual DAG gaining a cron in a later version doesn't fire
+the moment it is deployed); a cron edit keeps the switch. The existing `triggers` table keeps
+an event trigger's bookmark past its removal, a different lifecycle, so the switch has a table
+of its own, `dag_triggers`. The user: "do everything now, there is no rush, let's do 1.0.0
+properly", in 0001 (only rc1's test databases exist), `trigger_state` replacing `paused` in the
+API, STATE in `dags list`, the UI's kinds; then rc2, a mandatory step.
+
+The user also asked to rename the tables so their names say what they hold: an event
+trigger's progress (bookmark, worker, errors) is `trigger_progress`, what it passed
+`trigger_progress_passed`, beside the switch's `dag_triggers`. Building it, the DAG list first
+lost its State column with only `paused` in the Trigger cell; the user wanted the trigger's
+kind and whether it is paused visible, "it could be one column though": the Trigger column
+shows the kind, the trigger and an `active` or `paused` badge, nothing for a manual DAG.
+
+### <a id="D461"></a>2026-11-12: a DAG page's actions in one row; Restart where it does something (decision 461)
+
+Reviewing the UI after decision 459, the user saw a schedule's Trigger, Backfill and Unpause in
+one row and an event trigger's Restart in a row of its own, and Restart offered while paused,
+where it changes nothing until Unpause. Both went to one row, Restart only for a trigger stopped
+or failing. A side agent pointed out that Restart also restarts a running trigger, the fix for
+one hanging on its worker; the user: "show restart when the trigger is 'stuck'", in addition to
+failing or stopped. Only a poke trigger can be told stuck: its calls end within three times its
+`every` (decision 458) and are reported within a heartbeat. A listener may be quiet for hours,
+and `restart_if_idle` restarts it already.
+
+### <a id="D460"></a>2026-11-12: both sides number their messages and echo the other's (decision 460, B240; supersedes 450 and 455)
+
+The nightly simulator's first random runs of the master's side (R1.0b) found B240: a worker's
+messages up cut while its `AssignTask` still arrived; it started the task, its `Started` held up,
+and the master, losing the worker, ended the attempt `assignment_expired` (never started) and ran
+it again beside the first, uncounted. Decision 442 had listed the limit ("a `Started` held up
+more than two heartbeat intervals"). The master couldn't tell a heartbeat the worker sent before
+an assignment from one sent after: it echoed the worker's heartbeat numbers, but the worker
+echoed nothing. The user chose to fix it properly: every message both ways numbered and the
+other side's latest echoed ("monotonic clock" in the user's words meant this sequence with an
+echo, not a clock reading, which took a few rounds to see), then to simplify what master time
+had decided by timeouts: no start deadline, an assignment taken back only once the worker's
+messages show it never started it, a reconnecting process's journal deciding, a new incarnation
+holding what it may have started; the protocol 2.0, so an rc1 worker is refused. All before
+1.0.0: "more important right now, before 1.0.0 is to make things right, not to postpone them".
+
+A moved cleanup follows the same rules: while assigned and not started (`moving`), it counts as
+not started on its new worker, whatever its task did before; shown never started there, it waits
+for another worker again with no move used, otherwise it is held or moved on like a started one.
+The lease's lower bound of four heartbeats stays, its reason now only that a few lost beats
+don't lose a worker.

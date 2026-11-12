@@ -218,12 +218,12 @@ async fn parses_and_the_dag_list_are_stored() {
     );
 
     let stored = db.stored_dags().await.unwrap();
-    assert!(stored[0].paused);
+    assert_eq!(stored[0].paused, Some(true));
     assert_eq!(stored[0].current.as_ref().unwrap().dag, dag());
     // Read alone, the same (B136).
     let alone = db.stored_dag(&sync()).await.unwrap().unwrap();
     assert_eq!(alone.current.as_ref().unwrap().dag, dag());
-    assert!(alone.paused);
+    assert_eq!(alone.paused, Some(true));
     assert!(
         db.stored_dag(&DagId::new("nowhere").unwrap())
             .await
@@ -261,7 +261,7 @@ async fn parses_and_the_dag_list_are_stored() {
         ("dup", Some(places))
     );
     assert!(stored[1].removed);
-    assert!(!stored[1].paused);
+    assert_eq!(stored[1].paused, Some(false));
     assert_eq!(db.active_dags().await.unwrap(), []);
 }
 

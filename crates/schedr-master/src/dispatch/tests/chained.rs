@@ -144,7 +144,7 @@ async fn a_trigger_dag_starts_a_chained_run_and_ends_with_its_id() {
     assert_eq!(attempts[0].worker_id, None);
     // Not counted towards the limits (decision 380), nor taken back as unstarted.
     assert_eq!(db.active_attempts().await.unwrap(), []);
-    step(&mut dispatcher, later(START_TIMEOUT.as_secs() + 1)).await;
+    step(&mut dispatcher, later(11)).await;
     assert_eq!(
         children(&db, &run_id).await.len(),
         1,

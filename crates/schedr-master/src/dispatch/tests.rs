@@ -24,6 +24,20 @@ fn later(seconds: i64) -> Timestamp {
         .unwrap()
 }
 
+/// `worker`'s messages name each of `attempts`' assignments as handled, with no start before
+/// (B240): the echo that shows them never started.
+fn handled_unstarted(dispatcher: &Dispatcher, worker: &str, attempts: &[&str]) {
+    let stream = dispatcher.arrivals.new_stream(worker);
+    for (number, attempt) in (1..).zip(attempts) {
+        dispatcher
+            .arrivals
+            .assigned(worker, stream, attempt, number);
+    }
+    dispatcher
+        .arrivals
+        .read(worker, stream, u64::try_from(attempts.len()).unwrap());
+}
+
 fn task(name: &str, arguments: &Json, retries: u32) -> Json {
     json!({
         "id": name, "kind": "python", "arguments": arguments,
@@ -44,6 +58,19 @@ fn dag(retries: u32) -> Dag {
         "max_active_runs": 1,
         "tasks": [task("extract", &json!({}), retries), task("load", &rows, 0)],
         "edges": [{"from": "extract", "to": "load", "kind": "data"}]
+    }))
+    .unwrap()
+}
+
+/// A DAG of `width` independent tasks, `t000` on.
+fn dag_with_tasks(width: usize) -> Dag {
+    let tasks: Vec<Json> = (0..width)
+        .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
+        .collect();
+    serde_json::from_value(json!({
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": tasks, "edges": []
     }))
     .unwrap()
 }
@@ -465,7 +492,9 @@ async fn a_start_for_an_attempt_taken_back_is_answered_with_a_cancel() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
-    // No Started within 10 s: taken back, and assigned again (try 2, no retry used).
+    // Its worker's echo shows it unstarted: taken back, and assigned again (try 2, no retry
+    // used); its `Started` comes anyway (as after a stream the worker had already left).
+    handled_unstarted(&dispatcher, "w1", &[&attempt]);
     let out = dispatcher.step(later(11)).await.unwrap();
     let second = assignment(&out[0]);
     assert_eq!(second.try_number, 2);
@@ -494,6 +523,7 @@ async fn an_attempt_whose_start_arrived_is_not_taken_back() {
     let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
+    handled_unstarted(&dispatcher, "w1", &[&attempt]);
     // Its `Started` arrived; the master hasn't handled it yet.
     arrivals.start_arrived("w1", &attempt);
     assert_eq!(dispatcher.step(later(11)).await.unwrap(), []);
@@ -854,39 +884,6 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
     assert_eq!(outputs.get(&id("extract")), Some(&json!(7)));
 }
 
-/// Master time 30 s later at every read, from [`NOW`] (Grok's review of D442: the reads around
-/// a moved cleanup's awaits).
-static STEPS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-
-fn stepping(_wall: Timestamp) -> Timestamp {
-    later(STEPS.fetch_add(30, std::sync::atomic::Ordering::SeqCst))
-}
-
-#[tokio::test]
-async fn a_moved_cleanups_deadline_is_the_one_its_expiry_keeps() {
-    // Grok's review of D442: master time was read for the expiry, then again for the deadline
-    // after the awaits building the message, so the worker's deadline was later.
-    let (mut dispatcher, _db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
-    let attempt = started_attempt(&mut dispatcher).await;
-    let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
-    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
-    dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
-        .await
-        .unwrap();
-    dispatcher
-        .register("w2", "i1", &[], 1, ts(NOW))
-        .await
-        .unwrap();
-    dispatcher.set_steady(stepping);
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
-    let assigned = assignment(&out[0]);
-    assert!(assigned.cleanup_only.is_some());
-    let since = dispatcher.unstarted_since[&attempt];
-    let expires = since.checked_add(dispatcher.start_timeout).unwrap();
-    assert_eq!(assigned.start_by_ms, Some(expires.as_millisecond()));
-}
-
 #[tokio::test]
 async fn a_task_lost_with_its_worker_is_retried_after_its_moved_cleanup() {
     let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
@@ -986,8 +983,8 @@ async fn a_replaced_incarnations_cleanup_moves_once() {
 #[tokio::test]
 async fn a_moved_cleanup_not_started_when_its_worker_restarts_keeps_waiting() {
     // Grok's review of decision 443: assigned to w2 and not started there, it was held for
-    // w2's old incarnation, taken back by its start timeout, and the hold then ended it `lost`
-    // with no move left: the cleanup never ran.
+    // w2's old incarnation, and the hold then ended it `lost` with no move left: the cleanup
+    // never ran. Not known unstarted (B240), it is held, then waits for another worker.
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
@@ -1006,10 +1003,9 @@ async fn a_moved_cleanup_not_started_when_its_worker_restarts_keeps_waiting() {
             .incarnation_replaced("w2", &BTreeSet::new(), later(9))
             .await
             .unwrap(),
-        0,
-        "not the old process's"
+        1,
+        "held: the old process may have started it"
     );
-    dispatcher.expire(later(11)).await.unwrap();
     dispatcher.end_replaced(later(19)).await.unwrap();
     let waiting = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(
@@ -1019,6 +1015,80 @@ async fn a_moved_cleanup_not_started_when_its_worker_restarts_keeps_waiting() {
             waiting.worker_id.as_str()
         ),
         (1, None, "")
+    );
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_its_worker_surely_never_started_waits_again_at_once() {
+    // B240: assigned to w2, whose messages show it handled that assignment without starting
+    // it, then replaced or lost: it waits for another worker at once, no move used.
+    for lost in [false, true] {
+        let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
+        let attempt = started_attempt(&mut dispatcher).await;
+        dispatcher
+            .worker_lost("w1", KeptResults::Used, ts(NOW))
+            .await
+            .unwrap();
+        dispatcher
+            .register("w2", "i1", &[], 1, ts(NOW))
+            .await
+            .unwrap();
+        dispatcher.step(ts(NOW)).await.unwrap();
+        handled_unstarted(&dispatcher, "w2", &[&attempt]);
+        if lost {
+            dispatcher
+                .worker_lost("w2", KeptResults::Used, later(9))
+                .await
+                .unwrap();
+        } else {
+            let held = dispatcher
+                .incarnation_replaced("w2", &BTreeSet::new(), later(9))
+                .await
+                .unwrap();
+            assert_eq!(held, 0, "nothing held");
+        }
+        let waiting = db.attempt(&attempt).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                waiting.cleanup_moves,
+                waiting.moving,
+                waiting.status,
+                waiting.worker_id.as_str()
+            ),
+            (1, false, None, ""),
+            "lost: {lost}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_never_sent_waits_again_without_a_move() {
+    // Grok's review of B240: assigned to w2, not sent (its stream gone), then w2 lost.
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher.arrivals.unsent("w2", &attempt);
+    dispatcher
+        .worker_lost("w2", KeptResults::Used, later(61))
+        .await
+        .unwrap();
+    let waiting = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            waiting.cleanup_moves,
+            waiting.moving,
+            waiting.status,
+            waiting.worker_id.as_str()
+        ),
+        (1, false, None, "")
     );
 }
 
@@ -1064,10 +1134,11 @@ async fn a_moved_cleanup_refused_or_never_started_waits_again_without_a_move() {
     assert_eq!((stored.worker_id.as_str(), stored.cleanup_moves), ("", 1));
     assert_eq!(dispatcher.workers().get("w2").unwrap().attempts.len(), 0);
 
-    // Past the set-aside it goes out again; no `Started` in time, and it comes back.
+    // Past the set-aside it goes out again; never started, as w2 shows, and it comes back.
     let again = later(600);
     let out = dispatcher.step(again).await.unwrap();
     assert_eq!(out.len(), 1);
+    handled_unstarted(&dispatcher, "w2", &[&attempt]);
     let expired = later(1200);
     dispatcher.expire(expired).await.unwrap();
     let stored = db.attempt(&attempt).await.unwrap().unwrap();
@@ -1201,6 +1272,7 @@ async fn a_moved_cleanup_whose_start_arrived_is_not_taken_back() {
     let arrivals = crate::core::Arrivals::default();
     let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
     let attempt = moved_to_w2(&mut dispatcher).await;
+    handled_unstarted(&dispatcher, "w2", &[&attempt]);
     arrivals.start_arrived("w2", &attempt);
     dispatcher.expire(later(1200)).await.unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
@@ -1309,6 +1381,8 @@ async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
+    // Its worker said it had handled it, with no start before (B240).
+    handled_unstarted(&dispatcher, "w1", &[&attempt]);
     dispatcher
         .worker_lost("w1", KeptResults::Used, ts(NOW))
         .await
@@ -1354,22 +1428,49 @@ async fn cancelling_a_run_cancels_its_running_attempts() {
 }
 
 #[tokio::test]
-async fn an_unstarted_assignment_is_taken_back_only_its_grace_after_start_by() {
-    // Decision 450: the worker refuses two heartbeats before `start_by`; the master waits two
-    // after it (here 4 s past the 10 s start timeout) for a `Started` on its way.
-    let (dispatcher, db, _run_id) = with_run(dag(0)).await;
-    let mut dispatcher = dispatcher.with_start_grace(std::time::Duration::from_secs(4));
+async fn an_unstarted_assignment_is_taken_back_once_its_worker_shows_it_never_started() {
+    // B240: no deadline. However long it waits, an assignment its worker hasn't said it
+    // handled stays (its `Started` may be on its way); once a message names it as handled
+    // with no start before, it goes back at once.
+    let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
     let out = dispatcher.step(ts(NOW)).await.unwrap();
-    let assign = assignment(&out[0]);
-    assert_eq!(
-        assign.start_by_ms,
-        Some(later(10).as_millisecond()),
-        "the deadline sent is the start timeout's"
-    );
-    let attempt = assign.attempt_id.clone();
-    dispatcher.expire(later(14)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher.expire(later(3_600)).await.unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
-    dispatcher.expire(later(15)).await.unwrap();
+    handled_unstarted(&dispatcher, "w1", &[&attempt]);
+    dispatcher.expire(later(3_600)).await.unwrap();
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::AssignmentExpired)
+    );
+}
+
+#[tokio::test]
+async fn a_worker_without_a_stream_is_given_no_task_until_it_registers_again() {
+    // Grok's review of B240: given one, its assignment was dropped unrecorded, and its loss a
+    // lease later ended the attempt `lost`, using a retry, though it never left the master.
+    let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
+    dispatcher.worker_disconnected("w1");
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    dispatcher
+        .register("w1", "i1", &[], 2, later(1))
+        .await
+        .unwrap();
+    let out = dispatcher.step(later(1)).await.unwrap();
+    assert_eq!(out.len(), 1, "assigned once it is back");
+}
+
+#[tokio::test]
+async fn an_assignment_that_never_left_the_master_goes_back_without_a_retry() {
+    // Grok's review of B240: no stream, or one full or closed, as it was sent.
+    let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher.arrivals.unsent("w1", &attempt);
+    dispatcher
+        .worker_lost("w1", KeptResults::Used, later(61))
+        .await
+        .unwrap();
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(AttemptStatus::AssignmentExpired)
@@ -1382,14 +1483,6 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let none = BTreeSet::new();
-    assert_eq!(
-        dispatcher
-            .incarnation_replaced("w1", &none, ts(NOW))
-            .await
-            .unwrap(),
-        0,
-        "not started: left to expire"
-    );
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
@@ -1410,8 +1503,8 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
             .unwrap(),
         1
     );
-    // Decision 443 (B230): the old process may still run it until its lease (the start
-    // timeout, 10 s here) is over in master time.
+    // Decision 443 (B230): the old process may still run it until its lease (10 s here) is
+    // over in master time.
     assert_eq!(dispatcher.end_replaced(later(9)).await.unwrap(), 0);
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
     assert_eq!(dispatcher.metrics.replaced_held.get(), 1, "held, and shown");
@@ -1427,6 +1520,60 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     assert_eq!(
         summary.message,
         "worker `w1` restarted while the attempt ran (possibly out of memory)"
+    );
+}
+
+#[tokio::test]
+async fn a_replaced_incarnation_gives_back_what_it_surely_never_started_and_holds_the_rest() {
+    // B240: the old stream's echo decides, before the new stream replaces it. One its worker
+    // said it had handled with no start before goes back at once, no retry used; one not known
+    // unstarted may run in the old process, its `Started` lost with the stream: held as a
+    // started one (decision 443).
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_tasks(2)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let (known, unknown) = (
+        assignment(&out[0]).attempt_id.clone(),
+        assignment(&out[1]).attempt_id.clone(),
+    );
+    let stream = dispatcher.arrivals.new_stream("w1");
+    dispatcher.arrivals.assigned("w1", stream, &known, 1);
+    dispatcher.arrivals.assigned("w1", stream, &unknown, 2);
+    dispatcher.arrivals.read("w1", stream, 1);
+    let none = BTreeSet::new();
+    let held = dispatcher
+        .incarnation_replaced("w1", &none, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(held, 1, "the one not known unstarted");
+    assert_eq!(
+        db.attempt(&known).await.unwrap().unwrap().status,
+        Some(AttemptStatus::AssignmentExpired)
+    );
+    assert_eq!(db.attempt(&unknown).await.unwrap().unwrap().status, None);
+    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
+    assert_eq!(
+        db.attempt(&unknown).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Lost)
+    );
+}
+
+#[tokio::test]
+async fn the_same_process_registering_again_gives_back_what_its_journal_lacks() {
+    // B240: its journal holds every assignment it accepted; one not in it never started.
+    let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let none = BTreeSet::new();
+    assert_eq!(
+        dispatcher
+            .unreported_unstarted("w1", &none, ts(NOW))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::AssignmentExpired)
     );
 }
 
@@ -2214,26 +2361,22 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
     // B18: a burst made a round of assignments, and after an outage of expiries, as long as
     // there were tasks and slots.
     let width = ASSIGNMENTS_PER_ROUND + 5;
-    let tasks: Vec<Json> = (0..width)
-        .map(|i| task(&format!("t{i:03}"), &json!({}), 0))
-        .collect();
-    let wide: Dag = serde_json::from_value(json!({
-        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
-        "trigger": {"kind": "none"}, "initial_since": null,
-        "max_active_runs": 1, "tasks": tasks, "edges": []
-    }))
-    .unwrap();
-    let (mut dispatcher, db, _run_id) = with_run(wide).await;
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_tasks(width)).await;
     dispatcher
         .register("w1", "i1", &[], u32::try_from(width * 2).unwrap(), ts(NOW))
         .await
         .unwrap();
-    assert_eq!(
-        dispatcher.step(ts(NOW)).await.unwrap().len(),
-        ASSIGNMENTS_PER_ROUND
-    );
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 5);
-    // None starts: taken back at most EXPIRIES_PER_ROUND a round.
+    let mut sent = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(sent.len(), ASSIGNMENTS_PER_ROUND);
+    let more = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(more.len(), 5);
+    sent.extend(more);
+    // None starts, as the worker shows: taken back at most EXPIRIES_PER_ROUND a round.
+    let attempts: Vec<&str> = sent
+        .iter()
+        .map(|o| assignment(o).attempt_id.as_str())
+        .collect();
+    handled_unstarted(&dispatcher, "w1", &attempts);
     dispatcher.step(later(11)).await.unwrap();
     let schedr_db::Pool::Sqlite(pool) = db.pool() else {
         unreachable!("the tests' database is SQLite")
@@ -2275,6 +2418,8 @@ async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
     while !dispatcher.step(ts(NOW)).await.unwrap().is_empty() {}
     let unstarted = db.unstarted_attempts(later(11), &[], 1000).await.unwrap();
     assert_eq!(unstarted.len(), width);
+    let ids_of: Vec<&str> = unstarted.iter().map(|a| a.id.as_str()).collect();
+    handled_unstarted(&dispatcher, "w1", &ids_of);
     // The oldest ones' starts arrived and wait for a busy master.
     for attempt in &unstarted[..EXPIRIES_PER_ROUND] {
         arrivals.start_arrived("w1", &attempt.id);
@@ -2362,8 +2507,8 @@ mod faults {
             Self(Running::new(false).await)
         }
         async fn run(&mut self) {
-            let late = later(START_TIMEOUT.as_secs() + 1);
-            let _ = self.0.dispatcher.expire(late).await;
+            handled_unstarted(&self.0.dispatcher, "w1", &[&self.0.attempt]);
+            let _ = self.0.dispatcher.expire(ts(NOW)).await;
         }
         fn db(&self) -> &Database {
             &self.0.db
@@ -2849,8 +2994,9 @@ async fn a_rejected_or_expired_attempt_stops_counting() {
         .unwrap();
     let again = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
     assert_eq!(again.len(), 1);
-    // Never started: taken back after the start timeout, and another goes.
-    let expiry = START_TIMEOUT.as_secs() + 1;
+    // Never started, as its worker shows: taken back, and another goes.
+    handled_unstarted(&dispatcher, "w1", &[&again[0]]);
+    let expiry = 1;
     assert_eq!(dispatcher.expire(later(expiry)).await.unwrap(), 1);
     assert_eq!(
         assigned(&dispatcher.step(later(expiry)).await.unwrap()).len(),
@@ -2865,8 +3011,10 @@ async fn an_expiry_whose_commit_answer_was_lost_leaves_no_count_behind() {
     // task back until the master restarted.
     let (mut dispatcher, db, _run_id) =
         with_run(limited(&json!({}), &json!({"max_active_tasks": 1}))).await;
-    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 1);
-    let expiry = START_TIMEOUT.as_secs() + 1;
+    let first = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    assert_eq!(first.len(), 1);
+    handled_unstarted(&dispatcher, "w1", &[&first[0]]);
+    let expiry = 1;
     db.lose_commit_answer();
     let expired = dispatcher.expire(later(expiry)).await;
     assert!(
@@ -4344,6 +4492,7 @@ fn an_assignment_over_what_a_worker_takes_is_never_sent() {
             heard_sequence: u64::MAX,
             wall_ms: i64::MIN,
             lease_epoch: i64::MIN,
+            sequence: u64::MAX,
         }),
         ..message.clone()
     };
@@ -4637,7 +4786,7 @@ async fn a_moved_cleanup_isnt_taken_back_while_its_worker_may_come_back() {
 }
 
 /// F14's review: the attempts of a worker that may come back don't fill a round's expiries,
-/// so a connected worker's assignment past its start timeout is still taken back.
+/// so a connected worker's assignment it showed it never started is still taken back.
 #[tokio::test]
 async fn attempts_of_a_worker_that_may_come_back_dont_fill_a_rounds_expiries() {
     let width = EXPIRIES_PER_ROUND + 1;
@@ -4665,6 +4814,7 @@ async fn attempts_of_a_worker_that_may_come_back_dont_fill_a_rounds_expiries() {
     dispatcher.step(later(1)).await.unwrap();
     let on_w2 = db.open_attempts(Some("w2")).await.unwrap();
     assert_eq!(on_w2.len(), 1);
+    handled_unstarted(&dispatcher, "w2", &[&on_w2[0].id]);
     dispatcher.expire(later(30)).await.unwrap();
     let stored = db.attempt(&on_w2[0].id).await.unwrap().unwrap();
     assert_eq!(stored.status, Some(AttemptStatus::AssignmentExpired));

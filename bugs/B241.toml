@@ -1,0 +1,16 @@
+title = "the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok`"
+severity = "low"
+probability = "rare"
+kind = "tests"
+summary = "the_fork_that_finds_a_late_thread_disables_the_server's forked.is_ok() failed once under the full suite's load"
+found = 2026-11-12
+suspected = true
+details = '''
+`crates/schedr-agent/tests/fork.rs:621`: `assert!(forked.is_ok())` failed once in
+`make test-integration` (2026-11-12, the run after `make check`'s), passing in the runs before.
+The test starts a thread 0.3 s after the preloaded module's import (a `SIGALRM` timer) and forks
+after waiting for the server's `up` state plus a fixed 1 s; under the suite's load the ordering
+of the server's ready, the timer and the request can shift. Neither the test nor the fork server
+changed in that diff (B240/D459/D461). Not reproduced alone yet; the error the fork returned
+wasn't printed (`is_ok()` only), so the first step is to print it.
+'''

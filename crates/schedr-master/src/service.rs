@@ -38,7 +38,63 @@ pub const INPUT_CHUNK: usize = 1024 * 1024;
 const STREAM_BUFFER: usize = 1024;
 
 /// A worker's stream of messages. Sending never waits (see [`Hub::deliver`]).
-type Outbound = mpsc::Sender<Result<pb::MasterMessage, Status>>;
+/// A worker's stream to it (B240): each message's `MasterClock.sequence` is taken and the
+/// message queued under one lock, by the core's deliveries and the reader's answers alike, so
+/// the numbers leave in order; `id` tells it from the worker's other streams.
+#[derive(Debug, Clone)]
+struct Outbound {
+    sender: mpsc::Sender<Result<pb::MasterMessage, Status>>,
+    /// The last number used.
+    numbers: Arc<std::sync::Mutex<u64>>,
+    id: u64,
+}
+
+impl Outbound {
+    fn new(sender: mpsc::Sender<Result<pb::MasterMessage, Status>>, id: u64) -> Self {
+        Self {
+            sender,
+            numbers: Arc::default(),
+            id,
+        }
+    }
+
+    fn same_channel(&self, other: &Self) -> bool {
+        self.sender.same_channel(&other.sender)
+    }
+
+    /// Numbers `message` (stamped already) and queues it: its number. Not queued, the number
+    /// isn't used, and the message is dropped.
+    fn send(&self, message: pb::MasterMessage) -> Result<u64, mpsc::error::TrySendError<()>> {
+        numbered_send(&self.numbers, &self.sender, message)
+    }
+
+    /// Ends the stream with `status` (unnumbered: no message).
+    fn end(&self, status: Status) {
+        let _ = self.sender.try_send(Err(status));
+    }
+}
+
+/// Numbers `message` past the last of `numbers` and queues it on `sender`, under the lock.
+fn numbered_send(
+    numbers: &std::sync::Mutex<u64>,
+    sender: &mpsc::Sender<Result<pb::MasterMessage, Status>>,
+    mut message: pb::MasterMessage,
+) -> Result<u64, mpsc::error::TrySendError<()>> {
+    let mut last = numbers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let number = *last + 1;
+    if let Some(clock) = message.clock.as_mut() {
+        clock.sequence = number;
+    }
+    // The unsent message isn't wanted back: only whether the stream is full or closed.
+    sender.try_send(Ok(message)).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => mpsc::error::TrySendError::Full(()),
+        mpsc::error::TrySendError::Closed(_) => mpsc::error::TrySendError::Closed(()),
+    })?;
+    *last = number;
+    Ok(number)
+}
 
 /// The core and the workers' outgoing streams.
 #[derive(Debug, Clone)]
@@ -596,8 +652,9 @@ impl Hub {
     }
 
     /// Sends messages to their workers' streams; one for a worker without a live stream is
-    /// dropped (an assignment then expires without `Started`; a cancel is sent again when the
-    /// worker comes back and reports the attempt in its journal).
+    /// dropped (an assignment then recorded as never sent, so it is taken back without a retry
+    /// once the worker registers again or is lost; a cancel is sent again when the worker
+    /// comes back and reports the attempt in its journal).
     ///
     /// A send never waits: a worker [`STREAM_BUFFER`] messages behind has stopped reading.
     /// Its stream is dropped and the worker disconnected, so it registers again and its
@@ -613,14 +670,33 @@ impl Hub {
             mut message,
         } in outgoing
         {
+            let assigned = match &message.message {
+                Some(master_message::Message::AssignTask(assign)) => {
+                    Some(assign.attempt_id.clone())
+                }
+                _ => None,
+            };
+            // An assignment that doesn't leave never started there (Grok's review of B240).
+            let unsent = |attempt: Option<&String>| {
+                if let Some(attempt_id) = attempt {
+                    self.arrivals.unsent(&worker_id, attempt_id);
+                }
+            };
             let Some(stream) = streams.get(&worker_id) else {
                 tracing::warn!(worker_id, "no stream for worker; message dropped");
+                unsent(assigned.as_ref());
                 continue;
             };
             message.clock = Some(self.stamp(self.heard_on(&worker_id)));
-            match stream.try_send(Ok(message)) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => {
+            match stream.send(message) {
+                Ok(number) => {
+                    if let Some(attempt_id) = assigned {
+                        self.arrivals
+                            .assigned(&worker_id, stream.id, &attempt_id, number);
+                    }
+                }
+                Err(mpsc::error::TrySendError::Full(())) => {
+                    unsent(assigned.as_ref());
                     tracing::error!(
                         worker_id,
                         "worker doesn't read its stream ({STREAM_BUFFER} messages waiting): \
@@ -629,7 +705,8 @@ impl Hub {
                     streams.remove(&worker_id);
                     stuck.push(worker_id);
                 }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(mpsc::error::TrySendError::Closed(())) => {
+                    unsent(assigned.as_ref());
                     tracing::warn!(worker_id, "worker stream closed; message dropped");
                 }
             }
@@ -884,7 +961,9 @@ impl Hub {
             self.arrivals.clone(),
             queue,
             HeartbeatAcks {
-                stream: stream.downgrade(),
+                stream: stream.sender.downgrade(),
+                numbers: Arc::clone(&stream.numbers),
+                stream_id: stream.id,
                 leading: self.leading.subscribe(),
                 clocks: (self.clock, self.steady),
                 heard,
@@ -1027,7 +1106,10 @@ impl Hub {
             .iter()
             .filter(|message| message.worker_id == register.worker_id)
             .count();
-        let (stream, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
+        let (sender, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
+        // Under the core's lock, as the registration: what an older stream's reader still
+        // records is of another stream (B240).
+        let stream = Outbound::new(sender, self.arrivals.new_stream(&register.worker_id));
         // A new count of heartbeats for the new stream: its `Register` is heartbeat 0.
         let heard = Arc::new(AtomicU64::new(0));
         let first = pb::MasterMessage {
@@ -1035,7 +1117,7 @@ impl Hub {
             clock: Some(self.stamp(0)),
         };
         stream
-            .try_send(Ok(first))
+            .send(first)
             .map_err(|_| Status::internal("the stream closed at once"))?;
         // The worker's stream from now on, put in place before the lock is let go: a message
         // of the old stream handled after this registration is known to be the old one's
@@ -1069,7 +1151,7 @@ impl Hub {
         let streams = std::mem::take(&mut *self.streams.lock().await);
         for stream in streams.into_values() {
             // Full, the worker isn't reading: its stream ends when its other senders go.
-            let _ = stream.try_send(Err(Status::unavailable(STOPPING)));
+            stream.end(Status::unavailable(STOPPING));
         }
     }
 
@@ -1180,6 +1262,8 @@ fn stamp_of(
         heard_sequence: heard,
         wall_ms: wall.as_millisecond(),
         lease_epoch: epoch,
+        // Its number, set as it is queued on its stream (B240).
+        sequence: 0,
     }
 }
 
@@ -1200,6 +1284,10 @@ type Counters = Arc<std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>>;
 /// lost. The stream is held weakly, for this reader not to keep it open.
 struct HeartbeatAcks {
     stream: mpsc::WeakSender<Result<pb::MasterMessage, Status>>,
+    /// The stream's numbering, shared with its [`Outbound`] (B240).
+    numbers: Arc<std::sync::Mutex<u64>>,
+    /// The stream's ID, for [`Arrivals::read`].
+    stream_id: u64,
     leading: watch::Receiver<bool>,
     /// The master's wall clock and master time, for the stamp.
     clocks: (fn() -> Timestamp, crate::clock::Steady),
@@ -1213,14 +1301,15 @@ struct HeartbeatAcks {
 }
 
 impl HeartbeatAcks {
-    /// The heartbeat numbered `sequence` arrived: noted, and answered, its number on the
-    /// answer's stamp.
-    fn answer(&self, sequence: u64) {
+    /// The message numbered `sequence` arrived: noted (the latest's number goes on the
+    /// master's next stamps, B225), and a heartbeat answered with it on the answer's stamp.
+    fn heard(&self, sequence: u64, heartbeat: bool) {
         let heard = self
             .heard
             .fetch_max(sequence, Ordering::SeqCst)
             .max(sequence);
-        if *self.leading.borrow()
+        if heartbeat
+            && *self.leading.borrow()
             && self.is_current()
             && let Some(stream) = self.stream.upgrade()
         {
@@ -1229,7 +1318,7 @@ impl HeartbeatAcks {
                 clock: Some(stamp_of(self.clocks, heard, self.epoch)),
             };
             // Full, the worker isn't reading: the next heartbeat tries again.
-            let _ = stream.try_send(Ok(ack));
+            let _ = numbered_send(&self.numbers, &stream, ack);
         }
     }
 
@@ -1261,8 +1350,12 @@ async fn read_stream(
         match inbound.message().await {
             Ok(Some(message)) => {
                 arrivals.arrived(&worker_id, acks.steady_now());
-                if let Some(worker_message::Message::Heartbeat(beat)) = &message.message {
-                    acks.answer(beat.sequence);
+                // A heartbeat is answered whatever it carries; its numbers count when stamped.
+                let heartbeat =
+                    matches!(message.message, Some(worker_message::Message::Heartbeat(_)));
+                acks.heard(message.clock.as_ref().map_or(0, |c| c.sequence), heartbeat);
+                if let Some(clock) = &message.clock {
+                    arrivals.read(&worker_id, acks.stream_id, clock.heard_sequence);
                 }
                 if let Some(
                     worker_message::Message::Started(pb::Started { attempt_id, .. })
@@ -1270,6 +1363,13 @@ async fn read_stream(
                 ) = &message.message
                 {
                     arrivals.start_arrived(&worker_id, attempt_id);
+                    arrivals.answered(&worker_id, attempt_id);
+                }
+                if let Some(worker_message::Message::Rejected(pb::Rejected {
+                    attempt_id, ..
+                })) = &message.message
+                {
+                    arrivals.answered(&worker_id, attempt_id);
                 }
                 if let Some(message) = message.message
                     && let Err(mpsc::error::SendError(unsent)) = queue.send(message)

@@ -64,7 +64,7 @@ impl Transport for Scripted {
 
 fn dag(id: &str, paused: bool) -> Value {
     json!({
-        "dag_id": id, "paused": paused,
+        "dag_id": id, "trigger_state": if paused { "paused" } else { "active" },
         "location": {"root": "etl", "path": format!("{id}.py")},
         "conflict": null,
         "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "Europe/Warsaw",
@@ -172,6 +172,9 @@ async fn the_list_names_each_dags_kind_of_trigger() {
     let mut scripted = etl();
     let with = |id: &str, trigger: Value| {
         let mut dag = dag(id, false);
+        if trigger["kind"] == "none" {
+            dag["trigger_state"] = Value::Null;
+        }
         dag["trigger"] = trigger;
         dag
     };
@@ -221,13 +224,10 @@ async fn the_list_names_each_dags_kind_of_trigger() {
             "event paid"
         ]
     );
-    // A DAG without a trigger is `manual`, whatever its paused flag says: pausing
-    // stops nothing of it.
+    // Each trigger's switch beside it; a DAG without one has none (decision 459).
     assert_eq!(
-        texts(&html, "table.dags .badge"),
-        [
-            "active", "active", "active", "active", "active", "active", "manual"
-        ]
+        texts(&html, "table.dags td.trigger .badge"),
+        ["active", "active", "active", "active", "active", "active"]
     );
     assert!(texts(&html, "table.dags th").contains(&"Trigger".to_owned()));
 }
@@ -265,7 +265,10 @@ async fn the_dags_are_listed_by_id_with_their_state_and_schedule() {
         attrs(&html, "table.dags tbody td:first-child a", "href"),
         ["/d/etl/dags/archive", "/d/etl/dags/sync"]
     );
-    assert_eq!(texts(&html, "table.dags .badge"), ["paused", "active"]);
+    assert_eq!(
+        texts(&html, "table.dags td.trigger .badge"),
+        ["paused", "active"]
+    );
     // The trigger's kind, then the trigger as people write it.
     assert_eq!(
         texts(&html, "table.dags td.trigger .trigger-kind"),
@@ -343,7 +346,8 @@ async fn a_dag_page_shows_its_facts_and_runs_in_utc_and_local_time() {
     let cookie = ("cookie", "schedr_tz=Europe%2FWarsaw");
     let (status, html) = get(&app, "/d/etl/dags/sync", &[cookie]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(texts(&html, "h1"), ["sync active"]);
+    assert_eq!(texts(&html, "h1"), ["sync"]);
+    assert_eq!(texts(&html, "dd.trigger .badge"), ["active"]);
     assert_eq!(texts(&html, ".description"), ["Sync the orders."]);
     assert_eq!(texts(&html, "table.runs tbody td.mono"), ["r2", "r1"]);
     assert_eq!(
@@ -515,7 +519,7 @@ async fn a_dag_id_with_a_colon_slash_and_hash_links_to_its_page() {
     );
     let (status, page) = get(&app, &href, &[]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(texts(&page, "h1"), [format!("{id} active")]);
+    assert_eq!(texts(&page, "h1"), [id]);
 }
 
 /// A deployment's API that answers after `delay`, counting the calls under way in `busy`
@@ -757,7 +761,8 @@ async fn a_dag_page_shows_its_trigger_and_what_it_found() {
     assert_eq!(status, StatusCode::OK);
     assert!(html.contains("no route (2 in a row)"), "{html}");
     assert!(html.contains("Last poked"), "{html}");
-    assert!(html.contains("/d/etl/dags/sync/trigger/restart"), "{html}");
+    // Running, nothing holds it back: no Restart.
+    assert!(!html.contains("/d/etl/dags/sync/trigger/restart"), "{html}");
     assert!(
         html.contains("/d/etl/dags/sync/trigger/run-event?key=inbox%2F1"),
         "{html}"
@@ -766,6 +771,51 @@ async fn a_dag_page_shows_its_trigger_and_what_it_found() {
         !attrs(&html, ".state.running.waiting", "class").is_empty(),
         "it pulses while it waits: {html}"
     );
+}
+
+/// Restart is in the page's one row of actions, and only where it changes something: a
+/// trigger stopped, failing and waiting to start again, or stuck; not one running or waiting
+/// well, nor a paused one.
+#[tokio::test]
+async fn restart_is_offered_beside_the_other_actions_only_where_it_changes_something() {
+    for (state, failures, stuck, offered) in [
+        ("stopped", 0, false, true),
+        ("waiting", 3, false, true),
+        ("running", 0, true, true),
+        ("waiting", 0, false, false),
+        ("running", 2, false, false),
+        ("paused", 2, false, false),
+    ] {
+        let mut etl = etl_with_trigger();
+        etl.answers.insert(
+            "/api/v1/dags/sync/trigger".to_owned(),
+            (
+                200,
+                json!({
+                    "dag_id": "sync", "trigger": "found", "state": state, "worker": null,
+                    "bookmark": null, "stopped_why": null, "failures": failures, "stuck": stuck,
+                    "last_error": null, "not_before": null, "started_at": null,
+                    "last_event_at": null, "last_poked_at": null, "last_restart_at": null
+                }),
+            ),
+        );
+        etl.answers.insert(
+            "/api/v1/dags/sync/trigger/events?limit=20".to_owned(),
+            (200, json!({"events": []})),
+        );
+        let app = ui(vec![deployment("etl", etl)]);
+        let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+        let buttons = texts(&html, ".actions > button.action");
+        assert_eq!(
+            buttons.contains(&"Restart".to_owned()),
+            offered,
+            "{state} with {failures} failures, stuck {stuck}: {buttons:?}"
+        );
+        assert_eq!(
+            texts(&html, "dd .badge.warning").contains(&"stuck".to_owned()),
+            stuck
+        );
+    }
 }
 
 #[tokio::test]

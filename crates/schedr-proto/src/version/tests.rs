@@ -8,15 +8,18 @@ const fn v(major: u32, minor: u32) -> ProtocolVersion {
 }
 
 #[test]
-fn the_current_version_is_1_0() {
-    assert_eq!(PROTOCOL_VERSION, v(1, 0));
+fn the_current_version_is_2_0() {
+    assert_eq!(PROTOCOL_VERSION, v(2, 0));
 }
 
-#[test]
-fn a_1_0_master_refuses_a_worker_of_the_0_1_preview() {
-    // B187: a 0.1 worker would run a DAG with fields added since 0.1.0 without them.
+#[rstest]
+// B187: a 0.1 worker would run a DAG with fields added since 0.1.0 without them.
+#[case(v(0, 1))]
+// B240: a 1.0rc1 worker sends a start deadline and echoes nothing the master reads.
+#[case(v(1, 0))]
+fn the_master_refuses_an_earlier_schedrs_worker(#[case] worker: ProtocolVersion) {
     assert!(matches!(
-        check_worker_version(PROTOCOL_VERSION, Some(v(0, 1))),
+        check_worker_version(PROTOCOL_VERSION, Some(worker)),
         Err(VersionMismatch::Major { .. })
     ));
 }

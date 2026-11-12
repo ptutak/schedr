@@ -314,7 +314,9 @@ async fn old_events_and_decided_commands_go_with_what_triggers_passed() {
         .await;
         exec(
             &db,
-            format!("INSERT INTO trigger_passed (dag_id, item) VALUES ('sync', '{key}-id')"),
+            format!(
+                "INSERT INTO trigger_progress_passed (dag_id, item) VALUES ('sync', '{key}-id')"
+            ),
         )
         .await;
     }
@@ -343,12 +345,15 @@ async fn old_events_and_decided_commands_go_with_what_triggers_passed() {
     assert_eq!(
         count(
             &db,
-            "SELECT COUNT(*) FROM trigger_passed WHERE item = 'new-id'"
+            "SELECT COUNT(*) FROM trigger_progress_passed WHERE item = 'new-id'"
         )
         .await,
         1
     );
-    assert_eq!(count(&db, "SELECT COUNT(*) FROM trigger_passed").await, 1);
+    assert_eq!(
+        count(&db, "SELECT COUNT(*) FROM trigger_progress_passed").await,
+        1
+    );
     // A pending command stays, however old.
     assert_eq!(count(&db, "SELECT COUNT(*) FROM commands").await, 2);
 }
@@ -395,7 +400,8 @@ async fn a_run_something_unfinished_reads_is_kept_however_old() {
     // A trigger handed `triggered`, not passed yet.
     exec(
         &db,
-        "INSERT INTO triggers (dag_id, run_of_handed_run) VALUES ('sync', 'triggered')".to_owned(),
+        "INSERT INTO trigger_progress (dag_id, run_of_handed_run) VALUES ('sync', 'triggered')"
+            .to_owned(),
     )
     .await;
     let cut = ts("2026-01-10T00:00:00Z");

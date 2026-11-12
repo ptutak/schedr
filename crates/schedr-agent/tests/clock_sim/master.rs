@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use proptest::prelude::*;
-use schedr_agent::master_time::MasterTime;
+use schedr_agent::master_time::{MasterTime, lock};
 use schedr_db::Database;
 use schedr_db::reads::RunFilter;
 use schedr_master::core::{MasterCore, Settings};
@@ -188,46 +188,50 @@ pub fn scenario() -> impl Strategy<Value = Scenario> {
 /// the safeguard on, they are among the scenarios every rule must hold in).
 pub fn aimed_at(safeguard: Weakened) -> BoxedStrategy<Scenario> {
     let faults: BoxedStrategy<Vec<(u64, Fault)>> = match safeguard {
-        // An assignment arriving late, just before the worker's reserve (a lag down over a
-        // run's first assignment, on both workers), then its `Started` held up almost as long
-        // as decision 450 allows (a lag up from when it leaves): the heartbeats before it went
-        // up at once, so the worker isn't cut off for a lease (B233's rule doesn't cover it).
-        Weakened::StartGrace => (
-            0..8u64,
-            0..300u64,
-            6_500..7_900u64,
-            0..1_000u64,
-            2_500..3_900u64,
-            3_000..6_000u64,
-        )
-            .prop_map(|(run, early, down, over, up, up_len)| {
-                let at = 1_000 + run * TRIGGER_EVERY - early;
-                let mut faults = Vec::new();
-                for worker in 0..2 {
-                    let (len, lag_up) = (down + over, 0);
-                    faults.push((
+        // What the echo is there for (B240): a run's first assignment whose fate the master
+        // can't see at once. Its `Started` held up a moment (a lag up), its stream broken
+        // right after it was sent (the same process registers again), or its worker replaced
+        // with the old process running on.
+        Weakened::Echo => {
+            let start = |run: u64, after: u64| 1_000 + run * TRIGGER_EVERY + after;
+            let late_start = (
+                0..8u64,
+                0..300u64,
+                300..3_000u64,
+                2_000..6_000u64,
+                0..2usize,
+            )
+                .prop_map(move |(run, early, up, len, worker)| {
+                    let at = start(run, 0).saturating_sub(early);
+                    let down = 0;
+                    vec![(
                         at,
                         Fault::Lag {
                             worker,
                             len,
-                            up: lag_up,
+                            up,
                             down,
                         },
-                    ));
-                    let (len, lag_down) = (up_len, 0);
-                    faults.push((
-                        at + down,
-                        Fault::Lag {
+                    )]
+                });
+            let dropped = (0..8u64, 0..200u64, 0..2usize).prop_map(move |(run, after, worker)| {
+                vec![(start(run, after), Fault::Drop { worker })]
+            });
+            let replaced = (0..8u64, 0..200u64, 0..2usize, 0..2_000u64).prop_map(
+                move |(run, after, worker, gap)| {
+                    let old_lives = true;
+                    vec![(
+                        start(run, after),
+                        Fault::Replace {
                             worker,
-                            len,
-                            up,
-                            down: lag_down,
+                            old_lives,
+                            gap,
                         },
-                    ));
-                }
-                faults
-            })
-            .boxed(),
+                    )]
+                },
+            );
+            prop_oneof![late_start, dropped, replaced].boxed()
+        }
         // A worker replaced, the old process running on, the new one soon back.
         Weakened::Hold => prop::collection::vec(
             (2_000..40_000u64, 0..2usize, 0..4_000u64).prop_map(|(at, worker, gap)| {
@@ -271,7 +275,7 @@ pub fn aimed_at(safeguard: Weakened) -> BoxedStrategy<Scenario> {
 pub fn any_scenario() -> impl Strategy<Value = Scenario> {
     prop_oneof![
         3 => scenario(),
-        1 => aimed_at(Weakened::StartGrace),
+        1 => aimed_at(Weakened::Echo),
         1 => aimed_at(Weakened::Hold),
         1 => aimed_at(Weakened::MoveWait),
     ]
@@ -317,6 +321,8 @@ enum Event {
         inst: usize,
         sid: u64,
         message: Box<worker_message::Message>,
+        /// Its stamp, as the agent's sender puts it on as it queues it (B240).
+        clock: pb::WorkerClock,
     },
     AtWorker {
         inst: usize,
@@ -462,8 +468,12 @@ struct Sim {
     epoch: i64,
     /// Each worker's current stream at the master, and the instance on it.
     current: BTreeMap<usize, (u64, usize)>,
-    /// The latest heartbeat heard on each stream.
+    /// The latest worker message heard on each stream.
     heard: BTreeMap<u64, u64>,
+    /// The last number the master used on each stream (B240).
+    numbers: BTreeMap<u64, u64>,
+    /// Each stream's ID in the master's `Arrivals`.
+    stream_ids: BTreeMap<u64, u64>,
     /// A deposed master's streams, which it answers heartbeats on until then, with its epoch.
     deposed: Option<(u64, i64, BTreeMap<u64, usize>)>,
     instances: Vec<Instance>,
@@ -630,17 +640,26 @@ impl Sim {
 
     fn up(&mut self, inst: usize, message: worker_message::Message) {
         if let Some(sid) = self.instances[inst].session {
-            self.send(
+            self.up_on(inst, sid, message);
+        }
+    }
+
+    /// Sends `message` up stream `sid`, stamped from the instance's outbox as the agent's
+    /// sender does (B240).
+    fn up_on(&mut self, inst: usize, sid: u64, message: worker_message::Message) {
+        let local = self.local(inst);
+        let clock = lock(&self.instances[inst].time.outbox()).stamp(local);
+        self.send(
+            inst,
+            sid,
+            true,
+            Event::AtMaster {
                 inst,
                 sid,
-                true,
-                Event::AtMaster {
-                    inst,
-                    sid,
-                    message: Box::new(message),
-                },
-            );
-        }
+                message: Box::new(message),
+                clock,
+            },
+        );
     }
 
     fn stamp(&self, sid: u64, epoch: i64) -> pb::MasterClock {
@@ -651,16 +670,26 @@ impl Sim {
             heard_sequence: self.heard.get(&sid).copied().unwrap_or(0),
             wall_ms: ms,
             lease_epoch: epoch,
+            sequence: 0,
         }
     }
 
-    fn down(&mut self, inst: usize, sid: u64, message: master_message::Message, epoch: i64) {
+    /// Sends `message` down stream `sid`, numbered as the service numbers it: its number.
+    fn down(&mut self, inst: usize, sid: u64, message: master_message::Message, epoch: i64) -> u64 {
+        let number = {
+            let last = self.numbers.entry(sid).or_default();
+            *last += 1;
+            *last
+        };
+        let mut clock = self.stamp(sid, epoch);
+        clock.sequence = number;
         let message = pb::MasterMessage {
             message: Some(message),
-            clock: Some(self.stamp(sid, epoch)),
+            clock: Some(clock),
         };
         let message = Box::new(message);
         self.send(inst, sid, false, Event::AtWorker { inst, sid, message });
+        number
     }
 
     fn deliver(&mut self, out: Vec<Outgoing>) {
@@ -670,7 +699,17 @@ impl Sim {
                 continue;
             };
             if let Some(message) = o.message.message {
-                self.down(inst, sid, message, self.epoch);
+                let assigned = match &message {
+                    master_message::Message::AssignTask(assign) => Some(assign.attempt_id.clone()),
+                    _ => None,
+                };
+                let number = self.down(inst, sid, message, self.epoch);
+                if let (Some(attempt_id), Some(core), Some(&stream)) =
+                    (assigned, &self.core, self.stream_ids.get(&sid))
+                {
+                    core.arrivals()
+                        .assigned(WORKERS[worker], stream, &attempt_id, number);
+                }
             }
         }
     }
@@ -829,7 +868,12 @@ impl Sim {
             Event::Alive(inst) => self.alive(inst),
             Event::Heartbeat(inst, sid) => self.heartbeat(inst, sid),
             Event::ProcEnd(inst, attempt) => self.proc_end(inst, &attempt),
-            Event::AtMaster { inst, sid, message } => self.at_master(inst, sid, *message).await,
+            Event::AtMaster {
+                inst,
+                sid,
+                message,
+                clock,
+            } => self.at_master(inst, sid, *message, clock).await,
             Event::AtWorker { inst, sid, message } => self.at_worker(inst, sid, *message).await,
             Event::Refused(inst, sid) | Event::WorkerSeesEnd(inst, sid) => {
                 self.worker_end(inst, sid);
@@ -1033,7 +1077,6 @@ impl Sim {
         let sid = self.next_sid;
         i.connecting = Some(sid);
         i.time = MasterTime::with_window(Duration::from_mins(10));
-        i.time.sent(local);
         i.heard_boot = local.boot;
         let mut journal: Vec<pb::JournalEntry> = i
             .procs
@@ -1050,16 +1093,7 @@ impl Sim {
             handles: 0,
         }));
         let message = worker_message::Message::Register(register(i.worker, i.incarnation, journal));
-        self.send(
-            inst,
-            sid,
-            true,
-            Event::AtMaster {
-                inst,
-                sid,
-                message: Box::new(message),
-            },
-        );
+        self.up_on(inst, sid, message);
     }
 
     fn heartbeat(&mut self, inst: usize, sid: u64) {
@@ -1068,24 +1102,13 @@ impl Sim {
             return;
         }
         let local = self.local(inst);
-        let i = &mut self.instances[inst];
-        let sequence = i.time.sent(local);
+        let i = &self.instances[inst];
         let beat = pb::Heartbeat {
-            sequence,
             free_slots: u32::try_from(SLOTS.saturating_sub(i.procs.len())).unwrap(),
             running_attempt_ids: i.procs.keys().cloned().collect(),
             ..pb::Heartbeat::default()
         };
-        self.send(
-            inst,
-            sid,
-            true,
-            Event::AtMaster {
-                inst,
-                sid,
-                message: Box::new(worker_message::Message::Heartbeat(beat)),
-            },
-        );
+        self.up_on(inst, sid, worker_message::Message::Heartbeat(beat));
         let next = self.when_boot(inst, local.boot + Duration::from_millis(HEARTBEAT));
         self.at(next, Event::Heartbeat(inst, sid));
     }
@@ -1121,7 +1144,13 @@ impl Sim {
         self.up(inst, worker_message::Message::Finished(result));
     }
 
-    async fn at_master(&mut self, inst: usize, sid: u64, message: worker_message::Message) {
+    async fn at_master(
+        &mut self,
+        inst: usize,
+        sid: u64,
+        message: worker_message::Message,
+        clock: pb::WorkerClock,
+    ) {
         let worker = self.instances[inst].worker;
         let id = WORKERS[worker];
         if let Some((until, epoch, streams)) = &self.deposed
@@ -1129,9 +1158,9 @@ impl Sim {
             && streams.contains_key(&sid)
         {
             let epoch = *epoch;
-            if let worker_message::Message::Heartbeat(beat) = &message {
-                let heard = self.heard.entry(sid).or_default();
-                *heard = (*heard).max(beat.sequence);
+            let heard = self.heard.entry(sid).or_default();
+            *heard = (*heard).max(clock.sequence);
+            if let worker_message::Message::Heartbeat(_) = &message {
                 let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
                 self.down(inst, sid, ack, epoch);
             }
@@ -1149,16 +1178,24 @@ impl Sim {
         };
         let arrivals = core.arrivals();
         arrivals.arrived(id, ts(self.now));
+        // As the service's reader: every message's number heard, its echo read (B240).
+        let heard = self.heard.entry(sid).or_default();
+        *heard = (*heard).max(clock.sequence);
+        if let Some(&stream) = self.stream_ids.get(&sid) {
+            arrivals.read(id, stream, clock.heard_sequence);
+        }
         match &message {
-            worker_message::Message::Heartbeat(beat) => {
-                let heard = self.heard.entry(sid).or_default();
-                *heard = (*heard).max(beat.sequence);
+            worker_message::Message::Heartbeat(_) => {
                 let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
                 self.down(inst, sid, ack, self.epoch);
             }
             worker_message::Message::Started(pb::Started { attempt_id, .. })
             | worker_message::Message::Finished(pb::Finished { attempt_id, .. }) => {
                 arrivals.start_arrived(id, attempt_id);
+                arrivals.answered(id, attempt_id);
+            }
+            worker_message::Message::Rejected(pb::Rejected { attempt_id, .. }) => {
+                arrivals.answered(id, attempt_id);
             }
             _ => {}
         }
@@ -1193,6 +1230,7 @@ impl Sim {
         match core.register(&register, ts(self.now)).await {
             Ok((registered, out)) => {
                 arrivals.forget_starts(id);
+                self.stream_ids.insert(sid, arrivals.new_stream(id));
                 self.current.insert(worker, (sid, inst));
                 self.heard.insert(sid, 0);
                 let registered = master_message::Message::Registered(registered);
@@ -1229,6 +1267,7 @@ impl Sim {
         if let Some(clock) = &message.clock {
             i.time.heard(clock, local);
         }
+        let number = message.clock.as_ref().map_or(0, |clock| clock.sequence);
         i.heard_boot = local.boot;
         let Some(message) = message.message else {
             return;
@@ -1270,6 +1309,8 @@ impl Sim {
             }
             _ => {}
         }
+        // Handled: what it sent is queued, before anything naming it (B240).
+        lock(&self.instances[inst].time.outbox()).handled(number);
     }
 
     fn kill(&mut self, inst: usize, attempt: &str) {
@@ -1318,7 +1359,6 @@ impl Sim {
     }
 
     async fn assign(&mut self, inst: usize, assign: pb::AssignTask) {
-        let local = self.local(inst);
         let id = assign.attempt_id.clone();
         // Already here, running or its result not acknowledged: ignored, as the agent does (a
         // moved cleanup given back to the worker whose result is on its way).
@@ -1326,14 +1366,8 @@ impl Sim {
         if here.procs.contains_key(&id) || here.unacked.contains_key(&id) {
             return;
         }
-        let reserve = Duration::from_millis(2 * HEARTBEAT);
         let i = &self.instances[inst];
-        let late = assign
-            .start_by_ms
-            .is_some_and(|by| i.time.slack(by, reserve, local).is_none());
-        let reason = if late {
-            Some(pb::RejectReason::TooLate)
-        } else if i.procs.len() >= SLOTS || i.cut_off {
+        let reason = if i.procs.len() >= SLOTS || i.cut_off {
             Some(pb::RejectReason::NoFreeSlot)
         } else {
             None
@@ -1458,6 +1492,8 @@ pub fn simulate(scenario: &Scenario, weakened: Option<Weakened>) -> Result<(), S
                 epoch: 1,
                 current: BTreeMap::new(),
                 heard: BTreeMap::new(),
+                numbers: BTreeMap::new(),
+                stream_ids: BTreeMap::new(),
                 deposed: None,
                 instances: vec![
                     Instance::new(0, 1, scenario.ppm[0]),

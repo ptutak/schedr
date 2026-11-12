@@ -270,11 +270,13 @@ impl Workers {
     }
 
     /// The worker to give a task with `needs` to, leaving out `excluded`; `None` when no
-    /// eligible worker has a free slot.
+    /// eligible worker has a free slot. Only a connected one: an assignment to a worker without
+    /// a stream would be dropped and wait for its return or loss (Grok's review of B240); one
+    /// disconnected still counts as eligible, so the task waits rather than being unschedulable.
     #[must_use]
     pub fn pick<'a>(&'a self, needs: Needs<'a>, excluded: &BTreeSet<String>) -> Option<&'a str> {
         self.eligible(needs)
-            .filter(|w| w.free_for(needs) > 0 && !excluded.contains(&w.id))
+            .filter(|w| w.connected && w.free_for(needs) > 0 && !excluded.contains(&w.id))
             .min_by(|a, b| {
                 b.free_for(needs)
                     .cmp(&a.free_for(needs))

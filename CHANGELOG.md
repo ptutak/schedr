@@ -9,13 +9,14 @@ schema and protocol changed in place (decision 156).
 
 The first stable release (`Development Status :: 5 - Production/Stable`). From 1.0.0 on, the
 database schema changes only through new migrations, which `schedr db migrate` applies; the
-protocol between schedr's processes (now 1.0) changes only additively within 1.x; DAG JSON, the
+protocol between schedr's processes (now 2.0) changes only additively within 2.x; DAG JSON, the
 REST API and the configuration keep accepting what they accept now.
 
 ### Upgrading from 0.1.0
 
 - **A fresh database, every node at once.** 0.1.0 was a preview: its schema and protocol were
-  changed in place since. A 1.0.0 master refuses a 0.1 worker (another protocol major), and the
+  changed in place since. A 1.0.0 master refuses a 0.1 worker, and a worker of the 1.0.0rc1
+  rehearsal (protocol 1.0; another protocol major, decision 460), and the
   schema starts afresh: `schedr db status` reports a 0.1 database as created by an earlier
   schedr, and the master, the webserver and `schedr db migrate` refuse it.
 - **The images' plain tag is now glibc** (decision 454): `ghcr.io/ptutak/schedr`,
@@ -68,9 +69,25 @@ REST API and the configuration keep accepting what they accept now.
 - **Per-task memory** (M4.15a, decisions 50, 436-438): `memory=` budgets and
   `hard_memory_limit=`.
 - **Master time** (M4B.0, decisions 443-453): liveness decided on the master's monotonic clock,
-  carried on every message; a worker's start deadline and cutoff on master time; a replaced
+  carried on every message; a worker's cutoff on master time; a replaced
   incarnation's attempts held for its lease; a new leader waiting out a deposed one (lease
   epochs); metrics for the clock and the fencing.
+- **A DAG's trigger has the switch** (decision 459): pausing switches a trigger off, so a DAG
+  without one has nothing to pause (`dags pause` and `unpause` are refused; manual runs start
+  either way). A trigger is stored paused when it appears or changes kind; another of the same
+  kind keeps the switch. The API's `paused` is now `trigger_state` (`paused`, `active` or
+  null); `dags list` has STATE (`paused`, `active`, `manual`); the UI shows the switch in the
+  Trigger column. Tables: `dag_triggers`, and `triggers` and `trigger_passed` renamed
+  `trigger_progress` and `trigger_progress_passed`.
+- **A DAG page's actions in one row** (decision 461): an event trigger's Restart and Skip run sit
+  beside Trigger, Backfill and Pause; Restart only for a trigger stopped, failing or stuck (a
+  poke trigger with no call ended for over three times its `every` plus a heartbeat: the API's
+  `stuck`, `(stuck)` in `schedr triggers list`).
+- **Numbered messages with an echo** (decision 460, B240): every message between master and
+  worker is numbered and names the latest the other side had, so the master takes an
+  assignment back only once the worker's messages show it never started it. No start
+  deadline: `AssignTask.start_by_ms`, the `TOO_LATE` rejection and the metrics
+  `worker_start_slack_seconds` and `worker_too_late_rejections` are gone. Protocol 2.0.
 - **Throughput** (M4B, decisions 396, 397, 452): a worker's turn handled in groups, its results
   written together, the agent's journal in groups: about half again as many tasks a second on
   Postgres (the guide, Stress tests).
@@ -166,6 +183,8 @@ A worker connecting again gets back the parse jobs it held, instead of the DAG w
 `parse_job_timeout` (B235); a database of 0.1 is refused rather than read as current (B236).
 A draining worker whose master acknowledges its last results late still deregisters and
 exits within its grace period: the wait ends half the report period before it (B237).
+A worker whose messages were cut off while an assignment still reached it no longer has that
+assignment run again beside it (B240).
 
 ## 0.1.0
 

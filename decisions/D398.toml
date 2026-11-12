@@ -9,11 +9,11 @@ A DAG's runs come one way: its own trigger, or other DAGs' TriggerDagOperators, 
 DAG with `trigger=Chained()` (any DAG) or `Chained(by=[...])` (those named; `by=[]` is an error).
 Any other target fails the task when it runs (`chained_target_refused`, not retried); a paused one
 too, with retries. `schedr dags check` fails the operator's file when its target in the root
-refuses it; the master's parse doesn't. `trigger=None` means manual runs only: the UI greys out its
-Pause. Manual runs stay allowed on every DAG, a fallback and for testing. `schedr dags test`
+refuses it; the master's parse doesn't. `trigger=None` means manual runs only: nothing to pause,
+no Pause in the UI, pause and unpause refused (decisions 457 and 459). Manual runs stay allowed on every DAG, a fallback and for testing. `schedr dags test`
 unpauses the `Chained` DAGs of the path tested.
 '''
 history = "JOURNAL.md#D398"
 step = "M4.12a"
 code = ["crates/schedr-model/src/trigger.rs::chained_from", "crates/schedr-master/src/scheduler.rs::NotChained", "crates/schedr-master/src/validate.rs::target_problems", "python/schedr/chained.py::Chained", "crates/schedr/src/local.rs::unpause_chained"]
-checked = 2026-11-11
+checked = 2026-11-12

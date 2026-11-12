@@ -116,13 +116,13 @@ interpreter are there, and its code is at the expected hash. If a check fails it
 `Rejected` with a reason, and the master tries elsewhere or waits.
 
 If the checks pass, it records the attempt as running in its journal on disk, then sends
-`Started`, unless the assignment came past the time it had to start (it fetched its inputs or
-wrote its journal too slowly, or arrived late): then it removes the record, sends `Rejected`
-(`TOO_LATE`), and the task is queued again at once (a moved cleanup waits a minute, as after
-any rejection). A `Started` that doesn't arrive within the worker lease (60 s by
-default) makes the master take the assignment back (`assignment_expired`) and queue the task
-again, without using a retry; one that arrived in time counts even if a busy master handles it
-later.
+`Started`, however late the assignment came; a `Started` counts even if a busy master handles
+it later. The worker's messages are numbered and name the master's messages it has handled,
+and what it sends while handling one comes first: a later message naming the assignment with no
+`Started` or `Rejected` before it shows the master it never started, and the master takes it
+back (`assignment_expired`) and queues the task again, without using a retry. Until then the
+assignment stays; if the worker is lost first, it may have started there and ends `lost`
+([Message numbers](17-master-clock.md#message-numbers-and-their-echo-b240)).
 
 For a Python task, the agent starts a runner in a new process group, with stdout and stderr going to the
 attempt's log file. The runner says `hello`. The agent sends the task. Once the DAG file is

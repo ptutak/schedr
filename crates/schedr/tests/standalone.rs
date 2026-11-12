@@ -472,7 +472,7 @@ fn logs(dir: &Path) -> String {
 fn a_chain_runs_end_to_end(standalone: &Standalone) {
     standalone.wait("DAG `chain`", || standalone.dag_ids() == ["chain"]);
     let (_, chain) = &standalone.dags()[0];
-    assert_eq!(chain["paused"], true);
+    assert_eq!(chain["trigger_state"], Value::Null, "no trigger, no switch");
     assert_eq!(chain["location"]["path"], "chain.py");
     let run_id = standalone.trigger("chain");
     let run = standalone.wait_for_state(&run_id, "success");
@@ -497,7 +497,7 @@ fn a_chain_runs_end_to_end(standalone: &Standalone) {
     // The web UI, served next to the API over the same deployment.
     let list = standalone.page("/").expect("the UI's DAG list");
     assert!(
-        list.contains(r#"href="/d/default/dags/chain""#) && list.contains("paused"),
+        list.contains(r#"href="/d/default/dags/chain""#) && list.contains("Manual"),
         "{list}"
     );
     let page = standalone
@@ -1056,7 +1056,7 @@ fn a_scheduled_script_job_is_found_paused_and_listed_and_a_bad_key_is_an_import_
     let id = "jobs:team/schedr.toml#daily";
     standalone.wait("the script job", || standalone.dag_ids() == [id]);
     let (_, dag) = &standalone.dags()[0];
-    assert_eq!(dag["paused"], true);
+    assert_eq!(dag["trigger_state"], "paused");
     assert_eq!(dag["location"]["root"], "jobs");
     assert_eq!(dag["location"]["path"], "team/schedr.toml");
     let shown = standalone

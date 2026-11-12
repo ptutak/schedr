@@ -114,15 +114,25 @@ sequenceDiagram
 sequenceDiagram
     participant M as Master
     participant W as Worker
-    M->>W: AssignTask (may be lost in transit)
-    alt Started arrives in time
+    M->>W: AssignTask (master message n)
+    alt The worker starts it
         W->>M: Started
         Note over M: Arrival counts even while the message waits to be handled
-    else No Started arrives
-        Note over M: Assignment expiry: worker lease, 60 s default, take it back in a round
+    else A later worker message names n as handled, no Started before it
+        Note over M: It never started there, and never will
         M->>M: End assignment_expired, queue again without using a retry
+    else No worker message names n
+        Note over M: It may be running: it stays, and ends with its worker
     end
 ```
+
+Each side numbers its messages, and each message names the latest one it had from the other
+side. What a worker sends while handling a master message comes before anything naming that
+message as handled, so the master needs no start deadline to know an assignment never started
+(decision 460, [Message numbers and their echo](17-master-clock.md#message-numbers-and-their-echo-b240)).
+An assignment no worker message has named ends with its worker: taken back if the same process
+registers again without it in its journal, held as a started one for a new incarnation, `lost`
+(using a retry) if the worker is lost.
 
 ## Large inputs
 
@@ -139,12 +149,10 @@ sequenceDiagram
     M->>W: AssignTask (inputs_external)
     W->>M: FetchInputs (attempt ID)
     M-->>W: InputChunk stream
-    alt Fetch succeeds before the assignment's deadline
+    alt Fetch succeeds
         W->>M: Started
-    else Fetch succeeds past the deadline
-        W->>M: Rejected (TOO_LATE), queued again at once
-    else Fetch fails or does not finish in time
-        Note over M: Assignment expiry: worker lease (60 s default) plus two heartbeats without Started, assignment is taken back
+    else Fetch fails
+        W->>M: Rejected, queued again
     end
 ```
 
@@ -262,8 +270,10 @@ sequenceDiagram
         opt Task has cleanup
             M->>M: End cleanup worker_lost
         end
-    else Unstarted assignment
+    else Assignment shown never started
         M->>M: End assignment_expired, retry without using a task retry
+    else Unstarted assignment not shown never started
+        M->>M: As a started task: it may run there
     else Started task with cleanup_anywhere and moves remaining
         M->>M: Keep task result or mark task lost, queue cleanup to move
     else Cleanup has exhausted its moves
@@ -294,8 +304,8 @@ sequenceDiagram
         alt Refused
             W-->>M: Rejected
             M->>M: Take back, prefer another worker next time
-        else No Started
-            Note over M: Assignment expires, take back without another move
+        else Shown never started, or W lost or restarted first
+            Note over M: Take back without another move, or move it on as a started one if it may have started
         else Started
             W->>M: Started
             W->>M: TaskEnded
@@ -460,13 +470,18 @@ identical effects.
 
 ### Worker to master on `Control`
 
+Every worker message carries the worker's clock (`WorkerClock`): its number on this stream
+(`sequence`, the `Register` being 0) and the latest master message it had handled
+(`heard_sequence`). A message sent while handling a master message is numbered before any
+that names it.
+
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
 | `Register` | Worker on every connection | Validate, reconcile journal and `running_triggers`, and reply | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
 | `Heartbeat` | Worker periodically | Renew lease on arrival and reconcile `running_triggers` | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
 | `CodeVersionChanged` | Worker after root settles or withdraws it | Record hash and possibly plan parse; an empty hash withdraws the root | Yes, same hash | [`[dags] settle_time`](14-timings.md#public-timing-keys) |
-| `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | [assignment expiry](14-timings.md#fixed-timings) |
-| `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | — |
+| `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | — |
 | `TaskEnded` | Worker as cleanup begins | Keep task result, mark cleaning up | Yes, for open attempt | [`[worker] cleanup_timeout`](14-timings.md#public-timing-keys) |
 | `HandlesAdded` | Worker as each handle is journaled; all again on `Continue` | Store handles from the assigned worker for a moved cleanup; first at each position stands, up to 1 MiB per attempt | Yes | — |
 | `Finished` | Worker after attempt and cleanup | Store result and reply with `FinishedAck` | Yes, stored result is acknowledged again | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) governs resend |
@@ -482,19 +497,20 @@ identical effects.
 ### Master to worker on `Control`
 
 Every master message carries the master's clock (`MasterClock`): its process's timeline,
-master time (its monotonic clock) as it was sent, the latest heartbeat number it had from this
-stream (`0`: only the `Register`), its wall clock, and its lease epoch (raised at each
-takeover; a worker that has seen an epoch ends a stream from a lower one, unless the higher
-one has been silent for a whole lease). Every deadline the master and its
-workers must agree on is a master time; a worker reads master time from these, counting from
-when it sent the heartbeat a message names. No deadline reads the wall clock it carries.
+master time (its monotonic clock) as it was sent, its own number on this stream (`sequence`,
+from 1), the latest worker message number it had from this stream (`heard_sequence`; `0`:
+only the `Register`), its wall clock, and its lease epoch (raised at each takeover; a worker
+that has seen an epoch ends a stream from a lower one, unless the higher one has been silent
+for a whole lease). Every deadline the master and its workers must agree on is a master time;
+a worker reads master time from these, counting from when it sent the message a stamp names.
+No deadline reads the wall clock it carries.
 
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
 | `HeartbeatAck` | Master as each `Heartbeat` arrives, while it leads and the stream is the worker's current one (not one a newer registration replaced) | Note the master as heard (its clock, as on every master message, names the heartbeat it answers); silence for the worker lease ends the stream; `cleanup_anywhere` tasks stop then, or sooner once master time may have passed the last stamp plus the lease | Yes | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `Registered` | Master after `Register` | Apply timing, journal decisions and `script_uses` (`RootUses` per DAG root); ignore an answer at least a lease old and register again | Decisions reconcile entries | [`SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT`](14-timings.md#fixed-timings) |
 | `ScriptUses` | Master when the script roots sent for DAG roots change | Replace the uses (`RootUses` per DAG root); fold the used script roots' hashes into each DAG root's reported hash, withdrawing a DAG root that uses a script root this worker lacks (decisions 301, 303, 304) | Yes, it replaces; an omitted root uses none | — |
-| `AssignTask` | Master after storing assignment | Validate and start attempt, or reject it `TOO_LATE` past `start_by_ms` (its start timeout from when it was stored, in master time, read from the master's clock on its messages, two heartbeat intervals kept for `Started`); `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | [assignment expiry](14-timings.md#fixed-timings) |
+| `AssignTask` | Master after storing assignment | Validate and start attempt, or reject it; a later message naming it as handled, with neither before, shows the master it never started; `run.event_json` carries an event run's event; `cleanup_only` plans and runs the moved cleanup with its handles, requiring the cleanup script rather than the task script for a script cleanup; `resource_cleanup` marks a resource cleanup so the worker supplies its default timeout if needed | Existing attempt ID is ignored | — |
 | `AssignParse` | Master when root needs parsing | Parse root and upload result | A job for a root and hash already being parsed isn't started again: the running parse answers it (B235) | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
 | `CancelAttempt` | Master on cancellation or reconnect | Stop running task, including a resource cleanup task; leave per-task cleanup alone | Yes | [`[master] cancel_grace`](14-timings.md#public-timing-keys) |
 | `AssignTrigger` | Master when a DAG's trigger should run and has no worker | Run it on a watcher slot from its bookmark, with the previous consecutive `failures`, without an attempt | Yes | — |
@@ -513,4 +529,4 @@ alongside `Control`, despite being separate calls.
 |---|---|---|---|---|
 | `Control` | Worker on connection | Register and exchange control messages | Reconnection reconciles journal; a live duplicate is refused | [`SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_FIRST`](14-timings.md#fixed-timings), `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_MAX` |
 | `UploadParseResult` | Worker after parse | Accept header and file parts, acknowledge job | Matched by root, content hash and schedr version, not by job ID; a result for code already parsed keeps a stored success, replacing only files that failed transiently or were missing | [`[master] parse_job_timeout`](14-timings.md#public-timing-keys) |
-| `FetchInputs` | Worker when `AssignTask` says inputs are external | Stream inputs for attempt | Read-only; repeat while assignment is available | [assignment expiry](14-timings.md#fixed-timings) |
+| `FetchInputs` | Worker when `AssignTask` says inputs are external | Stream inputs for attempt | Read-only; repeat while assignment is available | — |

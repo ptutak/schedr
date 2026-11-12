@@ -147,7 +147,6 @@ if [ -z "$MESH" ]; then
 fi
 
 say "a worker stopped while its task runs: the task finishes in the drain"
-cli dags unpause slow
 slow=$(cli runs trigger slow | awk '/^triggered run/ {print $3}')
 worker=
 for _ in $(seq 1 60); do

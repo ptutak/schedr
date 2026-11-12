@@ -1,7 +1,8 @@
 title = "A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would"
 date = 2026-11-12
 by = "claude"
-status = "active"  # active, superseded, dropped, untraced
+status = "superseded"  # active, superseded, dropped, untraced
+superseded_by = 460
 topic = "workers"
 section = "Identity and connection"
 summary = '''

@@ -21,8 +21,8 @@ use schedr_agent::launch::ProcessParseRunner;
 use schedr_agent::parse::{ParseLimits, parse_files_with};
 use schedr_agent::process::ProcessSpec;
 use schedr_agent::scan::scan;
-use schedr_api::views::TriggerRequest;
 use schedr_api::views::{AttemptList, LocationView, RunDetail, WorkerView};
+use schedr_api::views::{TriggerRequest, TriggerState};
 use schedr_config::{Config, Root};
 use schedr_db::Database;
 use schedr_master::validate::{Checks, validate_files};
@@ -1387,7 +1387,7 @@ async fn drive(
 }
 
 /// Waits until the local master has stored `dag`; returns the file that defines it.
-/// Unpauses the `trigger=Chained()` DAGs of the path tested (a new DAG is stored paused), so a
+/// Unpauses the `trigger=Chained()` DAGs of the path tested (a new trigger is stored paused), so a
 /// `TriggerDagOperator` starts a real run of a target there (decisions 378, 398); only other
 /// DAGs start them, so nothing else runs. The others stay paused: their triggers don't fire.
 async fn unpause_chained(client: &Client<HttpTransport>) -> Result<(), AppError> {
@@ -1396,7 +1396,7 @@ async fn unpause_chained(client: &Client<HttpTransport>) -> Result<(), AppError>
             .trigger
             .as_ref()
             .is_some_and(|t| t["kind"].as_str() == Some("chained"));
-        if chained && found.paused {
+        if chained && found.trigger_state == Some(TriggerState::Paused) {
             client
                 .wait(
                     client

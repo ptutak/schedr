@@ -127,7 +127,7 @@ async fn a_waiting_step_gets_the_first_since_its_run_started_and_a_trigger_reads
 
 #[tokio::test]
 async fn what_a_trigger_passed_behind_its_window_is_forgotten() {
-    // B186: `trigger_passed` was never pruned.
+    // B186: `trigger_progress_passed` was never pruned.
     let db = db().await;
     let data = json!(null);
     let mut ids = Vec::new();
@@ -148,7 +148,7 @@ async fn what_a_trigger_passed_behind_its_window_is_forgotten() {
         unreachable!("SQLite")
     };
     for id in &ids {
-        sqlx::query("INSERT INTO trigger_passed (dag_id, item) VALUES ('sync', ?)")
+        sqlx::query("INSERT INTO trigger_progress_passed (dag_id, item) VALUES ('sync', ?)")
             .bind(id)
             .execute(pool)
             .await
@@ -159,7 +159,7 @@ async fn what_a_trigger_passed_behind_its_window_is_forgotten() {
         .await
         .unwrap();
     assert_eq!(forgotten, 1, "the one behind it only");
-    let left: Vec<String> = sqlx::query_scalar("SELECT item FROM trigger_passed")
+    let left: Vec<String> = sqlx::query_scalar("SELECT item FROM trigger_progress_passed")
         .fetch_all(pool)
         .await
         .unwrap();

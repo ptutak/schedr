@@ -11,4 +11,4 @@ It includes waiting for users, cleaning up, cleaned, cleanup failed, not needed 
 history = "archive/PROJECT.md#D275"
 step = "M4.8c2"
 code = ["crates/schedr-model/src/dag.rs::ResourceState", "crates/schedr-api/src/views.rs::ResourceView"]
-checked = 2026-11-10
+checked = 2026-11-12

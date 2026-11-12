@@ -509,6 +509,7 @@ impl pb::master_server::Master for Scripted {
                     .unwrap()
                         + wall_ahead_ms,
                     lease_epoch: epoch,
+                    sequence: 0,
                 });
                 message
             }
@@ -546,7 +547,9 @@ impl pb::master_server::Master for Scripted {
         tokio::spawn(async move {
             while let Ok(Some(message)) = inbound.message().await {
                 let beat = match &message.message {
-                    Some(worker_message::Message::Heartbeat(beat)) => Some(beat.sequence),
+                    Some(worker_message::Message::Heartbeat(_)) => {
+                        message.clock.as_ref().map(|clock| clock.sequence)
+                    }
                     _ => None,
                 };
                 received.lock().unwrap().push(message);
@@ -1659,7 +1662,8 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     let (stop, mut stopped) = Stops::new();
     agent.running.insert("a1".to_owned(), stop);
-    let (to_master, _outbound) = mpsc::unbounded_channel();
+    let (sender, _outbound) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, SharedOutbox::default());
     let kill = pb::JournalDecision {
         cleanup_from: 0,
         attempt_id: "a1".to_owned(),
@@ -2208,7 +2212,6 @@ fn command_needing_secret(
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
-        start_by_ms: None,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2450,7 +2453,6 @@ async fn command_with_connection(
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
-        start_by_ms: None,
     };
     let mut spec = crate::attempt::AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -2751,7 +2753,6 @@ fn attempt_with_timed_cleanup(
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
-        start_by_ms: None,
     };
     let mut spec = AttemptSpec::from_assign(&assign, None).unwrap();
     spec.stand_in_secrets();
@@ -3412,65 +3413,14 @@ async fn an_assignment_journaled_past_the_lease_isnt_started() {
 }
 
 #[tokio::test]
-async fn an_assignment_past_its_start_budget_isnt_started_and_is_rejected_too_late() {
-    // B225: delivered late, then journaled slowly, an assignment the master had already taken
-    // back (its start timeout counts from when it assigned it) started here as well; the
-    // worker's own lease, long, hadn't run out. Its budget is counted from the stream's
-    // opening (no heartbeat answered yet), so 100 ms is spent by the 250 ms write.
-    let mut script = silent_master_leased(false, 5000);
-    let mut task = task_json(&json!({"kind": "python"}));
-    task["id"] = json!("late");
-    let mut late = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut late.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(100);
-    script[1] = late;
-    let master = Scripted {
-        script,
-        ..Scripted::default()
-    };
-    let started = Instant::now();
-    let done = move |_: &[pb::WorkerMessage]| started.elapsed() > Duration::from_millis(800);
-    let launched = Arc::new(Mutex::new(Vec::new()));
-    let seen_launches = Arc::clone(&launched);
-    let stalled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen_stalls = Arc::clone(&stalled);
-    let (seen, left) = against_master(2, Start::With(vec![]), master, done, |agent| {
-        agent.executor.dirs = seen_launches;
-        agent.journal_stall = (Duration::from_millis(250), seen_stalls);
-    })
-    .await;
-    assert_eq!(stalled.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(left, Vec::<String>::new());
-    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
-    let rejected: Vec<i32> = seen
-        .iter()
-        .filter_map(|m| match &m.message {
-            Some(worker_message::Message::Rejected(r)) => Some(r.reason),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        rejected,
-        [i32::from(pb::RejectReason::TooLate)],
-        "{:?}",
-        kinds(&seen)
-    );
-}
-
-#[tokio::test]
-async fn an_assignment_starts_by_its_deadline_in_master_time() {
-    // B225: the master answers the worker's heartbeats (every 20 ms) and sends an assignment
-    // 400 ms after the stream opened (its master time), due by 700: it starts.
+async fn an_assignment_arriving_late_still_starts() {
+    // B240: no start deadline. The master answers the worker's heartbeats (every 20 ms) and
+    // sends an assignment 400 ms after the stream opened: it starts, however late, as the
+    // master takes it back only once the worker's messages show it never started it.
     let mut script = silent_master_leased(false, 5000);
     let mut task = task_json(&json!({"kind": "python"}));
     task["id"] = json!("anchored");
-    let mut later = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(700);
+    let later = assign("a1", &task, "sync.py", false);
     script.truncate(1);
     let master = Scripted {
         script,
@@ -3490,92 +3440,6 @@ async fn an_assignment_starts_by_its_deadline_in_master_time() {
     })
     .await;
     assert!(heartbeats(&seen) > 5, "{:?}", kinds(&seen));
-    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
-}
-
-#[tokio::test]
-async fn an_assignment_arriving_past_its_deadline_in_master_time_is_too_late() {
-    // B225: delivered late (sent at master time 400, due by 300 - stored long before), it
-    // arrives fresh but is rejected, never started: its deadline is the master's, not counted
-    // from its arrival.
-    let mut script = silent_master_leased(false, 5000);
-    let mut task = task_json(&json!({"kind": "python"}));
-    task["id"] = json!("anchored");
-    let mut later = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(300);
-    script.truncate(1);
-    let master = Scripted {
-        script,
-        late: Some((Duration::from_millis(400), vec![later])),
-        ack_heartbeats: Some(Duration::ZERO),
-        ..Scripted::default()
-    };
-    let launched = Arc::new(Mutex::new(Vec::new()));
-    let seen_launches = Arc::clone(&launched);
-    let watched = Arc::clone(&launched);
-    let started = Instant::now();
-    let done = move |seen: &[pb::WorkerMessage]| {
-        !watched.lock().unwrap().is_empty()
-            || seen
-                .iter()
-                .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
-            || started.elapsed() > Duration::from_secs(3)
-    };
-    let too_late = prometheus_client::metrics::counter::Counter::<u64>::default();
-    let counted = too_late.clone();
-    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
-        agent.executor.dirs = seen_launches;
-        agent.metrics.too_late = counted;
-    })
-    .await;
-    assert_eq!(too_late.get(), 1, "counted (decision 448)");
-    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
-    let rejected: Vec<i32> = seen
-        .iter()
-        .filter_map(|m| match &m.message {
-            Some(worker_message::Message::Rejected(r)) => Some(r.reason),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(rejected, [i32::from(pb::RejectReason::TooLate)]);
-}
-
-#[tokio::test]
-async fn heartbeats_never_answered_dont_hold_back_the_start_budget() {
-    // B225 (Grok's review): a paused master answers no heartbeat; once it leads again, the
-    // answers paired with the oldest unanswered heartbeats left the count that far behind for
-    // the session, and every assignment was too late. Unanswered for 1.5 s, then answered: a
-    // deadline 600 ms after the assignment starts, which the count left 1.5 s behind refuses
-    // (wide margins both ways: CI's coverage build is slow).
-    let mut script = silent_master_leased(false, 5000);
-    let mut task = task_json(&json!({"kind": "python"}));
-    task["id"] = json!("after_pause");
-    let mut later = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut later.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(2300);
-    script.truncate(1);
-    let master = Scripted {
-        script,
-        late: Some((Duration::from_millis(1700), vec![later])),
-        ack_heartbeats: Some(Duration::from_millis(1500)),
-        ..Scripted::default()
-    };
-    let launched = Arc::new(Mutex::new(Vec::new()));
-    let seen_launches = Arc::clone(&launched);
-    let watched = Arc::clone(&launched);
-    let started = Instant::now();
-    let done = move |_: &[pb::WorkerMessage]| {
-        !watched.lock().unwrap().is_empty() || started.elapsed() > Duration::from_secs(6)
-    };
-    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
-        agent.executor.dirs = seen_launches;
-    })
-    .await;
     assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
 }
 
@@ -3650,114 +3514,6 @@ async fn a_lower_epoch_is_followed_once_the_higher_has_been_silent_for_a_lease()
             .unwrap();
         agent.leader_epoch = (5, Some(long_ago));
         agent.lease = Some(Duration::from_secs(5));
-    })
-    .await;
-    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
-}
-
-#[tokio::test]
-async fn a_start_budget_over_two_heartbeats_starts() {
-    // B227: two heartbeat intervals are kept off the budget, no more: 2.5 s with a 1 s
-    // heartbeat leaves 0.5 s, and it starts.
-    let mut script = silent_master_leased(false, 5000);
-    let Some(master_message::Message::Registered(registered)) = &mut script[0].message else {
-        panic!("expected Registered")
-    };
-    registered.timing.as_mut().unwrap().heartbeat_interval_ms = 1000;
-    let mut task = task_json(&json!({"kind": "python"}));
-    task["id"] = json!("enough");
-    let mut enough = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut enough.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(2500);
-    script[1] = enough;
-    let master = Scripted {
-        script,
-        ..Scripted::default()
-    };
-    let launched = Arc::new(Mutex::new(Vec::new()));
-    let seen_launches = Arc::clone(&launched);
-    let watched = Arc::clone(&launched);
-    let started = Instant::now();
-    let done = move |seen: &[pb::WorkerMessage]| {
-        !watched.lock().unwrap().is_empty()
-            || seen
-                .iter()
-                .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
-            || started.elapsed() > Duration::from_secs(3)
-    };
-    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
-        agent.executor.dirs = seen_launches;
-    })
-    .await;
-    assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
-}
-
-#[tokio::test]
-async fn a_start_budget_keeps_a_heartbeat_for_the_started_to_arrive() {
-    // B227: a `Started` sent just before the master's time ran out could arrive after it took
-    // the attempt back. A budget under two heartbeat intervals (1 s each here) leaves no time.
-    let mut script = silent_master_leased(false, 5000);
-    let Some(master_message::Message::Registered(registered)) = &mut script[0].message else {
-        panic!("expected Registered")
-    };
-    registered.timing.as_mut().unwrap().heartbeat_interval_ms = 1000;
-    let mut task = task_json(&json!({"kind": "python"}));
-    task["id"] = json!("short");
-    let mut short = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut short.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(1900);
-    script[1] = short;
-    let master = Scripted {
-        script,
-        ..Scripted::default()
-    };
-    let launched = Arc::new(Mutex::new(Vec::new()));
-    let seen_launches = Arc::clone(&launched);
-    let done = |seen: &[pb::WorkerMessage]| {
-        seen.iter()
-            .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
-    };
-    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
-        agent.executor.dirs = seen_launches;
-    })
-    .await;
-    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
-    let rejected: Vec<i32> = seen
-        .iter()
-        .filter_map(|m| match &m.message {
-            Some(worker_message::Message::Rejected(r)) => Some(r.reason),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(rejected, [i32::from(pb::RejectReason::TooLate)]);
-}
-
-#[tokio::test]
-async fn an_assignment_within_its_start_budget_starts() {
-    // B225: the budget leaves an assignment in time alone.
-    let mut script = silent_master_leased(false, 5000);
-    let mut task = task_json(&json!({"kind": "python"}));
-    task["id"] = json!("in_time");
-    let mut in_time = assign("a1", &task, "sync.py", false);
-    let Some(master_message::Message::AssignTask(assigned)) = &mut in_time.message else {
-        panic!("expected an assignment")
-    };
-    assigned.start_by_ms = Some(60_000);
-    script[1] = in_time;
-    let master = Scripted {
-        script,
-        ..Scripted::default()
-    };
-    let launched = Arc::new(Mutex::new(Vec::new()));
-    let seen_launches = Arc::clone(&launched);
-    let watched = Arc::clone(&launched);
-    let done = move |_: &[pb::WorkerMessage]| !watched.lock().unwrap().is_empty();
-    let (seen, _) = against_master(2, Start::With(vec![]), master, done, |agent| {
-        agent.executor.dirs = seen_launches;
     })
     .await;
     assert_eq!(launched.lock().unwrap().len(), 1, "{:?}", kinds(&seen));
@@ -4381,6 +4137,7 @@ fn stamped_long_ago(dir: &Path, ago: Duration) -> Agent<Fake> {
         heard_sequence: sequence,
         wall_ms: 0,
         lease_epoch: 1,
+        sequence: 0,
     };
     agent.master_time.heard(&clock, then);
     agent.heard = tokio::time::Instant::now();
@@ -4405,13 +4162,21 @@ fn a_reconnect_keeps_the_cutoff_the_last_stamps_set() {
         left(agent.lease_deadline()) < Duration::from_secs(31),
         "kept over the reconnect"
     );
-    let (to_master, _from_agent) = mpsc::unbounded_channel();
+    // The session's `Register` (number 0) goes out through its sender, as `session` sends it.
+    let (sender, _from_agent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, agent.master_time.outbox());
+    to_master
+        .send(wrap(worker_message::Message::Register(
+            pb::Register::default(),
+        )))
+        .unwrap();
     let clock = pb::MasterClock {
         timeline: 8,
         master_ms: 5_000,
         heard_sequence: 0,
         wall_ms: 0,
         lease_epoch: 1,
+        sequence: 0,
     };
     agent.heard_master(Some(&clock), &to_master);
     assert!(
@@ -4462,7 +4227,8 @@ async fn a_fork_while_disconnected_is_told_to_the_next_session() {
             None,
         )
         .await;
-    let (to_master, mut sent) = mpsc::unbounded_channel();
+    let (sender, mut sent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, SharedOutbox::default());
     let decision = pb::JournalDecision {
         attempt_id: "a1".to_owned(),
         decision: pb::AttemptDecision::Continue.into(),
@@ -4580,7 +4346,8 @@ async fn a_fork_that_finished_while_disconnected_is_told_before_its_result() {
         unreachable!()
     };
     agent.on_done(Done::Attempt(finished), None).await;
-    let (to_master, mut sent) = mpsc::unbounded_channel();
+    let (sender, mut sent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, SharedOutbox::default());
     let decision = pb::JournalDecision {
         attempt_id: "a1".to_owned(),
         decision: pb::AttemptDecision::Continue.into(),

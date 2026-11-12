@@ -23,21 +23,23 @@ own: another master's times are a different timeline and are never compared with
 | A restarted process, or the other master | | A new timeline |
 
 Every master message carries a `MasterClock`: the timeline, master time as the message left,
-the latest heartbeat heard on that stream, the wall clock (for people), and the lease epoch
-(decision 444). Heartbeat 0 is the worker's `Register`.
+its own number on the stream, the number of the latest worker message the master had received
+on that stream, the wall clock (for people), and the lease epoch (decision 444). Every worker
+message is numbered too, the `Register` being 0, and names the latest master message the worker
+had handled ([Message numbers](#message-numbers-and-their-echo-b240)).
 
 ```{mermaid}
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    W->>M: Register (heartbeat 0)
-    W->>M: Heartbeat 1, sent at boot time T
+    W->>M: Register (message 0)
+    W->>M: Heartbeat (message 1), sent at boot time T
     M-->>W: HeartbeatAck, and every later message
     Note over M,W: timeline, master_ms, heard_sequence 1, wall_ms, lease_epoch
 ```
 
-The worker does not trust its own guess of when the master sent the message. The heartbeat
-the stamp names was sent first, so master time `master_ms` is already past that send.
+The worker does not trust its own guess of when the master sent the message. The worker
+message the stamp names was sent first, so master time `master_ms` is already past that send.
 Master time `X` is no earlier than the send plus `X - master_ms`, less 0.1 % (one part in a
 thousand: each clock slews by at most 500 ppm, so the two by at most 1000 ppm). That is
 Cristian's bound, from the worker's boot clock, which keeps counting through a suspend. The
@@ -54,7 +56,7 @@ sample replaces the old one.
 
 ```{mermaid}
 flowchart LR
-    newSample[A stamped answer to a heartbeat] --> tighter{At least as tight as the newest kept?}
+    newSample[A stamped message naming a worker message] --> tighter{At least as tight as the newest kept?}
     tighter -->|yes| dropLoose[Drop the looser ones before it] --> keep[Keep it last]
     tighter -->|no| keep
     keep --> old{Oldest kept sent more than 10 min ago?}
@@ -62,13 +64,13 @@ flowchart LR
     old -->|no| best[The first kept is the tightest of the window]
 ```
 
-`AssignTask.start_by_ms` is master time on that timeline: the start timeout (the worker
-lease, 60 s) after the master stored the assignment, from the same reading the master's
-expiry keeps.
+Master time decides the worker's cutoff, the worker lease, the hold of a replaced
+incarnation and the wait before a cleanup moves. Whether a worker started an assignment it
+does not decide: the message numbers do (below).
 
 ## The races it closes
 
-### An assignment started after the master took it back (B225)
+### An assignment started after the master took it back (B225, B227, B240)
 
 Before, the master expired an assignment from the wall-clock time it stored (`assigned_at`
 plus the lease). The worker's lease was its own timer, and the assignment's arrival refreshed
@@ -83,78 +85,72 @@ already replaced. The review that found it:
 | 62 s | Assigns it to another worker. | |
 | 65 s | | Journal done, still inside its own lease: starts the task. |
 
-After, the worker starts the task only while its bound of `start_by_ms` is more than two
-heartbeat intervals ahead (20 s). Otherwise it rejects the assignment `TOO_LATE` and does not
-leave it in the journal. The master takes it back two heartbeat intervals (20 s) after its own
-master time passes the same deadline, unless `Started` has arrived by then (decision 450): a
-`Started` sent at the last moment has the worker's reserve and that grace, 40 s, to arrive.
+Protocol 1.0 closed it with a start deadline in master time: the assignment carried
+`start_by_ms`, the worker refused to start within two heartbeat intervals of it (`TOO_LATE`),
+and the master took the attempt back two intervals after it (decisions 442 and 450). That
+left a known limit: a `Started` held up on the way for longer than those four intervals
+arrived after the take-back, and the task could run on two workers. The simulator of the
+master's side found it happening (B240): the worker's messages cut one way, its `Started`
+never arrived, and the master, losing the worker, took back an assignment that was running.
 
-| When | Master | Worker |
+The deadline guessed. Since protocol 2.0 the master knows instead: it takes an assignment
+back only once the worker's messages show that it never started it, and there is no start
+deadline at all (decision 460).
+
+### Message numbers and their echo (B240)
+
+Each side numbers the messages it sends on a stream, and each message names the latest
+message received from the other side. A master message carries its number and the latest
+worker message the master had received (`clock.sequence`, `clock.heard_sequence`); a worker
+message carries its number and the latest master message it had handled (`clock.sequence`,
+`clock.heard_sequence` of its `WorkerClock`).
+
+The worker handles master messages one at a time, in order. Whatever it sends while handling
+one (`Started` for an `AssignTask`, or `Rejected`) is queued before any later message naming
+it as handled. The stream keeps that order. So once the master reads a worker message naming
+an assignment's number as handled, with no `Started` or `Rejected` read before it, the worker
+did not start that assignment and never will: the master takes it back at once
+(`assignment_expired`, queued again without using a retry).
+
+| On the stream | Worker | Master |
 |---|---|---|
-| Master time S | Stores the attempt. `start_by_ms` is S plus 60 s; expiry keeps S. | |
-| On `AssignTask` | | Its stamp names the heartbeat sent at boot time T. The worker starts only while T + (`start_by_ms` − `master_ms`), less 0.1 %, is more than 20 s ahead. |
-| Otherwise | | Rejects `TOO_LATE`, and drops the journal entry. |
-| Past S + 60 s + 20 s, no `Started` waiting | Takes the attempt back. | |
+| Master message 7 | | Sends `AssignTask` for attempt A. |
+| Worker message 12 | Handles 7: its journal says the slot is gone, so it rejects it, or it starts it and sends `Started`. | |
+| Worker message 13 | A heartbeat, naming 7 as handled. | |
+| On message 13 | | If 12 was `Started`, A runs. If none came, A never started: taken back. |
 
-### A start budget that outlived the expiry
+Until a worker message names it, the assignment stays where it is. How it ends depends on what
+happens to the worker:
 
-The first patch put a remaining budget on the assignment, fixed when it was sent. The worker
-counted that budget from when the assignment arrived. The wait after the send sat outside the
-master's expiry, which still ran from when the attempt was stored, so the worker could start
-after the master had taken the attempt back (decision 442: a budget spent at delivery).
+| What happens | Its unstarted assignments |
+|---|---|
+| Its messages name them as handled | Taken back at once if no `Started` came first. |
+| The same process registers again (a broken stream) | Its journal lists every assignment it accepted; one not started and not in the journal is taken back at once. What the old stream still carries, the worker drops. |
+| A new incarnation registers | Those the old stream showed never started are taken back at once. The others may be running in the old process: held as started ones are, a lease from the registration (decision 443), then ended `lost`. |
+| The worker is lost | Those shown never started are taken back. The others may be running there: ended `lost`, using a retry, as a started one is. |
 
-Master time closes it by sending the deadline itself, the same reading `expire` keeps, rather
-than a duration the worker starts counting later.
+A moved cleanup follows the same rules on the worker it was given to. While it is assigned and
+not started there, it counts as unstarted there, whatever its task did before. Shown never
+started, it waits for another worker again with no move used; otherwise it is held, or moved
+on, as a started cleanup is.
 
-### Heartbeats left unanswered
-
-Numbering heartbeats and treating the count as the clock left the worker behind whenever an
-ack never went out (the master not leading, or the stream buffer full). The master's expiry
-moved on; the worker's count did not.
-
-The master records the heartbeat's number when it arrives, ack or no ack, and puts that
-number on every later message. The worker dates master time from when it sent that
-heartbeat. A run of messages with no sample at all counts every deadline as passed, so the
-task is not started.
-
-### A `Started` held up (B227)
-
-A `Started` sent in the last moment of the budget could arrive after the master had taken
-the attempt back and given it to someone else. The worker keeps two heartbeat intervals (20 s
-of the 60 s) so that `Started` can reach the master first. The master notes it as it is read,
-before the message waits for the lock.
-
-| | Before | After |
-|---|---|---|
-| When the worker may start | Up to the end of the 60 s | Not inside the last 20 s (two heartbeats) |
-| Its `Started` | Sent at the very end, and held on the way | Sent with 20 s of master time still to go |
-| The master | At 60 s from storage, no `Started` yet: takes the attempt back and gives it to another worker, while the first task already runs | Records the arrival before the lock, so expiry leaves the attempt alone |
-
-A `Started` held longer than those two intervals is a known limit, below.
+A restarted master has heard no echo from before it started. Every worker either registers
+again (its journal decides) or is lost, so an unstarted assignment never waits on a timer.
 
 ### A wall-clock jump on the master (B228)
 
-Expiry, worker loss and the other liveness timers used to compare stored wall-clock times
+Worker loss and the other liveness timers used to compare stored wall-clock times
 with the wall clock the master was handed. A step of that clock made a live assignment look
 due. Holding liveness after a jump was the next patch, and it was dropped: nothing that
 decides liveness reads the wall clock. A jump of two minutes while master time moves five
-seconds takes no assignment back and loses no worker. Both go only once master time itself
-passes the lease.
+seconds loses no worker: it goes only once master time itself passes the lease.
 
 ### The minimum lease (B226)
 
-The worker keeps two heartbeat intervals for `Started`, reads master time from a heartbeat
-sent up to one interval earlier, and still needs an interval in which to start. A lease under
-four heartbeat intervals cannot cover that, and a lease under one interval loses a worker
-between two heartbeats. The load check is below.
-
-A worker lease covers, at the least, four heartbeat intervals:
-
-- one: the heartbeat the stamp names, up to 10 s old;
-- one: at least 10 s left to start;
-- two: 20 s kept so `Started` arrives before the expiry.
-
-Under 40 s the process refuses to start.
+A lease under one heartbeat interval loses a worker between two heartbeats. A worker lease
+must cover at least four heartbeat intervals, so a few heartbeats held up or lost in a row
+don't lose a worker, and the cutoff, read from a message sent up to one interval earlier,
+keeps most of the lease. Under 40 s (with the 10 s heartbeat) the process refuses to start.
 
 ### A worker cut off by the clock of its own receipts (decision 445)
 
@@ -179,17 +175,17 @@ The master counts a worker lost a lease after the last message it received from 
 its own last send. With the worker's heartbeats lost on the way while the master's messages
 still arrive, each stamped later than the one before, the stamp alone would keep pushing the
 worker's cutoff past the moment the master moves its cleanup. So the cutoff has a third bound:
-every master message names the last heartbeat it heard (`heard_sequence`), the worker knows when
-it sent that heartbeat, and the master received it no earlier. The worker stops a lease after
-that send, less the drift allowance (0.1 %), on its own boot clock.
+every master message names the last worker message it received (`heard_sequence`), the worker
+knows when it sent that message, and the master received it no earlier. The worker stops a lease
+after that send, less the drift allowance (0.1 %), on its own boot clock.
 
 | When | Worker | Master |
 |---|---|---|
-| 10 s on the worker's clock | Sends heartbeat 7. | |
+| 10 s on the worker's clock | Sends message 7, a heartbeat. | |
 | 10.02 s | | Hears it. Counts the worker lost from 70.02 s (a 60 s lease). |
-| After that | Heartbeats 8, 9, … are lost on the way. | |
+| After that | Messages 8, 9, … are lost on the way. | |
 | Master time 50 s | | Sends an assignment stamped 50 s, `heard_sequence` 7. |
-| On that assignment | By the stamp alone it would stop near 110 s. By heartbeat 7's send it stops at 10 + 60 − 0.06 = 69.94 s, and does. | |
+| On that assignment | By the stamp alone it would stop near 110 s. By message 7's send it stops at 10 + 60 − 0.06 = 69.94 s, and does. | |
 | 70.02 s plus the cancel grace and the move wait | | Moves the cleanup. |
 
 When the master answers each heartbeat, this bound and the stamp's are within a few
@@ -199,12 +195,11 @@ milliseconds of each other; it only matters when the worker's messages stop gett
 
 The worker's real `MasterTime` runs against a master on a virtual clock in a property test
 (`crates/schedr-agent/tests/clock_sim.rs`): rate drift up to 0.1 %, delays both ways up to
-5 s, answers lost, assignments delivered up to 30 s late, and stalls the boot clock missed.
-Heartbeats are also lost on their way to the master while its messages still arrive, naming
-the last heartbeat it heard. At every event it checks that a start is at least the reserve
-before its deadline in master time, and that a worker not yet cut off is within a lease of when
-the master last heard it (so of the last stamp too). Removing the third bound above, or the
-drift allowance makes it fail at once.
+5 s, answers lost, and stalls the boot clock missed. Heartbeats are also lost on their way to
+the master while its messages still arrive, naming the last worker message it received. At
+every event it checks that a worker not yet cut off is within a lease of when the master last
+heard it (so of the last stamp too). Removing the third bound above, or the drift allowance,
+makes it fail at once.
 
 The master's side runs in the same test (`clock_sim/master.rs`): the real master core over an
 in-memory database, and two workers, each with its own `MasterTime` on a drifting clock,
@@ -220,12 +215,13 @@ running. The test checks three things:
   again only beside an attempt the master ended `lost`, at least once);
 - once the faults are over, every attempt and run has ended.
 
-Switching off the take-back's grace, the replaced incarnation's hold or the cleanup's move
-wait makes it fail, each in scenarios aimed at it.
+Switching off the echo (taking back every unstarted assignment whose start wasn't heard), the
+replaced incarnation's hold or the cleanup's move wait makes it fail, each in scenarios aimed
+at it. It also replays the run that found B240.
 
 | Side | What it varies | What it checks |
 |---|---|---|
-| The worker's `MasterTime` on virtual clocks | Drift, delays, lost answers, stalls, late assignments | A start is at least the reserve before `start_by_ms`; a worker not cut off is within a lease of the last heartbeat the master heard |
+| The worker's `MasterTime` on virtual clocks | Drift, delays, lost answers, stalls | A worker not cut off is within a lease of the last message the master heard |
 | The master core and two workers on one clock | Cuts, lags, replaced workers, restarts, takeovers | One process per task instance at a time; nothing started after the master ended it; all ended once the faults are over |
 
 A failure is reported with its smallest scenario.
@@ -234,10 +230,8 @@ A failure is reported with its smallest scenario.
 
 | Metric | What it shows |
 |---|---|
-| `worker_master_sample_age_seconds` | The age of the heartbeat master time is read from; growing past a few heartbeats, the master isn't answering. |
-| `worker_master_round_trip_seconds` | That heartbeat's round trip: what a deadline loses to the link. |
-| `worker_start_slack_seconds` | How long before its deadline (less the reserve) each assignment started; near zero, assignments arrive late. |
-| `worker_too_late_rejections` | Assignments rejected `TOO_LATE`. |
+| `worker_master_sample_age_seconds` | The age of the message master time is read from; growing past a few heartbeats, the master isn't answering. |
+| `worker_master_round_trip_seconds` | That message's round trip: what the cutoff loses to the link. |
 | `worker_older_epoch_refusals` | Streams ended for a lower lease epoch: a deposed master still answering. |
 | `master_replaced_attempts_held` | Attempts of replaced incarnations held for a lease (decision 443). |
 
@@ -256,16 +250,15 @@ master's own expiries count on its monotonic clock.
 
 | | Before | After |
 |---|---|---|
-| A deadline is | A wall-clock time stored in the database (`assigned_at` plus the lease) | A master time, on the stamp's timeline |
+| A deadline is | A wall-clock time stored in the database (`assigned_at` plus the lease) | A master time, on the stamp's timeline; an unstarted assignment has none (the echo decides) |
 | The master expires it | When its wall clock passes that time | On its monotonic clock, from the reading the deadline was built with |
-| The worker counts | Its own lease timer, refreshed when the assignment arrives | A bound of that same master time, from the heartbeat the stamp names |
+| The worker counts | Its own lease timer, refreshed when the assignment arrives | A bound of that same master time, from the message the stamp names |
 | So | Two clocks, and two starting points, that disagree | One clock, and one starting point |
 
 Each liveness deadline, and where its master time counts from:
 
 | Deadline | Counts on master time from |
 |---|---|
-| Assignment expiry | When this master stored the assignment. After a restart, when it first sees one it did not store: later, never earlier. |
 | Worker loss | The later of the last message it handled and the last arrival, recorded as the bytes are read, before they wait for the lock. |
 | A parse job | When the job was given to the worker, until `[master] parse_job_timeout` (10 min). |
 | A connection job | When the round sent it, plus the job's own limit and 30 s. |
@@ -354,20 +347,9 @@ a 6 s lease period and a 2 s query timeout: a 4 s lead.
 
 ## Known limits
 
-A `Started` held up for more than four heartbeat intervals (40 s: the worker's reserve and the
-master's grace), the stream still up, can arrive after the master has taken the attempt back. The master answers it with a cancel. The
-task may already have been given to another worker (decision 442).
-
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    Note over W: Started inside the budget, with the 20 s reserve
-    W->>M: Started, held more than 40 s
-    Note over M: The attempt was taken back at 80 s and given to another worker
-    M-->>W: CancelAttempt
-    Note over W,M: Both may have run it
-```
+An assignment the worker may have started but never reported (its messages cut off before any
+named it) ends `lost` with its worker, using a retry, though it may never have run. It is the
+price of never taking back an assignment that may be running.
 
 A jump of the master's monotonic clock (some moves of a virtual machine) is not caught.
 Wall-clock steps are.
@@ -388,6 +370,5 @@ At the end of a replaced incarnation's lease, the old process stops its `cleanup
 tasks and its triggers. An ordinary task still running there can overlap the retry, as it can
 for a worker the master has lost (decision 443).
 
-Every worker honours the deadline: a worker of the 0.1 preview, which ignored it, is refused
-by a 1.0 master (another protocol major). An assignment without `start_by_ms` sets the worker
-no limit of this kind.
+Every worker numbers its messages: a worker of protocol 1.0 (1.0.0rc1) or of the 0.1
+preview, which didn't, is refused by a 2.0 master (another protocol major).

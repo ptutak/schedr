@@ -106,12 +106,27 @@ fn register(protocol: pb::ProtocolVersion) -> pb::WorkerMessage {
             roots: vec![root()],
             ..pb::Register::default()
         })),
+        clock: Some(pb::WorkerClock::default()),
     }
 }
 
+/// `message` unstamped (an older worker's, or one whose numbers don't matter here).
 fn wrap(message: worker_message::Message) -> pb::WorkerMessage {
     pb::WorkerMessage {
         message: Some(message),
+        clock: None,
+    }
+}
+
+/// `message` numbered `sequence` on its stream, naming the master's messages up to `heard`
+/// as handled (B240).
+fn numbered(message: worker_message::Message, sequence: u64, heard: u64) -> pb::WorkerMessage {
+    pb::WorkerMessage {
+        message: Some(message),
+        clock: Some(pb::WorkerClock {
+            sequence,
+            heard_sequence: heard,
+        }),
     }
 }
 
@@ -372,10 +387,10 @@ async fn the_loop_ticks_until_stopped() {
 }
 
 #[tokio::test]
-async fn every_message_carries_the_masters_clock_and_an_assignment_its_deadline() {
+async fn every_message_carries_the_masters_clock_and_its_number() {
     // B225: the clock on every message names this master's timeline, master time and the
-    // latest heartbeat heard on the stream; an assignment is due by its start timeout (the
-    // lease) in master time from when it was stored.
+    // latest worker message heard on the stream; B240: and its own number on the stream (an
+    // assignment has no start deadline).
     let (hub, db, mut client) = connected().await;
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -396,12 +411,12 @@ async fn every_message_carries_the_masters_clock_and_an_assignment_its_deadline(
     assert_eq!(first.heard_sequence, 0);
     assert_eq!(first.wall_ms, fixed_now().as_millisecond());
     assert_eq!(first.lease_epoch, 7, "its lease's epoch (decision 444)");
-    let beat = pb::Heartbeat {
-        sequence: 3,
-        ..pb::Heartbeat::default()
-    };
     to_master
-        .send(wrap(worker_message::Message::Heartbeat(beat)))
+        .send(numbered(
+            worker_message::Message::Heartbeat(pb::Heartbeat::default()),
+            3,
+            1,
+        ))
         .await
         .unwrap();
     let mut parse_seen = false;
@@ -438,13 +453,12 @@ async fn every_message_carries_the_masters_clock_and_an_assignment_its_deadline(
         .unwrap()
         .unwrap()
         .unwrap();
-    let Some(master_message::Message::AssignTask(assign)) = &message.message else {
+    let Some(master_message::Message::AssignTask(_)) = &message.message else {
         panic!("expected AssignTask")
     };
-    let lease = jiff::SignedDuration::try_from(Settings::default().lease_timeout).unwrap();
-    assert_eq!(
-        assign.start_by_ms,
-        Some((fixed_now() + lease).as_millisecond())
+    assert!(
+        clock_of(&message).sequence > 1,
+        "numbered on its stream, after `Registered` (B240)"
     );
     assert_eq!(clock_of(&message).heard_sequence, 3);
 }
@@ -1257,7 +1271,7 @@ async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
         .unwrap();
     // The stream's reader records it at once (an in-memory connection: well within this).
     tokio::time::sleep(Duration::from_millis(200)).await;
-    // The next round comes past the start timeout, the `Started` still unhandled.
+    // The next round comes 11 s later, the `Started` still unhandled.
     busy.tick(fixed_now() + Duration::from_secs(11))
         .await
         .unwrap();
@@ -1970,10 +1984,11 @@ async fn a_replaced_stream_gets_no_more_heartbeat_answers() {
         master_message::Message::Registered(_)
     ));
     let beat = |sequence| {
-        wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
+        numbered(
+            worker_message::Message::Heartbeat(pb::Heartbeat::default()),
             sequence,
-            ..pb::Heartbeat::default()
-        }))
+            0,
+        )
     };
     // Whether an answer came, or else whether the stream ended (not merely went quiet).
     let acked = async |stream: &mut tonic::Streaming<pb::MasterMessage>| {
@@ -2054,7 +2069,7 @@ async fn a_reconnect_waiting_behind_a_round_keeps_its_running_attempts() {
         async move { client.control(ReceiverStream::new(outbound)).await }
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    // The round goes first, past the start timeout.
+    // The round goes first, 11 s later.
     move_to(11);
     drop(stuck);
     round.await.unwrap().unwrap();
@@ -2123,8 +2138,8 @@ async fn a_worker_that_stops_reading_holds_up_no_delivery() {
     let (other, mut read) = mpsc::channel(STREAM_BUFFER);
     {
         let mut streams = hub.streams.lock().await;
-        streams.insert("slow".to_owned(), slow);
-        streams.insert("other".to_owned(), other);
+        streams.insert("slow".to_owned(), Outbound::new(slow, 1));
+        streams.insert("other".to_owned(), Outbound::new(other, 2));
     }
     let to = |worker: &str| Outgoing {
         worker_id: worker.to_owned(),
@@ -2165,7 +2180,9 @@ async fn a_refused_registration_keeps_no_start_of_its_journal() {
 #[tokio::test]
 async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it() {
     // A `Started` that couldn't be stored keeps its attempt from expiring; once the worker
-    // registers again (restarted: the process gone) without it in its journal, it expires.
+    // registers again (restarted: the process gone) without it in its journal, it may have
+    // run in the old process: held for its lease, then `lost`, as a started one (B240,
+    // decision 443).
     let _clock = own_clock().await;
     let (hub, db, mut client) = connected_with(moving_now).await;
     let (to_master, mut stream) = parsed_worker(&mut client).await;
@@ -2203,7 +2220,7 @@ async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it(
         next(&mut stream).await,
         master_message::Message::Registered(_)
     ));
-    // Not at the old 10 s: the start timeout is the worker lease (decision 281, B163).
+    // Held for the old incarnation's lease (60 s).
     move_to(11);
     hub.tick().await.unwrap();
     let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
@@ -2211,10 +2228,7 @@ async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it(
     move_to(61);
     hub.tick().await.unwrap();
     let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
-    assert_eq!(
-        attempt.status,
-        Some(schedr_model::AttemptStatus::AssignmentExpired)
-    );
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Lost));
 }
 
 #[tokio::test]
@@ -2425,6 +2439,7 @@ async fn closing_the_streams_lets_every_sender_of_a_stream_go() {
         .values()
         .next()
         .unwrap()
+        .sender
         .downgrade();
     // The worker's side stays open: its server would wait for its messages for ever.
     hub.close_streams().await;

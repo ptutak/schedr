@@ -1,21 +1,18 @@
 //! A deterministic simulator of master time (decisions 446 and 447): a worker's real
 //! [`MasterTime`] against a master on a virtual clock, over random rate drift (within the
-//! 0.1 % allowed), delays each way, answers lost, assignments delivered late, and stalls that
-//! even the boot clock doesn't count (a frozen VM). It checks the rules a worker keeps:
+//! 0.1 % allowed), delays each way, answers lost, and stalls that even the boot clock doesn't
+//! count (a frozen VM). It checks the rule a worker keeps on master time (an assignment has no
+//! start deadline since B240: the master takes one back only once the worker's messages show
+//! it never started it, which the master's side, `clock_sim/master.rs`, checks):
 //!
-//! 1. **No start after expiry:** an assignment the worker starts is started at least its
-//!    reserve before its deadline in master time; the master expires an unstarted one two
-//!    heartbeats past that deadline (decision 450), so a `Started` sent at once is in time.
-//! 2. **No attempt open forever:** every assignment is decided (started or rejected `TOO_LATE`)
-//!    when it arrives; one never started the master expires (its side: `dispatch` tests).
-//! 3. **No retry within a replaced incarnation's hold:** a worker cut off from the master stops
+//! 1. **No retry within a replaced incarnation's hold:** a worker cut off from the master stops
 //!    by master time last stamp + lease; the master ends its attempts no earlier than a lease
 //!    after it marks them, which is after its last stamp to that worker (decision 443). And it
 //!    stops by a lease after the master last heard it (B233): a cut one way only, heartbeats
 //!    lost on their way while the master's messages still arrive, stamped later each time, as
 //!    the master counts the worker lost.
-//! 4. **A moved cleanup never beside its old worker:** a cleanup moves only past that hold and
-//!    the move wait, so rule 3 covers it.
+//! 2. **A moved cleanup never beside its old worker:** a cleanup moves only past that hold and
+//!    the move wait, so rule 1 covers it.
 //!
 //! Times are in nanoseconds of a real, ideal clock; master time runs on it exactly (the
 //! reference), the worker's boot clock at its drift and not at all through a stall.
@@ -94,14 +91,13 @@ impl Worker {
 }
 
 /// One heartbeat's fate: its delay to the master or lost on its way (`up_lost`: the master
-/// still sends a message then, naming the last heartbeat it heard), its answer's back (`None`:
-/// lost), and the assignment the answer is, if any (its age when sent, its lease).
+/// still sends a message then, naming the last heartbeat it heard), and its answer's back
+/// (`None`: lost).
 #[derive(Debug, Clone)]
 struct Beat {
     up_lost: bool,
     up_ms: u64,
     down_ms: Option<u64>,
-    assignment: Option<(u64, u64)>,
 }
 
 fn beat() -> impl Strategy<Value = Beat> {
@@ -111,13 +107,11 @@ fn beat() -> impl Strategy<Value = Beat> {
         prop::bool::weighted(0.15),
         delay.clone(),
         prop::option::weighted(0.8, delay),
-        prop::option::weighted(0.3, (0..30_000u64, 1_000..60_000u64)),
     )
-        .prop_map(|(up_lost, up_ms, down_ms, assignment)| Beat {
+        .prop_map(|(up_lost, up_ms, down_ms)| Beat {
             up_lost,
             up_ms,
             down_ms,
-            assignment,
         })
 }
 
@@ -175,8 +169,6 @@ enum Event {
         stamped: u64,
         /// The real time the master heard the heartbeat it names.
         heard_at: u64,
-        /// The assignment's deadline in master time, milliseconds.
-        start_by_ms: Option<i64>,
     },
 }
 
@@ -202,16 +194,13 @@ fn events(s: &Scenario) -> Vec<(u64, Event)> {
             continue;
         };
         back = s.worker.awake((at_master + down_ms * MS).max(back));
-        let start_by_ms = beat.assignment.map(|(age_ms, lease_ms)| {
-            let created = master_ns(at_master).saturating_sub(age_ms * MS);
-            i64::try_from((created + lease_ms * MS) / MS).unwrap()
-        });
         let clock = pb::MasterClock {
             timeline: 7,
             master_ms: stamp_ms(at_master),
             heard_sequence,
             wall_ms: 0,
             lease_epoch: 1,
+            sequence: 0,
         };
         events.push((
             back,
@@ -219,7 +208,6 @@ fn events(s: &Scenario) -> Vec<(u64, Event)> {
                 clock,
                 stamped: at_master,
                 heard_at,
-                start_by_ms,
             },
         ));
     }
@@ -231,8 +219,6 @@ fn events(s: &Scenario) -> Vec<(u64, Event)> {
 /// Runs a scenario, checking the rules at every event; `Err` names the one broken.
 fn run(s: &Scenario) -> Result<(), String> {
     let master_ns = |t: u64| s.master_origin_ms * MS + t;
-    let heartbeat = s.heartbeat_ms * MS;
-    let reserve = Duration::from_nanos(2 * heartbeat);
     let lease = Duration::from_millis(s.lease_ms);
     // The unseen-stall allowance at real time `t`: none before the first stall began.
     let unseen = |t: u64| {
@@ -258,26 +244,13 @@ fn run(s: &Scenario) -> Result<(), String> {
                 clock,
                 stamped,
                 heard_at,
-                start_by_ms,
             } => {
                 time.heard(&clock, now);
                 debug_assert!(heard_at <= stamped, "stamped after it heard");
                 last_heard_at = Some(heard_at);
-                // Rule 1: started only its reserve before the deadline.
-                if let Some(by) = start_by_ms
-                    && time.slack(by, reserve, now).is_some()
-                {
-                    let deadline = u64::try_from(by).unwrap() * MS;
-                    if master_ns(t) + 2 * heartbeat > deadline + unseen(t) {
-                        return Err(format!(
-                            "started at master {} ns, deadline {deadline} less the reserve",
-                            master_ns(t)
-                        ));
-                    }
-                }
             }
         }
-        // Rule 3: while not cut off, master time is within a lease of the last heartbeat the
+        // Rule 1: while not cut off, master time is within a lease of the last heartbeat the
         // master heard (so of the latest stamp too, which comes after it); and the cutoff it
         // counts down to (no stall before it) is too.
         let Some(heard_at) = last_heard_at else {
@@ -319,8 +292,8 @@ proptest! {
 
 #[test]
 fn a_stall_the_boot_clock_missed_counts_every_deadline_as_passed() {
-    // A fixed case: a 30 s freeze between a beat and its answer; the answer's assignment,
-    // due 10 s after it was sent, is refused, and the worker is cut off at once.
+    // A fixed case: a 30 s freeze between a beat and its answer: the worker is cut off at once
+    // (its lease of 10 s passed in the freeze).
     let s = Scenario {
         worker: Worker {
             ppm: 0,
@@ -335,13 +308,11 @@ fn a_stall_the_boot_clock_missed_counts_every_deadline_as_passed() {
                 up_lost: false,
                 up_ms: 1,
                 down_ms: Some(1),
-                assignment: None,
             },
             Beat {
                 up_lost: false,
                 up_ms: 10,
                 down_ms: Some(100),
-                assignment: Some((0, 10_000)),
             },
         ],
     };
@@ -404,6 +375,25 @@ fn an_assignment_started_as_its_worker_was_cut_off_isnt_run_again_beside_it() {
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
 
+#[test]
+fn an_assignment_whose_worker_cant_report_isnt_started_again_beside_it() {
+    // B240: the nightly simulator's smallest scenario (2026-11-12): w2's messages to the
+    // master held up for 15.5 s, then both ways; an attempt of `load` started while the one
+    // on w2 still ran (ended AssignmentExpired).
+    let cut = |at, worker, len, way| (at, master::Fault::Cut { worker, len, way });
+    let s = master::Scenario {
+        timings: master::Timings::SCALED,
+        ppm: [0, 0],
+        seed: 14_463_602_231_334_680_054,
+        faults: vec![
+            cut(12_824, 1, 15_500, master::Way::Up),
+            cut(33_901, 1, 13_703, master::Way::Both),
+            cut(58_883, 0, 20_609, master::Way::Up),
+        ],
+    };
+    assert_eq!(master::simulate(&s, None), Ok(()));
+}
+
 proptest! {
     #![proptest_config(master_config())]
 
@@ -433,9 +423,10 @@ fn broken_without(safeguard: Weakened, cases: u32) -> Option<(u32, String)> {
 }
 
 #[test]
-fn without_the_start_grace_a_rule_breaks() {
-    let found = broken_without(Weakened::StartGrace, 32);
-    eprintln!("start grace: {found:?}");
+fn without_the_echo_a_rule_breaks() {
+    // B240: an attempt not known unstarted taken for never started runs twice somewhere.
+    let found = broken_without(Weakened::Echo, 32);
+    eprintln!("echo: {found:?}");
     assert!(found.is_some());
 }
 

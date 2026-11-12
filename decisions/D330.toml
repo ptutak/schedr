@@ -11,4 +11,4 @@ Files excluded by .schedrignore are unavailable for imports.
 history = "archive/PROJECT.md#D330"
 step = "M4.11L"
 code = ["crates/schedr/src/local.rs::check_root"]
-checked = 2026-11-10
+checked = 2026-11-12

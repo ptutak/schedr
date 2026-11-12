@@ -714,14 +714,12 @@ async fn an_attempt_adopted_unrecorded_isnt_taken_back_while_its_worker_runs_it(
             .any(|o| matches!(message(o), master_message::Message::AssignTask(_))),
         "{out:?}"
     );
-    // Once its worker is lost, it is taken back as an attempt never started.
+    // Once its worker is lost, it ends `lost`: its journal said it ran (B240: not known
+    // unstarted).
     core.disconnected("w1", later(12)).await.unwrap();
     core.tick(later(73)).await.unwrap();
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
-    assert_eq!(
-        attempt.status,
-        Some(schedr_model::AttemptStatus::AssignmentExpired)
-    );
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Lost));
 }
 
 #[tokio::test]
@@ -753,6 +751,7 @@ async fn a_worker_silent_past_its_lease_is_lost_and_its_attempts_with_it() {
 async fn a_lost_workers_unstarted_attempt_whose_cleanup_may_move_waits_as_its_cleanup_would() {
     // B234: cut off as the assignment reached it, the worker may have started it, its
     // `Started` held up, and be stopping it; taken back at the loss, it ran beside itself.
+    // Not known unstarted (B240), it is ended as a started one: its cleanup waits, then moves.
     let mut core = with_dag_of(&anywhere_file()).await;
     trigger(&mut core).await;
     let out = core.tick(ts(NOW)).await.unwrap();
@@ -763,17 +762,17 @@ async fn a_lost_workers_unstarted_attempt_whose_cleanup_may_move_waits_as_its_cl
     // Lost at 61 s: the cancel grace (30 s) and the move wait (10 s) from then.
     core.tick(later(61)).await.unwrap();
     assert!(core.dispatcher().workers().get("w1").is_none());
-    let status = |core: &MasterCore| {
+    let state = |core: &MasterCore| {
         let (db, id) = (core.db.clone(), assign.attempt_id.clone());
-        async move { db.attempt(&id).await.unwrap().unwrap().status }
+        async move {
+            let attempt = db.attempt(&id).await.unwrap().unwrap();
+            (attempt.status, attempt.cleanup_moves)
+        }
     };
     core.tick(later(100)).await.unwrap();
-    assert_eq!(status(&core).await, None, "within the wait");
+    assert_eq!(state(&core).await, (None, 1), "its cleanup waiting to move");
     core.tick(later(102)).await.unwrap();
-    assert_eq!(
-        status(&core).await,
-        Some(schedr_model::AttemptStatus::AssignmentExpired)
-    );
+    assert_eq!(state(&core).await, (None, 1), "no other worker to move to");
 }
 
 #[tokio::test]
@@ -781,6 +780,7 @@ async fn a_new_incarnations_old_unstarted_attempt_whose_cleanup_may_move_waits_f
     // Grok's review of B234: the `Started` lost with the old stream, a new incarnation back
     // at once: never lost, the attempt was taken back on the start timeout (81 s) while the
     // old process, its cutoff a lease after the assignment, ran on until its kill (90 s).
+    // Since B240: not known unstarted, it is held as a started one, then its cleanup moves.
     let mut core = with_dag_of(&anywhere_file()).await;
     trigger(&mut core).await;
     let out = core.tick(ts(NOW)).await.unwrap();
@@ -792,28 +792,29 @@ async fn a_new_incarnations_old_unstarted_attempt_whose_cleanup_may_move_waits_f
         .await
         .unwrap();
     let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    let status = |core: &MasterCore| {
+    let state = |core: &MasterCore| {
         let (db, id) = (core.db.clone(), assign.attempt_id.clone());
-        async move { db.attempt(&id).await.unwrap().unwrap().status }
+        async move {
+            let attempt = db.attempt(&id).await.unwrap().unwrap();
+            (attempt.status, attempt.cleanup_moves)
+        }
     };
-    // From the registration at 2 s: the lease (60 s), then the grace and the move wait (40 s).
-    for at in (10..=100).step_by(10) {
+    // Held from the registration at 2 s for the lease (60 s); then its cleanup moves.
+    for at in (10..=60).step_by(10) {
         core.handle("w1", heartbeat(), later(at)).await.unwrap();
         core.tick(later(at)).await.unwrap();
-        assert_eq!(status(&core).await, None, "at {at} s");
+        assert_eq!(state(&core).await, (None, 0), "held at {at} s");
     }
-    core.handle("w1", heartbeat(), later(103)).await.unwrap();
-    core.tick(later(103)).await.unwrap();
-    assert_eq!(
-        status(&core).await,
-        Some(schedr_model::AttemptStatus::AssignmentExpired)
-    );
+    core.handle("w1", heartbeat(), later(63)).await.unwrap();
+    core.tick(later(63)).await.unwrap();
+    assert_eq!(state(&core).await, (None, 1), "its cleanup moved");
 }
 
 #[tokio::test]
 async fn a_restarted_master_takes_back_a_lost_workers_unstarted_attempt_only_after_its_stop() {
-    // Grok's review of B234: the wait armed at the loss is in memory; a restart counted only
-    // the start timeout from first sight, short of a long cancel grace (120 s here).
+    // Grok's review of B234: the wait armed at the loss was in memory; a restart counted only
+    // the start timeout from first sight, short of a long cancel grace (120 s here). Since
+    // B240 the loss ends it as a started one, its cleanup moving: stored, kept by a restart.
     let settings = Settings {
         cancel_grace: Duration::from_secs(120),
         ..Settings::default()
@@ -841,31 +842,64 @@ async fn a_restarted_master_takes_back_a_lost_workers_unstarted_attempt_only_aft
     // Killed by 180 s (its cutoff at 60 s, then the grace); a new master from 62 s.
     let mut core = MasterCore::new(db, settings);
     core.restore(later(62)).await.unwrap();
-    let status = |core: &MasterCore| {
+    let state = |core: &MasterCore| {
         let (db, id) = (core.db.clone(), assign.attempt_id.clone());
-        async move { db.attempt(&id).await.unwrap().unwrap().status }
+        async move {
+            let attempt = db.attempt(&id).await.unwrap().unwrap();
+            (attempt.status, attempt.cleanup_moves)
+        }
     };
     core.tick(later(62)).await.unwrap();
-    for at in [100, 144, 181, 250] {
+    for at in [100, 144, 181, 250, 253] {
         core.tick(later(at)).await.unwrap();
-        assert_eq!(status(&core).await, None, "at {at} s");
+        assert_eq!(state(&core).await, (None, 1), "at {at} s");
     }
-    // First seen at 62 s: the lease (60 s), the grace and the move wait (130 s).
-    core.tick(later(253)).await.unwrap();
-    assert_eq!(
-        status(&core).await,
-        Some(schedr_model::AttemptStatus::AssignmentExpired)
+}
+
+#[test]
+fn an_unsent_assignment_never_started_on_its_worker_until_it_is_sent() {
+    // Grok's review of B240: a send that didn't leave is proof for that worker only, and a
+    // later real send (to it again, a moved cleanup say) needs the echo once more.
+    let arrivals = Arrivals::default();
+    arrivals.unsent("w1", "a1");
+    assert!(arrivals.never_started("w1", "a1"));
+    assert!(!arrivals.never_started("w2", "a1"), "another worker's");
+    let stream = arrivals.new_stream("w1");
+    arrivals.assigned("w1", stream, "a1", 3);
+    assert!(
+        !arrivals.never_started("w1", "a1"),
+        "sent now: not handled yet"
+    );
+    arrivals.read("w1", stream, 3);
+    assert!(arrivals.never_started("w1", "a1"));
+    arrivals.unsent("w1", "a2");
+    arrivals.forget("w1");
+    assert!(
+        !arrivals.never_started("w1", "a2"),
+        "forgotten with its worker"
+    );
+    arrivals.unsent("w1", "a3");
+    let _ = arrivals.new_stream("w1");
+    assert!(
+        !arrivals.never_started("w1", "a3"),
+        "its registration decided it"
     );
 }
 
 #[tokio::test]
-async fn a_lost_workers_unstarted_attempt_of_an_ordinary_task_is_taken_back_at_once() {
+async fn a_lost_workers_unstarted_attempt_it_said_it_had_handled_is_taken_back_at_once() {
+    // B240: the worker's messages named its assignment's number as handled, with no start
+    // before: it never started there, so it goes back without using a retry (B17).
     let mut core = with_dag().await;
     trigger(&mut core).await;
     let out = core.tick(ts(NOW)).await.unwrap();
     let master_message::Message::AssignTask(assign) = message(&out[0]) else {
         panic!("expected AssignTask")
     };
+    let arrivals = core.arrivals();
+    let stream = arrivals.new_stream("w1");
+    arrivals.assigned("w1", stream, &assign.attempt_id, 4);
+    arrivals.read("w1", stream, 4);
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(61)).await.unwrap();
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
@@ -873,6 +907,26 @@ async fn a_lost_workers_unstarted_attempt_of_an_ordinary_task_is_taken_back_at_o
         attempt.status,
         Some(schedr_model::AttemptStatus::AssignmentExpired)
     );
+}
+
+#[tokio::test]
+async fn a_lost_workers_attempt_not_known_unstarted_may_have_run_and_ends_lost() {
+    // B240: no message named the assignment as handled (its `Started` may be held up on the
+    // way): it may run there, so it ends `lost`, using a retry, as a started one.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let arrivals = core.arrivals();
+    let stream = arrivals.new_stream("w1");
+    arrivals.assigned("w1", stream, &assign.attempt_id, 4);
+    arrivals.read("w1", stream, 3);
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Lost));
 }
 
 #[tokio::test]
@@ -1656,12 +1710,11 @@ async fn a_restarted_master_takes_back_no_assignment_within_its_workers_lease() 
         let open = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
         assert_eq!(open.status, None, "taken back at {at} s");
     }
+    // Then its worker is lost, and with nothing heard of its stream since the restart the
+    // attempt may have started there: `lost` (B240).
     restarted.tick(later(181)).await.unwrap();
     let ended = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
-    assert_eq!(
-        ended.status,
-        Some(schedr_model::AttemptStatus::AssignmentExpired)
-    );
+    assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
 }
 
 /// F14: nor while its worker is disconnected within its lease: it may come back with the
@@ -1674,7 +1727,7 @@ async fn no_assignment_is_taken_back_from_a_disconnected_worker_within_its_lease
     let master_message::Message::AssignTask(assign) = message(&out[0]) else {
         panic!("expected AssignTask")
     };
-    // Seen at 50 s, then gone: its lease runs to 110 s, the start timeout out at 60 s.
+    // Seen at 50 s, then gone: its lease runs to 110 s; no start deadline takes it back first.
     let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
     core.handle("w1", heartbeat, later(50)).await.unwrap();
     core.disconnected("w1", later(50)).await.unwrap();
@@ -2846,7 +2899,7 @@ async fn a_trigger_given_nowhere_keeps_no_slot() {
         unreachable!("the tests' database is SQLite")
     };
     sqlx::query(
-        "CREATE TRIGGER refuse_triggers BEFORE INSERT ON triggers \
+        "CREATE TRIGGER refuse_triggers BEFORE INSERT ON trigger_progress \
          BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
     )
     .execute(pool)
@@ -2862,7 +2915,7 @@ async fn what_a_trigger_of_an_older_version_found_starts_nothing() {
     let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
-    sqlx::query("UPDATE triggers SET dag_version_id = 'older'")
+    sqlx::query("UPDATE trigger_progress SET dag_version_id = 'older'")
         .execute(pool)
         .await
         .unwrap();
@@ -3050,7 +3103,7 @@ async fn a_generator_that_returned_stays_stopped_until_new_code() {
     let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
-    sqlx::query("UPDATE triggers SET stopped_on = 'older h0'")
+    sqlx::query("UPDATE trigger_progress SET stopped_on = 'older h0'")
         .execute(pool)
         .await
         .unwrap();
@@ -4228,7 +4281,7 @@ async fn a_call_s_event_the_master_didn_t_store_hands_its_item_again() {
     let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
-    sqlx::query("UPDATE triggers SET dag_version_id = 'before'")
+    sqlx::query("UPDATE trigger_progress SET dag_version_id = 'before'")
         .execute(pool)
         .await
         .unwrap();
@@ -4330,7 +4383,7 @@ async fn only_named_events_are_kept_as_passed_and_a_removed_dag_s_are_forgotten(
         let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
             unreachable!("the tests' database is SQLite")
         };
-        sqlx::query_scalar("SELECT COUNT(*) FROM trigger_passed")
+        sqlx::query_scalar("SELECT COUNT(*) FROM trigger_progress_passed")
             .fetch_one(pool)
             .await
             .unwrap()

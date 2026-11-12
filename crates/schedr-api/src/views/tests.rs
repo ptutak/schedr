@@ -20,7 +20,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
     .unwrap();
     let stored = StoredDag {
         dag_id: DagId::new("sync").unwrap(),
-        paused: true,
+        paused: Some(true),
         removed: false,
         conflict: None,
         current: Some(CurrentVersion {
@@ -32,7 +32,7 @@ fn a_dag_shows_its_current_version_or_its_conflict() {
     assert_eq!(
         serde_json::to_value(DagView::of(&stored, &HashMap::new())).unwrap(),
         json!({
-            "dag_id": "sync", "paused": true,
+            "dag_id": "sync", "trigger_state": "paused",
             "location": {"root": "etl", "path": "a.py"}, "conflict": null,
             "trigger": {
                 "kind": "every", "interval_ms": 60_000, "catchup": false,

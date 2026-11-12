@@ -6,6 +6,7 @@ use super::pb;
 #[test]
 fn messages_encode_and_decode() {
     let message = pb::WorkerMessage {
+        clock: None,
         message: Some(pb::worker_message::Message::Register(pb::Register {
             running_triggers: Vec::new(),
             watcher_slots: 500,

@@ -256,7 +256,7 @@ impl MasterCore {
     /// A DAG started by `RunOf` (decision 353): a run per run of the other DAG (or its task)
     /// that succeeded while it is live, as an event keyed by that run's ID, so each starts
     /// one; planned for that run's `planned_for` plus `lag`, or for now. Only what ended since
-    /// it is live (`dags.live_since`, kept with each pause, unpause and removal) counts: what
+    /// it is live (`dag_triggers.live_since`, kept with each pause, unpause and removal) counts: what
     /// ends while it is paused or gone is never caught up; held (its file failing to import),
     /// it waits and goes on after. At most what `[triggers] max_queued_events` leaves room for.
     async fn run_of_pass(

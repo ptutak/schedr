@@ -109,7 +109,11 @@ fn stress_02_command_burst() {
     let size = stress.size;
     let mut report = Report::new("02_command_burst");
     let burst = command_dags(&stress, "burst", 1, 1, "true", 0);
-    let flip = command_dags(&stress, "flip", 1, 1, "true", 0);
+    // A trigger to switch (decision 459: a DAG without one has nothing to pause), firing first
+    // in 2099, so no unpause of the storm creates a run.
+    let flip = ["flip0001".to_owned()];
+    let yearly = r#"Cron("0 0 1 1 *", start="2099-01-01")"#;
+    stress.write_dag(&flip[0], &one_task_dag(&flip[0], yearly, &stress.marks));
     let long = command_dags(&stress, "long", 1, 1, "sleep 600", 0);
     stress.start_core("master", &[]);
     let slots = size.n(4, 8);

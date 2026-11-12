@@ -531,10 +531,9 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
     Ok(timings)
 }
 
-/// The lease at least four heartbeats: under one, a worker is lost between two beats; a
-/// worker keeps two of an assignment's start timeout (the lease) for its `Started` to arrive
-/// (B225, B226, B227), reads master time from a heartbeat sent up to one before, and needs one
-/// left to start it.
+/// The lease at least four heartbeats: under one, a worker is lost between two beats; with
+/// four, a few beats held up or lost in a row don't lose it, and its cutoff, read from a
+/// heartbeat sent up to one before, keeps most of the lease.
 fn check_lease(timings: &Timings) -> Result<(), ConfigError> {
     if timings.lease_timeout < timings.heartbeat_interval.saturating_mul(4) {
         return Err(ConfigError::BadHiddenTiming {

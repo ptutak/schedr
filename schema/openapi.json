@@ -637,10 +637,6 @@
             },
             "type": "array"
           },
-          "paused": {
-            "description": "Whether the scheduler is stopped for it.",
-            "type": "boolean"
-          },
           "tags": {
             "description": "Its tags.",
             "items": {
@@ -655,6 +651,17 @@
               "null"
             ]
           },
+          "trigger_state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TriggerState",
+                "description": "Its trigger's switch (decision 459): `paused` or `active`; `null` without a trigger (it\nruns only when started by hand)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "warnings": {
             "description": "What is wrong with its current version that shows only when a run reaches it: a\nconnection a task declares that its root's current files don't define, or define twice\n(decision 179). Only on one DAG's view, not in the list.",
             "items": {
@@ -665,7 +672,6 @@
         },
         "required": [
           "dag_id",
-          "paused",
           "tags"
         ],
         "type": "object"
@@ -1700,6 +1706,14 @@
         },
         "type": "object"
       },
+      "TriggerState": {
+        "description": "A DAG's trigger's switch (decision 459).",
+        "enum": [
+          "paused",
+          "active"
+        ],
+        "type": "string"
+      },
       "TriggerView": {
         "description": "A DAG's trigger.",
         "properties": {
@@ -1784,6 +1798,10 @@
               "string",
               "null"
             ]
+          },
+          "stuck": {
+            "description": "A running poke trigger none of whose calls has ended for over three times its `every`\nplus a heartbeat: its worker may hang; `schedr triggers restart` starts it again.",
+            "type": "boolean"
           },
           "trigger": {
             "description": "Its function.",

@@ -53,26 +53,39 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B239: a drained worker is still `draining` right after it exited, once, under an I/O stall (Suspected) | 2 | medium | rare | tests |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 3 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
+| 4 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
 
-## B239: a drained worker is still `draining` right after it exited, once, under an I/O stall (Suspected)
+## B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected)
 
-- **Rating:** severity **medium**, probability **rare**, tests (score 2): drain test saw `draining`, not `offline`, under an I/O stall.
-- **Found:** 2026-11-12, `make check` on `4d8e88a` (B237's fixes, D457/D458), while the user
-  ran `make standalone` beside it: `a_draining_worker_stops_a_task_already_being_cancelled_near_its_grace_not_the_cancels`
-  (`crates/schedr/tests/roles.rs`) read `draining` where `offline` was expected. The worker
-  exited 0 within its grace; the log has a whole-system I/O stall of about 1.7 s, and no
-  master line about the worker leaving. `a_restarted_agent_runs_the_cleanup_of_the_task_it_lost`
-  failed in the same run ("waited too long for the run to end").
-- **Not reproduced:** both alone (8 of 8, 4 of 4), and the drain test under 12 busy loops (10
-  of 10).
-- **Not known:** whether the master took the `Deregister` and recorded it only after the
-  test's one read (a test that should wait briefly for `offline`), or never got it (the agent
-  exits after `deregister_by`, end of grace less a quarter of the report period, B237; with
-  this test's 8 s grace about 1.4 s after the stubborn task's SIGKILL). The next sighting:
-  keep its log, and look for the master's handling of the stream's end.
+- **Rating:** severity **low**, probability **rare**, tests (score 1): a_worker_that_exits_before_a_stalled_master_takes_its_deregister_is_offline_after: the master never handled the Deregister once.
+`crates/schedr/tests/roles.rs:1206` (added for B239 on 2026-11-12) failed once in
+`make test-integration` (`left: Some("disconnected")`), passing 6 of 6 alone and in the runs
+before. `forget` drops the connection when a `Deregister` is handled, so `disconnected` last
+means the master never handled it: the worker sent it (its drain log stops after "draining")
+while the master was frozen (SIGSTOP 3 s), waited `deregister_wait` (1 s) and exited. Not
+known: whether the frame was still in the worker's buffers at exit, or the master, back from
+the freeze and not leading at first (its lease late), read the stream's end before it. The
+suite alone was running (no standalone). The master's reader keeps order: a stream's end
+comes only after every message queued (`next_to_handle`), so the master can't take the end
+first. A theory, not shown: the exiting worker's socket still held unread bytes (an answer in
+flight as the master froze), so Linux closed it with RST, and an RST makes the frozen master's
+kernel drop what it hadn't read yet, the `Draining` and `Deregister` frames. First step: catch it
+with the master's log at debug, or capture the socket's close (FIN or RST) in a loop of the test
+under load.
+
+## B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, tests (score 1): the_fork_that_finds_a_late_thread_disables_the_server's forked.is_ok() failed once under the full suite's load.
+`crates/schedr-agent/tests/fork.rs:621`: `assert!(forked.is_ok())` failed once in
+`make test-integration` (2026-11-12, the run after `make check`'s), passing in the runs before.
+The test starts a thread 0.3 s after the preloaded module's import (a `SIGALRM` timer) and forks
+after waiting for the server's `up` state plus a fixed 1 s; under the suite's load the ordering
+of the server's ready, the timer and the request can shift. Neither the test nor the fork server
+changed in that diff (B240/D459/D461). Not reproduced alone yet; the error the fork returned
+wasn't printed (`is_ok()` only), so the first step is to print it.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 

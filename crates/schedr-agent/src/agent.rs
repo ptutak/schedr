@@ -63,7 +63,7 @@ use crate::journal::{
 };
 use crate::launch::{AGENT_VERSION, ProcessParseRunner, PythonTask, run_command, run_python};
 use crate::mask::Mask;
-use crate::master_time::{Local, MasterTime};
+use crate::master_time::{Local, MasterTime, SharedOutbox};
 use crate::memory::{MemorySeen, SharedSeen, over_budget_message, watch_group};
 use crate::metrics::AgentMetrics;
 use crate::process::ProcessSpec;
@@ -1402,7 +1402,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         client: &mut MasterClient<Channel>,
         attempt_id: &str,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
         (heartbeat, opened): (&mut tokio::time::Interval, tokio::time::Instant),
     ) -> Option<Result<Vec<u8>, String>> {
         let (heard, seen) = watch::channel(self.heard.max(opened));
@@ -1465,7 +1465,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// What the master hears at once on a new stream.
-    fn send_state(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    fn send_state(&mut self, to_master: &ToMaster) {
         if self.drain.is_some() {
             let _ = to_master.send(wrap(worker_message::Message::Draining(pb::Draining {})));
         }
@@ -1474,7 +1474,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// The executor's warnings and this session's clock-skew one, to the master.
-    fn report_warnings(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    fn report_warnings(&mut self, to_master: &ToMaster) {
         let mut warnings = self.warnings.borrow_and_update().clone();
         warnings.extend(self.clock_skew.clone());
         let _ = to_master.send(wrap(worker_message::Message::Warnings(pb::Warnings {
@@ -1851,7 +1851,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         attempt_id: &str,
         waiting: WaitingCleanup,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
     ) {
         let ended = waiting.ended.unwrap_or_else(|| restarted(attempt_id));
         let done = self.done_tx.clone();
@@ -1877,11 +1877,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// A task with a cleanup ended: on disk, then reported.
-    async fn task_ended(
-        &mut self,
-        mut finished: pb::Finished,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
-    ) {
+    async fn task_ended(&mut self, mut finished: pb::Finished, to_master: Option<&ToMaster>) {
         fit_result(&mut finished, self.master_limit);
         // A moved poke says itself which code it ended on (decision 335).
         if let (true, Some(hash)) = (
@@ -2034,7 +2030,7 @@ impl<E: Executor> Agent<E> {
 
     /// Reports each root whose hash changed since it was last reported: a new hash, or an
     /// empty one for a root withdrawn (decision 303).
-    fn report_changes(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    fn report_changes(&mut self, to_master: &ToMaster) {
         self.executor.code_changed(
             self.watchers
                 .iter()
@@ -2078,11 +2074,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// The master said which script roots each DAG root uses (decision 304).
-    fn set_uses(
-        &mut self,
-        roots: Vec<pb::RootUses>,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
-    ) {
+    fn set_uses(&mut self, roots: Vec<pb::RootUses>, to_master: &ToMaster) {
         self.uses = roots
             .into_iter()
             .map(|uses| (uses.root, uses.script_roots.into_iter().collect()))
@@ -2097,7 +2089,10 @@ impl<E: Executor> Agent<E> {
         };
         // Unbounded: the loop never waits on the master (its liveness is the agent's own); the
         // messages are few and small (heartbeats, results, reports).
-        let (to_master, outbound) = mpsc::unbounded_channel::<pb::WorkerMessage>();
+        let (sender, outbound) = mpsc::unbounded_channel::<pb::WorkerMessage>();
+        // The session's numbering starts with its `Register`, 0 (B240).
+        let opened = self.open_session();
+        let to_master = ToMaster::new(sender, self.master_time.outbox());
         let register = self.register_message(roots);
         if to_master
             .send(wrap(worker_message::Message::Register(register)))
@@ -2105,7 +2100,6 @@ impl<E: Executor> Agent<E> {
         {
             return SessionEnd::Lost("the outbound stream closed".to_owned());
         }
-        let opened = self.open_session();
         let mut inbound = match self.open_stream(&mut client, outbound, opened).await {
             Ok(inbound) => inbound,
             Err(end) => return end,
@@ -2163,6 +2157,8 @@ impl<E: Executor> Agent<E> {
                         }
                         self.heard_master(clock.as_ref(), &to_master);
                         self.on_master(message, &to_master, &mut client, (&mut heartbeat, opened)).await;
+                        // Handled: what it sent is queued, before anything naming it (B240).
+                        to_master.handled(clock.as_ref().map_or(0, |c| c.sequence));
                         // Past the lease while handling it (a slow fetch of inputs).
                         if self.cut_off || self.gone_silent(opened) {
                             return SessionEnd::Lost(NO_WORD.to_owned());
@@ -2240,11 +2236,7 @@ impl<E: Executor> Agent<E> {
 
     /// A master message arrived on the live stream: the master's word, and its clock read
     /// (B225).
-    fn heard_master(
-        &mut self,
-        clock: Option<&pb::MasterClock>,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
-    ) {
+    fn heard_master(&mut self, clock: Option<&pb::MasterClock>, to_master: &ToMaster) {
         self.heard = tokio::time::Instant::now();
         let skew = clock.and_then(|clock| self.master_time.heard(clock, Local::now()));
         if self
@@ -2295,18 +2287,16 @@ impl<E: Executor> Agent<E> {
         }
     }
 
-    /// Sends a heartbeat, numbered for the master's clock to name it (B225).
-    fn send_beat(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    /// Sends a heartbeat (numbered, as every message, by the session's sender, B225, B240).
+    fn send_beat(&mut self, to_master: &ToMaster) {
         self.publish_master_reading();
-        let sequence = self.master_time.sent(Local::now());
-        let _ = to_master.send(self.heartbeat_message(sequence));
+        let _ = to_master.send(self.heartbeat_message());
     }
 
     /// A heartbeat, and the unacknowledged results due to be sent again; the session's end
     /// if one was sent too often already.
-    fn heartbeat_message(&self, sequence: u64) -> pb::WorkerMessage {
+    fn heartbeat_message(&self) -> pb::WorkerMessage {
         wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
-            sequence,
             free_slots: self.free_slots(),
             free_watcher_slots: self.free_watcher_slots(),
             running_attempt_ids: self.running(),
@@ -2318,7 +2308,7 @@ impl<E: Executor> Agent<E> {
     fn send_heartbeat(
         &mut self,
         resends: &mut Resends,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
     ) -> Option<SessionEnd> {
         self.send_beat(to_master);
         self.send_poke_reports(to_master);
@@ -2337,7 +2327,7 @@ impl<E: Executor> Agent<E> {
     async fn on_master(
         &mut self,
         message: master_message::Message,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
         client: &mut MasterClient<Channel>,
         (heartbeat, opened): (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
@@ -2428,11 +2418,7 @@ impl<E: Executor> Agent<E> {
         }
     }
 
-    async fn decide(
-        &mut self,
-        decision: &pb::JournalDecision,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
-    ) {
+    async fn decide(&mut self, decision: &pb::JournalDecision, to_master: &ToMaster) {
         let id = &decision.attempt_id;
         match pb::AttemptDecision::try_from(decision.decision) {
             Ok(pb::AttemptDecision::Ack) => {
@@ -2509,11 +2495,7 @@ impl<E: Executor> Agent<E> {
 
     /// Sends an attempt's handles again: some may have gone with the old stream, or never
     /// left (decision 242). The master keeps what it has.
-    async fn send_handles(
-        &self,
-        attempt_id: &str,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
-    ) {
+    async fn send_handles(&self, attempt_id: &str, to_master: &ToMaster) {
         let journal = self.journal.clone();
         let id = attempt_id.to_owned();
         let read = tokio::task::spawn_blocking(move || journal.handles(&id)).await;
@@ -2532,7 +2514,7 @@ impl<E: Executor> Agent<E> {
     /// Sends unacknowledged result `id` again, fitted to the master's limit now: it was
     /// journalled under the limit of its time, which a master since may have lowered (B47).
     /// The journal keeps it whole, for a master accepting it.
-    fn send_again(&self, id: &str, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    fn send_again(&self, id: &str, to_master: &ToMaster) {
         if let Some(finished) = self.unacked.get(id) {
             let mut finished = finished.clone();
             fit_result(&mut finished, self.master_limit);
@@ -2546,7 +2528,7 @@ impl<E: Executor> Agent<E> {
     async fn external_inputs(
         &mut self,
         assign: &pb::AssignTask,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
         client: &mut MasterClient<Channel>,
         timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) -> Option<Option<Vec<u8>>> {
@@ -2573,13 +2555,11 @@ impl<E: Executor> Agent<E> {
     async fn assign(
         &mut self,
         assign: pb::AssignTask,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
         client: &mut MasterClient<Channel>,
         timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
         let opened = timers.1;
-        // Its start deadline, in master time (B225).
-        let start_by = assign.start_by_ms;
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
                 attempt_id: assign.attempt_id.clone(),
@@ -2635,7 +2615,7 @@ impl<E: Executor> Agent<E> {
         let journaled = match planned {
             Err(NotRun::Rejected { .. }) => Ok(()),
             _ => {
-                self.journal_start(&spec, &assign, external.as_deref(), (opened, start_by))
+                self.journal_start(&spec, &assign, external.as_deref(), opened)
                     .await
             }
         };
@@ -2672,7 +2652,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         mut spec: AttemptSpec,
         planned: Result<Plan, NotRun>,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
     ) {
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
@@ -2705,11 +2685,7 @@ impl<E: Executor> Agent<E> {
 
     /// Starts a DAG's trigger here: as a wait step's attempt would run, but no attempt, so nothing
     /// of it is journaled and the master keeps no result of it.
-    fn start_trigger(
-        &mut self,
-        assign: &pb::AssignTrigger,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
-    ) {
+    fn start_trigger(&mut self, assign: &pb::AssignTrigger, to_master: &ToMaster) {
         let stopped = |kind: &str, message: String| {
             wrap(worker_message::Message::TriggerStopped(
                 pb::TriggerStopped {
@@ -2827,11 +2803,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// A result in the journal: the attempt is done here, and the result goes to the master.
-    fn result_recorded(
-        &mut self,
-        finished: pb::Finished,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
-    ) {
+    fn result_recorded(&mut self, finished: pb::Finished, to_master: Option<&ToMaster>) {
         self.ended_running(&finished.attempt_id);
         self.cleaning.remove(&finished.attempt_id);
         self.cleanup_room.remove(&finished.attempt_id);
@@ -2851,7 +2823,7 @@ impl<E: Executor> Agent<E> {
     async fn on_done_group(
         &mut self,
         done: Done,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        to_master: Option<&ToMaster>,
         client: Option<&mut MasterClient<Channel>>,
     ) {
         let link = to_master.zip(client);
@@ -2953,11 +2925,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// What a trigger did reaches the master.
-    fn trigger_done(
-        &mut self,
-        done: TriggerDone,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
-    ) {
+    fn trigger_done(&mut self, done: TriggerDone, to_master: Option<&ToMaster>) {
         match done {
             TriggerDone::Found {
                 instance_id,
@@ -2981,7 +2949,7 @@ impl<E: Executor> Agent<E> {
         instance_id: String,
         event: crate::watchers::FoundEvent,
         stored: tokio::sync::oneshot::Sender<()>,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        to_master: Option<&ToMaster>,
     ) {
         let Some(trigger) = self.triggers.get_mut(&instance_id) else {
             return;
@@ -3008,7 +2976,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         instance_id: &str,
         error: Option<String>,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        to_master: Option<&ToMaster>,
     ) {
         let Some(trigger) = self.triggers.get_mut(instance_id) else {
             return;
@@ -3029,7 +2997,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// The pokes' reports not sent yet.
-    fn send_poke_reports(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    fn send_poke_reports(&mut self, to_master: &ToMaster) {
         for (instance_id, trigger) in &mut self.triggers {
             if trigger.poke.unsent {
                 let _ = to_master.send(poke_report(instance_id, trigger));
@@ -3044,7 +3012,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         instance_id: &str,
         finished: &pb::Finished,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        to_master: Option<&ToMaster>,
     ) {
         let code = self.release_code(instance_id);
         self.collect_code();
@@ -3080,7 +3048,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         spec: AttemptSpec,
         handles: Vec<CleanupHandle>,
-        to_master: &mpsc::UnboundedSender<pb::WorkerMessage>,
+        to_master: &ToMaster,
     ) {
         let id = spec.attempt_id.clone();
         let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
@@ -3100,16 +3068,16 @@ impl<E: Executor> Agent<E> {
 
     /// Journals an attempt about to start: first what its cleanup would need after a restart.
     /// Journals an attempt about to start: `Err(Some((reason, why)))` when the journal can't be
-    /// written or the assignment came past its start budget (B225, rejected `TOO_LATE`),
-    /// `Err(None)` when the lease ran out meanwhile (a stalled disk, F14): the master has taken
-    /// the attempt back and may have run it elsewhere, so it isn't started here, nor left in
-    /// the journal to be reported as started when this worker connects again.
+    /// written, `Err(None)` when the lease ran out meanwhile (a stalled disk, F14): the master may
+    /// count this worker lost and end the attempt, so it isn't started here, nor left in the
+    /// journal to be reported as started when this worker connects again (what it lacks there,
+    /// the master takes back, B240).
     async fn journal_start(
         &self,
         spec: &AttemptSpec,
         assign: &pb::AssignTask,
         external: Option<&[u8]>,
-        (opened, start_by): (tokio::time::Instant, Option<i64>),
+        opened: tokio::time::Instant,
     ) -> Result<(), Option<(pb::RejectReason, String)>> {
         if let Err(error) = self.record_start(spec, assign, external).await {
             let detail = format!(
@@ -3126,24 +3094,9 @@ impl<E: Executor> Agent<E> {
             self.forget(&spec.attempt_id).await;
             return Err(None);
         }
-        // Past its start deadline in master time, two heartbeat intervals kept for its
-        // `Started` to arrive (B225, B227): the master may have taken it back and given it to
-        // another worker. Rejected, it is queued again at once if it hadn't.
-        let reserve = self.heartbeat * 2;
-        let slack = start_by.map(|by| self.master_time.slack(by, reserve, Local::now()));
-        if let Some(Some(slack)) = slack {
-            self.metrics.start_slack.observe(slack.as_secs_f64());
-        }
-        if matches!(slack, Some(None)) {
-            self.metrics.too_late.inc();
-            tracing::warn!(
-                attempt_id = spec.attempt_id.as_str(),
-                "the assignment came too late to start; rejected"
-            );
-            self.forget(&spec.attempt_id).await;
-            let detail = "it came too late to start: past its start budget".to_owned();
-            return Err(Some((pb::RejectReason::TooLate, detail)));
-        }
+        // No start deadline: the master takes an assignment back only once this worker's
+        // messages show it never started it (B240), so however late it came, it is still this
+        // worker's to start.
         Ok(())
     }
 
@@ -3198,7 +3151,7 @@ impl<E: Executor> Agent<E> {
         &mut self,
         mut call: pb::ApiCall,
         answer: oneshot::Sender<pb::ApiAnswer>,
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        to_master: Option<&ToMaster>,
     ) {
         // Its task gone or out of time: not sent (Grok's review), the call left to its key.
         if answer.is_closed() {
@@ -3680,14 +3633,7 @@ impl<E: Executor> Agent<E> {
 
     /// Records what ended, and reports it over `link` (the outbound stream and the client)
     /// when connected.
-    async fn on_done(
-        &mut self,
-        done: Done,
-        link: Option<(
-            &mpsc::UnboundedSender<pb::WorkerMessage>,
-            &mut MasterClient<Channel>,
-        )>,
-    ) {
+    async fn on_done(&mut self, done: Done, link: Option<(&ToMaster, &mut MasterClient<Channel>)>) {
         match done {
             Done::Spawned {
                 attempt_id,
@@ -3772,7 +3718,7 @@ impl<E: Executor> Agent<E> {
         hash: Option<String>,
         attempt_id: Option<String>,
         reports: &[schedr_model::commands::ConnectionReport],
-        to_master: Option<&mpsc::UnboundedSender<pb::WorkerMessage>>,
+        to_master: Option<&ToMaster>,
     ) {
         if let Some(attempt_id) = attempt_id {
             self.forget(&attempt_id).await;
@@ -3811,10 +3757,7 @@ impl<E: Executor> Agent<E> {
         job_id: String,
         root: pb::RootHash,
         files: Result<Vec<ParsedFile>, String>,
-        link: Option<(
-            &mpsc::UnboundedSender<pb::WorkerMessage>,
-            &mut MasterClient<Channel>,
-        )>,
+        link: Option<(&ToMaster, &mut MasterClient<Channel>)>,
     ) {
         match (files, link) {
             (Ok(_), None) => tracing::warn!(
@@ -3850,7 +3793,7 @@ impl<E: Executor> Agent<E> {
         }
     }
 
-    fn watch(&mut self, to_master: &mpsc::UnboundedSender<pb::WorkerMessage>) {
+    fn watch(&mut self, to_master: &ToMaster) {
         let mut changed_any = false;
         for (name, watcher) in &mut self.watchers {
             match watcher.poll(Instant::now()) {
@@ -4358,6 +4301,38 @@ fn restarted(attempt_id: &str) -> pb::Finished {
 const fn wrap(message: worker_message::Message) -> pb::WorkerMessage {
     pb::WorkerMessage {
         message: Some(message),
+        clock: None,
+    }
+}
+
+/// A session's sender to the master: each message numbered, and stamped with the latest of
+/// the master's messages handled, as it is queued (B240). Queued in that order, so a message
+/// naming the master's message `n` comes after everything sent while handling `n`; its send
+/// counted from the queueing, no later than the stream's write (sooner deadlines, never
+/// later).
+struct ToMaster {
+    sender: mpsc::UnboundedSender<pb::WorkerMessage>,
+    outbox: SharedOutbox,
+}
+
+impl ToMaster {
+    const fn new(sender: mpsc::UnboundedSender<pb::WorkerMessage>, outbox: SharedOutbox) -> Self {
+        Self { sender, outbox }
+    }
+
+    /// Numbers, stamps and queues `message`; the stream closed, it is dropped.
+    fn send(&self, mut message: pb::WorkerMessage) -> Result<(), mpsc::error::SendError<()>> {
+        // Held over the queueing: numbers in queue order.
+        let mut outbox = crate::master_time::lock(&self.outbox);
+        message.clock = Some(outbox.stamp(Local::now()));
+        self.sender
+            .send(message)
+            .map_err(|_| mpsc::error::SendError(()))
+    }
+
+    /// The master's message numbered `sequence` was handled.
+    fn handled(&self, sequence: u64) {
+        crate::master_time::lock(&self.outbox).handled(sequence);
     }
 }
 

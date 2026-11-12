@@ -1,0 +1,20 @@
+title = "A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck"
+date = 2026-11-12
+by = "user"
+status = "active"
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+Trigger, Backfill, Pause or Unpause, and an event trigger's Restart and Skip run share the page's
+one row of actions. Restart is shown only where it changes something: the trigger stopped,
+failing and waiting to start again, or stuck (a running poke trigger none of whose calls has
+ended for over three times its `every` plus a heartbeat; the API's `stuck`, `(stuck)` in
+`triggers list`). Not while paused (Unpause starts it) nor running well; a long-running trigger
+can't be told stuck (`restart_if_idle` restarts it). `schedr triggers restart` works at any
+time. Known limit: the poke's time is the worker's clock, so a worker off by more than the
+window (warned `clock_skew` past 2 s) can be shown stuck wrongly. Not chosen: Restart always shown; Restart for any running listener.
+'''
+history = "JOURNAL.md#D461"
+step = "1.0.0"
+code = ["crates/schedr-api/src/routes.rs::poke_stuck", "crates/schedr-ui/src/pages.rs::TriggerPanel"]
+checked = 2026-11-12

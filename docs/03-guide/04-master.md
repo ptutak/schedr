@@ -75,7 +75,7 @@ later post but whose transaction committed after it. The pass skips keys the DAG
 has and respects `[triggers] max_queued_events`.
 
 For `@trigger(wait_for=...)`, the trigger pass hands one ended run or named event to a
-call on a watcher. For named events it records passed items in `trigger_passed` and reads
+call on a watcher. For named events it records passed items in `trigger_progress_passed` and reads
 back a minute behind the last, bounded by when the DAG became live, to find late commits.
 When a call returns an event, its input is passed when the returned event is stored; if the
 return is dropped, the input is handed again.

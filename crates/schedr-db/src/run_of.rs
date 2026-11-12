@@ -229,15 +229,15 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or the stored time doesn't read.
     pub async fn live_since(&self, dag: &str) -> Result<Option<Timestamp>, DbError> {
-        const SINCE: &str =
-            "SELECT {ts<}live_since{>ts} FROM dags WHERE dag_id = $1 AND live_since IS NOT NULL";
+        const SINCE: &str = "SELECT {ts<}live_since{>ts} FROM dag_triggers WHERE dag_id = $1 \
+             AND live_since IS NOT NULL";
         let row: Option<(String,)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, SINCE))
                 .bind(dag)
                 .fetch_optional(pool)
                 .await?
         });
-        row.map(|(at,)| parse_time("dags.live_since", &at))
+        row.map(|(at,)| parse_time("dag_triggers.live_since", &at))
             .transpose()
     }
 
@@ -248,7 +248,7 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or the stored time doesn't read.
     pub async fn run_of_seen(&self, dag: &str, source: &str) -> Result<Option<RunOfSeen>, DbError> {
-        const SEEN: &str = "SELECT {ts<}run_of_seen_at{>ts}, run_of_seen_run FROM triggers \
+        const SEEN: &str = "SELECT {ts<}run_of_seen_at{>ts}, run_of_seen_run FROM trigger_progress \
             WHERE dag_id = $1 AND run_of_source = $2 AND run_of_seen_at IS NOT NULL \
             AND run_of_seen_run IS NOT NULL";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
@@ -260,7 +260,7 @@ impl Database {
         });
         row.map(|(at, run)| {
             Ok(RunOfSeen {
-                at: parse_time("triggers.run_of_seen_at", &at)?,
+                at: parse_time("trigger_progress.run_of_seen_at", &at)?,
                 run,
             })
         })
@@ -279,7 +279,7 @@ impl Database {
         source: &str,
         seen: &RunOfSeen,
     ) -> Result<(), DbError> {
-        const SET: &str = "INSERT INTO triggers \
+        const SET: &str = "INSERT INTO trigger_progress \
             (dag_id, failures, run_of_source, run_of_seen_at, run_of_seen_run) \
             VALUES ($1, 0, $2, $3{ts}, $4) ON CONFLICT (dag_id) DO UPDATE SET \
             run_of_source = excluded.run_of_source, run_of_seen_at = excluded.run_of_seen_at, \
@@ -525,12 +525,12 @@ impl Database {
     pub async fn hand_trigger_run(&self, dag: &str, seen: &RunOfSeen) -> Result<(), DbError> {
         // Another run than the one it failed on starts with no failures (Codex's review): those
         // were the dropped run's.
-        const HAND: &str = "INSERT INTO triggers (dag_id, failures, run_of_handed_run, \
+        const HAND: &str = "INSERT INTO trigger_progress (dag_id, failures, run_of_handed_run, \
             run_of_handed_at) VALUES ($1, 0, $2, $3{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
-            failures = CASE WHEN COALESCE(triggers.run_of_handed_run, '') = excluded.run_of_handed_run \
-                THEN triggers.failures ELSE 0 END, \
-            not_before = CASE WHEN COALESCE(triggers.run_of_handed_run, '') = excluded.run_of_handed_run \
-                THEN triggers.not_before ELSE NULL END, \
+            failures = CASE WHEN COALESCE(trigger_progress.run_of_handed_run, '') = excluded.run_of_handed_run \
+                THEN trigger_progress.failures ELSE 0 END, \
+            not_before = CASE WHEN COALESCE(trigger_progress.run_of_handed_run, '') = excluded.run_of_handed_run \
+                THEN trigger_progress.not_before ELSE NULL END, \
             run_of_handed_run = excluded.run_of_handed_run, \
             run_of_handed_at = excluded.run_of_handed_at";
         in_tx!(self, |tx, backend| {
@@ -550,7 +550,7 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or the stored time doesn't read.
     pub async fn trigger_run_handed(&self, dag: &str) -> Result<Option<RunOfSeen>, DbError> {
-        const READ: &str = "SELECT run_of_handed_run, {ts<}run_of_handed_at{>ts} FROM triggers \
+        const READ: &str = "SELECT run_of_handed_run, {ts<}run_of_handed_at{>ts} FROM trigger_progress \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND run_of_handed_at IS NOT NULL";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, READ))
@@ -560,7 +560,7 @@ impl Database {
         });
         row.map(|(run, at)| {
             Ok(RunOfSeen {
-                at: parse_time("triggers.run_of_handed_at", &at)?,
+                at: parse_time("trigger_progress.run_of_handed_at", &at)?,
                 run,
             })
         })
@@ -585,7 +585,7 @@ impl Database {
         skipped: Option<&str>,
         call: Option<&str>,
     ) -> Result<bool, DbError> {
-        const PASS: &str = "UPDATE triggers SET run_of_source = $2, \
+        const PASS: &str = "UPDATE trigger_progress SET run_of_source = $2, \
             run_of_seen_at = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
             AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_at ELSE run_of_handed_at END, \
             run_of_seen_run = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
@@ -593,7 +593,7 @@ impl Database {
             run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL, \
             last_error = COALESCE($3, last_error) \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id IS NULL";
-        const END_AND_PASS: &str = "UPDATE triggers SET run_of_source = $2, \
+        const END_AND_PASS: &str = "UPDATE trigger_progress SET run_of_source = $2, \
             run_of_seen_at = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
             AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_at ELSE run_of_handed_at END, \
             run_of_seen_run = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
@@ -604,8 +604,8 @@ impl Database {
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $4";
         // Kept as passed in the same transaction, under the same conditions (decision 354): a
         // named event only, the one ever read back (B186).
-        const KEEP: &str = "INSERT INTO trigger_passed (dag_id, item) \
-            SELECT dag_id, run_of_handed_run FROM triggers t WHERE dag_id = $1 \
+        const KEEP: &str = "INSERT INTO trigger_progress_passed (dag_id, item) \
+            SELECT dag_id, run_of_handed_run FROM trigger_progress t WHERE dag_id = $1 \
             AND run_of_handed_run IS NOT NULL AND ($2 IS NULL AND instance_id IS NULL \
             OR instance_id = $2) AND EXISTS (SELECT 1 FROM named_events e \
             WHERE e.id = t.run_of_handed_run{uuid}) ON CONFLICT (dag_id, item) DO NOTHING";
@@ -646,15 +646,15 @@ impl Database {
         source: &str,
         call: &str,
     ) -> Result<bool, DbError> {
-        const PASS: &str = "UPDATE triggers SET run_of_source = $2, \
+        const PASS: &str = "UPDATE trigger_progress SET run_of_source = $2, \
             run_of_seen_at = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
             AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_at ELSE run_of_handed_at END, \
             run_of_seen_run = CASE WHEN run_of_seen_at IS NOT NULL AND run_of_seen_at > run_of_handed_at \
             AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = run_of_handed_run{uuid}) THEN run_of_seen_run ELSE run_of_handed_run END, \
             run_of_handed_run = NULL, run_of_handed_at = NULL, failures = 0, not_before = NULL \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND instance_id = $3";
-        const KEEP: &str = "INSERT INTO trigger_passed (dag_id, item) \
-            SELECT dag_id, run_of_handed_run FROM triggers t WHERE dag_id = $1 \
+        const KEEP: &str = "INSERT INTO trigger_progress_passed (dag_id, item) \
+            SELECT dag_id, run_of_handed_run FROM trigger_progress t WHERE dag_id = $1 \
             AND run_of_handed_run IS NOT NULL AND instance_id = $2 \
             AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = t.run_of_handed_run{uuid}) \
             ON CONFLICT (dag_id, item) DO NOTHING";
@@ -687,7 +687,7 @@ impl Database {
         error: &str,
         not_before: Option<Timestamp>,
     ) -> Result<(), DbError> {
-        const REFUSED: &str = "UPDATE triggers SET last_error = $2, failures = failures + 1, \
+        const REFUSED: &str = "UPDATE trigger_progress SET last_error = $2, failures = failures + 1, \
             not_before = $3{ts} WHERE dag_id = $1 AND instance_id IS NULL";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, REFUSED))

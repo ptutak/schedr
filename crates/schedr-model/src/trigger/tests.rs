@@ -134,3 +134,13 @@ fn a_key_holds_nothing_a_terminal_would_act_on() {
     }
     assert!(super::check_event_key("order-123 é").is_ok());
 }
+
+#[rstest]
+#[case(Trigger::None, None)]
+#[case(cron(), Some("schedule"))]
+#[case(every(false), Some("schedule"))]
+#[case(once(), Some("schedule"))]
+#[case(Trigger::Chained { by: None }, Some("chained"))]
+fn a_triggers_kind_is_the_uis(#[case] trigger: Trigger, #[case] kind: Option<&str>) {
+    assert_eq!(trigger.kind(), kind);
+}

@@ -18,6 +18,7 @@
 //! counts any deadline as passed.
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use schedr_proto::pb;
@@ -33,9 +34,11 @@ const PAUSE_SLACK: Duration = Duration::from_secs(1);
 /// The part of the time since the sample the two clocks may drift apart by, per thousand.
 const PAUSE_PER_MILLE: u32 = 2;
 
-/// At most so many heartbeats wait to be heard of (the oldest dropped first): a session that
-/// silent has ended.
-const SENT_KEPT: usize = 10_000;
+/// At most so many messages wait to be heard of (the oldest dropped first): a session that
+/// silent has ended. Every message is numbered (B240), so it is bounded by what a session sends
+/// over a round trip; dropped, the master's naming one finds nothing, and its cutoff counts
+/// from an earlier send (sooner, never later).
+const SENT_KEPT: usize = 100_000;
 
 /// How far back the tightest sample is looked for (decision 447,
 /// `SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW`).
@@ -143,13 +146,61 @@ pub struct SampleReading {
     pub round_trip: Duration,
 }
 
-/// Master time as this worker knows it, for one session.
-#[derive(Debug, Clone)]
-pub struct MasterTime {
+/// What a session sent that the master hasn't named as heard yet, and the latest of the
+/// master's messages it has handled (B240). Shared by [`MasterTime`], which reads the sends
+/// when a stamp names one, and the session's sender, which numbers and stamps each message as
+/// it queues it.
+#[derive(Debug, Clone, Default)]
+pub struct Outbox {
     /// What it sent and the master hasn't shown it heard: number, when sent.
     sent: VecDeque<(u64, Local)>,
-    /// The next heartbeat's number.
+    /// The next message's number (the `Register` is 0).
     next: u64,
+    /// The highest `MasterClock.sequence` handled.
+    handled: u64,
+}
+
+impl Outbox {
+    /// A message leaves after `at`: its number.
+    pub fn sent(&mut self, at: Local) -> u64 {
+        let sequence = self.next;
+        self.next += 1;
+        if self.sent.len() == SENT_KEPT {
+            self.sent.pop_front();
+        }
+        self.sent.push_back((sequence, at));
+        sequence
+    }
+
+    /// The stamp of a message leaving after `at`: its number, and what was handled of the
+    /// master's messages before it.
+    pub fn stamp(&mut self, at: Local) -> pb::WorkerClock {
+        pb::WorkerClock {
+            sequence: self.sent(at),
+            heard_sequence: self.handled,
+        }
+    }
+
+    /// The master's message numbered `sequence` was handled: everything sent while handling it
+    /// is queued already.
+    pub fn handled(&mut self, sequence: u64) {
+        self.handled = self.handled.max(sequence);
+    }
+}
+
+/// A session's [`Outbox`], shared.
+pub type SharedOutbox = Arc<Mutex<Outbox>>;
+
+/// The outbox, locked (a panic while it was held left nothing half-done that matters).
+pub fn lock(outbox: &SharedOutbox) -> MutexGuard<'_, Outbox> {
+    outbox.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Master time as this worker knows it, for one session.
+#[derive(Debug)]
+pub struct MasterTime {
+    /// What the session sent, shared with its sender.
+    outbox: SharedOutbox,
     /// Samples of the master's current timeline over the window, each looser than the one
     /// before it and later: the first is the tightest (a monotonic queue).
     samples: VecDeque<Sample>,
@@ -160,6 +211,19 @@ pub struct MasterTime {
     /// When this session sent the latest heartbeat a stamp said the master had heard (B233):
     /// the master counts a worker lost from the last message it heard, received no earlier.
     heard_sent: Option<Local>,
+}
+
+impl Clone for MasterTime {
+    /// A copy that goes its own way: its outbox copied, not shared.
+    fn clone(&self) -> Self {
+        Self {
+            outbox: Arc::new(Mutex::new(lock(&self.outbox).clone())),
+            samples: self.samples.clone(),
+            window: self.window,
+            last: self.last,
+            heard_sent: self.heard_sent,
+        }
+    }
 }
 
 impl Default for MasterTime {
@@ -173,8 +237,7 @@ impl MasterTime {
     #[must_use]
     pub fn with_window(window: Duration) -> Self {
         Self {
-            sent: VecDeque::new(),
-            next: 0,
+            outbox: SharedOutbox::default(),
             samples: VecDeque::new(),
             window,
             last: None,
@@ -182,16 +245,19 @@ impl MasterTime {
         }
     }
 
-    /// A session opens: its `Register` (number 0) leaves after now. Returns now on the agent's
-    /// own timer clock, the session's opening.
+    /// A session opens: a new outbox, its first message (the `Register`) numbered 0 as the
+    /// session's sender queues it. Returns now on the agent's own timer clock, the session's
+    /// opening.
     pub fn open(&mut self) -> tokio::time::Instant {
         let opened = tokio::time::Instant::now();
-        *self = Self {
-            sent: VecDeque::from([(0, Local::now())]),
-            next: 1,
-            ..Self::with_window(self.window)
-        };
+        *self = Self::with_window(self.window);
         opened
+    }
+
+    /// The session's outbox, for its sender.
+    #[must_use]
+    pub fn outbox(&self) -> SharedOutbox {
+        Arc::clone(&self.outbox)
     }
 
     /// The tightest sample of the window.
@@ -215,15 +281,9 @@ impl MasterTime {
         })
     }
 
-    /// A heartbeat leaves after `at`: its number.
+    /// A message leaves after `at`: its number (as [`Outbox::sent`]).
     pub fn sent(&mut self, at: Local) -> u64 {
-        let sequence = self.next;
-        self.next += 1;
-        if self.sent.len() == SENT_KEPT {
-            self.sent.pop_front();
-        }
-        self.sent.push_back((sequence, at));
-        sequence
+        lock(&self.outbox).sent(at)
     }
 
     /// A master message's clock, arrived at `now`: a sample if it names what this session
@@ -242,14 +302,17 @@ impl MasterTime {
             self.samples.clear();
         }
         // Those before it won't be named again: the master's messages come in order.
-        while self
-            .sent
-            .front()
-            .is_some_and(|(number, _)| *number < clock.heard_sequence)
-        {
-            self.sent.pop_front();
-        }
-        let &(number, sent) = self.sent.front()?;
+        let (number, sent) = {
+            let mut outbox = lock(&self.outbox);
+            while outbox
+                .sent
+                .front()
+                .is_some_and(|(number, _)| *number < clock.heard_sequence)
+            {
+                outbox.sent.pop_front();
+            }
+            *outbox.sent.front()?
+        };
         if number != clock.heard_sequence {
             return None;
         }
@@ -360,15 +423,14 @@ mod tests {
             heard_sequence: heard,
             wall_ms: 0,
             lease_epoch: 0,
+            sequence: 0,
         }
     }
 
     fn opened(register_at: u64) -> MasterTime {
-        MasterTime {
-            sent: VecDeque::from([(0, at(register_at))]),
-            next: 1,
-            ..MasterTime::default()
-        }
+        let mut time = MasterTime::default();
+        assert_eq!(time.sent(at(register_at)), 0, "the Register");
+        time
     }
 
     #[test]
@@ -512,6 +574,7 @@ mod window_tests {
             heard_sequence: heard,
             wall_ms: master_ms,
             lease_epoch: 0,
+            sequence: 0,
         }
     }
 
@@ -562,8 +625,7 @@ mod window_tests {
             None,
             "nothing heard"
         );
-        time.sent = VecDeque::from([(0, at(1_000))]);
-        time.next = 1;
+        time.sent(at(1_000));
         time.heard(&clock(50_000, 0), at(1_100));
         let mut pushed = time.clone();
         pushed.heard(&clock(55_000, 0), at(9_000));
@@ -593,8 +655,7 @@ mod window_tests {
         // lose the worker a lease after 1000, so the worker stops by 1000 + 60 000, less 0.1 %
         // (60 940), not by the last stamp's 80 000 + 60 000 (about 59.9 s on).
         let mut time = MasterTime::with_window(Duration::from_secs(600));
-        time.sent = VecDeque::from([(0, at(1_000))]);
-        time.next = 1;
+        time.sent(at(1_000));
         time.heard(&clock(50_000, 0), at(1_100));
         time.sent(at(11_000));
         time.heard(&clock(80_000, 0), at(31_000));
@@ -628,6 +689,53 @@ mod window_tests {
             None,
             "not a sample"
         );
+    }
+
+    #[test]
+    fn messages_never_answered_dont_hold_back_the_count() {
+        // B225 (Grok's review), every message numbered since B240: messages 0 to 4 unanswered
+        // (a paused master), then one naming 5 is the sample: sent at 6000, not at 1000.
+        let mut time = MasterTime::with_window(Duration::from_secs(600));
+        for n in 0..6 {
+            assert_eq!(time.sent(at(1_000 + n * 1_000)), n);
+        }
+        time.heard(&clock(50_000, 5), at(6_100));
+        assert_eq!(
+            time.reading(at(6_100)).map(|r| r.round_trip),
+            Some(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
+    fn the_outbox_numbers_each_message_and_echoes_what_was_handled() {
+        // B240: the Register is 0; each message after it the next number, naming the master's
+        // latest message handled before it was queued.
+        let mut outbox = Outbox::default();
+        let register = outbox.stamp(at(1_000));
+        assert_eq!((register.sequence, register.heard_sequence), (0, 0));
+        outbox.handled(1);
+        let started = outbox.stamp(at(1_010));
+        outbox.handled(4);
+        outbox.handled(3);
+        let beat = outbox.stamp(at(1_020));
+        assert_eq!(
+            [
+                (started.sequence, started.heard_sequence),
+                (beat.sequence, beat.heard_sequence)
+            ],
+            [(1, 1), (2, 4)],
+            "the highest handled, never lower"
+        );
+    }
+
+    #[test]
+    fn a_copy_of_master_time_goes_its_own_way() {
+        // Its outbox copied, not shared: what the copy sends isn't the original's.
+        let mut time = MasterTime::default();
+        time.sent(at(1_000));
+        let mut copy = time.clone();
+        assert_eq!(copy.sent(at(2_000)), 1);
+        assert_eq!(time.sent(at(3_000)), 1);
     }
 
     #[test]

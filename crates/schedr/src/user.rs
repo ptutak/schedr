@@ -10,7 +10,8 @@ use std::io::Write;
 use jiff::tz::TimeZone;
 use schedr_api::views::{
     AttemptView, BackfillRequest, CheckConnectionsRequest, CommandView, DagView, PostEventRequest,
-    RunDetail, RunView, TaskView, TestConnectionRequest, TriggerRequest, TriggerView, WorkerView,
+    RunDetail, RunView, TaskView, TestConnectionRequest, TriggerRequest, TriggerState, TriggerView,
+    WorkerView,
 };
 
 use crate::app::AppError;
@@ -55,7 +56,7 @@ pub async fn run_dags<T: Transport>(
             }
             write_table(
                 out,
-                &["DAG", "PAUSED", "HELD", "TRIGGER", "DEFINED IN"],
+                &["DAG", "STATE", "HELD", "TRIGGER", "DEFINED IN"],
                 &dag_rows(&dags.dags, &output.local),
             )?;
             // Why each held DAG gets no runs, and what to do (decision 72.3).
@@ -304,7 +305,12 @@ fn trigger_row(trigger: &TriggerView) -> Vec<String> {
     vec![
         trigger.dag_id.clone(),
         trigger.trigger.clone(),
-        trigger.state.clone(),
+        // Its worker may hang: `schedr triggers restart` starts it again.
+        if trigger.stuck {
+            format!("{} (stuck)", trigger.state)
+        } else {
+            trigger.state.clone()
+        },
         shown(&trigger.worker),
         shown(&trigger.bookmark),
         trigger.failures.to_string(),
@@ -1246,7 +1252,7 @@ fn dag_rows(dags: &[DagView], local: &TimeZone) -> Vec<Vec<String>> {
             );
             vec![
                 dag.dag_id.clone(),
-                if dag.paused { "yes" } else { "no" }.to_owned(),
+                TriggerState::shown(dag.trigger_state).to_owned(),
                 // Held while its file fails to import (decision 72): the error's class (the
                 // message is on the UI's Import errors page).
                 dag.held

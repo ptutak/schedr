@@ -53,7 +53,7 @@ fn on_postgres_a_command_is_applied_at_once_not_at_the_next_tick() {
     let mut cluster = Cluster::new(Some(postgres_database()), "1h");
     cluster.up();
     let started = Instant::now();
-    let (code, out, err) = cluster.cli(&["dags", "unpause", "chain"]);
+    let (code, out, err) = cluster.cli(&["runs", "trigger", "chain"]);
     assert_eq!(code, 0, "{out}{err}\n{}", cluster.logs());
     assert!(
         started.elapsed() < Duration::from_secs(20),
@@ -789,8 +789,6 @@ impl Cluster {
             self.cli_json(&["dags", "list"])
                 .is_some_and(|d| d["dags"][0]["dag_id"] == "chain")
         });
-        let (code, _, err) = self.cli(&["dags", "unpause", "chain"]);
-        assert_eq!(code, 0, "{err}");
         let (code, _, err) = self.cli(&["runs", "trigger", "chain", "--for", "2026-10-15"]);
         assert_eq!(code, 0, "{err}");
         self.wait("the run to succeed", || {
@@ -1176,6 +1174,44 @@ fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_peri
 }
 
 #[test]
+fn a_worker_that_exits_before_a_stalled_master_takes_its_deregister_is_offline_after() {
+    // B239: the worker gives the master until `deregister_by` to take its `Deregister`, then
+    // exits; a master stalled meanwhile (here frozen) still reads it and marks it offline.
+    let mut cluster = Cluster::new(None, "100ms");
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    cluster.start("webserver");
+    cluster.start_with(
+        "worker",
+        &[("SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT", "1s")],
+    );
+    cluster.wait("the worker to register", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    cluster.signal("master", "STOP");
+    let frozen = Instant::now();
+    let exited = cluster.terminate_within("worker", Duration::from_secs(10));
+    // Under the worker lease (5 s in tests): the master would otherwise find it lost.
+    std::thread::sleep(Duration::from_secs(3).saturating_sub(frozen.elapsed()));
+    cluster.signal("master", "CONT");
+    assert!(
+        exited.is_some_and(|s| s.success()),
+        "{exited:?}\n{}",
+        cluster.logs()
+    );
+    cluster.wait_for("the worker to leave", Duration::from_secs(20), || {
+        cluster.worker_state("w1").as_deref() != Some("draining")
+    });
+    assert_eq!(
+        cluster.worker_state("w1").as_deref(),
+        Some("offline"),
+        "{}",
+        cluster.logs()
+    );
+}
+
+#[test]
 fn a_draining_worker_stops_a_task_already_being_cancelled_near_its_grace_not_the_cancels() {
     // B9: a task already being stopped (here cancelled, so on the master's 30 s cancel grace)
     // when the drain's time is up kept that grace: the worker outlived the pod's deadline and
@@ -1222,6 +1258,11 @@ fn a_draining_worker_stops_a_task_already_being_cancelled_near_its_grace_not_the
         "the worker didn't stop within its grace and 5 s: {exited:?}\n{}",
         cluster.logs()
     );
+    // The master records the `Deregister` it took, perhaps only after the worker exited: a
+    // master behind (B239, an I/O stall) marks it offline a moment later, never `lost`.
+    cluster.wait_for("the worker to leave", Duration::from_secs(20), || {
+        cluster.worker_state("w1").as_deref() != Some("draining")
+    });
     assert_eq!(
         cluster.worker_state("w1").as_deref(),
         Some("offline"),

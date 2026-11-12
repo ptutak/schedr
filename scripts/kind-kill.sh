@@ -188,7 +188,7 @@ has_all() {
 
 # Polls `schedr dags list` until every name is there. One call per poll. Returns 1 and sets
 # MISSING_DAG when one never appears, so the caller fails through `fail` (its dump) instead
-# of `dags unpause` dying under `set -e`.
+# of `runs trigger` dying under `set -e`.
 wait_dags() {
     local tries=$1
     shift
@@ -271,8 +271,9 @@ note_lost() {
 
 # Sets RUN_ID. Kept out of a command substitution so a failure exits this script.
 trigger() {
+    # Run by hand: it starts paused or not, and these DAGs have no trigger to unpause (decision
+    # 459).
     local dag=$1 json
-    cli dags unpause "$dag" >/dev/null
     json=$(cli runs trigger "$dag" --json) || fail "runs trigger $dag failed"
     RUN_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["run_id"])' <<<"$json")
     [ -n "$RUN_ID" ] || fail "$dag: no run id ($json)"

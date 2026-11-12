@@ -48,7 +48,7 @@ async fn with_dag() -> (Database, String) {
         .unwrap();
     let dag: Dag = serde_json::from_value(json!({
         "produced_by": "1.0", "id": sync().as_str(), "location": {"root": "etl", "path": "a/b.py"},
-        "trigger": {"kind": "none"}, "initial_since": null, "max_active_runs": 1,
+        "trigger": {"kind": "every", "interval_ms": 60000, "catchup": false}, "initial_since": null, "max_active_runs": 1,
         "tasks": [], "edges": []
     }))
     .unwrap();

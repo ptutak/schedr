@@ -565,6 +565,7 @@ fn trigger_view(
     active: &schedr_db::runs::ActiveDag,
     record: Option<&schedr_db::triggers::TriggerRecord>,
     switched_off: bool,
+    heartbeat: std::time::Duration,
     now: Timestamp,
 ) -> Option<TriggerView> {
     let schedr_model::Trigger::Event {
@@ -587,6 +588,7 @@ fn trigger_view(
     };
     let empty = schedr_db::triggers::TriggerRecord::default();
     let record = record.unwrap_or(&empty);
+    let stuck = state == "running" && poke_stuck(task, record, heartbeat, now);
     Some(TriggerView {
         dag_id: active.dag.id.to_string(),
         trigger: task.id.to_string(),
@@ -608,8 +610,40 @@ fn trigger_view(
         last_event_at: record.last_event_at,
         last_poked_at: record.last_poked_at,
         last_restart_at: record.last_restart_at,
+        stuck,
         called_for: None,
     })
+}
+
+/// Whether a poke trigger has had no call end for over three times its `every` plus a heartbeat,
+/// counted from its start when none has yet (decision 461): a call past `every` is cancelled as
+/// an error, and the end reported within a heartbeat, so its worker may hang. (One that never
+/// yields is cut at the block limit, 30 s, which a short `every` may not cover: Restart is then
+/// offered early, and harmless.) The time is the worker's own clock: one more than the window
+/// off (it reports `clock_skew` past 2 s) may be shown stuck wrongly, or not. A long-running
+/// trigger can't be told: quiet is normal for it, and `restart_if_idle` restarts it.
+fn poke_stuck(
+    task: &schedr_model::Task,
+    record: &schedr_db::triggers::TriggerRecord,
+    heartbeat: std::time::Duration,
+    now: Timestamp,
+) -> bool {
+    let schedr_model::TaskKind::Sensor {
+        mode: schedr_model::SensorMode::Poke,
+        every_ms: Some(every),
+        ..
+    } = &task.kind
+    else {
+        return false;
+    };
+    let Some(since) = record.last_poked_at.max(record.started_at) else {
+        return false;
+    };
+    let limit = std::time::Duration::from_millis(every.saturating_mul(3)).saturating_add(heartbeat);
+    jiff::SignedDuration::try_from(limit)
+        .ok()
+        .and_then(|limit| since.checked_add(limit).ok())
+        .is_some_and(|at| at < now)
 }
 
 /// The run an `@trigger(wait_for=...)` is called for (decision 353), on its view.
@@ -653,6 +687,7 @@ pub async fn list_triggers(State(state): State<ApiState>) -> ApiResult<TriggerLi
             active,
             records.iter().find(|r| r.dag_id == dag),
             off.iter().any(|s| s.dag_id == dag && s.task_id == function),
+            state.heartbeat_interval,
             now,
         ) else {
             continue;
@@ -685,7 +720,14 @@ pub async fn dag_trigger(
         .await?
         .is_some_and(|strikes| strikes.off_at.is_some());
     let record = state.db.trigger(&dag_id).await?;
-    let mut view = trigger_view(active, record.as_ref(), off, Timestamp::now()).ok_or_else(none)?;
+    let mut view = trigger_view(
+        active,
+        record.as_ref(),
+        off,
+        state.heartbeat_interval,
+        Timestamp::now(),
+    )
+    .ok_or_else(none)?;
     add_called_for(&state.db, active, &mut view).await?;
     Ok(Json(view))
 }

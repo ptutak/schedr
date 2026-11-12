@@ -41,7 +41,7 @@ flowchart LR
    Only `schedr dags check` shows them; the agent doesn't upload them.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file.
    The master validates them and stores a new DAG version for each DAG that changed. A new
-   DAG is stored **paused**. The upload is a stream: a header, then one message per file, so
+   trigger, or one of another kind, is stored **paused** ([Pausing](../02-dags/04-schedules.md#pausing)). The upload is a stream: a header, then one message per file, so
    only a single file's size counts against `[grpc] max_message_size` (64 MiB by
    default), which the master sends the worker in `Registered`. A file whose parse result is
    bigger is uploaded as its import error, `ParseResultTooLarge`, naming the setting. That,

@@ -102,11 +102,24 @@ finish.
 
 ## Pausing
 
-A new DAG is stored paused, and so is a DAG that was removed and comes back.
-`schedr dags unpause <id>` lets the scheduler create runs. `schedr dags pause <id>` stops
-only that: fire times pass with no scheduled run, runs already going finish, and a manual
-run still starts. A paused `Chained` DAG refuses operators until unpaused. For
-`trigger=None`, the UI shows neither Pause nor Unpause: it has only manual runs.
+Pausing switches a DAG's trigger off; the switch belongs to the trigger (decision 459). A
+trigger is stored paused when it first appears, when new code changes its kind (Schedule:
+`Cron`, `Every`, `Once`; Run of; Chained; Event: an event trigger or `EventNamed`), and when
+a removed DAG comes back. Another trigger of the same kind keeps the switch, so editing a
+cron expression doesn't pause it; a DAG losing its trigger loses the switch.
+
+`schedr dags unpause <id>` lets the trigger create runs. `schedr dags pause <id>` stops only
+that: fire times pass with no scheduled run, runs already going finish, and a manual run
+still starts. A paused `Chained` DAG refuses operators until unpaused. A DAG with
+`trigger=None` has nothing to pause: both commands are refused, its state is `manual` in
+`schedr dags list`, and the UI shows neither Pause nor Unpause.
+
+| New code | The switch |
+|---|---|
+| A DAG's first trigger | Paused |
+| `Cron("0 3 * * *")` becomes `Cron("0 4 * * *")`, or `Every(...)` | Kept |
+| `Cron(...)` becomes `RunOf(...)` | Paused |
+| `trigger=None` | Gone; a trigger added later starts paused |
 
 After unpause, `catchup` applies to the fire times that passed. With it off, only the
 latest one is created. With it on, the missed ones are created in order.

@@ -12,4 +12,4 @@ by construction. Not chosen: a fixed constant.
 history = "JOURNAL.md#D445"
 step = "M4B.0"
 code = ["crates/schedr-agent/src/master_time.rs::heard", "crates/schedr-agent/src/master_time.rs::with_window"]
-checked = 2026-11-11
+checked = 2026-11-12

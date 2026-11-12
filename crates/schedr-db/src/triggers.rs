@@ -120,16 +120,16 @@ fn record(row: Row) -> Result<TriggerRecord, DbError> {
         dag_version_id: version,
         code_hash,
         bookmark,
-        last_planned_for: optional_time("triggers.last_planned_for", last)?,
+        last_planned_for: optional_time("trigger_progress.last_planned_for", last)?,
         last_error,
         failures: u32::try_from(failures).unwrap_or(0),
-        not_before: optional_time("triggers.not_before", not_before)?,
+        not_before: optional_time("trigger_progress.not_before", not_before)?,
         stopped_why,
         stopped_on,
-        started_at: optional_time("triggers.started_at", started_at)?,
-        last_event_at: optional_time("triggers.last_event_at", last_event_at)?,
-        last_restart_at: optional_time("triggers.last_restart_at", last_restart_at)?,
-        last_poked_at: optional_time("triggers.last_poked_at", last_poked_at)?,
+        started_at: optional_time("trigger_progress.started_at", started_at)?,
+        last_event_at: optional_time("trigger_progress.last_event_at", last_event_at)?,
+        last_restart_at: optional_time("trigger_progress.last_restart_at", last_restart_at)?,
+        last_poked_at: optional_time("trigger_progress.last_poked_at", last_poked_at)?,
     })
 }
 
@@ -144,7 +144,7 @@ impl Database {
             code_hash, bookmark, {ts<}last_planned_for{>ts}, last_error, failures, {ts<}not_before{>ts}, \
             stopped_why, stopped_on, {ts<}started_at{>ts}, {ts<}last_event_at{>ts}, \
             {ts<}last_restart_at{>ts}, {ts<}last_poked_at{>ts} \
-            FROM triggers ORDER BY dag_id";
+            FROM trigger_progress ORDER BY dag_id";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, ALL)).fetch_all(pool).await?
         });
@@ -161,7 +161,7 @@ impl Database {
             code_hash, bookmark, {ts<}last_planned_for{>ts}, last_error, failures, {ts<}not_before{>ts}, \
             stopped_why, stopped_on, {ts<}started_at{>ts}, {ts<}last_event_at{>ts}, \
             {ts<}last_restart_at{>ts}, {ts<}last_poked_at{>ts} \
-            FROM triggers WHERE dag_id = $1";
+            FROM trigger_progress WHERE dag_id = $1";
         let row: Option<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, ONE))
                 .bind(dag_id)
@@ -185,7 +185,7 @@ impl Database {
         code_hash: &str,
         now: Timestamp,
     ) -> Result<(), DbError> {
-        const SET: &str = "INSERT INTO triggers \
+        const SET: &str = "INSERT INTO trigger_progress \
             (dag_id, instance_id, worker_id, dag_version_id, code_hash, started_at) \
             VALUES ($1, $2, $3, $4, $5, $6{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
             instance_id = excluded.instance_id, worker_id = excluded.worker_id, \
@@ -218,7 +218,7 @@ impl Database {
         error: Option<&str>,
         not_before: Option<Timestamp>,
     ) -> Result<bool, DbError> {
-        const END: &str = "UPDATE triggers SET instance_id = NULL, worker_id = NULL, \
+        const END: &str = "UPDATE trigger_progress SET instance_id = NULL, worker_id = NULL, \
             dag_version_id = NULL, code_hash = NULL, last_error = COALESCE($1, last_error), \
             failures = failures + $2, not_before = $3{ts} \
             WHERE dag_id = $4 AND instance_id = $5";
@@ -251,12 +251,12 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const EVENT: &str = "INSERT INTO events (dag_id, key, data, at, received_at) \
             VALUES ($1, $2, $3{json}, $4{ts}, $5{ts}) ON CONFLICT (dag_id, key) DO NOTHING";
-        const BOOKMARK: &str = "INSERT INTO triggers \
+        const BOOKMARK: &str = "INSERT INTO trigger_progress \
             (dag_id, bookmark, last_planned_for, failures, last_event_at) \
             VALUES ($1, $2, $3{ts}, 0, $4{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
             bookmark = excluded.bookmark, failures = 0, last_error = NULL, \
             last_event_at = excluded.last_event_at, \
-            last_planned_for = COALESCE(excluded.last_planned_for, triggers.last_planned_for)";
+            last_planned_for = COALESCE(excluded.last_planned_for, trigger_progress.last_planned_for)";
         let dag_id = run.dag_id.as_str();
         Box::pin(self.atomically(async {
             let new = in_tx!(self, |tx, backend| {
@@ -305,12 +305,12 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const EVENT: &str = "INSERT INTO events (dag_id, key, data, at, received_at) \
             VALUES ($1, $2, $3{json}, $4{ts}, $5{ts}) ON CONFLICT (dag_id, key) DO NOTHING";
-        const BOOKMARK: &str = "INSERT INTO triggers \
+        const BOOKMARK: &str = "INSERT INTO trigger_progress \
             (dag_id, bookmark, last_planned_for, failures, last_event_at) \
             VALUES ($1, $2, $3{ts}, 0, $4{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
             bookmark = excluded.bookmark, failures = 0, last_error = NULL, \
             last_event_at = excluded.last_event_at, \
-            last_planned_for = COALESCE(excluded.last_planned_for, triggers.last_planned_for)";
+            last_planned_for = COALESCE(excluded.last_planned_for, trigger_progress.last_planned_for)";
         let dag_id = run.dag_id.as_str();
         Box::pin(self.atomically(async {
             let mut new = Vec::new();
@@ -367,7 +367,8 @@ impl Database {
         dag_id: &str,
         why: Option<(&str, &str)>,
     ) -> Result<(), DbError> {
-        const SET: &str = "UPDATE triggers SET stopped_why = $1, stopped_on = $2 WHERE dag_id = $3";
+        const SET: &str =
+            "UPDATE trigger_progress SET stopped_why = $1, stopped_on = $2 WHERE dag_id = $3";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
                 .bind(why.map(|(why, _)| why))
@@ -385,7 +386,7 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn trigger_idle_restart(&self, dag_id: &str, now: Timestamp) -> Result<(), DbError> {
-        const SET: &str = "UPDATE triggers SET last_restart_at = $1{ts} WHERE dag_id = $2";
+        const SET: &str = "UPDATE trigger_progress SET last_restart_at = $1{ts} WHERE dag_id = $2";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
                 .bind(db_time(now))
@@ -410,7 +411,7 @@ impl Database {
         error: Option<&str>,
         failures: u32,
     ) -> Result<(), DbError> {
-        const SET: &str = "UPDATE triggers SET last_poked_at = $1{ts}, last_error = $2, \
+        const SET: &str = "UPDATE trigger_progress SET last_poked_at = $1{ts}, last_error = $2, \
             failures = $3 WHERE dag_id = $4 AND instance_id = $5";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
@@ -447,7 +448,7 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn restart_trigger(&self, dag_id: &str) -> Result<(), DbError> {
-        const SET: &str = "UPDATE triggers SET stopped_why = NULL, stopped_on = NULL, \
+        const SET: &str = "UPDATE trigger_progress SET stopped_why = NULL, stopped_on = NULL, \
             not_before = NULL, dag_version_id = NULL WHERE dag_id = $1";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))

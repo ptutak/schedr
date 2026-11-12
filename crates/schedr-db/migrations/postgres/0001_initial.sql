@@ -103,15 +103,25 @@ CREATE TABLE current_parses (
 
 CREATE TABLE dags (
     dag_id             TEXT PRIMARY KEY,
-    paused             BOOLEAN NOT NULL DEFAULT TRUE,
     current_version_id UUID,
     first_seen_at      TIMESTAMPTZ NOT NULL,
     removed_at         TIMESTAMPTZ,
     -- Set while the DAG ID is defined in more than one place: a JSON array of {root, path}.
-    conflict           JSONB,
-    -- Since when it has been unpaused and defined, without a break: a `trigger=RunOf(...)` counts
-    -- only runs ending from then on (decision 353). Kept with the change, in the same statement.
-    live_since         TIMESTAMPTZ
+    conflict           JSONB
+);
+
+-- A DAG's trigger and its switch (decision 459): a row while its current code has a trigger, none
+-- for a DAG run only by hand. A trigger that appears, or changes kind, starts paused; another of
+-- the same kind keeps the switch. Kept while the DAG is removed or in conflict, for its return.
+CREATE TABLE dag_triggers (
+    dag_id       TEXT PRIMARY KEY REFERENCES dags (dag_id) ON DELETE CASCADE,
+    -- As the UI names it: schedule (cron, every, once), run_of, chained, event (both kinds).
+    kind         TEXT NOT NULL CHECK (kind IN ('schedule', 'run_of', 'chained', 'event')),
+    paused       BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Since when it has been unpaused and its DAG defined, without a break: a `trigger=RunOf(...)`
+    -- counts only runs ending from then on (decision 353). Kept with the change, in the same
+    -- statement.
+    live_since   TIMESTAMPTZ
 );
 
 -- What triggers found (M4.11b): one row per key, as a key seen before starts no run. Old ones go
@@ -167,14 +177,14 @@ CREATE TABLE notifications (
 );
 CREATE INDEX notifications_due ON notifications (next_try_at, id);
 
-CREATE TABLE trigger_passed (
+CREATE TABLE trigger_progress_passed (
     dag_id  TEXT NOT NULL,
     item    TEXT NOT NULL,
     PRIMARY KEY (dag_id, item)
 );
 
 -- Each event-triggered DAG's trigger. Its bookmark outlives everything else: `after` when it starts.
-CREATE TABLE triggers (
+CREATE TABLE trigger_progress (
     dag_id       TEXT PRIMARY KEY,
     -- Set while a worker is running it.
     instance_id  TEXT,
@@ -208,7 +218,7 @@ CREATE TABLE triggers (
     run_of_handed_run TEXT,
     run_of_handed_at TIMESTAMPTZ,
     -- `@trigger(wait_for=EventNamed(...))`: what it passed of the events posted before this is
-    -- forgotten (`trigger_passed`), so it reads none of them again, whatever its lookback (B186).
+    -- forgotten (`trigger_progress_passed`), so it reads none of them again, whatever its lookback (B186).
     passed_floor TIMESTAMPTZ
 );
 
@@ -467,7 +477,7 @@ CREATE INDEX runs_outputs_kept ON runs (ended_at, id)
 CREATE INDEX runs_by_parent ON runs (parent_run_id) WHERE parent_run_id IS NOT NULL;
 CREATE INDEX runs_by_version ON runs (dag_version_id);
 CREATE INDEX task_instances_handed ON task_instances (handed_run) WHERE handed_run IS NOT NULL;
-CREATE INDEX trigger_passed_by_item ON trigger_passed (item);
+CREATE INDEX trigger_progress_passed_by_item ON trigger_progress_passed (item);
 CREATE INDEX events_by_age ON events (received_at);
 CREATE INDEX named_events_by_age ON named_events (posted_at, id);
 CREATE INDEX commands_decided ON commands (requested_at) WHERE status <> 'pending';
@@ -532,6 +542,13 @@ CREATE TRIGGER dags_inserted AFTER INSERT ON dags REFERENCING NEW TABLE AS chang
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
 CREATE TRIGGER dags_updated AFTER UPDATE ON dags REFERENCING NEW TABLE AS changed
     FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
+-- Its trigger switched, appearing or gone: shown on its pages.
+CREATE TRIGGER dag_triggers_inserted AFTER INSERT ON dag_triggers REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
+CREATE TRIGGER dag_triggers_updated AFTER UPDATE ON dag_triggers REFERENCING NEW TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
+CREATE TRIGGER dag_triggers_deleted AFTER DELETE ON dag_triggers REFERENCING OLD TABLE AS changed
+    FOR EACH STATEMENT EXECUTE FUNCTION schedr_dags_changed();
 -- Whether a wait step is switched off shows on its DAG's page and on the list's banner.
 -- How a trigger goes, for its DAG's page: not each poke's time.
 CREATE FUNCTION schedr_trigger_changed() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -540,9 +557,9 @@ BEGIN
     RETURN NULL;
 END;
 $$;
-CREATE TRIGGER triggers_inserted AFTER INSERT ON triggers
+CREATE TRIGGER trigger_progress_inserted AFTER INSERT ON trigger_progress
     FOR EACH ROW EXECUTE FUNCTION schedr_trigger_changed();
-CREATE TRIGGER triggers_updated AFTER UPDATE ON triggers FOR EACH ROW
+CREATE TRIGGER trigger_progress_updated AFTER UPDATE ON trigger_progress FOR EACH ROW
     WHEN (OLD.instance_id IS DISTINCT FROM NEW.instance_id
         OR OLD.stopped_why IS DISTINCT FROM NEW.stopped_why
         OR OLD.bookmark IS DISTINCT FROM NEW.bookmark

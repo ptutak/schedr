@@ -206,7 +206,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
-| M4B.0 | Master time hardened (the clock step) | done 2026-11-11 | D445, D446, D447, D448, D449, D450, D453 |
+| M4B.0 | Master time hardened (the clock step) | done 2026-11-11 | D445, D446, D447, D448, D449, D453 |
 | M4B.1 | Measure first | dropped |  |
 | M4B.2 | Savepoints in `schedr-db` | dropped |  |
 | M4B.3 | A turn's messages in groups | done 2026-11-11 | D397, D451 |
@@ -221,7 +221,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | Step | Title | State | Decisions |
 |---|---|---|---|
 | R1.0a | A slim image | planned | D383 |
-| R1.0b | The master's side in the clock simulator | done 2026-11-12 | D455 |
+| R1.0b | The master's side in the clock simulator | done 2026-11-12 |  |
 | R1.0c | Images on glibc beside Alpine | planned | D454 |
 
 ## M5: Airflow layer

@@ -45,7 +45,8 @@ load_images "$TEST_IMAGE"
 # Runs the CLI in the pod, against its own API.
 cli() { k exec schedr-0 -c schedr -- schedr "$@" --server http://127.0.0.1:8080; }
 
-# run_a_dag [dag]: waits for the DAG (daily_report), unpauses it, runs it and waits for success.
+# run_a_dag [dag]: waits for the DAG (daily_report), runs it by hand (paused or not, decision 459)
+# and waits for success.
 run_a_dag() {
     local dag=${1:-daily_report}
     k rollout status statefulset/schedr --timeout=180s
@@ -53,7 +54,6 @@ run_a_dag() {
         cli dags list 2>/dev/null | grep -q "$dag" && break
         sleep 2
     done
-    cli dags unpause "$dag"
     # The run this call triggers (on the same Postgres, earlier runs succeeded already).
     local run
     run=$(cli runs trigger "$dag" | awk '/^triggered run/ {print $3}')

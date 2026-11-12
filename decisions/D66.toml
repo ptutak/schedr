@@ -14,4 +14,4 @@ step = "M4.2c"
 unverified = ["a DAG keeps its last good version"]
 also = ["code-delivery"]
 code = ["crates/schedr-db/migrations/postgres/0001_initial.sql", "crates/schedr-api/src/routes.rs::list_import_errors", "crates/schedr-api/src/views.rs::ImportErrorView"]
-checked = 2026-11-11
+checked = 2026-11-12

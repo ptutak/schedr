@@ -52,8 +52,9 @@ pub struct CurrentVersion {
 pub struct StoredDag {
     /// The DAG's ID.
     pub dag_id: DagId,
-    /// Whether it is paused.
-    pub paused: bool,
+    /// Its trigger's switch (decision 459): whether it is paused; `None` without a trigger
+    /// (run only by hand), which has no switch.
+    pub paused: Option<bool>,
     /// Whether it was removed (hidden, history kept).
     pub removed: bool,
     /// The places defining it, while it is in conflict.
@@ -66,23 +67,24 @@ pub struct StoredDag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DagChange {
     /// The DAG is defined in one place by this parse: it becomes the current version (stored
-    /// once per parse), and the DAG is no longer removed or in conflict. A new DAG is stored
-    /// paused; `pause` pauses an existing one too.
+    /// once per parse), and the DAG is no longer removed or in conflict. A trigger new to it,
+    /// or of another kind, is stored paused, and losing it deletes its switch (decision 459);
+    /// `pause` pauses an existing one too.
     Define {
         /// The definition.
         dag: Box<Dag>,
         /// The parse it comes from.
         parse_id: String,
-        /// Pause the DAG (a removed DAG that came back).
+        /// Pause its trigger (a removed DAG that came back).
         pause: bool,
     },
-    /// The DAG ID is defined in more than one place: it can't run. A new DAG is stored paused.
+    /// The DAG ID is defined in more than one place: it can't run.
     Conflict {
         /// The DAG's ID.
         dag_id: DagId,
         /// Every place defining it.
         places: Vec<DagLocation>,
-        /// Pause the DAG (a removed DAG that came back).
+        /// Pause its trigger (a removed DAG that came back).
         pause: bool,
     },
     /// The DAG is no longer defined: hidden, its history kept.
@@ -98,7 +100,7 @@ type FileRow = (String, String, Option<String>, String, String);
 /// The row of a stored DAG with its current version.
 type DagRow = (
     String,
-    bool,
+    Option<bool>,
     bool,
     Option<String>,
     Option<String>,
@@ -532,9 +534,10 @@ impl Database {
     /// [`DbError::Sqlx`] if the query fails, [`DbError::InvalidData`] if stored JSON doesn't
     /// read back.
     pub async fn stored_dags(&self) -> Result<Vec<StoredDag>, DbError> {
-        const DAGS: &str = "SELECT d.dag_id, d.paused, d.removed_at IS NOT NULL, \
+        const DAGS: &str = "SELECT d.dag_id, t.paused, d.removed_at IS NOT NULL, \
             d.conflict{text}, v.id{text}, v.parse_result_id{text}, v.dag_json{text} \
-            FROM dags d LEFT JOIN dag_versions v ON v.id = d.current_version_id \
+            FROM dags d LEFT JOIN dag_triggers t ON t.dag_id = d.dag_id \
+            LEFT JOIN dag_versions v ON v.id = d.current_version_id \
             ORDER BY d.dag_id";
         let rows: Vec<DagRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, DAGS)).fetch_all(pool).await?
@@ -591,9 +594,10 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or its stored DAG doesn't read.
     pub async fn stored_dag(&self, dag_id: &DagId) -> Result<Option<StoredDag>, DbError> {
-        const DAG: &str = "SELECT d.dag_id, d.paused, d.removed_at IS NOT NULL, \
+        const DAG: &str = "SELECT d.dag_id, t.paused, d.removed_at IS NOT NULL, \
             d.conflict{text}, v.id{text}, v.parse_result_id{text}, v.dag_json{text} \
-            FROM dags d LEFT JOIN dag_versions v ON v.id = d.current_version_id \
+            FROM dags d LEFT JOIN dag_triggers t ON t.dag_id = d.dag_id \
+            LEFT JOIN dag_versions v ON v.id = d.current_version_id \
             WHERE d.dag_id = $1";
         let row: Option<DagRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, DAG))
@@ -604,7 +608,8 @@ impl Database {
         row.map(stored_dag).transpose()
     }
 
-    /// Pauses or unpauses a DAG. Returns whether it exists.
+    /// Pauses or unpauses a DAG's trigger. Returns whether it has one (decision 459: a DAG run
+    /// only by hand has no switch).
     ///
     /// # Errors
     ///
@@ -625,8 +630,10 @@ impl Database {
         paused: bool,
         now: Timestamp,
     ) -> Result<bool, DbError> {
-        const PAUSE: &str = "UPDATE dags SET paused = $1, live_since = CASE WHEN $1 THEN NULL \
-            WHEN removed_at IS NULL AND conflict IS NULL THEN COALESCE(live_since, $3{ts}) END \
+        const PAUSE: &str = "UPDATE dag_triggers SET paused = $1, \
+            live_since = CASE WHEN $1 THEN NULL WHEN EXISTS (SELECT 1 FROM dags d \
+                WHERE d.dag_id = dag_triggers.dag_id AND d.removed_at IS NULL \
+                AND d.conflict IS NULL) THEN COALESCE(live_since, $3{ts}) END \
             WHERE dag_id = $2";
         let changed = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, PAUSE))
@@ -654,28 +661,40 @@ impl Database {
         changes: &[DagChange],
         now: Timestamp,
     ) -> Result<(), DbError> {
-        const ENSURE: &str = "INSERT INTO dags (dag_id, paused, first_seen_at) \
-            VALUES ($1, TRUE, $2{ts}) ON CONFLICT (dag_id) DO NOTHING";
+        const ENSURE: &str = "INSERT INTO dags (dag_id, first_seen_at) \
+            VALUES ($1, $2{ts}) ON CONFLICT (dag_id) DO NOTHING";
         const VERSION: &str = "INSERT INTO dag_versions \
             (id, dag_id, parse_result_id, dag_json, created_at) \
             VALUES ($1{uuid}, $2, $3{uuid}, $4{json}, $5{ts}) \
             ON CONFLICT (dag_id, parse_result_id) DO NOTHING";
-        // `live_since` (decision 353) in the same statement: kept while it stays live with the same
-        // trigger, set when it comes back unpaused or its trigger changes ($5), cleared while it is
-        // paused, in conflict or removed.
         const OLD_TRIGGER: &str = "SELECT v.dag_json{text} FROM dags d \
             JOIN dag_versions v ON v.id = d.current_version_id WHERE d.dag_id = $1";
+        // Its trigger's switch (decision 459), before the DAG's row changes: new, or of another
+        // kind ($2), paused; else kept, paused by $3. `live_since` (decision 353) with it: kept
+        // while it stays live with the same trigger, set when it comes back unpaused or its
+        // trigger changes ($4), cleared while it is paused, in conflict or removed.
+        const SWITCH: &str = "INSERT INTO dag_triggers (dag_id, kind, paused, live_since) \
+            VALUES ($1, $2, TRUE, NULL) ON CONFLICT (dag_id) DO UPDATE SET \
+            paused = CASE WHEN dag_triggers.kind <> excluded.kind THEN TRUE \
+                ELSE (dag_triggers.paused OR $3) END, \
+            live_since = CASE WHEN dag_triggers.kind <> excluded.kind \
+                OR dag_triggers.paused OR $3 THEN NULL \
+                WHEN EXISTS (SELECT 1 FROM dags d WHERE d.dag_id = $1 \
+                    AND d.removed_at IS NULL AND d.conflict IS NULL) AND NOT $4 \
+                THEN COALESCE(dag_triggers.live_since, $5{ts}) ELSE $5{ts} END, \
+            kind = excluded.kind";
+        const NO_SWITCH: &str = "DELETE FROM dag_triggers WHERE dag_id = $1";
         const CURRENT: &str = "UPDATE dags SET current_version_id = (SELECT id FROM dag_versions \
             WHERE dag_id = $1 AND parse_result_id = $2{uuid}), \
-            live_since = CASE WHEN (paused OR $3) THEN NULL \
-                WHEN removed_at IS NULL AND conflict IS NULL AND NOT $5 \
-                THEN COALESCE(live_since, $4{ts}) ELSE $4{ts} END, \
-            removed_at = NULL, conflict = NULL, paused = (paused OR $3) WHERE dag_id = $1";
-        const CONFLICT: &str = "UPDATE dags SET conflict = $1{json}, removed_at = NULL, \
-            live_since = NULL, paused = (paused OR $2) WHERE dag_id = $3";
-        const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL, \
-            live_since = NULL WHERE dag_id = $2";
-        const FORGET_PASSED: &str = "DELETE FROM trigger_passed WHERE dag_id = $1";
+            removed_at = NULL, conflict = NULL WHERE dag_id = $1";
+        const CONFLICT: &str = "UPDATE dags SET conflict = $1{json}, removed_at = NULL \
+            WHERE dag_id = $2";
+        const CONFLICT_SWITCH: &str = "UPDATE dag_triggers SET live_since = NULL, \
+            paused = (paused OR $1) WHERE dag_id = $2";
+        const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL \
+            WHERE dag_id = $2";
+        const REMOVE_SWITCH: &str = "UPDATE dag_triggers SET live_since = NULL WHERE dag_id = $1";
+        const FORGET_PASSED: &str = "DELETE FROM trigger_progress_passed WHERE dag_id = $1";
         // As retention's: not one a new run's foreign key waits for.
         const LOCK: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR NO KEY UPDATE";
         let now = db_time(now);
@@ -721,12 +740,24 @@ impl Database {
                                 })
                                 != serde_json::to_value(&dag.trigger).ok()
                         });
+                        if let Some(kind) = dag.trigger.kind() {
+                            sqlx::query(sql(backend, SWITCH))
+                                .bind(dag.id.as_str())
+                                .bind(kind)
+                                .bind(*pause)
+                                .bind(new_trigger)
+                                .bind(&now)
+                                .execute(&mut *tx)
+                                .await?;
+                        } else {
+                            sqlx::query(sql(backend, NO_SWITCH))
+                                .bind(dag.id.as_str())
+                                .execute(&mut *tx)
+                                .await?;
+                        }
                         sqlx::query(sql(backend, CURRENT))
                             .bind(dag.id.as_str())
                             .bind(parse_id)
-                            .bind(*pause)
-                            .bind(&now)
-                            .bind(new_trigger)
                             .execute(&mut *tx)
                             .await?;
                     }
@@ -742,6 +773,10 @@ impl Database {
                             .await?;
                         sqlx::query(sql(backend, CONFLICT))
                             .bind(to_json(places))
+                            .bind(dag_id.as_str())
+                            .execute(&mut *tx)
+                            .await?;
+                        sqlx::query(sql(backend, CONFLICT_SWITCH))
                             .bind(*pause)
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
@@ -750,6 +785,10 @@ impl Database {
                     DagChange::Remove { dag_id } => {
                         sqlx::query(sql(backend, REMOVE))
                             .bind(&now)
+                            .bind(dag_id.as_str())
+                            .execute(&mut *tx)
+                            .await?;
+                        sqlx::query(sql(backend, REMOVE_SWITCH))
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;

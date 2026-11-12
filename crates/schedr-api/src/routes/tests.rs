@@ -168,7 +168,11 @@ async fn dags_are_listed_and_read() {
     let (status, body) = get(&app, "/api/v1/dags").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["dags"][0]["dag_id"], "sync");
-    assert_eq!(body["dags"][0]["paused"], true);
+    assert_eq!(
+        body["dags"][0]["trigger_state"],
+        Json::Null,
+        "no trigger, no switch (decision 459)"
+    );
     let (status, body) = get(&app, "/api/v1/dags/sync").await;
     assert_eq!(
         (status, &body["location"]["path"]),
@@ -1582,8 +1586,8 @@ async fn one_dags_reads_dont_read_the_other_dags() {
         unreachable!("SQLite in memory")
     };
     sqlx::query(
-        "INSERT INTO dags (dag_id, paused, current_version_id, first_seen_at) \
-         VALUES ('other', 1, 'v-other', '2026-10-15T00:00:00.000000Z')",
+        "INSERT INTO dags (dag_id, current_version_id, first_seen_at) \
+         VALUES ('other', 'v-other', '2026-10-15T00:00:00.000000Z')",
     )
     .execute(pool)
     .await
@@ -2225,8 +2229,8 @@ async fn a_run_whose_dag_doesnt_read_is_an_error_naming_it_not_an_unmapped_dag()
     };
     // A version not read yet (the setup's is in the cache), with a field the model lost.
     for statement in [
-        "INSERT INTO dags (dag_id, paused, current_version_id, first_seen_at) \
-         VALUES ('other', 1, '01a1cc00-0000-7000-8000-000000000001', \
+        "INSERT INTO dags (dag_id, current_version_id, first_seen_at) \
+         VALUES ('other', '01a1cc00-0000-7000-8000-000000000001', \
          '2026-10-15T00:00:00.000000Z')",
         "INSERT INTO dag_versions (id, dag_id, parse_result_id, dag_json, created_at) \
          SELECT '01a1cc00-0000-7000-8000-000000000001', 'other', parse_result_id, \
@@ -2245,4 +2249,45 @@ async fn a_run_whose_dag_doesnt_read_is_an_error_naming_it_not_an_unmapped_dag()
     // The run itself still shows, its tasks' instances unknown.
     let (status, body) = get(&app, &format!("/api/v1/runs/{run_id}")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[test]
+fn a_poke_trigger_is_stuck_once_no_call_has_ended_for_three_everies_and_a_heartbeat() {
+    let task: schedr_model::Task = serde_json::from_value(json!({
+        "id": "found", "kind": "sensor", "mode": "poke", "every_ms": 10_000,
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576
+        },
+        "output_type": {"type": "any"}
+    }))
+    .unwrap();
+    let at = |s: i64| {
+        "2026-10-15T01:00:00Z"
+            .parse::<Timestamp>()
+            .unwrap()
+            .checked_add(jiff::SignedDuration::from_secs(s))
+            .unwrap()
+    };
+    let record = schedr_db::triggers::TriggerRecord {
+        started_at: Some(at(0)),
+        last_poked_at: Some(at(20)),
+        ..Default::default()
+    };
+    let heartbeat = std::time::Duration::from_secs(10);
+    // From the last call's end, 30 s and a 10 s heartbeat.
+    assert!(!poke_stuck(&task, &record, heartbeat, at(60)));
+    assert!(poke_stuck(&task, &record, heartbeat, at(61)));
+    // None ended yet: from its start.
+    let fresh = schedr_db::triggers::TriggerRecord {
+        started_at: Some(at(0)),
+        ..Default::default()
+    };
+    assert!(poke_stuck(&task, &fresh, heartbeat, at(41)));
+    // A long-running one can't be told.
+    let mut listening = task.clone();
+    if let schedr_model::TaskKind::Sensor { mode, .. } = &mut listening.kind {
+        *mode = schedr_model::SensorMode::Loop;
+    }
+    assert!(!poke_stuck(&listening, &record, heartbeat, at(3_600)));
 }

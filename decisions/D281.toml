@@ -5,9 +5,8 @@ status = "active"
 topic = "workers"
 section = "Identity and connection"
 summary = '''
-The agent closes a stream silent for the worker lease and ignores messages arriving after it. The
-master takes back unstarted assignments only after the lease; input fetches and first registration
-obey the same limit.
+The agent closes a stream silent for the worker lease and ignores messages arriving after it. Input fetches and first registration obey the same limit; the master takes an unstarted
+assignment back once the worker's messages show it never started it (decision 460).
 '''
 history = "archive/PROJECT.md#D281"
 step = "M4.8z"

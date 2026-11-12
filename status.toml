@@ -1,14 +1,14 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-11
+updated = 2026-11-12
 
 in_progress = [
-    "Release 1.0.0 being prepared (the user, 2026-11-11: rc1 rehearsal then stop for the go on v1.0.0; major bumps; protocol 1.0 and Stable; R1.0b before the tag; all open bugs fixed, B39/B38 to M6). Done 2026-11-11: M4B, stress after M4B (N2), the open bugs (batches A, B, D, each reviewed by Grok), the slim image (R1.0a) and the glibc images (R1.0c, D454, PGDG's pg_dump 18): built and smoke-tested, both steps done when pushed with 1.0.0. Next: R1.0b, the upgrades, the version work, a Grok review, then v1.0.0rc1.",
-    "A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user.",
+    "Release 1.0.0 (the user, 2026-11-12: rc2 is mandatory, then v1.0.0 without asking if nothing breaks and nothing is to decide). rc1 published and smoke-tested. Uncommitted in main, to go as two commits after Grok's paranoid review (d2836aa9, worktree schedr-grok-b240) and `make check`: B240/D460 (protocol 2.0, numbered messages with an echo, no start deadline) and D459 + D461 (the trigger switch in `dag_triggers`, tables renamed, `trigger_state`; one row of actions, Restart for stopped, failing or stuck). Integration suite clean on both (289/289) before D461; the user approved the UI and the docs. Then push, CI, a nightly-style stress run, rc2, v1.0.0.",
+    "A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.",
     "For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).",
     "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",
-    "M5.0a-e (the start path after M4B's regression in assigned->started p99, the user's choice): after 1.0.0, profile first.",
+    "After 1.0.0: M5.0a-e (the start path after M4B's regression in assigned->started p99, profile first); an idea (the user, 2026-11-12, left for later): a Status block on the deployment page from what that page already fetches (masters, workers by state, slots in use, problems), no Prometheus scraping (no process records its ops address).",
 ]
 
 waiting = []
@@ -23,6 +23,6 @@ rules = [
 ]
 
 colleagues = """
-Codex at 98% of its week (resets Sat 14 Nov 21:47). Grok reset early (the user, 2026-11-11: 22%), its rounds since about 6%; its script's week figure counts from Friday and is wrong now. Usage logs in the skills' `USAGE.md`."""
+Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 64% by its script on 2026-11-12 (the user confirmed 62% earlier that day). Usage logs in the skills' `USAGE.md`."""
 
 resume = "claude --resume e45442ad-3ec7-4bce-9d45-b6191e505a11"

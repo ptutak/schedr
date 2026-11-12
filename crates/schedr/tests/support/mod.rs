@@ -487,10 +487,9 @@ impl Cluster {
         });
     }
 
-    /// Unpauses `chain`, triggers a run for a past day, and waits until it succeeds.
+    /// Triggers a run of `chain` (no trigger, so nothing to unpause: decision 459) for a past
+    /// day, and waits until it succeeds.
     pub fn run_chain(&self) {
-        let (code, _, err) = self.cli(&["dags", "unpause", "chain"]);
-        assert_eq!(code, 0, "{err}\n{}", self.logs());
         let (code, out, err) = self.cli(&["runs", "trigger", "chain", "--for", "2026-10-15"]);
         assert_eq!(code, 0, "{err}\n{}", self.logs());
         assert!(out.contains("triggered run"), "{out}");
@@ -518,17 +517,24 @@ impl Cluster {
             .then(|| serde_json::from_slice(&output.stdout).unwrap())
     }
 
-    /// Unpauses `dag`, triggers it, and returns the run's ID.
+    /// Unpauses `dag`'s trigger if it has one (decision 459: a run by hand starts either way, and
+    /// a DAG without one has no switch), triggers it, and returns the run's ID.
     pub fn trigger(&self, dag: &str) -> String {
+        let mut paused = false;
         self.wait(&format!("DAG `{dag}`"), || {
             self.cli_json(&["dags", "list"]).is_some_and(|dags| {
-                dags["dags"]
-                    .as_array()
-                    .is_some_and(|d| d.iter().any(|x| x["dag_id"] == dag))
+                dags["dags"].as_array().is_some_and(|d| {
+                    d.iter().find(|x| x["dag_id"] == dag).is_some_and(|x| {
+                        paused = x["trigger_state"] == "paused";
+                        true
+                    })
+                })
             })
         });
-        let (code, _, err) = self.cli(&["dags", "unpause", dag]);
-        assert_eq!(code, 0, "{err}");
+        if paused {
+            let (code, _, err) = self.cli(&["dags", "unpause", dag]);
+            assert_eq!(code, 0, "{err}");
+        }
         let command = self
             .cli_json(&["runs", "trigger", dag])
             .unwrap_or_else(|| panic!("`runs trigger {dag}` failed\n{}", self.logs()));
@@ -577,6 +583,21 @@ impl Cluster {
                 ("SCHEDR_CONFIG__WORKER__ID", id),
                 ("SCHEDR_CONFIG__WORKER__QUEUES", queues),
             ],
+        );
+    }
+}
+
+impl Cluster {
+    /// Sends `signal` (`STOP`, `CONT`) to a role: SIGSTOP freezes it, as a stalled machine or
+    /// a paused VM would.
+    pub fn signal(&self, name: &str, signal: &str) {
+        let role = self.roles.iter().find(|r| r.name == name).unwrap();
+        assert!(
+            Command::new("kill")
+                .args(["-s", signal, &role.child.id().to_string()])
+                .status()
+                .unwrap()
+                .success()
         );
     }
 }

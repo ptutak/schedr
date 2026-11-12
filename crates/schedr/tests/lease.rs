@@ -221,6 +221,7 @@ async fn a_registration_finishing_after_shutdown_is_refused() {
             slots: 1,
             ..Default::default()
         })),
+        clock: Some(pb::WorkerClock::default()),
     })
     .await
     .unwrap();

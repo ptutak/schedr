@@ -62,9 +62,9 @@ pub(crate) use event_wait::event_value;
 #[cfg(test)]
 mod tests;
 
-/// How long a worker has to report `Started` after an assignment, by default; the master uses
-/// the worker lease (decision 281, [`Dispatcher::with_start_timeout`]).
-pub const START_TIMEOUT: SignedDuration = SignedDuration::from_secs(10);
+/// The worker lease, by default: how long a replaced incarnation's attempts are held
+/// (decision 443); the master uses its own ([`Dispatcher::with_lease`]).
+pub const DEFAULT_LEASE: SignedDuration = SignedDuration::from_secs(10);
 
 /// How long a task whose assignment failed on its own is left out of the rounds before it is
 /// tried again, unless set otherwise (see [`Dispatcher::assign_into`]).
@@ -107,8 +107,9 @@ pub enum KeptResults {
 /// How a commit cut off by the time limit or a lost connection is read back: whether the work
 /// is stored, checked at once, then every `interval` for up to `window`, since a server slow
 /// enough to have cut it off may still be committing it (`read_back_window`,
-/// `read_back_interval`). Never seen meanwhile: not stored (a stored round's attempts are
-/// taken back after the start timeout and run again). The master holds its lock meanwhile:
+/// `read_back_interval`). Never seen meanwhile: not stored (a stored round's attempts then
+/// never left the master: taken back with their worker's return or loss, B240). The master
+/// holds its lock meanwhile:
 /// only after a commit cut off, a database incident.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadBack {
@@ -268,8 +269,9 @@ impl DispatchError {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Weakened {
-    /// No grace past an assignment's `start_by` (decision 450).
-    StartGrace,
+    /// An attempt not known unstarted counts as never started (B240): a `Started` held up on
+    /// its way is missed.
+    Echo,
     /// A replaced incarnation's attempts end at once, with no hold (decision 443).
     Hold,
     /// A lost worker's cleanup moves at once (decisions 256 and 445).
@@ -317,17 +319,12 @@ pub struct Dispatcher {
     set_aside_for: SignedDuration,
     /// How long a lost worker's cleanup waits before it moves (decision 256).
     cleanup_move_wait: SignedDuration,
-    /// How long a worker has to report `Started` before its assignment is taken back.
-    start_timeout: SignedDuration,
-    /// How long past an assignment's `start_by` the master still waits for its `Started`
-    /// (decision 450: two heartbeat intervals), the worker refusing to start it two before.
-    start_grace: SignedDuration,
+    /// The worker lease: how long a replaced incarnation's attempts are held (decision 443).
+    lease: SignedDuration,
+    /// An attempt not known unstarted counts as never started ([`Weakened::Echo`]).
+    trust_unknown: bool,
     /// Master time, which its timers count on (B228; see [`crate::clock`]).
     steady: crate::clock::Steady,
-    /// When each unstarted assignment was stored, in master time: it is taken back a start
-    /// timeout after that (B228), the deadline it was sent with. One this master didn't store
-    /// (after a restart) counts from when it first sees it: later, never earlier.
-    unstarted_since: BTreeMap<String, Timestamp>,
     /// When each cleanup waiting to move may go to another worker, in master time (D256, B228);
     /// after a restart, a whole wait from when it is first seen.
     move_not_before: BTreeMap<String, Timestamp>,
@@ -337,11 +334,6 @@ pub struct Dispatcher {
     replaced_since: BTreeMap<String, Timestamp>,
     /// No hold for a replaced incarnation's attempts ([`Weakened::Hold`]).
     no_hold: bool,
-    /// A lost worker's attempts it was never heard starting, of tasks whose cleanup may move,
-    /// and when each may be taken back, in master time (B234): it may have started one, its
-    /// `Started` held up, and be stopping it, so each waits as a started one's cleanup would
-    /// before it moves. After a restart, an ordinary expiry from when it is first seen.
-    lost_unstarted: BTreeMap<String, Timestamp>,
     /// How far behind its cursor an event sensor reads back, for an event committed late
     /// (B185; the triggers' `event_lookback`).
     event_lookback: SignedDuration,
@@ -380,8 +372,6 @@ pub struct Memory {
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
     stops: Vec<Outgoing>,
     active: Active,
-    /// A lost worker's attempts waiting to be taken back (B234): a rolled-back loss keeps none.
-    lost_unstarted: BTreeMap<String, Timestamp>,
 }
 
 /// What a write did to an attempt, for a commit cut off to be read back by.
@@ -459,14 +449,12 @@ impl Dispatcher {
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
                 .unwrap_or(SignedDuration::MAX),
-            start_timeout: START_TIMEOUT,
-            start_grace: SignedDuration::ZERO,
+            lease: DEFAULT_LEASE,
+            trust_unknown: false,
             steady: crate::clock::as_given,
-            unstarted_since: BTreeMap::new(),
             move_not_before: BTreeMap::new(),
             replaced_since: BTreeMap::new(),
             no_hold: false,
-            lost_unstarted: BTreeMap::new(),
             event_lookback: SignedDuration::from_mins(1),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
                 .unwrap_or(SignedDuration::MAX),
@@ -524,7 +512,6 @@ impl Dispatcher {
             code_missing: self.code_missing.clone(),
             stops: self.stops.clone(),
             active: self.active.clone(),
-            lost_unstarted: self.lost_unstarted.clone(),
         }
     }
 
@@ -559,7 +546,6 @@ impl Dispatcher {
         self.code_missing = memory.code_missing;
         self.stops = memory.stops;
         self.active = memory.active;
-        self.lost_unstarted = memory.lost_unstarted;
     }
 
     /// The attempts a `CancelAttempt` is queued for, sent at the next step (for the
@@ -592,21 +578,11 @@ impl Dispatcher {
         self
     }
 
-    /// The dispatcher taking back an assignment with no `Started` after `timeout`: the worker
-    /// lease, so an assignment held on its way (a one-way cut) is never started after its task
-    /// ran elsewhere; the worker drops a stream silent for the lease (decision 281, B163).
+    /// The dispatcher holding a replaced incarnation's attempts for `lease`, the worker lease
+    /// (decision 443): the old process may run them that long.
     #[must_use]
-    pub fn with_start_timeout(mut self, timeout: Duration) -> Self {
-        self.start_timeout = SignedDuration::try_from(timeout).unwrap_or(SignedDuration::MAX);
-        self
-    }
-
-    /// The dispatcher taking an unstarted assignment back only `grace` after its `start_by`
-    /// (decision 450): a `Started` the worker sent just before its own reserve ran out has that
-    /// long to arrive on top. The deadline sent stays the start timeout's.
-    #[must_use]
-    pub fn with_start_grace(mut self, grace: Duration) -> Self {
-        self.start_grace = SignedDuration::try_from(grace).unwrap_or(SignedDuration::MAX);
+    pub fn with_lease(mut self, lease: Duration) -> Self {
+        self.lease = SignedDuration::try_from(lease).unwrap_or(SignedDuration::MAX);
         self
     }
 
@@ -614,7 +590,7 @@ impl Dispatcher {
     #[doc(hidden)]
     pub fn weaken(&mut self, safeguard: Weakened) {
         match safeguard {
-            Weakened::StartGrace => self.start_grace = SignedDuration::ZERO,
+            Weakened::Echo => self.trust_unknown = true,
             Weakened::Hold => self.no_hold = true,
             Weakened::MoveWait => self.cleanup_move_wait = SignedDuration::ZERO,
         }
@@ -738,7 +714,8 @@ impl Dispatcher {
             .collect();
     }
 
-    /// A worker's stream ended: no connections job goes to it until it registers again.
+    /// A worker's stream ended: no task, cleanup nor connections job goes to it until it
+    /// registers again.
     pub fn worker_disconnected(&mut self, worker_id: &str) {
         self.workers.disconnected(worker_id);
     }
@@ -1050,7 +1027,8 @@ impl Dispatcher {
         };
         // A commit cut off may have stored them all (they are one transaction): one of its new
         // attempts there means it did, and its messages go; none, or no answer, means it
-        // didn't (taken back; a stored one would expire after START_TIMEOUT).
+        // didn't (taken back; a stored one is taken back once the worker's echo shows it
+        // unstarted, B240).
         if matches!(error, DispatchError::Db(DbError::CommitUnknown))
             && self.stored(&outgoing[built..]).await
         {
@@ -1708,7 +1686,6 @@ impl Dispatcher {
             try_number,
             (inputs, outcomes, params),
         );
-        message.start_by_ms = Some(self.unstarted(&attempt_id, now));
         self.add_event(ready, &mut message).await?;
         self.keep_deadline(ready, task, &mut message, now).await?;
         let Some(message) = self.if_it_fits(ready, &attempt_id, message, now).await? else {
@@ -1756,16 +1733,10 @@ impl Dispatcher {
         Ok(Some(cancel(worker_id, &started.attempt_id)))
     }
 
-    /// An assignment stored at `now`: noted in master time for `expire`, and the master time
-    /// by which it must start (B225), from the same reading, so the deadline sent is the one
-    /// `expire` keeps.
-    fn unstarted(&mut self, attempt_id: &str, now: Timestamp) -> i64 {
-        let since = (self.steady)(now);
-        self.unstarted_since.insert(attempt_id.to_owned(), since);
-        since
-            .checked_add(self.start_timeout)
-            .unwrap_or(Timestamp::MAX)
-            .as_millisecond()
+    /// Whether `worker_id` surely never started `attempt_id`, as its messages' echo says
+    /// ([`crate::core::Arrivals::never_started`], B240).
+    fn never_started(&self, worker_id: &str, attempt_id: &str) -> bool {
+        self.trust_unknown || self.arrivals.never_started(worker_id, attempt_id)
     }
 
     /// Times this dispatcher on `steady` (see [`crate::clock`]).
@@ -2427,27 +2398,23 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// Takes back assignments with no `Started` within the start timeout: they end
-    /// `assignment_expired` and their tasks run again without using a retry. One whose
-    /// `Started` arrived but waits for a busy master isn't taken back: the task did start
-    /// (B11); nor one whose worker may come back with it (F14). Returns how many.
+    /// Takes back assignments the worker's echo shows it never started (B240): a message from
+    /// it named the assignment's number as handled, with no `Started` (or `Finished`) before.
+    /// They end `assignment_expired` and their tasks run again without using a retry; a moved
+    /// cleanup never started goes on waiting for another worker. One not known unstarted
+    /// stays: its worker hasn't handled it yet (it does, in order), or its lease runs out
+    /// ([`Self::worker_lost`] decides), or it registers again (its journal decides,
+    /// [`Self::unreported_unstarted`]). Returns how many attempts ended.
     ///
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn expire(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
-        // On master time (B228): each unstarted assignment counts from when this master first
-        // saw it, never from a stored wall-clock time. All of them are read (no more than the
-        // workers' slots), and at most so many end a round (several writes each, B18).
-        let steady = (self.steady)(now);
         // Adopted attempts whose start wasn't recorded are kept while a worker holds them.
         let workers = &self.workers;
         self.adopted_unrecorded
             .retain(|attempt| workers.all().any(|w| w.attempts.contains(attempt)));
-        // Nor those of a worker that may come back (F14): it may have run the task and
-        // finished, the `Started` lost with the old master or stream; its journal says so when
-        // it registers. Its lease run out, it is lost and they end with it. Left out by the
-        // query.
+        // Nor those of a worker that may come back (F14): nothing of its stream is known.
         let coming_back = self.may_come_back();
         let unstarted = self
             .db
@@ -2457,15 +2424,6 @@ impl Dispatcher {
             .db
             .unstarted_cleanups(Timestamp::MAX, &coming_back, u32::MAX)
             .await?;
-        let seen: BTreeSet<&str> = unstarted
-            .iter()
-            .chain(&cleanups)
-            .map(|attempt| attempt.id.as_str())
-            .collect();
-        self.unstarted_since
-            .retain(|id, _| seen.contains(id.as_str()));
-        self.lost_unstarted
-            .retain(|id, _| seen.contains(id.as_str()));
         let mut expired = Vec::new();
         let mut taken_back = Vec::new();
         for (attempt, cleanup) in unstarted
@@ -2473,54 +2431,22 @@ impl Dispatcher {
             .map(|a| (a, false))
             .chain(cleanups.into_iter().map(|a| (a, true)))
         {
-            let since = *self
-                .unstarted_since
-                .entry(attempt.id.clone())
-                .or_insert(steady);
-            // Its `Started` is here, waiting its turn, or it was adopted though that couldn't
-            // be recorded (batch A's review): the worker has it.
-            let timeout = self.start_timeout.saturating_add(self.start_grace);
-            let waits = if let Some(not_before) = self.lost_unstarted.get(&attempt.id) {
-                steady < *not_before
-            } else {
-                let waited = steady.duration_since(since);
-                // One whose cleanup may move waits at least the move wait past the start
-                // timeout, as one taken back from a lost worker does: after a restart,
-                // which forgets that wait, counting from when this master first saw it,
-                // after the loss (Grok's review of B234). Looked up only past the timeout.
-                waited <= timeout
-                    || (waited <= self.start_timeout.saturating_add(self.cleanup_move_wait)
-                        && self
-                            .task_cleanup(&attempt)
-                            .await?
-                            .is_some_and(|wanted| wanted.anywhere))
-            };
-            if waits
-                || self.arrivals.start_waiting(&attempt.id)
-                || self.adopted_unrecorded.contains(&attempt.id)
+            if self.adopted_unrecorded.contains(&attempt.id)
+                || !self.never_started(&attempt.worker_id, &attempt.id)
             {
                 continue;
             }
             if cleanup {
-                // A moved cleanup never started goes on waiting.
                 taken_back.push(attempt);
             } else if expired.len() < EXPIRIES_PER_ROUND {
                 expired.push(attempt);
             }
         }
         for attempt in &taken_back {
-            self.unstarted_since.remove(&attempt.id);
             self.take_back_cleanup(attempt, now).await?;
         }
         for attempt in &expired {
-            let end = AttemptEnd {
-                // Its worker lost before it was heard starting it (B234).
-                error_summary: self
-                    .lost_unstarted
-                    .remove(&attempt.id)
-                    .map(|_| not_started_summary(&attempt.worker_id)),
-                ..AttemptEnd::by_master(AttemptStatus::AssignmentExpired)
-            };
+            let end = AttemptEnd::by_master(AttemptStatus::AssignmentExpired);
             let result = by_master(AttemptStatus::AssignmentExpired);
             // Whole or not at all, memory with it (B49): ending the attempt and moving its
             // task are separate writes, and the slot is freed in memory before them.
@@ -2530,13 +2456,16 @@ impl Dispatcher {
         Ok(expired.len())
     }
 
-    /// A worker's agent restarted (a new incarnation): the attempts it had started and doesn't
-    /// report in its journal are marked, and end `lost` with a `WorkerRestarted` error
-    /// summary once the old incarnation's lease is over in master time (decision 443, B230:
-    /// the old process may still run them meanwhile; see [`Self::end_replaced`]), each using a
-    /// retry, as for a lost worker (the crash may have been the task's own; see
-    /// archive/PROJECT.md, Worker lifecycle). Attempts it hadn't started yet are left to expire
-    /// without using a retry. Returns how many were marked.
+    /// A worker's agent restarted (a new incarnation), before its stream replaces the old
+    /// one's: the attempts the old process may run and the new one doesn't report are marked,
+    /// and end `lost` with a `WorkerRestarted` error summary once the old incarnation's lease
+    /// is over in master time (decision 443, B230: the old process may still run them
+    /// meanwhile; see [`Self::end_replaced`]), each using a retry, as for a lost worker (the
+    /// crash may have been the task's own; see archive/PROJECT.md, Worker lifecycle). Those
+    /// are the started ones, and the unstarted ones the old stream's echo doesn't show it
+    /// never started (B240: its `Started` may have been lost with its stream). Those it shows
+    /// never started are taken back now, without using a retry; a moved cleanup among them
+    /// waits for another worker. Returns how many were marked.
     ///
     /// # Errors
     ///
@@ -2547,16 +2476,20 @@ impl Dispatcher {
         reported: &BTreeSet<&str>,
         now: Timestamp,
     ) -> Result<usize, DispatchError> {
-        let left: Vec<String> = self
-            .db
-            .open_attempts(Some(worker_id))
-            .await?
-            .into_iter()
-            // A moved cleanup assigned here and not started yet isn't the old process's: its
-            // own start timeout takes it back (Grok's review).
-            .filter(|a| a.started && !a.moving && !reported.contains(a.id.as_str()))
-            .map(|a| a.id)
-            .collect();
+        let mut left = Vec::new();
+        let mut never = Vec::new();
+        for attempt in self.db.open_attempts(Some(worker_id)).await? {
+            if reported.contains(attempt.id.as_str()) {
+                continue;
+            }
+            // Not started here: the task never heard starting, or a moved cleanup assigned
+            // here and not started (the task's own start was elsewhere).
+            if (!attempt.started || attempt.moving) && self.never_started(worker_id, &attempt.id) {
+                never.push(attempt);
+            } else {
+                left.push(attempt.id);
+            }
+        }
         self.db.mark_replaced(&left, now).await?;
         let since = (self.steady)(now);
         for attempt_id in &left {
@@ -2564,32 +2497,62 @@ impl Dispatcher {
                 .entry(attempt_id.clone())
                 .or_insert(since);
         }
-        // One never heard starting, whose cleanup may move: the old process may have started
-        // it, its `Started` lost with its stream, and be stopping it. Taken back only once its
-        // cutoff (a lease after the master's last word, no later than this registration) and
-        // its stop (the move wait) are over (Grok's review of B234).
+        for attempt in &never {
+            self.take_back_unstarted(attempt, now).await?;
+        }
+        Ok(left.len())
+    }
+
+    /// Takes back `attempt`, which its worker never started (B240): a moved cleanup waits for
+    /// another worker; a task's attempt ends `assignment_expired`, its task queued again
+    /// without using a retry (B17).
+    async fn take_back_unstarted(
+        &mut self,
+        attempt: &StoredAttempt,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        if attempt.moving {
+            return self.take_back_cleanup(attempt, now).await;
+        }
+        let status = AttemptStatus::AssignmentExpired;
+        let end = AttemptEnd {
+            error_summary: Some(not_started_summary(&attempt.worker_id)),
+            ..AttemptEnd::by_master(status)
+        };
+        // Whole or not at all, memory with it (B49).
+        self.whole(async |dispatcher| {
+            dispatcher
+                .record(attempt, &end, &by_master(status), now)
+                .await
+        })
+        .await
+    }
+
+    /// The same process registered again (a stream broken, the worker running on): its
+    /// journal holds every assignment it accepted, so one not started and not in it never
+    /// started there, and is taken back now (B240; what its old stream still carries, it
+    /// drops). Returns how many.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn unreported_unstarted(
+        &mut self,
+        worker_id: &str,
+        reported: &BTreeSet<&str>,
+        now: Timestamp,
+    ) -> Result<usize, DispatchError> {
         let unstarted: Vec<StoredAttempt> = self
             .db
             .open_attempts(Some(worker_id))
             .await?
             .into_iter()
-            .filter(|a| !a.started && !a.moving && !reported.contains(a.id.as_str()))
+            .filter(|a| (!a.started || a.moving) && !reported.contains(a.id.as_str()))
             .collect();
-        let not_before = since
-            .checked_add(self.start_timeout)
-            .and_then(|at| at.checked_add(self.cleanup_move_wait))
-            .unwrap_or(Timestamp::MAX);
-        for attempt in unstarted {
-            if self
-                .task_cleanup(&attempt)
-                .await?
-                .is_some_and(|wanted| wanted.anywhere)
-            {
-                let armed = self.lost_unstarted.entry(attempt.id).or_insert(not_before);
-                *armed = (*armed).max(not_before);
-            }
+        for attempt in &unstarted {
+            self.take_back_unstarted(attempt, now).await?;
         }
-        Ok(left.len())
+        Ok(unstarted.len())
     }
 
     /// The attempts `worker_id`'s journal reports at its registration: alive there, none of
@@ -2641,12 +2604,24 @@ impl Dispatcher {
                 .replaced_since
                 .entry(attempt_id.clone())
                 .or_insert(steady);
-            if !self.no_hold && steady.duration_since(since) < self.start_timeout {
+            if !self.no_hold && steady.duration_since(since) < self.lease {
                 continue;
             }
             let Some(attempt) = self.db.attempt(&attempt_id).await? else {
                 continue;
             };
+            // A moved cleanup never heard starting there: the old process has stopped, so it
+            // waits for another worker again, no move used (Grok's review of decision 443: ended
+            // `lost` with no move left, it never ran).
+            if attempt.moving {
+                self.db
+                    .clear_replaced(std::slice::from_ref(&attempt.id))
+                    .await?;
+                self.take_back_cleanup(&attempt, now).await?;
+                self.replaced_since.remove(&attempt_id);
+                ended += 1;
+                continue;
+            }
             let summary = restarted_summary(&attempt.worker_id);
             // `end_lost` clears the mark with it: a cleanup moved stays open, and mustn't be
             // moved again a lease later (Grok's review).
@@ -2705,28 +2680,27 @@ impl Dispatcher {
         self.workers.remove(worker_id);
         self.away.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
-            if attempt.started {
+            if attempt.started && !attempt.moving {
                 self.end_lost(&attempt, lost_summary(worker_id), results, now)
                     .await?;
                 continue;
             }
-            // One whose cleanup may move may have started there, its `Started` held up as the
-            // worker was cut off, which is stopping it: taken back once the wait a started
-            // one's cleanup gets is over, by `expire` (B234).
-            if self
-                .task_cleanup(&attempt)
-                .await?
-                .is_some_and(|wanted| wanted.anywhere)
-            {
-                let not_before = (self.steady)(now)
-                    .checked_add(self.cleanup_move_wait)
-                    .unwrap_or(Timestamp::MAX);
-                self.lost_unstarted.insert(attempt.id.clone(), not_before);
+            // Not heard starting: if the worker said it had handled the assignment and no start
+            // came before, it never started there (B240). Otherwise it may run there, its
+            // `Started` held up on the way (a one-way cut): as a started one, `lost` using a
+            // retry, its cleanup moving if it may (B234), the worker running on with an
+            // ordinary task (decision 252).
+            if !self.never_started(worker_id, &attempt.id) {
+                self.end_lost(&attempt, maybe_started_summary(worker_id), results, now)
+                    .await?;
                 continue;
             }
-            // Any other it never started (sent as it began draining, say) never ran there, or
-            // runs on there whatever happens (decision 252): taken back like an expired
-            // assignment, queued again without using a retry (B17).
+            // A moved cleanup never started there waits for another worker.
+            if attempt.moving {
+                self.take_back_cleanup(&attempt, now).await?;
+                continue;
+            }
+            // Taken back like an expired assignment, queued again without using a retry (B17).
             let status = AttemptStatus::AssignmentExpired;
             let end = AttemptEnd {
                 error_summary: Some(not_started_summary(worker_id)),
@@ -2935,13 +2909,9 @@ impl Dispatcher {
             if !self.db.assign_cleanup(&attempt_id, &worker_id, now).await? {
                 continue;
             }
-            // One reading of master time for its deadline and its expiry, before the reads
-            // that build its message (Grok's review of D442).
-            let start_by = self.unstarted(&attempt_id, now);
-            let mut message = self
+            let message = self
                 .cleanup_message(&ready, &worker_id, &attempt_id)
                 .await?;
-            message.start_by_ms = Some(start_by);
             self.workers.reserve(&worker_id, &attempt_id, now);
             outgoing.push(Outgoing {
                 worker_id,
@@ -3565,8 +3535,6 @@ impl Dispatcher {
             cleanup_only: None,
             resource_cleanup: ready.dag.resource_of_cleanup(&ready.task_id).is_some(),
             first_started: None,
-            // Set by who sends it, from when it was stored (`Self::start_by`).
-            start_by_ms: None,
         }
     }
 }
@@ -3749,6 +3717,16 @@ fn not_started_summary(worker_id: &str) -> String {
     )
 }
 
+fn maybe_started_summary(worker_id: &str) -> String {
+    ErrorSummary::json(
+        "WorkerLost",
+        &format!(
+            "worker `{worker_id}` stopped answering after the attempt was sent to it, and may \
+             have started it (its start not heard)"
+        ),
+    )
+}
+
 fn lost_summary(worker_id: &str) -> String {
     ErrorSummary::json(
         "WorkerLost",
@@ -3782,6 +3760,7 @@ pub(crate) fn too_big_to_send(message: &pb::MasterMessage, limit: usize) -> Opti
         heard_sequence: u64::MAX,
         wall_ms: i64::MIN,
         lease_epoch: i64::MIN,
+        sequence: u64::MAX,
     });
     let size = prost::Message::encoded_len(message)
         + stamp.map_or(0, |clock| {

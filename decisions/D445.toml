@@ -8,7 +8,7 @@ summary = '''
 After a worker lease without word from the master, the worker stops its tasks with
 `cleanup_anywhere` at the earlier of two moments: a lease after the last message it received
 (decision 252), and when master time may have passed the last stamp's master time plus the
-lease, by the same bound as a start deadline. Never later than before. Not chosen: master time
+lease, by the worker's bound of master time (decision 442). Never later than before. Not chosen: master time
 only; leaving the cutoff on receipt.
 '''
 history = "JOURNAL.md#D445"

@@ -35,6 +35,9 @@ pub struct ApiState {
     pub metrics: ApiMetrics,
     /// How long a connection test may take when its request doesn't say.
     pub connection_test_timeout: std::time::Duration,
+    /// The workers' heartbeat interval: a poke trigger whose last call ended longer ago than
+    /// three times its `every` plus this is stuck.
+    pub heartbeat_interval: std::time::Duration,
     /// What changed, for `GET /api/v1/changes`.
     pub feed: Feed,
     /// The largest posted event's data (`[events] max_size`).
@@ -59,6 +62,8 @@ impl ApiState {
             logs: Arc::new(HttpLogSource::new(None)),
             metrics: ApiMetrics::default(),
             connection_test_timeout: crate::routes::CONNECTION_TEST_TIMEOUT,
+            // The configuration's default; the webserver passes its own.
+            heartbeat_interval: std::time::Duration::from_secs(10),
             feed,
             max_event_size: crate::named_events::DEFAULT_MAX_EVENT_SIZE,
             node: Arc::new(crate::views::NodeView {
@@ -75,6 +80,15 @@ impl ApiState {
     pub fn with_connection_test_timeout(self, timeout: std::time::Duration) -> Self {
         Self {
             connection_test_timeout: timeout,
+            ..self
+        }
+    }
+
+    /// This state, judging a poke trigger stuck with `interval`, the workers' heartbeat.
+    #[must_use]
+    pub fn with_heartbeat_interval(self, interval: std::time::Duration) -> Self {
+        Self {
+            heartbeat_interval: interval,
             ..self
         }
     }

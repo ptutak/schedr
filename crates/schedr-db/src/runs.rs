@@ -131,7 +131,8 @@ impl RunOverview {
 /// A DAG the scheduler looks at: not removed, not in conflict, with a current version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveDag {
-    /// Whether it is paused (no new scheduled runs; queued runs still start).
+    /// Whether its trigger is paused (no new scheduled runs; queued runs still start), or it
+    /// has none (decision 459).
     pub paused: bool,
     /// Why it is held, when the file defining it fails to import in its root's current parse
     /// (decision 72): no run is created or started, and manual triggers are refused.
@@ -594,8 +595,10 @@ impl Database {
         dags: &[&DagId],
     ) -> Result<(), DbError> {
         let text = format!(
-            "SELECT d.paused, {{ts<}}d.first_seen_at{{>ts}}, d.current_version_id{{text}} \
-             FROM dags d WHERE d.current_version_id IS NOT NULL \
+            "SELECT COALESCE(t.paused, TRUE), {{ts<}}d.first_seen_at{{>ts}}, \
+             d.current_version_id{{text}} \
+             FROM dags d LEFT JOIN dag_triggers t ON t.dag_id = d.dag_id \
+             WHERE d.current_version_id IS NOT NULL \
              AND d.removed_at IS NULL AND d.conflict IS NULL{} ORDER BY d.dag_id",
             among("d.dag_id", dags.len())
         );

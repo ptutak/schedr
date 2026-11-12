@@ -215,7 +215,6 @@ cli runs list daily_report | grep -q success || { k logs schedr-0 -c schedr --ta
 cli runs list daily_report
 
 say "a drain under the mesh: SIGTERM while a task runs; its result still reaches Postgres"
-cli dags unpause slow
 RUN=$("$SCHEDR_BIN" runs trigger slow --server "$GATEWAY" --token "$GOOD" --json \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["run_id"])')
 attempts() { api "/api/v1/runs/$RUN/tasks/nap/attempts"; }

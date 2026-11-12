@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D340"
 step = "M4.11a3"
 also = ["cleanup", "wait-steps"]
 code = ["crates/schedr/src/cli.rs", "crates/schedr-api/src/routes.rs::list_run_resources", "crates/schedr-api/src/routes.rs::list_switched_off_sensors"]
-checked = 2026-11-11
+checked = 2026-11-12

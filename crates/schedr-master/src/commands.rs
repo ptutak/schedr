@@ -276,6 +276,27 @@ impl Commander {
         })))
     }
 
+    /// Pauses or unpauses a DAG's trigger at `now` (decision 459); refused without one: pausing
+    /// changes nothing of its manual runs.
+    async fn switch(
+        &self,
+        dag_id: &DagId,
+        paused: bool,
+        now: Timestamp,
+    ) -> Result<Option<Outcome>, CommandError> {
+        if self.db.stored_dag(dag_id).await?.is_none() {
+            return Ok(Some(no_dag(dag_id)));
+        }
+        // Gone between the two (a parse dropping its trigger): refused the same.
+        if self.db.set_paused_at(dag_id, paused, now).await? {
+            return Ok(None);
+        }
+        Ok(Some(Outcome::Rejected(format!(
+            "DAG `{dag_id}` has no trigger: it runs only when started, so pausing changes \
+             nothing (cancel its runs with `schedr runs cancel`)"
+        ))))
+    }
+
     /// Starts a DAG's trigger again; a DAG without one is refused.
     async fn restart_trigger(&self, dag_id: &DagId) -> Result<Outcome, CommandError> {
         let Some(dag) = self.db.stored_dag(dag_id).await? else {
@@ -409,8 +430,8 @@ impl Commander {
                 dag_id,
                 cancel_runs,
             } => {
-                if !self.db.set_paused_at(dag_id, true, now).await? {
-                    return Ok(no_dag(dag_id));
+                if let Some(refused) = self.switch(dag_id, true, now).await? {
+                    return Ok(refused);
                 }
                 let mut cancelled = Vec::new();
                 if *cancel_runs {
@@ -422,8 +443,8 @@ impl Commander {
                 Ok(Outcome::Applied(json!({"cancelled_runs": cancelled})))
             }
             Command::UnpauseDag { dag_id } => {
-                if !self.db.set_paused_at(dag_id, false, now).await? {
-                    return Ok(no_dag(dag_id));
+                if let Some(refused) = self.switch(dag_id, false, now).await? {
+                    return Ok(refused);
                 }
                 Ok(Outcome::Applied(json!({})))
             }

@@ -177,7 +177,7 @@ impl Database {
     ) -> Result<Option<NamedEvent>, DbError> {
         let query = format!(
             "SELECT {COLUMNS} FROM named_events n WHERE n.name = $1 AND n.posted_at >= $2{{ts}} \
-             AND NOT EXISTS (SELECT 1 FROM trigger_passed p WHERE p.dag_id = $3 \
+             AND NOT EXISTS (SELECT 1 FROM trigger_progress_passed p WHERE p.dag_id = $3 \
              AND p.item = n.id{{text}}) ORDER BY n.posted_at, n.id LIMIT 1"
         );
         let found: Option<Row> = on_pool!(self, |pool, backend| {
@@ -204,11 +204,11 @@ impl Database {
         before: Timestamp,
     ) -> Result<u64, DbError> {
         // Its own few rows, each looked up by ID, not the name's whole history (Codex's review).
-        const FORGET: &str = "DELETE FROM trigger_passed WHERE dag_id = $1 AND EXISTS \
-            (SELECT 1 FROM named_events e WHERE e.id = trigger_passed.item{uuid} \
+        const FORGET: &str = "DELETE FROM trigger_progress_passed WHERE dag_id = $1 AND EXISTS \
+            (SELECT 1 FROM named_events e WHERE e.id = trigger_progress_passed.item{uuid} \
             AND e.name = $2 AND e.posted_at < $3{ts})";
         // Never read below again, however the lookback changes (Grok's review).
-        const FLOOR: &str = "UPDATE triggers SET passed_floor = $2{ts} WHERE dag_id = $1 \
+        const FLOOR: &str = "UPDATE trigger_progress SET passed_floor = $2{ts} WHERE dag_id = $1 \
             AND (passed_floor IS NULL OR passed_floor < $2{ts})";
         let forgotten = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, FLOOR))
@@ -233,7 +233,7 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or the time doesn't read.
     pub async fn passed_floor(&self, dag_id: &str) -> Result<Option<Timestamp>, DbError> {
-        const FLOOR: &str = "SELECT {ts<}passed_floor{>ts} FROM triggers WHERE dag_id = $1";
+        const FLOOR: &str = "SELECT {ts<}passed_floor{>ts} FROM trigger_progress WHERE dag_id = $1";
         let floor: Option<Option<String>> = on_pool!(self, |pool, backend| {
             sqlx::query_scalar(sql(backend, FLOOR))
                 .bind(dag_id)
@@ -242,7 +242,7 @@ impl Database {
         });
         floor
             .flatten()
-            .map(|at| parse_time("triggers.passed_floor", &at))
+            .map(|at| parse_time("trigger_progress.passed_floor", &at))
             .transpose()
     }
 

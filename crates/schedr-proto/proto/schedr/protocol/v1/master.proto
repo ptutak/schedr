@@ -48,6 +48,22 @@ message WorkerMessage {
     TriggerPoked trigger_poked = 15;
     ApiCall api_call = 16;
   }
+  // Its number, and what the worker had read of the master's messages (B240): every message
+  // carries it.
+  WorkerClock clock = 20;
+}
+
+// The worker's side of a stream's numbering, as `MasterClock`'s `sequence` and
+// `heard_sequence` are the master's (B240). No clock reading: the worker keeps its own.
+message WorkerClock {
+  // This message's number on the stream: the `Register` is 0, then 1, 2, ... The master's
+  // messages name the latest it had received (`MasterClock.heard_sequence`).
+  uint64 sequence = 1;
+  // The highest `MasterClock.sequence` of this stream the worker had handled when it sent this
+  // (0: none yet). What it sends while handling a message (a `Started` for an `AssignTask`)
+  // goes out before anything naming that message, so an assignment named here without a
+  // `Started` before it never started.
+  uint64 heard_sequence = 2;
 }
 
 // A REST request a task (or a trigger, a wait step) makes through its agent, with no URL or
@@ -171,9 +187,8 @@ message Heartbeat {
   repeated string running_attempt_ids = 2;
   uint32 free_watcher_slots = 3;
   repeated WatcherHost watcher_hosts = 4;
-  // Its number in the session, from 1 (the `Register` is 0), echoed by the master's messages'
-  // `clock.heard_sequence` (B225). 0 on a heartbeat: unnumbered (an older worker).
-  uint64 sequence = 6;
+  // Its number moved to `WorkerMessage.clock.sequence`, which numbers every message (B240).
+  reserved 6;
 }
 
 // A process running a worker's wait steps, or a code set whose hosts were lost: for people.
@@ -225,9 +240,9 @@ enum RejectReason {
   // The worker's code of the task's root isn't the hash the master expects (it hasn't synced
   // yet, or synced past it): "code not there yet".
   REJECT_REASON_CODE_MISMATCH = 10;
-  // The assignment came too late to start: past its `start_by_ms` (B225). Queued again at
-  // once, any worker (a moved cleanup set aside first, as for any rejection).
-  REJECT_REASON_TOO_LATE = 11;
+  // 11 was TOO_LATE, past an assignment's start deadline: gone with the deadline (protocol
+  // 2.0, B240).
+  reserved 11;
 }
 
 message Rejected {
@@ -377,9 +392,9 @@ message MasterClock {
   uint64 timeline = 1;
   // Master time, in milliseconds on that timeline.
   int64 master_ms = 2;
-  // The latest heartbeat `sequence` the master had from this worker's stream when it sent this
-  // (0: only its `Register`): the heartbeat was sent before this message, so the worker reads
-  // master time from it, conservatively.
+  // The latest `WorkerClock.sequence` the master had received on this worker's stream when
+  // it sent this (0: only its `Register`): that message was sent before this one, so the
+  // worker reads master time from it, conservatively (B225, B240).
   uint64 heard_sequence = 3;
   // The master's wall clock, Unix milliseconds: for a clock-skew warning only, never a
   // deadline.
@@ -388,6 +403,9 @@ message MasterClock {
   // an epoch ends a stream from a lower one, a deposed master's, and connects again. 0: no
   // lease (a test's master).
   int64 lease_epoch = 5;
+  // This message's number on the stream: `Registered` is 1, then 2, 3, ... (B240). The
+  // worker's messages name the latest it had handled (`WorkerClock.heard_sequence`).
+  uint64 sequence = 6;
 }
 
 // The answer to an `ApiCall`: the HTTP status and body the router gave, or the master's refusal
@@ -533,13 +551,9 @@ message AssignTask {
   // When the task's first try started, for a wait step tried again: `delay` counts from it
   // (M4.11g). Unset on its first try, which counts from its own start.
   google.protobuf.Timestamp first_started = 18;
-  // The master time (on the message's `clock.timeline`) by which the worker must start it: its
-  // start timeout from when the master stored it (B225). Past it the master may have taken it
-  // back and given it to another worker, so the worker doesn't start it (it rejects it as
-  // `TOO_LATE`); it reads master time conservatively from the clocks on the master's messages
-  // and keeps two heartbeat intervals for its `Started` to arrive (B227). Unset (an older
-  // master): no limit.
-  optional int64 start_by_ms = 19;
+  // 19 was `start_by_ms`, a start deadline in master time: the master takes an assignment back
+  // only once the worker's messages show it never started it (protocol 2.0, B240).
+  reserved 19;
 }
 
 message CleanupOnly {

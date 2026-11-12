@@ -76,7 +76,6 @@ fn assign(task: &serde_json::Value) -> pb::AssignTask {
         cleanup_only: None,
         resource_cleanup: false,
         first_started: None,
-        start_by_ms: None,
     }
 }
 

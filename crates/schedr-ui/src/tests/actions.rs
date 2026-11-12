@@ -366,6 +366,7 @@ async fn a_dag_without_a_trigger_has_nothing_to_pause_nor_to_backfill() {
     let mut manual = with_backfill();
     let mut sync = dag("sync", false);
     sync["trigger"] = json!({"kind": "none"});
+    sync["trigger_state"] = Value::Null;
     manual
         .answers
         .insert("/api/v1/dags/sync".to_owned(), (200, sync));
@@ -381,27 +382,6 @@ async fn a_dag_without_a_trigger_has_nothing_to_pause_nor_to_backfill() {
         attrs(&html, "table.backfills dialog form", "hx-post"),
         [format!("/d/etl/backfills/{BACKFILL}/cancel")]
     );
-}
-
-#[tokio::test]
-async fn a_paused_dag_without_a_trigger_has_nothing_to_unpause() {
-    // Paused before new code dropped its trigger, say: unpausing would change nothing.
-    let mut manual = with_backfill();
-    let mut sync = dag("sync", true);
-    sync["trigger"] = json!({"kind": "none"});
-    manual
-        .answers
-        .insert("/api/v1/dags/sync".to_owned(), (200, sync));
-    let app = ui(vec![deployment("etl", manual)]);
-    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
-    assert_eq!(texts(&html, ".actions > button.action"), ["Trigger"]);
-    assert_eq!(
-        attrs(&html, ".actions dialog form", "hx-post"),
-        ["/d/etl/dags/sync/trigger"],
-        "no unpause dialog"
-    );
-    // Its state is `manual`, not the paused flag it kept.
-    assert_eq!(texts(&html, "h1 .badge"), ["manual"]);
 }
 
 const BACKFILL: &str = "01a1c0a0-0000-7000-8000-000000000001";

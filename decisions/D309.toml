@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D309"
 step = "B169"
 also = ["runs", "observability"]
 code = ["crates/schedr-api/src/views.rs", "crates/schedr-db/src/runs.rs::mark_late_failure", "crates/schedr-db/src/reads.rs::late_failure"]
-checked = 2026-11-10
+checked = 2026-11-12

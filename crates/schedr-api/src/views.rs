@@ -49,13 +49,36 @@ impl From<&DagLocation> for LocationView {
     }
 }
 
+/// A DAG's trigger's switch (decision 459).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerState {
+    /// Switched off: it starts no runs; runs started by hand still run.
+    Paused,
+    /// Switched on.
+    Active,
+}
+
+impl TriggerState {
+    /// As `dags list` shows it, `manual` without a trigger.
+    #[must_use]
+    pub const fn shown(state: Option<Self>) -> &'static str {
+        match state {
+            Some(Self::Paused) => "paused",
+            Some(Self::Active) => "active",
+            None => "manual",
+        }
+    }
+}
+
 /// A DAG.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DagView {
     /// Its ID.
     pub dag_id: String,
-    /// Whether the scheduler is stopped for it.
-    pub paused: bool,
+    /// Its trigger's switch (decision 459): `paused` or `active`; `null` without a trigger (it
+    /// runs only when started by hand).
+    pub trigger_state: Option<TriggerState>,
     /// Where its current version is defined (none for a DAG only ever seen in conflict).
     pub location: Option<LocationView>,
     /// Every place defining it, while it is in conflict (then it can't run).
@@ -163,7 +186,13 @@ impl DagView {
         let current = dag.current.as_ref().map(|c| &c.dag);
         Self {
             dag_id: dag.dag_id.to_string(),
-            paused: dag.paused,
+            trigger_state: dag.paused.map(|paused| {
+                if paused {
+                    TriggerState::Paused
+                } else {
+                    TriggerState::Active
+                }
+            }),
             location: current.map(|d| (&d.location).into()),
             conflict: dag
                 .conflict
@@ -778,6 +807,10 @@ pub struct TriggerView {
     pub last_poked_at: Option<Timestamp>,
     /// When it was last started again for finding nothing for its `restart_if_idle`.
     pub last_restart_at: Option<Timestamp>,
+    /// A running poke trigger none of whose calls has ended for over three times its `every`
+    /// plus a heartbeat: its worker may hang; `schedr triggers restart` starts it again.
+    #[serde(default)]
+    pub stuck: bool,
     /// `@trigger(wait_for=...)` (decision 353): the run of the other DAG it is called for and
     /// hasn't ended well with yet; `schedr triggers skip` passes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

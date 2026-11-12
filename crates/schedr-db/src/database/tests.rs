@@ -189,10 +189,14 @@ async fn foreign_keys_are_enforced() {
 }
 
 #[tokio::test]
-async fn new_dags_are_paused_by_default() {
+async fn new_triggers_are_paused_by_default() {
     let db = migrated().await;
     insert_dag(&db).await;
-    let paused: i64 = sqlx::query_scalar("SELECT paused FROM dags WHERE dag_id = 'sync'")
+    sqlx::query("INSERT INTO dag_triggers (dag_id, kind) VALUES ('sync', 'schedule')")
+        .execute(pool(&db))
+        .await
+        .unwrap();
+    let paused: i64 = sqlx::query_scalar("SELECT paused FROM dag_triggers WHERE dag_id = 'sync'")
         .fetch_one(pool(&db))
         .await
         .unwrap();

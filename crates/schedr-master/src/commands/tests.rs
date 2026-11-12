@@ -101,7 +101,7 @@ impl World {
     }
 
     async fn paused(&self) -> bool {
-        self.db.stored_dags().await.unwrap()[0].paused
+        self.db.stored_dags().await.unwrap()[0].paused == Some(true)
     }
 }
 
@@ -149,6 +149,27 @@ async fn pausing_and_unpausing_change_the_dag_and_are_recorded() {
     );
     assert!(world.paused().await);
     assert_eq!(world.apply().await.decided, []);
+}
+
+#[tokio::test]
+async fn a_dag_without_a_trigger_has_nothing_to_pause() {
+    // Decision 459: its manual runs start either way, and no switch is stored.
+    let mut manual = dag();
+    manual.trigger = schedr_model::Trigger::None;
+    let mut world = world_of(manual).await;
+    let refused = "DAG `sync` has no trigger: it runs only when started, so pausing changes \
+                   nothing (cancel its runs with `schedr runs cancel`)";
+    world.ask(&Command::UnpauseDag { dag_id: sync() }).await;
+    world
+        .ask(&Command::PauseDag {
+            dag_id: sync(),
+            cancel_runs: true,
+        })
+        .await;
+    let applied = world.apply().await;
+    let decided: Vec<_> = applied.decided.iter().map(summary).collect();
+    assert_eq!(decided, [rejected(refused), rejected(refused)]);
+    assert_eq!(world.db.stored_dags().await.unwrap()[0].paused, None);
 }
 
 #[tokio::test]

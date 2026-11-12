@@ -21,8 +21,17 @@
   {% else %}
   {% call confirm::action("Pause", "Pause " ~ row.dag_id ~ "?", "Its trigger starts no more of its runs until it is unpaused.", actions ~ "/pause", "pause", page.base) %}{% endcall %}
   {% endif %}
+  {# An event trigger's own actions, in the same row: Restart only where it changes something. #}
+  {% if let Some(trigger) = trigger %}
+  {% if trigger.restartable() %}
+  {% call confirm::action("Restart", "Restart the trigger of " ~ row.dag_id ~ "?", "It starts again from its bookmark, whatever stopped it.", trigger.restart, "", page.base) %}{% endcall %}
+  {% endif %}
+  {% if !trigger.called_for.is_empty() && trigger.state != "running" %}
+  {% call confirm::action("Skip run", "Skip run " ~ trigger.called_for ~ " for the trigger of " ~ row.dag_id ~ "?", "Its function isn't called for this run again: the next call gets the next run that ended. What it failed with stays its last error.", trigger.skip, "", page.base) %}{% endcall %}
+  {% endif %}
+  {% endif %}
 </div>
-<h1>{{ row.dag_id }} {% if row.manual_only() %}<span class="badge manual" title="No trigger: it runs only when started by hand">manual</span>{% else if row.paused %}<span class="badge paused">paused</span>{% else %}<span class="badge active">active</span>{% endif %}{% if row.held.is_some() %} <span class="badge warning">held</span>{% endif %}</h1>
+<h1>{{ row.dag_id }}{% if row.held.is_some() %} <span class="badge warning">held</span>{% endif %}</h1>
 {% if !description.is_empty() %}<p class="description">{{ description }}</p>{% endif %}
 {% if let Some(why) = row.held %}
 <div class="banner warning">
@@ -68,14 +77,8 @@
 <div class="banner warning">Its trigger can't be told now: {{ trigger.unavailable }}</div>
 {% endif %}
 {% if !trigger.state.is_empty() %}
-<div class="actions">
-  {% call confirm::action("Restart", "Restart the trigger of " ~ row.dag_id ~ "?", "It starts again from its bookmark, whatever stopped it.", trigger.restart, "", page.base) %}{% endcall %}
-  {% if !trigger.called_for.is_empty() && trigger.state != "running" %}
-  {% call confirm::action("Skip run", "Skip run " ~ trigger.called_for ~ " for the trigger of " ~ row.dag_id ~ "?", "Its function isn't called for this run again: the next call gets the next run that ended. What it failed with stays its last error.", trigger.skip, "", page.base) %}{% endcall %}
-  {% endif %}
-</div>
 <dl class="facts">
-  <dt>State</dt><dd><span class="state {{ trigger.state }}{% if trigger.state == "running" %} waiting{% endif %}">{{ trigger.state }}</span> <span class="mono">{{ trigger.function }}</span></dd>
+  <dt>State</dt><dd><span class="state {{ trigger.state }}{% if trigger.state == "running" %} waiting{% endif %}">{{ trigger.state }}</span>{% if trigger.stuck %} <span class="badge warning" title="No poke has ended for over three times its every: its worker may hang">stuck</span>{% endif %} <span class="mono">{{ trigger.function }}</span></dd>
   {% if !trigger.worker.is_empty() %}<dt>Worker</dt><dd class="mono">{{ trigger.worker }}</dd>{% endif %}
   {% if !trigger.bookmark.is_empty() %}<dt>Bookmark</dt><dd class="mono">{{ trigger.bookmark }}</dd>{% endif %}
   {% if !trigger.called_for.is_empty() %}<dt>Called for run</dt><dd class="mono">{{ trigger.called_for }}</dd>{% endif %}
@@ -101,7 +104,7 @@
 {% endif %}
 {% endif %}
 <dl class="facts">
-  <dt>Trigger</dt><dd class="trigger"><span class="trigger-kind">{{ row.trigger_kind }}</span>{% if !row.manual_only() %} <span class="mono">{{ row.schedule }}</span>{% endif %}</dd>
+  <dt>Trigger</dt><dd class="trigger"><span class="trigger-kind">{{ row.trigger_kind }}</span>{% if !row.manual_only() %} <span class="mono">{{ row.schedule }}</span>{% endif %}{% if row.paused %} <span class="badge paused" title="Its trigger is switched off: it starts no runs">paused</span>{% else if !row.manual_only() %} <span class="badge active" title="Its trigger starts its runs">active</span>{% endif %}</dd>
   <dt>Defined in</dt><dd class="mono">{{ row.location }}</dd>
   {% if !row.tags.is_empty() %}<dt>Tags</dt><dd>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</dd>{% endif %}
   {% if !limits.is_empty() %}<dt>Limits</dt><dd><ul class="limits">{% for limit in limits %}<li{% if limit.reached %} class="reached"{% endif %}><code>{{ limit.name }}</code> {{ limit.value }} on {{ limit.of }}: {{ limit.running }}{% if limit.reached %} (reached: the rest wait){% endif %}</li>{% endfor %}</ul></dd>{% endif %}

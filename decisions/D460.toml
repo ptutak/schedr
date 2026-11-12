@@ -1,0 +1,22 @@
+title = "Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started"
+date = 2026-11-12
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "protocol"
+section = "Connection"
+summary = '''
+Every message on a worker's stream is numbered and names the latest the other side had: a
+master message's `clock.sequence` and `heard_sequence` (the latest worker message received), a
+worker message's `WorkerClock` with its `sequence` and the latest master message it had
+handled. What a worker sends while handling a message (`Started` for an `AssignTask`) is
+queued before anything naming it. So an assignment a worker's message names as handled, with
+no `Started` before, never started there: the master takes it back at once
+(`assignment_expired`, no retry). Not named, it stays; a worker lost with it ends it `lost`
+(it may run), the same process registering again takes back what its journal lacks, a new
+incarnation holds it as a started one (decision 443). No start deadline: `start_by_ms`,
+`TOO_LATE`, the start grace and B234's wait are gone; protocol 2.0 (an rc1 worker is refused).
+Not chosen: numbering assignments only; a worker clock on its messages; a minor version.
+'''
+history = "JOURNAL.md#D460"  # <a id="D460"></a> starts its JOURNAL.md entry
+step = "1.0.0"
+code = []

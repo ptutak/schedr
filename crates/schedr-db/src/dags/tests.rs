@@ -33,8 +33,9 @@ fn now() -> Timestamp {
 fn dag(id: &str, path: &str) -> Dag {
     serde_json::from_value(json!({
         "produced_by": "1.0", "id": id, "location": {"root": "etl", "path": path},
-        "trigger": {"kind": "none"}, "initial_since": null,
-        "max_active_runs": 1, "tasks": [], "edges": []
+        "trigger": {"kind": "cron", "expression": "0 3 * * *", "timezone": "UTC",
+            "catchup": false},
+        "initial_since": null, "max_active_runs": 1, "tasks": [], "edges": []
     }))
     .unwrap()
 }
@@ -140,7 +141,7 @@ async fn a_new_dag_is_paused_with_its_version() {
     let stored = db.stored_dags().await.unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].dag_id, id("sync"));
-    assert!(stored[0].paused);
+    assert_eq!(stored[0].paused, Some(true));
     assert!(!stored[0].removed);
     assert_eq!(stored[0].conflict, None);
     let current = stored[0].current.as_ref().unwrap();
@@ -164,12 +165,12 @@ async fn a_new_parse_becomes_the_current_version_and_keeps_the_paused_setting() 
     db.apply_dag_changes(&[define(&first)], now())
         .await
         .unwrap();
-    execute(&db, "UPDATE dags SET paused = 0").await;
+    execute(&db, "UPDATE dag_triggers SET paused = 0").await;
     db.apply_dag_changes(&[define(&second)], now())
         .await
         .unwrap();
     let stored = &db.stored_dags().await.unwrap()[0];
-    assert!(!stored.paused);
+    assert_eq!(stored.paused, Some(false));
     assert_eq!(stored.current.as_ref().unwrap().parse_id, second);
     assert_eq!(version_count(&db).await, 2);
     db.apply_dag_changes(&[define(&first)], now())
@@ -190,7 +191,7 @@ async fn removing_hides_a_dag_and_coming_back_can_pause_it() {
         pause,
     };
     db.apply_dag_changes(&[define(false)], now()).await.unwrap();
-    execute(&db, "UPDATE dags SET paused = 0").await;
+    execute(&db, "UPDATE dag_triggers SET paused = 0").await;
     db.apply_dag_changes(&[DagChange::Remove { dag_id: id("sync") }], now())
         .await
         .unwrap();
@@ -200,7 +201,7 @@ async fn removing_hides_a_dag_and_coming_back_can_pause_it() {
     db.apply_dag_changes(&[define(true)], now()).await.unwrap();
     let stored = &db.stored_dags().await.unwrap()[0];
     assert!(!stored.removed);
-    assert!(stored.paused);
+    assert_eq!(stored.paused, Some(true));
 }
 
 #[tokio::test]
@@ -220,7 +221,7 @@ async fn conflicts_record_the_places_and_clear_with_a_definition() {
     .unwrap();
     let stored = &db.stored_dags().await.unwrap()[0];
     assert_eq!(stored.conflict, Some(places));
-    assert!(stored.paused);
+    assert_eq!(stored.paused, None, "no trigger known yet");
     assert_eq!(stored.current, None);
 
     db.apply_dag_changes(
@@ -302,9 +303,9 @@ async fn dags_can_be_paused_and_unpaused() {
     };
     db.apply_dag_changes(&[change], now()).await.unwrap();
     assert!(db.set_paused(&id("sync"), false).await.unwrap());
-    assert!(!db.stored_dags().await.unwrap()[0].paused);
+    assert_eq!(db.stored_dags().await.unwrap()[0].paused, Some(false));
     assert!(db.set_paused(&id("sync"), true).await.unwrap());
-    assert!(db.stored_dags().await.unwrap()[0].paused);
+    assert_eq!(db.stored_dags().await.unwrap()[0].paused, Some(true));
     assert!(!db.set_paused(&id("nope"), true).await.unwrap());
 }
 
@@ -525,18 +526,75 @@ async fn a_dag_is_live_since_it_last_came_on_and_never_while_paused_removed_or_i
         .await
         .unwrap();
     assert_eq!(db.live_since("sync").await.unwrap(), Some(at(11)));
-    let mut other = dag("sync", "sync.py");
-    other.trigger =
-        serde_json::from_value(json!({"kind": "run_of", "run_of": {"dag": "orders"}})).unwrap();
-    let changed = DagChange::Define {
-        dag: Box::new(other),
-        parse_id: store_parse(&db, "sha256:b", &files()).await,
-        pause: false,
+    let changed = |trigger: serde_json::Value, hash: &str| {
+        let mut other = dag("sync", "sync.py");
+        other.trigger = serde_json::from_value(trigger).unwrap();
+        let (files, db, hash) = (files(), &db, hash.to_owned());
+        async move {
+            DagChange::Define {
+                dag: Box::new(other),
+                parse_id: store_parse(db, &hash, &files).await,
+                pause: false,
+            }
+        }
     };
-    db.apply_dag_changes(&[changed], at(12)).await.unwrap();
+    let cron = json!({"kind": "cron", "expression": "0 4 * * *", "timezone": "UTC",
+        "catchup": false});
+    db.apply_dag_changes(&[changed(cron, "sha256:b").await], at(12))
+        .await
+        .unwrap();
     assert_eq!(
         db.live_since("sync").await.unwrap(),
         Some(at(12)),
-        "another trigger is live from now"
+        "another trigger of its kind is live from now"
     );
+    let run_of = json!({"kind": "run_of", "run_of": {"dag": "orders"}});
+    db.apply_dag_changes(&[changed(run_of, "sha256:c").await], at(13))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.live_since("sync").await.unwrap(),
+        None,
+        "another kind is paused (decision 459)"
+    );
+}
+
+#[tokio::test]
+async fn a_dags_trigger_has_its_switch_while_it_has_one() {
+    // Decision 459: a trigger appearing or changing kind is paused; one of the same kind keeps
+    // the switch; none, no switch, and pausing is refused.
+    let db = migrated().await;
+    let define = |trigger: serde_json::Value, hash: &'static str| {
+        let mut changed = dag("sync", "sync.py");
+        changed.trigger = serde_json::from_value(trigger).unwrap();
+        let db = &db;
+        async move {
+            let change = DagChange::Define {
+                dag: Box::new(changed),
+                parse_id: store_parse(db, hash, &files()).await,
+                pause: false,
+            };
+            db.apply_dag_changes(&[change], now()).await.unwrap();
+            db.stored_dag(&id("sync")).await.unwrap().unwrap().paused
+        }
+    };
+    let cron = |hour: u8| {
+        json!({"kind": "cron", "expression": format!("0 {hour} * * *"), "timezone": "UTC",
+            "catchup": false})
+    };
+    assert_eq!(define(json!({"kind": "none"}), "h1").await, None);
+    assert!(
+        !db.set_paused(&id("sync"), false).await.unwrap(),
+        "no switch"
+    );
+    assert_eq!(define(cron(3), "h2").await, Some(true), "a new trigger");
+    assert!(db.set_paused(&id("sync"), false).await.unwrap());
+    assert_eq!(define(cron(4), "h3").await, Some(false), "the same kind");
+    let every = json!({"kind": "every", "interval_ms": 60_000, "catchup": false});
+    assert_eq!(define(every, "h4").await, Some(false), "a schedule still");
+    let chained = json!({"kind": "chained"});
+    assert_eq!(define(chained, "h5").await, Some(true), "another kind");
+    assert!(db.set_paused(&id("sync"), false).await.unwrap());
+    assert_eq!(define(json!({"kind": "none"}), "h6").await, None, "gone");
+    assert_eq!(define(cron(3), "h7").await, Some(true), "back, paused");
 }

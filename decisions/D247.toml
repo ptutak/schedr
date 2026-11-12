@@ -6,11 +6,12 @@ topic = "cleanup"
 section = "Moving and disconnection"
 summary = '''
 A cleanup may move up to `retries + 1` times; another worker loss after that
-allowance ends it `worker_lost`. An assignment that never reaches `Started` returns
-without consuming a move.
+allowance ends it `worker_lost`. An assignment its worker's messages show it never started,
+or one never sent, returns without consuming a move; one that may have started counts as
+started (decision 460).
 '''
 history = "archive/PROJECT.md#D247"
 step = "M4.8b2"
 also = ["workers"]
 code = ["crates/schedr-db/migrations/postgres/0001_initial.sql", "crates/schedr-db/src/attempts.rs::cleanup_moves", "crates/schedr-db/migrations/sqlite/0001_initial.sql::cleanup_moves"]
-checked = 2026-11-11
+checked = 2026-11-12

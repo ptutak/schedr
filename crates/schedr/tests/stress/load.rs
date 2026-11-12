@@ -151,10 +151,24 @@ impl Stress {
         started.elapsed()
     }
 
-    /// Unpauses `dags` and triggers each `runs` times, many CLI calls at once.
+    /// Unpauses those of `dags` whose trigger is paused (decision 459: one without a trigger has
+    /// no switch, and runs by hand either way) and triggers each `runs` times, many CLI calls at
+    /// once.
     pub fn trigger(&self, dags: &[String], runs: usize) {
+        let call = ["dags", "list", "--json"].map(str::to_owned);
+        let (code, out, err) = cli(&self.cluster.api, &call);
+        assert_eq!(code, 0, "{out}{err}");
+        let listed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let paused: Vec<&str> = listed["dags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|d| d["trigger_state"] == "paused")
+            .filter_map(|d| d["dag_id"].as_str())
+            .collect();
         let unpause = dags
             .iter()
+            .filter(|d| paused.contains(&d.as_str()))
             .map(|d| vec!["dags".to_owned(), "unpause".to_owned(), d.clone()])
             .collect();
         self.expect_ok(&cli_many(&self.cluster.api, unpause, 16));

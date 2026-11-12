@@ -263,8 +263,8 @@ async fn dags_are_listed_as_a_table() {
     let client = world(false).await;
     assert_eq!(
         dags(&client, DagsCommand::List, &text()).await,
-        "DAG   PAUSED  HELD  TRIGGER                    DEFINED IN\n\
-         sync  yes     no    0 3 * * * (Europe/Warsaw)  etl:team/sync.py\n"
+        "DAG   STATE   HELD  TRIGGER                    DEFINED IN\n\
+         sync  paused  no    0 3 * * * (Europe/Warsaw)  etl:team/sync.py\n"
     );
     let listed: serde_json::Value =
         serde_json::from_str(&dags(&client, DagsCommand::List, &json_output()).await).unwrap();
@@ -278,14 +278,20 @@ async fn pausing_and_unpausing_wait_for_the_master() {
         dag: "sync".to_owned(),
     };
     assert_eq!(dags(&client, unpause, &text()).await, "unpaused sync\n");
-    assert!(!client.transport().db.stored_dags().await.unwrap()[0].paused);
+    assert_eq!(
+        client.transport().db.stored_dags().await.unwrap()[0].paused,
+        Some(false)
+    );
     let pause = DagsCommand::Pause {
         dag: "sync".to_owned(),
     };
     let printed: serde_json::Value =
         serde_json::from_str(&dags(&client, pause, &json_output()).await).unwrap();
     assert_eq!(printed["status"], "applied");
-    assert!(client.transport().db.stored_dags().await.unwrap()[0].paused);
+    assert_eq!(
+        client.transport().db.stored_dags().await.unwrap()[0].paused,
+        Some(true)
+    );
 }
 
 #[tokio::test]
@@ -546,7 +552,7 @@ async fn bad_arguments_are_errors() {
 fn a_dag_in_conflict_says_so() {
     let dag = DagView {
         dag_id: "dup".to_owned(),
-        paused: false,
+        trigger_state: None,
         location: None,
         conflict: Some(vec![
             schedr_api::views::LocationView {
@@ -586,14 +592,14 @@ fn a_dag_in_conflict_says_so() {
         [
             vec![
                 "dup".to_owned(),
-                "no".to_owned(),
+                "manual".to_owned(),
                 "no".to_owned(),
                 String::new(),
                 "CONFLICT: 2 places".to_owned()
             ],
             vec![
                 "sync".to_owned(),
-                "no".to_owned(),
+                "manual".to_owned(),
                 "yes: ModuleNotFoundError".to_owned(),
                 String::new(),
                 "etl:sync.py".to_owned()

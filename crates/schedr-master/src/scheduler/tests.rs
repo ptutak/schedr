@@ -404,7 +404,7 @@ async fn a_dag_catching_up_gets_at_most_so_many_runs_a_round() {
         "max_active_runs": 1000
     })))
     .await;
-    execute(&db, "UPDATE dags SET paused = FALSE").await;
+    execute(&db, "UPDATE dag_triggers SET paused = FALSE").await;
     let now = ts("2026-10-03T00:30:00Z");
     assert_eq!(
         planned(&scheduler.pass(now).await.unwrap()).len(),

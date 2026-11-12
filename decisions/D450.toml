@@ -1,7 +1,8 @@
 title = "The master expires an assignment two heartbeats after its deadline"
 date = 2026-11-11
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 460
 topic = "workers"
 section = "Identity and connection"
 summary = '''

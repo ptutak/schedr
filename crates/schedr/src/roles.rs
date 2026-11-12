@@ -956,6 +956,8 @@ pub struct ApiTimings {
     pub worker_request: Duration,
     /// `connection_test_timeout`.
     pub connection_test: Duration,
+    /// The workers' heartbeat interval: the slack before a poke trigger counts as stuck.
+    pub heartbeat: Duration,
     /// `[events] max_size`.
     pub max_event_size: usize,
 }
@@ -977,6 +979,7 @@ impl ApiTimings {
             worker_connect: config.timings.worker_connect_timeout,
             worker_request: config.webserver.worker_request_timeout,
             connection_test: config.webserver.connection_test_timeout,
+            heartbeat: config.timings.heartbeat_interval,
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "a size in bytes, a few MiB, on a 64-bit host"
@@ -1017,6 +1020,7 @@ pub async fn serve_api(
                 .with_timeouts(timings.worker_connect, timings.worker_request),
         ))
         .with_connection_test_timeout(timings.connection_test)
+        .with_heartbeat_interval(timings.heartbeat)
         .with_max_event_size(timings.max_event_size)
         .with_metrics(observed.metrics);
     observed.ready.ready();

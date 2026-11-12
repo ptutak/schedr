@@ -9,8 +9,8 @@ The DAG list's and the DAG page's Schedule becomes Trigger: the kind (`Schedule`
 every and once, `Run of`, `Chained`, `Event` for `@trigger` and `EventNamed`, `Manual` for
 none), then the trigger as the CLI
 writes it, nothing after `Manual`. The list shows a DAG's description under its id, one line,
-all of it on hover. A DAG without a trigger has neither Pause nor Unpause, and its state is `manual`
-whatever its paused flag says: it has only manual runs, which pausing doesn't stop. Not chosen: the API's kind names (`Cron`, `Every`, `RunOf`,
+all of it on hover. A DAG without a trigger has neither Pause nor Unpause: it has only manual runs,
+which pausing doesn't stop (its switch, decision 459). Not chosen: the API's kind names (`Cron`, `Every`, `RunOf`,
 `None`); a greyed-out button.
 '''
 history = "JOURNAL.md#D457"  # <a id="D457"></a> starts its JOURNAL.md entry

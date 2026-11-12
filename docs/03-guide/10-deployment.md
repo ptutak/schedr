@@ -545,8 +545,6 @@ CTX=<the lab context>
 NS=<namespace>
 REL=schedr
 kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
-  schedr dags unpause hold --server http://127.0.0.1:8080
-kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
   schedr runs trigger hold --server http://127.0.0.1:8080
 ```
 
@@ -567,8 +565,6 @@ Then `again`. Kill the pod named by that attempt's `worker_id` (`$REL-worker-0` 
 
 ```bash
 kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
-  schedr dags unpause again --server http://127.0.0.1:8080
-kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
   schedr runs trigger again --server http://127.0.0.1:8080
 kubectl --context "$CTX" -n "$NS" exec "deploy/$REL-webserver" -c schedr -- \
   wget -qO- "http://127.0.0.1:8080/api/v1/runs/<run id>/tasks/again/attempts"
@@ -583,11 +579,7 @@ Standalone on SQLite: `ping` first, then `again`. The commands run in `$REL-0`. 
 
 ```bash
 kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
-  schedr dags unpause ping --server http://127.0.0.1:8080
-kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
   schedr runs trigger ping --server http://127.0.0.1:8080
-kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
-  schedr dags unpause again --server http://127.0.0.1:8080
 kubectl --context "$CTX" -n "$NS" exec "$REL-0" -c schedr -- \
   schedr runs trigger again --server http://127.0.0.1:8080
 kubectl --context "$CTX" -n "$NS" delete pod "<worker_id>" --force --grace-period=0

@@ -6,7 +6,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use schedr_api::views::{BackfillView, DagView, LocationView, SensorView};
+use schedr_api::views::{BackfillView, DagView, LocationView, SensorView, TriggerState};
 use schedr_client::times::trigger_text;
 use schedr_client::{ClientError, Transport, path_segment};
 
@@ -49,7 +49,7 @@ pub struct DagRow {
     pub href: String,
     /// Its ID.
     pub dag_id: String,
-    /// Whether it is paused.
+    /// Whether its trigger is paused (decision 459; never without one).
     pub paused: bool,
     /// What starts its runs.
     pub starts: Starts,
@@ -103,6 +103,8 @@ struct TriggerPanel {
     worker: String,
     bookmark: String,
     failures: u32,
+    /// A running poke trigger with no call ended for long: its worker may hang.
+    stuck: bool,
     last_error: String,
     /// How long it has gone on, as people read it: label and moment.
     moments: Vec<(&'static str, String)>,
@@ -112,6 +114,14 @@ struct TriggerPanel {
     called_for: String,
     skip: String,
     events: Vec<EventRow>,
+}
+
+impl TriggerPanel {
+    /// Whether Restart changes anything: it is stopped, failing and waiting to start again, or
+    /// stuck. Paused, Unpause is what starts it; running or waiting well, nothing holds it back.
+    fn restartable(&self) -> bool {
+        self.state == "stopped" || (self.state == "waiting" && self.failures > 0) || self.stuck
+    }
 }
 
 /// An event a trigger found, on its DAG's page.
@@ -212,6 +222,7 @@ async fn trigger_panel<T: Transport>(
         worker: trigger.worker.unwrap_or_default(),
         bookmark: trigger.bookmark.unwrap_or_default(),
         failures: trigger.failures,
+        stuck: trigger.stuck,
         last_error: trigger.last_error.unwrap_or_default(),
         moments,
         restart: format!("{actions}/restart"),
@@ -676,7 +687,7 @@ fn dag_row<T>(page: &Page, deployment: &Deployment<T>, dag: &DagView) -> DagRow 
             path_segment(&dag.dag_id)
         ),
         dag_id: dag.dag_id.clone(),
-        paused: dag.paused,
+        paused: dag.trigger_state == Some(TriggerState::Paused),
         starts: match dag.trigger.as_ref().and_then(|t| t["kind"].as_str()) {
             None | Some("none") => Starts::ManualOnly,
             Some("cron" | "every" | "once") => Starts::FireTimes,

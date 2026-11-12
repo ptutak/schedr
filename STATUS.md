@@ -3,32 +3,32 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-11)
+## Now (2026-11-12)
 
 - **Milestone:** M4B, Batched worker messages (a milestone after M4).
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
 - **Then:** R1.0a, R1.0c, M5.0a, M5.0b, M5.0c.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 3; first: B239 (medium/rare), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 4; first: B39 (low/possible), B38 (low/possible), B242 (low/rare), B241 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D460 (2026-11-12): both sides number their messages and echo the other's (decision 460, B240; supersedes 450 and 455)
+- D461 (2026-11-12): a DAG page's actions in one row; Restart where it does something
+- D459 (2026-11-12): a DAG's trigger has its own row with its switch
 - D458 (2026-11-12): a sensor poke tolerates overruns of `every` (decision 458, supersedes 322)
 - D457 (2026-11-12): the UI names a DAG's trigger kind, shows descriptions, and has no Pause for a DAG without a trigger
-- D456 (2026-11-12): from 1.0.0 the schema and the protocol change only additively
-- D455 (2026-11-12): a lost worker's unstarted attempts wait as a cleanup would (decision 455, B234)
-- D454 (2026-11-11): images on glibc beside Alpine
 - R1.0b (2026-11-12): The master's side in the clock simulator
 - M4B.5 (2026-11-11): The agent's journal in groups
 - M4B.4 (2026-11-11): A turn's `Finished`s written together
 
 ## In progress
 
-- Release 1.0.0 being prepared (the user, 2026-11-11: rc1 rehearsal then stop for the go on v1.0.0; major bumps; protocol 1.0 and Stable; R1.0b before the tag; all open bugs fixed, B39/B38 to M6). Done 2026-11-11: M4B, stress after M4B (N2), the open bugs (batches A, B, D, each reviewed by Grok), the slim image (R1.0a) and the glibc images (R1.0c, D454, PGDG's pg_dump 18): built and smoke-tested, both steps done when pushed with 1.0.0. Next: R1.0b, the upgrades, the version work, a Grok review, then v1.0.0rc1.
-- A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user.
+- Release 1.0.0 (the user, 2026-11-12: rc2 is mandatory, then v1.0.0 without asking if nothing breaks and nothing is to decide). rc1 published and smoke-tested. Uncommitted in main, to go as two commits after Grok's paranoid review (d2836aa9, worktree schedr-grok-b240) and `make check`: B240/D460 (protocol 2.0, numbered messages with an echo, no start deadline) and D459 + D461 (the trigger switch in `dag_triggers`, tables renamed, `trigger_state`; one row of actions, Restart for stopped, failing or stuck). Integration suite clean on both (289/289) before D461; the user approved the UI and the docs. Then push, CI, a nightly-style stress run, rc2, v1.0.0.
+- A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
-- M5.0a-e (the start path after M4B's regression in assigned->started p99, the user's choice): after 1.0.0, profile first.
+- After 1.0.0: M5.0a-e (the start path after M4B's regression in assigned->started p99, profile first); an idea (the user, 2026-11-12, left for later): a Status block on the deployment page from what that page already fetches (masters, workers by state, slots in use, problems), no Prometheus scraping (no process records its ops address).
 
 ## Waiting for the user
 
@@ -45,7 +45,7 @@ Nothing.
 
 ## Colleagues
 
-Codex at 98% of its week (resets Sat 14 Nov 21:47). Grok reset early (the user, 2026-11-11: 22%), its rounds since about 6%; its script's week figure counts from Friday and is wrong now. Usage logs in the skills' `USAGE.md`.
+Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 64% by its script on 2026-11-12 (the user confirmed 62% earlier that day). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

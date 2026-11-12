@@ -5,9 +5,9 @@ status = "active"
 topic = "observability"
 section = ""
 summary = '''
-Workers export the age of their master-time sample, the round trip it was measured over,
-the slack left on the last start deadline, and counts of `TOO_LATE` rejections and of streams
-ended for an older lease epoch; the master exports the attempts held for a replaced incarnation.
+Workers export the age of their master-time sample, the round trip it was measured over, and a
+count of streams ended for an older lease epoch; the master exports the attempts held for a
+replaced incarnation. The start-slack and `TOO_LATE` metrics went with the start deadline (D460).
 Not chosen: worker metrics only.
 '''
 history = "JOURNAL.md#D445"

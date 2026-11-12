@@ -1,0 +1,24 @@
+title = "A DAG's trigger has its own row with its switch; no row, no trigger"
+date = 2026-11-12
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "triggers"
+section = "One trigger"
+summary = '''
+Pausing switches a DAG's trigger off; manual runs start either way. The switch is the trigger's:
+`dag_triggers` holds a row per DAG whose current code has a trigger (its kind, `paused`,
+`live_since`), and no row means none (`dags` has no `paused`). A parse gaining a trigger, or
+changing its kind (Schedule, Run of, Chained, Event, as the UI names them), stores it paused;
+another trigger of the same kind keeps the switch; losing it deletes the row. Pause and unpause
+are refused without one. The API's `trigger_state` is `paused`, `active` or null; `dags list`'s
+STATE is `paused`, `active` or `manual`; the UI shows the kind and the switch (`active` or
+`paused`) in one Trigger column, no State column. `triggers` and `trigger_passed` are renamed
+`trigger_progress` and `trigger_progress_passed`. Not chosen:
+the flag on `dags` (it isn't the DAG's); resetting on every trigger change (a cron edit would
+pause production); a stored `manual` (a second copy of the code's fact); a 0002 migration
+(only rc1's test databases exist).
+'''
+history = "JOURNAL.md#D459"  # <a id="D459"></a> starts its JOURNAL.md entry
+step = "1.0.0"
+code = ["crates/schedr-db/src/dags.rs::apply_dag_changes", "crates/schedr-model/src/trigger.rs::kind", "crates/schedr-master/src/commands.rs::switch", "crates/schedr-api/src/views.rs::TriggerState"]
+checked = 2026-11-12

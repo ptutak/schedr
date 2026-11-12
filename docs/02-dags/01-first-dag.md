@@ -53,8 +53,8 @@ A DAG ID is explicit. It is up to 250 bytes: ASCII letters, digits and `_ . - : 
 same ID in two files of the newest code is a conflict, and schedr creates no runs until
 that is resolved ([Parsing and code versions](../03-guide/06-parsing.md)).
 
-A new DAG is stored paused. `schedr dags unpause <id>` lets the scheduler create its runs
-([Schedules](04-schedules.md#pausing)).
+A new DAG's trigger is stored paused. `schedr dags unpause <id>` lets it create runs
+([Schedules](04-schedules.md#pausing)). A run started by hand starts either way.
 
 ## Libraries in a root
 

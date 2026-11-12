@@ -23,21 +23,25 @@ flowchart LR
 
 On `Control` the worker sends `Register`, heartbeats and results; the master sends
 assignments, acks and cancels. Every message the master sends carries a `MasterClock`:
-`timeline`, `master_ms`, `heard_sequence`, `wall_ms` and `lease_epoch`.
+`timeline`, `master_ms`, `sequence`, `heard_sequence`, `wall_ms` and `lease_epoch`. Every
+message the worker sends carries a `WorkerClock`: its `sequence` and `heard_sequence`.
 
 Each deadline counts on one of these:
 
 | Clock | Kept by | What it sets |
 |---|---|---|
-| Master time: this process's monotonic clock | The leader | Assignment expiry, worker loss, a parse job, a connection job, a moved cleanup's wait, a replaced incarnation's hold, a new leader's wait |
+| Master time: this process's monotonic clock | The leader | Worker loss, a parse job, a connection job, a moved cleanup's wait, a replaced incarnation's hold, a new leader's wait |
 | That same monotonic clock, as a duration from the last renewal | The leader | How long a deposed master still answers |
-| The boot clock: its bound of a stamped master time | The worker | `start_by_ms`, and the master-time half of the `cleanup_anywhere` cutoff |
+| The boot clock: its bound of a stamped master time | The worker | The master-time half of the `cleanup_anywhere` cutoff |
 | Its own timer | The worker | A stream silent for a lease, the epoch fence, the receipt half of the cutoff |
 | The wall clock | The leader | Schedules, set-aside, a sensor's `max_wait`, the script-root grace, the skew warning |
 | The database clock | The database | When a standby may take the lease |
 
-`heard_sequence` is the latest heartbeat this stream has shown the master, and `0` is the
-worker's `Register`. `wall_ms` is there for people. `timeline` is this master process's own;
+Each side numbers its messages on a stream, the worker's `Register` being 0. A master
+message's `heard_sequence` is the latest worker message the master had received on that
+stream; a worker message's is the latest master message the worker had handled. Whether a
+worker started an assignment is read from those numbers, not from a clock
+([A start, by the echo](#a-start-by-the-echo)). `wall_ms` is there for people. `timeline` is this master process's own;
 another master's times are a different timeline. A deadline of the first row is a master
 time on that timeline.
 
@@ -47,24 +51,24 @@ The worker's bound of a master time falls before that master time. That bound is
 worker's side of the limits below. How it is taken from a stamp is in
 [The master clock](17-master-clock.md#what-master-time-is).
 
-### A start deadline
+### A start, by the echo
 
-`start_by_ms` is the worker lease, 60 s, after the master stored the attempt, from the same
-reading the master's expiry keeps.
+No assignment has a start deadline. The worker handles master messages in order, and what it
+sends while handling an `AssignTask` (`Started`, or `Rejected`) is queued before any later
+message that names the assignment as handled.
 
 | When | Master | Worker |
 |---|---|---|
-| 0 s of master time | Stores the attempt, with `start_by_ms` at 60 s. | |
-| While its bound of those 60 s is more than 20 s ahead | | Starts the task. The 20 s is two heartbeats, kept so `Started` can arrive. |
-| Once it is not | | Rejects `TOO_LATE` and drops the journal entry. |
-| Until 80 s of master time | Holds the attempt. A `Started` or `Finished` already read keeps it, one still waiting for the lock included. | |
-| A round past 80 s of master time, none waiting | Takes the attempt back. | |
+| Master message 7 | Sends `AssignTask`. | |
+| On it | | Starts the task and sends `Started`, or rejects it. |
+| Its next message | | Names 7 as handled. |
+| On that message, no `Started` or `Rejected` read before it | Takes the attempt back: it never started, and never will. | |
+| No message has named it yet | Leaves the attempt: it may be running. | |
 
-The worker's bound is earlier than master time, so its last start falls before the take-back.
-
-The 80 s is the lease plus the same two heartbeats. While that worker may still come back
-with the attempt, the master leaves it out of the take-back. The lease must be at least four
-heartbeats, 40 s, or the process refuses to start.
+An attempt left that way ends with its worker. The same process registering again takes back
+what its journal lacks; a new incarnation's hold ends it `lost` a lease after the
+registration (decision 443); a lost worker ends it `lost`, using a retry. The lease must be
+at least four heartbeats, 40 s, or the process refuses to start.
 
 ### The worker lease, and the cutoff
 
@@ -77,7 +81,7 @@ it has handled. The worker has three limits of its own, and the earliest wins fo
 |---|---|---|
 | The stream ends, and messages that arrive later are ignored | its own timer | 60 s after the last master message, or after the stream opened |
 | The master-time cutoff | its bound | the last stamp's `master_ms` plus 60 s |
-| The heard-heartbeat cutoff | its bound | 60 s less 0.1 % after it sent the last heartbeat the stamp says the master heard |
+| The heard-message cutoff | its bound | 60 s less 0.1 % after it sent the last message the stamp says the master received |
 
 A `cleanup_anywhere` task stops at the earliest of the three, and its cleanup waits. The
 master holds the worker until 60 s of master time after its last message, and a round past
@@ -147,12 +151,11 @@ write once the lease row is another holder's, or the same holder's at a newer ep
 
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
-| A task is not started after the master took the attempt back | `start_by_ms` is 60 s of master time after the attempt was stored. The worker starts only while its bound of that deadline is more than 20 s ahead, and rejects `TOO_LATE` otherwise. The master takes the attempt back only once master time is past 80 s, and a `Started` or `Finished` already read keeps it. While the worker may come back, the attempt is left out of the take-back. | A `Started` held longer than 40 s, the stream still up, can arrive after the take-back. The master answers `CancelAttempt`, and both workers may have run the task. |
+| A task is not started after the master took the attempt back | The master takes an unstarted attempt back only once a worker message names its assignment as handled with no `Started` before it, or the same process's journal lacks it. What the worker sends while handling a message comes before anything naming it, on one ordered stream. Otherwise the attempt stays until it ends with its worker. | An attempt that may have started ends `lost` with its worker, using a retry, though it may never have run. |
 
-The 40 s between the last start and the take-back is the worker's two heartbeats and the
-master's two. Both limits are in the table under
-[A start deadline](#a-start-deadline). The late `Started` is in
-[Known limits](17-master-clock.md#known-limits).
+The message numbers are in
+[A start, by the echo](#a-start-by-the-echo) and in
+[Message numbers and their echo](17-master-clock.md#message-numbers-and-their-echo-b240).
 
 ### One leader
 
@@ -181,7 +184,7 @@ Repeats are in [Delivery](07-failures.md#delivery). The refused result is in
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
 | A stream silent for a lease ends | 60 s after the master's last message, on the worker's timer, the worker ends the stream and ignores what arrives later. A `Registered` at least that old on the first stream is ignored, and the worker registers again. | An ordinary task keeps running. A `cleanup_anywhere` task stops here, or sooner, at the cutoff below. |
-| A `cleanup_anywhere` task stops before its cleanup moves | The task stops at the earliest of 60 s after the last message received, the bound of the last stamp plus 60 s, and 60 s less 0.1 % after it sent the last heartbeat the master says it heard. The master loses the worker only once master time is past 60 s after the worker's last message it received, then waits 40 s before the cleanup can move. The stop falls first, a cut one way included. | A cleanup already running when the cut starts keeps running. A frozen VM does not stop. |
+| A `cleanup_anywhere` task stops before its cleanup moves | The task stops at the earliest of 60 s after the last message received, the bound of the last stamp plus 60 s, and 60 s less 0.1 % after it sent the last message the master says it received. The master loses the worker only once master time is past 60 s after the worker's last message it received, then waits 40 s before the cleanup can move. The stop falls first, a cut one way included. | A cleanup already running when the cut starts keeps running. A frozen VM does not stop. |
 
 The two limits are in the tables under
 [The worker lease, and the cutoff](#the-worker-lease-and-the-cutoff) and
@@ -192,7 +195,7 @@ are in [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-w
 
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
-| A wall-clock jump moves no liveness deadline | Assignment expiry, worker loss, a parse job, a connection job and a moved cleanup's wait count on master time. The worker reads that time from `MasterClock`. | A jump of the master's monotonic clock is not caught. Four decisions still read the wall clock: schedules, set-aside, a sensor's `max_wait`, and the script-root grace. A jump can fire one of those early, or hold it. |
+| A wall-clock jump moves no liveness deadline | Worker loss, a parse job, a connection job and a moved cleanup's wait count on master time. The worker reads that time from `MasterClock`. | A jump of the master's monotonic clock is not caught. Four decisions still read the wall clock: schedules, set-aside, a sensor's `max_wait`, and the script-root grace. A jump can fire one of those early, or hold it. |
 
 Which four, and why they stay on the wall clock, is in
 [One clock, and what still uses the wall clock](17-master-clock.md#one-clock-and-what-still-uses-the-wall-clock).
@@ -201,8 +204,7 @@ Which four, and why they stay on the wall clock, is in
 
 Each line is a limit that is kept on purpose, or open for now.
 
-- A `Started` held longer than 40 s can arrive after the take-back, and both workers may have run the task ([Known limits](17-master-clock.md#known-limits)).
-- An assignment that leaves `start_by_ms` unset gives the worker no master-time start limit; a worker of the 0.1 preview, which ignored it, is refused by a 1.0 master ([Known limits](17-master-clock.md#known-limits)).
+- An assignment its worker may have started, never reported before the worker was lost, ends `lost` using a retry, though it may never have run ([Known limits](17-master-clock.md#known-limits)).
 - A cleanup already running at the cut, and a task on a frozen VM, can overlap the moved cleanup ([Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker)).
 - After a suspend, the cutoff is read again on the alive tick, every 5 s, so a `cleanup_anywhere` task can stop up to 5 s late ([Known limits](17-master-clock.md#known-limits)).
 - A stall under 1 s, plus 0.2 % of the time since the sample, leaves the worker's bound late by that much ([Known limits](17-master-clock.md#known-limits)).

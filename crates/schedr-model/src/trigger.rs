@@ -146,6 +146,21 @@ pub struct RunEvent {
 }
 
 impl Trigger {
+    /// Its kind as the UI names it and `dag_triggers.kind` stores it (decision 459):
+    /// `schedule` (cron, every, once), `run_of`, `chained` or `event` (by a trigger or by name);
+    /// `None` for no trigger. A change of kind pauses it; another trigger of the same kind
+    /// keeps its switch.
+    #[must_use]
+    pub const fn kind(&self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Cron { .. } | Self::Every { .. } | Self::Once { .. } => Some("schedule"),
+            Self::RunOf { .. } => Some("run_of"),
+            Self::Chained { .. } => Some("chained"),
+            Self::Event { .. } | Self::EventNamed { .. } => Some("event"),
+        }
+    }
+
     /// Whether the scheduler never creates runs: only people (or other DAGs) do.
     #[must_use]
     pub const fn is_manual_only(&self) -> bool {

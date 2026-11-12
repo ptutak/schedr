@@ -52,21 +52,8 @@ const MASTER_ROUND_TRIP: MetricDoc = MetricDoc {
     name: "worker_master_round_trip_seconds",
     kind: MetricKind::Gauge,
     labels: &[],
-    help: "That heartbeat's round trip, from its send to the master's answer naming it: how much \
-        a start deadline loses to the link",
-};
-const START_SLACK: MetricDoc = MetricDoc {
-    name: "worker_start_slack_seconds",
-    kind: MetricKind::Histogram,
-    labels: &[],
-    help: "How long before an assignment's start deadline (less the two heartbeats kept for \
-        its `Started`) the worker started it: near zero means assignments arrive late",
-};
-const TOO_LATE: MetricDoc = MetricDoc {
-    name: "worker_too_late_rejections",
-    kind: MetricKind::Counter,
-    labels: &[],
-    help: "Assignments rejected `TOO_LATE`: past their start deadline in master time (B225)",
+    help: "That message's round trip, from its send to the master's answer naming it: how much \
+        the worker's master-time deadlines lose to the link",
 };
 const OLDER_EPOCH: MetricDoc = MetricDoc {
     name: "worker_older_epoch_refusals",
@@ -187,8 +174,6 @@ pub const METRICS: &[MetricDoc] = &[
     TASK_START,
     MASTER_SAMPLE_AGE,
     MASTER_ROUND_TRIP,
-    START_SLACK,
-    TOO_LATE,
     OLDER_EPOCH,
     WATCHDOG_KILLS,
     JOURNAL_RECORDS,
@@ -376,10 +361,6 @@ pub struct AgentMetrics {
     pub master_sample_age: Gauge<f64, std::sync::atomic::AtomicU64>,
     /// Its round trip, in seconds.
     pub master_round_trip: Gauge<f64, std::sync::atomic::AtomicU64>,
-    /// How long before its deadline each assignment started.
-    pub start_slack: Histogram,
-    /// Assignments rejected `TOO_LATE`.
-    pub too_late: Counter,
     /// Streams ended for a lower lease epoch.
     pub older_epoch: Counter,
     /// Tasks and parse runners the memory watchdog killed.
@@ -409,8 +390,6 @@ impl Default for AgentMetrics {
             master_sample_age: Gauge::default(),
             master_round_trip: Gauge::default(),
             // 10 ms to about 160 s.
-            start_slack: Histogram::new(exponential_buckets(0.01, 2.0, 15)),
-            too_late: Counter::default(),
             older_epoch: Counter::default(),
             watchdog_kills: Counter::default(),
             journal_records: Gauge::default(),
@@ -441,8 +420,6 @@ impl AgentMetrics {
             MASTER_ROUND_TRIP.help,
             self.master_round_trip.clone(),
         );
-        r.register(START_SLACK.name, START_SLACK.help, self.start_slack.clone());
-        r.register(TOO_LATE.name, TOO_LATE.help, self.too_late.clone());
         r.register(OLDER_EPOCH.name, OLDER_EPOCH.help, self.older_epoch.clone());
         r.register(
             WATCHDOG_KILLS.name,

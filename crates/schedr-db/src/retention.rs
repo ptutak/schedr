@@ -39,7 +39,7 @@ const HELD: &str = "r.id IN (SELECT a.chained_run_id FROM attempts a \
         WHERE a.status IS NULL AND a.chained_run_id IS NOT NULL) \
     OR r.id{text} IN (SELECT t.handed_run FROM task_instances t WHERE t.handed_run IS NOT NULL \
         AND t.state NOT IN ('success', 'failed', 'cancelled', 'skipped', 'upstream_failed')) \
-    OR r.id{text} IN (SELECT g.run_of_handed_run FROM triggers g \
+    OR r.id{text} IN (SELECT g.run_of_handed_run FROM trigger_progress g \
         WHERE g.run_of_handed_run IS NOT NULL)";
 
 /// The finished runs `r` of DAG `d` that ended before `$1` and nothing keeps.
@@ -78,7 +78,7 @@ impl Database {
     /// [`DbError`] if a statement fails (nothing of the batch is deleted then).
     pub async fn delete_old_runs(&self, before: Timestamp, batch: u32) -> Result<u64, DbError> {
         const UNLINK: &str = "UPDATE runs SET parent_run_id = NULL WHERE parent_run_id = $1{uuid}";
-        const PASSED: &str = "DELETE FROM trigger_passed WHERE item = $1";
+        const PASSED: &str = "DELETE FROM trigger_progress_passed WHERE item = $1";
         const DELETE: &str = "DELETE FROM runs WHERE id = $1{uuid}";
         const BACKFILLS: &str = "DELETE FROM backfills WHERE created_at < $1{ts} \
             AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.backfill_id = backfills.id)";
@@ -196,7 +196,7 @@ impl Database {
     pub async fn delete_unused_versions(&self) -> Result<u64, DbError> {
         const UNUSED: &str = "NOT EXISTS (SELECT 1 FROM dags c WHERE c.current_version_id = v.id) \
             AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.dag_version_id = v.id) \
-            AND NOT EXISTS (SELECT 1 FROM triggers t WHERE t.dag_version_id = v.id{text})";
+            AND NOT EXISTS (SELECT 1 FROM trigger_progress t WHERE t.dag_version_id = v.id{text})";
         let any = format!("SELECT v.dag_id FROM dag_versions v WHERE {UNUSED} LIMIT 1");
         let delete = format!(
             "DELETE FROM dag_versions WHERE id IN \
@@ -243,7 +243,7 @@ impl Database {
                 WHERE t.handed_run IS NOT NULL AND t.state NOT IN \
                 ('success', 'failed', 'cancelled', 'skipped', 'upstream_failed')) \
             ORDER BY posted_at, id LIMIT $2";
-        const PASSED: &str = "DELETE FROM trigger_passed WHERE item = $1";
+        const PASSED: &str = "DELETE FROM trigger_progress_passed WHERE item = $1";
         const DELETE: &str = "DELETE FROM named_events WHERE id = $1{uuid}";
         let before = db_time(before);
         let deleted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
@@ -313,14 +313,15 @@ impl Database {
         const STILL_SQLITE: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 \
             AND removed_at IS NOT NULL";
         const RUNS: &str = "SELECT 1 FROM runs WHERE dag_id = $1 LIMIT 1";
-        const DEPENDENTS: [&str; 8] = [
+        const DEPENDENTS: [&str; 9] = [
             "UPDATE dags SET current_version_id = NULL WHERE dag_id = $1",
             "DELETE FROM backfills WHERE dag_id = $1",
             "DELETE FROM dag_versions WHERE dag_id = $1",
             "DELETE FROM events WHERE dag_id = $1",
-            "DELETE FROM triggers WHERE dag_id = $1",
-            "DELETE FROM trigger_passed WHERE dag_id = $1",
+            "DELETE FROM trigger_progress WHERE dag_id = $1",
+            "DELETE FROM trigger_progress_passed WHERE dag_id = $1",
             "DELETE FROM wait_step_strikes WHERE dag_id = $1",
+            "DELETE FROM dag_triggers WHERE dag_id = $1",
             "DELETE FROM dags WHERE dag_id = $1",
         ];
         let before = db_time(before);

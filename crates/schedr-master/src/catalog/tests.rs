@@ -62,7 +62,7 @@ fn source(root: &str, parse_id: &str, files: Vec<ParsedFile>) -> Source {
 fn stored(dag: Dag, parse_id: &str) -> StoredDag {
     StoredDag {
         dag_id: dag.id.clone(),
-        paused: false,
+        paused: Some(false),
         removed: false,
         conflict: None,
         current: Some(CurrentVersion {

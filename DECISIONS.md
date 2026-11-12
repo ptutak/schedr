@@ -29,15 +29,18 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D461 | 2026-11-12 | user | planned (1.0.0) | ui-cli | A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck |
+| D460 | 2026-11-12 | user | planned (1.0.0) | protocol | Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started |
+| D459 | 2026-11-12 | user | planned (1.0.0) | triggers | A DAG's trigger has its own row with its switch; no row, no trigger |
 | D458 | 2026-11-12 | user | planned (1.0.0) | wait-steps | A sensor poke tolerates overruns of every: it fails after poke_overruns in a row, or one at three times every |
 | D457 | 2026-11-12 | user | planned (1.0.0) | ui-cli | The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger |
 | D456 | 2026-10-29 | user | rule | development | From 1.0.0 the schema and the protocol change only additively |
-| D455 | 2026-11-12 | claude | built R1.0b | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
+| D455 | 2026-11-12 | claude | superseded by D460 | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
 | D454 | 2026-11-11 | user | planned (R1.0c) | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
 | D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
 | D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
 | D451 | 2026-11-11 | user | built M4B.3 | components | B48 is fixed by M4B's per-group memory snapshot |
-| D450 | 2026-11-11 | user | built M4B.0 | workers | The master expires an assignment two heartbeats after its deadline |
+| D450 | 2026-11-11 | user | superseded by D460 | workers | The master expires an assignment two heartbeats after its deadline |
 | D449 | 2026-11-11 | user | built M4B.0 | workers | A clock-skew warning from the master's wall clock |
 | D448 | 2026-11-11 | user | built M4B.0 | observability | Clock and fencing metrics on workers and the master |
 | D447 | 2026-11-11 | user | built M4B.0 | workers | The worker's best clock sample is taken over a window |
@@ -765,6 +768,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### protocol
 
+- D460: Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started
 - D258: The master acknowledges each worker heartbeat
 - D62: Parse results stream one file per message
 - D61: Oversized task results fail before they are sent
@@ -904,6 +908,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### triggers
 
+- D459: A DAG's trigger has its own row with its switch; no row, no trigger
 - D394: A cycle through trigger=RunOf across DAGs isn't caught
 - D354: `EventNamed` waits for events posted through the API
 - D352: `@trigger.poke` batches events in Python
@@ -913,6 +918,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### ui-cli
 
+- D461: A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck
 - D457: The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger
 - D340: Sensors and resources have their own endpoints
 - D272: The graph shows which tasks a cleanup holds back
@@ -979,9 +985,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
-- D455: A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would
 - D453: A worker's cutoff counts from the send of the last heartbeat the master heard
-- D450: The master expires an assignment two heartbeats after its deadline
 - D449: A clock-skew warning from the master's wall clock
 - D447: The worker's best clock sample is taken over a window
 - D446: A simulator checks the liveness rules on virtual clocks
