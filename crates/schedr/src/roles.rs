@@ -38,7 +38,7 @@ use schedr_api::metrics::ApiMetrics;
 use schedr_api::{ApiState, router};
 use schedr_config::config::Timings;
 use schedr_config::{AuthMode, AuthSection, Config, MemoryReserve, TlsMode};
-use schedr_db::{Backend, Database, redact_password};
+use schedr_db::{Backend, Database, SchemaStatus, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
 use schedr_master::lease::{Leadership, Renewal};
 use schedr_master::metrics::MasterMetrics;
@@ -1233,7 +1233,11 @@ pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) {
     loop {
         let (waiting, error) = match db.schema_status().await {
             Ok(status) if status.is_usable() => return,
-            Ok(status) => (describe_status(&status), false),
+            // An earlier schedr's schema is no migration away: say it louder.
+            Ok(status) => (
+                describe_status(&status),
+                matches!(status, SchemaStatus::Modified { .. }),
+            ),
             Err(error) => (format!("unreadable ({error})"), true),
         };
         if waiting != said {
@@ -1441,6 +1445,12 @@ pub async fn lead(
             }
             Ok(lead)
         })));
+    }
+    if let SchemaStatus::Modified { .. } = status {
+        return Err(AppError::BadArgument(format!(
+            "the database schema is {}",
+            describe_status(&status)
+        )));
     }
     if !migrate {
         return Err(AppError::BadArgument(format!(

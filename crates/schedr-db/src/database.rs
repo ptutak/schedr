@@ -530,29 +530,39 @@ impl Database {
     ///
     /// Returns [`DbError::Sqlx`] if the query fails.
     pub async fn applied_migrations(&self) -> Result<Vec<i64>, DbError> {
+        Ok(self
+            .applied_checksums()
+            .await?
+            .into_iter()
+            .map(|(version, _)| version)
+            .collect())
+    }
+
+    /// The applied migrations' versions and checksums, in order (none before the first migration).
+    async fn applied_checksums(&self) -> Result<Vec<(i64, Vec<u8>)>, DbError> {
         const EXISTS_SQLITE: &str =
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'";
         const EXISTS_POSTGRES: &str =
             "SELECT COUNT(*) FROM pg_tables WHERE tablename = '_sqlx_migrations'";
-        const VERSIONS: &str =
-            "SELECT version FROM _sqlx_migrations WHERE success ORDER BY version";
-        let versions = match &self.pool {
+        const APPLIED: &str =
+            "SELECT version, checksum FROM _sqlx_migrations WHERE success ORDER BY version";
+        let applied = match &self.pool {
             Pool::Sqlite(pool) => {
                 let exists: i64 = sqlx::query_scalar(EXISTS_SQLITE).fetch_one(pool).await?;
                 if exists == 0 {
                     return Ok(Vec::new());
                 }
-                sqlx::query_scalar(VERSIONS).fetch_all(pool).await?
+                sqlx::query_as(APPLIED).fetch_all(pool).await?
             }
             Pool::Postgres(pool) => {
                 let exists: i64 = sqlx::query_scalar(EXISTS_POSTGRES).fetch_one(pool).await?;
                 if exists == 0 {
                     return Ok(Vec::new());
                 }
-                sqlx::query_scalar(VERSIONS).fetch_all(pool).await?
+                sqlx::query_as(APPLIED).fetch_all(pool).await?
             }
         };
-        Ok(versions)
+        Ok(applied)
     }
 
     /// How the database's schema compares with this binary's migrations.
@@ -561,10 +571,14 @@ impl Database {
     ///
     /// Returns [`DbError::Sqlx`] if reading the applied migrations fails.
     pub async fn schema_status(&self) -> Result<SchemaStatus, DbError> {
-        let applied = self.applied_migrations().await?;
-        Ok(SchemaStatus::compare(
-            &self.backend().migration_versions(),
-            &applied,
-        ))
+        let applied = self.applied_checksums().await?;
+        let embedded: Vec<(i64, &[u8])> = self
+            .backend()
+            .migrator()
+            .iter()
+            .map(|m| (m.version, m.checksum.as_ref()))
+            .collect();
+        let applied: Vec<(i64, &[u8])> = applied.iter().map(|(v, c)| (*v, c.as_slice())).collect();
+        Ok(SchemaStatus::compare_checksums(&embedded, &applied))
     }
 }

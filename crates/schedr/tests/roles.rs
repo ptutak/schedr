@@ -74,6 +74,32 @@ fn the_master_refuses_a_database_not_migrated_yet() {
 }
 
 #[test]
+fn the_master_refuses_an_earlier_schedrs_database_even_with_migrate() {
+    let url = postgres_database();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let db = schedr_db::Database::connect(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        // As a 0.x database looks: a migration applied with other contents than this binary's.
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        sqlx::raw_sql(
+            "UPDATE _sqlx_migrations SET checksum = '\\x00' \
+             WHERE version = (SELECT MIN(version) FROM _sqlx_migrations)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    });
+    let cluster = Cluster::new(Some(url), "100ms");
+    let (code, err) = cluster.schedr(&["master", "--migrate"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("created by an earlier schedr") && err.contains("needs a fresh database"),
+        "{err}"
+    );
+    assert!(!err.contains("--migrate`"), "{err}");
+}
+
+#[test]
 fn a_webserver_started_before_the_migration_serves_once_the_master_has_migrated() {
     let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
     cluster.start_unready("webserver", &["webserver"]);

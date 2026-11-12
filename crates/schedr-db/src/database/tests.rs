@@ -144,6 +144,27 @@ async fn a_schema_migrated_by_a_newer_schedr_is_still_usable() {
 }
 
 #[tokio::test]
+async fn a_schema_whose_applied_migration_differs_is_modified_and_not_usable() {
+    let db = migrated().await;
+    let first = Backend::Sqlite.migration_versions()[0];
+    execute(
+        &db,
+        &format!("UPDATE _sqlx_migrations SET checksum = x'00' WHERE version = {first}"),
+    )
+    .await
+    .unwrap();
+    let status = db.schema_status().await.unwrap();
+    assert_eq!(
+        status,
+        SchemaStatus::Modified {
+            changed: vec![first]
+        }
+    );
+    assert!(!status.is_usable());
+    assert!(db.migrate().await.is_err(), "migrate must refuse it too");
+}
+
+#[tokio::test]
 async fn migrating_a_database_with_unknown_migrations_fails() {
     let db = migrated().await;
     execute(

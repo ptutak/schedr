@@ -20,6 +20,13 @@ pub enum SchemaStatus {
         /// The versions not applied yet.
         missing: Vec<i64>,
     },
+    /// Migrations applied under a version this binary has, but with other contents: an earlier
+    /// schedr (0.x, whose migrations 1.0 rewrote) created the database. Not usable, and
+    /// `schedr db migrate` refuses it too: 1.0 needs a fresh database (see CHANGELOG).
+    Modified {
+        /// The versions whose applied checksum differs from this binary's.
+        changed: Vec<i64>,
+    },
     /// The database has migrations this binary doesn't know (a newer schedr migrated it).
     Newer {
         /// The versions this binary doesn't know.
@@ -52,6 +59,25 @@ impl SchemaStatus {
         } else {
             Self::Newer { unknown }
         }
+    }
+
+    /// Compares the migrations built into the binary with the applied ones, version and
+    /// checksum: a version applied with another checksum makes the schema
+    /// [`Modified`](Self::Modified), whatever else holds.
+    #[must_use]
+    pub fn compare_checksums(embedded: &[(i64, &[u8])], applied: &[(i64, &[u8])]) -> Self {
+        let changed: Vec<i64> = applied
+            .iter()
+            .filter(|(version, checksum)| {
+                embedded.iter().any(|(v, c)| v == version && c != checksum)
+            })
+            .map(|(version, _)| *version)
+            .collect();
+        if !changed.is_empty() {
+            return Self::Modified { changed };
+        }
+        let versions = |list: &[(i64, &[u8])]| list.iter().map(|(v, _)| *v).collect::<Vec<_>>();
+        Self::compare(&versions(embedded), &versions(applied))
     }
 
     /// Whether schedr can run against this schema: up to date, or migrated by a newer schedr.

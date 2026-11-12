@@ -20,6 +20,28 @@ fn compares_embedded_and_applied_versions(
 }
 
 #[rstest]
+#[case(&[(1, b"a"), (2, b"b")], &[(1, b"a"), (2, b"b")], SchemaStatus::UpToDate)]
+#[case(&[(1, b"a"), (2, b"b")], &[(1, b"x"), (2, b"b")], SchemaStatus::Modified { changed: vec![1] })]
+#[case(&[(1, b"a"), (2, b"b")], &[(1, b"x")], SchemaStatus::Modified { changed: vec![1] })]
+#[case(&[(1, b"a")], &[(1, b"a"), (2, b"z")], SchemaStatus::Newer { unknown: vec![2] })]
+#[case(&[(1, b"a"), (2, b"b")], &[(1, b"a")], SchemaStatus::Outdated { missing: vec![2] })]
+#[case(&[(1, b"a")], &[], SchemaStatus::Uninitialized)]
+fn a_migration_applied_with_other_contents_makes_the_schema_modified(
+    #[case] embedded: &[(i64, &[u8; 1])],
+    #[case] applied: &[(i64, &[u8; 1])],
+    #[case] expected: SchemaStatus,
+) {
+    fn slices<'a>(list: &[(i64, &'a [u8; 1])]) -> Vec<(i64, &'a [u8])> {
+        list.iter().map(|(v, c)| (*v, c.as_slice())).collect()
+    }
+    assert_eq!(
+        SchemaStatus::compare_checksums(&slices(embedded), &slices(applied)),
+        expected
+    );
+}
+
+#[rstest]
+#[case(SchemaStatus::Modified { changed: vec![1] }, false)]
 #[case(SchemaStatus::UpToDate, true)]
 #[case(SchemaStatus::Newer { unknown: vec![9] }, true)]
 #[case(SchemaStatus::Outdated { missing: vec![1] }, false)]

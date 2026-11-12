@@ -110,6 +110,10 @@ pub fn describe_status(status: &SchemaStatus) -> String {
                 missing.len()
             )
         }
+        SchemaStatus::Modified { changed } => format!(
+            "created by an earlier schedr: {} migration(s) differ from this one's; schedr 1.0 needs a fresh database (see the CHANGELOG)",
+            changed.len()
+        ),
         SchemaStatus::Newer { unknown } => format!(
             "newer than this schedr ({} unknown migration(s)); usable within the same major version",
             unknown.len()
