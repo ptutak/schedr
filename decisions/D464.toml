@@ -1,0 +1,15 @@
+title = "The master keeps a sample of each process a minute"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "observability"
+section = "Metrics in the UI"
+summary = '''
+The leading master writes one sample per process a minute (memory, CPU, the container's memory
+and limit, a worker's breakdown) into a samples table (a new migration on both databases). Kept a
+minute apart for 24 h, then rolled up into 15-minute averages and peaks kept 30 days; retention
+deletes older ones, its ages hidden values. Not chosen: one a minute for 7 days without a rollup.
+'''
+history = "JOURNAL.md#D464"
+step = "M5.3"
+also = ["state"]

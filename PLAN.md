@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M4B.6, The turn in one transaction, savepoints per group.
+**Next:** M5.0a, Profile the start path.
 
 ## M0: Foundations
 
@@ -212,7 +212,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4B.3 | A turn's messages in groups | done 2026-11-11 | D397, D451 |
 | M4B.4 | A turn's `Finished`s written together | done 2026-11-11 |  |
 | M4B.5 | The agent's journal in groups | done 2026-11-11 | D396 |
-| M4B.6 | The turn in one transaction, savepoints per group | **next** |  |
+| M4B.6 | The turn in one transaction, savepoints per group | dropped |  |
 
 ## 1.0.0: after M4B
 
@@ -220,21 +220,27 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
-| R1.0a | A slim image | planned | D383 |
+| R1.0a | A slim image | done 2026-11-11 | D383 |
 | R1.0b | The master's side in the clock simulator | done 2026-11-12 |  |
-| R1.0c | Images on glibc beside Alpine | planned | D454 |
+| R1.0c | Images on glibc beside Alpine | done 2026-11-11 | D454 |
 
-## M5: Airflow layer
+## M5: Performance, metrics, Airflow migration tools
 
 **Done when:** Not set yet (archive/PROJECT.md, Roadmap). Scope, criteria and notes: `plan/M5.toml`.
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
-| M5.0a | Profile the start path | planned |  |
+| M5.0a | Profile the start path | **next** |  |
 | M5.0b | Starts not held behind a turn | planned |  |
 | M5.0c | The start rate | planned |  |
 | M5.0d | Pokes and rounds through PgBouncer | planned |  |
 | M5.0e | The turn size from data | planned |  |
+| M5.1 | The Status block | planned | D462 |
+| M5.2 | Memory and CPU reported | planned | D463 |
+| M5.3 | The samples table | planned | D464 |
+| M5.4 | The Metrics page | planned | D465, D466 |
+| M5.5 | Task memory charts | planned | D467 |
+| M5.6 | Throughput and start latency on the Metrics page | planned |  |
 
 ## M6: sign-in against LDAP
 

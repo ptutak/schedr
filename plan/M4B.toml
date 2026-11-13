@@ -23,6 +23,9 @@ its `Finished`s written with set-based statements, each run read and settled onc
 the agent's journal written in groups; B184 counts as fixed when stress 23 records its 500 ends
 within 5 s on Postgres, with a unit test counting the statements of a turn.
 
+M4B is done (the user, 2026-11-13, after 1.0.0): M4B.6 dropped, never needed; whether the
+turn's commits matter is M5.0's profiling to show.
+
 A milestone of its own between M4 and M5 (the user, 2026-11-01: renamed from "M4.5", which
 read as a step of M4, M4.5 being the agent channel there).
 
@@ -147,4 +150,4 @@ scope = '''
 done_when = '''
 a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
 '''
-status = "planned"
+status = "dropped"

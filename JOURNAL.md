@@ -654,3 +654,43 @@ not started on its new worker, whatever its task did before; shown never started
 for another worker again with no move used, otherwise it is held or moved on like a started one.
 The lease's lower bound of four heartbeats stays, its reason now only that a few lost beats
 don't lose a worker.
+
+### <a id="D462"></a><a id="D463"></a><a id="D464"></a><a id="D465"></a><a id="D466"></a><a id="D467"></a>2026-11-13: metrics in the UI (decisions 462-467)
+
+After 1.0.0 the user set the next phase: M5.0's performance work, then metrics in the UI. What
+existed: every process exports Prometheus metrics on its ops port, which the UI never reads (no
+process records that address); the attempts keep their timestamps, peak memory and CPU for 90
+days; nothing records a process's memory over time, and no one records a container's limit.
+D386 rules out OpenTelemetry.
+
+Claude proposed three layers: a Status block on the Deployments page (the user's idea of
+2026-11-12, from what that page already fetches), history from the attempts on the DAG page, and
+a Metrics page over a samples table the master writes. Reading the code corrected the idea's
+note: the page's `GET /api/v1/deployment` carries no slots, so the block needs each worker's
+`slots` and `running` added there (the Workers page's endpoint has them). The user asked for
+memory per node, per master and worker, "and maybe even more, in some kind of a chart"; then
+chose layers 1 and 3, asked what layer 1 needs (only that additive API change), and accepted
+every recommendation and the layout:
+
+- Depth (decision 463): processes, the container's limit from the cgroup (what gets a pod
+  killed), and a worker's memory split into agent, fork servers, watcher hosts and tasks. Not
+  chosen: processes only.
+- History (decision 464): a sample a minute for 24 h, 15-minute averages and peaks for 30 days.
+  Not chosen: one a minute for 7 days (more rows, shorter reach).
+- CPU beside memory (decision 463): the same path at almost no cost.
+- A task's peak memory over its attempts (decision 467), from data already stored: it shows a
+  task creeping towards its limit before an OOM kill.
+- Charts drawn by the server as SVG (decision 466), as the DAG graphs are: no JavaScript library,
+  htmx and the live stream re-render them. Not chosen: uPlot (hover and zoom, but a vendored
+  library and charts drawn in the browser).
+- No Grafana dashboards in the Helm chart for now.
+- Part of M5 (steps M5.1-M5.6), after M5.0's performance work and before the Airflow layer, so
+  the Metrics page can show the start's stages M5.0a times. Not chosen: a milestone of its own;
+  before M5.0.
+- Placement (decision 465): history where it belongs (the task panel, the DAG page), the
+  deployment-wide figures on a new Metrics page after Deployments. Not chosen: everything on
+  one page.
+
+The UI scraping each process's `/metrics` was not chosen: it needs every process to record its
+ops address, and gives the present only. Runs and tasks by state stay off the Status block,
+which describes a deployment's health; they belong to the Metrics page.

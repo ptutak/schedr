@@ -29,6 +29,12 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D467 | 2026-11-13 | user | planned (M5.5) | ui-cli | A task's peak memory over its attempts is charted |
+| D466 | 2026-11-13 | user | planned (M5.4) | ui-cli | UI charts are SVG drawn by the server |
+| D465 | 2026-11-13 | user | planned (M5.4) | ui-cli | A Metrics page with memory and CPU over time |
+| D464 | 2026-11-13 | user | planned (M5.3) | observability | The master keeps a sample of each process a minute |
+| D463 | 2026-11-13 | user | planned (M5.2) | observability | Masters, workers and the webserver report their memory and CPU |
+| D462 | 2026-11-13 | user | planned (M5.1) | ui-cli | The Deployments page has a Status block above its graph |
 | D461 | 2026-11-12 | user | planned (1.0.0) | ui-cli | A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck |
 | D460 | 2026-11-12 | user | planned (1.0.0) | protocol | Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started |
 | D459 | 2026-11-12 | user | planned (1.0.0) | triggers | A DAG's trigger has its own row with its switch; no row, no trigger |
@@ -36,7 +42,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D457 | 2026-11-12 | user | planned (1.0.0) | ui-cli | The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger |
 | D456 | 2026-10-29 | user | rule | development | From 1.0.0 the schema and the protocol change only additively |
 | D455 | 2026-11-12 | claude | superseded by D460 | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
-| D454 | 2026-11-11 | user | planned (R1.0c) | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
+| D454 | 2026-11-11 | user | built R1.0c | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
 | D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
 | D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
 | D451 | 2026-11-11 | user | built M4B.3 | components | B48 is fixed by M4B's per-group memory snapshot |
@@ -107,7 +113,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D386 | 2026-11-09 | user | rule | observability | No OpenTelemetry |
 | D385 | 2026-11-09 | user | rule | task-processes | A worker's interpreters serve all its roots |
 | D384 | 2026-11-09 | user | rule | assignment | Assignment stays oldest-ready-first; no priorities between DAGs |
-| D383 | 2026-11-09 | user | planned (R1.0a) | deployment | A slim image beside the full one |
+| D383 | 2026-11-09 | user | built R1.0a | deployment | A slim image beside the full one |
 | D382 | 2026-11-09 | user | rule | components | One leading master per deployment; scale by more deployments |
 | D381 | 2026-11-09 | user | superseded by D407 | chained-runs | Operators are mapped in a later step, TriggerDagOperator with them |
 | D380 | 2026-11-09 | user | built M4.12a | chained-runs | A waiting TriggerDagOperator doesn't count towards the DAG's limits |
@@ -727,6 +733,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### observability
 
+- D464: The master keeps a sample of each process a minute
+- D463: Masters, workers and the webserver report their memory and CPU
 - D448: Clock and fencing metrics on workers and the master
 - D387: Wait steps aren't isolated after host losses
 - D386: No OpenTelemetry
@@ -918,6 +926,10 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### ui-cli
 
+- D467: A task's peak memory over its attempts is charted
+- D466: UI charts are SVG drawn by the server
+- D465: A Metrics page with memory and CPU over time
+- D462: The Deployments page has a Status block above its graph
 - D461: A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck
 - D457: The UI names a DAG's trigger kind, shows descriptions in the list, and offers no Pause for a DAG without a trigger
 - D340: Sensors and resources have their own endpoints

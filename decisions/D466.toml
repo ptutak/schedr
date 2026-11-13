@@ -1,0 +1,16 @@
+title = "UI charts are SVG drawn by the server"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+Charts are SVG rendered on the server like the DAG graphs (decision 22), with no JavaScript chart
+library: a point's value shows on hover from its `<title>`, and an open chart refreshes once a
+minute on the page's live stream (decision 175). Light and dark from the UI's colour tokens; on a
+phone charts stack and tables scroll in their own box. Not chosen: a vendored library such as
+uPlot (hover and zoom); Grafana dashboards in the Helm chart, for now.
+'''
+history = "JOURNAL.md#D466"
+step = "M5.4"
+also = []

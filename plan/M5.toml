@@ -1,7 +1,11 @@
-title = "Airflow layer"
+title = "Performance, metrics, Airflow migration tools"
 order = 80
 done_when = "Not set yet (archive/PROJECT.md, Roadmap)."
 notes = '''
+Renamed (the user, 2026-11-13): probably no Airflow layer; Airflow migration tools instead,
+converting Airflow DAG files into schedr DAGs once. To be decided when those steps are planned;
+the layer's notes below stay until then.
+
 Thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation,
 `xcom_pull`; the placeholder and macro design (deferred until the first version works); the
 migration tool. After M4B (archive/PROJECT.md, Roadmap; Airflow compatibility).
@@ -10,6 +14,12 @@ First, the start path (the user, 2026-11-11, after 1.0.0): M4B's stress comparis
 Stress tests, After M4B) made finishing faster and starting slower (assigned → started p99 up
 66-114 % in scenarios 9 and 13, stress 23's 500 starts in 25.7 s against its ends in 4.8 s).
 Profile first; the other four steps follow what it finds.
+
+Then metrics in the UI (the user, 2026-11-13, decisions 462-467), M5.1-M5.6, before the
+Airflow layer, so the Metrics page can also show where a start's time goes (M5.0a's stages).
+The Status block (M5.1) needs no protocol or schema change; the rest needs a protocol field
+(minor version) and new migrations on both databases. No OpenTelemetry (decision 386); no
+Grafana dashboards for now.
 '''
 
 [[steps]]
@@ -64,5 +74,71 @@ one stress session comparing 10, 20, 40 and 80 messages a turn (`SCHEDR_HIDDEN__
 '''
 done_when = '''
 the default set from the measured trade-off between start latency and throughput, the numbers in the stress guide
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.1"
+title = "The Status block"
+scope = '''
+(decision 462): the block above the Deployments graph from what the page already fetches, plus each worker's `slots` and `running` in `GET /api/v1/deployment`
+'''
+done_when = '''
+the block shows masters by role, workers by state, slots, problems, mixed versions and unreachable deployments; a UI test per state; the guide's Deployments section says so
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2"
+title = "Memory and CPU reported"
+scope = '''
+(decision 463): resident memory, CPU time and the cgroup's memory and limit in the masters row, the worker's heartbeat (a protocol field, minor version up; the worker's breakdown: agent, fork servers, watcher hosts, tasks) and the webserver's `/deployment` answer
+'''
+done_when = '''
+each process's figures reach the database or the answer; an older worker without the field is still served; tests on both databases
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.3"
+title = "The samples table"
+scope = '''
+(decision 464): a migration on both databases; the leading master writes a sample per process a minute; 15-minute rollups of averages and peaks; retention deletes past 24 h and 30 days
+'''
+done_when = '''
+samples written, rolled up and deleted on both databases, with a statement count per minute under a stated bound; the guide's retention section names them
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.4"
+title = "The Metrics page"
+scope = '''
+(decisions 465, 466): the page with memory and CPU charts per deployment, its table and side panel; the Status block's memory and sparkline; a chart in each node's panel; the Workers page's Memory column; SVG charts drawn by the server
+'''
+done_when = '''
+the page renders every range on both databases and in light and dark; live refresh once a minute; UI browser tests; a guide page on it
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.5"
+title = "Task memory charts"
+scope = '''
+(decision 467): the task panel's chart of its last 30 attempts' peak memory, the DAG page's p95 peaks against limits
+'''
+done_when = '''
+both shown from the attempts table with an `oom_killed` attempt marked; UI tests
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.6"
+title = "Throughput and start latency on the Metrics page"
+scope = '''
+tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.0a times them
+'''
+done_when = '''
+not set yet: after M5.0a's breakdown
 '''
 status = "planned"

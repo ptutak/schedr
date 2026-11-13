@@ -5,10 +5,11 @@ updated = 2026-11-13
 
 in_progress = [
     "Release 1.0.0 out (v1.0.0, 8316ba3, 2026-11-12): CI and the release workflow green; PyPI shows 1.0.0 and the six ghcr.io images carry the 1.0.0 label (checked by hand 2026-11-13).",
+    "M5.0 starts with profiling (the user, 2026-11-13): Grok (high) looks for the most cost-efficient performance improvements, read-only, in the worktree schedr-grok-m5-perf (session d12a2612-6f5d-45e0-878d-ca3e9832f971); its findings to verify, then M5.0a. After M5.0, metrics in the UI as M5.1-M5.6 (decisions 462-467).",
     "A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.",
     "For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).",
     "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",
-    "After 1.0.0: M5.0a-e (the start path after M4B's regression in assigned->started p99, profile first); an idea (the user, 2026-11-12, left for later): a Status block on the deployment page from what that page already fetches (masters, workers by state, slots in use, problems), no Prometheus scraping (no process records its ops address); an Airflow translation tool (the user, 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.",
+    "Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.",
 ]
 
 waiting = []

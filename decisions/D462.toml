@@ -1,0 +1,17 @@
+title = "The Deployments page has a Status block above its graph"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+One row per deployment above the graph: masters by role (red when none leads), workers by state,
+slots in use over active workers, errors and warnings counted with the list unfolding (each line
+opening its node's panel), mixed versions warned, an unreachable deployment's error and how long
+it took. `GET /api/v1/deployment` gains each worker's `slots` and `running` (additive). Memory now,
+with a 24 h sparkline, joins it with the memory samples (decision 464). Not chosen: runs and tasks
+by state in the block (left to the Metrics page).
+'''
+history = "JOURNAL.md#D462"
+step = "M5.1"
+also = ["observability"]

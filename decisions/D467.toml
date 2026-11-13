@@ -1,0 +1,14 @@
+title = "A task's peak memory over its attempts is charted"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+The task panel charts the peak memory of a task's last 30 attempts from the attempts table, one
+bar per attempt coloured by its outcome (`oom_killed` marked) and linking to its run, its memory
+limit dashed. The DAG page lists its tasks' p95 peak against their limits, closest first.
+'''
+history = "JOURNAL.md#D467"
+step = "M5.5"
+also = ["observability"]

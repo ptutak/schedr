@@ -378,6 +378,7 @@ Each is one line; the reader's page has the diagrams.
 - Watcher hosts stop when their last watcher ends (D334, `wait-steps`; built M4.11a2)
 - The UI shows watcher hosts and switched-off sensors (D343, `observability`; built M4.11a4)
 - Running cleanup continues past the drain deadline (D346, `cleanup`; built M4.11a4)
+- Masters, workers and the webserver report their memory and CPU (D463, `observability`; planned (M5.2))
 <!-- end of current -->
 
 ## Replaced

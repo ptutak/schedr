@@ -5,9 +5,9 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Now (2026-11-13)
 
-- **Milestone:** M4B, Batched worker messages (a milestone after M4).
-- **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
-- **Then:** R1.0a, R1.0c, M5.0a, M5.0b, M5.0c.
+- **Milestone:** M5, Performance, metrics, Airflow migration tools.
+- **Next step:** M5.0a, Profile the start path. Done when: a written breakdown of assigned → started p50/p99 by stage, from a run with timings per stage; the next steps' order set from it
+- **Then:** M5.0b, M5.0c, M5.0d, M5.0e, M5.1.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 4; first: B39 (low/possible), B38 (low/possible), B242 (low/rare), B241 (low/rare) (`BUGS.md`).
 
@@ -19,16 +19,17 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D458 (2026-11-12): a sensor poke tolerates overruns of `every` (decision 458, supersedes 322)
 - D457 (2026-11-12): the UI names a DAG's trigger kind, shows descriptions, and has no Pause for a DAG without a trigger
 - R1.0b (2026-11-12): The master's side in the clock simulator
-- M4B.5 (2026-11-11): The agent's journal in groups
-- M4B.4 (2026-11-11): A turn's `Finished`s written together
+- R1.0c (2026-11-11): Images on glibc beside Alpine
+- R1.0a (2026-11-11): A slim image
 
 ## In progress
 
 - Release 1.0.0 out (v1.0.0, 8316ba3, 2026-11-12): CI and the release workflow green; PyPI shows 1.0.0 and the six ghcr.io images carry the 1.0.0 label (checked by hand 2026-11-13).
+- M5.0 starts with profiling (the user, 2026-11-13): Grok (high) looks for the most cost-efficient performance improvements, read-only, in the worktree schedr-grok-m5-perf (session d12a2612-6f5d-45e0-878d-ca3e9832f971); its findings to verify, then M5.0a. After M5.0, metrics in the UI as M5.1-M5.6 (decisions 462-467).
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
-- After 1.0.0: M5.0a-e (the start path after M4B's regression in assigned->started p99, profile first); an idea (the user, 2026-11-12, left for later): a Status block on the deployment page from what that page already fetches (masters, workers by state, slots in use, problems), no Prometheus scraping (no process records its ops address); an Airflow translation tool (the user, 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
+- Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
 
 ## Waiting for the user
 

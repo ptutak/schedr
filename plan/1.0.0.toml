@@ -24,7 +24,9 @@ scope = '''
 done_when = '''
 the slim image is released with 1.0.0 and its smoke test runs a DAG without connections
 '''
-status = "planned"
+status = "done"
+done = 2026-11-11
+commits = ["e5281c9"]
 
 [[steps]]
 id = "R1.0b"
@@ -47,4 +49,6 @@ scope = '''
 done_when = '''
 both kinds of each image pass the smoke tests in CI and are pushed with 1.0.0
 '''
-status = "planned"
+status = "done"
+done = 2026-11-11
+commits = ["e5281c9"]

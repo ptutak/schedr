@@ -1,0 +1,17 @@
+title = "Masters, workers and the webserver report their memory and CPU"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "observability"
+section = "Metrics in the UI"
+summary = '''
+Each process reports its resident memory and CPU time, and its container's memory now and its
+limit from the cgroup: a master in its masters row, a worker in its heartbeat (a new field, the
+protocol's minor version up), the webserver in its `/deployment` answer. A worker splits its
+memory into the agent itself, its fork servers, its watcher hosts and its running tasks, with its
+largest tasks named. Not chosen: processes only, without the limit or the breakdown; the UI
+scraping each process's `/metrics` (no process records that address, and it gives no history).
+'''
+history = "JOURNAL.md#D463"
+step = "M5.2"
+also = ["protocol", "workers"]
