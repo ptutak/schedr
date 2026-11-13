@@ -858,3 +858,57 @@ D442 and the guarantees page state them.
   role and user `odd`, the table `async_rows`, the Mongo database `schedr_test`).
 - **Not chosen:** B, for about 1.5 min more against the 12 cores both suites would share and
   the flaky timeouts already seen under load (B245, B247); C, which leaves about 5 min.
+
+### <a id="D480"></a>2026-11-13: the core lock released at the end of each transaction (decision 480; replaces 468)
+
+- **Measured first (M5.1c, round parts and a probe of one assignment, stress 23, SQLite):**
+  a round holding the lock for up to 3.3 s spends it in the assign part: of 17.6 s of
+  assignment transactions over the run, 10.8 s are the wait-step checks (`ended_before_its_call`:
+  `wait_step_strikes` and `first_start`, about 5.9 ms each, 1,840 calls: 500 assigned and 1,340
+  visits to tasks past the round's cap of 50), 4.8 s the claim (`assign_attempt`, 9.6 ms each),
+  1.5 s the deadline (`keep_deadline`, 3.1 ms each); the rest is negligible. An assignment costs
+  about 18 ms (Claude first said 33 ms, read off a histogram bucket). Commands reach 1.6-3.3 s at
+  p99 in scenarios 13 and 23.
+- **Question:** how the lock is shared between workers' turns and the round. The user asked what
+  M4B built (savepoints were planned, M4B.2 and M4B.6, both dropped: a turn's groups are one
+  transaction each, a failed group redone one by one) and how a turn orders its messages
+  (segments cut at barriers: the `Started`s, then the `Finished`s, then heartbeats and warnings,
+  then the barrier alone).
+- **Options:** (A) release the lock at the end of each transaction, the turns' groups as they
+  are; (B) one turn for all workers: all messages in one inbox in arrival order, grouped as one
+  worker's turn is, a barrier from any worker cutting the pile (the user's form of 468); (C)
+  decision 468 as written, barriers per worker.
+- **Chosen: A first** (the user). Small and safe: no transaction is added, only lock hand-offs
+  (FIFO, microseconds); the longest wait falls to one transaction. B is kept for later, built
+  if commits per second limit under several workers (scenario 13 measured): it cuts commits from
+  N per group kind to one, but a barrier from any worker cuts everyone's group, a failed group
+  reaches every worker, and one worker gains nothing.
+- **Not chosen:** C, its per-worker barriers more complex than B for the same commits.
+
+### <a id="D481"></a>2026-11-13: the round's assignments set-based; tasks past the cap pending (decisions 481, 482)
+
+- **From the probe (D480's entry):** of 17.6 s of assignment transactions in stress 23, the
+  wait-step checks take 10.8 s (1,840 visits, 1,340 of them past the cap), the claim 4.8 s,
+  the deadline 1.5 s.
+- **Chosen (Claude's proposal, the user agreeing):** the wait-step checks as two queries a round
+  for all ready wait steps (482, Claude's: nothing changes for users, the same wait steps end in
+  the same round); the claim and the deadline in statements per batch, the one-by-one fallback
+  kept (482); the round stops visiting tasks at its cap (481, the user's, as it changes what
+  people see): they count as `next_round` and show a pending reason, written in one statement a
+  round ("show in the UI something like (Pending state...)").
+- **Not chosen:** keeping the visits past the cap (cheap once the checks are set-based, but
+  still 1,340 visits); writing each task's real reason every round.
+- **Plan (the user):** M5.1c1 builds D480 and these; M5.1c2 measures the commands (1.6-3.3 s at
+  p99 in scenarios 13 and 23); then the user decides whether more M5.1c steps are needed before
+  M5.1d.
+
+### <a id="N5"></a>2026-11-13: M5.1c2: what a round's commands spend (stress 13 and 23) (note 5)
+
+Probed after M5.1c1 (temporary timers, SQLite, stress 13 and 23; every command a `TriggerRun`),
+per command in scenario 23 (50 commands; scenario 13 about twice as slow, its machine busy with
+tasks): marked applying 10.0 ms, `active_dags` 10.4 ms (all DAGs read to find one), the nearest
+earlier run 4.5 ms, the run inserted 10.7 ms, the running count 4.0 ms, the queued runs 4.3 ms,
+the queued runs started 10.7 ms, the decision stored 9.6 ms: about 64 ms a command, no step
+dominating. The four writes are each their own commit (a command isn't one transaction); the
+reads are 4-10 ms each. Up to 50 commands a round: 3.2 s at most. What to do with it is the
+user's decision after M5.1c1 and M5.1c2's review.

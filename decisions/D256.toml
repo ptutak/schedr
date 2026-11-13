@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D256"
 step = "M4.8b3"
 also = ["workers", "configuration"]
 code = ["crates/schedr-config/src/config.rs::cleanup_move_wait", "crates/schedr-master/src/dispatch.rs::cleanup_move_wait"]
-checked = 2026-11-12
+checked = 2026-11-13

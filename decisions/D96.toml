@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D96"
 step = "M4.4"
 also = ["assignment"]
 code = ["crates/schedr-ui/src/pages.rs", "crates/schedr-db/src/attempts.rs::active_counts", "crates/schedr-api/src/views.rs::LimitView"]
-checked = 2026-11-12
+checked = 2026-11-13

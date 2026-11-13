@@ -29,7 +29,10 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D479 | 2026-11-13 | user | planned (M5.1c) | development | The Python integration tests run on several processes (pytest-xdist) |
+| D482 | 2026-11-13 | claude | built M5.1c1 | assignment | The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch |
+| D481 | 2026-11-13 | user | built M5.1c1 | assignment | Tasks past a round's assignment cap are not visited; they show as pending |
+| D480 | 2026-11-13 | user | built M5.1c1 | workers | The core lock released at the end of each transaction; one turn for all workers only if commits limit |
+| D479 | 2026-11-13 | user | built M5.1c1 | development | The Python integration tests run on several processes (pytest-xdist) |
 | D478 | 2026-11-13 | user | rule | wait-steps | User-set deadlines count on the wall clock |
 | D477 | 2026-11-13 | user | built M5.1b2 | development | PyPI shows a page of its own: installing and a first run |
 | D476 | 2026-11-13 | user | built M5.1b2 | components | A worker or standalone with no DAG directories warns at start |
@@ -39,8 +42,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D472 | 2026-11-13 | user | planned (M5.2c) | airflow | What the migration tool converts, and what it leaves marked for a person |
 | D471 | 2026-11-13 | user | planned (M5.2b) | airflow | The migration tool has an Airflow 2 mode and an Airflow 3 mode |
 | D470 | 2026-11-13 | user | planned (M5.2b) | airflow | The Airflow migration tool rewrites the source, checked against the original's structure |
-| D469 | 2026-11-13 | user | planned (M5.1c) | assignment | A round releases the core lock between its batches of assignments |
-| D468 | 2026-11-13 | user | planned (M5.1c) | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
+| D469 | 2026-11-13 | user | built M5.1c1 | assignment | A round releases the core lock between its batches of assignments |
+| D468 | 2026-11-13 | user | superseded by D480 | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
 | D467 | 2026-11-13 | user | planned (M5.1k) | ui-cli | A task's peak memory over its attempts is charted |
 | D466 | 2026-11-13 | user | planned (M5.1j) | ui-cli | UI charts are SVG drawn by the server |
 | D465 | 2026-11-13 | user | planned (M5.1j) | ui-cli | A Metrics page with memory and CPU over time |
@@ -522,6 +525,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### assignment
 
+- D482: The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch
+- D481: Tasks past a round's assignment cap are not visited; they show as pending
 - D469: A round releases the core lock between its batches of assignments
 - D384: Assignment stays oldest-ready-first; no priorities between DAGs
 - D95: Concurrency limits cannot be overridden through the API or CLI
@@ -1019,7 +1024,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
-- D468: One inbox for all workers: a turn takes every worker's messages, in phases
+- D480: The core lock released at the end of each transaction; one turn for all workers only if commits limit
 - D453: A worker's cutoff counts from the send of the last heartbeat the master heard
 - D449: A clock-skew warning from the master's wall clock
 - D447: The worker's best clock sample is taken over a window

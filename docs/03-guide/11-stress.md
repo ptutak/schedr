@@ -394,3 +394,26 @@ the worker sent it.
 records at about 13 ms each are about 6.5 s of disk time, one after another on the agent's
 loop, of the 14.5 s; the rest is the master assigning them in rounds of 50 behind a lock its
 turns also want.
+
+### What a round spends (M5.1c)
+
+`master_round_part_seconds` times each part of a round. Before M5.1c1, scenario 23's rounds
+spent their time assigning: of 17.6 s of assignment transactions over the run, the wait-step
+checks (switched off? past `max_wait`?) took 10.8 s, one or two queries for each ready wait
+step at every visit, 1,340 of those visits to tasks past the round's 50; the claims took 4.8 s
+(9.6 ms each, three statements) and the deadlines 1.5 s. An assignment cost about 18 ms. After
+M5.1c1 (the checks read once a round, the round stopping at its 50, the claims in a few
+statements over the batch, the lock taken per part and per transaction):
+
+| Scenario 23 | M5.1b | M5.1c1 |
+|---|---|---|
+| `all_in_s` (500 wait steps started) | 14.5 s | 4.2 s |
+| the round's assign part, p99 | 3.3 s | 0.2 s |
+| a turn waiting for the lock, p99 | 6.6 s | 1.6 s |
+
+**Commands (M5.1c2).** A round's commands reach 1.6-3.3 s at p99 in scenarios 13 and 23,
+every one a `TriggerRun` at about 64 ms in scenario 23: marked applying 10.0 ms, all the active
+DAGs read to find one 10.4 ms, the nearest earlier run 4.5 ms, the run inserted 10.7 ms, the
+running count 4.0 ms, the queued runs 4.3 ms, queued runs started 10.7 ms, the decision stored
+9.6 ms (scenario 13 about twice that, its machine busy with tasks). No step dominates: the four
+writes are each their own commit, and the reads 4-10 ms each.

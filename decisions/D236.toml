@@ -12,5 +12,5 @@ configuration file for every command but `task-ctx` and `dag-ctx`).
 '''
 history = "archive/PROJECT.md#D236"
 step = "M4.8u"
-checked = 2026-11-12
+checked = 2026-11-13
 code = ["crates/schedr-master/src/core.rs::MasterTimings"]

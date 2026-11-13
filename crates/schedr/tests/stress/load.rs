@@ -243,9 +243,9 @@ impl Stress {
     }
 
     /// Where a start's time goes (M5.1a), p50 and p99 of each stage, recorded without limits:
-    /// on the master, the wait for its core lock (by a worker's turn, by the round) and each
-    /// part of a turn; on the first worker (or the standalone), from an `AssignTask` taken to
-    /// its `Started` sent, and each kind of journal record.
+    /// on the master, the wait for its core lock (by a worker's turn, by the round), each part
+    /// of a turn and each part of a round (M5.1c); on the first worker (or the standalone),
+    /// from an `AssignTask` taken to its `Started` sent, and each kind of journal record.
     pub fn stages(&self, report: &mut Report, master: &str) {
         let has = |name: &str| self.cluster.ops.iter().any(|(ops, _)| ops == name);
         let mut put = |metrics: &str, name: &str, labels: &str, key: &str| {
@@ -274,6 +274,20 @@ impl Stress {
                 let labels = format!("part=\"{part}\"");
                 let key = format!("turn_{part}");
                 put(metrics, "schedr_master_turn_part_seconds", &labels, &key);
+            }
+            // Each part of a round (M5.1c): what a round holding the lock spends its time on.
+            for part in [
+                "commands",
+                "scheduler",
+                "triggers",
+                "prepare",
+                "expire",
+                "assign",
+                "rest",
+            ] {
+                let labels = format!("part=\"{part}\"");
+                let key = format!("round_{part}");
+                put(metrics, "schedr_master_round_part_seconds", &labels, &key);
             }
         }
         let worker = if has("w01") {

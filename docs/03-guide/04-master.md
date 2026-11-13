@@ -5,8 +5,11 @@ workers (who is connected, their slots, queues and code) and keeps everything el
 database. There is one master per database (below); when it restarts, it reads its state
 back from the database.
 
-All of its work runs under **one lock**: a round, and the handling of each message from a
-worker. Each sees a consistent view, and two decisions never interleave.
+All of its work runs under **one lock**, taken for one piece of work at a time: each part of a
+round (below), and each transaction of a worker's messages. Each piece sees a consistent view
+and two never interleave; between them the lock goes to whoever waited first, so a worker's
+`Started` doesn't wait for a whole round, nor a round for another worker's whole turn
+(decisions 469, 480).
 
 ## Rounds
 
@@ -60,7 +63,7 @@ and holds up the workers' messages and the lease:
 | 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again (if finding them fails, it is tried again each round). |
 | 3 | **Scheduler** | Visits the [busy DAGs](#busy-and-quiet-dags) every round and the quiet ones woken this round (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), and starts queued runs while the DAG is under `max_active_runs`. Its trigger passes also start runs for matching `RunOf` and posted named events. |
-| 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after the worker lease (60 s by default) (not one whose `Started` has arrived and waits to be handled, nor one whose worker is disconnected within its lease or, after a restart, not registered again yet: it may come back with the task done); assigns ready tasks to workers (resource cleanups first, then oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). [Resource cleanups](../02-dags/16-resources.md) bypass those limits. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. |
+| 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after the worker lease (60 s by default) (not one whose `Started` has arrived and waits to be handled, nor one whose worker is disconnected within its lease or, after a restart, not registered again yet: it may come back with the task done); assigns ready tasks to workers (resource cleanups first, then oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). [Resource cleanups](../02-dags/16-resources.md) bypass those limits. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. Once a round has made its 50 assignments it stops going through the ready tasks: the rest show "pending: waiting for a round with room" (up to 500 a round) and go in the next rounds; a wait step among them switched off or out of `max_wait` still ends in that round (decision 481). The round reads its ready wait steps' switch-off marks and first starts once, and claims its assignments together, in a few statements (decision 482). |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than `[master] parse_job_timeout` (10 minutes by default) to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for the [worker lease](14-timings.md#fixed-timings) (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one (a task with `cleanup_anywhere` only after the cancel grace and the cleanup move wait: the worker may have started it and be stopping it). |
 
@@ -215,8 +218,9 @@ gets the same item; `NOT_YET` waits for a later match.
 
 Messages from workers are handled as they arrive, under the same lock, in order for each
 worker. A worker's messages that are already waiting are handled together, up to 40 in one turn
-of the lock (`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`); then the round and other workers get
-their turns, and the rest follow in the worker's next turn. (A task sends `Started` and
+(`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), the rest in the worker's next turn. A turn takes
+the lock for each of its transactions on its own (decision 480), and checks each time that its
+stream is still the worker's: the round and other workers' turns get in between. (A task sends `Started` and
 `Finished`. A forked Python task sends `Started` twice, the second with `start_method` `fork`.)
 
 In a turn, the `Started`s are stored together in one transaction, then the `Finished`s in

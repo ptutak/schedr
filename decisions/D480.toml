@@ -1,0 +1,20 @@
+title = "The core lock released at the end of each transaction; one turn for all workers only if commits limit"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+A worker's turn keeps its groups and their transactions (decision 397: `Started`s, then
+`Finished`s, barriers alone in order) but takes the master's core lock for each transaction on
+its own, releasing it at the transaction's end, so other workers' turns and the round
+interleave; the round already takes it per part (decision 469). Nothing it keeps across groups
+is trusted after the lock is taken again. One turn for all workers (all workers' messages in one
+inbox in arrival order, grouped as one worker's turn is, a barrier from any worker cutting the
+pile) is built only if commits per second turn out to be the limit under several workers.
+Not chosen: decision 468's phases with barriers per worker.
+'''
+history = "JOURNAL.md#D480"
+step = "M5.1c1"
+code = ["crates/schedr-master/src/service.rs::turn"]
+checked = 2026-11-13

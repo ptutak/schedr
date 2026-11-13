@@ -2395,6 +2395,69 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
 }
 
 #[tokio::test]
+async fn the_tasks_past_a_rounds_cap_show_pending_and_go_in_the_next() {
+    // Decision 481: once a round has made its assignments it stops going through the ready
+    // tasks: the rest show pending, in one write, and go in the next round.
+    let width = ASSIGNMENTS_PER_ROUND + 5;
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_tasks(width)).await;
+    dispatcher
+        .register("w1", "i1", &[], u32::try_from(width * 2).unwrap(), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher.step(ts(NOW)).await.unwrap().len(),
+        ASSIGNMENTS_PER_ROUND
+    );
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let pending: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT queued_reason FROM task_instances WHERE state = 'queued'")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(pending.len(), 5);
+    assert!(
+        pending
+            .iter()
+            .all(|r| r.as_deref() == Some(pending_reason().as_str())),
+        "{pending:?}"
+    );
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn a_batch_redone_one_at_a_time_still_stops_at_the_rounds_cap() {
+    // Grok's review of M5.1c1: an assignment the master ends while building it (its message
+    // too large to send) redoes the batch one at a time, which went on past the round's cap.
+    let big = task("big", &json!({"x": {"literal": "x".repeat(70 * 1024)}}), 0);
+    let mut dag = serde_json::to_value(dag_with_tasks(ASSIGNMENTS_PER_ROUND + 5)).unwrap();
+    dag["tasks"].as_array_mut().unwrap().insert(0, big);
+    let (dispatcher, db, run_id) = with_run(serde_json::from_value(dag).unwrap()).await;
+    let mut dispatcher = dispatcher.with_max_message_size(64 * 1024);
+    let slots = u32::try_from(ASSIGNMENTS_PER_ROUND * 2).unwrap();
+    dispatcher
+        .register("w1", "i1", &[], slots, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), ASSIGNMENTS_PER_ROUND);
+    assert_eq!(
+        state_of(&db, &run_id, "big").await.0,
+        TaskInstanceState::Failed
+    );
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let queued: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM task_instances WHERE state = 'queued'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(queued, 5, "the rest wait for the next round");
+}
+
+#[tokio::test]
 async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
     // B52: unstarted attempts are read a round's worth at a time; those whose `Started`
     // waits in memory are left out after reading, so they must not use up the read.
@@ -3429,6 +3492,31 @@ async fn a_switched_off_wait_step_fails_at_once_even_with_no_worker_to_take_it()
         .unwrap();
     let out = dispatcher.step(ts(NOW)).await.unwrap();
     assert_eq!(out.len(), 0);
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Failed
+    );
+}
+
+#[tokio::test]
+async fn a_switched_off_wait_step_past_the_rounds_cap_still_fails_that_round() {
+    // Decision 481: the round doesn't go through the tasks past its cap, but a wait step
+    // switched off among them still ends in it (its strikes read once a round, decision 482).
+    let mut dag = serde_json::to_value(dag_with_tasks(ASSIGNMENTS_PER_ROUND)).unwrap();
+    let wait = serde_json::to_value(&sensor_dag().tasks[0]).unwrap();
+    dag["tasks"].as_array_mut().unwrap().push(wait);
+    let (mut dispatcher, db, run_id) = with_run(serde_json::from_value(dag).unwrap()).await;
+    switched_off_on_h1(&db).await;
+    dispatcher.set_current_code("etl", &accepted(&["h1"]), None);
+    let slots = u32::try_from(ASSIGNMENTS_PER_ROUND * 2).unwrap();
+    dispatcher
+        .register("w1", "i2", &[], slots, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.report_root("w1", "etl", "h1");
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), ASSIGNMENTS_PER_ROUND);
+    assert!(out.iter().all(|o| assignment(o).task_id != "wait"));
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Failed

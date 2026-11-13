@@ -1,0 +1,20 @@
+title = "Tasks past a round's assignment cap are not visited; they show as pending"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+summary = '''
+Once a round has made its assignments (`ASSIGNMENTS_PER_ROUND`), it stops going through the
+ready tasks: the rest are counted as waiting for the next round (`tasks_waiting`, `next_round`)
+and their reason becomes a pending one the UI shows ("pending: waiting for a round with
+room ..."), at most 500 a round (one statement; a longer backlog over the next rounds),
+written with the round's other reasons, instead of
+each being checked for its limits and workers; a round that reaches them writes their own
+reason again. A wait step among them switched off or out of time still ends in that round. Not chosen: visiting every ready task each round (1,340 visits, 1.6 s of a round in
+stress 23).
+'''
+history = "JOURNAL.md#D481"
+step = "M5.1c1"
+code = ["crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-13

@@ -18,6 +18,9 @@ use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sq
 /// The most tasks one query reads the outputs of.
 const OUTPUTS_PER_QUERY: usize = 500;
 
+/// The most instances claimed by one statement (and attempts inserted, four parameters each).
+const CLAIMS_PER_STATEMENT: usize = 200;
+
 #[cfg(test)]
 mod tests;
 
@@ -380,6 +383,92 @@ impl Database {
         Ok(try_number.map(|n| (id, u32::try_from(n).unwrap_or(0))))
     }
 
+    /// [`Self::assign_attempt`] for a round's whole batch (decision 482): each
+    /// `(instance, worker, attempt)` whose instance is still queued becomes `running` with that
+    /// new attempt, in two statements over many rows (the claim, then the attempts). Returns the
+    /// try number of each instance claimed; one no longer queued is left out.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails (nothing is stored then).
+    pub async fn claim_attempts(
+        &self,
+        claims: &[(&str, &str, &str)],
+        now: Timestamp,
+    ) -> Result<BTreeMap<String, u32>, DbError> {
+        // One transaction for every chunk (Grok's review): never part of a batch stored.
+        Box::pin(self.atomically(self.claim_chunks(claims, now))).await
+    }
+
+    async fn claim_chunks(
+        &self,
+        claims: &[(&str, &str, &str)],
+        now: Timestamp,
+    ) -> Result<BTreeMap<String, u32>, DbError> {
+        let now = db_time(now);
+        let mut tries: BTreeMap<String, u32> = BTreeMap::new();
+        for chunk in claims.chunks(CLAIMS_PER_STATEMENT) {
+            let ids: Vec<String> = (2..chunk.len() + 2)
+                .map(|n| format!("${n}{{uuid}}"))
+                .collect();
+            let claim = format!(
+                "UPDATE task_instances SET state = 'running', try_number = try_number + 1, \
+                 ready_at = NULL, queued_reason = NULL, updated_at = $1{{ts}} \
+                 WHERE state = 'queued' AND id IN ({}) RETURNING id{{text}}, try_number",
+                ids.join(", ")
+            );
+            // The claim and its attempts in one transaction: never one without the other.
+            let claimed: BTreeMap<String, u32> = in_tx!(self, |tx, backend| {
+                let mut query =
+                    sqlx::query_as::<_, (String, i32)>(sql_text(backend, &claim)).bind(&now);
+                for (instance, _, _) in chunk {
+                    query = query.bind(*instance);
+                }
+                let claimed: BTreeMap<String, u32> = query
+                    .fetch_all(&mut *tx)
+                    .await?
+                    .into_iter()
+                    .map(|(id, n)| (id, u32::try_from(n).unwrap_or(0)))
+                    .collect();
+                let rows: Vec<&(&str, &str, &str)> = chunk
+                    .iter()
+                    .filter(|(instance, _, _)| claimed.contains_key(*instance))
+                    .collect();
+                if !rows.is_empty() {
+                    let values: Vec<String> = (0..rows.len())
+                        .map(|i| {
+                            let n = i * 4 + 2;
+                            format!(
+                                "(${n}{{uuid}}, ${}{{uuid}}, ${}, ${}, $1{{ts}})",
+                                n + 1,
+                                n + 2,
+                                n + 3
+                            )
+                        })
+                        .collect();
+                    let insert = format!(
+                        "INSERT INTO attempts (id, task_instance_id, try_number, worker_id, \
+                         assigned_at) VALUES {}",
+                        values.join(", ")
+                    );
+                    let mut query = sqlx::query(sql_text(backend, &insert)).bind(&now);
+                    for (instance, worker, attempt) in &rows {
+                        let try_number = i32::try_from(claimed[*instance]).unwrap_or(i32::MAX);
+                        query = query
+                            .bind(*attempt)
+                            .bind(*instance)
+                            .bind(try_number)
+                            .bind(*worker);
+                    }
+                    query.execute(&mut *tx).await?;
+                }
+                claimed
+            });
+            tries.extend(claimed);
+        }
+        Ok(tries)
+    }
+
     /// Starts a `TriggerDagOperator`'s attempt (decisions 361, 380): the queued instance becomes
     /// `running` with a new attempt that no worker runs, started at once, recording the run it
     /// starts (`chained_run_id`) before that run is created. Returns the attempt's ID and try
@@ -558,6 +647,39 @@ impl Database {
         first
             .map(|at| parse_time("attempts.started_at", &at))
             .transpose()
+    }
+
+    /// [`Self::first_start`] of each of `instance_ids` at once (a round's ready wait steps,
+    /// decision 482): the instances never started are absent.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails or a time doesn't read.
+    pub async fn first_starts(
+        &self,
+        instance_ids: &[&str],
+    ) -> Result<BTreeMap<String, Timestamp>, DbError> {
+        let mut first = BTreeMap::new();
+        for chunk in instance_ids.chunks(OUTPUTS_PER_QUERY) {
+            let wanted: Vec<String> = (1..=chunk.len()).map(|n| format!("${n}{{uuid}}")).collect();
+            let text = format!(
+                "SELECT task_instance_id{{text}}, {{ts<}}MIN(started_at){{>ts}} FROM attempts \
+                 WHERE started_at IS NOT NULL AND task_instance_id IN ({}) \
+                 GROUP BY task_instance_id",
+                wanted.join(", ")
+            );
+            let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+                let mut query = sqlx::query_as(sql_text(backend, &text));
+                for id in chunk {
+                    query = query.bind(*id);
+                }
+                query.fetch_all(pool).await?
+            });
+            for (instance_id, at) in rows {
+                first.insert(instance_id, parse_time("attempts.started_at", &at)?);
+            }
+        }
+        Ok(first)
     }
 
     /// An attempt by its ID.

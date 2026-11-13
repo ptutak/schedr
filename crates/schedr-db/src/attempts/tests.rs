@@ -233,6 +233,92 @@ async fn an_instance_is_assigned_once_with_the_next_try_number() {
 }
 
 #[tokio::test]
+async fn a_batch_claims_the_queued_instances_with_their_attempts_and_skips_the_others() {
+    // Decision 482: as `assign_attempt`, for many at once; an instance not queued (`load` is
+    // scheduled, `extract` claimed already the second time) is left out, nothing stored for it.
+    let (db, run_id) = with_run().await;
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let instance = |task: &str| {
+        run.instances
+            .iter()
+            .find(|i| i.task_id == id(task))
+            .unwrap()
+            .id
+            .clone()
+    };
+    let (extract, load) = (instance("extract"), instance("load"));
+    let (first, second) = (
+        "0190a3e5-0000-7000-8000-000000000001",
+        "0190a3e5-0000-7000-8000-000000000002",
+    );
+    let claims = [
+        (extract.as_str(), "w1", first),
+        (load.as_str(), "w2", second),
+    ];
+    let tries = db.claim_attempts(&claims, ts(NOW)).await.unwrap();
+    assert_eq!(tries, BTreeMap::from([(extract.clone(), 1)]));
+    assert_eq!(
+        instance_state(&db, &run_id, "extract").await,
+        (TaskInstanceState::Running, 1)
+    );
+    assert_eq!(
+        instance_state(&db, &run_id, "load").await,
+        (TaskInstanceState::Scheduled, 0)
+    );
+    let attempt = db.attempt(first).await.unwrap().unwrap();
+    assert_eq!(
+        (attempt.instance_id.as_str(), attempt.worker_id.as_str()),
+        (extract.as_str(), "w1")
+    );
+    assert_eq!((attempt.try_number, attempt.started), (1, false));
+    assert_eq!(db.attempt(second).await.unwrap(), None);
+    let again = [(
+        extract.as_str(),
+        "w2",
+        "0190a3e5-0000-7000-8000-000000000003",
+    )];
+    assert!(db.claim_attempts(&again, ts(NOW)).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn first_starts_read_each_instances_earliest_start_at_once() {
+    // Decision 482: `first_start` for a round's wait steps together; never started: absent.
+    let (db, run_id) = with_run().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let extract = ready[0].instance_id.clone();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let load = run
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("load"))
+        .unwrap()
+        .id
+        .clone();
+    let (attempt_id, _) = db
+        .assign_attempt(&extract, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        db.first_starts(&[&extract, &load])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    db.mark_started(&attempt_id, "spawn", ts("2026-10-21T08:00:05Z"))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.first_starts(&[&extract, &load]).await.unwrap(),
+        BTreeMap::from([(extract.clone(), ts("2026-10-21T08:00:05Z"))])
+    );
+    assert_eq!(
+        db.first_start(&extract).await.unwrap(),
+        Some(ts("2026-10-21T08:00:05Z"))
+    );
+}
+
+#[tokio::test]
 async fn a_rejected_assignment_is_taken_back_without_a_try() {
     let (db, run_id) = with_run().await;
     let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]

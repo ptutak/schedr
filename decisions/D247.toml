@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D247"
 step = "M4.8b2"
 also = ["workers"]
 code = ["crates/schedr-db/migrations/postgres/0001_initial.sql", "crates/schedr-db/src/attempts.rs::cleanup_moves", "crates/schedr-db/migrations/sqlite/0001_initial.sql::cleanup_moves"]
-checked = 2026-11-12
+checked = 2026-11-13

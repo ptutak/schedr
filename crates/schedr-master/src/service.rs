@@ -22,7 +22,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::core::task_api::ApiCallPlan;
-use crate::core::{Arrivals, CoreError, Group, MasterCore};
+use crate::core::{Arrivals, CoreError, Group, MasterCore, RoundPart};
 use crate::dispatch::Outgoing;
 use crate::lease::{Leadership, Renewal};
 use crate::metrics::MasterMetrics;
@@ -418,14 +418,20 @@ impl Hub {
     ///
     /// The core's failure (the next tick goes on).
     pub async fn tick(&self) -> Result<(), CoreError> {
-        // What the round built before a failure is delivered too (B7).
-        let (outgoing, result) = self
-            .core_for("round")
-            .await
-            .tick_partial((self.clock)())
-            .await;
-        self.deliver(outgoing).await;
-        result
+        // The lock taken for each part on its own, so a worker's turn gets in between them
+        // (decision 469), each part at the time it runs. What a part built before a failure is
+        // delivered too (B7); a failed part ends the round, as before.
+        for part in RoundPart::ALL {
+            let mut outgoing = Vec::new();
+            let result = self
+                .core_for("round")
+                .await
+                .round_part(part, (self.clock)(), &mut outgoing)
+                .await;
+            self.deliver(outgoing).await;
+            result?;
+        }
+        Ok(())
     }
 
     /// Runs the master's loop: a tick every `interval` until `stop` completes, and at once when
@@ -800,19 +806,20 @@ impl Hub {
         }
     }
 
-    /// One turn of a worker's messages under the core's lock (M4B.3, decision 397): its
-    /// `Started`s and `Finished`s as one group, stored together, heartbeats and warnings after
-    /// it; any other message ends the group (it is stored first) and is handled alone. A group
-    /// that fails is redone one by one, [`ALONE_PER_TURN`] now and the rest first in the next
-    /// turn, with what this turn hadn't reached.
+    /// One turn of a worker's messages (M4B.3, decision 397): its `Started`s and `Finished`s as
+    /// one group, stored together, heartbeats and warnings after it; any other message ends the
+    /// group (it is stored first) and is handled alone. A group that fails is redone one by one,
+    /// [`ALONE_PER_TURN`] now and the rest first in the next turn, with what this turn hadn't
+    /// reached. The core's lock is taken for each transaction on its own (the `Started` group,
+    /// the `Finished` group, each message alone) and its stream checked again each time, so
+    /// rounds and other workers' turns get in between (decision 480); what each sends goes out
+    /// at once.
     async fn turn(
         &self,
-        core: &mut MasterCore,
-        worker_id: &str,
+        (worker_id, stream): (&str, &Outbound),
         turn: Vec<Turned>,
         carried: &mut VecDeque<Turned>,
-    ) -> TurnDone {
-        let mut done = TurnDone::default();
+    ) -> TurnEnd {
         let mut group = Group::default();
         let mut after = Vec::new();
         let mut messages = turn.into_iter();
@@ -855,19 +862,21 @@ impl Hub {
                 } else {
                     ("started", kind.started.len())
                 };
+                let Some(mut core) = self.served_core(worker_id, stream).await else {
+                    return TurnEnd::Dropped;
+                };
                 let began = std::time::Instant::now();
                 let handled = core.handle_group(worker_id, kind, (self.clock)()).await;
                 self.metrics.turn_part_done(part, count, began.elapsed());
+                drop(core);
                 match handled {
-                    Ok(out) => {
-                        done.finished |= wakes;
-                        done.outgoing.extend(out);
-                    }
+                    Ok(out) => self.sent(out, wakes).await,
                     Err(failed) => {
                         let mut failed = failed.into_messages().into_iter();
                         for message in failed.by_ref().take(ALONE_PER_TURN) {
-                            if !self.alone(core, worker_id, message, &mut done).await {
-                                return done;
+                            let (end, _) = self.alone_served(worker_id, stream, message).await;
+                            if !matches!(end, TurnEnd::Goes) {
+                                return end;
                             }
                         }
                         // The rest in order: a `Finished` never stored before its `Started`.
@@ -881,30 +890,84 @@ impl Hub {
                         carried.extend(after.drain(..).map(Turned::Grouped));
                         carried.extend(barrier.take().map(Turned::Alone));
                         carried.extend(messages);
-                        return done;
+                        return TurnEnd::Goes;
                     }
                 }
             }
-            let began = std::time::Instant::now();
             let rest = after.len() + usize::from(barrier.is_some());
+            let mut held = std::time::Duration::ZERO;
             for message in after.drain(..) {
-                if !self.alone(core, worker_id, message, &mut done).await {
-                    self.metrics.turn_part_done("rest", rest, began.elapsed());
-                    return done;
+                let (end, took) = self.alone_served(worker_id, stream, message).await;
+                held += took;
+                if !matches!(end, TurnEnd::Goes) {
+                    self.metrics.turn_part_done("rest", rest, held);
+                    return end;
                 }
             }
-            let barrier = barrier.take();
-            let goes_on = match barrier {
-                Some(message) => self.alone(core, worker_id, message, &mut done).await,
-                None => false,
+            let end = match barrier.take() {
+                Some(message) => {
+                    let (end, took) = self.alone_served(worker_id, stream, message).await;
+                    held += took;
+                    Some(end)
+                }
+                None => None,
             };
             if rest > 0 {
-                self.metrics.turn_part_done("rest", rest, began.elapsed());
+                self.metrics.turn_part_done("rest", rest, held);
             }
-            if !goes_on {
-                return done;
+            match end {
+                // The barrier handled: on to the messages after it.
+                Some(TurnEnd::Goes) => {}
+                Some(end) => return end,
+                None => return TurnEnd::Goes,
             }
         }
+    }
+
+    /// The core, locked, if `stream` still carries its worker's messages (see
+    /// [`Self::still_served`]); none when it doesn't, and the stream is let go.
+    async fn served_core(
+        &self,
+        worker_id: &str,
+        stream: &Outbound,
+    ) -> Option<tokio::sync::MutexGuard<'_, MasterCore>> {
+        let core = self.core_for("turn").await;
+        self.still_served(&core, worker_id, stream)
+            .await
+            .then_some(core)
+    }
+
+    /// `message` handled alone, under the core's lock taken for it ([`Self::alone`]), what it
+    /// sends delivered after the lock is let go; with how long the lock was held.
+    async fn alone_served(
+        &self,
+        worker_id: &str,
+        stream: &Outbound,
+        message: worker_message::Message,
+    ) -> (TurnEnd, std::time::Duration) {
+        let Some(mut core) = self.served_core(worker_id, stream).await else {
+            return (TurnEnd::Dropped, std::time::Duration::ZERO);
+        };
+        let began = std::time::Instant::now();
+        let mut done = TurnDone::default();
+        let goes_on = self.alone(&mut core, worker_id, message, &mut done).await;
+        let took = began.elapsed();
+        drop(core);
+        self.sent(done.outgoing, done.finished).await;
+        let end = if goes_on && !done.unhandled {
+            TurnEnd::Goes
+        } else {
+            TurnEnd::Unhandled
+        };
+        (end, took)
+    }
+
+    /// Delivers what a transaction of a turn sends, waking a round if it stored a `Finished`.
+    async fn sent(&self, outgoing: Vec<Outgoing>, finished: bool) {
+        if finished {
+            self.finished.notify_one();
+        }
+        self.deliver(outgoing).await;
     }
 
     /// One message handled on its own, as every message was before M4B.3; whether the turn
@@ -1023,21 +1086,16 @@ impl Hub {
             // Everything already queued, up to the turn's limit, in one turn of the lock: one
             // message per turn left a worker's messages behind every round in between (B12).
             let turn = fill_turn(first, &mut carried, &mut queued, self.messages_per_turn);
-            let done = {
-                let mut core = self.core_for("turn").await;
-                if !self.still_served(&core, &worker_id, &stream).await {
+            match self.turn((&worker_id, &stream), turn, &mut carried).await {
+                TurnEnd::Goes => {}
+                TurnEnd::Dropped => {
                     reader.abort();
                     return;
                 }
-                self.turn(&mut core, &worker_id, turn, &mut carried).await
-            };
-            if done.finished {
-                self.finished.notify_one();
-            }
-            self.deliver(done.outgoing).await;
-            if done.unhandled {
-                reader.abort();
-                break;
+                TurnEnd::Unhandled => {
+                    reader.abort();
+                    break;
+                }
             }
         }
         if let Err(error) = reader.await
@@ -1235,6 +1293,17 @@ struct TurnDone {
     finished: bool,
     /// A message wasn't handled: the stream ends.
     unhandled: bool,
+}
+
+/// How a turn ended.
+enum TurnEnd {
+    /// The stream goes on.
+    Goes,
+    /// The stream no longer carries its worker's messages (replaced, or the worker taken for
+    /// lost): let go, the worker not written as disconnected.
+    Dropped,
+    /// A message wasn't handled: the stream ends, the worker disconnected.
+    Unhandled,
 }
 
 enum Next {

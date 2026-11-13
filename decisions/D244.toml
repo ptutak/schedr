@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D244"
 step = "M4.8b2"
 also = ["assignment"]
 code = ["crates/schedr-master/src/dispatch.rs::NO_CLEANUP_WORKER"]
-checked = 2026-11-12
+checked = 2026-11-13

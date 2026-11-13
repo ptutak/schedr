@@ -571,6 +571,53 @@ impl Arrivals {
     }
 }
 
+/// A part of a round, in the order a round runs them (`master_round_part_seconds`). The service
+/// takes the core's lock for each on its own (decision 469).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundPart {
+    /// Commands applied, and their follow-ups (drains, resumes).
+    Commands,
+    /// The scheduler's pass: runs created.
+    Scheduler,
+    /// Triggers given, moved or stopped.
+    Triggers,
+    /// Runs prepared, due retries queued.
+    Prepare,
+    /// Assignments expired, replaced incarnations' attempts ended.
+    Expire,
+    /// Cleanups, chained runs and assignments.
+    Assign,
+    /// Parse jobs past their time given again, lost workers forgotten.
+    Rest,
+}
+
+impl RoundPart {
+    /// Every part, in a round's order.
+    pub const ALL: [Self; 7] = [
+        Self::Commands,
+        Self::Scheduler,
+        Self::Triggers,
+        Self::Prepare,
+        Self::Expire,
+        Self::Assign,
+        Self::Rest,
+    ];
+
+    /// Its `part` label.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Commands => "commands",
+            Self::Scheduler => "scheduler",
+            Self::Triggers => "triggers",
+            Self::Prepare => "prepare",
+            Self::Expire => "expire",
+            Self::Assign => "assign",
+            Self::Rest => "rest",
+        }
+    }
+}
+
 /// The master's state between messages.
 #[derive(Debug)]
 pub struct MasterCore {
@@ -1435,6 +1482,51 @@ impl MasterCore {
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
+        for part in RoundPart::ALL {
+            self.round_part(part, now, outgoing).await?;
+        }
+        Ok(())
+    }
+
+    /// One part of a round, its messages into `outgoing` (each built after the write it stands
+    /// for is stored). The service takes the core's lock for each part on its own, so a
+    /// worker's turn gets in between them (decision 469); [`Self::tick`] runs them all.
+    ///
+    /// # Errors
+    ///
+    /// The part's failure: the round's later parts wait for the next round.
+    pub async fn round_part(
+        &mut self,
+        part: RoundPart,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), CoreError> {
+        let started = std::time::Instant::now();
+        let result = match part {
+            RoundPart::Commands => self.round_commands(outgoing, now).await,
+            RoundPart::Scheduler => (self.scheduler.pass(now).await)
+                .map(|_| ())
+                .map_err(CoreError::from),
+            RoundPart::Triggers => self.trigger_pass(now, outgoing).await,
+            RoundPart::Prepare => {
+                (self.dispatcher.prepare(now, outgoing).await).map_err(CoreError::from)
+            }
+            RoundPart::Expire => (self.dispatcher.expire_round(now).await).map_err(CoreError::from),
+            RoundPart::Assign => {
+                (self.dispatcher.assign_round(now, outgoing).await).map_err(CoreError::from)
+            }
+            RoundPart::Rest => self.round_rest(outgoing, now).await,
+        };
+        self.metrics.round_part_done(part.name(), started.elapsed());
+        result
+    }
+
+    /// A round's commands applied, with their follow-ups (drains, resumes).
+    async fn round_commands(
+        &mut self,
+        outgoing: &mut Vec<Outgoing>,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
         self.send_uses(outgoing, now);
         let mut applied = Applied::default();
         let commands = self
@@ -1486,10 +1578,15 @@ impl MasterCore {
                 }
             }
         }
-        commands?;
-        self.scheduler.pass(now).await?;
-        self.trigger_pass(now, outgoing).await?;
-        self.dispatcher.step_into(now, outgoing).await?;
+        commands.map_err(CoreError::from)
+    }
+
+    /// A round's last part: parse jobs past their time given again, lost workers forgotten.
+    async fn round_rest(
+        &mut self,
+        outgoing: &mut Vec<Outgoing>,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
         let expired = self.discovery.jobs_mut().expire(now);
         outgoing.extend(expired.into_iter().map(assign_parse));
         let lease =

@@ -1,0 +1,18 @@
+title = "The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch"
+date = 2026-11-13
+by = "claude"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+summary = '''
+A round finds the ready wait steps that are switched off or past their `max_wait` with a query
+each for all of them, before assigning, instead of one or two queries per wait step at each
+visit; and it claims the round's batch of assignments (attempts, `try_number`, the instances'
+state) and keeps their deadlines in statements over the whole batch, as a turn's `Finished`s
+are written (decision 396). A batch that fails is still assigned one by one. Not chosen: the
+per-task statements (in stress 23, 10.8 s, 4.8 s and 1.5 s of 17.6 s of assignment).
+'''
+history = "JOURNAL.md#D481"
+step = "M5.1c1"
+code = ["crates/schedr-master/src/dispatch.rs"]
+checked = 2026-11-13

@@ -91,6 +91,64 @@ pub fn finished_ack(worker_id: &str, attempt_id: &str) -> Outgoing {
 /// The error kind of a result the database refused (not retried).
 const RESULT_NOT_STORED: &str = "result_not_stored";
 
+/// An assignment picked, before its claim is stored (decision 482).
+#[derive(Debug)]
+struct Pick {
+    worker_id: String,
+    attempt_id: String,
+}
+
+/// The reason shown for a ready task a round didn't reach (decision 481).
+fn pending_reason() -> String {
+    format!(
+        "pending: waiting for a round with room (a round assigns at most \
+         {ASSIGNMENTS_PER_ROUND})"
+    )
+}
+
+/// What a round's assignments read once, for all their ready tasks, instead of once a task at
+/// each visit (decision 482): neither changes while the round assigns (an assignment adds an
+/// attempt not started; only rounds switch wait steps off or on).
+#[derive(Debug, Default)]
+struct RoundReads {
+    /// The wait steps switched off now, by DAG and task.
+    switched_off: BTreeMap<(String, String), schedr_db::strikes::WaitStepStrikes>,
+    /// Each ready wait step's first start (`None`: never started).
+    first_starts: BTreeMap<String, Option<Timestamp>>,
+}
+
+impl RoundReads {
+    async fn read(db: &Database, ready: &[ReadyInstance]) -> Result<Self, DispatchError> {
+        let waits: Vec<&str> = ready
+            .iter()
+            .filter(|r| {
+                r.dag
+                    .task(&r.task_id)
+                    .is_some_and(|t| matches!(t.kind, schedr_model::TaskKind::Sensor { .. }))
+            })
+            .map(|r| r.instance_id.as_str())
+            .collect();
+        if waits.is_empty() {
+            return Ok(Self::default());
+        }
+        let switched_off = db
+            .switched_off_wait_steps()
+            .await?
+            .into_iter()
+            .map(|s| ((s.dag_id.clone(), s.task_id.clone()), s))
+            .collect();
+        let started = db.first_starts(&waits).await?;
+        let first_starts = waits
+            .into_iter()
+            .map(|id| (id.to_owned(), started.get(id).copied()))
+            .collect();
+        Ok(Self {
+            switched_off,
+            first_starts,
+        })
+    }
+}
+
 /// Why a moved cleanup waits, shown as `unschedulable` (decision 244).
 const NO_CLEANUP_WORKER: &str = "no worker for the cleanup";
 
@@ -167,6 +225,10 @@ pub const DAG_IN_CONFLICT: &str = "waiting: DAG ID conflict";
 /// metrics still cover every task.
 pub const REASONS_PER_ROUND: usize = 100;
 
+/// The most pending reasons a round writes for the tasks past its cap (decision 481): one
+/// statement; a longer backlog gets them over the next rounds.
+const PENDING_PER_ROUND: usize = 500;
+
 /// When a task whose code wasn't on the worker yet is tried again: about the git-sync
 /// interval plus the settle time.
 pub const CODE_RETRY_DELAY: SignedDuration = SignedDuration::from_secs(35);
@@ -242,6 +304,11 @@ pub enum DispatchError {
         /// What is wrong.
         reason: String,
     },
+    /// An assignment of a round's batch was ended by the master before it was sent (its inputs
+    /// don't fit its arguments, or are too large to send): the batch is redone one at a time,
+    /// each assignment ending, and what it ends, as it would alone (decision 482).
+    #[error("an assignment of a round's batch ended before it was sent")]
+    Redo,
 }
 
 impl DispatchError {
@@ -344,6 +411,9 @@ pub struct Dispatcher {
     stops: Vec<Outgoing>,
     /// Mapped lists resolved during a step, shared by a task's instances.
     resolved: mapping::Resolved,
+    /// What a round's assignments read once for all its ready tasks, while it assigns
+    /// (decision 482); none outside it.
+    round_reads: Option<RoundReads>,
     /// Attempts a reconnecting worker runs whose start the database refused to record (B128):
     /// not taken back as never started while a worker holds them.
     adopted_unrecorded: BTreeSet<String>,
@@ -461,6 +531,7 @@ impl Dispatcher {
             read_back: ReadBack::default(),
             stops: Vec::new(),
             resolved: mapping::Resolved::new(),
+            round_reads: None,
             active: Active::new(),
             current_versions: BTreeMap::new(),
         }
@@ -956,14 +1027,53 @@ impl Dispatcher {
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
+        self.prepare(now, outgoing).await?;
+        self.expire_round(now).await?;
+        self.assign_round(now, outgoing).await
+    }
+
+    /// A round's first part of the dispatcher's: runs prepared, due retries queued.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn prepare(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
         outgoing.append(&mut self.stops);
-        self.resolved.clear();
         // Only a group's own writes are read back by (M4B.3); a round's aren't kept.
         self.witnesses.clear();
         self.execution.prepare_runs(now).await?;
         self.execution.queue_due_retries(now).await?;
+        Ok(())
+    }
+
+    /// A round's part: assignments past their worker's echo expired, replaced incarnations'
+    /// attempts ended.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn expire_round(&mut self, now: Timestamp) -> Result<(), DispatchError> {
         self.expire(now).await?;
         self.end_replaced(now).await?;
+        Ok(())
+    }
+
+    /// A round's assignments ([`Self::assign_into`]), the mapped lists read afresh: a worker's
+    /// turn may have run since the round's last part (decision 469).
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn assign_round(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
+        self.resolved.clear();
         self.assign_into(now, outgoing).await
     }
 
@@ -985,6 +1095,18 @@ impl Dispatcher {
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn assign_into(
+        &mut self,
+        now: Timestamp,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), DispatchError> {
+        let assigned = self.assign_reading(now, outgoing).await;
+        // Read for these assignments only: a later round, or a turn, reads afresh.
+        self.round_reads = None;
+        assigned
+    }
+
+    /// [`Self::assign_into`], [`RoundReads`] read once its ready tasks are known.
+    async fn assign_reading(
         &mut self,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
@@ -1013,6 +1135,7 @@ impl Dispatcher {
             self.metrics.set_waiting(&[]);
             return Ok(());
         }
+        self.round_reads = Some(RoundReads::read(&self.db, &ready).await?);
         self.read_limits().await?;
         // The step's assignments are one transaction: stored together, with one lease check
         // and one commit (T2, 2.10b). What they changed in memory (the slots reserved) and the
@@ -1047,7 +1170,11 @@ impl Dispatcher {
         }
         // One task may fail every time (its data won't read, the database refuses it): one at
         // a time, the others go on and it is set aside, instead of every round failing on it.
-        tracing::warn!(%error, "a round's assignments failed together: assigning one at a time");
+        if matches!(error, DispatchError::Redo) {
+            tracing::debug!("an assignment of the round's batch ended: assigning one at a time");
+        } else {
+            tracing::warn!(%error, "a round's assignments failed together: assigning one at a time");
+        }
         self.assign_one_by_one(now, &ready, outgoing).await
     }
 
@@ -1506,9 +1633,19 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         let mut tally = Tally::default();
         let (mut failed, mut made) = (Vec::new(), 0);
-        for one in ready {
+        for (n, one) in ready.iter().enumerate() {
+            // The round's cap holds here too (Grok's review of M5.1c1): the rest as in a batch.
+            if tally.assigned >= ASSIGNMENTS_PER_ROUND {
+                let db = self.db.clone();
+                let rest = Box::pin(db.atomically(self.past_the_cap(now, &ready[n..], &mut tally)));
+                if let Err(error) = rest.await {
+                    tracing::warn!(%error, "the tasks past the round's cap not gone through");
+                }
+                break;
+            }
             let (workers, active, built) =
                 (self.workers.clone(), self.active.clone(), outgoing.len());
+            let counted = tally.assigned;
             let db = self.db.clone();
             let assigned =
                 Box::pin(db.atomically(self.assign_one(now, one, outgoing, &mut tally))).await;
@@ -1519,6 +1656,7 @@ impl Dispatcher {
             };
             self.workers = workers;
             self.active = active;
+            tally.assigned = counted;
             if error.commit_unknown() {
                 // The rest of the round counts what is stored.
                 self.recount();
@@ -1566,12 +1704,77 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         let mut tally = Tally::default();
-        for one in ready {
-            self.assign_one(now, one, outgoing, &mut tally).await?;
+        // Picked one by one (each sees the slots and limits the ones before it took), claimed
+        // together, then each one's message built (decision 482).
+        let mut picks = Vec::new();
+        for (n, one) in ready.iter().enumerate() {
+            if tally.assigned >= ASSIGNMENTS_PER_ROUND {
+                self.past_the_cap(now, &ready[n..], &mut tally).await?;
+                break;
+            }
+            if let Some(pick) = self.pick_one(now, one, &mut tally).await? {
+                picks.push((one, pick));
+            }
+        }
+        let claims: Vec<(&str, &str, &str)> = picks
+            .iter()
+            .map(|(one, pick)| {
+                (
+                    one.instance_id.as_str(),
+                    pick.worker_id.as_str(),
+                    pick.attempt_id.as_str(),
+                )
+            })
+            .collect();
+        let tries = if claims.is_empty() {
+            BTreeMap::new()
+        } else {
+            self.db.claim_attempts(&claims, now).await?
+        };
+        let in_batch = picks.len() > 1;
+        for (one, pick) in picks {
+            let try_number = tries.get(&one.instance_id).copied();
+            self.build_one(now, one, (pick, try_number), in_batch, outgoing, &mut tally)
+                .await?;
         }
         self.db.set_queued_reasons(&tally.reasons, now).await?;
         let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
         self.metrics.set_waiting(&waiting);
+        Ok(())
+    }
+
+    /// The ready tasks a round reaches once it has made its assignments (decision 481): not
+    /// gone through for their limits and workers, but counted as waiting for the next round and
+    /// shown pending, the reason written with the others (in statements over many tasks). A
+    /// wait step switched off or out of time still ends now: read once a round
+    /// ([`RoundReads`]), that check costs a statement only for one that ends.
+    async fn past_the_cap(
+        &mut self,
+        now: Timestamp,
+        rest: &[ReadyInstance],
+        tally: &mut Tally,
+    ) -> Result<(), DispatchError> {
+        let pending = pending_reason();
+        // At most a statement's worth a round (Grok's review): a reason stays once written,
+        // so a longer backlog shows pending over the next rounds.
+        let mut shown = 0;
+        for ready in rest {
+            let dag = Arc::clone(&ready.dag);
+            let Some(task) = tally.task_in(&ready.version_id, &dag, &ready.task_id) else {
+                continue;
+            };
+            if self.ended_before_its_call(ready, task, now).await? {
+                continue;
+            }
+            *tally.waiting.entry("next_round").or_default() += 1;
+            if ready.queued_reason.as_deref() != Some(pending.as_str()) && shown < PENDING_PER_ROUND
+            {
+                shown += 1;
+                tally
+                    .reasons
+                    .push((ready.instance_id.clone(), pending.clone()));
+            }
+        }
         Ok(())
     }
 
@@ -1598,16 +1801,39 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
         tally: &mut Tally,
     ) -> Result<(), DispatchError> {
-        let dag = Arc::clone(&ready.dag);
-        let Some(task) = tally.task_in(&ready.version_id, &dag, &ready.task_id) else {
+        let Some(pick) = self.pick_one(now, ready, tally).await? else {
             return Ok(());
         };
+        let claim = [(
+            ready.instance_id.as_str(),
+            pick.worker_id.as_str(),
+            pick.attempt_id.as_str(),
+        )];
+        let tries = self.db.claim_attempts(&claim, now).await?;
+        let try_number = tries.get(&ready.instance_id).copied();
+        self.build_one(now, ready, (pick, try_number), false, outgoing, tally)
+            .await
+    }
+
+    /// The first part of an assignment (decision 482): whether `ready` goes this round, and to
+    /// which worker, its slot and its place under the concurrency limits taken at once (so the
+    /// next task picked sees them), under a new attempt ID; or why it waits.
+    async fn pick_one(
+        &mut self,
+        now: Timestamp,
+        ready: &ReadyInstance,
+        tally: &mut Tally,
+    ) -> Result<Option<Pick>, DispatchError> {
+        let dag = Arc::clone(&ready.dag);
+        let Some(task) = tally.task_in(&ready.version_id, &dag, &ready.task_id) else {
+            return Ok(None);
+        };
         if self.ended_before_its_call(ready, task, now).await? {
-            return Ok(());
+            return Ok(None);
         }
         // Its concurrency limits first: a task over one waits for it, whatever the workers.
         if self.held_back(ready, task, tally).await? {
-            return Ok(());
+            return Ok(None);
         }
         let excluded: BTreeSet<String> = self
             .rejections
@@ -1624,11 +1850,6 @@ impl Dispatcher {
             .workers
             .pick(needs, &without_code)
             .or_else(|| self.workers.pick(needs, &excluded));
-        // Enough for a round: the rest wait for the next one, counted as waiting (B18).
-        if picked.is_some() && tally.assigned >= ASSIGNMENTS_PER_ROUND {
-            *tally.waiting.entry("next_round").or_default() += 1;
-            return Ok(());
-        }
         let Some(worker_id) = picked.map(str::to_owned) else {
             let (why, reason) = self.why_waiting(needs, &excluded);
             *tally.waiting.entry(why).or_default() += 1;
@@ -1638,13 +1859,42 @@ impl Dispatcher {
             {
                 tally.reasons.push((ready.instance_id.clone(), reason));
             }
-            return Ok(());
+            return Ok(None);
         };
-        let Some((attempt_id, try_number)) = self
-            .db
-            .assign_attempt(&ready.instance_id, &worker_id, now)
-            .await?
-        else {
+        let attempt_id = uuid::Uuid::now_v7().to_string();
+        self.take_slot(task, (&worker_id, &attempt_id), now);
+        self.active.assigned(&attempt_id, ready);
+        tally.assigned += 1;
+        Ok(Some(Pick {
+            worker_id,
+            attempt_id,
+        }))
+    }
+
+    /// The last part of an assignment, once its claim is stored (`try_number`; `None`: the
+    /// instance wasn't queued any more): its message built into `outgoing`, or the attempt
+    /// ended for what the master finds (inputs that don't fit its arguments or are too large,
+    /// a message too large to send). The slot and the limits' place [`Self::pick_one`] took are
+    /// given back when it doesn't go.
+    async fn build_one(
+        &mut self,
+        now: Timestamp,
+        ready: &ReadyInstance,
+        (pick, try_number): (Pick, Option<u32>),
+        in_batch: bool,
+        outgoing: &mut Vec<Outgoing>,
+        tally: &mut Tally,
+    ) -> Result<(), DispatchError> {
+        let Pick {
+            worker_id,
+            attempt_id,
+        } = pick;
+        let dag = Arc::clone(&ready.dag);
+        let (Some(try_number), Some(task)) = (
+            try_number,
+            tally.task_in(&ready.version_id, &dag, &ready.task_id),
+        ) else {
+            self.unpick(&attempt_id, tally);
             return Ok(());
         };
         let inputs = mapping::inputs(
@@ -1658,7 +1908,10 @@ impl Dispatcher {
         let inputs = match inputs {
             Ok(inputs) => inputs,
             Err(InputsError::Db(error)) => return Err(error.into()),
+            // Ending it may end its task or run, and so what the batch picked after it.
+            Err(InputsError::NotArguments(_)) if in_batch => return Err(DispatchError::Redo),
             Err(InputsError::NotArguments(why)) => {
+                self.unpick(&attempt_id, tally);
                 let end = failed_by_master(INPUT_MISMATCH, "InputMismatch", &why);
                 self.end_ready(ready, &attempt_id, end, now).await?;
                 return Ok(());
@@ -1669,6 +1922,10 @@ impl Dispatcher {
             upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
         let params = self.params_json(ready).await?;
         if inputs.len() > MAX_INPUTS {
+            if in_batch {
+                return Err(DispatchError::Redo);
+            }
+            self.unpick(&attempt_id, tally);
             self.end(
                 &attempt_id,
                 &ready.run_id,
@@ -1688,14 +1945,22 @@ impl Dispatcher {
         );
         self.add_event(ready, &mut message).await?;
         self.keep_deadline(ready, task, &mut message, now).await?;
-        let Some(message) = self.if_it_fits(ready, &attempt_id, message, now).await? else {
+        let fits = self
+            .if_it_fits(ready, &attempt_id, (message, in_batch), now)
+            .await?;
+        let Some(message) = fits else {
+            self.unpick(&attempt_id, tally);
             return Ok(());
         };
-        self.take_slot(task, (&worker_id, &attempt_id), now);
-        self.active.assigned(&attempt_id, ready);
-        tally.assigned += 1;
         outgoing.push(Outgoing { worker_id, message });
         Ok(())
+    }
+
+    /// Gives back what [`Self::pick_one`] took for an assignment that doesn't go.
+    fn unpick(&mut self, attempt_id: &str, tally: &mut Tally) {
+        self.workers.release(attempt_id);
+        self.active.remove(attempt_id);
+        tally.assigned = tally.assigned.saturating_sub(1);
     }
 
     /// A worker reported `Started`. Returns a `CancelAttempt` if the attempt was taken back,
@@ -2110,6 +2375,12 @@ impl Dispatcher {
                 .sensor_wait(&ready.instance_id, now)
                 .await?
                 .map(|wait| wait.since)
+        } else if let Some(first) = self
+            .round_reads
+            .as_ref()
+            .and_then(|reads| reads.first_starts.get(&ready.instance_id))
+        {
+            *first
         } else {
             self.db.first_start(&ready.instance_id).await?
         };
@@ -2176,7 +2447,7 @@ impl Dispatcher {
         &mut self,
         ready: &ReadyInstance,
         attempt_id: &str,
-        assign: pb::AssignTask,
+        (assign, in_batch): (pb::AssignTask, bool),
         now: Timestamp,
     ) -> Result<Option<pb::MasterMessage>, DispatchError> {
         let mut message = pb::MasterMessage {
@@ -2195,6 +2466,10 @@ impl Dispatcher {
         let Some(why) = too_big_to_send(&message, self.max_message_size) else {
             return Ok(Some(message));
         };
+        if in_batch {
+            // Ending it may end its task or run, and so what the batch picked after it.
+            return Err(DispatchError::Redo);
+        }
         self.handing.remove(&ready.instance_id);
         let end = failed_by_master(INPUTS_TOO_LARGE, "InputsTooLarge", &why);
         self.end_ready(ready, attempt_id, end, now).await?;
@@ -2297,7 +2572,14 @@ impl Dispatcher {
         dag: &schedr_model::Dag,
         task: &str,
     ) -> Result<bool, DispatchError> {
-        let Some(strikes) = self.db.wait_step_strikes(dag.id.as_str(), task).await? else {
+        let strikes = match &self.round_reads {
+            Some(reads) => reads
+                .switched_off
+                .get(&(dag.id.to_string(), task.to_owned()))
+                .cloned(),
+            None => self.db.wait_step_strikes(dag.id.as_str(), task).await?,
+        };
+        let Some(strikes) = strikes else {
             return Ok(false);
         };
         if strikes.off_at.is_none() {
@@ -3869,7 +4151,9 @@ async fn upstream_outcomes(
 fn task_specific(error: &DispatchError) -> bool {
     let db = match error {
         DispatchError::Db(db) | DispatchError::Execution(ExecutionError::Db(db)) => db,
-        DispatchError::Execution(_) | DispatchError::BadMessage { .. } => return true,
+        DispatchError::Execution(_) | DispatchError::BadMessage { .. } | DispatchError::Redo => {
+            return true;
+        }
     };
     db.is_data_fault()
 }

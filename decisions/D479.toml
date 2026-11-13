@@ -6,11 +6,11 @@ topic = "development"
 section = "Testing"
 summary = '''
 `make test-integration` runs the Python integration tests with `pytest-xdist` (a dev
-dependency), `PYTEST_WORKERS` processes (6) and `--dist loadgroup`; CI uses `-n auto`. The
+dependency), six processes (a Makefile variable, PYTEST_WORKERS) and `--dist loadgroup`; CI uses `-n auto`. The
 tests sharing the containers' names (`test_connection_types.py`) are one `xdist_group`, run on
 one process. The Rust and Python suites still run one after the other. Not chosen: both suites
 at once (12 cores shared; B245 and B247 already show under load).
 '''
 history = "JOURNAL.md#D479"
-step = "M5.1c"
+step = "M5.1c1"
 code = ["Makefile", "python/tests/integration/test_connection_types.py"]

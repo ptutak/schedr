@@ -15,3 +15,4 @@ leads.
 history = "JOURNAL.md#D478"
 step = "n/a"
 code = ["crates/schedr-master/src/dispatch.rs::deadline", "crates/schedr-master/src/dispatch.rs::fail_waiting_users"]
+checked = 2026-11-13

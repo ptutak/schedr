@@ -47,6 +47,15 @@ const TURN_PART: MetricDoc = MetricDoc {
     help: "How long each part of a worker's turn held the core lock (started: its `Started`s \
         stored; finished: its `Finished`s; rest: heartbeats, warnings and the other messages)",
 };
+const ROUND_PART: MetricDoc = MetricDoc {
+    name: "master_round_part_seconds",
+    kind: MetricKind::Histogram,
+    labels: &["part"],
+    help: "How long each part of a round took, the core lock held (commands: commands applied \
+        and their follow-ups; scheduler: the scheduler's pass; triggers; prepare: runs prepared \
+        and retries queued; expire: assignments expired and replaced incarnations ended; assign: \
+        cleanups, chained runs and assignments; rest: parse jobs expired, workers lost)",
+};
 const TURN_MESSAGES: MetricDoc = MetricDoc {
     name: "master_turn_messages",
     kind: MetricKind::Histogram,
@@ -246,6 +255,7 @@ pub const METRICS: &[MetricDoc] = &[
     CORE_LOCK_WAIT,
     TURN_PART,
     TURN_MESSAGES,
+    ROUND_PART,
     RUNS,
     RUNS_FINISHED,
     RUNS_LATE_FAILED,
@@ -350,7 +360,7 @@ pub struct ByLabels {
 /// A part of a worker's turn.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct PartLabels {
-    /// `started`, `finished` or `rest`.
+    /// A turn's: `started`, `finished` or `rest`; a round's: see `master_round_part_seconds`.
     pub part: String,
 }
 
@@ -367,6 +377,8 @@ pub struct MasterMetrics {
     pub turn_part: Histograms<PartLabels>,
     /// How many messages each part of a worker's turn handled.
     pub turn_messages: Histograms<PartLabels>,
+    /// How long each part of a round took.
+    pub round_part: Histograms<PartLabels>,
     /// Runs by state and kind.
     pub runs: Family<RunLabels, Gauge>,
     /// Runs finished, by DAG and result.
@@ -444,6 +456,9 @@ impl Default for MasterMetrics {
             turn_part: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(0.0001, 2.0, 19))
             }),
+            round_part: Family::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.0001, 2.0, 19))
+            }),
             // 1 to 128 messages.
             turn_messages: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(1.0, 2.0, 8))
@@ -495,12 +510,22 @@ impl MasterMetrics {
             TURN_MESSAGES.help,
             self.turn_messages.clone(),
         );
+        r.register(ROUND_PART.name, ROUND_PART.help, self.round_part.clone());
     }
 
     /// Records a wait of `took` for the core lock by `by`.
     pub fn core_lock_waited(&self, by: &str, took: Duration) {
         self.core_lock_wait
             .get_or_create(&ByLabels { by: by.to_owned() })
+            .observe(took.as_secs_f64());
+    }
+
+    /// Records a part of a round that took `took`.
+    pub fn round_part_done(&self, part: &str, took: Duration) {
+        self.round_part
+            .get_or_create(&PartLabels {
+                part: part.to_owned(),
+            })
             .observe(took.as_secs_f64());
     }
 

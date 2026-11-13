@@ -1299,9 +1299,10 @@ async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
 }
 
 #[tokio::test]
-async fn a_workers_queued_messages_are_handled_in_one_turn_of_the_lock() {
-    // B12: one message per turn of the master's lock left a worker's messages behind every
-    // round in between (1 task a second in stress scenario 13).
+async fn a_turns_groups_each_take_the_lock_so_a_round_gets_in_between() {
+    // Decision 480: a turn takes the master's lock for each transaction, so a round (here the
+    // test) gets in between its `Started`s and its `Finished`s; B12 still holds: both were
+    // queued together and are handled in that one turn, with no message after them.
     let (hub, db, mut client) = connected().await;
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -1351,11 +1352,58 @@ async fn a_workers_queued_messages_are_handled_in_one_turn_of_the_lock() {
     // The worker's handler is waiting for the lock by then (an in-memory connection).
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(busy);
-    // Next in line after the handler (the lock is first come, first served): both messages
-    // were handled in its one turn.
-    let _round = core.lock().await;
+    // Next in line after the handler's first transaction (the lock is first come, first
+    // served): its `Started` is stored, its `Finished` waits for the lock.
+    let round = core.lock().await;
+    assert!(stored(&db, &assign.attempt_id, false).await);
     let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
-    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
+    assert_eq!(
+        attempt.status, None,
+        "the round got in before the `Finished`s"
+    );
+    drop(round);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !stored(&db, &assign.attempt_id, true).await {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the same turn ends it"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_turn_checks_its_stream_again_after_each_release_of_the_lock() {
+    // Decision 480: between a turn's `Started`s and its `Finished`s the lock is let go; the
+    // worker taken for lost meanwhile, the `Finished`s change nothing (its stream is let go,
+    // B44), as a turn whose stream wasn't served any more always did.
+    let (hub, db, mut client) = connected().await;
+    let (to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let id = assign.attempt_id.as_str();
+    let core = hub.core();
+    let busy = core.lock().await;
+    to_master.send(wrap(started_msg(id))).await.unwrap();
+    to_master.send(wrap(finished_msg(id))).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(busy);
+    // In between the turn's two transactions (first come, first served).
+    let mut between = core.lock().await;
+    assert!(stored(&db, id, false).await);
+    between.disconnected("w1", fixed_now()).await.unwrap();
+    drop(between);
+    // The turn reached its next transaction: it found its stream no longer served and let it
+    // go (Grok's review: a sleep alone would pass on a `Finished` stored late).
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while hub.streams.lock().await.contains_key("w1") {
+        assert!(std::time::Instant::now() < deadline, "the stream is let go");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let attempt = db.attempt(id).await.unwrap().unwrap();
+    assert_eq!(
+        attempt.status, None,
+        "the `Finished` of a stream no longer served"
+    );
+    assert_eq!(successes(&hub), 0);
 }
 
 /// A worker with one task assigned, its stream and the assignment.
@@ -1413,9 +1461,27 @@ async fn in_one_turn(
     before_turn();
     let before = db.commits();
     drop(busy);
-    // Next in line after the handler (the lock is first come, first served).
-    let _after = core.lock().await;
+    // The turn takes the lock for each of its transactions (decision 480): done once the lock
+    // is free and no commit has come for a while (nothing else writes in these tests).
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut last = (db.commits(), std::time::Instant::now());
+    loop {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let commits = db.commits();
+        if commits != last.0 {
+            last = (commits, std::time::Instant::now());
+        } else if core.try_lock().is_ok() && last.1.elapsed() > Duration::from_millis(300) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the turn ends");
+    }
     db.commits() - before
+}
+
+/// Whether the attempt `id` is stored started (`ended`: and ended).
+async fn stored(db: &Database, id: &str, ended: bool) -> bool {
+    let attempt = db.attempt(id).await.unwrap().unwrap();
+    attempt.started && (!ended || attempt.status.is_some())
 }
 
 fn successes(hub: &Hub) -> u64 {
@@ -1464,20 +1530,10 @@ async fn a_failed_group_is_redone_one_by_one_and_counted_once() {
     let id = assign.attempt_id.as_str();
     let turn = vec![started_msg(id), started_msg(id), finished_msg(id)];
     let commits = in_one_turn(&hub, &db, &to_master, turn, || db.fail_write(1)).await;
-    // The group failed (no commit), then each `Started` alone; the `Finished` waits for the
-    // next turn (a `Finished` never stored before its `Started`).
-    assert_eq!(commits, 2);
-    let attempt = db.attempt(id).await.unwrap().unwrap();
-    assert!(attempt.started);
-    assert_eq!(attempt.status, None);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while db.attempt(id).await.unwrap().unwrap().status.is_none() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the next turn stores the result"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // The group failed (no commit), then each `Started` alone, then the `Finished`, carried to
+    // the next turn (a `Finished` never stored before its `Started`).
+    assert_eq!(commits, 3);
+    assert!(stored(&db, id, true).await);
     assert_eq!(successes(&hub), 1);
 }
 
