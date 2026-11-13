@@ -153,6 +153,15 @@ import error naming the part. The same types are what one task may pass to anoth
 base64 in a `str`). Outcome unions, `Outcome` enums and `.on(...)` are
 [Routing by outcome](08-outcomes.md).
 
+## Where a task writes files
+
+A task runs from a read-only copy of its DAG root, and its files go elsewhere: a temporary
+directory, or an output folder outside every DAG root. Not into the DAG root by its path
+either: every file there counts for the root's code hash, so a write is new code, and the run's
+next tasks wait about 35 s for the workers to have it, again after each write (see
+[Which code runs](../03-guide/06-parsing.md#which-code-runs-only-the-newest)). A folder that must
+stay under the root is excluded with `.schedrignore`.
+
 ## IDs
 
 A task ID is up to 250 bytes: ASCII letters, digits and `_ . -`. A `.` is allowed

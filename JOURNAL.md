@@ -838,3 +838,23 @@ D442 and the guarantees page state them.
   stretches it) is shown on the guide's master-clock page, not fixed.
 - **Not chosen:** B: two ways of counting one deadline (master time while leading, the wall clock
   across a restart), for a step of the master's own clock that the times people see share anyway.
+
+### <a id="D479"></a>2026-11-13: the Python integration tests on several processes (decision 479)
+
+- **Question (the user):** can the integration suites run in parallel? `make check` took 17 min
+  alone, 24-26 min beside a colleague's build; the Python integration suite 7 min (409 s), run
+  on one process, the Rust one already parallel under nextest (4.3 min).
+- **Found on the way:** two tests (`test_concurrency_limits_hold_with_slots_to_spare`,
+  `test_a_resource_is_cleaned_once_after_its_last_user`, 40 s each) wrote their logs into
+  their own DAG root; every file there counts for the code hash (decision 305), so each write
+  was new code and the next tasks were rejected `CODE_MISMATCH` and waited `CODE_RETRY_DELAY`
+  (35 s). Shown with `dags test`: 8.7 s with nothing written into the root, about 40 s with the
+  log there. The DAGs moved to a folder of their own (79 s to 13 s), and the pitfall documented
+  (the guide's parsing page, the tasks page), at the user's word.
+- **Options:** (A) `pytest-xdist`, 6 processes, `--dist loadgroup`, the container tests one
+  group; (B) A plus the Python suite beside the Rust one; (C) the test fix alone.
+- **Chosen: A** (the user). `run_dag` takes free ports and a private directory per run, so the
+  tests can run side by side; the connection tests share fixed names in the containers (the
+  role and user `odd`, the table `async_rows`, the Mongo database `schedr_test`).
+- **Not chosen:** B, for about 1.5 min more against the 12 cores both suites would share and
+  the flaky timeouts already seen under load (B245, B247); C, which leaves about 5 min.

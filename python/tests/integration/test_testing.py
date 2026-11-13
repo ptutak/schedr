@@ -427,9 +427,13 @@ def test_concurrency_limits_hold_with_slots_to_spare(
 ) -> None:
     # M4.4 (decision 92B): 6 slots, so without the limits 6 would run at once.
     monkeypatch.setenv("SCHEDR_CONFIG__WORKER__SLOTS", "6")
+    # The log outside the DAG's root: every file there counts for its code hash (decision
+    # 305), so a write changes the code under the next tasks, which then wait for it (35 s).
     log = tmp_path / "ran.log"
-    (tmp_path / "limited.py").write_text(LIMITED.format(log=str(log)))
-    result = run_dag(tmp_path / "limited.py", "limited", for_=FOR)
+    root = tmp_path / "dags"
+    root.mkdir()
+    (root / "limited.py").write_text(LIMITED.format(log=str(log)))
+    result = run_dag(root / "limited.py", "limited", for_=FOR)
     assert result.state == "success", result
     spans: dict[str, list[tuple[float, float]]] = {"fetch": [], "other": []}
     for line in log.read_text().splitlines():
@@ -618,9 +622,12 @@ with Dag("resourced", defaults=StepDefaults(retries=0, retry_delay=timedelta(0))
 
 
 def test_a_resource_is_cleaned_once_after_its_last_user(tmp_path: Path) -> None:
-    # The worker runs a copy of the code: the marks go to a path of the test's.
-    (tmp_path / "resourced.py").write_text(RESOURCED.replace("{marks}", str(tmp_path / "marks")))
-    result = run_dag(tmp_path / "resourced.py", "resourced", for_=FOR)
+    # The worker runs a copy of the code: the marks go to a path of the test's, outside the
+    # DAG's root (a write there changes the root's code hash, decision 305).
+    root = tmp_path / "dags"
+    root.mkdir()
+    (root / "resourced.py").write_text(RESOURCED.replace("{marks}", str(tmp_path / "marks")))
+    result = run_dag(root / "resourced.py", "resourced", for_=FOR)
     marks = (tmp_path / "marks").read_text().splitlines()
     assert marks[0] == "setup"
     assert marks.count("cleanup c-8") == 1

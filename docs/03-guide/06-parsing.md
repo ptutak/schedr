@@ -191,7 +191,8 @@ schedr keeps no old code, so it runs **only the newest code**:
 - The current hash's parse defines the root's DAGs.
 - The root's tasks go **only to workers at the current hash**, or at a newer one being parsed.
   `AssignTask` carries the expected hash, and a worker whose code moved meanwhile rejects the
-  task with `CODE_MISMATCH`, to be tried again shortly.
+  task with `CODE_MISMATCH`, to be tried again 35 s later (about git-sync's interval plus the
+  settle time).
 - A task waiting for code says so ("waiting for workers serving queue `default` to have the
   newest code of root `etl`"). A task that waits longer than `[master] code_wait` (10 min)
   becomes `unschedulable`; `schedr tasks retry` gives it another chance.
@@ -209,6 +210,12 @@ place) leaves running jobs alone. So:
   the task: the code runs as the worker's user, which owns the copy (workers and their DAG code
   are trusted, decision 101). Its directories are read-only too, so deleting a worker's data
   directory by hand takes `chmod -R u+w <data_dir>` first.
+- **Never write into a DAG root.** Every file under it counts for its hash, not only `.py`
+  files, so a task writing a log, a mark or an output file there (by the root's configured
+  path) changes the code under its own run: once the root settles, the worker reports a new
+  hash, and the tasks assigned for the old one are rejected (`CODE_MISMATCH`) and wait 35 s.
+  Each write starts it again. Write to a temporary directory or an output folder outside every
+  root, or exclude the path with `.schedrignore` (excluded files aren't hashed).
 - **Other DAG roots are on `sys.path` at their copies.** A parse also sees the other DAG
   roots and script roots at their copies. These copies are kept while the parse runs; task
   copies are kept while the task or its recovered cleanup runs.

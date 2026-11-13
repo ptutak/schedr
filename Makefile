@@ -48,6 +48,8 @@ DOCS_PORT ?= 8765
 TARGET_MAX_GIB ?= 50
 # The same for each other worktree of this repository (each has a target/ of its own).
 WORKTREE_TARGET_MAX_GIB ?= 20
+# The integration tests' pytest processes (pytest-xdist).
+PYTEST_WORKERS ?= 6
 LLVM_COV_IGNORE := '(^|/)(tests|main)\.rs$$'
 
 setup:           ## Install dev tools, Python dev deps and pre-commit hooks
@@ -188,7 +190,8 @@ test-integration: ## Run integration tests (real processes, the binary; Postgres
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)'; \
-	uv run pytest python/tests/integration examples
+	: "several processes; the tests sharing the containers' names stay on one (xdist_group)"; \
+	uv run pytest python/tests/integration examples -n $(PYTEST_WORKERS) --dist loadgroup
 
 # The web UI's browser tests (decision 27A): a standalone with the example DAG and a finished
 # run, driven by Playwright's Chromium (downloaded once, into ~/.cache/ms-playwright). Kept out

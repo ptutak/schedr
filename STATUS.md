@@ -6,18 +6,18 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-13)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1c, One inbox for all workers (decisions D468, D469). Done when: stress 23 starts its 500 wait steps in under 10 s by `all_in_s` (14.5 s after M5.1b; moved here from M5.1b); assigned → started p99 in scenarios 9 and 13 within their range before M4B over four alternating runs (scenario 13 3.1-4.8 s; the single runs' 2.1 s and 1.8 s the aim), M4B's throughput kept or better; commits per second under stress 1 counted before and after; tests for each rule (order per worker, a barrier, a replaced stream, a failed phase, fairness) on both databases
+- **Next step:** M5.1c, One inbox for all workers (decisions D468, D469, D479). Done when: stress 23 starts its 500 wait steps in under 10 s by `all_in_s` (14.5 s after M5.1b; moved here from M5.1b); assigned → started p99 in scenarios 9 and 13 within their range before M4B over four alternating runs (scenario 13 3.1-4.8 s; the single runs' 2.1 s and 1.8 s the aim), M4B's throughput kept or better; commits per second under stress 1 counted before and after; tests for each rule (order per worker, a barrier, a replaced stream, a failed phase, fairness) on both databases
 - **Then:** M5.1d, M5.1e, M5.1f, M5.1g, M5.1h.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D479 (2026-11-13): the Python integration tests on several processes
 - D478 (2026-11-13): user-set deadlines count on the wall clock (decision 478, Q27)
 - N4 (2026-11-13): The liveness redesign drafts retired: settled by D442-D460 (corrects D442)
 - N3 (2026-11-13): M5.1b's 10 s target moved to M5.1c
 - D469 (2026-11-13): a round lets go of the core lock between its batches
-- D468 (2026-11-13): one inbox for all workers (decision 468); M5.0 reordered
 - M5.1b2 (2026-11-13): A first start: Getting started, the PyPI page
 - M5.1b (2026-11-13): Start journal records in groups
 - M5.1a (2026-11-13): Profile the start path

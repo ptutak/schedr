@@ -201,7 +201,8 @@ jobs:
       - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       # The stress suite runs nightly instead (stress.yml).
       - run: cargo nextest run --workspace -E 'kind(test) & not binary(stress)'
-      - run: uv run pytest python/tests/integration examples
+      # A process per runner core; the tests sharing the containers' names stay on one.
+      - run: uv run pytest python/tests/integration examples -n auto --dist loadgroup
       # The SSH server's own log (refused connections, penalties) when a test fails.
       - if: failure()
         run: docker logs sshd 2>&1 | tail -100

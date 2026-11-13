@@ -20,6 +20,10 @@ import pytest
 from schedr.testing import run_dag
 from schedr.types import ProcessResult
 
+# One worker runs them all, one after another (`make test-integration` runs the others on
+# several): they share the containers' role, user, table and database names.
+pytestmark = pytest.mark.xdist_group("containers")
+
 FOR = datetime(2026, 10, 15, 3, tzinfo=UTC)
 # A password a URL would misread: `@` ends the user part, `/` the host, `?` and `#` the path.
 ODD = "p@ss/w#rd?x&y=1"

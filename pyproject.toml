@@ -50,6 +50,8 @@ connections = ["schedr[http,mongo,ssh,postgres,mysql]"]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
+    # The integration tests on several processes (`make test-integration`).
+    "pytest-xdist>=3.6",
     "ruff>=0.8",
     "mypy>=1.13",
     "pre-commit>=4.0",

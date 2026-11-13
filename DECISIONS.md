@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D479 | 2026-11-13 | user | planned (M5.1c) | development | The Python integration tests run on several processes (pytest-xdist) |
 | D478 | 2026-11-13 | user | rule | wait-steps | User-set deadlines count on the wall clock |
 | D477 | 2026-11-13 | user | built M5.1b2 | development | PyPI shows a page of its own: installing and a first run |
 | D476 | 2026-11-13 | user | built M5.1b2 | components | A worker or standalone with no DAG directories warns at start |
@@ -707,6 +708,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### development
 
+- D479: The Python integration tests run on several processes (pytest-xdist)
 - D477: PyPI shows a page of its own: installing and a first run
 - D456: From 1.0.0 the schema and the protocol change only additively
 - D377: JOURNAL.md holds notes (N) beside decisions (D)
