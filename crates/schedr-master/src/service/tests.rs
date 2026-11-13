@@ -242,6 +242,24 @@ async fn a_worker_registers_parses_runs_a_task_and_is_acknowledged() {
         panic!("expected FinishedAck")
     };
     assert_eq!(ack.attempt_id, assign.attempt_id);
+    // M5.1a: the lock's waits and the turn's parts are recorded where they happen.
+    let mut registry = prometheus_client::registry::Registry::with_prefix("schedr");
+    hub.metrics.register(&mut registry);
+    let mut scraped = String::new();
+    prometheus_client::encoding::text::encode(&mut scraped, &registry).unwrap();
+    for series in [
+        "schedr_master_core_lock_wait_seconds_count{by=\"turn\"}",
+        "schedr_master_core_lock_wait_seconds_count{by=\"round\"}",
+        "schedr_master_core_lock_wait_seconds_count{by=\"upload\"}",
+        "schedr_master_turn_part_seconds_count{part=\"started\"}",
+        "schedr_master_turn_part_seconds_count{part=\"finished\"}",
+    ] {
+        let count = scraped
+            .lines()
+            .find_map(|line| line.strip_prefix(series))
+            .and_then(|rest| rest.trim().parse::<u64>().ok());
+        assert!(count.is_some_and(|n| n >= 1), "{series}\n{scraped}");
+    }
 
     let status = client
         .fetch_inputs(pb::FetchInputsRequest {

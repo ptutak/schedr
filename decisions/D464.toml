@@ -11,5 +11,5 @@ minute apart for 24 h, then rolled up into 15-minute averages and peaks kept 30 
 deletes older ones, its ages hidden values. Not chosen: one a minute for 7 days without a rollup.
 '''
 history = "JOURNAL.md#D464"
-step = "M5.3"
+step = "M5.1i"
 also = ["state"]

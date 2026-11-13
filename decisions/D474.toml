@@ -1,0 +1,15 @@
+title = "Airflow connections and Variables are converted; provider operators are reported"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "airflow"
+section = "What converts"
+summary = '''
+`airflow connections export` and `airflow variables export` (JSON) become schedr connection
+definitions and secrets. Provider operators (SQL, S3, Kubernetes, ...) are not converted in
+the first version: the report counts them, so the most used ones are converted next. Not
+chosen: a fixed set of provider operators now (each needs a native form first); DAG files
+only.
+'''
+history = "JOURNAL.md#D474"
+step = "M5.2e"

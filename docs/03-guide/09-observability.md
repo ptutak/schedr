@@ -35,9 +35,11 @@ the code. Roughly:
   DAGs (`schedr_master_dags{state}`), quiet DAGs woken (`schedr_master_dag_wakes_total{reason}`),
   runs, tasks and workers by state, tasks waiting by reason, assignments, rejections,
   attempts ended, parse jobs, trigger state and events, back-pressure stops and idle
-  restarts, commands and how long they waited for a decision;
+  restarts, commands and how long they waited for a decision, how long the core lock was
+  waited for and how long each part of a worker's turn held it;
 - **worker:** slots and slots used, attempts by status, how long a Python task took to start
-  (`schedr_worker_task_start_seconds{method,phase}`), fork servers
+  (`schedr_worker_task_start_seconds{method,phase}`), from an assignment to its `Started`,
+  journal writes by record, fork servers
   (`schedr_worker_fork_servers{interpreter,kind,state}`), Python tasks and parse jobs a fork
   server didn't fork (`schedr_worker_fork_fallbacks_total{interpreter,reason}`), watchdog
   kills, watcher hosts and wait steps, journal records, log disk usage;
@@ -82,6 +84,30 @@ interpreter records `fork` when a fork server forked the task and the runner sai
 (from sending the task to the runner's `task_imported`: the DAG file imported and the
 arguments built). The import phase is left out when that fails. The agent times both on its
 own clock; the runner only sends the message. A command task is not in the histogram.
+
+### Where a start's time goes
+
+A task's start crosses both sides, and each side times its own part (M5.1a). The
+[stress guide](11-stress.md) reads them to find where a slow start's time went.
+
+On the worker, `schedr_worker_assign_to_started_seconds` runs from the agent's loop taking an
+`AssignTask` to its `Started` sent: the plan, the inputs and the journal record. An
+assignment the worker rejects isn't counted. `schedr_worker_journal_write_seconds{record}`
+times each write that kept a record on disk before the agent went on (a failed write
+isn't counted): `start` (an attempt,
+before its `Started`), `process` (its process's identity, once started) and `results` (a group
+of results). The agent sets the slot gauges (`schedr_worker_slots_used`,
+`schedr_worker_watcher_slots_used`) as each attempt starts or ends, not only at its alive tick.
+
+On the master, one lock guards the core: the round takes it, and so does each worker's turn
+of messages, a registration, a parse result, a stream's end. `schedr_master_core_lock_wait_seconds{by}`
+is how long each waited for it: `turn`, `round`, `register`, `upload`, `stream` or `restore`.
+`schedr_master_turn_part_seconds{part}` is how long each part of a turn held it, and
+`schedr_master_turn_messages{part}` how many messages that part had: `started` (the turn's
+`Started`s, stored together), `finished` (its `Finished`s) and `rest` (heartbeats, warnings and
+the other messages). The master records a task's `started_at` when its `Started` part runs, so
+a long wait for the lock shows as a late `started_at`, while the task itself started when the
+worker sent `Started`.
 
 `schedr_worker_fork_servers` is a gauge: one series per interpreter, kind and state. `kind`
 is `preloaded` or `bare`. `state` is `up`, `down` or `disabled`. The current state is 1 and

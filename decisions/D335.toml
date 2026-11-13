@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D335"
 step = "M4.11a2"
 also = ["code-delivery"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/attempt.rs", "crates/schedr-agent/src/watchers.rs::begin_move"]
-checked = 2026-11-12
+checked = 2026-11-13

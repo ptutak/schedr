@@ -220,6 +220,25 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
   the plan.
 - Don't expand scope on your own: propose extra work, don't just do it.
 
+## Two modes: designing and building
+
+**Designing** (a step's scope, a decision, a review of options) is **argue mode**:
+- Name the unit the problem lives in (a turn, a lock, a transaction, a process), and give at
+  least one option that changes that unit rather than working inside it.
+- Treat earlier decisions as open where they shape the problem. (schedr, 2026-11-13: M5.0c's
+  options all worked inside D397's turn per worker; the user had to ask for one turn across
+  all workers.)
+- Say plainly when an earlier design looks like the wrong shape, even my own or a recorded one.
+
+**Building** (once a step's design is accepted) is **stable mode**:
+- Recorded decisions are settled: build them, don't re-argue them.
+- Behaviour comes from the code, changes stay in scope, and anything that seems to need a
+  design change comes back to me as a question.
+
+**Where they meet:** when building shows the design doesn't hold (a rule that can't be kept, a
+cost much higher than expected), it doesn't silently become "stable": stop, switch to argue
+mode for that point, and bring it to me.
+
 ## Design habits I value
 
 - Neutral names in the core; terms from other tools or products only in their compatibility

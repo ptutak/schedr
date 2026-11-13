@@ -12,4 +12,4 @@ A lone root keeps its plain hash.
 history = "archive/PROJECT.md#D327"
 step = "M4.11L"
 code = ["crates/schedr-agent/src/agent.rs::fold_hash"]
-checked = 2026-11-12
+checked = 2026-11-13

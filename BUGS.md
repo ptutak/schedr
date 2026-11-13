@@ -53,10 +53,22 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-| 3 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
-| 4 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+| 1 | B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load | 2 | low | possible | tests |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 4 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
+| 5 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+
+## B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): async_tasks_run_and_stop_cleanly_on_each_start_method_and_loop: `stopped_spawned` timed out (5.2 s) before writing its start marker.
+`crates/schedr/tests/roles.rs:1958` gives `stopped_forked` and `stopped_spawned` a 5 s
+`timeout`, which counts from the process's start, so for the spawned one it includes a new
+interpreter starting and importing `asyncio` or `uvloop`. In `make check` on 2026-11-13 (the
+whole suite in parallel) `on_asyncio`'s `stopped_spawned` ended `timed_out` after 5.235 s with
+no marker written: it never reached `note(...)`. Alone it passed 3 of 3 (13 s each). Fix: a
+timeout long enough for a spawn under load (e.g. 20 s) for the two stopped tasks; the test then
+takes that much longer.
 
 ## B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected)
 

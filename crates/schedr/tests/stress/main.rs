@@ -1752,11 +1752,13 @@ fn stress_23_many_sensors() {
         #[expect(clippy::cast_precision_loss, reason = "500 wait steps")]
         let all_in = used >= steps as f64;
         if all_in {
+            // Taken before the settling wait (M5.1a): it measures the starts only.
+            let took = started.elapsed().as_secs_f64();
             // A few seconds in: their imports done, their loops waiting.
             std::thread::sleep(Duration::from_secs(5));
             let (_, metrics) = stress.cluster.ops_get("w01", "/metrics");
             held = Some((
-                started.elapsed().as_secs_f64(),
+                took,
                 tree_pss_kib(worker),
                 gauge(&metrics, "schedr_worker_watcher_memory_bytes"),
                 gauge(&metrics, "schedr_worker_watcher_hosts"),
@@ -1765,6 +1767,13 @@ fn stress_23_many_sensors() {
             std::fs::write(&gate, b"go").unwrap();
         }
     });
+    stress.stages(&mut report, "master");
+    // The rounds this scenario's one worker's turns wait behind (M5.1a).
+    let (_, metrics) = stress.cluster.ops_get("master", "/metrics");
+    for (q, key) in [(0.5, "round_p50_s"), (0.99, "round_p99_s")] {
+        let round = check::histogram_quantile(&metrics, "schedr_master_tick_duration_seconds", q);
+        report.set(key, round);
+    }
     let Some((took, kib, hosts_bytes, hosts)) = held else {
         report.broken(vec![format!("never {steps} wait steps running at once")]);
         finish(&stress, report, &["success"]);

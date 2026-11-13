@@ -1285,6 +1285,11 @@ impl<E: Executor> Agent<E> {
     /// The loop is alive: beat, and update the gauges of slots and the journal.
     fn alive(&self) {
         self.beat.beat();
+        self.set_slot_gauges();
+    }
+
+    /// The gauges of slots and the journal, as things are now.
+    fn set_slot_gauges(&self) {
         let running = i64::try_from(self.running.len()).unwrap_or(i64::MAX);
         let unacked = i64::try_from(self.unacked.len()).unwrap_or(i64::MAX);
         self.metrics
@@ -1907,6 +1912,14 @@ impl<E: Executor> Agent<E> {
             .map_err(std::io::Error::other)?
     }
 
+    /// A result the master has: no longer kept, the journal's gauge down by it.
+    async fn acknowledged(&mut self, attempt_id: &str) {
+        if self.unacked.remove(attempt_id).is_some() {
+            self.forget(attempt_id).await;
+            self.set_slot_gauges();
+        }
+    }
+
     /// Removes an attempt from the journal; a failure is logged (the file is then reported
     /// again after a restart, and the master decides on it).
     async fn forget(&self, attempt_id: &str) {
@@ -2411,9 +2424,7 @@ impl<E: Executor> Agent<E> {
             }
             master_message::Message::FinishedAck(ack) => {
                 self.forked.remove(&ack.attempt_id);
-                if self.unacked.remove(&ack.attempt_id).is_some() {
-                    self.forget(&ack.attempt_id).await;
-                }
+                self.acknowledged(&ack.attempt_id).await;
             }
         }
     }
@@ -2423,9 +2434,7 @@ impl<E: Executor> Agent<E> {
         match pb::AttemptDecision::try_from(decision.decision) {
             Ok(pb::AttemptDecision::Ack) => {
                 self.forked.remove(id);
-                if self.unacked.remove(id).is_some() {
-                    self.forget(id).await;
-                }
+                self.acknowledged(id).await;
             }
             Ok(pb::AttemptDecision::CleanRest) => {
                 // Ended, its cleanup moved without the handles from `cleanup_from` on: they
@@ -2448,15 +2457,14 @@ impl<E: Executor> Agent<E> {
             }
             Ok(pb::AttemptDecision::Kill) => {
                 self.forked.remove(id);
-                if self.unacked.remove(id).is_some() {
-                    self.forget(id).await;
-                }
+                self.acknowledged(id).await;
                 if let Some(gate) = self.gates.get(id) {
                     gate.send_replace(Gate::Dropped);
                 }
                 if self.waiting.remove(id).is_some() {
                     // The master ended it, or it moved: its cleanup isn't run here.
                     self.running.remove(id);
+                    self.set_slot_gauges();
                     self.release_code(id);
                     self.forget(id).await;
                     self.collect_code();
@@ -2559,6 +2567,7 @@ impl<E: Executor> Agent<E> {
         client: &mut MasterClient<Channel>,
         timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
+        let received = std::time::Instant::now();
         let opened = timers.1;
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
@@ -2632,7 +2641,9 @@ impl<E: Executor> Agent<E> {
             && !matches!(planned, Err(NotRun::Rejected { .. }))
         {
             match moved_handles(only) {
-                Ok(handles) => self.moved_cleanup(spec, handles, to_master).await,
+                Ok(handles) => {
+                    self.moved_cleanup(spec, handles, to_master, received).await;
+                }
                 // Run without them, it could report success and leave them behind.
                 Err(error) => {
                     self.release_code(&spec.attempt_id);
@@ -2643,7 +2654,7 @@ impl<E: Executor> Agent<E> {
             }
             return;
         }
-        self.start_planned(spec, planned, to_master);
+        self.start_planned(spec, planned, to_master, received);
     }
 
     /// An assignment journaled: started (`Started`, then launched), failed before it could
@@ -2653,6 +2664,7 @@ impl<E: Executor> Agent<E> {
         mut spec: AttemptSpec,
         planned: Result<Plan, NotRun>,
         to_master: &ToMaster,
+        received: std::time::Instant,
     ) {
         let started = wrap(worker_message::Message::Started(pb::Started {
             attempt_id: spec.attempt_id.clone(),
@@ -2669,6 +2681,9 @@ impl<E: Executor> Agent<E> {
             }
             Err(NotRun::Failed { kind, message }) => {
                 let _ = to_master.send(started);
+                self.metrics
+                    .assign_to_started
+                    .observe(received.elapsed().as_secs_f64());
                 let failed = failed_before_start(&spec.attempt_id, &kind, &message);
                 let _ = self.done_tx.send(Done::Attempt(failed));
             }
@@ -2678,6 +2693,11 @@ impl<E: Executor> Agent<E> {
                 self.note_wait_step(&spec);
                 self.set_gate(&mut spec);
                 let _ = to_master.send(started);
+                self.metrics
+                    .assign_to_started
+                    .observe(received.elapsed().as_secs_f64());
+                // At once, not at the next alive tick: a burst of starts shows as it happens.
+                self.set_slot_gauges();
                 self.launch(spec, plan, stopped);
             }
         }
@@ -2811,6 +2831,8 @@ impl<E: Executor> Agent<E> {
         self.gates.remove(&finished.attempt_id);
         self.unacked
             .insert(finished.attempt_id.clone(), finished.clone());
+        // Now in `unacked`: the journal's gauge counts it again.
+        self.set_slot_gauges();
         if let Some(to_master) = to_master {
             let _ = to_master.send(wrap(worker_message::Message::Finished(finished)));
         }
@@ -2862,6 +2884,7 @@ impl<E: Executor> Agent<E> {
             .iter()
             .map(|f| (f.attempt_id.clone(), JournalRecord::Finished(f.clone())))
             .collect();
+        let began = std::time::Instant::now();
         let written = tokio::task::spawn_blocking(move || {
             let refs: Vec<(&str, &JournalRecord)> =
                 records.iter().map(|(id, r)| (id.as_str(), r)).collect();
@@ -2870,6 +2893,9 @@ impl<E: Executor> Agent<E> {
         .await
         .map_err(std::io::Error::other)
         .and_then(|written| written);
+        if written.is_ok() {
+            self.metrics.journal_written("results", began.elapsed());
+        }
         if let Err(error) = written {
             tracing::warn!(
                 results = results.len(),
@@ -2882,13 +2908,17 @@ impl<E: Executor> Agent<E> {
 
     /// Keeps a result in the journal until the master has it.
     async fn record_finished(&self, finished: &pb::Finished) {
-        if let Err(error) = self
+        let began = std::time::Instant::now();
+        let recorded = self
             .record(
                 &finished.attempt_id,
                 JournalRecord::Finished(finished.clone()),
             )
-            .await
-        {
+            .await;
+        if recorded.is_ok() {
+            self.metrics.journal_written("results", began.elapsed());
+        }
+        if let Err(error) = recorded {
             tracing::warn!(
                 attempt_id = finished.attempt_id.as_str(),
                 %error,
@@ -3049,14 +3079,19 @@ impl<E: Executor> Agent<E> {
         spec: AttemptSpec,
         handles: Vec<CleanupHandle>,
         to_master: &ToMaster,
+        received: std::time::Instant,
     ) {
         let id = spec.attempt_id.clone();
         let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
             attempt_id: id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
         })));
+        self.metrics
+            .assign_to_started
+            .observe(received.elapsed().as_secs_f64());
         let (stop, _) = Stops::new();
         self.running.insert(id.clone(), stop);
+        self.set_slot_gauges();
         let waiting = WaitingCleanup {
             spec,
             handles,
@@ -3079,7 +3114,12 @@ impl<E: Executor> Agent<E> {
         external: Option<&[u8]>,
         opened: tokio::time::Instant,
     ) -> Result<(), Option<(pb::RejectReason, String)>> {
-        if let Err(error) = self.record_start(spec, assign, external).await {
+        let began = std::time::Instant::now();
+        let recorded = self.record_start(spec, assign, external).await;
+        if recorded.is_ok() {
+            self.metrics.journal_written("start", began.elapsed());
+        }
+        if let Err(error) = recorded {
             let detail = format!(
                 "can't write the journal in `{}`: {error}; check the worker's data directory",
                 self.journal.dir().display()
@@ -3653,7 +3693,12 @@ impl<E: Executor> Agent<E> {
                     Some(ended) => JournalRecord::Cleaning(ended, Some(identity)),
                     None => JournalRecord::Running(Some(identity)),
                 };
-                if let Err(error) = self.record(&attempt_id, record).await {
+                let began = std::time::Instant::now();
+                let recorded = self.record(&attempt_id, record).await;
+                if recorded.is_ok() {
+                    self.metrics.journal_written("process", began.elapsed());
+                }
+                if let Err(error) = recorded {
                     tracing::warn!(attempt_id, %error, "can't record the task's process");
                 }
             }
@@ -3875,6 +3920,7 @@ impl<E: Executor> Agent<E> {
     fn ended_running(&mut self, attempt_id: &str) {
         self.running.remove(attempt_id);
         self.wait_steps.remove(attempt_id);
+        self.set_slot_gauges();
     }
 
     /// The attempts running on task slots.

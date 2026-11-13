@@ -1,0 +1,19 @@
+title = "The Airflow migration tool rewrites the source, checked against the original's structure"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "airflow"
+section = "The tool"
+summary = '''
+`schedr airflow migrate <paths> --out <dir>` rewrites Airflow DAG files into native schedr DAGs
+once, with LibCST (comments, layout and the user's functions kept), never editing files in
+place. Each converted DAG is checked: the original imported through a recording stub of
+`airflow` and the converted one through `schedr dags check`, compared by the paths a
+run can take (which tasks run, after which, for each way their upstream tasks can end) and by
+their schedules, retries and timeouts, not by entity kinds, so an emulation (decision 473)
+compares equal; a difference is reported, not shipped. LibCST is an optional
+extra (`schedr[migrate]`). Not chosen: building DAGs by running the original alone (loops
+unrolled, the user's structure lost); a rewrite without the check.
+'''
+history = "JOURNAL.md#D470"
+step = "M5.2b"

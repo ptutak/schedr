@@ -1,0 +1,17 @@
+title = "The migration tool emulates Airflow behaviour with native constructs where exact"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "airflow"
+section = "What converts"
+summary = '''
+What the tool keeps is the DAG's paths: the same tasks run, after the same ones, in the same
+cases, even when the native entity differs. Where Airflow has a form the native API lacks, the
+tool writes the combination of native constructs that takes the same paths, never a change to
+the native API: e.g. a leaf task with the `all_done` rule (it runs once the others are done,
+whatever happened) becomes a resource with an empty setup whose cleanup is that task;
+`@task.run_if(condition)` a short-circuit in front of the task. Only exact emulations; anything
+inexact is reported for a person.
+'''
+history = "JOURNAL.md#D473"
+step = "M5.2c"

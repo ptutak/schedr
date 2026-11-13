@@ -32,6 +32,27 @@ const TICK_DURATION: MetricDoc = MetricDoc {
     labels: &[],
     help: "How long each tick of the master's loop took",
 };
+const CORE_LOCK_WAIT: MetricDoc = MetricDoc {
+    name: "master_core_lock_wait_seconds",
+    kind: MetricKind::Histogram,
+    labels: &["by"],
+    help: "How long the master's core lock was waited for, by who waited (turn: a worker's \
+        messages; round; register; upload: a parse result; stream: a stream ended or dropped; \
+        restore)",
+};
+const TURN_PART: MetricDoc = MetricDoc {
+    name: "master_turn_part_seconds",
+    kind: MetricKind::Histogram,
+    labels: &["part"],
+    help: "How long each part of a worker's turn held the core lock (started: its `Started`s \
+        stored; finished: its `Finished`s; rest: heartbeats, warnings and the other messages)",
+};
+const TURN_MESSAGES: MetricDoc = MetricDoc {
+    name: "master_turn_messages",
+    kind: MetricKind::Histogram,
+    labels: &["part"],
+    help: "How many messages each part of a worker's turn handled",
+};
 const RUNS: MetricDoc = MetricDoc {
     name: "runs",
     kind: MetricKind::Gauge,
@@ -222,6 +243,9 @@ pub const METRICS: &[MetricDoc] = &[
     TRIGGER_BACK_PRESSURE_STOPS,
     TRIGGER_IDLE_RESTARTS,
     TICK_DURATION,
+    CORE_LOCK_WAIT,
+    TURN_PART,
+    TURN_MESSAGES,
     RUNS,
     RUNS_FINISHED,
     RUNS_LATE_FAILED,
@@ -316,11 +340,33 @@ pub struct CommandLabels {
     pub decision: String,
 }
 
+/// Who waited for the core lock.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ByLabels {
+    /// `turn`, `round`, `register`, `upload`, `stream` or `restore`.
+    pub by: String,
+}
+
+/// A part of a worker's turn.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct PartLabels {
+    /// `started`, `finished` or `rest`.
+    pub part: String,
+}
+
+type Histograms<L> = Family<L, Histogram, fn() -> Histogram>;
+
 /// The master's metrics (cheap to clone; clones share them).
 #[derive(Debug, Clone)]
 pub struct MasterMetrics {
     /// How long each tick of the loop took.
     pub tick_duration: Histogram,
+    /// How long the core lock was waited for, by who waited.
+    pub core_lock_wait: Histograms<ByLabels>,
+    /// How long each part of a worker's turn held the core lock.
+    pub turn_part: Histograms<PartLabels>,
+    /// How many messages each part of a worker's turn handled.
+    pub turn_messages: Histograms<PartLabels>,
     /// Runs by state and kind.
     pub runs: Family<RunLabels, Gauge>,
     /// Runs finished, by DAG and result.
@@ -391,6 +437,17 @@ impl Default for MasterMetrics {
             // 1 ms to about 16 s, each bucket √2 times the last: fine enough for scenario 14
             // to tell a round's p99 one step worse from two (M2.5.2).
             tick_duration: Histogram::new(exponential_buckets(0.001, std::f64::consts::SQRT_2, 29)),
+            // 0.1 ms to about 26 s, each bucket 2 times the last.
+            core_lock_wait: Family::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.0001, 2.0, 19))
+            }),
+            turn_part: Family::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.0001, 2.0, 19))
+            }),
+            // 1 to 128 messages.
+            turn_messages: Family::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(1.0, 2.0, 8))
+            }),
             runs: Family::default(),
             runs_finished: Family::default(),
             runs_late_failed: Family::default(),
@@ -425,6 +482,45 @@ impl Default for MasterMetrics {
 }
 
 impl MasterMetrics {
+    /// The core lock's and the turns' metrics (M5.1a).
+    fn register_lock(&self, r: &mut Registry) {
+        r.register(
+            CORE_LOCK_WAIT.name,
+            CORE_LOCK_WAIT.help,
+            self.core_lock_wait.clone(),
+        );
+        r.register(TURN_PART.name, TURN_PART.help, self.turn_part.clone());
+        r.register(
+            TURN_MESSAGES.name,
+            TURN_MESSAGES.help,
+            self.turn_messages.clone(),
+        );
+    }
+
+    /// Records a wait of `took` for the core lock by `by`.
+    pub fn core_lock_waited(&self, by: &str, took: Duration) {
+        self.core_lock_wait
+            .get_or_create(&ByLabels { by: by.to_owned() })
+            .observe(took.as_secs_f64());
+    }
+
+    /// Records a part of a worker's turn: `messages` handled in `took`.
+    pub fn turn_part_done(&self, part: &str, messages: usize, took: Duration) {
+        let labels = PartLabels {
+            part: part.to_owned(),
+        };
+        self.turn_part
+            .get_or_create(&labels)
+            .observe(took.as_secs_f64());
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a turn's messages, far below 2^52"
+        )]
+        self.turn_messages
+            .get_or_create(&labels)
+            .observe(messages as f64);
+    }
+
     /// Registers every metric in `registry` (names get the `schedr_` prefix there), as
     /// [`METRICS`] describes them.
     pub fn register(&self, registry: &mut Registry) {
@@ -434,6 +530,7 @@ impl MasterMetrics {
             TICK_DURATION.help,
             self.tick_duration.clone(),
         );
+        self.register_lock(r);
         r.register(RUNS.name, RUNS.help, self.runs.clone());
         r.register(
             RUNS_FINISHED.name,

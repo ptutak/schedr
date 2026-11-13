@@ -29,13 +29,20 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D468 | 2026-11-13 | user | planned (M5.0c) | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
-| D467 | 2026-11-13 | user | planned (M5.5) | ui-cli | A task's peak memory over its attempts is charted |
-| D466 | 2026-11-13 | user | planned (M5.4) | ui-cli | UI charts are SVG drawn by the server |
-| D465 | 2026-11-13 | user | planned (M5.4) | ui-cli | A Metrics page with memory and CPU over time |
-| D464 | 2026-11-13 | user | planned (M5.3) | observability | The master keeps a sample of each process a minute |
-| D463 | 2026-11-13 | user | planned (M5.2) | observability | Masters, workers and the webserver report their memory and CPU |
-| D462 | 2026-11-13 | user | planned (M5.1) | ui-cli | The Deployments page has a Status block above its graph |
+| D475 | 2026-11-13 | user | planned (M5.2a) | airflow | No Airflow look-alike layer: the migration tool replaces it |
+| D474 | 2026-11-13 | user | planned (M5.2e) | airflow | Airflow connections and Variables are converted; provider operators are reported |
+| D473 | 2026-11-13 | user | planned (M5.2c) | airflow | The migration tool emulates Airflow behaviour with native constructs where exact |
+| D472 | 2026-11-13 | user | planned (M5.2c) | airflow | What the migration tool converts, and what it leaves marked for a person |
+| D471 | 2026-11-13 | user | planned (M5.2b) | airflow | The migration tool has an Airflow 2 mode and an Airflow 3 mode |
+| D470 | 2026-11-13 | user | planned (M5.2b) | airflow | The Airflow migration tool rewrites the source, checked against the original's structure |
+| D469 | 2026-11-13 | user | planned (M5.1c) | assignment | A round releases the core lock between its batches of assignments |
+| D468 | 2026-11-13 | user | planned (M5.1c) | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
+| D467 | 2026-11-13 | user | planned (M5.1k) | ui-cli | A task's peak memory over its attempts is charted |
+| D466 | 2026-11-13 | user | planned (M5.1j) | ui-cli | UI charts are SVG drawn by the server |
+| D465 | 2026-11-13 | user | planned (M5.1j) | ui-cli | A Metrics page with memory and CPU over time |
+| D464 | 2026-11-13 | user | planned (M5.1i) | observability | The master keeps a sample of each process a minute |
+| D463 | 2026-11-13 | user | planned (M5.1h) | observability | Masters, workers and the webserver report their memory and CPU |
+| D462 | 2026-11-13 | user | planned (M5.1g) | ui-cli | The Deployments page has a Status block above its graph |
 | D461 | 2026-11-12 | user | planned (1.0.0) | ui-cli | A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck |
 | D460 | 2026-11-12 | user | planned (1.0.0) | protocol | Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started |
 | D459 | 2026-11-12 | user | planned (1.0.0) | triggers | A DAG's trigger has its own row with its switch; no row, no trigger |
@@ -45,7 +52,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D455 | 2026-11-12 | claude | superseded by D460 | workers | A lost worker's unstarted attempt whose cleanup may move waits as its cleanup would |
 | D454 | 2026-11-11 | user | built R1.0c | deployment | Images on glibc beside Alpine; Alpine tagged -alpine |
 | D453 | 2026-11-11 | user | built M4B.0 | workers | A worker's cutoff counts from the send of the last heartbeat the master heard |
-| D452 | 2026-11-11 | user | planned (M4B) | components | A master that isn't leading names the leader |
+| D452 | 2026-11-11 | user | built M4B.3 | components | A master that isn't leading names the leader |
 | D451 | 2026-11-11 | user | built M4B.3 | components | B48 is fixed by M4B's per-group memory snapshot |
 | D450 | 2026-11-11 | user | superseded by D460 | workers | The master expires an assignment two heartbeats after its deadline |
 | D449 | 2026-11-11 | user | built M4B.0 | workers | A clock-skew warning from the master's wall clock |
@@ -361,7 +368,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D139 | 2026-11-01 | claude | built M4.5a | task-context | Durations may be given in weeks |
 | D138 | 2026-11-01 | claude | built M4.5a | task-context | Run parameters are described in DAG JSON and stored as tagged values |
 | D137 | 2026-11-01 | user | built M4.5a | task-context | A queued run keeps its validated parameter values |
-| D136 | 2026-11-01 | user | planned (M5) | airflow | Airflow Param comes with Airflow compatibility |
+| D136 | 2026-11-01 | user | superseded by D472 | airflow | Airflow Param comes with Airflow compatibility |
 | D135 | 2026-11-01 | user | built M4.5a | task-context | Run parameters are limited to 64 KiB of JSON |
 | D134 | 2026-11-01 | user | built M4.5a | task-context | Run parameters are masked when shown |
 | D133 | 2026-11-01 | user | built M4.5a | task-context | The master checks run parameters and their schemas with jsonschema |
@@ -502,10 +509,16 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### airflow
 
-- D136: Airflow Param comes with Airflow compatibility
+- D475: No Airflow look-alike layer: the migration tool replaces it
+- D474: Airflow connections and Variables are converted; provider operators are reported
+- D473: The migration tool emulates Airflow behaviour with native constructs where exact
+- D472: What the migration tool converts, and what it leaves marked for a person
+- D471: The migration tool has an Airflow 2 mode and an Airflow 3 mode
+- D470: The Airflow migration tool rewrites the source, checked against the original's structure
 
 ### assignment
 
+- D469: A round releases the core lock between its batches of assignments
 - D384: Assignment stays oldest-ready-first; no priorities between DAGs
 - D95: Concurrency limits cannot be overridden through the API or CLI
 - D89: Mapped instances each count toward concurrency limits

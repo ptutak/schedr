@@ -341,7 +341,7 @@ Each is one line; the reader's page has the diagrams.
   one by one, at most 10 in a turn. The turn in one transaction with savepoints per group comes
   later, only if needed.
 - **One inbox for all workers: a turn takes every worker's messages, in phases** (D468, planned
-  (M5.0c)): The workers' stream readers feed one inbox, and a turn takes messages from all workers,
+  (M5.1c)): The workers' stream readers feed one inbox, and a turn takes messages from all workers,
   up to a limit per turn and per worker: every worker's `Started`s in one transaction, then every
   worker's `Finished`s, then heartbeats and warnings together, then barrier messages worker by
   worker, the core's lock released between phases so a round can run. Each worker's own order holds
@@ -387,7 +387,8 @@ Each is one line; the reader's page has the diagrams.
 - Watcher hosts stop when their last watcher ends (D334, `wait-steps`; built M4.11a2)
 - The UI shows watcher hosts and switched-off sensors (D343, `observability`; built M4.11a4)
 - Running cleanup continues past the drain deadline (D346, `cleanup`; built M4.11a4)
-- Masters, workers and the webserver report their memory and CPU (D463, `observability`; planned (M5.2))
+- Masters, workers and the webserver report their memory and CPU (D463, `observability`; planned (M5.1h))
+- A round releases the core lock between its batches of assignments (D469, `assignment`; planned (M5.1c))
 <!-- end of current -->
 
 ## Replaced

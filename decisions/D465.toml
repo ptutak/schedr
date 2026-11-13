@@ -10,8 +10,8 @@ summary = '''
 charts of its processes (the 8 highest peaks, the rest as one band, container limits dashed) over
 a sortable table (now, peak, limit, share); a row opens a panel beside the chart with that
 process's breakdown and its largest tasks. A node's panel on Deployments gets a 24 h chart and a
-link; the Workers page a Memory column. Throughput and start latency by stage join after M5.0.
+link; the Workers page a Memory column. Throughput and start latency by stage join after M5.1a-f.
 '''
 history = "JOURNAL.md#D465"
-step = "M5.4"
+step = "M5.1j"
 also = ["observability"]

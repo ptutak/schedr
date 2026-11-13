@@ -13,4 +13,4 @@ step = "M4.8b"
 unverified = ["a pod lost in the gap loses the handle for `cleanup_anywhere`"]
 also = ["workers", "protocol"]
 code = ["crates/schedr-master/src/dispatch.rs", "crates/schedr-proto/proto/schedr/protocol/v1/master.proto", "crates/schedr-agent/src/agent.rs::send_handles"]
-checked = 2026-11-12
+checked = 2026-11-13

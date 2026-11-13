@@ -1,0 +1,18 @@
+title = "The migration tool has an Airflow 2 mode and an Airflow 3 mode"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "airflow"
+section = "The tool"
+summary = '''
+The tool has two modes, `--airflow 2` and `--airflow 3`, one of them always given (no
+default, never guessed): Airflow 2's forms (`airflow.operators.*`, `airflow.decorators`,
+`schedule_interval`) and defaults, or Airflow 3's (`airflow.sdk`, the `standard` provider) and
+its defaults. Defaults a file doesn't state differ between the two (e.g. `catchup`, the schedule
+when none is given), so the version can't be read from the file; an import that contradicts the
+mode stops that file with an error naming it. The report says which mode each file was
+converted in. Not chosen: Airflow 3 only (most of those leaving Airflow are on 2.x); guessing the
+version from the imports.
+'''
+history = "JOURNAL.md#D471"
+step = "M5.2b"

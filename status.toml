@@ -4,7 +4,7 @@
 updated = 2026-11-13
 
 in_progress = [
-    "M5.0 planned from Grok's study (session d12a2612, findings checked in the code; the user, 2026-11-13): a profile, b start journal in groups, c one inbox for all workers (D468), d PgBouncer, e turn size, f idle cost; then metrics in the UI M5.1-M5.6 (D462-D467), M5.7 the start time from the worker.",
+    "M5.1a done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); with one worker the round holds it (D469). Next M5.1b, the start records in groups; then M5.1c (D468 and D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).",
     "A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.",
     "For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).",
     "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",
@@ -14,7 +14,7 @@ in_progress = [
 waiting = []
 
 rules = [
-    "The pre-acceptance of commits and pushes ended at the v1.0.0 tag: each commit needs the user's acceptance again; stop at any decision that is the user's.",
+    "Commits and pushes pre-accepted from M5.1a to the end of M5.1f (the user, 2026-11-13), after each step's review, `make check` and `make docs`; stop at any decision that is the user's, or where building shows an accepted design doesn't hold.",
     "One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10).",
     "Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).",
     "Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).",

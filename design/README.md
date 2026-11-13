@@ -61,5 +61,5 @@ The other layers (see `AI_SETUP.md`, Project documents):
 | `cleanup` | cleanup handles, resources | Cleanup and resources |
 | `serialization` | output serialization, codecs | Output serialization |
 | `testing-dags` | `dags check` / `dags test`, `run_dag`, `task_context` | Testing DAGs |
-| `airflow` | the Airflow compatibility layer | Airflow compatibility |
+| `airflow` | the Airflow migration tool (the compatibility layer dropped, D475) | Airflow compatibility |
 | `development` | repository, tooling, tests, docs, libraries, CI, workflow, releases | Repository and tooling |

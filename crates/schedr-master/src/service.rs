@@ -393,6 +393,14 @@ impl Hub {
         MasterServer::new(self.clone()).max_decoding_message_size(self.max_message_size)
     }
 
+    /// The core's lock, the wait for it recorded by who asked (`by`: M5.1a's profile).
+    async fn core_for(&self, by: &str) -> tokio::sync::MutexGuard<'_, MasterCore> {
+        let asked = std::time::Instant::now();
+        let core = self.core.lock().await;
+        self.metrics.core_lock_waited(by, asked.elapsed());
+        core
+    }
+
     /// Reads the worker registry back (see [`MasterCore::restore`]) at the hub's clock, the
     /// one its lease checks use.
     ///
@@ -401,7 +409,7 @@ impl Hub {
     /// The core's failure.
     pub async fn restore(&self) -> Result<usize, CoreError> {
         let now = (self.clock)();
-        self.core.lock().await.restore(now).await
+        self.core_for("restore").await.restore(now).await
     }
 
     /// One tick of the master's loop, its messages delivered.
@@ -411,7 +419,11 @@ impl Hub {
     /// The core's failure (the next tick goes on).
     pub async fn tick(&self) -> Result<(), CoreError> {
         // What the round built before a failure is delivered too (B7).
-        let (outgoing, result) = self.core.lock().await.tick_partial((self.clock)()).await;
+        let (outgoing, result) = self
+            .core_for("round")
+            .await
+            .tick_partial((self.clock)())
+            .await;
         self.deliver(outgoing).await;
         result
     }
@@ -735,7 +747,7 @@ impl Hub {
     /// registered again since. (Its stream's reader stops at its next message, which ends
     /// the worker's side.)
     async fn disconnect_stuck(self, worker_id: String) {
-        let mut core = self.core.lock().await;
+        let mut core = self.core_for("stream").await;
         if self.streams.lock().await.contains_key(&worker_id) {
             return;
         }
@@ -838,7 +850,15 @@ impl Hub {
                     continue;
                 }
                 let wakes = !kind.finished.is_empty();
-                match core.handle_group(worker_id, kind, (self.clock)()).await {
+                let (part, count) = if kind.started.is_empty() {
+                    ("finished", kind.finished.len())
+                } else {
+                    ("started", kind.started.len())
+                };
+                let began = std::time::Instant::now();
+                let handled = core.handle_group(worker_id, kind, (self.clock)()).await;
+                self.metrics.turn_part_done(part, count, began.elapsed());
+                match handled {
                     Ok(out) => {
                         done.finished |= wakes;
                         done.outgoing.extend(out);
@@ -865,18 +885,24 @@ impl Hub {
                     }
                 }
             }
+            let began = std::time::Instant::now();
+            let rest = after.len() + usize::from(barrier.is_some());
             for message in after.drain(..) {
                 if !self.alone(core, worker_id, message, &mut done).await {
+                    self.metrics.turn_part_done("rest", rest, began.elapsed());
                     return done;
                 }
             }
-            match barrier.take() {
-                Some(message) => {
-                    if !self.alone(core, worker_id, message, &mut done).await {
-                        return done;
-                    }
-                }
-                None => return done,
+            let barrier = barrier.take();
+            let goes_on = match barrier {
+                Some(message) => self.alone(core, worker_id, message, &mut done).await,
+                None => false,
+            };
+            if rest > 0 {
+                self.metrics.turn_part_done("rest", rest, began.elapsed());
+            }
+            if !goes_on {
+                return done;
             }
         }
     }
@@ -998,7 +1024,7 @@ impl Hub {
             // message per turn left a worker's messages behind every round in between (B12).
             let turn = fill_turn(first, &mut carried, &mut queued, self.messages_per_turn);
             let done = {
-                let mut core = self.core.lock().await;
+                let mut core = self.core_for("turn").await;
                 if !self.still_served(&core, &worker_id, &stream).await {
                     reader.abort();
                     return;
@@ -1022,7 +1048,7 @@ impl Hub {
         // Only the worker's current stream ending disconnects it: a replaced one's end says
         // nothing of the newer stream (B44). Checked and removed under the core's lock, which
         // a registration holds while it puts its stream in place.
-        let mut core = self.core.lock().await;
+        let mut core = self.core_for("stream").await;
         let mut streams = self.streams.lock().await;
         if !streams
             .get(&worker_id)
@@ -1061,7 +1087,7 @@ impl Hub {
             .map(|entry| entry.attempt_id.as_str())
             .collect();
         let leads = self.leading_unless_closing().await;
-        let mut core = self.core.lock().await;
+        let mut core = self.core_for("register").await;
         // Paused while it waited for the lock (behind a round), or stopping: refused as
         // above, what it added gone.
         if !leads || !*self.leading.borrow() {
@@ -1462,7 +1488,12 @@ impl Master for Hub {
             if !hub.leading_unless_closing().await {
                 return None;
             }
-            Some(hub.core.lock().await.upload(result, (hub.clock)()).await)
+            Some(
+                hub.core_for("upload")
+                    .await
+                    .upload(result, (hub.clock)())
+                    .await,
+            )
         })
         .await
         .map_err(|e| Status::internal(format!("the upload failed: {e}")))?

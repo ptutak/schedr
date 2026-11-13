@@ -15,4 +15,4 @@ history = "archive/PROJECT.md#D174"
 step = "M4.7c"
 also = ["task-context", "testing-dags", "async-tasks"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-master/src/dispatch.rs::set_connections", "crates/schedr-agent/src/connection_jobs.rs::check"]
-checked = 2026-11-12
+checked = 2026-11-13

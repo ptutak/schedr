@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::check::{Db, Report, histogram_quantile, quantile};
+use crate::check::{Db, Report, histogram_quantile, labelled_quantile, quantile};
 use crate::support::{BINARY, Cluster};
 
 /// The suite's size: `SCHEDR_STRESS_PROFILE` = `quick` (the default; sized for GitHub's
@@ -222,6 +222,7 @@ impl Stress {
         let done = self.throughput();
         report.set("tasks", done.tasks);
         report.at_least("tasks_per_s", done.tasks_per_s, min_tasks_per_s);
+        report.set("assigned_to_started_p50_s", done.start_p50_s);
         report.at_most("assigned_to_started_p99_s", done.start_p99_s, 30.0);
         let runs = self.db.floats(&format!(
             "SELECT ({}) - ({}) FROM runs WHERE ended_at IS NOT NULL",
@@ -238,6 +239,66 @@ impl Stress {
                 5.0,
             );
         }
+        self.stages(report, master);
+    }
+
+    /// Where a start's time goes (M5.1a), p50 and p99 of each stage, recorded without limits:
+    /// on the master, the wait for its core lock (by a worker's turn, by the round) and each
+    /// part of a turn; on the first worker (or the standalone), from an `AssignTask` taken to
+    /// its `Started` sent, and each kind of journal record.
+    pub fn stages(&self, report: &mut Report, master: &str) {
+        let has = |name: &str| self.cluster.ops.iter().any(|(ops, _)| ops == name);
+        let mut put = |metrics: &str, name: &str, labels: &str, key: &str| {
+            for (q, at) in [(0.5, "p50"), (0.99, "p99")] {
+                let value = if labels.is_empty() {
+                    histogram_quantile(metrics, name, q)
+                } else {
+                    labelled_quantile(metrics, name, labels, q)
+                };
+                report.set(&format!("{key}_{at}_s"), value);
+            }
+        };
+        let master_metrics = has(master).then(|| self.cluster.ops_get(master, "/metrics").1);
+        if let Some(metrics) = &master_metrics {
+            for by in ["turn", "round"] {
+                let labels = format!("by=\"{by}\"");
+                let key = format!("lock_wait_{by}");
+                put(
+                    metrics,
+                    "schedr_master_core_lock_wait_seconds",
+                    &labels,
+                    &key,
+                );
+            }
+            for part in ["started", "finished", "rest"] {
+                let labels = format!("part=\"{part}\"");
+                let key = format!("turn_{part}");
+                put(metrics, "schedr_master_turn_part_seconds", &labels, &key);
+            }
+        }
+        let worker = if has("w01") {
+            Some(self.cluster.ops_get("w01", "/metrics").1)
+        } else {
+            master_metrics
+        };
+        if let Some(metrics) = &worker {
+            put(
+                metrics,
+                "schedr_worker_assign_to_started_seconds",
+                "",
+                "worker_assign",
+            );
+            for record in ["start", "process", "results"] {
+                let labels = format!("record=\"{record}\"");
+                let key = format!("journal_{record}");
+                put(
+                    metrics,
+                    "schedr_worker_journal_write_seconds",
+                    &labels,
+                    &key,
+                );
+            }
+        }
     }
 }
 
@@ -247,6 +308,7 @@ impl Stress {
 pub struct Throughput {
     pub tasks: f64,
     pub tasks_per_s: f64,
+    pub start_p50_s: f64,
     pub start_p99_s: f64,
 }
 
@@ -270,6 +332,7 @@ impl Stress {
         Throughput {
             tasks,
             tasks_per_s: tasks / span,
+            start_p50_s: quantile(&starts, 0.5),
             start_p99_s: quantile(&starts, 0.99),
         }
     }

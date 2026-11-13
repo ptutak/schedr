@@ -1,0 +1,18 @@
+title = "What the migration tool converts, and what it leaves marked for a person"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "airflow"
+section = "What converts"
+summary = '''
+Converted: `DAG`/`@dag`, `@task`, the Bash, Python and Empty operators, dependencies,
+schedules, `default_args`, retries, timeouts, params (Airflow `Param` included), task groups,
+mapping, branching, short-circuit, trigger rules with an exact native equivalent; then Jinja
+in commands, XCom pulls (into outputs), sensors (into wait steps), `TriggerDagRunOperator`
+and `email_on_failure` where exact. What has none (callbacks, failure-branch rules,
+`depends_on_past`, SLA, custom operators) stays in place under a `# schedr-migrate: TODO`
+comment and is listed in the report; the file still converts. A per-DAG report (Markdown and
+JSON) says what was converted, approximated (and why) and left.
+'''
+history = "JOURNAL.md#D472"
+step = "M5.2c"

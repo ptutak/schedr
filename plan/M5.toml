@@ -2,13 +2,10 @@ title = "Performance, metrics, Airflow migration tools"
 order = 80
 done_when = "Not set yet (archive/PROJECT.md, Roadmap)."
 notes = '''
-Renamed (the user, 2026-11-13): probably no Airflow layer; Airflow migration tools instead,
-converting Airflow DAG files into schedr DAGs once. To be decided when those steps are planned;
-the layer's notes below stay until then.
-
-Thin translating classes (Tier 1 first, then the rest of the scope), trigger-rule translation,
-`xcom_pull`; the placeholder and macro design (deferred until the first version works); the
-migration tool. After M4B (archive/PROJECT.md, Roadmap; Airflow compatibility).
+Two parts (the user, 2026-11-13): M5.1, performance (M5.1a-f) and metrics in the UI (M5.1g-l),
+with the worker's start time (M5.1m); then release 1.1.0 (R1.1); then M5.2, the Airflow
+migration tool (decisions 470-475), converting Airflow 2 and 3 DAG files into native ones once.
+The look-alike layer is dropped (decision 475).
 
 First, the start path (the user, 2026-11-11, after 1.0.0): M4B's stress comparison (guide,
 Stress tests, After M4B) made finishing faster and starting slower (assigned → started p99 up
@@ -20,15 +17,15 @@ stress clock, then the worker's start journal in groups (measured about 4x, the 
 then the master's core lock between a turn's groups, then the pooler, the turn size, and the
 idle cost (a standalone measured at about 22 queries a second with nothing to do).
 
-Then metrics in the UI (the user, 2026-11-13, decisions 462-467), M5.1-M5.6, before the
-Airflow layer, so the Metrics page can also show where a start's time goes (M5.0a's stages).
-The Status block (M5.1) needs no protocol or schema change; the rest needs a protocol field
+Then metrics in the UI (the user, 2026-11-13, decisions 462-467), M5.1g-M5.1l, before the
+Airflow layer, so the Metrics page can also show where a start's time goes (M5.1a's stages).
+The Status block (M5.1g) needs no protocol or schema change; the rest needs a protocol field
 (minor version) and new migrations on both databases. No OpenTelemetry (decision 386); no
 Grafana dashboards for now.
 '''
 
 [[steps]]
-id = "M5.0a"
+id = "M5.1a"
 title = "Profile the start path"
 scope = '''
 timers for each stage: on the worker, `AssignTask` received to `Started` sent, the start journal write, the `Spawned` record; on the master, the wait for the core lock against the time inside a turn, by `started` and `finished`, with the messages counted. Stress 23's `all_in_s` fixed: the time taken before its 5 s settling sleep, the watcher slots gauge set when a wait step is noted instead of in the 5 s alive tick. Run under a burst (stress 23, scenario 13) on this laptop
@@ -36,10 +33,11 @@ timers for each stage: on the worker, `AssignTask` received to `Started` sent, t
 done_when = '''
 a written breakdown of assigned → started p50/p99 by stage, from a run with these timers, in the stress guide; `all_in_s` measures the starts only
 '''
-status = "planned"
+status = "done"
+done = 2026-11-13
 
 [[steps]]
-id = "M5.0b"
+id = "M5.1b"
 title = "Start journal records in groups"
 scope = '''
 the agent's start records (`journal_start`) and a wait step's watcher-host record (`Spawned`) written in groups like its finishes (`write_many`: the files flushed together, the directory once), a burst of `AssignTask`s gathered, its `Started`s sent after the group is on disk; one at a time today, each a file and a directory fsync awaited on the agent's loop
@@ -50,10 +48,10 @@ stress 23 starts its 500 wait steps in under 10 s by the corrected `all_in_s` (2
 status = "planned"
 
 [[steps]]
-id = "M5.0c"
+id = "M5.1c"
 title = "One inbox for all workers"
 scope = '''
-(decision 468) the stream readers feed one inbox; a turn takes messages from all workers up to a limit per turn and per worker: every worker's `Started`s in one transaction, then every worker's `Finished`s, then heartbeats and warnings together (set-based), then barriers worker by worker, the core's lock released between phases. Each worker's order kept, a barrier holding back only its worker, each message checked against its own stream (B44), a failed phase redone worker by worker, then one by one. Fallback, if M5.0a shows other workers' turns cost nothing: the lock released between a worker's groups, `Started`s first. Reviewed by Grok in paranoid mode
+(decisions 468, 469) the stream readers feed one inbox; a turn takes messages from all workers up to a limit per turn and per worker: every worker's `Started`s in one transaction, then every worker's `Finished`s, then heartbeats and warnings together (set-based), then barriers worker by worker, the core's lock released between phases. Each worker's order kept, a barrier holding back only its worker, each message checked against its own stream (B44), a failed phase redone worker by worker, then one by one. And the round lets go of the lock between its batches of assignments (decision 469): with one worker the round is what a `Started` waits for (M5.1a). Reviewed by Grok in paranoid mode
 '''
 done_when = '''
 assigned → started p99 in scenarios 9 and 13 within their range before M4B over four alternating runs (scenario 13 3.1-4.8 s; the single runs' 2.1 s and 1.8 s the aim), M4B's throughput kept or better; commits per second under stress 1 counted before and after; tests for each rule (order per worker, a barrier, a replaced stream, a failed phase, fairness) on both databases
@@ -61,10 +59,10 @@ assigned → started p99 in scenarios 9 and 13 within their range before M4B ove
 status = "planned"
 
 [[steps]]
-id = "M5.0d"
+id = "M5.1d"
 title = "Pokes and rounds through PgBouncer"
 scope = '''
-statements counted per transaction on Postgres behind PgBouncer after M5.0c's turn across workers; then set-based where the count still points: assignment's per-item claim, `try_number` and insert, `first_start` once per sensor instead of twice, a wait step's per-item finish reads (`count_strike`, `run_dag`, `clear_wait_step`); `ready_instances` reading only what a round can assign, cleanups still first
+statements counted per transaction on Postgres behind PgBouncer after M5.1c's turn across workers; then set-based where the count still points: assignment's per-item claim, `try_number` and insert, `first_start` once per sensor instead of twice, a wait step's per-item finish reads (`count_strike`, `run_dag`, `clear_wait_step`); `ready_instances` reading only what a round can assign, cleanups still first
 '''
 done_when = '''
 pokes p99 under 7 s (11.1 s after M4B); scenario 6's round p99 at scenario 1's
@@ -72,10 +70,10 @@ pokes p99 under 7 s (11.1 s after M4B); scenario 6's round p99 at scenario 1's
 status = "planned"
 
 [[steps]]
-id = "M5.0e"
+id = "M5.1e"
 title = "The turn size from data"
 scope = '''
-after M5.0c: the turn's limit and the limit per worker compared in one stress session (10, 20, 40, 80 and more messages a turn; `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`)
+after M5.1c: the turn's limit and the limit per worker compared in one stress session (10, 20, 40, 80 and more messages a turn; `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`)
 '''
 done_when = '''
 the default set from the measured trade-off between start latency and throughput, the numbers in the stress guide
@@ -83,7 +81,7 @@ the default set from the measured trade-off between start latency and throughput
 status = "planned"
 
 [[steps]]
-id = "M5.0f"
+id = "M5.1f"
 title = "The idle cost"
 scope = '''
 a standalone with nothing to do (measured 2026-11-13 on the examples' DAGs, SQLite): about 22 queries a second (6,724 in 5 min; the master's 1 s tick reads commands, queued runs, retries and ready tasks each time, about 14 kinds), in the 1.0.0 release build 1.9 % of a core, 44 wakeups a second and 1.3 MiB written to disk in 3 min (about 0.6 GiB a day), 46 MiB resident (the debug build 5.2 %, 51 wakeups a second, 96 MiB); the fork servers idle. Work skipped when nothing changed (the change notifications, or a mark the writers set), the polls that remain at their own slower pace
@@ -94,7 +92,7 @@ an idle standalone's queries, wakeups and CPU measured before and after over 10 
 status = "planned"
 
 [[steps]]
-id = "M5.1"
+id = "M5.1g"
 title = "The Status block"
 scope = '''
 (decision 462): the block above the Deployments graph from what the page already fetches, plus each worker's `slots` and `running` in `GET /api/v1/deployment`
@@ -105,7 +103,7 @@ the block shows masters by role, workers by state, slots, problems, mixed versio
 status = "planned"
 
 [[steps]]
-id = "M5.2"
+id = "M5.1h"
 title = "Memory and CPU reported"
 scope = '''
 (decision 463): resident memory, CPU time and the cgroup's memory and limit in the masters row, the worker's heartbeat (a protocol field, minor version up; the worker's breakdown: agent, fork servers, watcher hosts, tasks) and the webserver's `/deployment` answer
@@ -116,7 +114,7 @@ each process's figures reach the database or the answer; an older worker without
 status = "planned"
 
 [[steps]]
-id = "M5.3"
+id = "M5.1i"
 title = "The samples table"
 scope = '''
 (decision 464): a migration on both databases; the leading master writes a sample per process a minute; 15-minute rollups of averages and peaks; retention deletes past 24 h and 30 days
@@ -127,7 +125,7 @@ samples written, rolled up and deleted on both databases, with a statement count
 status = "planned"
 
 [[steps]]
-id = "M5.4"
+id = "M5.1j"
 title = "The Metrics page"
 scope = '''
 (decisions 465, 466): the page with memory and CPU charts per deployment, its table and side panel; the Status block's memory and sparkline; a chart in each node's panel; the Workers page's Memory column; SVG charts drawn by the server
@@ -138,7 +136,7 @@ the page renders every range on both databases and in light and dark; live refre
 status = "planned"
 
 [[steps]]
-id = "M5.5"
+id = "M5.1k"
 title = "Task memory charts"
 scope = '''
 (decision 467): the task panel's chart of its last 30 attempts' peak memory, the DAG page's p95 peaks against limits
@@ -149,23 +147,100 @@ both shown from the attempts table with an `oom_killed` attempt marked; UI tests
 status = "planned"
 
 [[steps]]
-id = "M5.6"
+id = "M5.1l"
 title = "Throughput and start latency on the Metrics page"
 scope = '''
-tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.0a times them
+tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.1a times them
 '''
 done_when = '''
-not set yet: after M5.0a's breakdown
+not set yet: after M5.1a's breakdown
 '''
 status = "planned"
 
 [[steps]]
-id = "M5.7"
+id = "M5.1m"
 title = "The start time from the worker"
 scope = '''
 nice to have (the user, 2026-11-13): `Started` carries the worker's start time (an additive protocol field, minor version), turned into master time with the worker's estimate (decision 448), recorded as `started_at`; the master's own time for an older worker. Today `started_at` is the master's time when it handles the message, so it includes the wait for the core's lock
 '''
 done_when = '''
 `started_at` within the clock-skew bound of the worker's start under stress 9, 13 and 23; an older worker's falls back; a "started → recorded" figure in the stress report
+'''
+status = "planned"
+
+[[steps]]
+id = "R1.1"
+title = "Release 1.1.0"
+scope = '''
+after M5.1: the version bumped, the changelog, an rc rehearsal (the release workflow, the wheel on TestPyPI and the images checked by hand), then 1.1.0; the protocol's minor version as M5.1h and M5.1m leave it, the new migrations (M5.1i) checked on an upgraded 1.0.0 database
+'''
+done_when = '''
+1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2a"
+title = "The recording stub and the comparison"
+scope = '''
+(decisions 470, 475) a stub `airflow` package (Airflow 2 and 3 import paths) that records a DAG file's DAGs as it imports, and a comparison of that record with a native DAG as `schedr dags check` loads it by the paths a run can take (which tasks run, after which, for each way their upstream tasks end; an emulated task compared as the task it stands for) and by schedules, retries, timeouts; the corpus started (Airflow's example DAGs, Apache-2.0)
+'''
+done_when = '''
+the corpus's DAGs recorded; a hand-written native twin of a few compared equal, a changed one reported different
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2b"
+title = "The rewrite: the authoring core"
+scope = '''
+(decisions 470, 471) `schedr airflow migrate --airflow 2|3 <paths> --out <dir>` with LibCST (`schedr[migrate]`): `DAG`/`@dag`, `@task`, the Bash, Python and Empty operators, dependencies (`>>`, `<<`, `chain`, lists), schedules (cron, presets, `timedelta`, `@once`, `None`), `start_date`/`end_date`/`catchup`, `default_args`, retries, timeouts, tags, description, `max_active_*`, params; each mode's forms and defaults (the defaults checked against Airflow 2's and 3's docs), an import contradicting the mode an error; every result compared (M5.2a)
+'''
+done_when = '''
+the corpus's DAGs within this scope convert and compare equal; the share converted in the guide
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2c"
+title = "Branching, groups, mapping, trigger rules, emulations"
+scope = '''
+(decisions 472, 473) task groups, `.partial()`/`.expand()`, `@task.branch`/`BranchPythonOperator`, short-circuit, trigger rules onto `NoneFailed`/`AllSucceeded` with the start anchor and dropped edges, `all_done` leaves and `@setup`/`@teardown` onto resources; what has no exact form under TODO comments
+'''
+done_when = '''
+each translation with a corpus or hand-written case compared equal; each refusal with its report line
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2d"
+title = "Templates, XCom, sensors, chained runs, email"
+scope = '''
+(decision 472) Jinja in `bash_command` and templated fields (`ds`, `params`, `ti.xcom_pull`, ...) onto the task context and outputs; XCom pulls onto outputs; the standard sensors onto wait steps; `TriggerDagRunOperator` onto `TriggerDagOperator`; `email`/`email_on_failure`/`email_on_retry` onto channels; what isn't exact reported
+'''
+done_when = '''
+the corpus's uses converted or reported, the report's counts in the guide
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2e"
+title = "Connections and Variables"
+scope = '''
+(decision 474) `airflow connections export` / `airflow variables export` JSON into schedr connection definitions and secrets (`schedr airflow migrate-connections`); provider operators counted in the report
+'''
+done_when = '''
+the common connection types (Postgres, MySQL, HTTP, SSH, S3) converted and checked with `schedr connections check`; secrets never written in plain text
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2f"
+title = "The report and the migration guide"
+scope = '''
+the report (Markdown and JSON per DAG and a summary), a guide page on migrating from Airflow (what converts, what to do with each TODO), the corpus's conversion rate
+'''
+done_when = '''
+the guide page; the corpus's rate measured and stated
 '''
 status = "planned"

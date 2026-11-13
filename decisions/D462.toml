@@ -13,5 +13,5 @@ with a 24 h sparkline, joins it with the memory samples (decision 464). Not chos
 by state in the block (left to the Metrics page).
 '''
 history = "JOURNAL.md#D462"
-step = "M5.1"
+step = "M5.1g"
 also = ["observability"]

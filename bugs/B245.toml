@@ -1,0 +1,16 @@
+title = "the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load"
+severity = "low"
+probability = "possible"
+kind = "tests"
+summary = "async_tasks_run_and_stop_cleanly_on_each_start_method_and_loop: `stopped_spawned` timed out (5.2 s) before writing its start marker"
+found = 2026-11-13
+suspected = false
+details = '''
+`crates/schedr/tests/roles.rs:1958` gives `stopped_forked` and `stopped_spawned` a 5 s
+`timeout`, which counts from the process's start, so for the spawned one it includes a new
+interpreter starting and importing `asyncio` or `uvloop`. In `make check` on 2026-11-13 (the
+whole suite in parallel) `on_asyncio`'s `stopped_spawned` ended `timed_out` after 5.235 s with
+no marker written: it never reached `note(...)`. Alone it passed 3 of 3 (13 s each). Fix: a
+timeout long enough for a spawn under load (e.g. 20 s) for the two stopped tasks; the test then
+takes that much longer.
+'''

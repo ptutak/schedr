@@ -1,0 +1,14 @@
+title = "No Airflow look-alike layer: the migration tool replaces it"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "airflow"
+section = "The tool"
+summary = '''
+`schedr.airflow` (Airflow's names over the native API at parse time) is dropped: a converted
+DAG has no runtime tie to Airflow's API. The layer's translation rules (schedules, trigger
+rules, short-circuit, resources for `all_done` and teardown) become the tool's. The principle
+stays: the native API never changes for Airflow; what it can't express exactly is reported.
+'''
+history = "JOURNAL.md#D475"
+step = "M5.2a"

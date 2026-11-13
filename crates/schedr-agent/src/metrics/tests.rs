@@ -47,6 +47,8 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
         })
         .inc();
     metrics.watchers.set_threads(1, 30);
+    metrics.journal_written("start", Duration::from_millis(3));
+    metrics.assign_to_started.observe(0.004);
     metrics
         .watchers
         .hosts_lost
@@ -69,6 +71,8 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
         "schedr_worker_task_start_seconds_count{method=\"spawn\",phase=\"import\"} 1",
         "schedr_worker_task_start_seconds_bucket{le=\"0.16\",method=\"spawn\",phase=\"runner\"} 2",
         "schedr_worker_journal_records 0",
+        "schedr_worker_journal_write_seconds_count{record=\"start\"} 1",
+        "schedr_worker_assign_to_started_seconds_count 1",
         "schedr_worker_log_bytes 0",
         "schedr_worker_log_swept_bytes_total 0",
         "schedr_worker_fork_servers{interpreter=\"python\",kind=\"preloaded\",state=\"up\"} 1",

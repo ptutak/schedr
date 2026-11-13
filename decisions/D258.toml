@@ -11,5 +11,5 @@ The response is not behind the master’s lock and is not sent while paused, nor
 history = "archive/PROJECT.md#D258"
 step = "M4.8b3"
 also = ["workers"]
-checked = 2026-11-12
+checked = 2026-11-13
 code = ["crates/schedr-master/src/service.rs::HeartbeatAcks"]

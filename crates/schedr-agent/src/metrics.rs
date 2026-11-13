@@ -41,6 +41,20 @@ const TASK_START: MetricDoc = MetricDoc {
         (runner: from starting the process to the runner's hello; import: from sending the \
         task to the DAG file imported, not counted when that fails)",
 };
+const ASSIGN_TO_STARTED: MetricDoc = MetricDoc {
+    name: "worker_assign_to_started_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "How long an assignment took from its `AssignTask` taken by the agent's loop to its \
+        `Started` sent (its plan, inputs and journal record): not counted when rejected",
+};
+const JOURNAL_WRITE: MetricDoc = MetricDoc {
+    name: "worker_journal_write_seconds",
+    kind: MetricKind::Histogram,
+    labels: &["record"],
+    help: "How long the journal took to keep a record on disk, by record (start: an attempt \
+        before its `Started`; process: its process's identity; results: a group of results)",
+};
 const MASTER_SAMPLE_AGE: MetricDoc = MetricDoc {
     name: "worker_master_sample_age_seconds",
     kind: MetricKind::Gauge,
@@ -172,6 +186,8 @@ pub const METRICS: &[MetricDoc] = &[
     SLOTS_USED,
     ATTEMPTS,
     TASK_START,
+    ASSIGN_TO_STARTED,
+    JOURNAL_WRITE,
     MASTER_SAMPLE_AGE,
     MASTER_ROUND_TRIP,
     OLDER_EPOCH,
@@ -207,6 +223,13 @@ pub struct StartLabels {
     pub method: String,
     /// `runner` or `import`.
     pub phase: String,
+}
+
+/// A kind of journal record.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct RecordLabels {
+    /// `start`, `process` or `results`.
+    pub record: String,
 }
 
 /// A fork server and its state.
@@ -357,6 +380,10 @@ pub struct AgentMetrics {
     pub attempts: Family<StatusLabels, Counter>,
     /// How long Python tasks took to start, by start method and phase.
     pub task_start: StartHistograms,
+    /// From an `AssignTask` taken to its `Started` sent.
+    pub assign_to_started: Histogram,
+    /// How long the journal took to keep a record, by record.
+    pub journal_write: Family<RecordLabels, Histogram, fn() -> Histogram>,
     /// The age of the heartbeat master time is read from, in seconds (decision 448).
     pub master_sample_age: Gauge<f64, std::sync::atomic::AtomicU64>,
     /// Its round trip, in seconds.
@@ -387,6 +414,11 @@ impl Default for AgentMetrics {
             task_start: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(0.01, 2.0, 13))
             }),
+            // 0.1 ms to about 26 s, each bucket 2 times the last.
+            assign_to_started: Histogram::new(exponential_buckets(0.0001, 2.0, 19)),
+            journal_write: Family::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.0001, 2.0, 19))
+            }),
             master_sample_age: Gauge::default(),
             master_round_trip: Gauge::default(),
             // 10 ms to about 160 s.
@@ -410,6 +442,16 @@ impl AgentMetrics {
         r.register(SLOTS_USED.name, SLOTS_USED.help, self.slots_used.clone());
         r.register(ATTEMPTS.name, ATTEMPTS.help, self.attempts.clone());
         r.register(TASK_START.name, TASK_START.help, self.task_start.clone());
+        r.register(
+            ASSIGN_TO_STARTED.name,
+            ASSIGN_TO_STARTED.help,
+            self.assign_to_started.clone(),
+        );
+        r.register(
+            JOURNAL_WRITE.name,
+            JOURNAL_WRITE.help,
+            self.journal_write.clone(),
+        );
         r.register(
             MASTER_SAMPLE_AGE.name,
             MASTER_SAMPLE_AGE.help,
@@ -463,6 +505,15 @@ impl AgentMetrics {
                     .observe(took.as_secs_f64());
             }
         }
+    }
+
+    /// Records the journal keeping a `record` in `took`.
+    pub fn journal_written(&self, record: &str, took: std::time::Duration) {
+        self.journal_write
+            .get_or_create(&RecordLabels {
+                record: record.to_owned(),
+            })
+            .observe(took.as_secs_f64());
     }
 
     /// Counts one ended attempt.

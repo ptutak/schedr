@@ -1,7 +1,8 @@
 title = "Airflow Param comes with Airflow compatibility"
 date = 2026-11-01
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 472
 topic = "airflow"
 section = "Airflow API"
 summary = '''

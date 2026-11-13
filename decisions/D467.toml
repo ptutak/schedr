@@ -10,5 +10,5 @@ bar per attempt coloured by its outcome (`oom_killed` marked) and linking to its
 limit dashed. The DAG page lists its tasks' p95 peak against their limits, closest first.
 '''
 history = "JOURNAL.md#D467"
-step = "M5.5"
+step = "M5.1k"
 also = ["observability"]

@@ -6,25 +6,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-13)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.0a, Profile the start path. Done when: a written breakdown of assigned → started p50/p99 by stage, from a run with these timers, in the stress guide; `all_in_s` measures the starts only
-- **Then:** M5.0b, M5.0c, M5.0d, M5.0e, M5.0f.
+- **Next step:** M5.1b, Start journal records in groups. Done when: stress 23 starts its 500 wait steps in under 10 s by the corrected `all_in_s` (25.7 s after M4B, with the sleep and the gauge's lag); a crash test: no `Started` sent for a record not on disk, a group lost whole on recovery
+- **Then:** M5.1c, M5.1d, M5.1e, M5.1f, M5.1g.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 4; first: B39 (low/possible), B38 (low/possible), B242 (low/rare), B241 (low/rare) (`BUGS.md`).
+- **Open bugs:** 5; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B242 (low/rare), B241 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D469 (2026-11-13): a round lets go of the core lock between its batches
 - D468 (2026-11-13): one inbox for all workers (decision 468); M5.0 reordered
 - D460 (2026-11-12): both sides number their messages and echo the other's (decision 460, B240; supersedes 450 and 455)
 - D461 (2026-11-12): a DAG page's actions in one row; Restart where it does something
 - D459 (2026-11-12): a DAG's trigger has its own row with its switch
-- D458 (2026-11-12): a sensor poke tolerates overruns of `every` (decision 458, supersedes 322)
+- M5.1a (2026-11-13): Profile the start path
 - R1.0b (2026-11-12): The master's side in the clock simulator
 - R1.0c (2026-11-11): Images on glibc beside Alpine
-- R1.0a (2026-11-11): A slim image
 
 ## In progress
 
-- M5.0 planned from Grok's study (session d12a2612, findings checked in the code; the user, 2026-11-13): a profile, b start journal in groups, c one inbox for all workers (D468), d PgBouncer, e turn size, f idle cost; then metrics in the UI M5.1-M5.6 (D462-D467), M5.7 the start time from the worker.
+- M5.1a done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); with one worker the round holds it (D469). Next M5.1b, the start records in groups; then M5.1c (D468 and D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
@@ -36,7 +36,7 @@ Nothing.
 
 ## Rules in force
 
-- The pre-acceptance of commits and pushes ended at the v1.0.0 tag: each commit needs the user's acceptance again; stop at any decision that is the user's.
+- Commits and pushes pre-accepted from M5.1a to the end of M5.1f (the user, 2026-11-13), after each step's review, `make check` and `make docs`; stop at any decision that is the user's, or where building shows an accepted design doesn't hold.
 - One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10).
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).

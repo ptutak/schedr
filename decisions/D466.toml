@@ -12,5 +12,5 @@ phone charts stack and tables scroll in their own box. Not chosen: a vendored li
 uPlot (hover and zoom); Grafana dashboards in the Helm chart, for now.
 '''
 history = "JOURNAL.md#D466"
-step = "M5.4"
+step = "M5.1j"
 also = []

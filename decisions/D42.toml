@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D42"
 step = "M3.6"
 also = ["assignment"]
 code = ["crates/schedr-master/src/service.rs::ROUND_GAP"]
-checked = 2026-11-12
+checked = 2026-11-13

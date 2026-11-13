@@ -195,6 +195,7 @@ struct World {
     fake: Fake,
     stop: watch::Sender<u32>,
     agent: tokio::task::JoinHandle<()>,
+    metrics: AgentMetrics,
 }
 
 /// A master over SQLite, and an agent with a fake executor connected to it in process,
@@ -211,6 +212,14 @@ async fn world() -> World {
 /// As [`world`], with root `etl` where `make_root` puts it in the test's directory (it
 /// returns the configured path, e.g. a symbolic link to a revision as git-sync makes).
 async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
+    world_timed(make_root, &crate::attempt::WorkerTimeouts::default()).await
+}
+
+/// As [`world_in`], the agent's timings `timeouts`.
+async fn world_timed(
+    make_root: impl FnOnce(&Path) -> PathBuf,
+    timeouts: &crate::attempt::WorkerTimeouts,
+) -> World {
     let dir = TempDir::new().unwrap();
     let root = make_root(dir.path());
     std::fs::write(root.join("sync.py"), "").unwrap();
@@ -255,7 +264,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
             log_dir: dir.path().join("logs"),
             connection_dir: dir.path().join("connections"),
             memory: crate::memory::MemoryWatch::default(),
-            timeouts: crate::attempt::WorkerTimeouts::default(),
+            timeouts: *timeouts,
             fork_server: None,
         },
         poll_interval: Duration::from_millis(20),
@@ -271,7 +280,9 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
         secrets: Arc::new(crate::secrets::SecretStores::none()),
     };
     let fake = Fake::default();
-    let mut agent = Agent::new(settings, fake.clone(), "i1".to_owned());
+    let metrics = AgentMetrics::default();
+    let mut agent =
+        Agent::new(settings, fake.clone(), "i1".to_owned()).with_metrics(metrics.clone());
     let (stop, stopped) = watch::channel(0);
     let agent = tokio::spawn(async move {
         let connect = move || {
@@ -288,6 +299,7 @@ async fn world_in(make_root: impl FnOnce(&Path) -> PathBuf) -> World {
         fake,
         stop,
         agent,
+        metrics,
     }
 }
 
@@ -389,6 +401,51 @@ async fn the_agent_registers_parses_its_root_and_runs_a_task_to_the_end() {
     })
     .await;
     shut_down(world).await;
+}
+
+#[tokio::test]
+async fn a_start_shows_in_the_slots_gauge_and_its_stages_at_once() {
+    // An alive tick an hour apart: only the start itself can move the gauge (M5.1a: stress
+    // 23 read it for its starts and waited up to an alive interval for it).
+    let timeouts = crate::attempt::WorkerTimeouts {
+        alive: Duration::from_hours(1),
+        ..crate::attempt::WorkerTimeouts::default()
+    };
+    let world = world_timed(
+        |dir| {
+            let root = dir.join("etl");
+            std::fs::create_dir_all(&root).unwrap();
+            root
+        },
+        &timeouts,
+    )
+    .await;
+    let db = world.db.clone();
+    eventually(&world, "the DAGs to be parsed", || {
+        let db = db.clone();
+        async move { dag_ids(&db).await.len() == 2 }
+    })
+    .await;
+    assert_eq!(world.metrics.slots_used.get(), 0);
+    trigger(&db, "wait").await;
+    let metrics = world.metrics.clone();
+    eventually(&world, "the slot to show as used", || {
+        let metrics = metrics.clone();
+        async move { metrics.slots_used.get() == 1 }
+    })
+    .await;
+    let mut out = String::new();
+    let mut registry = prometheus_client::registry::Registry::with_prefix("schedr");
+    world.metrics.register(&mut registry);
+    prometheus_client::encoding::text::encode(&mut out, &registry).unwrap();
+    for line in [
+        "schedr_worker_assign_to_started_seconds_count 1",
+        "schedr_worker_journal_write_seconds_count{record=\"start\"} 1",
+    ] {
+        assert!(out.contains(line), "{line}\n{out}");
+    }
+    // Not drained: a drain goes by the alive tick, an hour away here.
+    world.agent.abort();
 }
 
 #[tokio::test]
@@ -3203,6 +3260,66 @@ async fn a_moved_cleanup_runs_alone_with_the_handles_it_came_with() {
     );
     assert_eq!(*cleanups.lock().unwrap(), [vec![one_handle()]]);
     assert!(result_in(&seen).cleanup.is_some());
+}
+
+#[tokio::test]
+async fn a_moved_cleanup_counts_as_a_start_in_the_assignment_timer() {
+    // Grok's review of M5.1a: a moved cleanup sends `Started` by its own path, which recorded
+    // no `assign_to_started`.
+    let mut message = assign("a1", &task_with_cleanup(1000), "sync.py", false);
+    let Some(master_message::Message::AssignTask(assigned)) = &mut message.message else {
+        panic!("expected an assignment")
+    };
+    assigned.cleanup_only = Some(pb::CleanupOnly {
+        handle_json: vec![serde_json::to_vec(&one_handle()).unwrap()],
+    });
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"finished: failed");
+    let metrics = AgentMetrics::default();
+    let given = metrics.clone();
+    let (seen, _) = against_script_with(2, Start::With(vec![]), vec![message], done, |agent| {
+        agent.metrics = given;
+    })
+    .await;
+    assert!(kinds(&seen).contains(&"started"));
+    let mut registry = prometheus_client::registry::Registry::with_prefix("schedr");
+    metrics.register(&mut registry);
+    let mut out = String::new();
+    prometheus_client::encoding::text::encode(&mut out, &registry).unwrap();
+    assert!(
+        out.contains("schedr_worker_assign_to_started_seconds_count 1"),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn the_journal_gauge_follows_finishes_and_acknowledgements() {
+    // Grok's review of M5.1a: a finish set the gauge before its result was kept (one short),
+    // and an acknowledgement never set it again.
+    let dir = TempDir::new().unwrap();
+    let mut agent = offline_agent(dir.path());
+    for id in ["a1", "a2"] {
+        let (stop, _) = Stops::new();
+        agent.running.insert(id.to_owned(), stop);
+    }
+    agent.set_slot_gauges();
+    assert_eq!(agent.metrics.journal_records.get(), 2);
+    for id in ["a1", "a2"] {
+        let finished = pb::Finished {
+            attempt_id: id.to_owned(),
+            ..pb::Finished::default()
+        };
+        agent.result_recorded(finished, None);
+    }
+    assert_eq!(
+        agent.metrics.journal_records.get(),
+        2,
+        "kept until acknowledged"
+    );
+    assert_eq!(agent.metrics.slots_used.get(), 0);
+    agent.acknowledged("a1").await;
+    assert_eq!(agent.metrics.journal_records.get(), 1);
+    agent.acknowledged("a2").await;
+    assert_eq!(agent.metrics.journal_records.get(), 0);
 }
 
 /// A `Registered` with a lease of 50 ms and `wait`, with a cleanup, `anywhere` as said.

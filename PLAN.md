@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.0a, Profile the start path.
+**Next:** M5.1b, Start journal records in groups.
 
 ## M0: Foundations
 
@@ -209,7 +209,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M4B.0 | Master time hardened (the clock step) | done 2026-11-11 | D445, D446, D447, D448, D449, D453 |
 | M4B.1 | Measure first | dropped |  |
 | M4B.2 | Savepoints in `schedr-db` | dropped |  |
-| M4B.3 | A turn's messages in groups | done 2026-11-11 | D397, D451 |
+| M4B.3 | A turn's messages in groups | done 2026-11-11 | D397, D451, D452 |
 | M4B.4 | A turn's `Finished`s written together | done 2026-11-11 |  |
 | M4B.5 | The agent's journal in groups | done 2026-11-11 | D396 |
 | M4B.6 | The turn in one transaction, savepoints per group | dropped |  |
@@ -230,19 +230,26 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 
 | Step | Title | State | Decisions |
 |---|---|---|---|
-| M5.0a | Profile the start path | **next** |  |
-| M5.0b | Start journal records in groups | planned |  |
-| M5.0c | One inbox for all workers | planned | D468 |
-| M5.0d | Pokes and rounds through PgBouncer | planned |  |
-| M5.0e | The turn size from data | planned |  |
-| M5.0f | The idle cost | planned |  |
-| M5.1 | The Status block | planned | D462 |
-| M5.2 | Memory and CPU reported | planned | D463 |
-| M5.3 | The samples table | planned | D464 |
-| M5.4 | The Metrics page | planned | D465, D466 |
-| M5.5 | Task memory charts | planned | D467 |
-| M5.6 | Throughput and start latency on the Metrics page | planned |  |
-| M5.7 | The start time from the worker | planned |  |
+| M5.1a | Profile the start path | done 2026-11-13 |  |
+| M5.1b | Start journal records in groups | **next** |  |
+| M5.1c | One inbox for all workers | planned | D468, D469 |
+| M5.1d | Pokes and rounds through PgBouncer | planned |  |
+| M5.1e | The turn size from data | planned |  |
+| M5.1f | The idle cost | planned |  |
+| M5.1g | The Status block | planned | D462 |
+| M5.1h | Memory and CPU reported | planned | D463 |
+| M5.1i | The samples table | planned | D464 |
+| M5.1j | The Metrics page | planned | D465, D466 |
+| M5.1k | Task memory charts | planned | D467 |
+| M5.1l | Throughput and start latency on the Metrics page | planned |  |
+| M5.1m | The start time from the worker | planned |  |
+| R1.1 | Release 1.1.0 | planned |  |
+| M5.2a | The recording stub and the comparison | planned | D475 |
+| M5.2b | The rewrite: the authoring core | planned | D470, D471 |
+| M5.2c | Branching, groups, mapping, trigger rules, emulations | planned | D472, D473 |
+| M5.2d | Templates, XCom, sensors, chained runs, email | planned |  |
+| M5.2e | Connections and Variables | planned | D474 |
+| M5.2f | The report and the migration guide | planned |  |
 
 ## M6: sign-in against LDAP
 

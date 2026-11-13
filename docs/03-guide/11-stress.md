@@ -357,3 +357,40 @@ arriving while the master handles a turn of up to 40 `Finished`s waits for the w
 where it waited behind one message before. It stays well inside the worker's reserve for a
 start (two heartbeats, 20 s). The turn's size is `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`
 ([Timings](14-timings.md)).
+
+## Where a start's time goes (M5.1a, 2026-11-13)
+
+Each side now times its part of a start ([Observability](09-observability.md#where-a-starts-time-goes)),
+and every measured scenario reports p50 and p99 of each stage. `all_in_s` in scenario 23 is
+now taken before its 5 s settling wait, and the worker sets its slot gauges as each wait step
+starts, not at its 5 s alive tick: it measures the starts only. Measured on this laptop under
+WSL (quick profile, Postgres, the test build), on the code after 1.0.0. A figure from a histogram
+is the upper bound of its bucket: the stages' buckets double, the round's are √2 apart (so
+1.02, 1.45 and 2.05 s are neighbouring buckets).
+
+| Stage | 9 standalone (1 worker) | 13 spawned (2 workers) | 13 forked (2 workers) | 23 many sensors (1 worker) |
+|---|---|---|---|---|
+| assigned → started p50 / p99 (from the database) | 0.11 / 3.09 s | 1.04 / 4.35 s | 1.02 / 3.75 s | — |
+| worker: `AssignTask` to `Started` sent, p99 | 0.03 s | 0.05 s | 0.05 s | 0.05 s |
+| worker: start record on disk, p50 / p99 | 0.013 / 0.026 s | 0.013 / 0.05 s | 0.013 / 0.05 s | 0.013 / 0.05 s |
+| master: a turn waiting for the lock, p50 / p99 | 0.0001 / 0.82 s | 0.82 / 3.28 s | 0.82 / 1.64 s | 0.10 / 6.55 s |
+| master: a round waiting for the lock, p50 / p99 | 0.013 / 0.10 s | 0.41 / 0.82 s | 0.41 / 0.82 s | 0.0001 / 0.82 s |
+| master: a round, p50 / p99 | — / 1.02 s | — / 2.05 s | — / 1.45 s | 0.13 / 4.10 s |
+| master: a turn's `Started`s, p99 | 0.05 s | 0.20 s | 0.20 s | 0.82 s |
+| master: a turn's `Finished`s, p99 | 0.10 s | 0.20 s | 0.20 s | 0.82 s |
+| `all_in_s` (500 wait steps started) | | | | 14.5 s (25.7 s before, with the wait and the gauge's lag) |
+
+**The time to a start is the wait for the master's core lock.** The worker's part is small:
+under 50 ms from an assignment to its `Started`, the start record on disk included. A turn's
+own work is under a second at p99. What a `Started` waits for is the lock, held by the rounds
+and the other worker's turns: in scenario 13 a turn waited 0.8 s at p50 and up to 3.3 s,
+matching the assigned → started p99. With one worker (scenarios 9 and 23) there is no other
+turn to wait behind, so the wait is the rounds: scenario 23's rounds, assigning 500 wait steps,
+took up to 4.1 s, and a turn waited up to 6.6 s. The master records `started_at` when it gets
+to the `Started`, so this wait shows as a late `started_at`; the tasks themselves started when
+the worker sent it.
+
+**The worker's journal is a part of scenario 23's starts, not most of them.** 500 start
+records at about 13 ms each are about 6.5 s of disk time, one after another on the agent's
+loop, of the 14.5 s; the rest is the master assigning them in rounds of 50 behind a lock its
+turns also want.

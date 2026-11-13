@@ -723,3 +723,60 @@ by worker, then one by one), barriers and stream identity kept per worker, fairn
 per worker, and a longer hold (the lock released between phases). Chosen as M5.0c, with A+B as
 the fallback if M5.0a shows other workers' turns cost nothing. Not chosen: a turn per worker;
 `Started` recorded outside the core lock (brittle); the round shortened (left to M5.0d).
+
+### <a id="D469"></a>2026-11-13: a round lets go of the core lock between its batches (decision 469)
+
+M5.0a's profile (stress guide, Where a start's time goes) showed a start's time is the wait for
+the master's core lock, and with one worker (scenarios 9 and 23) there is no other worker's turn
+to wait behind: the round is what holds it, up to 4.1 s in scenario 23 while it assigns 500 wait
+steps, a turn waiting up to 6.6 s. D468's one inbox can't help a single worker, so M5.0c's target
+for scenario 9 was out of its reach. Claude raised it before reaching M5.0c (the two modes: a
+design that doesn't hold goes back to the user) with three options: shorten the round's hold in
+M5.0c as well; narrow M5.0c's target to several workers and leave the round to M5.0d; or M5.0d's
+set-based round statements first. The user chose the first. Not chosen: the round left to M5.0d
+(scenario 9's start p99 would stay out of reach in M5.0c); M5.0d first (shorter statements still
+leave the round holding the lock from start to end).
+
+### <a id="D470"></a><a id="D471"></a><a id="D472"></a><a id="D473"></a><a id="D474"></a><a id="D475"></a>2026-11-13: the Airflow migration tool instead of the layer (decisions 470-475); M5 renumbered, 1.1.0 after M5.1
+
+The user set the order: release 1.1.0 after M5.1 (performance and metrics; the steps renumbered
+M5.1a-M5.1m, M5.1m, the worker's start time, before the release), then M5.2, the Airflow
+migration tool. The archived plan was a look-alike layer (`schedr.airflow`, Airflow 3's names
+translated at parse time, migration by changing imports); on 2026-11-12 the user had proposed
+converting Airflow DAG files into native ones once instead. Claude took that as a change of
+unit, from a runtime layer to a one-off source conversion, and put the layer's decisions back
+on the table. The user accepted every recommendation:
+
+- How it reads a DAG (decision 470): a LibCST rewrite of the source, keeping the user's code,
+  with each result checked against the original imported through a recording stub. Not
+  chosen: running the original to rebuild the DAG (loops unrolled, structure lost), or the
+  rewrite unchecked.
+- Input (decision 471): Airflow 2 and 3. Not chosen: Airflow 3 only, the layer's choice, since
+  most people leaving Airflow are on 2.x.
+- What converts (decision 472): the authoring core, then templates, XCom, sensors, chained
+  runs and email where exact; the rest under TODO comments and in a report. Airflow `Param`
+  becomes native params, so decision 136 (Param with the layer) is superseded.
+- Connections and Variables converted from Airflow's JSON exports; provider operators counted
+  in the report for a later version (decision 474). Not chosen: a set of provider operators
+  now; DAG files only.
+- The layer dropped (decision 475); its translation rules become the tool's, and the principle
+  stays: the native API isn't changed for Airflow.
+
+The user added (decision 473): the tool should emulate what Airflow has with native
+constructs, e.g. the empty resource with a cleanup for a rule like `all_done`. Claude restated
+it as "exact emulations by combinations of native constructs" (as the layer allowed) and asked
+whether the user's "run_if rule" meant `all_done` or Airflow's `@task.run_if` decorator.
+
+The user answered: yes, and more generally, something in Airflow may translate to something
+else in schedr as long as the DAG takes the same paths, even though it is a different entity.
+That changed the check of decision 470: it compares the paths a run can take (which tasks run,
+after which, for each way their upstream tasks end), not entity kinds, or every emulation would
+read as a difference. Decision 473 states the paths as what the tool keeps, with
+`@task.run_if(condition)` (a short-circuit in front of the task) as a second example.
+
+Then the user: the tool should have two modes, Airflow 2 and Airflow 3, so it parses without
+guessing. Claude agreed and added a stronger reason: some differences aren't in the file at all,
+defaults it doesn't state (from memory, to be checked in M5.2b: `catchup` true by default in 2,
+false in 3; no schedule meaning daily in 2, manual in 3), and some imports exist in both. Decision
+471 now says: `--airflow 2|3`, always given, an import contradicting it an error. Not chosen:
+guessing the version from the imports.
