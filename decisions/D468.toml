@@ -1,0 +1,19 @@
+title = "One inbox for all workers: a turn takes every worker's messages, in phases"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+The workers' stream readers feed one inbox, and a turn takes messages from all workers, up to a
+limit per turn and per worker: every worker's `Started`s in one transaction, then every
+worker's `Finished`s, then heartbeats and warnings together, then barrier messages worker by
+worker, the core's lock released between phases so a round can run. Each worker's own order
+holds (a barrier holds back only its worker's later messages), each message is checked against
+its own stream, and a failed phase is redone worker by worker, then one by one. Plain release
+between a worker's groups with `Started`s first is the fallback if profiling shows other
+workers' turns cost nothing. Not chosen: a turn per worker (today's).
+'''
+history = "JOURNAL.md#D468"
+step = "M5.0c"
+also = ["protocol"]

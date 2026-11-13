@@ -694,3 +694,32 @@ every recommendation and the layout:
 The UI scraping each process's `/metrics` was not chosen: it needs every process to record its
 ops address, and gives the present only. Runs and tasks by state stay off the Status block,
 which describes a deployment's health; they belong to the Metrics page.
+
+### <a id="D468"></a>2026-11-13: one inbox for all workers (decision 468); M5.0 reordered
+
+Grok's study for M5 (session d12a2612) ranked the start path's costs: the worker's start journal
+written one record at a time, each a file and a directory fsync awaited on its loop (about 4x
+in groups on its disk); the master's core lock held for a worker's whole turn; per-item
+statements inside the round's and the finishes' transactions. It also found stress 23's
+`all_in_s` counting a fixed 5 s sleep and up to 5 s of a gauge's lag. The user reordered M5.0:
+profile and fix that clock, the journal in groups, then the lock, the pooler, the turn size, and
+the idle cost (a standalone measured at about 22 queries a second, 1.9 % of a core and 0.6 GiB
+written a day with nothing to do).
+
+Going through M5.0c, the user asked what else fights for the lock with one master. The code has
+one `Mutex<MasterCore>` for the whole master: each worker's turn takes it, and so do the round,
+registrations, stream ends and parse uploads; the REST API doesn't (its writes are commands the
+round picks up) and heartbeats are answered before it. A `Started` waits for its own turn's
+`Finished`s, for other workers' turns, and for a round. Reading on, `Started` carries no time:
+the master records `started_at` when it handles the message, so the regression after M4B is
+mostly the recording's lag, the tasks themselves starting no later (the worker launches right
+after sending `Started`). Claude proposed the worker stamping its start time; the user: nice to
+have, it won't improve the performance (planned as M5.7), and chose releasing the lock between
+groups plus `Started`s first across workers (A+B). Then the user asked: instead of one worker's
+messages per turn, gather all workers' messages and process them together. That is B's general
+form: fewer commits and lock acquisitions under load, set-based statements across workers,
+heartbeats in one statement; its costs are a failed phase reaching every worker (redone worker
+by worker, then one by one), barriers and stream identity kept per worker, fairness by a limit
+per worker, and a longer hold (the lock released between phases). Chosen as M5.0c, with A+B as
+the fallback if M5.0a shows other workers' turns cost nothing. Not chosen: a turn per worker;
+`Started` recorded outside the core lock (brittle); the round shortened (left to M5.0d).

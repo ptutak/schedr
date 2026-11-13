@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D468 | 2026-11-13 | user | planned (M5.0c) | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
 | D467 | 2026-11-13 | user | planned (M5.5) | ui-cli | A task's peak memory over its attempts is charted |
 | D466 | 2026-11-13 | user | planned (M5.4) | ui-cli | UI charts are SVG drawn by the server |
 | D465 | 2026-11-13 | user | planned (M5.4) | ui-cli | A Metrics page with memory and CPU over time |
@@ -997,6 +998,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D468: One inbox for all workers: a turn takes every worker's messages, in phases
 - D453: A worker's cutoff counts from the send of the last heartbeat the master heard
 - D449: A clock-skew warning from the master's wall clock
 - D447: The worker's best clock sample is taken over a window

@@ -231,16 +231,18 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | Step | Title | State | Decisions |
 |---|---|---|---|
 | M5.0a | Profile the start path | **next** |  |
-| M5.0b | Starts not held behind a turn | planned |  |
-| M5.0c | The start rate | planned |  |
+| M5.0b | Start journal records in groups | planned |  |
+| M5.0c | One inbox for all workers | planned | D468 |
 | M5.0d | Pokes and rounds through PgBouncer | planned |  |
 | M5.0e | The turn size from data | planned |  |
+| M5.0f | The idle cost | planned |  |
 | M5.1 | The Status block | planned | D462 |
 | M5.2 | Memory and CPU reported | planned | D463 |
 | M5.3 | The samples table | planned | D464 |
 | M5.4 | The Metrics page | planned | D465, D466 |
 | M5.5 | Task memory charts | planned | D467 |
 | M5.6 | Throughput and start latency on the Metrics page | planned |  |
+| M5.7 | The start time from the worker | planned |  |
 
 ## M6: sign-in against LDAP
 

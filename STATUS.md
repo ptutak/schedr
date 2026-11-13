@@ -6,26 +6,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-13)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.0a, Profile the start path. Done when: a written breakdown of assigned → started p50/p99 by stage, from a run with timings per stage; the next steps' order set from it
-- **Then:** M5.0b, M5.0c, M5.0d, M5.0e, M5.1.
+- **Next step:** M5.0a, Profile the start path. Done when: a written breakdown of assigned → started p50/p99 by stage, from a run with these timers, in the stress guide; `all_in_s` measures the starts only
+- **Then:** M5.0b, M5.0c, M5.0d, M5.0e, M5.0f.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 4; first: B39 (low/possible), B38 (low/possible), B242 (low/rare), B241 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D468 (2026-11-13): one inbox for all workers (decision 468); M5.0 reordered
 - D460 (2026-11-12): both sides number their messages and echo the other's (decision 460, B240; supersedes 450 and 455)
 - D461 (2026-11-12): a DAG page's actions in one row; Restart where it does something
 - D459 (2026-11-12): a DAG's trigger has its own row with its switch
 - D458 (2026-11-12): a sensor poke tolerates overruns of `every` (decision 458, supersedes 322)
-- D457 (2026-11-12): the UI names a DAG's trigger kind, shows descriptions, and has no Pause for a DAG without a trigger
 - R1.0b (2026-11-12): The master's side in the clock simulator
 - R1.0c (2026-11-11): Images on glibc beside Alpine
 - R1.0a (2026-11-11): A slim image
 
 ## In progress
 
-- Release 1.0.0 out (v1.0.0, 8316ba3, 2026-11-12): CI and the release workflow green; PyPI shows 1.0.0 and the six ghcr.io images carry the 1.0.0 label (checked by hand 2026-11-13).
-- M5.0 starts with profiling (the user, 2026-11-13): Grok (high) looks for the most cost-efficient performance improvements, read-only, in the worktree schedr-grok-m5-perf (session d12a2612-6f5d-45e0-878d-ca3e9832f971); its findings to verify, then M5.0a. After M5.0, metrics in the UI as M5.1-M5.6 (decisions 462-467).
+- M5.0 planned from Grok's study (session d12a2612, findings checked in the code; the user, 2026-11-13): a profile, b start journal in groups, c one inbox for all workers (D468), d PgBouncer, e turn size, f idle cost; then metrics in the UI M5.1-M5.6 (D462-D467), M5.7 the start time from the worker.
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
@@ -38,7 +37,7 @@ Nothing.
 ## Rules in force
 
 - The pre-acceptance of commits and pushes ended at the v1.0.0 tag: each commit needs the user's acceptance again; stop at any decision that is the user's.
-- One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10). After M4B, Grok also reviews the whole milestone's diff (brittle).
+- One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10).
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).
 - Before stating how something behaves, read the code or run it, and say which.
