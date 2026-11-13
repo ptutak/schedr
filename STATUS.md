@@ -3,7 +3,7 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-12)
+## Now (2026-11-13)
 
 - **Milestone:** M4B, Batched worker messages (a milestone after M4).
 - **Next step:** M4B.6, The turn in one transaction, savepoints per group. Done when: a turn is one transaction; a failed group replayed without a second transaction; unit tests on both databases
@@ -24,7 +24,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- Release 1.0.0: rc2 released 2026-11-12 (CI, Stress and the release workflow green; the TestPyPI wheel and the six images checked by hand: 1.0.0rc2). Its Stress failures were the tests' (B243 the simulator's broken stream, B244 the cleanup check after D460), fixed in 84b5888. Then the 1.0.0 bump, `make check`, tag v1.0.0, the release workflow, a check of PyPI and the images.
+- Release 1.0.0 out (v1.0.0, 8316ba3, 2026-11-12): CI and the release workflow green; PyPI shows 1.0.0 and the six ghcr.io images carry the 1.0.0 label (checked by hand 2026-11-13).
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
@@ -36,7 +36,7 @@ Nothing.
 
 ## Rules in force
 
-- Commits and pushes pre-accepted (2026-11-10; for 1.0.0 too, up to the v1.0.0 tag) after each review, `make check` and `make docs`; stop at any decision that is the user's.
+- The pre-acceptance of commits and pushes ended at the v1.0.0 tag: each commit needs the user's acceptance again; stop at any decision that is the user's.
 - One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10). After M4B, Grok also reviews the whole milestone's diff (brittle).
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).
@@ -49,4 +49,4 @@ Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 
 
 Resume this session with:
 
-claude --resume e45442ad-3ec7-4bce-9d45-b6191e505a11
+claude --resume 9af68419-e690-4a0a-b460-6e83325ce2df
