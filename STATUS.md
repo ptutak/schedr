@@ -13,18 +13,18 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- D483 (2026-11-13): a command is one transaction, the lock released between commands
 - N5 (2026-11-13): M5.1c2: what a round's commands spend (stress 13 and 23)
 - D481 (2026-11-13): the round's assignments set-based; tasks past the cap pending (decisions 481, 482)
 - D480 (2026-11-13): the core lock released at the end of each transaction (decision 480; replaces 468)
 - D479 (2026-11-13): the Python integration tests on several processes
-- D478 (2026-11-13): user-set deadlines count on the wall clock (decision 478, Q27)
+- M5.1c3 (2026-11-13): A command one transaction, the lock released between commands
 - M5.1c2 (2026-11-13): The commands measured
 - M5.1c1 (2026-11-13): The core lock per transaction; the round's assignments set-based
-- M5.1b2 (2026-11-13): A first start: Getting started, the PyPI page
 
 ## In progress
 
-- M5.1a-M5.1c2 done 2026-11-13. M5.1c1: the core lock per round part and per turn transaction (D469, D480), the round's assignments set-based (D481, D482): stress 23 all_in_s 14.5 s -> 4.2 s, a turn's lock wait p99 6.6 s -> 1.6 s. M5.1c2: a TriggerRun command costs about 64 ms over eight steps, each write its own commit (N5, the stress guide). Waits for the user: what comes from the command numbers (more M5.1c steps, or M5.1d). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
+- M5.1a-M5.1c3 done 2026-11-13. M5.1c1: the core lock per round part and per turn transaction (D469, D480), the round's assignments set-based (D481, D482): stress 23 all_in_s 14.5 s -> 4.2 s, a turn's lock wait p99 6.6 s -> 1.6 s. M5.1c2: a TriggerRun cost about 64 ms over eight steps (N5). M5.1c3: a command one transaction, the lock per command, only its DAG read (D483): commands part p99 3.3 s -> 1.6 s bucket in 13, 0.8 s in 23, a turn's lock wait at most 0.8 s. Paused for the user to free storage; next M5.1d (PgBouncer, the TriggerRun timed again). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
 - Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
@@ -48,4 +48,4 @@ Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 
 
 Resume this session with:
 
-claude --resume 9af68419-e690-4a0a-b460-6e83325ce2df
+claude --resume 0f288ee8-d79c-4c85-9781-7c4774e2f509

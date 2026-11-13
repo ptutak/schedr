@@ -422,6 +422,10 @@ impl Hub {
         // (decision 469), each part at the time it runs. What a part built before a failure is
         // delivered too (B7); a failed part ends the round, as before.
         for part in RoundPart::ALL {
+            if part == RoundPart::Commands {
+                self.commands().await?;
+                continue;
+            }
             let mut outgoing = Vec::new();
             let result = self
                 .core_for("round")
@@ -432,6 +436,49 @@ impl Hub {
             result?;
         }
         Ok(())
+    }
+
+    /// The round's commands part, the core's lock taken for each command on its own (decision
+    /// 483): each command is one transaction, so a worker's turn waits for one at most. Timed
+    /// as the part's time under the lock.
+    async fn commands(&self) -> Result<(), CoreError> {
+        let mut held = std::time::Duration::ZERO;
+        let mut outgoing = Vec::new();
+        let pending = {
+            let mut core = self.core_for("round").await;
+            let began = std::time::Instant::now();
+            let pending = core.commands_to_apply(&mut outgoing, (self.clock)()).await;
+            held += began.elapsed();
+            pending
+        };
+        self.deliver(std::mem::take(&mut outgoing)).await;
+        let mut failed = Ok(());
+        for command in pending? {
+            let applied = {
+                let mut core = self.core_for("round").await;
+                let began = std::time::Instant::now();
+                let applied = core
+                    .apply_command(command, &mut outgoing, (self.clock)())
+                    .await;
+                held += began.elapsed();
+                applied
+            };
+            self.deliver(std::mem::take(&mut outgoing)).await;
+            if applied.is_err() {
+                failed = applied;
+                break;
+            }
+        }
+        {
+            let mut core = self.core_for("round").await;
+            let began = std::time::Instant::now();
+            core.commands_done(&mut outgoing, (self.clock)()).await;
+            held += began.elapsed();
+        }
+        self.deliver(outgoing).await;
+        self.metrics
+            .round_part_done(RoundPart::Commands.name(), held);
+        failed
     }
 
     /// Runs the master's loop: a tick every `interval` until `stop` completes, and at once when

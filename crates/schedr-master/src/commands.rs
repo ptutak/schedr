@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use jiff::Timestamp;
-use schedr_db::commands::PendingCommand;
+use schedr_db::commands::{CommandRecord, PendingCommand};
 use schedr_db::{Database, DbError};
 use schedr_model::commands::{AskedEvent, BackfillRequest};
 use schedr_model::commands::{
@@ -21,7 +21,7 @@ use schedr_proto::pb;
 use schedr_proto::pb::master_message;
 use serde_json::json;
 
-use crate::dispatch::{DispatchError, Dispatcher, Outgoing};
+use crate::dispatch::{DispatchError, Dispatcher, Outgoing, ReadBack};
 use crate::execution::{ExecutionError, TaskCancel, TaskRetry};
 use crate::metrics::{CommandLabels, MasterMetrics};
 use crate::quiet::WakeReason;
@@ -43,6 +43,17 @@ pub enum CommandError {
     /// The dispatcher failed (a database failure while cancelling).
     #[error(transparent)]
     Dispatch(#[from] DispatchError),
+}
+
+impl CommandError {
+    /// Whether it is a commit whose answer was lost: it may have stored.
+    #[must_use]
+    pub const fn commit_unknown(&self) -> bool {
+        match self {
+            Self::Db(error) => matches!(error, DbError::CommitUnknown),
+            Self::Dispatch(error) => error.commit_unknown(),
+        }
+    }
 }
 
 /// How a command was decided.
@@ -97,6 +108,9 @@ pub struct Commander {
     /// The most fire times a backfill's range may have (`[backfill] max_runs`).
     backfill_max_runs: u32,
 }
+
+/// A command's decision: applied or rejected, why, and what it produced.
+type Decision = (CommandStatus, Option<String>, Option<serde_json::Value>);
 
 impl Commander {
     /// A commander over `db`.
@@ -153,48 +167,147 @@ impl Commander {
         applied: &mut Applied,
         now: Timestamp,
     ) -> Result<(), CommandError> {
-        // At most so many a round, oldest first: a burst is applied over a few rounds rather
-        // than in one long one (B18).
-        // Read so many only: a backlog isn't read whole each round (B52).
-        for pending in self.db.pending_commands(COMMANDS_PER_ROUND).await? {
-            // Marked before its first write: should this round fail before the decision is
-            // stored, the next application knows it may find its own work done (B7).
-            if !pending.applying {
-                self.db.mark_applying(&pending.id, now).await?;
-            }
-            let sent_before = (applied.outgoing.len(), applied.connection_jobs.len());
-            let outcome = self
-                .apply(&pending, scheduler, dispatcher, applied, now)
+        for pending in self.pending().await? {
+            self.apply_one(pending, scheduler, dispatcher, applied, now)
                 .await?;
-            let (status, reason, result) = match outcome {
-                Outcome::Applied(result) => (CommandStatus::Applied, None, Some(result)),
-                Outcome::Rejected(reason) => (CommandStatus::Rejected, Some(reason), None),
-            };
-            if let Err(error) = self
-                .db
-                .decide_command(&pending.id, status, reason.as_deref(), result.as_ref(), now)
-                .await
-            {
-                // A connections job is sent with its decision only: applied again next round,
-                // it would run twice (the worker can't tell).
-                if matches!(
-                    pending.command,
-                    Ok(Command::CheckConnections { .. } | Command::TestConnection { .. })
-                ) {
-                    applied.outgoing.truncate(sent_before.0);
-                    applied.connection_jobs.truncate(sent_before.1);
-                }
-                return Err(error.into());
-            }
-            self.count(&pending, status, now);
-            applied.decided.push(Decided {
-                id: pending.id,
-                status,
-                reason,
-                result,
-            });
         }
         Ok(())
+    }
+
+    /// The commands a round applies: at most so many, oldest first (a burst is applied over a
+    /// few rounds rather than in one long one, B18), read so many only (a backlog isn't read
+    /// whole each round, B52).
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Db`] if the database fails.
+    pub async fn pending(&self) -> Result<Vec<PendingCommand>, CommandError> {
+        Ok(self.db.pending_commands(COMMANDS_PER_ROUND).await?)
+    }
+
+    /// Applies one command in one transaction, its decision with it (decision 483): what it
+    /// changed in the dispatcher's memory, would send and counted goes with a rollback. A
+    /// commit whose answer is lost is read back by its decision (stored with everything it
+    /// did): found decided, it landed and all of it goes; not found, it is undone as a
+    /// rollback and applied again next round (B7).
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError`] if the database fails: the command stays pending.
+    pub async fn apply_one(
+        &self,
+        pending: PendingCommand,
+        scheduler: &Scheduler,
+        dispatcher: &mut Dispatcher,
+        applied: &mut Applied,
+        now: Timestamp,
+    ) -> Result<(), CommandError> {
+        let sent_before = (
+            applied.outgoing.len(),
+            applied.connection_jobs.len(),
+            applied.drained.len(),
+        );
+        // Only the kinds that change the dispatcher's memory pay for its copy (B48).
+        let keeps_memory = !matches!(
+            pending.command,
+            Ok(Command::TriggerRun { .. }
+                | Command::Backfill(_)
+                | Command::RestartTrigger { .. }
+                | Command::SkipTriggerRun { .. }
+                | Command::UnpauseDag { .. }
+                | Command::SwitchOnSensor { .. })
+                | Err(_)
+        );
+        let memory = keeps_memory.then(|| dispatcher.memory());
+        let db = self.db.clone();
+        // The runs it finishes are counted once it is stored.
+        self.metrics.stage();
+        let stored = Box::pin(
+            db.atomically(self.apply_stored(&pending, scheduler, dispatcher, applied, now)),
+        )
+        .await;
+        let decided = match stored {
+            Ok(decided) => Ok(decided),
+            Err(error) if error.commit_unknown() => self
+                .landed(&pending.id, dispatcher.read_back())
+                .await
+                .ok_or(error),
+            Err(error) => Err(error),
+        };
+        match decided {
+            Ok((status, reason, result)) => {
+                self.metrics.count_staged();
+                self.count(&pending, status, now);
+                applied.decided.push(Decided {
+                    id: pending.id,
+                    status,
+                    reason,
+                    result,
+                });
+                Ok(())
+            }
+            Err(error) => {
+                self.metrics.drop_staged();
+                applied.outgoing.truncate(sent_before.0);
+                applied.connection_jobs.truncate(sent_before.1);
+                applied.drained.truncate(sent_before.2);
+                if let Some(memory) = memory {
+                    dispatcher.restore(memory);
+                }
+                if error.commit_unknown() {
+                    // Read back as not stored, or not read back at all.
+                    dispatcher.recount();
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// The decision a command whose commit was cut off stored, if it did (read back as
+    /// `read_back` says; `None` if it can't be told).
+    async fn landed(&self, id: &str, read_back: ReadBack) -> Option<Decision> {
+        let decided = |record: &CommandRecord| record.status != CommandStatus::Pending;
+        let stored = read_back
+            .stored(|| async {
+                matches!(self.db.command(id).await, Ok(Some(record)) if decided(&record))
+            })
+            .await;
+        if !stored {
+            return None;
+        }
+        match self.db.command(id).await {
+            Ok(Some(record)) if decided(&record) => {
+                Some((record.status, record.reason, record.result))
+            }
+            _ => None,
+        }
+    }
+
+    /// One command marked applying, applied and decided, in the caller's transaction.
+    async fn apply_stored(
+        &self,
+        pending: &PendingCommand,
+        scheduler: &Scheduler,
+        dispatcher: &mut Dispatcher,
+        applied: &mut Applied,
+        now: Timestamp,
+    ) -> Result<Decision, CommandError> {
+        // Marked before its first write: a commit whose answer is lost may have stored it, and
+        // the next application then knows it may find its own work done (B7).
+        if !pending.applying {
+            self.db.mark_applying(&pending.id, now).await?;
+        }
+        let outcome = self
+            .apply(pending, scheduler, dispatcher, applied, now)
+            .await?;
+        let (status, reason, result) = match outcome {
+            Outcome::Applied(result) => (CommandStatus::Applied, None, Some(result)),
+            Outcome::Rejected(reason) => (CommandStatus::Rejected, Some(reason), None),
+        };
+        self.db
+            .decide_command(&pending.id, status, reason.as_deref(), result.as_ref(), now)
+            .await?;
+        Ok((status, reason, result))
     }
 
     fn count(&self, pending: &PendingCommand, status: CommandStatus, now: Timestamp) {

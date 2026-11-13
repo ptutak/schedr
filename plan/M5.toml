@@ -85,10 +85,22 @@ status = "done"
 done = 2026-11-13
 
 [[steps]]
+id = "M5.1c3"
+title = "A command one transaction, the lock released between commands"
+scope = '''
+(decision 483) a round's commands each in one transaction (marked applying, applied, decided), the core lock taken for each command on its own, what a command changed in memory and would send undone with a rollback; a command reads only the DAG it names instead of every active DAG. Reviewed by Grok in paranoid mode: a commit whose answer is lost now read back by the command's decision (a cancel no longer sent for a commit that didn't store, a connection job kept when it did), runs a command finishes counted once stored
+'''
+done_when = '''
+a round's commands part p99 in scenarios 13 and 23 under 1.3 s (1.6-3.3 s after M5.1c1), a `TriggerRun` timed again (the timing moved to M5.1d by the user, 2026-11-13: 23 and 13 forked at the 0.8 s bucket, 13 at the 1.6 s bucket, a turn waiting at most 0.8 s at p99, accepted); tests: a command whose transaction fails leaves nothing stored and nothing sent, a turn gets in between two commands, a commit whose answer is lost is read back as before (B7)
+'''
+status = "done"
+done = 2026-11-13
+
+[[steps]]
 id = "M5.1d"
 title = "Pokes and rounds through PgBouncer"
 scope = '''
-statements counted per transaction on Postgres behind PgBouncer after M5.1c's set-based round; then set-based where the count still points: assignment's per-item claim, `try_number` and insert, `first_start` once per sensor instead of twice, a wait step's per-item finish reads (`count_strike`, `run_dag`, `clear_wait_step`); `ready_instances` reading only what a round can assign, cleanups still first
+statements counted per transaction on Postgres behind PgBouncer after M5.1c's set-based round; then set-based where the count still points: assignment's per-item claim, `try_number` and insert, `first_start` once per sensor instead of twice, a wait step's per-item finish reads (`count_strike`, `run_dag`, `clear_wait_step`); `ready_instances` reading only what a round can assign, cleanups still first; a `TriggerRun` timed again after M5.1c3 (one transaction)
 '''
 done_when = '''
 pokes p99 under 7 s (11.1 s after M4B); scenario 6's round p99 at scenario 1's

@@ -912,3 +912,23 @@ the queued runs started 10.7 ms, the decision stored 9.6 ms: about 64 ms a comma
 dominating. The four writes are each their own commit (a command isn't one transaction); the
 reads are 4-10 ms each. Up to 50 commands a round: 3.2 s at most. What to do with it is the
 user's decision after M5.1c1 and M5.1c2's review.
+
+### <a id="D483"></a>2026-11-13: a command is one transaction, the lock released between commands (decision 483)
+
+- **Question:** what to do with M5.1c2's numbers (N5): a `TriggerRun` costs about 64 ms in
+  stress 23 over eight steps, four of them writes committed on their own (41 ms), and
+  `active_dags` reads every DAG to find one (10 ms); 50 commands a round hold the core lock up
+  to 3.2 s. Commands are the API's actions (the CLI, the UI, `schedr.api`, tasks calling it);
+  scheduled and event runs and worker messages don't go through them, so the cost shows in
+  bursts of API actions.
+- **Options:** (A) one transaction per command, the lock released between commands (about 35
+  ms, a worker waiting at most one command); (B) read only the command's DAG (about 10 ms less);
+  (C) a round's commands in one transaction (one commit, about 15 ms a command, but the lock held
+  for the whole batch and one bad command rolling back all), with savepoints per command to keep
+  a bad one from undoing the others (savepoints not built, M4B.2 dropped; memory snapshots per
+  command needed too); (D) leave them.
+- **Chosen: A + B** (the user), as M5.1c3: about 25 ms a command, a round of 50 about 1.25 s, no
+  worker waiting behind more than one command. Savepoints help only when several commands share a
+  transaction, so not here; batches of about 10 commands with a savepoint each are the follow-up if
+  commits still show after M5.1c3.
+- **Not chosen:** C (the lock held for the batch, against decision 480), D.

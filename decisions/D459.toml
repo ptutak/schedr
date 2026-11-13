@@ -21,4 +21,4 @@ pause production); a stored `manual` (a second copy of the code's fact); a 0002 
 history = "JOURNAL.md#D459"  # <a id="D459"></a> starts its JOURNAL.md entry
 step = "1.0.0"
 code = ["crates/schedr-db/src/dags.rs::apply_dag_changes", "crates/schedr-model/src/trigger.rs::kind", "crates/schedr-master/src/commands.rs::switch", "crates/schedr-api/src/views.rs::TriggerState"]
-checked = 2026-11-12
+checked = 2026-11-13

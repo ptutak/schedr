@@ -235,6 +235,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1b2 | A first start: Getting started, the PyPI page | done 2026-11-13 | D476, D477 |
 | M5.1c1 | The core lock per transaction; the round's assignments set-based | done 2026-11-13 | D469, D479, D480, D481, D482 |
 | M5.1c2 | The commands measured | done 2026-11-13 |  |
+| M5.1c3 | A command one transaction, the lock released between commands | done 2026-11-13 | D483 |
 | M5.1d | Pokes and rounds through PgBouncer | **next** |  |
 | M5.1e | The turn size from data | planned |  |
 | M5.1f | The idle cost | planned |  |

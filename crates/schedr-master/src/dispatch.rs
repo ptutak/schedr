@@ -684,6 +684,12 @@ impl Dispatcher {
         self
     }
 
+    /// How a commit cut off is read back (see [`ReadBack`]).
+    #[must_use]
+    pub const fn read_back(&self) -> ReadBack {
+        self.read_back
+    }
+
     /// The dispatcher giving an `@sensor(wait_for=...)`'s call at least `least` once it is handed
     /// its run (see [`DEFAULT_HANDED_CALL_MIN`]).
     #[must_use]

@@ -72,7 +72,13 @@ async fn world_of(dag: Dag) -> World {
         pause: false,
     };
     db.apply_dag_changes(&[change], ts(NOW)).await.unwrap();
-    let mut dispatcher = Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE);
+    // A commit cut off is read back over a short window here (decision 483).
+    let read_back = crate::dispatch::ReadBack {
+        window: Duration::from_millis(100),
+        interval: Duration::from_millis(10),
+    };
+    let mut dispatcher = Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE)
+        .with_set_aside(crate::dispatch::DEFAULT_SET_ASIDE, read_back);
     dispatcher
         .register("w1", "i1", &[], 2, ts(NOW))
         .await
@@ -1110,4 +1116,326 @@ async fn an_item_of_a_batch_run_again_is_a_batch_of_it_alone() {
         .unwrap();
     let event = world.db.run_event(&manual.id).await.unwrap().unwrap();
     assert_eq!(event.data, serde_json::json!([raw]));
+}
+
+/// Applies the pending commands with the `n`th write failing, for `n` from 1 until they go
+/// through, checking `unchanged` after each failure; the number of failures.
+async fn failing_at_each_write(
+    world: &mut World,
+    unchanged: impl AsyncFn(&World, &Applied),
+) -> u64 {
+    let mut n = 1;
+    loop {
+        world.db.fail_write(n);
+        let mut applied = Applied::default();
+        let result = world
+            .commander
+            .apply_into(
+                &world.scheduler,
+                &mut world.dispatcher,
+                &mut applied,
+                ts(NOW),
+            )
+            .await;
+        if result.is_ok() {
+            world.db.count_writes();
+            return n - 1;
+        }
+        assert!(applied.decided.is_empty(), "write {n}");
+        unchanged(world, &applied).await;
+        let pending = world.db.pending_commands(10).await.unwrap();
+        assert_eq!(pending.len(), 1, "write {n}: the command stays pending");
+        assert!(!pending[0].applying, "write {n}: its mark rolled back too");
+        n += 1;
+    }
+}
+
+#[tokio::test]
+async fn a_trigger_whose_transaction_fails_at_any_write_stores_nothing() {
+    // Decision 483: a command is one transaction, its mark and decision with it.
+    let mut world = world().await;
+    world
+        .ask(&Command::TriggerRun {
+            event: None,
+            params: None,
+            dag_id: sync(),
+            planned_for: None,
+        })
+        .await;
+    let failures = failing_at_each_write(&mut world, async |world, applied| {
+        assert_eq!(applied.outgoing, []);
+        let schedr_db::Pool::Sqlite(pool) = world.db.pool() else {
+            unreachable!("the tests' database is SQLite")
+        };
+        let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 0);
+    })
+    .await;
+    assert!(
+        failures >= 3,
+        "its mark, its run and its decision: {failures}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_whose_transaction_fails_at_any_write_sends_nothing_and_keeps_its_slot() {
+    // Decision 483: what a command would send and what it changed in the dispatcher's memory
+    // go with its rollback.
+    let mut world = world().await;
+    world
+        .ask(&Command::TriggerRun {
+            event: None,
+            params: None,
+            dag_id: sync(),
+            planned_for: None,
+        })
+        .await;
+    let run_id = world.apply().await.decided[0].result.as_ref().unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let assigned = world.dispatcher.step(ts(NOW)).await.unwrap();
+    let Some(pb::master_message::Message::AssignTask(assign)) = &assigned[0].message.message else {
+        panic!("expected AssignTask")
+    };
+    let started = pb::Started {
+        attempt_id: assign.attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+    };
+    world
+        .dispatcher
+        .started("w1", &started, ts(NOW))
+        .await
+        .unwrap();
+    let free = world.dispatcher.workers().get("w1").unwrap().free_slots();
+    world
+        .ask(&Command::CancelRun {
+            run_id: run_id.clone(),
+        })
+        .await;
+    let failures = failing_at_each_write(&mut world, async |world, applied| {
+        assert!(applied.outgoing.is_empty(), "no cancel sent");
+        assert_eq!(
+            world.dispatcher.workers().get("w1").unwrap().free_slots(),
+            free
+        );
+        let run = world.db.run_tasks(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.state, RunState::Running);
+        assert!(!run.cancel_requested);
+    })
+    .await;
+    assert!(
+        failures >= 2,
+        "its mark and its decision at least: {failures}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_whose_commit_answer_is_lost_runs_once_whether_it_landed_or_not() {
+    // B7 with decision 483: the commit answers nothing, and the command's decision, stored
+    // with all it did, is read back. Landed, it is decided and all it sends goes (applied
+    // again it would run twice); not landed, nothing goes and the next application applies
+    // it once.
+    for landed in [true, false] {
+        let mut world = world().await;
+        world
+            .ask(&Command::TriggerRun {
+                event: None,
+                params: None,
+                dag_id: sync(),
+                planned_for: None,
+            })
+            .await;
+        lose_commit(&world, landed);
+        let mut applied = Applied::default();
+        let first = world
+            .commander
+            .apply_into(
+                &world.scheduler,
+                &mut world.dispatcher,
+                &mut applied,
+                ts(NOW),
+            )
+            .await;
+        assert_eq!(first.is_ok(), landed, "{first:?}");
+        assert_eq!(applied.decided.len(), usize::from(landed));
+        let again = world.apply().await;
+        assert_eq!(
+            again.decided.len(),
+            usize::from(!landed),
+            "landed: {landed}"
+        );
+        let schedr_db::Pool::Sqlite(pool) = world.db.pool() else {
+            unreachable!("the tests' database is SQLite")
+        };
+        let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 1, "landed: {landed}");
+    }
+}
+
+fn lose_commit(world: &World, landed: bool) {
+    if landed {
+        world.db.lose_commit_answer();
+    } else {
+        world.db.lose_commit_unstored();
+    }
+}
+
+/// Applies the pending commands with the next commit's answer lost (stored or not, as
+/// `landed`); what they produced, whether they failed.
+async fn applied_losing_commit(world: &mut World, landed: bool) -> (Applied, bool) {
+    lose_commit(world, landed);
+    let mut applied = Applied::default();
+    let failed = world
+        .commander
+        .apply_into(
+            &world.scheduler,
+            &mut world.dispatcher,
+            &mut applied,
+            ts(NOW),
+        )
+        .await;
+    assert!(
+        failed.as_ref().is_ok() || failed.as_ref().is_err_and(CommandError::commit_unknown),
+        "{failed:?}"
+    );
+    (applied, failed.is_err())
+}
+
+#[tokio::test]
+async fn a_cancel_whose_commit_answer_is_lost_is_sent_only_if_it_landed() {
+    // Decision 483: a cancel sent for a commit that didn't store would stop the task for
+    // nothing (the run stored as not cancelled, the command rejected next round).
+    for landed in [true, false] {
+        let mut world = world().await;
+        world
+            .ask(&Command::TriggerRun {
+                event: None,
+                params: None,
+                dag_id: sync(),
+                planned_for: None,
+            })
+            .await;
+        let run_id = world.apply().await.decided[0].result.as_ref().unwrap()["run_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let assigned = world.dispatcher.step(ts(NOW)).await.unwrap();
+        let Some(pb::master_message::Message::AssignTask(assign)) = &assigned[0].message.message
+        else {
+            panic!("expected AssignTask")
+        };
+        let started = pb::Started {
+            attempt_id: assign.attempt_id.clone(),
+            start_method: pb::StartMethod::Spawn.into(),
+        };
+        world
+            .dispatcher
+            .started("w1", &started, ts(NOW))
+            .await
+            .unwrap();
+        world
+            .ask(&Command::CancelRun {
+                run_id: run_id.clone(),
+            })
+            .await;
+        let (applied, failed) = applied_losing_commit(&mut world, landed).await;
+        assert_eq!(failed, !landed);
+        assert_eq!(
+            applied.outgoing.len(),
+            usize::from(landed),
+            "landed: {landed}"
+        );
+        let run = world.db.run_tasks(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.cancel_requested, landed);
+        if !landed {
+            let again = world.apply().await;
+            assert_eq!(again.outgoing.len(), 1, "the cancel, sent once stored");
+            assert_eq!(again.decided[0].status, CommandStatus::Applied);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_connection_check_whose_commit_answer_is_lost_keeps_its_job_only_if_it_landed() {
+    // Decision 483: a check stored as applied with its job running is never applied again,
+    // so its job is sent and timed; one that didn't store goes again next round.
+    for landed in [true, false] {
+        let mut world = world().await;
+        with_connections(&mut world);
+        world
+            .ask(&Command::CheckConnections {
+                root: Some("etl".to_owned()),
+                name: None,
+                worker: None,
+            })
+            .await;
+        let (applied, failed) = applied_losing_commit(&mut world, landed).await;
+        assert_eq!(failed, !landed);
+        assert_eq!(
+            jobs_sent(&applied).len(),
+            usize::from(landed),
+            "landed: {landed}"
+        );
+        assert_eq!(applied.connection_jobs.len(), usize::from(landed));
+        if !landed {
+            let again = world.apply().await;
+            assert_eq!(jobs_sent(&again).len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_run_a_command_finishes_is_counted_only_once_stored() {
+    // Decision 483: a queued run cancelled in a transaction that fails is still queued, and
+    // isn't counted finished.
+    for landed in [true, false] {
+        let mut world = world().await;
+        let metrics = crate::metrics::MasterMetrics::default();
+        world.commander.set_metrics(metrics.clone());
+        world.dispatcher.set_metrics(metrics.clone());
+        world.scheduler.set_metrics(metrics.clone());
+        for _ in 0..2 {
+            world
+                .ask(&Command::TriggerRun {
+                    event: None,
+                    params: None,
+                    dag_id: sync(),
+                    planned_for: None,
+                })
+                .await;
+        }
+        let triggered = world.apply().await;
+        let queued = triggered.decided[1].result.as_ref().unwrap()["run_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            world.db.run_tasks(&queued).await.unwrap().unwrap().state,
+            RunState::Queued,
+            "`max_active_runs` 1 queues the second"
+        );
+        world
+            .ask(&Command::CancelRun {
+                run_id: queued.clone(),
+            })
+            .await;
+        applied_losing_commit(&mut world, landed).await;
+        let cancelled = metrics
+            .runs_finished
+            .get_or_create(&crate::metrics::ResultLabels {
+                dag_id: "sync".to_owned(),
+                result: RunState::Cancelled.to_string(),
+            })
+            .get();
+        assert_eq!(cancelled, u64::from(landed), "landed: {landed}");
+        let state = world.db.run_tasks(&queued).await.unwrap().unwrap().state;
+        assert_eq!(state == RunState::Queued, !landed);
+    }
 }

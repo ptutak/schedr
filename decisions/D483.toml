@@ -1,0 +1,21 @@
+title = "A command is one transaction, the core lock released between commands; it reads only its own DAG"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+A round applies each command (marked applying, applied, its decision stored) in one
+transaction, and takes the master's core lock for each command on its own, as a worker's turn
+does for each transaction (decision 480); what a command changes in memory and would send goes
+with a rollback, and the runs it finishes are counted once it is stored. A commit whose answer
+is lost is read back by the command's decision: found, all it did goes; not found, it is undone
+as a rollback and applied again. A command reads only the DAG it names, not every active DAG. Not chosen: a
+round's commands in one transaction, with or without a savepoint per command (one commit, but
+the lock held for the whole batch and savepoints not built); leaving them as they were (about
+64 ms a `TriggerRun`, four commits).
+'''
+history = "JOURNAL.md#D483"
+step = "M5.1c3"
+code = ["crates/schedr-master/src/commands.rs"]
+checked = 2026-11-13

@@ -417,3 +417,15 @@ DAGs read to find one 10.4 ms, the nearest earlier run 4.5 ms, the run inserted 
 running count 4.0 ms, the queued runs 4.3 ms, queued runs started 10.7 ms, the decision stored
 9.6 ms (scenario 13 about twice that, its machine busy with tasks). No step dominates: the four
 writes are each their own commit, and the reads 4-10 ms each.
+
+**Commands (M5.1c3).** With each command one transaction (its mark, its work and its decision
+committed together) and only the named DAG read, a round's commands part fell to the 0.8 s
+bucket at p99 in scenario 23 and in scenario 13 with forked tasks, and to the 1.6 s bucket in
+scenario 13 (3.3 s before). The part's length no longer holds workers back: the lock is taken
+for each command on its own, and a turn waits at most one command.
+
+| p99 | 13 | 13, forked | 23 |
+|---|---|---|---|
+| the round's commands part | 1.6 s | 0.8 s | 0.8 s |
+| a turn waiting for the lock | 0.8 s | 0.4 s | 0.8 s |
+| a round, all its parts | 2.9 s | 2.0 s | 2.9 s |

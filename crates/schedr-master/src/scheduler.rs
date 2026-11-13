@@ -427,9 +427,10 @@ impl Scheduler {
         (kind, user, parent): (RunKind, &str, Option<(&str, &DagId)>),
         now: Timestamp,
     ) -> Result<CreatedRun, SchedulerError> {
+        // Its own DAG only, not every active one (decision 483).
         let active = self
             .db
-            .active_dags()
+            .active_dags_of(&[dag_id])
             .await?
             .into_iter()
             .find(|d| &d.dag.id == dag_id)

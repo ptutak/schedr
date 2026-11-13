@@ -16,4 +16,4 @@ unpauses the `Chained` DAGs of the path tested.
 history = "JOURNAL.md#D398"
 step = "M4.12a"
 code = ["crates/schedr-model/src/trigger.rs::chained_from", "crates/schedr-master/src/scheduler.rs::NotChained", "crates/schedr-master/src/validate.rs::target_problems", "python/schedr/chained.py::Chained", "crates/schedr/src/local.rs::unpause_chained"]
-checked = 2026-11-12
+checked = 2026-11-13

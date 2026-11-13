@@ -1521,17 +1521,64 @@ impl MasterCore {
         result
     }
 
-    /// A round's commands applied, with their follow-ups (drains, resumes).
+    /// A round's commands applied, with their follow-ups (drains, resumes): the commands part
+    /// whole, as [`Self::tick`] runs it; the service takes the lock for each command on its own
+    /// (decision 483).
     async fn round_commands(
         &mut self,
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
+        let pending = self.commands_to_apply(outgoing, now).await?;
+        let mut failed = Ok(());
+        for command in pending {
+            failed = self.apply_command(command, outgoing, now).await;
+            if failed.is_err() {
+                break;
+            }
+        }
+        self.commands_done(outgoing, now).await;
+        failed
+    }
+
+    /// The commands part's start: the script roots' uses sent, the round's commands read.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError`] if the database fails.
+    pub async fn commands_to_apply(
+        &mut self,
+        outgoing: &mut Vec<Outgoing>,
+        now: Timestamp,
+    ) -> Result<Vec<schedr_db::commands::PendingCommand>, CoreError> {
         self.send_uses(outgoing, now);
+        Ok(self.commander.pending().await?)
+    }
+
+    /// One command applied in its own transaction (decision 483), with its follow-ups: the
+    /// connection jobs it sent timed, a drain's or resume's parse jobs moved. What a failed
+    /// command kept (a commit whose answer was lost) gets its follow-ups too.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError`] if the database fails: the command stays pending, the round's later ones
+    /// wait for the next round.
+    pub async fn apply_command(
+        &mut self,
+        pending: schedr_db::commands::PendingCommand,
+        outgoing: &mut Vec<Outgoing>,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
         let mut applied = Applied::default();
-        let commands = self
+        let result = self
             .commander
-            .apply_into(&self.scheduler, &mut self.dispatcher, &mut applied, now)
+            .apply_one(
+                pending,
+                &self.scheduler,
+                &mut self.dispatcher,
+                &mut applied,
+                now,
+            )
             .await;
         outgoing.append(&mut applied.outgoing);
         for job in applied.connection_jobs.drain(..) {
@@ -1541,44 +1588,58 @@ impl MasterCore {
             self.connection_jobs
                 .insert(job.job_id, (job.worker_id, deadline));
         }
+        for (worker_id, drained) in std::mem::take(&mut applied.drained) {
+            self.follow_up(worker_id, drained, outgoing, now).await;
+        }
+        result.map_err(CoreError::from)
+    }
+
+    /// The commands part's end: overdue connection jobs marked lost, and the resumes whose
+    /// follow-up failed tried again (B99), whether or not a command failed.
+    pub async fn commands_done(&mut self, outgoing: &mut Vec<Outgoing>, now: Timestamp) {
         if let Err(error) = self.connection_jobs_overdue(now).await {
             tracing::warn!(%error, "overdue connection jobs not marked lost yet");
         }
-        // The drains and resumes decided before a failing command get their follow-up too:
-        // being decided, they won't be applied again. A resume whose follow-up failed is
-        // tried again each round until it succeeds, or the worker is drained again (B99).
-        let mut follow_ups: Vec<(String, bool)> = std::mem::take(&mut self.unresumed)
-            .into_iter()
-            .map(|worker_id| (worker_id, false))
-            .collect();
-        follow_ups.append(&mut applied.drained);
-        for (worker_id, drained) in follow_ups {
-            if drained {
-                self.unresumed.remove(&worker_id);
-                let moved = self.discovery.stop_parsing(&worker_id, now);
-                outgoing.extend(moved.into_iter().map(assign_parse));
-            } else if self
-                .dispatcher
-                .workers()
-                .get(&worker_id)
-                .is_none_or(|w| w.state == crate::workers::WorkerState::Active)
-            {
-                // Not if the agent itself is draining (shutting down).
-                match self.discovery.allow_parsing(&worker_id, now).await {
-                    Ok(jobs) => outgoing.extend(jobs.into_iter().map(assign_parse)),
-                    Err(error) => {
-                        // Logged, not failing the round: the rest of it doesn't depend on it.
-                        tracing::error!(
-                            worker_id,
-                            %error,
-                            "resumed worker's parse jobs not found: tried again next round"
-                        );
-                        self.unresumed.insert(worker_id);
-                    }
+        // A resume whose follow-up failed is tried again each round until it succeeds, or the
+        // worker is drained again (B99).
+        for worker_id in std::mem::take(&mut self.unresumed) {
+            self.follow_up(worker_id, false, outgoing, now).await;
+        }
+    }
+
+    /// A drain's (`drained`) or resume's follow-up: the worker's parse jobs moved away, or
+    /// given back to it.
+    async fn follow_up(
+        &mut self,
+        worker_id: String,
+        drained: bool,
+        outgoing: &mut Vec<Outgoing>,
+        now: Timestamp,
+    ) {
+        if drained {
+            self.unresumed.remove(&worker_id);
+            let moved = self.discovery.stop_parsing(&worker_id, now);
+            outgoing.extend(moved.into_iter().map(assign_parse));
+        } else if self
+            .dispatcher
+            .workers()
+            .get(&worker_id)
+            .is_none_or(|w| w.state == crate::workers::WorkerState::Active)
+        {
+            // Not if the agent itself is draining (shutting down).
+            match self.discovery.allow_parsing(&worker_id, now).await {
+                Ok(jobs) => outgoing.extend(jobs.into_iter().map(assign_parse)),
+                Err(error) => {
+                    // Logged, not failing the round: the rest of it doesn't depend on it.
+                    tracing::error!(
+                        worker_id,
+                        %error,
+                        "resumed worker's parse jobs not found: tried again next round"
+                    );
+                    self.unresumed.insert(worker_id);
                 }
             }
         }
-        commands.map_err(CoreError::from)
     }
 
     /// A round's last part: parse jobs past their time given again, lost workers forgotten.

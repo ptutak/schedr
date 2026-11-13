@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D483 | 2026-11-13 | user | built M5.1c3 | workers | A command is one transaction, the core lock released between commands; it reads only its own DAG |
 | D482 | 2026-11-13 | claude | built M5.1c1 | assignment | The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch |
 | D481 | 2026-11-13 | user | built M5.1c1 | assignment | Tasks past a round's assignment cap are not visited; they show as pending |
 | D480 | 2026-11-13 | user | built M5.1c1 | workers | The core lock released at the end of each transaction; one turn for all workers only if commits limit |
@@ -1024,6 +1025,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D483: A command is one transaction, the core lock released between commands; it reads only its own DAG
 - D480: The core lock released at the end of each transaction; one turn for all workers only if commits limit
 - D453: A worker's cutoff counts from the send of the last heartbeat the master heard
 - D449: A clock-skew warning from the master's wall clock

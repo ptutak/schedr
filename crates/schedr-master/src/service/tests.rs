@@ -1406,6 +1406,43 @@ async fn a_turn_checks_its_stream_again_after_each_release_of_the_lock() {
     assert_eq!(successes(&hub), 0);
 }
 
+#[tokio::test]
+async fn a_rounds_commands_each_take_the_lock_so_others_get_in_between() {
+    // Decision 483: the round takes the master's lock for each command on its own, so whoever
+    // waits for it (a worker's turn; here the test) gets in between two commands.
+    let (hub, db, _client) = connected().await;
+    let unknown = |dag: &str| schedr_model::commands::Command::TriggerRun {
+        event: None,
+        params: None,
+        dag_id: DagId::new(dag).unwrap(),
+        planned_for: None,
+    };
+    for dag in ["first", "second"] {
+        db.insert_command(&unknown(dag), "anna", fixed_now())
+            .await
+            .unwrap();
+    }
+    let core = hub.core();
+    let busy = core.lock().await;
+    let round = tokio::spawn({
+        let hub = hub.clone();
+        async move { hub.tick().await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let pending = async || db.pending_commands(10).await.unwrap().len();
+    drop(busy);
+    // Next in line after the round's reading of its commands: neither applied yet.
+    let between = core.lock().await;
+    assert_eq!(pending().await, 2);
+    drop(between);
+    // After its first command: one decided, the other still waiting for the lock.
+    let between = core.lock().await;
+    assert_eq!(pending().await, 1);
+    drop(between);
+    round.await.unwrap().unwrap();
+    assert_eq!(pending().await, 0);
+}
+
 /// A worker with one task assigned, its stream and the assignment.
 async fn assigned_one(
     hub: &Hub,
