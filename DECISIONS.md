@@ -29,6 +29,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D478 | 2026-11-13 | user | rule | wait-steps | User-set deadlines count on the wall clock |
+| D477 | 2026-11-13 | user | built M5.1b2 | development | PyPI shows a page of its own: installing and a first run |
+| D476 | 2026-11-13 | user | built M5.1b2 | components | A worker or standalone with no DAG directories warns at start |
 | D475 | 2026-11-13 | user | planned (M5.2a) | airflow | No Airflow look-alike layer: the migration tool replaces it |
 | D474 | 2026-11-13 | user | planned (M5.2e) | airflow | Airflow connections and Variables are converted; provider operators are reported |
 | D473 | 2026-11-13 | user | planned (M5.2c) | airflow | The migration tool emulates Airflow behaviour with native constructs where exact |
@@ -628,6 +631,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### components
 
+- D476: A worker or standalone with no DAG directories warns at start
 - D452: A master that isn't leading names the leader
 - D451: B48 is fixed by M4B's per-group memory snapshot
 - D382: One leading master per deployment; scale by more deployments
@@ -703,6 +707,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### development
 
+- D477: PyPI shows a page of its own: installing and a first run
 - D456: From 1.0.0 the schema and the protocol change only additively
 - D377: JOURNAL.md holds notes (N) beside decisions (D)
 - D376: STATUS.md is generated from the records and status.toml
@@ -988,6 +993,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### wait-steps
 
+- D478: User-set deadlines count on the wall clock
 - D458: A sensor poke tolerates overruns of every: it fails after poke_overruns in a row, or one at three times every
 - D393: first_of doesn't cancel the tasks that didn't win
 - D392: No by_deadline wait

@@ -279,7 +279,8 @@ Each is one line; the reader's page has the diagrams.
   along with the latest worker message heard; the worker reads master time from when it sent that
   message. An assignment has no start deadline (decision 460). The master's expiries count on its
   own clock; a lease under four heartbeats is refused. Not chosen: an acknowledged `Started` before
-  launch; a hold after a wall-clock jump.
+  launch; a hold after a wall-clock jump. *Corrected by N4:* The liveness redesign drafts retired:
+  settled by D442-D460.
 - **A replaced incarnation's lost attempts wait out its lease** (D443): When a worker registers as a
   new incarnation, the started attempts its journal doesn't report end `lost` only once the old
   incarnation's lease is over in master time, counted from the registration (the old stream gets no

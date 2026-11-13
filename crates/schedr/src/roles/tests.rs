@@ -1213,3 +1213,49 @@ fn an_unreadable_ca_file_stops_the_master() {
         "{error}"
     );
 }
+
+/// What `f` logs at `warn`, as text.
+fn warnings_of(f: impl FnOnce()) -> String {
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, f);
+    let logged = buffer.0.lock().unwrap().clone();
+    String::from_utf8(logged).unwrap()
+}
+
+/// D476, and Grok's M5.1b2 review: a worker or standalone without DAG or script roots warns;
+/// building agent settings alone doesn't, as `dags check` and `dags test` do that (a fork
+/// server's) for a path that isn't among the roots.
+#[test]
+fn only_a_worker_without_dag_directories_warns() {
+    let mut config = config();
+    let settings = warnings_of(|| {
+        agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE).unwrap();
+    });
+    assert_eq!(settings, "");
+    let warned = warnings_of(|| assert!(warn_without_dag_roots(&config)));
+    assert!(warned.contains("no DAG directories"), "{warned}");
+    config.script_roots = vec![schedr_config::roots::Root {
+        name: "jobs".to_owned(),
+        path: PathBuf::from("/jobs"),
+        only: None,
+    }];
+    let silent = warnings_of(|| assert!(!warn_without_dag_roots(&config)));
+    assert_eq!(silent, "");
+}

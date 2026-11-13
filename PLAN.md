@@ -232,6 +232,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 |---|---|---|---|
 | M5.1a | Profile the start path | done 2026-11-13 |  |
 | M5.1b | Start journal records in groups | done 2026-11-13 |  |
+| M5.1b2 | A first start: Getting started, the PyPI page | done 2026-11-13 | D476, D477 |
 | M5.1c | One inbox for all workers | **next** | D468, D469 |
 | M5.1d | Pokes and rounds through PgBouncer | planned |  |
 | M5.1e | The turn size from data | planned |  |

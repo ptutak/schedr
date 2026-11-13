@@ -1,0 +1,17 @@
+title = "User-set deadlines count on the wall clock"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "wait-steps"
+section = "Nodes the master ends"
+summary = '''
+Deadlines a person sets and the master enforces, a wait step's `max_wait` and a resource's
+`unschedulable_timeout`, count on the master's wall clock from the time stored with the wait,
+not on master time (decision 442): they are set in wall time, and a restart counts from stored
+times anyway. A step of the master's wall clock moves them (forward ends a wait early, back
+stretches it); the guide's master-clock page says so. Not chosen: master time while one master
+leads.
+'''
+history = "JOURNAL.md#D478"
+step = "n/a"
+code = ["crates/schedr-master/src/dispatch.rs::deadline", "crates/schedr-master/src/dispatch.rs::fail_waiting_users"]

@@ -793,3 +793,48 @@ and 13 improved a little (assigned → started p99 3.09 → 2.65 s, 4.35 → 3.4
 one run each). Claude stopped and asked (the two modes); the user chose to keep M5.1b, its
 target rewritten to what it does, and to move the 10 s target to M5.1c, where the round lets go
 of the lock (decision 469).
+
+### <a id="D476"></a><a id="D477"></a>2026-11-13: a first start, tried from nothing (decisions 476, 477; B248)
+
+The user asked for a minimal setup in the documentation that starts schedr. Claude ran it first
+against the published 1.0.0 wheel, from a clean directory: a `.venv` with `pip install schedr`
+and `examples/sync.py` in `dags/`. Three things came up. With no DAG path, standalone watched no
+root and said nothing, an empty UI being the only sign (`dags test`'s default of the current
+directory is that command's alone). A stopped standalone, Ctrl-C included, kept the master's
+lease, so every restart waited it out as a standby (20-30 s): `serve_master` ended on the gRPC
+server's clean stop and dropped the master's loop, whose release then ran in a detached task the
+process didn't wait for (B248, fixed by awaiting the loop; two start-stop cycles then led at
+once). And a side agent asked whether unpausing the example would replay every day since its
+`start`: it doesn't, `catchup` is off by default, one scheduled run appeared.
+
+The user accepted the warning (decision 476) and the fix, put the pages in a section of their
+own ahead of Writing DAGs (`docs/01-start/`), and asked for PyPI to show that, not the README,
+which is about working on the repository (decision 477): `PYPI.md`, its DAG checked against the
+example by a unit test.
+
+### <a id="N4"></a>2026-11-13: The liveness redesign drafts retired: settled by D442-D460 (note 4; corrects D442)
+
+The drafts `liveness-redesign.md` and `liveness-one-clock.md` (2026-11-11, never committed; in
+the worktree `schedr-grok-liveness`) were reviewed against what was built, and dropped with the
+worktree (the user: B). Their decisions became D442-D453 and D460: master time (D442, D447, D453),
+the incarnation hold (D443), epochs and the new leader's wait (D444), the cutoff of
+`cleanup_anywhere` tasks only (D445, D252), the simulator (D446), and the numbered messages that
+replaced a start deadline and the draft's Revoke (D460); Grok's review of them became B230 and
+B231, fixed. Left open: user-set deadlines on the wall clock (the draft's decision 6), now Q27; a
+formal model of the protocol (the draft's section 9, optional), not planned. Known limits stay as
+D442 and the guarantees page state them.
+
+### <a id="D478"></a>2026-11-13: user-set deadlines count on the wall clock (decision 478, Q27)
+
+- **Question (Q27, from the retired liveness drafts' decision 6, N4):** liveness counts on master
+  time (D442), but the deadlines a person sets and the master enforces compare a stored wall-clock
+  time with the wall clock now: a wait step's `max_wait` (`dispatch.rs`, `deadline`) and a
+  resource's `unschedulable_timeout` (`fail_waiting_users`), both checked in the code.
+  `execution_timeout` is the worker's own, on its clock, and not in question.
+- **Options:** (A) keep them on the wall clock and say so in the docs; (B) count them on master
+  time while one master leads, from the stored wall time after a restart or takeover.
+- **Chosen: A** (the user). They are set in wall time, and a restarted master can only count them
+  from the stored times; a step of the wall clock moving them (forward ends a wait early, back
+  stretches it) is shown on the guide's master-clock page, not fixed.
+- **Not chosen:** B: two ways of counting one deadline (master time while leading, the wall clock
+  across a restart), for a step of the master's own clock that the times people see share anyway.

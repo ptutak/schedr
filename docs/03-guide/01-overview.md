@@ -3,8 +3,9 @@
 schedr is one binary, `schedr`, that runs in one of five **roles**. On a laptop `schedr
 standalone` runs them all in one process and serves the web UI on the REST API's port. The
 chart's standalone mode does the same in one pod. Its distributed mode runs the master, the
-webserver and the workers in their own pods. A `schedr ui` pod comes with M3.6; until then
-that role is run on its own (see [Deployment](10-deployment.md#running-schedr-ui)).
+webserver, the workers and `schedr ui` in their own pods (`ui.enabled`). Outside the chart,
+`schedr ui` is run on its own (see [Deployment](10-deployment.md#running-schedr-ui)). For a
+first standalone on your machine, see [Getting started](../01-start/index.md).
 
 | Role | What it does | Runs user code? | State |
 |---|---|---|---|

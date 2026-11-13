@@ -1476,6 +1476,25 @@ fn a_second_standalone_on_the_same_data_is_refused_and_sigterm_stops_the_first()
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    // B248: stopped cleanly, it gave the master's lease up, so the next start leads at once
+    // instead of waiting it out as a standby.
+    let url = format!(
+        "sqlite://{}",
+        standalone.dir.path().join("data/schedr.db").display()
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let db = schedr_db::Database::connect(&url).await.unwrap();
+        let taken = db
+            .take_lease("the next start", std::time::Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert!(
+            taken.is_some(),
+            "the lease is still held\n{}",
+            standalone.log()
+        );
+    });
 }
 
 #[test]

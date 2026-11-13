@@ -17,6 +17,18 @@ Not released yet: the notes grow with M5.1 (performance, metrics in the UI).
   assignment already in hand could still be started after the cutoff (in 1.0.0 one such
   assignment, after the alive tick had noticed the cutoff), so the same task could run on two
   workers. The worker now starts nothing once it is cut off.
+- **A stopped standalone kept the master's lease** (B248). Every restart, a Ctrl-C's included,
+  waited 20-30 s as a standby before scheduling anything. The master now gives the lease up
+  when it stops cleanly, so the next start leads at once; after a crash it still waits the
+  lease out.
+
+### Changed
+
+- **A worker with no DAG directories warns at start** (decision 476): "no DAG directories",
+  naming `SCHEDR_DAG_PATH` and `[dags] path`. Before, a standalone started without them showed
+  only an empty UI.
+- **PyPI shows a page of its own** (decision 477): installing and a first run, with links to the
+  new **Getting started** section of the documentation, instead of the repository's README.
 
 ## 1.0.0
 

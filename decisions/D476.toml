@@ -1,0 +1,18 @@
+title = "A worker or standalone with no DAG directories warns at start"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "components"
+section = "Roles"
+summary = '''
+A worker (standalone's included) with neither DAG directories nor script roots configured logs a
+warning at start, "no DAG directories", naming `SCHEDR_DAG_PATH` and `[dags] path`: it still
+starts and serves, but has nothing to parse or run. Only `schedr worker` and `schedr standalone`
+warn: `dags check` and `dags test` build agent settings for a path outside the roots. Found on a first start of the published
+1.0.0, which showed only an empty UI. Not chosen: refusing to start (a worker may be given its
+roots later by a redeploy, and the UI alone is useful).
+'''
+history = "JOURNAL.md#D476"
+step = "M5.1b2"
+code = ["crates/schedr/src/roles.rs::warn_without_dag_roots"]
+checked = 2026-11-13

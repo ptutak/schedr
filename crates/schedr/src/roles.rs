@@ -311,6 +311,21 @@ fn checked_memory(config: &Config, default_reserve: Reserve) -> Result<MemoryWat
     Ok(memory)
 }
 
+/// Warns when a worker (or a standalone's) watches no directory (D476). Not an error: it starts
+/// and serves, but nothing is there to run, which a first start otherwise only shows as an empty
+/// UI. Only the roles that run a worker call it: `dags check` and `dags test` build agent
+/// settings too (a fork server's), for a path that isn't among the roots.
+pub(crate) fn warn_without_dag_roots(config: &Config) -> bool {
+    let none = config.dag_roots.is_empty() && config.script_roots.is_empty();
+    if none {
+        tracing::warn!(
+            "no DAG directories: this worker watches none, so it has nothing to parse or run; \
+             set SCHEDR_DAG_PATH (or [dags] path) to the directories of your DAG files"
+        );
+    }
+    none
+}
+
 /// The worker agent's settings, from the configuration; its journal is
 /// `<data_dir>/journal/<worker ID>` and its logs `<data_dir>/logs/<worker ID>` (other bytes
 /// than letters, digits, `-`, `_` and `.`, and a leading `.`, as `%XX`), so workers sharing a
@@ -746,7 +761,11 @@ pub async fn serve_master(
     // then end too, not go on with a loop no worker can reach.
     tokio::select! {
         result = &mut grpc => {
-            result.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))
+            result.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
+            // Stopped (the server ends cleanly only on `stop`): the loop ends on the same stop
+            // and gives the lease up. Awaited, or the process could exit first and the next
+            // start wait the lease out as a standby.
+            master_loop.await.map_err(|lost| AppError::BadArgument(lost.to_string()))
         }
         ended = &mut master_loop => {
             // The workers' streams ended, or the server's graceful shutdown waits for them
@@ -1915,6 +1934,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     tokio::fs::create_dir_all(&data_dir)
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
+    warn_without_dag_roots(&config);
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
     secure_logs(log_mode(&config), &agent.setup.log_dir)?;
     // Secrets go there as files: a folder another user made first is refused (decision 201).

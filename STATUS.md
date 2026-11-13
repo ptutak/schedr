@@ -13,26 +13,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- D478 (2026-11-13): user-set deadlines count on the wall clock (decision 478, Q27)
+- N4 (2026-11-13): The liveness redesign drafts retired: settled by D442-D460 (corrects D442)
 - N3 (2026-11-13): M5.1b's 10 s target moved to M5.1c
 - D469 (2026-11-13): a round lets go of the core lock between its batches
 - D468 (2026-11-13): one inbox for all workers (decision 468); M5.0 reordered
-- D460 (2026-11-12): both sides number their messages and echo the other's (decision 460, B240; supersedes 450 and 455)
-- D461 (2026-11-12): a DAG page's actions in one row; Restart where it does something
+- M5.1b2 (2026-11-13): A first start: Getting started, the PyPI page
 - M5.1b (2026-11-13): Start journal records in groups
 - M5.1a (2026-11-13): Profile the start path
-- R1.0b (2026-11-12): The master's side in the clock simulator
 
 ## In progress
 
-- M5.1a and M5.1b done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); grouping the worker's start records left stress 23 at 14.5 s (the rounds are the limit), its 10 s target moved to M5.1c (N3). Next M5.1c: one inbox for all workers (D468) and the round letting go of the lock (D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
-- A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
+- M5.1a, M5.1b and M5.1b2 done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); grouping the worker's start records left stress 23 at 14.5 s (the rounds are the limit), its 10 s target moved to M5.1c (N3); M5.1b2: Getting started and the PyPI page (D477), the no-DAG warning (D476), B248 (the lease released on a clean stop). Next M5.1c: one inbox for all workers (D468) and the round letting go of the lock (D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
 - Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
 
 ## Waiting for the user
 
-Nothing.
+- 2026-11-14: a general docs review by Codex (the whole docs site, not tied to a step); before or after 1.1.0, as it comes
 
 ## Rules in force
 
@@ -45,7 +44,7 @@ Nothing.
 
 ## Colleagues
 
-Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 64% by its script on 2026-11-12 (the user confirmed 62% earlier that day). Usage logs in the skills' `USAGE.md`.
+Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok 12% after the 13 Nov reset (the user confirmed, 2026-11-13; the script agrees). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

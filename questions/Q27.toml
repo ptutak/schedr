@@ -1,0 +1,16 @@
+title = "User-set deadlines on the wall clock or master time"
+asked = 2026-11-13
+topic = "wait-steps"
+status = "decided"
+proposal = '''
+Left open by the liveness redesign draft (its decision 6, 2026-11-11), not taken up by D442-D460:
+liveness counts on master time, but deadlines users set still compare stored wall-clock times
+with the wall clock now. Checked for a wait step's `max_wait` (`dispatch.rs`, `deadline`); not
+checked: `execution_timeout` on the master's side, `unschedulable_timeout`. A forward step of the
+master's wall clock ends such waits early, a backward one stretches them. Options: (A) keep them on
+the wall clock and say so in the docs (users set them in wall time; a restart counts from stored
+times anyway); (B) count them on master time while one master leads, from the stored wall time
+after a restart or takeover. Claude's view: A, recorded as a decision.
+'''
+history = "JOURNAL.md#N4"
+decided_by = 478

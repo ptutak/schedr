@@ -40,7 +40,8 @@ with Dag(
 From 1.0.0 on, the database schema changes only through new migrations and the protocol
 between schedr's processes only additively within 1.x; DAG JSON, the REST API and the
 configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a
-fresh database. Next: the Airflow layer (M5); see `PLAN.md`.
+fresh database. Next: M5, performance and metrics in the UI (released as 1.1.0), then a
+tool that translates Airflow DAGs into schedr's API; see `PLAN.md`.
 
 What works:
 
@@ -98,14 +99,21 @@ Online at https://ptutak.github.io/schedr/ (the latest release).
 http://localhost:8765). Its sections:
 
 1. **Overview** (this file).
-2. **Writing DAGs** (`docs/02-dags/`): the native API, with tested examples.
-3. **How schedr works** (`docs/03-guide/`): the running system, failures, deployment.
-4. **Reference**, generated from the code: configuration, CLI, REST API, metrics.
-5. **Design**: `archive/PROJECT.md`, the decision log, one page per chapter.
-6. **Plan**: `PLAN.md`.
-7. **API**: Python (from docstrings) and Rust (rustdoc).
+2. **Getting started** (`docs/01-start/`): installing, and a first standalone with one DAG.
+3. **Writing DAGs** (`docs/02-dags/`): the native API, with tested examples.
+4. **How schedr works** (`docs/03-guide/`): the running system, failures, deployment.
+5. **Reference**, generated from the code: configuration, CLI, REST API, metrics.
+6. **Design**: `archive/PROJECT.md`, the decision log, one page per chapter.
+7. **Plan**: `PLAN.md`.
+8. **API**: Python (from docstrings) and Rust (rustdoc).
+
+PyPI shows `PYPI.md` instead of this file: installing and a first run, for someone using the
+package rather than working on this repository.
 
 ## Installing
+
+For a first run with the published package, see
+[Getting started](https://ptutak.github.io/schedr/01-start/index.html).
 
 ```sh
 pip install schedr            # Python 3.14; add [pydantic] for Pydantic models
@@ -131,7 +139,8 @@ Then, from another shell: `schedr dags list`, `schedr dags unpause sync_customer
 `http://localhost:8080` unless `--server` or `SCHEDR_SERVER` says otherwise). After
 `make standalone-separate-ui` the pages are on port 8082; the CLI still uses `main`'s API
 on 8080. `DAGS=<directory>` runs other DAGs;
-`LISTEN=127.0.0.1` keeps the API off the network (it has no authentication yet).
+`LISTEN=127.0.0.1` keeps the API off the network (`make standalone` signs no one in; see
+[Sign-in](https://ptutak.github.io/schedr/03-guide/08-network.html#sign-in)).
 
 ## Layout
 

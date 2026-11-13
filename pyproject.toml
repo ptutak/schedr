@@ -4,7 +4,8 @@ name = "schedr"
 # one version number.
 dynamic = ["version"]
 description = "schedr scheduler: a Python DAG API plus the schedr binary."
-readme = "README.md"
+# PyPI shows this: installing and a first run, not the repository's development setup.
+readme = "PYPI.md"
 requires-python = ">=3.14"
 license = "MIT"
 # The binary's crates' licences beside schedr's own (scripts/third_party.py writes it).

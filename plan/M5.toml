@@ -49,6 +49,18 @@ status = "done"
 done = 2026-11-13
 
 [[steps]]
+id = "M5.1b2"
+title = "A first start: Getting started, the PyPI page"
+scope = '''
+(the user, 2026-11-13; decisions 476, 477) a Getting started section (`docs/01-start/`: install, a first standalone with one DAG, next steps), each step run against the published 1.0.0 wheel from a clean directory; `PYPI.md` as the package's page; what the trial found: a warning for a worker with no DAG directories (decision 476), and B248 (a stopped standalone kept its lease, so every restart waited it out)
+'''
+done_when = '''
+the pages build; the trial's steps work as written; PYPI.md's DAG checked against the example; a restart after Ctrl-C leads at once
+'''
+status = "done"
+done = 2026-11-13
+
+[[steps]]
 id = "M5.1c"
 title = "One inbox for all workers"
 scope = '''

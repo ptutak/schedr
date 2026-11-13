@@ -564,6 +564,7 @@ pub async fn command(
 ) -> Result<(), AppError> {
     let stop = stop_on_signal();
     let mut setup = plan(config, env)?;
+    crate::roles::warn_without_dag_roots(config);
     setup.migrate = migrate;
     if no_ui {
         setup.ui = None;

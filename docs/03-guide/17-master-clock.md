@@ -269,7 +269,7 @@ starts once a deposed leader can no longer be answering. That wait is in
 [Starting up](04-master.md#starting-up).
 
 The wall clock the master is handed is what people see and what the database keeps:
-schedules, the times shown, retention. These four stay on it as well. Each is a decision one
+schedules, the times shown, retention. These five stay on it as well. Each is a decision one
 master makes about a time of its own, or a time a person set. None of them is an agreement
 with a worker about whether a process is still alive.
 
@@ -278,7 +278,13 @@ with a worker about whether a process is still alive.
 | Schedules | Fire times are the times people set, stored with the run. |
 | Set-aside | How long this master leaves an assignment that failed on its own before it tries again, compared with the clock the round was handed. |
 | A sensor's `max_wait` | How long the wait may last, from the time stored with the wait. |
+| A resource's `unschedulable_timeout` | How long a user of the resource may wait for a worker, from the time stored when it became `unschedulable`. |
 | The script-root grace | How long this master has gone without a report of a script root, from its start and from the last report. |
+
+The deadlines a person sets (a sensor's `max_wait`, a resource's `unschedulable_timeout`) stay on
+the wall clock on purpose: they are set in wall time, and a restarted master counts them from the
+stored times anyway. A step of the master's wall clock moves them: a step forward ends such a
+wait early, a step back makes it longer (decision 478).
 
 ## Identity built on it
 

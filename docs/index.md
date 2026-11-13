@@ -11,6 +11,13 @@ _generated/01-overview
 
 ```{toctree}
 :maxdepth: 2
+:caption: Getting started
+
+01-start/index
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: Writing DAGs
 
 02-dags/index

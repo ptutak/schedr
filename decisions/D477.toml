@@ -1,0 +1,15 @@
+title = "PyPI shows a page of its own: installing and a first run"
+date = 2026-11-13
+by = "user"
+status = "active"
+topic = "development"
+section = "Releases"
+summary = '''
+The package's page on PyPI is `PYPI.md`, not the README: what schedr is, `pip install schedr`,
+a first standalone with one DAG (examples/sync.py, word for word, a unit test checks it) and
+links into the documentation's Getting started section (`docs/01-start/`). The README keeps
+the repository's development setup and points to both.
+'''
+history = "JOURNAL.md#D477"
+step = "M5.1b2"
+code = ["PYPI.md", "python/tests/unit/test_pypi_page.py"]
