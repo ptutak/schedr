@@ -1214,6 +1214,78 @@ async fn a_result_not_acknowledged_is_sent_again_while_the_link_stays_up() {
     assert_eq!(left, ["old-1"]);
 }
 
+/// Assignments of a Python task `wait` (it runs until stopped), one per ID.
+fn waits(ids: &[&str]) -> Vec<pb::MasterMessage> {
+    let mut task = task_json(&json!({"kind": "python"}));
+    task["id"] = json!("wait");
+    ids.iter()
+        .map(|id| assign(id, &task, "sync.py", false))
+        .collect()
+}
+
+/// How many times the journal kept a group of start records.
+fn start_groups(metrics: &AgentMetrics) -> u64 {
+    let mut registry = prometheus_client::registry::Registry::with_prefix("schedr");
+    metrics.register(&mut registry);
+    let mut out = String::new();
+    prometheus_client::encoding::text::encode(&mut out, &registry).unwrap();
+    out.lines()
+        .find_map(|line| {
+            line.strip_prefix("schedr_worker_journal_write_seconds_count{record=\"start\"} ")
+        })
+        .map_or(0, |count| count.trim().parse().unwrap())
+}
+
+#[tokio::test]
+async fn a_burst_of_assignments_is_journaled_as_one_group_then_started() {
+    // M5.1b: the records of assignments already waiting are written together, each `Started`
+    // only after the group is on disk.
+    let metrics = AgentMetrics::default();
+    let given = metrics.clone();
+    let started = |m: &[pb::WorkerMessage]| kinds(m).iter().filter(|k| **k == "started").count();
+    let (seen, left) = against_script_with(
+        3,
+        Start::With(vec![]),
+        waits(&["a1", "a2", "a3"]),
+        |m| started(m) >= 3,
+        |agent| agent.metrics = given,
+    )
+    .await;
+    assert_eq!(kinds(&seen), ["register", "started", "started", "started"]);
+    assert_eq!(start_groups(&metrics), 1, "one group of three records");
+    assert_eq!(left, ["a1", "a2", "a3"]);
+}
+
+#[tokio::test]
+async fn a_burst_takes_no_more_slots_than_are_free() {
+    // M5.1b: a group's assignments hold their slots before they are started.
+    let (seen, left) = against_script(2, Start::With(vec![]), waits(&["a1", "a2", "a3"]), |m| {
+        kinds(m).len() >= 4
+    })
+    .await;
+    // The refusal goes as the group is gathered, before the group's `Started`s: each
+    // attempt's own messages keep their order, which is what the master reads.
+    assert_eq!(
+        kinds(&seen),
+        ["register", "rejected: no slot", "started", "started"]
+    );
+    assert_eq!(left, ["a1", "a2"]);
+}
+
+#[tokio::test]
+async fn a_burst_the_journal_cant_record_starts_nothing() {
+    // M5.1b: no `Started` for a record not on disk, each assignment refused on its own.
+    let (seen, left) = against_script(3, Start::Unwritable, waits(&["a1", "a2"]), |m| {
+        kinds(m).len() >= 3
+    })
+    .await;
+    assert_eq!(
+        kinds(&seen),
+        ["register", "rejected: disk", "rejected: disk"]
+    );
+    assert!(left.is_empty(), "{left:?}");
+}
+
 #[tokio::test]
 async fn an_attempt_the_journal_cant_record_is_rejected() {
     let python = task_json(&json!({"kind": "python"}));
@@ -3399,6 +3471,47 @@ async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
         .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
         .count();
     assert!(beats >= 1, "{:?}", kinds(&seen));
+}
+
+#[tokio::test]
+async fn an_assignment_behind_a_fetch_cut_off_by_the_lease_is_not_started() {
+    // Grok's review of M5.1b: a burst went on after its fetch ended the session at the
+    // cutoff, journaling and launching the assignment behind it.
+    let stops = Arc::new(Mutex::new(Vec::new()));
+    let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
+    let mut script = silent_master_leased(true, 300);
+    let mut fetching = assign(
+        "a2",
+        &task_json(&json!({"kind": "python"})),
+        "sync.py",
+        false,
+    );
+    let Some(master_message::Message::AssignTask(assigned)) = &mut fetching.message else {
+        panic!("expected an assignment")
+    };
+    assigned.inputs_external = true;
+    script.push(fetching);
+    script.extend(waits(&["a3"]));
+    let master = Scripted {
+        script,
+        inputs_stuck: true,
+        ..Scripted::default()
+    };
+    let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
+    let (seen, left) = against_master(2, Start::With(vec![]), master, done, |agent| {
+        agent.executor.stops = seen_stops;
+    })
+    .await;
+    assert_eq!(*stops.lock().unwrap(), [StopReason::CutOff]);
+    let started: Vec<&str> = seen
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Started(s)) => Some(s.attempt_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, ["a1"], "{:?}", kinds(&seen));
+    assert!(!left.iter().any(|id| id == "a3"), "a3 journaled: {left:?}");
 }
 
 #[tokio::test]

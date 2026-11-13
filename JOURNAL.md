@@ -780,3 +780,16 @@ defaults it doesn't state (from memory, to be checked in M5.2b: `catchup` true b
 false in 3; no schedule meaning daily in 2, manual in 3), and some imports exist in both. Decision
 471 now says: `--airflow 2|3`, always given, an import contradicting it an error. Not chosen:
 guessing the version from the imports.
+
+### <a id="N3"></a>2026-11-13: M5.1b's 10 s target moved to M5.1c (note 3)
+
+
+M5.1b wrote a burst's start records as one group, and stress 23's `all_in_s` stayed at 14.5 s
+(M5.1a: 14.5 s): the worker's journal wasn't the limit on this machine, the master's rounds
+were (50 assignments a round, a round's p99 4.1 s while it holds the core lock), so 500 starts
+take about ten rounds whatever the worker does. Grok's estimate that the journal set the floor
+didn't hold here: each group's write overlaps the master's next round. Starts in scenarios 9
+and 13 improved a little (assigned → started p99 3.09 → 2.65 s, 4.35 → 3.43 s, 3.75 → 2.96 s;
+one run each). Claude stopped and asked (the two modes); the user chose to keep M5.1b, its
+target rewritten to what it does, and to move the 10 s target to M5.1c, where the round lets go
+of the lock (decision 469).

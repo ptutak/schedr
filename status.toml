@@ -4,7 +4,7 @@
 updated = 2026-11-13
 
 in_progress = [
-    "M5.1a done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); with one worker the round holds it (D469). Next M5.1b, the start records in groups; then M5.1c (D468 and D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).",
+    "M5.1a and M5.1b done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); grouping the worker's start records left stress 23 at 14.5 s (the rounds are the limit), its 10 s target moved to M5.1c (N3). Next M5.1c: one inbox for all workers (D468) and the round letting go of the lock (D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).",
     "A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.",
     "For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).",
     "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",

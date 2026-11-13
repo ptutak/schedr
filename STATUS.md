@@ -6,25 +6,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-13)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1b, Start journal records in groups. Done when: stress 23 starts its 500 wait steps in under 10 s by the corrected `all_in_s` (25.7 s after M4B, with the sleep and the gauge's lag); a crash test: no `Started` sent for a record not on disk, a group lost whole on recovery
-- **Then:** M5.1c, M5.1d, M5.1e, M5.1f, M5.1g.
+- **Next step:** M5.1c, One inbox for all workers (decisions D468, D469). Done when: stress 23 starts its 500 wait steps in under 10 s by `all_in_s` (14.5 s after M5.1b; moved here from M5.1b); assigned → started p99 in scenarios 9 and 13 within their range before M4B over four alternating runs (scenario 13 3.1-4.8 s; the single runs' 2.1 s and 1.8 s the aim), M4B's throughput kept or better; commits per second under stress 1 counted before and after; tests for each rule (order per worker, a barrier, a replaced stream, a failed phase, fairness) on both databases
+- **Then:** M5.1d, M5.1e, M5.1f, M5.1g, M5.1h.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 5; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B242 (low/rare), B241 (low/rare) (`BUGS.md`).
+- **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- N3 (2026-11-13): M5.1b's 10 s target moved to M5.1c
 - D469 (2026-11-13): a round lets go of the core lock between its batches
 - D468 (2026-11-13): one inbox for all workers (decision 468); M5.0 reordered
 - D460 (2026-11-12): both sides number their messages and echo the other's (decision 460, B240; supersedes 450 and 455)
 - D461 (2026-11-12): a DAG page's actions in one row; Restart where it does something
-- D459 (2026-11-12): a DAG's trigger has its own row with its switch
+- M5.1b (2026-11-13): Start journal records in groups
 - M5.1a (2026-11-13): Profile the start path
 - R1.0b (2026-11-12): The master's side in the clock simulator
-- R1.0c (2026-11-11): Images on glibc beside Alpine
 
 ## In progress
 
-- M5.1a done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); with one worker the round holds it (D469). Next M5.1b, the start records in groups; then M5.1c (D468 and D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
+- M5.1a and M5.1b done 2026-11-13: a start's time is the wait for the master's core lock (stress guide, Where a start's time goes); grouping the worker's start records left stress 23 at 14.5 s (the rounds are the limit), its 10 s target moved to M5.1c (N3). Next M5.1c: one inbox for all workers (D468) and the round letting go of the lock (D469). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - A side job (the user, 2026-11-11): a liveness redesign draft in the worktree schedr-grok-liveness (design/drafts/liveness-redesign.md and liveness-one-clock.md), reviewed by Grok (ac32cff4): it closes the single-leader part, not the whole family; its findings wait for the user. B240 changed the ground under it.
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).

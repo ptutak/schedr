@@ -967,6 +967,53 @@ pub enum SessionEnd {
 /// meanwhile.
 const RESULTS_PER_GROUP: usize = 32;
 
+/// The next message from the master: one read ahead while gathering a burst first.
+async fn next_inbound(
+    held: &mut Option<Result<Option<pb::MasterMessage>, tonic::Status>>,
+    inbound: &mut tonic::Streaming<pb::MasterMessage>,
+) -> Result<Option<pb::MasterMessage>, tonic::Status> {
+    if let Some(message) = held.take() {
+        return message;
+    }
+    inbound.message().await
+}
+
+/// The most assignments whose journal records are written as one group (M5.1b), as many as
+/// [`RESULTS_PER_GROUP`] for the same reason: each a thread writing its file meanwhile.
+const STARTS_PER_GROUP: usize = 32;
+
+/// An assignment checked and planned, its journal record not yet written.
+struct Prepared {
+    assign: pb::AssignTask,
+    spec: AttemptSpec,
+    planned: Result<Plan, NotRun>,
+    external: Option<Vec<u8>>,
+    received: std::time::Instant,
+}
+
+/// What a group's assignments before this one take (M5.1b): slots not yet counted as
+/// running, and their IDs.
+#[derive(Default)]
+struct Held {
+    tasks: u32,
+    wait_steps: u32,
+    ids: std::collections::HashSet<String>,
+}
+
+impl Held {
+    fn add(&mut self, prepared: &Prepared) {
+        self.ids.insert(prepared.assign.attempt_id.clone());
+        if matches!(prepared.planned, Err(NotRun::Rejected { .. })) {
+            return;
+        }
+        if assigned_a_wait_step(&prepared.assign) {
+            self.wait_steps += 1;
+        } else {
+            self.tasks += 1;
+        }
+    }
+}
+
 enum Done {
     Spawned {
         attempt_id: String,
@@ -2127,6 +2174,9 @@ impl<E: Executor> Agent<E> {
         // The unacknowledged results' resends (B41: the master failed to store one and kept
         // the stream).
         let mut resends = Resends::default();
+        // A message read while gathering a burst of assignments, not one of them: handled
+        // next, in its turn (M5.1b).
+        let mut held_message = None;
         loop {
             let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
             tokio::select! {
@@ -2157,21 +2207,17 @@ impl<E: Executor> Agent<E> {
                         return SessionEnd::Stopped;
                     }
                 }
-                message = inbound.message() => match message {
+                message = next_inbound(&mut held_message, &mut inbound) => match message {
                     Ok(Some(pb::MasterMessage { message: Some(message), clock })) => {
-                        if let Some(why) = self.refused(&message, clock.as_ref(), opened) {
-                            return SessionEnd::Lost(why);
+                        if let Err(end) = self.take_in(&message, clock.as_ref(), opened, &to_master) {
+                            return end;
                         }
-                        // Past the lease, a message (one held while this worker was frozen,
-                        // B162, or on its way through a one-way cut, B163) doesn't count as
-                        // the master's word.
-                        if self.silent_too_long(opened) {
-                            return SessionEnd::Lost(NO_WORD.to_owned());
+                        let link = (&to_master, &mut client, (&mut heartbeat, opened));
+                        let handled =
+                            Box::pin(self.handle_inbound(message, clock.as_ref(), &mut inbound, &mut held_message, link));
+                        if let Err(end) = handled.await {
+                            return end;
                         }
-                        self.heard_master(clock.as_ref(), &to_master);
-                        self.on_master(message, &to_master, &mut client, (&mut heartbeat, opened)).await;
-                        // Handled: what it sent is queued, before anything naming it (B240).
-                        to_master.handled(clock.as_ref().map_or(0, |c| c.sequence));
                         // Past the lease while handling it (a slow fetch of inputs).
                         if self.cut_off || self.gone_silent(opened) {
                             return SessionEnd::Lost(NO_WORD.to_owned());
@@ -2335,6 +2381,91 @@ impl<E: Executor> Agent<E> {
             self.send_again(&id, to_master);
         }
         None
+    }
+
+    /// A message from the master handled, taken in already: an assignment with the others
+    /// already waiting behind it as one group (M5.1b), anything else alone; each counted as
+    /// handled once what it sent is queued (B240). A message read ahead that isn't an
+    /// assignment is left in `held` for the next turn of the loop.
+    async fn handle_inbound(
+        &mut self,
+        message: master_message::Message,
+        clock: Option<&pb::MasterClock>,
+        inbound: &mut tonic::Streaming<pb::MasterMessage>,
+        held: &mut Option<Result<Option<pb::MasterMessage>, tonic::Status>>,
+        (to_master, client, timers): (
+            &ToMaster,
+            &mut MasterClient<Channel>,
+            (&mut tokio::time::Interval, tokio::time::Instant),
+        ),
+    ) -> Result<(), SessionEnd> {
+        let (heartbeat, opened) = timers;
+        let sequence = clock.map_or(0, |c| c.sequence);
+        let master_message::Message::AssignTask(first) = message else {
+            Box::pin(self.on_master(message, to_master, client, (heartbeat, opened))).await;
+            // Handled: what it sent is queued, before anything naming it (B240).
+            to_master.handled(sequence);
+            return Ok(());
+        };
+        let mut burst = vec![first];
+        let mut sequences = vec![sequence];
+        while burst.len() < STARTS_PER_GROUP {
+            match futures_util::FutureExt::now_or_never(inbound.message()) {
+                Some(Ok(Some(pb::MasterMessage {
+                    message: Some(master_message::Message::AssignTask(next)),
+                    clock,
+                }))) => {
+                    let next = master_message::Message::AssignTask(next);
+                    if let Err(end) = self.take_in(&next, clock.as_ref(), opened, to_master) {
+                        // The session ends with it: those taken in before it go on as they
+                        // would have one by one.
+                        Box::pin(self.assign_group(burst, to_master, client, (heartbeat, opened)))
+                            .await;
+                        for sequence in sequences {
+                            to_master.handled(sequence);
+                        }
+                        return Err(end);
+                    }
+                    let master_message::Message::AssignTask(next) = next else {
+                        unreachable!("built as an assignment above")
+                    };
+                    burst.push(next);
+                    sequences.push(clock.as_ref().map_or(0, |c| c.sequence));
+                }
+                Some(other) => {
+                    *held = Some(other);
+                    break;
+                }
+                None => break,
+            }
+        }
+        Box::pin(self.assign_group(burst, to_master, client, (heartbeat, opened))).await;
+        // Handled once their `Started`s (or `Rejected`s) are queued (B240).
+        for sequence in sequences {
+            to_master.handled(sequence);
+        }
+        Ok(())
+    }
+
+    /// A message from the master taken in: refused (the session ends) if it isn't this
+    /// session's or arrives past the lease, else its clock read.
+    fn take_in(
+        &mut self,
+        message: &master_message::Message,
+        clock: Option<&pb::MasterClock>,
+        opened: tokio::time::Instant,
+        to_master: &ToMaster,
+    ) -> Result<(), SessionEnd> {
+        if let Some(why) = self.refused(message, clock, opened) {
+            return Err(SessionEnd::Lost(why));
+        }
+        // Past the lease, a message (one held while this worker was frozen, B162, or on its
+        // way through a one-way cut, B163) doesn't count as the master's word.
+        if self.silent_too_long(opened) {
+            return Err(SessionEnd::Lost(NO_WORD.to_owned()));
+        }
+        self.heard_master(clock, to_master);
+        Ok(())
     }
 
     async fn on_master(
@@ -2567,8 +2698,70 @@ impl<E: Executor> Agent<E> {
         client: &mut MasterClient<Channel>,
         timers: (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
+        Box::pin(self.assign_group(vec![assign], to_master, client, timers)).await;
+    }
+
+    /// A burst of assignments (M5.1b): each prepared up to its journal record, their records
+    /// written as one group ([`Journal::write_many`]), then each started (or failed, or
+    /// rejected) in order. No `Started` goes before its record is on disk.
+    async fn assign_group(
+        &mut self,
+        assigns: Vec<pb::AssignTask>,
+        to_master: &ToMaster,
+        client: &mut MasterClient<Channel>,
+        timers: (&mut tokio::time::Interval, tokio::time::Instant),
+    ) {
+        let (heartbeat, opened) = timers;
+        let mut ready = Vec::new();
+        let mut held = Held::default();
+        for assign in assigns {
+            // Its inputs fetched from the master first: those before it don't wait on the
+            // network, they start now.
+            if assign.inputs_external && !ready.is_empty() {
+                Box::pin(self.start_group(std::mem::take(&mut ready), to_master, opened)).await;
+                held = Held::default();
+            }
+            // Cut off (a fetch reaching the cutoff, or the alive tick) or past the lease: the
+            // session ends, nothing more of the burst is prepared or started.
+            if self.cut_off || self.gone_silent(opened) {
+                break;
+            }
+            let prepared = self
+                .prepare(assign, to_master, client, (&mut *heartbeat, opened), &held)
+                .await;
+            if let Some(prepared) = prepared {
+                held.add(&prepared);
+                ready.push(prepared);
+            }
+        }
+        Box::pin(self.start_group(ready, to_master, opened)).await;
+    }
+
+    /// Prepared assignments' records written as one group, then each started in order.
+    async fn start_group(
+        &mut self,
+        ready: Vec<Prepared>,
+        to_master: &ToMaster,
+        opened: tokio::time::Instant,
+    ) {
+        let journaled = self.journal_starts(&ready, opened).await;
+        for (prepared, journaled) in ready.into_iter().zip(journaled) {
+            self.after_journal(prepared, journaled, to_master).await;
+        }
+    }
+
+    /// An assignment checked and planned, up to its journal record; `None` when it was
+    /// refused (its `Rejected` sent) or ignored. `held`: the group's assignments before it,
+    /// whose slots are taken though not yet started.
+    async fn prepare(
+        &mut self,
+        assign: pb::AssignTask,
+        to_master: &ToMaster,
+        client: &mut MasterClient<Channel>,
+        timers: (&mut tokio::time::Interval, tokio::time::Instant),
+        held: &Held,
+    ) -> Option<Prepared> {
         let received = std::time::Instant::now();
-        let opened = timers.1;
         let reject = |reason: pb::RejectReason, detail: String| {
             wrap(worker_message::Message::Rejected(pb::Rejected {
                 attempt_id: assign.attempt_id.clone(),
@@ -2581,28 +2774,26 @@ impl<E: Executor> Agent<E> {
             // didn't have (B169): refused, it goes elsewhere or comes back after.
             let detail = "cleaning the rest of this attempt's handles".to_owned();
             let _ = to_master.send(reject(pb::RejectReason::NoFreeSlot, detail));
-            return;
+            return None;
         }
         if self.running.contains_key(&assign.attempt_id)
             || self.unacked.contains_key(&assign.attempt_id)
+            || held.ids.contains(&assign.attempt_id)
         {
             // Already started here: its journal entry must not be replaced.
             tracing::warn!(
                 attempt_id = assign.attempt_id.as_str(),
                 "assignment of an attempt this worker already has; ignored"
             );
-            return;
+            return None;
         }
-        if let Some((reason, detail)) = self.cannot_take(assigned_a_wait_step(&assign)) {
+        if let Some((reason, detail)) = self.cannot_take_held(assigned_a_wait_step(&assign), held) {
             let _ = to_master.send(reject(reason, detail.to_owned()));
-            return;
+            return None;
         }
-        let Some(external) = self
+        let external = self
             .external_inputs(&assign, to_master, client, timers)
-            .await
-        else {
-            return;
-        };
+            .await?;
         let mut spec = match AttemptSpec::from_assign(&assign, external.as_deref()) {
             Ok(spec) => spec,
             Err(error) => {
@@ -2610,23 +2801,47 @@ impl<E: Executor> Agent<E> {
                     pb::RejectReason::InvalidSpecification,
                     error.to_string(),
                 ));
-                return;
+                return None;
             }
         };
         if let Some(detail) = self.code_mismatch(&assign) {
             let _ = to_master.send(reject(pb::RejectReason::CodeMismatch, detail));
-            return;
+            return None;
         }
         // Planned with stand-ins for its secrets (fetched once it is started, so a slow
         // storage never holds up the agent): whether it runs here doesn't depend on them.
         spec.stand_in_secrets();
         let planned = self.plan(&mut spec, &assign);
-        let journaled = match planned {
-            Err(NotRun::Rejected { .. }) => Ok(()),
-            _ => {
-                self.journal_start(&spec, &assign, external.as_deref(), opened)
-                    .await
-            }
+        Some(Prepared {
+            assign,
+            spec,
+            planned,
+            external,
+            received,
+        })
+    }
+
+    /// An assignment whose journal record is on disk (or failed, `journaled`): started,
+    /// failed before it could start, or rejected, in the group's order.
+    async fn after_journal(
+        &mut self,
+        prepared: Prepared,
+        journaled: Result<(), Option<(pb::RejectReason, String)>>,
+        to_master: &ToMaster,
+    ) {
+        let Prepared {
+            assign,
+            mut spec,
+            planned,
+            received,
+            ..
+        } = prepared;
+        let reject = |reason: pb::RejectReason, detail: String| {
+            wrap(worker_message::Message::Rejected(pb::Rejected {
+                attempt_id: assign.attempt_id.clone(),
+                reason: reason.into(),
+                detail,
+            }))
         };
         if let Err(why) = journaled {
             if let Some((reason, detail)) = why {
@@ -2849,8 +3064,17 @@ impl<E: Executor> Agent<E> {
         client: Option<&mut MasterClient<Channel>>,
     ) {
         let link = to_master.zip(client);
-        let Done::Attempt(first) = done else {
-            return self.on_done(done, link).await;
+        let first = match done {
+            Done::Attempt(first) => first,
+            Done::Spawned {
+                attempt_id,
+                identity,
+                forked,
+            } => {
+                let (record, repeat) = self.spawned_record(&attempt_id, identity, forked);
+                return Box::pin(self.spawned_group((attempt_id, record, repeat), link)).await;
+            }
+            other => return self.on_done(other, link).await,
         };
         let mut results = vec![self.result_ready(first)];
         let mut next = None;
@@ -2871,6 +3095,113 @@ impl<E: Executor> Agent<E> {
         }
         if let Some(next) = next {
             Box::pin(self.on_done(next, link)).await;
+        }
+    }
+
+    /// A started process's identity for its journal record (so a restart can stop it); a
+    /// forked one's `Started` sent again with its method (the master keeps the first start
+    /// time).
+    fn spawned_record(
+        &mut self,
+        attempt_id: &str,
+        identity: ProcessIdentity,
+        forked: bool,
+    ) -> (JournalRecord, bool) {
+        // `Started` went before the process existed, as `spawn`; a repeat sets the method, sent
+        // once the identity is on disk (`resend_forked`).
+        let ended = self.cleaning.get(attempt_id).cloned();
+        let repeat = forked && ended.is_none();
+        if repeat {
+            self.forked.insert(attempt_id.to_owned());
+        }
+        let record = match ended {
+            Some(ended) => JournalRecord::Cleaning(ended, Some(identity)),
+            None => JournalRecord::Running(Some(identity)),
+        };
+        (record, repeat)
+    }
+
+    /// Started processes' identities, the first and those waiting behind it, kept in the
+    /// journal as one group (M5.1b); the first other news after them is handled next.
+    async fn spawned_group(
+        &mut self,
+        first: (String, JournalRecord, bool),
+        link: Option<(&ToMaster, &mut MasterClient<Channel>)>,
+    ) {
+        let to_master = link.as_ref().map(|(to_master, _)| *to_master);
+        let mut records = vec![first];
+        let mut next = None;
+        while records.len() < STARTS_PER_GROUP {
+            match self.done_rx.try_recv() {
+                Ok(Done::Spawned {
+                    attempt_id,
+                    identity,
+                    forked,
+                }) => {
+                    let (record, repeat) = self.spawned_record(&attempt_id, identity, forked);
+                    records.push((attempt_id, record, repeat));
+                }
+                Ok(other) => {
+                    next = Some(other);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        self.keep_processes(records, to_master).await;
+        if let Some(next) = next {
+            Box::pin(self.on_done(next, link)).await;
+        }
+    }
+
+    /// Started processes' identities kept in the journal (one write for several, M5.1b), then
+    /// each forked one's `Started` repeated with its method: after its identity is on disk.
+    async fn keep_processes(
+        &mut self,
+        records: Vec<(String, JournalRecord, bool)>,
+        to_master: Option<&ToMaster>,
+    ) {
+        let began = std::time::Instant::now();
+        let written = if let [(id, record, _)] = records.as_slice() {
+            self.record(id, record.clone()).await
+        } else {
+            let journal = self.journal.clone();
+            let group: Vec<(String, JournalRecord)> = records
+                .iter()
+                .map(|(id, record, _)| (id.clone(), record.clone()))
+                .collect();
+            tokio::task::spawn_blocking(move || {
+                let refs: Vec<(&str, &JournalRecord)> = group
+                    .iter()
+                    .map(|(id, record)| (id.as_str(), record))
+                    .collect();
+                journal.write_many(&refs)
+            })
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|written| written)
+        };
+        match written {
+            Ok(()) => self.metrics.journal_written("process", began.elapsed()),
+            Err(_) if records.len() > 1 => {
+                // The group failed: each kept on its own, as before groups.
+                for (attempt_id, record, _) in &records {
+                    if let Err(error) = self.record(attempt_id, record.clone()).await {
+                        tracing::warn!(attempt_id, %error, "can't record the task's process");
+                    }
+                }
+            }
+            Err(error) => {
+                let attempt_id = records[0].0.as_str();
+                tracing::warn!(attempt_id, %error, "can't record the task's process");
+            }
+        }
+        if let Some(to_master) = to_master {
+            for (attempt_id, _, repeat) in &records {
+                if *repeat {
+                    let _ = to_master.send(forked_started(attempt_id));
+                }
+            }
         }
     }
 
@@ -3101,80 +3432,127 @@ impl<E: Executor> Agent<E> {
         self.start_waiting(&id, waiting, to_master).await;
     }
 
-    /// Journals an attempt about to start: first what its cleanup would need after a restart.
-    /// Journals an attempt about to start: `Err(Some((reason, why)))` when the journal can't be
-    /// written, `Err(None)` when the lease ran out meanwhile (a stalled disk, F14): the master may
-    /// count this worker lost and end the attempt, so it isn't started here, nor left in the
-    /// journal to be reported as started when this worker connects again (what it lacks there,
-    /// the master takes back, B240).
-    async fn journal_start(
+    /// The journal records of a group's assignments (M5.1b): those planned to run (or to fail
+    /// before they could start) kept on disk together, a cleanup's assignment kept beside its
+    /// record first. Each one's outcome in order: on disk, refused for the disk
+    /// (`DiskNotWritable`), or dropped (`None`) because the lease ran out meanwhile.
+    async fn journal_starts(
         &self,
-        spec: &AttemptSpec,
-        assign: &pb::AssignTask,
-        external: Option<&[u8]>,
+        ready: &[Prepared],
         opened: tokio::time::Instant,
-    ) -> Result<(), Option<(pb::RejectReason, String)>> {
-        let began = std::time::Instant::now();
-        let recorded = self.record_start(spec, assign, external).await;
-        if recorded.is_ok() {
-            self.metrics.journal_written("start", began.elapsed());
-        }
-        if let Err(error) = recorded {
+    ) -> Vec<Result<(), Option<(pb::RejectReason, String)>>> {
+        let disk = |error: &std::io::Error| {
             let detail = format!(
                 "can't write the journal in `{}`: {error}; check the worker's data directory",
                 self.journal.dir().display()
             );
-            return Err(Some((pb::RejectReason::DiskNotWritable, detail)));
+            Some((pb::RejectReason::DiskNotWritable, detail))
+        };
+        let mut outcomes: Vec<Result<(), Option<(pb::RejectReason, String)>>> =
+            ready.iter().map(|_| Ok(())).collect();
+        let began = std::time::Instant::now();
+        let mut writing = Vec::new();
+        for (at, prepared) in ready.iter().enumerate() {
+            if matches!(prepared.planned, Err(NotRun::Rejected { .. })) {
+                continue;
+            }
+            #[cfg(test)]
+            if !self.journal_stall.0.is_zero() {
+                tokio::time::sleep(self.journal_stall.0).await;
+                self.journal_stall
+                    .1
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            match self.keep_for_cleanup(prepared).await {
+                Ok(()) => writing.push(at),
+                Err(error) => outcomes[at] = Err(disk(&error)),
+            }
         }
-        if self.gone_silent(opened) {
-            tracing::warn!(
-                attempt_id = spec.attempt_id.as_str(),
-                "the lease ran out while the attempt was journaled; not started"
-            );
-            self.forget(&spec.attempt_id).await;
-            return Err(None);
+        if writing.is_empty() {
+            return outcomes;
+        }
+        let ids: Vec<String> = writing
+            .iter()
+            .map(|&at| ready[at].spec.attempt_id.clone())
+            .collect();
+        let written = if let [id] = ids.as_slice() {
+            self.record(id, JournalRecord::Running(None)).await
+        } else {
+            let journal = self.journal.clone();
+            let records = ids.clone();
+            tokio::task::spawn_blocking(move || {
+                let running = JournalRecord::Running(None);
+                let refs: Vec<(&str, &JournalRecord)> =
+                    records.iter().map(|id| (id.as_str(), &running)).collect();
+                journal.write_many(&refs)
+            })
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|written| written)
+        };
+        match written {
+            Ok(()) => self.metrics.journal_written("start", began.elapsed()),
+            Err(_) if ids.len() > 1 => {
+                // The group failed: each written on its own, so each gets its own outcome.
+                for (&at, id) in writing.iter().zip(&ids) {
+                    if let Err(error) = self.record(id, JournalRecord::Running(None)).await {
+                        outcomes[at] = Err(disk(&error));
+                    }
+                }
+            }
+            Err(error) => outcomes[writing[0]] = Err(disk(&error)),
+        }
+        // Cut off or past the lease while journaling: not started (decision 281; Grok's review
+        // of M5.1b: the cutoff too, not only the lease).
+        if self.cut_off || self.gone_silent(opened) {
+            for &at in &writing {
+                if outcomes[at].is_ok() {
+                    let id = &ready[at].spec.attempt_id;
+                    tracing::warn!(
+                        attempt_id = id.as_str(),
+                        "the lease ran out while the attempt was journaled; not started"
+                    );
+                    self.forget(id).await;
+                    outcomes[at] = Err(None);
+                }
+            }
         }
         // No start deadline: the master takes an assignment back only once this worker's
         // messages show it never started it (B240), so however late it came, it is still this
         // worker's to start.
-        Ok(())
+        outcomes
     }
 
-    async fn record_start(
-        &self,
-        spec: &AttemptSpec,
-        assign: &pb::AssignTask,
-        external: Option<&[u8]>,
-    ) -> std::io::Result<()> {
-        #[cfg(test)]
-        if !self.journal_stall.0.is_zero() {
-            tokio::time::sleep(self.journal_stall.0).await;
-            self.journal_stall
-                .1
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    /// A cleanup's assignment kept beside its journal record (to run it again after a
+    /// restart, decision 248); nothing for a task without a cleanup.
+    async fn keep_for_cleanup(&self, prepared: &Prepared) -> std::io::Result<()> {
+        let Prepared {
+            assign,
+            spec,
+            external,
+            ..
+        } = prepared;
+        if spec.task.cleanup.is_none() {
+            return Ok(());
         }
-        if spec.task.cleanup.is_some() {
-            let mut assign = assign.clone();
-            if let Some(inputs) = external {
-                assign.inputs_json = inputs.to_vec();
-                assign.inputs_external = false;
-            }
-            let kept = KeptAttempt {
-                assign,
-                code_dir: spec.code_dir.clone(),
-                code_hash: self.code_hash_of(spec),
-                root_copies: spec.root_copies.clone(),
-                script_dir: spec.script_dir.clone(),
-            };
-            let journal = self.journal.clone();
-            let id = spec.attempt_id.clone();
-            tokio::task::spawn_blocking(move || journal.keep(&id, &kept))
-                .await
-                .map_err(std::io::Error::other)
-                .and_then(|kept| kept)?;
+        let mut assign = assign.clone();
+        if let Some(inputs) = external {
+            assign.inputs_json.clone_from(inputs);
+            assign.inputs_external = false;
         }
-        self.record(&spec.attempt_id, JournalRecord::Running(None))
+        let kept = KeptAttempt {
+            assign,
+            code_dir: spec.code_dir.clone(),
+            code_hash: self.code_hash_of(spec),
+            root_copies: spec.root_copies.clone(),
+            script_dir: spec.script_dir.clone(),
+        };
+        let journal = self.journal.clone();
+        let id = spec.attempt_id.clone();
+        tokio::task::spawn_blocking(move || journal.keep(&id, &kept))
             .await
+            .map_err(std::io::Error::other)
+            .and_then(|kept| kept)
     }
 
     /// The hash of the code `spec` was planned against.
@@ -3336,11 +3714,21 @@ impl<E: Executor> Agent<E> {
 
     /// Why this worker takes no new attempt now, if it doesn't: draining, or no free slot.
     fn cannot_take(&self, wait_step: bool) -> Option<(pb::RejectReason, &'static str)> {
+        self.cannot_take_held(wait_step, &Held::default())
+    }
+
+    /// As [`Self::cannot_take`], with `held`'s slots taken too (a group's assignments not yet
+    /// started, M5.1b).
+    fn cannot_take_held(
+        &self,
+        wait_step: bool,
+        held: &Held,
+    ) -> Option<(pb::RejectReason, &'static str)> {
         if self.drain.is_some() {
             Some((pb::RejectReason::Draining, "the worker is draining"))
-        } else if wait_step && self.free_watcher_slots() == 0 {
+        } else if wait_step && self.free_watcher_slots() <= held.wait_steps {
             Some((pb::RejectReason::NoFreeSlot, "no free watcher slot"))
-        } else if !wait_step && self.free_slots() == 0 {
+        } else if !wait_step && self.free_slots() <= held.tasks {
             Some((pb::RejectReason::NoFreeSlot, "no free slot"))
         } else {
             None
@@ -3680,27 +4068,10 @@ impl<E: Executor> Agent<E> {
                 identity,
                 forked,
             } => {
-                // `Started` went before the process existed, as `spawn`; a repeat sets the
-                // method (the master keeps the first start time).
-                let ended = self.cleaning.get(&attempt_id).cloned();
-                if forked && ended.is_none() {
-                    self.forked.insert(attempt_id.clone());
-                    if let Some((to_master, _)) = &link {
-                        let _ = to_master.send(forked_started(&attempt_id));
-                    }
-                }
-                let record = match ended {
-                    Some(ended) => JournalRecord::Cleaning(ended, Some(identity)),
-                    None => JournalRecord::Running(Some(identity)),
-                };
-                let began = std::time::Instant::now();
-                let recorded = self.record(&attempt_id, record).await;
-                if recorded.is_ok() {
-                    self.metrics.journal_written("process", began.elapsed());
-                }
-                if let Err(error) = recorded {
-                    tracing::warn!(attempt_id, %error, "can't record the task's process");
-                }
+                let to_master = link.as_ref().map(|(to_master, _)| *to_master);
+                let (record, repeat) = self.spawned_record(&attempt_id, identity, forked);
+                self.keep_processes(vec![(attempt_id, record, repeat)], to_master)
+                    .await;
             }
             Done::TaskEnded(finished) => {
                 self.task_ended(finished, link.map(|(to_master, _)| to_master))

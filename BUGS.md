@@ -56,8 +56,20 @@ step touches their code or the user schedules them.
 | 1 | B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load | 2 | low | possible | tests |
 | 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-| 4 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
-| 5 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+| 4 | B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected) | 1 | low | rare | tests |
+| 5 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
+| 6 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+
+## B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, tests (score 1): a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies: `pool timed out while waiting for an open connection` at the master's start.
+In `make check` on 2026-11-13 (M5.1b's code; the agent alone changed) the test waited too long
+for `schedr master: gRPC on` in the master's log; the master had failed with `database error:
+pool timed out while waiting for an open connection`, and the harness reported an I/O stall of
+about 2.4 s (497 ms full) across the system since the cluster started. The full `make check`
+right after passed it. Not known: whether the pool's acquire timeout is too short for a start
+under such a stall, or the container's Postgres was itself stalled. First step: the master's
+start-up pool timeout against the stall the harness measures, in a loop of the test under load.
 
 ## B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load
 

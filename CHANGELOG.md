@@ -5,6 +5,19 @@ on, the database schema changes only through new migrations and the protocol bet
 processes only additively within a major version (decision 456); 0.1.0 was a preview, its
 schema and protocol changed in place (decision 156).
 
+## 1.1.0
+
+Not released yet: the notes grow with M5.1 (performance, metrics in the UI).
+
+### Fixed
+
+- **A worker could start a task after its cutoff** (B246, critical, found by Grok's review of
+  M5.1b). When a worker loses contact with the master, its cutoff is the moment it must stop
+  starting tasks, since the master may hand them to another worker from then on. An
+  assignment already in hand could still be started after the cutoff (in 1.0.0 one such
+  assignment, after the alive tick had noticed the cutoff), so the same task could run on two
+  workers. The worker now starts nothing once it is cut off.
+
 ## 1.0.0
 
 The first stable release (`Development Status :: 5 - Production/Stable`). From 1.0.0 on, the

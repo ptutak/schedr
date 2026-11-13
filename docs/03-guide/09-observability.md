@@ -93,11 +93,15 @@ A task's start crosses both sides, and each side times its own part (M5.1a). The
 On the worker, `schedr_worker_assign_to_started_seconds` runs from the agent's loop taking an
 `AssignTask` to its `Started` sent: the plan, the inputs and the journal record. An
 assignment the worker rejects isn't counted. `schedr_worker_journal_write_seconds{record}`
-times each write that kept a record on disk before the agent went on (a failed write
-isn't counted): `start` (an attempt,
-before its `Started`), `process` (its process's identity, once started) and `results` (a group
-of results). The agent sets the slot gauges (`schedr_worker_slots_used`,
-`schedr_worker_watcher_slots_used`) as each attempt starts or ends, not only at its alive tick.
+times each write that kept records on disk before the agent went on (a failed write isn't
+counted): `start` (the records of attempts before their `Started`s), `process` (their
+processes' identities, once started) and `results`. Each is written as a group: the
+assignments, started processes or results already waiting, up to 32, their files flushed
+together and the directory once, so a burst of 500 starts takes tens of writes, not 500. An
+assignment whose inputs the agent must fetch from the master first ends the group: those before
+it are started without waiting on that fetch. The agent sets the slot gauges
+(`schedr_worker_slots_used`, `schedr_worker_watcher_slots_used`) as each attempt starts or ends,
+not only at its alive tick.
 
 On the master, one lock guards the core: the round takes it, and so does each worker's turn
 of messages, a registration, a parse result, a stream's end. `schedr_master_core_lock_wait_seconds{by}`

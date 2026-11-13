@@ -52,8 +52,9 @@ const JOURNAL_WRITE: MetricDoc = MetricDoc {
     name: "worker_journal_write_seconds",
     kind: MetricKind::Histogram,
     labels: &["record"],
-    help: "How long the journal took to keep a record on disk, by record (start: an attempt \
-        before its `Started`; process: its process's identity; results: a group of results)",
+    help: "How long the journal took to keep records on disk, by record (start: a group of \
+        attempts before their `Started`s; process: a group of their processes' identities; \
+        results: a group of results)",
 };
 const MASTER_SAMPLE_AGE: MetricDoc = MetricDoc {
     name: "worker_master_sample_age_seconds",
