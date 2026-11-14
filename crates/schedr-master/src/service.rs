@@ -1645,8 +1645,9 @@ impl Master for Hub {
 
 /// The most messages of one worker handled in one turn of the master's lock: what is queued
 /// gets through together, and a long queue doesn't hold rounds and other workers up for long
-/// (at most this many `Finished`, each a few writes; the rest waits for the next turn).
-pub const MESSAGES_PER_TURN: usize = 40;
+/// (at most this many `Finished`, each a few writes; the rest waits for the next turn). 80 from
+/// M5.1e's stress runs (decision 484): bursts recorded fastest, steady throughput unchanged.
+pub const MESSAGES_PER_TURN: usize = 80;
 
 /// The most messages of a failed group handled one by one in a turn (M4B.3): the rest wait for
 /// the next, so a failing group doesn't hold the lock for 40 transactions.

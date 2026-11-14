@@ -112,12 +112,13 @@ done = 2026-11-14
 id = "M5.1e"
 title = "The turn size from data"
 scope = '''
-after M5.1c: the turn's limit and the limit per worker compared in one stress session (10, 20, 40, 80 and more messages a turn; `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`)
+after M5.1c: the turn's limit and the limit per worker compared in one stress session (10, 20, 40, 80 and more messages a turn; `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`). Built: sizes 10, 20, 40, 60, 80, 120 and 160 measured (stress 1, 13 and 23, one run each, the variable passed to the test cluster's master); the default 80 (decision 484): steady throughput within noise, bursts recorded fastest from 60, starts slower from 120
 '''
 done_when = '''
 the default set from the measured trade-off between start latency and throughput, the numbers in the stress guide
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1f"

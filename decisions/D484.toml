@@ -1,0 +1,17 @@
+title = "A worker's turn takes up to 80 messages"
+date = 2026-11-14
+by = "claude"  # the user left the choice to the measurements, rounded to fives
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+A worker's turn takes up to 80 messages by default (`MESSAGES_PER_TURN`, still
+`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), from M5.1e's stress runs of 10 to 160: steady
+throughput within noise at every size, a burst of 500 wait-step ends recorded fastest from 60
+up, and starts slower again from 120. Not chosen: 40 (bursts recorded later), 120 or more
+(slower starts).
+'''
+history = "JOURNAL.md#D484"
+step = "M5.1e"
+code = ["crates/schedr-master/src/service.rs::MESSAGES_PER_TURN", "crates/schedr-config/src/config.rs::HiddenLimits"]
+checked = 2026-11-14

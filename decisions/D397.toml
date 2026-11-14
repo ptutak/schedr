@@ -5,7 +5,7 @@ status = "active"
 topic = "workers"
 section = "Messages and transactions"
 summary = '''
-A worker's turn (up to 40 messages, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`) is reordered,
+A worker's turn (up to 80 messages since decision 484, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`) is reordered,
 `Started`s then `Finished`s, and each group is stored as one batch in one transaction; a failed
 group is redone one by one, at most 10 in a turn. The turn in one transaction with savepoints per
 group comes later, only if needed.

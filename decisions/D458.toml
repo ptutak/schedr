@@ -18,4 +18,4 @@ option.
 history = "JOURNAL.md#D458"  # <a id="D458"></a> starts its JOURNAL.md entry
 step = "1.0.0"
 code = ["python/schedr/runner/waiting.py::OVERRUN_LIMIT", "python/schedr/runner/waiting.py::set_poke_overruns", "crates/schedr-config/src/config.rs::poke_overruns"]
-checked = 2026-11-12
+checked = 2026-11-14

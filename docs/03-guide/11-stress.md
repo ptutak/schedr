@@ -459,3 +459,23 @@ for each DAG, and a repeat is acknowledged without a read or a write.
 
 The pokes' figure (7.75 s, then 4.4 s) is mostly where the file opens in their 5 s cycle, so
 the step is judged on the `await` steps (note 6).
+
+### The turn's size (M5.1e, 2026-11-14)
+
+How many of a worker's messages the master takes in one turn
+(`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), measured on an idle machine with one run of
+scenarios 1, 13 and 23 at each size (the variable passes through to the test cluster's master):
+
+| Size | 1: tasks/s | 1: start p99 | 13 forked: tasks/s | 13 forked: start p99 | 23: `await` p99 |
+|---|---|---|---|---|---|
+| 10 | 28.2 | 0.80 s | 18.9 | 0.53 s | 3.86 s |
+| 20 | 28.1 | 0.71 s | 19.6 | 0.45 s | 2.42 s |
+| 40 | 27.6 | 0.98 s | 19.5 | 0.49 s | 2.03 s |
+| 60 | 27.1 | 0.92 s | 19.1 | 0.48 s | 1.64 s |
+| **80** | 28.1 | 0.77 s | 19.6 | 0.50 s | 1.64 s |
+| 120 | 27.0 | 1.09 s | 18.6 | 1.24 s | 1.54 s |
+| 160 | 27.1 | 0.88 s | 19.0 | 0.50 s | 1.74 s |
+
+Steady throughput stays within about 4 % at every size, which is the runs' noise. The size
+shows in bursts: 500 wait steps ending at once are recorded in 3.9 s at 10 and in 1.6 s from 60
+up, while starts get slower again from 120. The default is 80 since then (decision 484).

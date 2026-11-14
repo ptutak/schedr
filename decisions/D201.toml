@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D201"
 step = "M4.7b2"
 also = ["workers", "configuration"]
 code = ["crates/schedr/src/roles.rs", "crates/schedr-agent/src/connection_env.rs::default_dir", "crates/schedr-agent/src/connection_env.rs::prepare", "crates/schedr-config/src/config.rs::connection_dir"]
-checked = 2026-11-13
+checked = 2026-11-14

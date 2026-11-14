@@ -217,7 +217,7 @@ gets the same item; `NOT_YET` waits for a later match.
 ## Between rounds: messages from workers
 
 Messages from workers are handled as they arrive, under the same lock, in order for each
-worker. A worker's messages that are already waiting are handled together, up to 40 in one turn
+worker. A worker's messages that are already waiting are handled together, up to 80 in one turn
 (`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), the rest in the worker's next turn. A turn takes
 the lock for each of its transactions on its own (decision 480), and checks each time that its
 stream is still the worker's: the round and other workers' turns get in between. (A task sends `Started` and
@@ -231,7 +231,7 @@ alone, as before.
 
 ```{mermaid}
 flowchart LR
-    turn[A turn: up to 40 waiting messages] --> sort{Message}
+    turn[A turn: up to 80 waiting messages] --> sort{Message}
     sort -->|Started| startGroup[Started group]
     sort -->|Finished| finishGroup[Finished group]
     sort -->|Heartbeat, Warnings| after[After the groups]

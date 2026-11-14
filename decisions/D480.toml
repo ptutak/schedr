@@ -17,4 +17,4 @@ Not chosen: decision 468's phases with barriers per worker.
 history = "JOURNAL.md#D480"
 step = "M5.1c1"
 code = ["crates/schedr-master/src/service.rs::turn"]
-checked = 2026-11-13
+checked = 2026-11-14

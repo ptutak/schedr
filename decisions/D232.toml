@@ -14,5 +14,5 @@ there is no migration.
 '''
 history = "archive/PROJECT.md#D232"
 step = "M4.8t"
-checked = 2026-11-12
+checked = 2026-11-14
 code = ["crates/schedr-config/src/config.rs::Timings"]

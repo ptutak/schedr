@@ -490,14 +490,14 @@ pub struct HiddenLimits {
 
 impl Default for HiddenLimits {
     /// 256 records of each kind, 4096 characters of each text, 1 MiB a notification, 100 runs
-    /// a retention transaction, 40 messages a turn.
+    /// a retention transaction, 80 messages a turn (decision 484).
     fn default() -> Self {
         Self {
             worker_report_records: 256,
             worker_report_text: 4096,
             notification_body: 1 << 20,
             retention_batch: 100,
-            messages_per_turn: 40,
+            messages_per_turn: 80,
             overridden: Vec::new(),
         }
     }

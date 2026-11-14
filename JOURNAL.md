@@ -946,3 +946,29 @@ change at all. The same baseline counted the statements (`make stress STRESS_STA
 8,000 in 35 s, 2.3 s of the server's time, so the database isn't busy; the work is round trips,
 and about 360 of the 500 wait steps' results were sent twice (the stress setup's 1 s heartbeat
 resends a result unacknowledged at two heartbeats), each repeat read again and ended to no effect.
+
+### <a id="D484"></a>2026-11-14: a worker's turn takes up to 80 messages (decision 484)
+
+- **Question:** M5.1e: how many of a worker's messages the master takes in one turn (40 since
+  M4B.3, `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), from measurements. The user left the
+  laptop idle and the choice to the numbers ("we'll not argue about that"), rounded to fives,
+  raising the size until it got worse, then a value between the best neighbours.
+- **Measured** (one run each, stress 1, 13 spawned and forked, 23; `tasks_per_s`, assigned to
+  started p99, 23's `await` p99):
+
+  | Size | 1: tasks/s | 1: start p99 | 13 forked: tasks/s | 13 forked: start p99 | 23: `await` p99 |
+  |---|---|---|---|---|---|
+  | 10 | 28.2 | 0.80 s | 18.9 | 0.53 s | 3.86 s |
+  | 20 | 28.1 | 0.71 s | 19.6 | 0.45 s | 2.42 s |
+  | 40 | 27.6 | 0.98 s | 19.5 | 0.49 s | 2.03 s |
+  | 60 | 27.1 | 0.92 s | 19.1 | 0.48 s | 1.64 s |
+  | 80 | 28.1 | 0.77 s | 19.6 | 0.50 s | 1.64 s |
+  | 120 | 27.0 | 1.09 s | 18.6 | 1.24 s | 1.54 s |
+  | 160 | 27.1 | 0.88 s | 19.0 | 0.50 s | 1.74 s |
+
+  Steady throughput moves within about 4 % at every size (noise); the size shows in bursts:
+  500 wait steps ending at once are recorded in 3.9 s at 10 and 1.6 s from 60 up. From 120 the
+  starts get slower again (scenario 13 forked 1.24 s at p99), and 160 is no better than 80.
+- **Chosen: 80** (Claude's, as the user asked): the burst recorded as fast as at any size, no
+  figure worse than the noise. Scenario 13 spawned (8.6 to 9.2 tasks a second) showed no trend.
+- **Not chosen:** 40 (a burst recorded 0.4 s later), 120 or 160 (slower starts, no gain).

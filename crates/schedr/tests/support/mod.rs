@@ -249,6 +249,10 @@ impl Cluster {
             .env("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "6s")
             .env("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "2s")
             .env("SCHEDR_DAG_PATH", self.root());
+        // A turn's size set from outside, for the stress runs comparing sizes (M5.1e).
+        if let Ok(size) = std::env::var("SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN") {
+            command.env("SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN", size);
+        }
         if self.ca.is_some() {
             command
                 .env("SCHEDR_CONFIG__TLS__MODE", "app")

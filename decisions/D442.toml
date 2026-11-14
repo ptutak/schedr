@@ -14,4 +14,4 @@ on its own clock; a lease under four heartbeats is refused. Not chosen: an ackno
 history = "JOURNAL.md#D442"
 step = "B225"
 code = ["crates/schedr-agent/src/master_time.rs::MasterTime", "crates/schedr-master/src/clock.rs::monotonic", "crates/schedr-master/src/service.rs::stamp_of", "crates/schedr-config/src/loader.rs::check_lease"]
-checked = 2026-11-13
+checked = 2026-11-14
