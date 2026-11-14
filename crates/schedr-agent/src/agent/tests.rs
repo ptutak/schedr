@@ -1078,7 +1078,8 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
 }
 
 /// Decision 463: a heartbeat says what the worker uses (a test's process: /proc is there); this
-/// executor has neither fork servers nor tasks measured.
+/// executor has neither fork servers nor tasks measured. Its CPU time may be 0: a process a few
+/// milliseconds old may not have used a clock tick yet (CI, 2026-11-14).
 fn assert_a_heartbeat_says_what_the_worker_uses(seen: &[pb::WorkerMessage]) {
     let usage = seen
         .iter()
@@ -1089,7 +1090,7 @@ fn assert_a_heartbeat_says_what_the_worker_uses(seen: &[pb::WorkerMessage]) {
         .expect("a heartbeat with its usage");
     let process = usage.process.expect("the agent's process");
     assert!(
-        process.resident_bytes > 0 && process.cpu_seconds > 0.0,
+        process.resident_bytes > 0 && process.cpu_seconds.is_finite() && process.cpu_seconds >= 0.0,
         "{process:?}"
     );
     assert_eq!(
