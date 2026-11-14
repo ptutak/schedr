@@ -1,10 +1,10 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-13
+updated = 2026-11-14
 
 in_progress = [
-    "M5.1a-M5.1e done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`); a turn's starts, wait-step clears and repeated results set-based or acknowledged only: stress 23's wait-step end recorded in 1.2 s (2.9 s), scenario 1 27.3 tasks/s (22.1), 6 26.7 (21.3). M5.1e: a turn takes up to 80 messages (D484, from stress runs of 10-160). Next M5.1f (the idle cost). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).",
+    "M5.1a-M5.1f1 done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`); a turn's starts, wait-step clears and repeated results set-based or acknowledged only. M5.1e: a turn takes up to 80 messages (D484). M5.1f1 (D485): one probe statement a round, a scheduled DAG's `next_fire_at` stored; idle standalone 1.9 statements/s (22.5), 0.3 % CPU (2.0 %), 23 switches/s (200). Next M5.1f2 (triggers and events in a round of their own, their moments stored, named events notified). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).",
     "For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).",
     "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",
     "Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.",
@@ -24,6 +24,6 @@ rules = [
 ]
 
 colleagues = """
-Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 15% after the 13 Nov reset by its script (12% confirmed by the user after M5.1b2). Usage logs in the skills' `USAGE.md`."""
+Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 25% of its week by its script after M5.1f1's review (2.7%). Usage logs in the skills' `USAGE.md`."""
 
 resume = "claude --resume 0f288ee8-d79c-4c85-9781-7c4774e2f509"

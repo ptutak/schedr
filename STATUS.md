@@ -3,28 +3,28 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-13)
+## Now (2026-11-14)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1f, The idle cost. Done when: an idle standalone's queries, wakeups and CPU measured before and after over 10 minutes (release build), the polls left each with a reason, the numbers in the guide; no start, round or trigger latency lost (stress 1, 9, 23)
+- **Next step:** M5.1f2, Triggers and events in a round of their own. Done when: the time from an event to its run measured idle and under load (stress 23 and the trigger scenarios), the numbers in the guide; a test per wake, and the trigger round getting in between a busy round's parts; no other latency lost
 - **Then:** M5.1g, M5.1h, M5.1i, M5.1j, M5.1k.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D485 (2026-11-14): each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
 - D484 (2026-11-14): a worker's turn takes up to 80 messages
 - N6 (2026-11-14): M5.1d judged on the recording of a wait step's end, not the pokes' figure
 - D483 (2026-11-13): a command is one transaction, the lock released between commands
 - N5 (2026-11-13): M5.1c2: what a round's commands spend (stress 13 and 23)
-- D481 (2026-11-13): the round's assignments set-based; tasks past the cap pending (decisions 481, 482)
+- M5.1f1 (2026-11-14): The idle cost: one probe a tick, the moments stored
 - M5.1e (2026-11-14): The turn size from data
 - M5.1d (2026-11-14): Pokes and rounds through PgBouncer
-- M5.1c3 (2026-11-13): A command one transaction, the lock released between commands
 
 ## In progress
 
-- M5.1a-M5.1e done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`); a turn's starts, wait-step clears and repeated results set-based or acknowledged only: stress 23's wait-step end recorded in 1.2 s (2.9 s), scenario 1 27.3 tasks/s (22.1), 6 26.7 (21.3). M5.1e: a turn takes up to 80 messages (D484, from stress runs of 10-160). Next M5.1f (the idle cost). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
+- M5.1a-M5.1f1 done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`); a turn's starts, wait-step clears and repeated results set-based or acknowledged only. M5.1e: a turn takes up to 80 messages (D484). M5.1f1 (D485): one probe statement a round, a scheduled DAG's `next_fire_at` stored; idle standalone 1.9 statements/s (22.5), 0.3 % CPU (2.0 %), 23 switches/s (200). Next M5.1f2 (triggers and events in a round of their own, their moments stored, named events notified). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
 - Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
@@ -44,7 +44,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Colleagues
 
-Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 15% after the 13 Nov reset by its script (12% confirmed by the user after M5.1b2). Usage logs in the skills' `USAGE.md`.
+Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 25% of its week by its script after M5.1f1's review (2.7%). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

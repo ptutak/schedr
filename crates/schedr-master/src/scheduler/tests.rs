@@ -134,6 +134,41 @@ async fn with_catchup_missed_fire_times_run_in_order() {
 }
 
 #[tokio::test]
+async fn while_due_runs_wait_the_stored_time_is_the_first_of_them_and_isnt_rewritten() {
+    // Decision 485: a DAG catching up at its `max_active_runs` stays due by its first waiting
+    // fire time, the same each round (no write a round), and once caught up its next one.
+    let (scheduler, db) = scheduler_with(dag(&json!({"trigger": {
+            "kind": "cron", "expression": "0 3 * * *", "timezone": "UTC", "catchup": true,
+            "start": "2026-10-01T00:00:00Z"
+        }, "max_active_runs": 2})))
+    .await;
+    db.set_paused(&sync(), false).await.unwrap();
+    let now = ts("2026-10-04T08:00:00Z");
+    scheduler.pass(now).await.unwrap();
+    let waiting = [(sync(), Some(ts("2026-10-03T03:00:00Z")))].into();
+    assert_eq!(db.next_fires().await.unwrap(), waiting);
+    for second in 1..3 {
+        let later = now + jiff::SignedDuration::from_secs(second);
+        assert_eq!(
+            planned(&scheduler.pass(later).await.unwrap()),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            db.next_fires().await.unwrap(),
+            waiting,
+            "no place: the same time"
+        );
+    }
+    execute(&db, "UPDATE runs SET state = 'success'").await;
+    scheduler.pass(now).await.unwrap();
+    assert_eq!(
+        db.next_fires().await.unwrap(),
+        [(sync(), Some(ts("2026-10-05T03:00:00Z")))].into(),
+        "caught up: its next fire time"
+    );
+}
+
+#[tokio::test]
 async fn a_fire_time_a_backfill_or_manual_run_covers_gets_no_scheduled_run() {
     // Codex's case: the latest fire time backfilled (or run by hand) before the pass reaches
     // it, with a place free: no second run of the same period.
@@ -550,10 +585,7 @@ async fn timeline_marking(scheduler: &Scheduler, db: &Database, mark_unpause: bo
 
 #[tokio::test]
 async fn quiet_dags_create_the_same_runs_at_the_same_times_as_visiting_every_dag() {
-    let every_round = QuietSettings {
-        enabled: false,
-        ..QuietSettings::default()
-    };
+    let every_round = QuietSettings { enabled: false };
     let db = timeline_db().await;
     let full = timeline(
         &Scheduler::with_quiet(db.clone(), every_round, Wakes::default()),
@@ -622,56 +654,43 @@ async fn a_queued_run_wakes_its_quiet_dag_whatever_stored_it() {
 }
 
 #[tokio::test]
-async fn the_sweep_catches_a_missed_mark_within_the_interval() {
-    let every_round = QuietSettings {
-        enabled: false,
-        ..QuietSettings::default()
-    };
+async fn an_unpause_whose_mark_is_missed_is_found_by_its_cleared_fire_time() {
+    // Decision 485: unpausing clears the DAG's stored next fire time, so the next round
+    // visits it whatever marked it: the same runs at the same times as visiting every DAG.
+    let every_round = QuietSettings { enabled: false };
     let db = timeline_db().await;
     let full = timeline(
         &Scheduler::with_quiet(db.clone(), every_round, Wakes::default()),
         &db,
     )
     .await;
-    // The same timeline, the unpause's mark missed: only the sweep finds `later`.
     let db = timeline_db().await;
     let quiet = Scheduler::with_quiet(db.clone(), QuietSettings::default(), Wakes::default());
     let metrics = crate::metrics::MasterMetrics::default();
     quiet.set_metrics(metrics.clone());
     let missed = timeline_marking(&quiet, &db, false).await;
-    let sweeps = metrics
+    let unknown = metrics
         .dag_wakes
         .get_or_create(&crate::metrics::ReasonLabels {
-            reason: "sweep".to_owned(),
+            reason: "unknown".to_owned(),
         })
         .get();
-    assert!(sweeps >= 1, "the sweep found nothing");
-    // Every other DAG's runs are the same; `later`'s first run comes at most an interval
-    // (and a round) late, for the same fire time, and the rest of its runs are the same.
-    let others = |runs: &[String]| -> Vec<String> {
-        runs.iter()
-            .filter(|r| !r.starts_with("later "))
-            .cloned()
-            .collect()
-    };
-    assert_eq!(others(&missed), others(&full));
-    let later = |runs: &[String]| -> Vec<String> {
-        runs.iter()
-            .filter(|r| r.starts_with("later "))
-            .cloned()
-            .collect()
-    };
-    let (late, on_time) = (later(&missed), later(&full));
-    assert_eq!(late.len(), on_time.len());
-    assert_eq!(late[1..], on_time[1..]);
-    let field = |run: &str, name: &str| -> Timestamp {
-        let rest = run.split(&format!(" {name} ")).nth(1).unwrap();
-        rest.split(' ').next().unwrap().parse().unwrap()
-    };
-    assert_eq!(field(&late[0], "for"), field(&on_time[0], "for"));
-    let delay = field(&late[0], "at").duration_since(field(&on_time[0], "at"));
+    assert!(unknown >= 1, "no visit for a cleared fire time");
+    assert_eq!(missed, full);
+    // What is stored is what a visit of every DAG from scratch stores: nothing changes.
+    let stored = db.next_fires().await.unwrap();
     assert!(
-        delay > jiff::SignedDuration::ZERO && delay <= jiff::SignedDuration::from_secs(80),
-        "{delay:?}"
+        stored.values().all(Option::is_some),
+        "every scheduled DAG's next fire time stored: {stored:?}"
     );
+    let end = ts("2026-10-27T01:00:00Z") + jiff::SignedDuration::from_secs(540 * 20);
+    Scheduler::with_quiet(
+        db.clone(),
+        QuietSettings { enabled: false },
+        Wakes::default(),
+    )
+    .pass(end)
+    .await
+    .unwrap();
+    assert_eq!(db.next_fires().await.unwrap(), stored);
 }

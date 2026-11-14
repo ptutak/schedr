@@ -8,6 +8,22 @@ use crate::database::{Database, DbError};
 use crate::query::{db_time, in_tx, on_pool, optional_time, sql, to_json};
 use crate::runs::NewRun;
 
+/// The rows of queued event runs: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! queued_event_from {
+    () => {
+        "FROM runs WHERE state = 'queued' AND kind = 'event'"
+    };
+}
+pub(crate) use queued_event_from;
+
+/// The rows the master's trigger pass looks after: a switched-on trigger of an event or `RunOf` DAG, or a trigger running on a worker: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! trigger_pass_from {
+    () => {
+        "FROM dag_triggers WHERE (NOT paused AND kind IN ('run_of', 'event')) OR EXISTS (SELECT 1 FROM trigger_progress p WHERE p.instance_id IS NOT NULL)"
+    };
+}
+pub(crate) use trigger_pass_from;
+
 #[cfg(test)]
 mod tests;
 
@@ -432,8 +448,14 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the query fails.
     pub async fn queued_event_runs(&self) -> Result<Vec<(String, i64)>, DbError> {
-        const COUNT: &str = "SELECT dag_id, COUNT(*) FROM runs \
-            WHERE state = 'queued' AND kind = 'event' GROUP BY dag_id";
+        const COUNT: &str = concat!(
+            "SELECT dag_id, COUNT(*) ",
+            queued_event_from!(),
+            " GROUP BY dag_id"
+        );
+        if self.skipped(crate::probe::Check::QueuedEventRuns).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<(String, i64)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, COUNT)).fetch_all(pool).await?
         });

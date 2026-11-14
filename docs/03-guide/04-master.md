@@ -62,7 +62,7 @@ and holds up the workers' messages and the lease:
 |---|---|---|
 | 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. Each command is one transaction, its decision with it, and the round takes the lock for each command on its own (decision 483): a command whose transaction fails leaves nothing stored and sends nothing, and stays pending. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again (if finding them fails, it is tried again each round). |
-| 3 | **Scheduler** | Visits the [busy DAGs](#busy-and-quiet-dags) every round and the quiet ones woken this round (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), and starts queued runs while the DAG is under `max_active_runs`. Its trigger passes also start runs for matching `RunOf` and posted named events. |
+| 3 | **Scheduler** | Visits the DAGs [due](#busy-and-quiet-dags): scheduled ones whose stored next fire time has come or isn't known, those with queued runs, and those a command, an ended run or a new version marked (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), starts queued runs while the DAG is under `max_active_runs`, and stores when to visit each scheduled DAG next. Its trigger passes also start runs for matching `RunOf` and posted named events. |
 | 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after the worker lease (60 s by default) (not one whose `Started` has arrived and waits to be handled, nor one whose worker is disconnected within its lease or, after a restart, not registered again yet: it may come back with the task done); assigns ready tasks to workers (resource cleanups first, then oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). [Resource cleanups](../02-dags/16-resources.md) bypass those limits. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. Once a round has made its 50 assignments it stops going through the ready tasks: the rest show "pending: waiting for a round with room" (up to 500 a round) and go in the next rounds; a wait step among them switched off or out of `max_wait` still ends in that round (decision 481). The round reads its ready wait steps' switch-off marks and first starts once, and claims its assignments together, in a few statements (decision 482). |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than `[master] parse_job_timeout` (10 minutes by default) to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for the [worker lease](14-timings.md#fixed-timings) (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one (a task with `cleanup_anywhere` only after the cancel grace and the cleanup move wait: the worker may have started it and be stopping it). |
@@ -98,8 +98,8 @@ and the task is assigned again. A cancel is sent again when the worker reconnect
 the attempt.
 
 A round that fails (the database returns an error) is logged, and the next one goes on. The
-scheduler does not keep that round's place: its wake marks are put back, and the sweep
-and the ID check do not move forward, so the next round tries that visit again (a term's
+scheduler does not keep that round's place: its wake marks are put back, and the next fire
+times it didn't store are still due, so the next round tries that visit again (a term's
 first round visits every DAG again). What it wrote
 before the error stays done, and **the messages it had built are still sent**: each
 is built only after the write it stands for is stored, so none announces something the
@@ -138,53 +138,74 @@ restarts the master, which reads its state back (see [State and failures](07-fai
 
 ### Busy and quiet DAGs
 
-Which DAGs the scheduler visits lives in the leading master's memory. It starts empty, so
-the first round of a leadership term visits every DAG. A new term is a new process: the
-standby that takes the lease has none of the previous master's memory. After that first
-round, a round visits the busy DAGs and the quiet ones something woke.
+Which DAGs a round visits comes from the database, not from the master's memory, so a
+standby that takes over decides the same way. A scheduled DAG (`cron`, `every`, `once`)
+stores **when to visit it next**, `next_fire_at` on its trigger's row:
 
-A visit is **active** when a run is running or queued, or the round created one. An active
-visit marks the DAG **busy**, and every later round visits it until
-the [quiet wait](14-timings.md#fixed-timings) (60 s) after the last active visit. A DAG that was not busy — one
-just learned, or one already quiet — turns **quiet** on an idle visit at once, unless a fire
-time is within the [wake-ahead time](14-timings.md#fixed-timings) (60 s): then the visit leaves it busy. A
-quiet DAG is skipped until it wakes. A paused DAG has no timer. A visit that finds it paused
-makes it quiet once that busy wait has elapsed; until then rounds still visit it.
+- after a visit, its next fire time, or none ahead (a far date, 9999-01-01);
+- the first fire time still due while due runs **wait**: more than the 10 a round creates, a
+  fire time waiting for a free place under `max_active_runs`, or one behind a run of another
+  kind that may still fail (a run that succeeded takes the time for good). It has come, so
+  every round visits the DAG, and it stays the same until that run is created: no write a
+  round;
+- a time that has come while the DAG is **held** (its file fails to import), so every round
+  sees whether the hold lifted;
+- **unknown** (empty) when its switch changes: a new or changed trigger, pausing, unpausing.
 
-What wakes a quiet DAG:
+A round visits the scheduled DAGs whose time has come or is unknown, and the DAGs with a
+run in `queued`, whatever stored it (a manual, chained, event or backfill run). The ones
+something marked in this master are visited too:
 
-- **Its timer.** The next fire time (from the DAG's start, and within its end) less
-  the [wake-ahead time](14-timings.md#fixed-timings). That visit leaves it busy, and it stays busy while a fire time is
-  still that close. A paused DAG, or one with no next fire time, has no timer.
-- **A queued run.** Each round asks which DAGs have a run in `queued`, so a manual run wakes
-  its DAG whatever stored it, and a chained, event or backfill run will too. The DAG is
-  visited in that same pass.
-- **A run ended.** Finishing a run wakes its DAG for the next round, when a queued run can
-  take the freed place under `max_active_runs`. Cancelling or retrying needs no mark of its
-  own: the run wakes the DAG when it ends.
-- **A command** about the DAG: trigger, pause or unpause, applied earlier in the same round.
+- **A run ended.** Its DAG, when a queued run can take the freed place under
+  `max_active_runs`. Cancelling or retrying needs no mark of its own: the run wakes the DAG
+  when it ends.
+- **A command** about the DAG (trigger, pause, unpause), applied earlier in the same round.
 - **A new version**, or a removed DAG that came back, stored by discovery between rounds.
 
-Two safety nets bound a missed wake by about the [quiet DAG full pass interval](14-timings.md#fixed-timings) (60 s):
+The rest are **quiet**: not visited. A paused DAG is never due by its schedule. The
+leadership term's first round visits every DAG and stores each one's time. A visit that
+finds nothing to do creates nothing: a scheduled run is unique for its `planned_for`, so a
+needless visit costs time, never runs.
 
-- **The sweep.** Each round also visits a slice of the quiet DAGs, those visited longest ago
-  (a tie goes to the smaller DAG ID). The slice is the share of them that the time since the
-  last successful round is of the interval, counted in DAG-milliseconds with the remainder
-  carried to the next round. 600 quiet DAGs and a round a second: 10 a round. One quiet DAG:
-  once a minute. A burst of rounds sweeps the same number per minute.
-- **The ID check.** Once per that interval, one query reads every active DAG's ID and current
-  version, without definitions or runs. A DAG the memory does not know, or whose version
-  differs, is visited. A DAG that is gone (removed, or in conflict) is forgotten. The same
-  version is not a visit: a missed unpause is the sweep's to find, or the unpause command's.
+`[master] quiet_dags` is on by default. Set it to `false` and every round visits every DAG.
+A failed scheduler pass puts its marks back ([above](#rounds)), and the times it didn't store
+are still due, so the next round makes that visit again.
 
-`[master] quiet_dags` is on by default. Set it to `false` and every round visits every DAG,
-as before these settings existed. The three times above are the wait after a DAG was seen
-active, how early its timer fires, and how long the sweep and the ID check take to cover
-every DAG.
+### An idle round reads one statement
 
-A failed scheduler pass puts the marks back and does not move the sweep or the ID check
-forward ([above](#rounds)), so the next round tries that visit again. Visiting a DAG that
-had nothing to do creates nothing: a scheduled run is unique for its `planned_for`.
+Each round begins with one statement, the **probe**, that asks the database, for each read
+the round would make, whether that read would find anything: commands to apply, queued
+runs, scheduled DAGs due, runs just started, retries due, tasks ready, attempts to take back
+or move, triggers to look after. A read whose answer is no isn't made. A write the round makes
+for its later parts (a run started, then its tasks, then their assignment) takes the probe
+again before the next read, so those parts happen in the same round.
+
+A round's parts each run at their own time, a little later than the last. The probe looks
+one tick ahead: what comes due before the next tick (a task ready, a retry, a fire time) is
+found, so the parts share one probe. A read for a time past that, in a round that ran long,
+takes the probe again for its own time: work a part stores is found by the next part.
+
+Each check is its read's own condition, so the two can't disagree. A read that takes a
+value the probe doesn't have (a worker's cutoff, say) is checked without it: the check
+answers yes more often than the read finds something, never less. Only the master's rounds
+are cut this way; a worker's messages and the API read as before.
+
+An idle standalone (the examples, SQLite, a release build, measured over 10 minutes) makes
+about two statements a second, 22.5 before the probe; it uses 0.3 % of a core (2.0 %), switches
+context about 23 times a second (200) and writes about 4 MiB in 10 minutes, as before: the
+writes are the lease, the node row and heartbeats. The statements are the probe and the loops
+that run on their own intervals, each needed while idle:
+
+| Loop | Interval | Why it runs while idle |
+|---|---|---|
+| Lease renewal and its check | 10 s | Keeps the lead; a standby takes over without it. |
+| The master's node row | 10 s | The UI's list of nodes; stale rows removed. |
+| Outbox | 5 s | Delivers notifications written by other processes, and retries failed ones. |
+| Gauges | 15 s | Run, task and worker counts for metrics. |
+| A worker's last heartbeat | at most every 10 s | Shown in the UI's workers list (liveness itself is kept in memory). |
+
+A switched-on `RunOf` or event trigger still has the trigger pass read every round, until the
+triggers' round of their own (M5.1f2).
 
 ## When a task is ready
 

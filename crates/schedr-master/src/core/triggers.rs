@@ -129,6 +129,11 @@ impl MasterCore {
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), CoreError> {
+        // Nothing for the pass: no trigger it looks after is switched on or running (decision
+        // 485).
+        if self.db.skipped(schedr_db::probe::Check::Triggers).await? {
+            return Ok(());
+        }
         let records = self.db.triggers().await?;
         let active = self.db.active_dags().await?;
         let queued: BTreeMap<String, i64> =

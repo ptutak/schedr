@@ -412,30 +412,44 @@ impl Hub {
         self.core_for("restore").await.restore(now).await
     }
 
-    /// One tick of the master's loop, its messages delivered.
+    /// One tick of the master's loop, its messages delivered; its probe looks no time ahead.
     ///
     /// # Errors
     ///
     /// The core's failure (the next tick goes on).
     pub async fn tick(&self) -> Result<(), CoreError> {
+        self.tick_ahead(Duration::ZERO).await
+    }
+
+    /// As [`Self::tick`], its probe looking `ahead` (the loop's tick interval: what comes due
+    /// before the next tick is found, so the round's parts share one probe, decision 485).
+    ///
+    /// # Errors
+    ///
+    /// The core's failure (the next tick goes on).
+    pub async fn tick_ahead(&self, ahead: Duration) -> Result<(), CoreError> {
         // The lock taken for each part on its own, so a worker's turn gets in between them
         // (decision 469), each part at the time it runs. What a part built before a failure is
-        // delivered too (B7); a failed part ends the round, as before.
-        for part in RoundPart::ALL {
-            if part == RoundPart::Commands {
-                self.commands().await?;
-                continue;
+        // delivered too (B7); a failed part ends the round, as before. The round's reads the
+        // probe finds empty are skipped (decision 485): an idle tick is one statement.
+        Box::pin(self.db.in_round((self.clock)(), ahead, async {
+            for part in RoundPart::ALL {
+                if part == RoundPart::Commands {
+                    self.commands().await?;
+                    continue;
+                }
+                let mut outgoing = Vec::new();
+                let result = self
+                    .core_for("round")
+                    .await
+                    .round_part(part, (self.clock)(), &mut outgoing)
+                    .await;
+                self.deliver(outgoing).await;
+                result?;
             }
-            let mut outgoing = Vec::new();
-            let result = self
-                .core_for("round")
-                .await
-                .round_part(part, (self.clock)(), &mut outgoing)
-                .await;
-            self.deliver(outgoing).await;
-            result?;
-        }
-        Ok(())
+            Ok(())
+        }))
+        .await
     }
 
     /// The round's commands part, the core's lock taken for each command on its own (decision
@@ -657,16 +671,16 @@ impl Hub {
                 Wake::RoundDue => ticks.reset(),
                 Wake::Tick => {}
             }
-            self.timed_tick().await;
+            self.timed_tick(interval).await;
             round_due = None;
             last_round = Some(tokio::time::Instant::now());
         }
     }
 
     /// A round, its duration observed.
-    async fn timed_tick(&self) {
+    async fn timed_tick(&self, ahead: Duration) {
         let started = std::time::Instant::now();
-        match self.tick().await {
+        match self.tick_ahead(ahead).await {
             Ok(()) => self.problems.clear(ProblemKind::Round),
             Err(error) => {
                 tracing::error!(%error, "master tick failed");

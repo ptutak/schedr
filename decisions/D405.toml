@@ -13,4 +13,4 @@ that fails later leaves its day without a scheduled run: it is rerun by hand.
 history = "JOURNAL.md#D405"
 step = "M4.12b"
 code = ["crates/schedr-master/src/scheduler.rs::due_runs", "crates/schedr-master/src/planning.rs::scheduled_runs_except"]
-checked = 2026-11-13
+checked = 2026-11-14

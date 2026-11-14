@@ -15,6 +15,63 @@ use uuid::Uuid;
 use crate::database::{Database, DbError};
 use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, sql_text};
 
+/// The rows of open assignments not started yet, whenever and wherever (the read's cutoff and
+/// workers left out: its check says yes more often, never less; decision 485).
+macro_rules! unstarted_any_time_from {
+    () => {
+        "FROM attempts a WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.started_at IS NULL"
+    };
+}
+pub(crate) use unstarted_any_time_from;
+
+/// The rows of moved cleanups not started yet, whenever and wherever (as above).
+macro_rules! unstarted_cleanups_any_time_from {
+    () => {
+        "FROM attempts a WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.moved_at IS NOT NULL"
+    };
+}
+pub(crate) use unstarted_cleanups_any_time_from;
+
+/// The rows of a replaced incarnation's open attempts: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! replaced_from {
+    () => {
+        "FROM attempts WHERE status IS NULL AND replaced_at IS NOT NULL"
+    };
+}
+pub(crate) use replaced_from;
+
+/// The rows of unschedulable instances of running runs: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! unschedulable_from {
+    () => {
+        "FROM task_instances t JOIN runs r ON r.id = t.run_id WHERE t.state = 'unschedulable' AND r.state = 'running'"
+    };
+}
+pub(crate) use unschedulable_from;
+
+/// The rows of open `TriggerDagOperator` attempts: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! chained_from {
+    () => {
+        "FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id JOIN runs r ON r.id = t.run_id LEFT JOIN runs c ON c.id = a.chained_run_id WHERE a.status IS NULL AND a.chained_run_id IS NOT NULL"
+    };
+}
+pub(crate) use chained_from;
+
+/// The rows queued for assignment at `$1`: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! ready_from {
+    () => {
+        "FROM task_instances t JOIN runs r ON r.id = t.run_id JOIN dag_versions v ON v.id = r.dag_version_id JOIN parse_results p ON p.id = v.parse_result_id WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' AND t.cancel_requested_at IS NULL"
+    };
+}
+pub(crate) use ready_from;
+
+/// The rows of moved cleanups waiting for a worker, whenever they may go: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! waiting_cleanups_any_time_from {
+    () => {
+        "FROM attempts a WHERE a.status IS NULL AND a.worker_id IS NULL AND a.chained_run_id IS NULL"
+    };
+}
+pub(crate) use waiting_cleanups_any_time_from;
+
 /// The most tasks one query reads the outputs of.
 const OUTPUTS_PER_QUERY: usize = 500;
 
@@ -297,16 +354,16 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
-        const READY: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
+        const READY: &str = concat!(
+            "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
             {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
-            t.queued_reason, p.schedr_version, t.map_index, r.cancel_requested_at IS NOT NULL \
-            FROM task_instances t \
-            JOIN runs r ON r.id = t.run_id \
-            JOIN dag_versions v ON v.id = r.dag_version_id \
-            JOIN parse_results p ON p.id = v.parse_result_id \
-            WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' \
-            AND t.cancel_requested_at IS NULL \
-            ORDER BY t.ready_at, t.id";
+            t.queued_reason, p.schedr_version, t.map_index, r.cancel_requested_at IS NOT NULL ",
+            ready_from!(),
+            " ORDER BY t.ready_at, t.id"
+        );
+        if self.skipped_at(crate::probe::Check::Ready, now).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, READY))
                 .bind(db_time(now))
@@ -528,14 +585,15 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or a row doesn't read.
     pub async fn chained_attempts(&self) -> Result<Vec<ChainedAttempt>, DbError> {
-        const OPEN: &str = "SELECT a.id{text}, t.id{text}, t.run_id{text}, t.task_id, \
+        const OPEN: &str = concat!(
+            "SELECT a.id{text}, t.id{text}, t.run_id{text}, t.task_id, \
             t.map_index, {ts<}a.assigned_at{>ts}, a.chained_run_id{text}, c.state, \
             r.dag_version_id{text}, \
             (r.cancel_requested_at IS NOT NULL OR t.cancel_requested_at IS NOT NULL), \
-            r.kind, {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, {ts<}c.ended_at{>ts} \
-            FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
-            JOIN runs r ON r.id = t.run_id LEFT JOIN runs c ON c.id = a.chained_run_id \
-            WHERE a.status IS NULL AND a.chained_run_id IS NOT NULL ORDER BY a.assigned_at, a.id";
+            r.kind, {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, {ts<}c.ended_at{>ts} ",
+            chained_from!(),
+            " ORDER BY a.assigned_at, a.id"
+        );
         type Row = (
             String,
             String,
@@ -552,6 +610,9 @@ impl Database {
             String,
             Option<String>,
         );
+        if self.skipped(crate::probe::Check::ChainedAttempts).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, OPEN)).fetch_all(pool).await?
         });
@@ -768,8 +829,14 @@ impl Database {
     ///
     /// [`DbError`] if the query fails.
     pub async fn replaced_attempts(&self) -> Result<Vec<String>, DbError> {
-        const REPLACED: &str = "SELECT id{text} FROM attempts \
-            WHERE status IS NULL AND replaced_at IS NOT NULL ORDER BY replaced_at, id";
+        const REPLACED: &str = concat!(
+            "SELECT id{text} ",
+            replaced_from!(),
+            " ORDER BY replaced_at, id"
+        );
+        if self.skipped(crate::probe::Check::ReplacedAttempts).await? {
+            return Ok(Vec::new());
+        }
         Ok(on_pool!(self, |pool, backend| {
             sqlx::query_scalar(sql(backend, REPLACED))
                 .fetch_all(pool)
@@ -1066,6 +1133,9 @@ impl Database {
         except_workers: &[String],
         limit: u32,
     ) -> Result<Vec<StoredAttempt>, DbError> {
+        if self.skipped(crate::probe::Check::UnstartedCleanups).await? {
+            return Ok(Vec::new());
+        }
         let except = serde_json::to_string(except_workers).unwrap_or_else(|_| "[]".to_owned());
         let query = UNSTARTED_CLEANUPS;
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
@@ -1099,8 +1169,13 @@ impl Database {
             WHERE a.status IS NULL AND a.worker_id IS NULL AND a.chained_run_id IS NULL \
             AND a.cleanup_not_before <= $1{ts} \
             ORDER BY a.assigned_at, a.id";
-        const IDS: &str = "SELECT a.id{text}, a.task_instance_id{text} FROM attempts a \
-            WHERE a.status IS NULL AND a.worker_id IS NULL AND a.chained_run_id IS NULL";
+        const IDS: &str = concat!(
+            "SELECT a.id{text}, a.task_instance_id{text} ",
+            waiting_cleanups_any_time_from!()
+        );
+        if self.skipped(crate::probe::Check::WaitingCleanups).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<ReadyRow> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WAITING))
                 .bind(db_time(now))
@@ -1196,6 +1271,9 @@ impl Database {
         except_workers: &[String],
         limit: u32,
     ) -> Result<Vec<StoredAttempt>, DbError> {
+        if self.skipped(crate::probe::Check::Unstarted).await? {
+            return Ok(Vec::new());
+        }
         let except = serde_json::to_string(except_workers).unwrap_or_else(|_| "[]".to_owned());
         let query = UNSTARTED_ATTEMPTS;
         let rows: Vec<AttemptRow> = on_pool!(self, |pool, backend| {
@@ -1735,10 +1813,15 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn unschedulable_instances(&self) -> Result<Vec<Unschedulable>, DbError> {
-        const WAITING: &str = "SELECT r.id{text}, t.task_id, t.map_index, \
-            r.dag_version_id{text}, {ts<}t.updated_at{>ts} FROM task_instances t \
-            JOIN runs r ON r.id = t.run_id \
-            WHERE t.state = 'unschedulable' AND r.state = 'running' ORDER BY t.updated_at";
+        const WAITING: &str = concat!(
+            "SELECT r.id{text}, t.task_id, t.map_index, \
+            r.dag_version_id{text}, {ts<}t.updated_at{>ts} ",
+            unschedulable_from!(),
+            " ORDER BY t.updated_at"
+        );
+        if self.skipped(crate::probe::Check::Unschedulable).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<(String, String, i32, String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, WAITING))
                 .fetch_all(pool)

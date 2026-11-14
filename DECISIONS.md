@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D485 | 2026-11-14 | user | built M5.1f1 | assignment | Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own |
 | D484 | 2026-11-14 | claude | built M5.1e | workers | A worker's turn takes up to 80 messages |
 | D483 | 2026-11-13 | user | built M5.1c3 | workers | A command is one transaction, the core lock released between commands; it reads only its own DAG |
 | D482 | 2026-11-13 | claude | built M5.1c1 | assignment | The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch |
@@ -527,6 +528,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### assignment
 
+- D485: Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
 - D482: The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch
 - D481: Tasks past a round's assignment cap are not visited; they show as pending
 - D469: A round releases the core lock between its batches of assignments

@@ -598,3 +598,54 @@ async fn a_dags_trigger_has_its_switch_while_it_has_one() {
     assert_eq!(define(json!({"kind": "none"}), "h6").await, None, "gone");
     assert_eq!(define(cron(3), "h7").await, Some(true), "back, paused");
 }
+
+#[test]
+fn every_write_of_a_trigger_row_sets_its_next_fire_time() {
+    // Decision 485: a scheduled DAG is visited by its stored `next_fire_at`, and nothing sweeps
+    // the others; a statement changing a trigger's row (its kind, its switch, its liveness)
+    // must clear or set that time with it, or the DAG may never be visited again. Every
+    // `INSERT INTO` or `UPDATE` of `dag_triggers` in this crate's code, up to its statement's
+    // end, names `next_fire_at`.
+    fn sources(dir: &std::path::Path, found: &mut Vec<(std::path::PathBuf, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n != "tests") {
+                    sources(&path, found);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_some_and(|n| n != "tests.rs")
+            {
+                found.push((path.clone(), std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let mut writes = 0;
+    for (path, text) in files {
+        // Statements are split over continued lines: whitespace runs read as one space.
+        let text = text.replace("\\\n", " ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        for start in ["INSERT INTO dag_triggers", "UPDATE dag_triggers"] {
+            for (at, _) in text.match_indices(start) {
+                let statement = &text[at..];
+                let end = statement.find("\";").unwrap_or(statement.len());
+                let statement = &statement[..end];
+                assert!(
+                    statement.contains("next_fire_at"),
+                    "{}: a write of a trigger row leaves its next fire time: {statement}",
+                    path.display()
+                );
+                writes += 1;
+            }
+        }
+    }
+    assert_eq!(
+        writes, 5,
+        "the writes known: SET, PAUSE, SWITCH, CONFLICT_SWITCH, REMOVE_SWITCH"
+    );
+}

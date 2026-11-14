@@ -83,16 +83,6 @@ pub struct Timings {
     /// How often a master whose listening for commands failed to start (the database too slow
     /// to check for a pooler, or unreachable) tries again; it polls meanwhile.
     pub listen_retry: Duration,
-    /// A DAG that had a run in progress turns quiet this long after the last one (a DAG found
-    /// idle otherwise is quiet at once), unless a fire time is within `quiet_dag_wake_ahead`:
-    /// rounds then skip it until something wakes it.
-    pub quiet_dag_after: Duration,
-    /// How long before its next fire time a quiet DAG is woken (it is busy from then on).
-    pub quiet_dag_wake_ahead: Duration,
-    /// Every quiet DAG is visited within this long, spread over the rounds (each visits a
-    /// slice, those visited longest ago), and every DAG's ID and version are checked against
-    /// memory this often: about the longest a missed wake can delay a DAG.
-    pub quiet_dag_full_pass_interval: Duration,
     /// How often the web UI's live pages are told to read themselves again when the
     /// database's changes can't be followed (`[database] change_notifications = false`, or no
     /// listening connection).
@@ -247,9 +237,6 @@ impl Default for Timings {
             handed_call_min: Duration::from_mins(1),
             cleanup_move_wait: Duration::from_secs(10),
             listen_retry: Duration::from_mins(30),
-            quiet_dag_after: Duration::from_mins(1),
-            quiet_dag_wake_ahead: Duration::from_mins(1),
-            quiet_dag_full_pass_interval: Duration::from_mins(1),
             refresh_interval: Duration::from_secs(15),
             worker_connect_timeout: Duration::from_secs(5),
             drain_report_period: Duration::from_secs(2),

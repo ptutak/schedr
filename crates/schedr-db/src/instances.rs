@@ -12,6 +12,22 @@ use crate::query::{
     db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, sql_text, to_json,
 };
 
+/// The rows of running runs without instances: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! newly_running_from {
+    () => {
+        "FROM runs r WHERE r.state = 'running' AND NOT EXISTS (SELECT 1 FROM task_instances t WHERE t.run_id = r.id)"
+    };
+}
+pub(crate) use newly_running_from;
+
+/// The rows up for retry and due at `$1`: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! due_retries_from {
+    () => {
+        "FROM task_instances WHERE state = 'up_for_retry' AND ready_at <= $1{ts}"
+    };
+}
+pub(crate) use due_retries_from;
+
 #[cfg(test)]
 mod tests;
 
@@ -160,10 +176,14 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or a stored DAG doesn't read.
     pub async fn newly_running(&self) -> Result<Vec<NewlyRunning>, DbError> {
-        const NEW: &str = "SELECT r.id{text}, r.dag_version_id{text} FROM runs r \
-            WHERE r.state = 'running' \
-            AND NOT EXISTS (SELECT 1 FROM task_instances t WHERE t.run_id = r.id) \
-            ORDER BY r.started_at, r.id";
+        const NEW: &str = concat!(
+            "SELECT r.id{text}, r.dag_version_id{text} ",
+            newly_running_from!(),
+            " ORDER BY r.started_at, r.id"
+        );
+        if self.skipped(crate::probe::Check::NewlyRunning).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, NEW)).fetch_all(pool).await?
         });
@@ -563,8 +583,17 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or a stored ID doesn't read.
     pub async fn due_retries(&self, now: Timestamp) -> Result<Vec<(String, TaskId, i32)>, DbError> {
-        const DUE: &str = "SELECT run_id{text}, task_id, map_index FROM task_instances \
-            WHERE state = 'up_for_retry' AND ready_at <= $1{ts} ORDER BY ready_at, id";
+        const DUE: &str = concat!(
+            "SELECT run_id{text}, task_id, map_index ",
+            due_retries_from!(),
+            " ORDER BY ready_at, id"
+        );
+        if self
+            .skipped_at(crate::probe::Check::DueRetries, now)
+            .await?
+        {
+            return Ok(Vec::new());
+        }
         let rows: Vec<(String, String, i32)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, DUE))
                 .bind(db_time(now))

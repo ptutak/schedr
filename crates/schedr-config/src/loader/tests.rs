@@ -828,7 +828,7 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .split('`')
         .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
         .collect();
-    assert_eq!(names.len(), 77, "{names:?}");
+    assert_eq!(names.len(), 74, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         let value = if name.ends_with("LEASE_TIMEOUT") {
@@ -844,6 +844,17 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         } else {
             assert_eq!(loaded.unwrap().timings.overridden, [name]);
         }
+    }
+}
+
+#[test]
+fn a_retired_timing_is_accepted_and_ignored() {
+    // Decision 485: the quiet DAGs' timings no longer exist; a deployment still setting one
+    // starts, and nothing is overridden, even by a value that wouldn't read.
+    for key in RETIRED_TIMINGS {
+        let name = format!("{HIDDEN_PREFIX}{key}");
+        let loaded = load(None, &env(&[(&name, "not a duration")]), &[]).unwrap();
+        assert_eq!(loaded.timings.overridden, Vec::<String>::new(), "{name}");
     }
 }
 

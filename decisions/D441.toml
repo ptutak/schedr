@@ -13,4 +13,4 @@ archived design's "last good version keeps running").
 history = "JOURNAL.md#D441"
 step = "M4.15b"
 code = ["crates/schedr-db/src/runs.rs::schedr_version"]
-checked = 2026-11-12
+checked = 2026-11-14

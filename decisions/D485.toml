@@ -1,0 +1,30 @@
+title = "Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own"
+date = 2026-11-14
+by = "user"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+also = ["triggers"]
+summary = '''
+Each master round starts with one statement, the probe (`Database::probe`): for each read the
+round makes, whether it would find anything. Inside `Database::in_round` a read whose check
+said no returns nothing; the probe looks a tick ahead, and is taken again after a write ends
+or for a time-bounded read past what it covered. Every check reads a stored row
+or column: a scheduled DAG stores `next_fire_at` (unknown after a switch change, a time come
+already while due runs wait or it is held), so a round visits the DAGs due, queued or marked and
+keeps nothing in memory to decide it; the tick stays 1 s. Triggers and events get a round of
+their own, with their moments stored (M5.1f2). Not chosen: rounds gated by change signals, a
+stretched idle tick, an in-memory model of the state.
+'''
+history = "JOURNAL.md#D485"
+step = "M5.1f1"
+code = [
+    "crates/schedr-db/src/probe.rs::in_round",
+    "crates/schedr-db/src/dags.rs::scheduled_due",
+    "crates/schedr-db/src/dags.rs::NO_FIRE",
+    "crates/schedr-master/src/quiet.rs::QuietDags",
+    "crates/schedr-master/src/scheduler.rs::create_due",
+    "crates/schedr-master/src/planning.rs::first_waiting",
+    "crates/schedr-config/src/loader.rs::RETIRED_TIMINGS",
+]
+checked = 2026-11-14

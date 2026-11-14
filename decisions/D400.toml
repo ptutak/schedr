@@ -12,4 +12,4 @@ every fire time.
 history = "JOURNAL.md#D400"
 step = "M4.12b"
 code = ["crates/schedr-db/src/backfills.rs::covered_times", "crates/schedr-master/src/scheduler/backfill.rs::backfill"]
-checked = 2026-11-11
+checked = 2026-11-14

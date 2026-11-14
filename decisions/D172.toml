@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D172"
 step = "M4.6c"
 also = ["configuration"]
 code = ["crates/schedr/src/secret_storage.rs", "crates/schedr-config/src/loader.rs::check_secret_storage"]
-checked = 2026-11-12
+checked = 2026-11-14

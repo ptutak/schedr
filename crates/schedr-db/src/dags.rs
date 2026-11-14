@@ -5,7 +5,7 @@
 //! ([`DagChange`]). Each DAG version belongs to one parse (see archive/PROJECT.md, DAG code
 //! delivery and DAG ID conflicts).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use jiff::Timestamp;
 use schedr_model::connection::Registry;
@@ -15,6 +15,30 @@ use uuid::Uuid;
 
 use crate::database::{Database, DbError};
 use crate::query::{BATCH_LIMITS, db_time, from_json, in_tx, on_pool, parse_time, sql, to_json};
+
+/// The rows of removed DAGs' unfinished runs with something not started: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! removed_dags_runs_from {
+    () => {
+        "FROM runs r JOIN dags d ON d.dag_id = r.dag_id WHERE d.removed_at IS NOT NULL AND r.state IN ('queued', 'running') AND (r.state = 'queued' OR EXISTS (SELECT 1 FROM task_instances t WHERE t.run_id = r.id AND t.state IN ('scheduled', 'queued', 'up_for_retry', 'unschedulable')) OR EXISTS (SELECT 1 FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id WHERE t.run_id = r.id AND t.state = 'running' AND a.status IS NULL AND a.started_at IS NULL AND t.cancel_requested_at IS NULL))"
+    };
+}
+pub(crate) use removed_dags_runs_from;
+
+/// The rows of scheduled DAGs that can run whose next fire time has come at `$1` or isn't
+/// known: the scheduler's read and its probe check's (decision 485).
+macro_rules! scheduled_due_from {
+    () => {
+        "FROM dag_triggers t JOIN dags d ON d.dag_id = t.dag_id \
+         WHERE t.kind = 'schedule' AND NOT t.paused \
+         AND d.current_version_id IS NOT NULL AND d.removed_at IS NULL AND d.conflict IS NULL \
+         AND (t.next_fire_at IS NULL OR t.next_fire_at <= $1{ts})"
+    };
+}
+pub(crate) use scheduled_due_from;
+
+/// A stored next fire time meaning "none ahead" (decision 485): a schedule past its `end`, a
+/// `@once` done.
+pub const NO_FIRE: Timestamp = Timestamp::constant(253_370_764_800, 0);
 
 #[cfg(test)]
 mod tests;
@@ -570,21 +594,94 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the query fails.
     pub async fn removed_dags_runs(&self) -> Result<Vec<String>, DbError> {
-        const RUNS: &str = "SELECT r.id{text} FROM runs r JOIN dags d ON d.dag_id = r.dag_id \
-            WHERE d.removed_at IS NOT NULL AND r.state IN ('queued', 'running') \
-            AND (r.state = 'queued' OR EXISTS (SELECT 1 FROM task_instances t \
-                WHERE t.run_id = r.id \
-                AND t.state IN ('scheduled', 'queued', 'up_for_retry', 'unschedulable')) \
-            OR EXISTS (SELECT 1 FROM attempts a JOIN task_instances t \
-                ON t.id = a.task_instance_id WHERE t.run_id = r.id AND t.state = 'running' \
-                AND a.status IS NULL AND a.started_at IS NULL \
-                AND t.cancel_requested_at IS NULL)) \
-            ORDER BY r.triggered_at, r.id";
+        const RUNS: &str = concat!(
+            "SELECT r.id{text} ",
+            removed_dags_runs_from!(),
+            " ORDER BY r.triggered_at, r.id"
+        );
+        if self.skipped(crate::probe::Check::RemovedDagsRuns).await? {
+            return Ok(Vec::new());
+        }
         Ok(on_pool!(self, |pool, backend| {
             sqlx::query_scalar(sql(backend, RUNS))
                 .fetch_all(pool)
                 .await?
         }))
+    }
+
+    /// The scheduled DAGs that can run whose next fire time has come at `now` or isn't known
+    /// (decision 485), with what is stored (`None`: not known).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn scheduled_due(
+        &self,
+        now: Timestamp,
+    ) -> Result<Vec<(DagId, Option<Timestamp>)>, DbError> {
+        const DUE: &str = concat!(
+            "SELECT t.dag_id, {ts<}t.next_fire_at{>ts} ",
+            scheduled_due_from!(),
+            " ORDER BY t.dag_id"
+        );
+        if self.skipped_at(crate::probe::Check::Scheduled, now).await? {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(String, Option<String>)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, DUE))
+                .bind(db_time(now))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter()
+            .map(|(dag, at)| {
+                let at = at
+                    .map(|at| parse_time("dag_triggers.next_fire_at", &at))
+                    .transpose()?;
+                Ok((crate::runs::dag_id_of(dag)?, at))
+            })
+            .collect()
+    }
+
+    /// Every scheduled DAG's stored next fire time (`None`: not known), for a round visiting
+    /// every DAG (decision 485).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn next_fires(&self) -> Result<HashMap<DagId, Option<Timestamp>>, DbError> {
+        const ALL: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers \
+            WHERE kind = 'schedule'";
+        let rows: Vec<(String, Option<String>)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, ALL)).fetch_all(pool).await?
+        });
+        rows.into_iter()
+            .map(|(dag, at)| {
+                let at = at
+                    .map(|at| parse_time("dag_triggers.next_fire_at", &at))
+                    .transpose()?;
+                Ok((crate::runs::dag_id_of(dag)?, at))
+            })
+            .collect()
+    }
+
+    /// Stores scheduled DAG `dag_id`'s next fire time (decision 485): when the master visits it
+    /// next ([`NO_FIRE`]: none ahead). A DAG without a schedule's switch changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_next_fire(&self, dag_id: &DagId, at: Timestamp) -> Result<(), DbError> {
+        const SET: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} \
+            WHERE dag_id = $2 AND kind = 'schedule'";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(db_time(at))
+                .bind(dag_id.as_str())
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
     }
 
     /// DAG `dag_id` as [`Self::stored_dags`] lists it, read alone (B136: one DAG's reads
@@ -630,7 +727,8 @@ impl Database {
         paused: bool,
         now: Timestamp,
     ) -> Result<bool, DbError> {
-        const PAUSE: &str = "UPDATE dag_triggers SET paused = $1, \
+        // A switch changed: its next fire time isn't known any more (decision 485).
+        const PAUSE: &str = "UPDATE dag_triggers SET paused = $1, next_fire_at = NULL, \
             live_since = CASE WHEN $1 THEN NULL WHEN EXISTS (SELECT 1 FROM dags d \
                 WHERE d.dag_id = dag_triggers.dag_id AND d.removed_at IS NULL \
                 AND d.conflict IS NULL) THEN COALESCE(live_since, $3{ts}) END \
@@ -682,7 +780,7 @@ impl Database {
                 WHEN EXISTS (SELECT 1 FROM dags d WHERE d.dag_id = $1 \
                     AND d.removed_at IS NULL AND d.conflict IS NULL) AND NOT $4 \
                 THEN COALESCE(dag_triggers.live_since, $5{ts}) ELSE $5{ts} END, \
-            kind = excluded.kind";
+            kind = excluded.kind, next_fire_at = NULL";
         const NO_SWITCH: &str = "DELETE FROM dag_triggers WHERE dag_id = $1";
         const CURRENT: &str = "UPDATE dags SET current_version_id = (SELECT id FROM dag_versions \
             WHERE dag_id = $1 AND parse_result_id = $2{uuid}), \
@@ -690,10 +788,11 @@ impl Database {
         const CONFLICT: &str = "UPDATE dags SET conflict = $1{json}, removed_at = NULL \
             WHERE dag_id = $2";
         const CONFLICT_SWITCH: &str = "UPDATE dag_triggers SET live_since = NULL, \
-            paused = (paused OR $1) WHERE dag_id = $2";
+            paused = (paused OR $1), next_fire_at = NULL WHERE dag_id = $2";
         const REMOVE: &str = "UPDATE dags SET removed_at = $1{ts}, conflict = NULL \
             WHERE dag_id = $2";
-        const REMOVE_SWITCH: &str = "UPDATE dag_triggers SET live_since = NULL WHERE dag_id = $1";
+        const REMOVE_SWITCH: &str =
+            "UPDATE dag_triggers SET live_since = NULL, next_fire_at = NULL WHERE dag_id = $1";
         const FORGET_PASSED: &str = "DELETE FROM trigger_progress_passed WHERE dag_id = $1";
         // As retention's: not one a new run's foreign key waits for.
         const LOCK: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 FOR NO KEY UPDATE";

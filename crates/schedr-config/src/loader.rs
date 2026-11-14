@@ -436,9 +436,6 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "MASTER__HANDED_CALL_MIN" => &mut timings.handed_call_min,
         "MASTER__CLEANUP_MOVE_WAIT" => &mut timings.cleanup_move_wait,
         "MASTER__LISTEN_RETRY" => &mut timings.listen_retry,
-        "MASTER__QUIET_DAG_AFTER" => &mut timings.quiet_dag_after,
-        "MASTER__QUIET_DAG_WAKE_AHEAD" => &mut timings.quiet_dag_wake_ahead,
-        "MASTER__QUIET_DAG_FULL_PASS_INTERVAL" => &mut timings.quiet_dag_full_pass_interval,
         "WEBSERVER__REFRESH_INTERVAL" => &mut timings.refresh_interval,
         "WEBSERVER__WORKER_CONNECT_TIMEOUT" => &mut timings.worker_connect_timeout,
         "WORKER__DRAIN_REPORT_PERIOD" => &mut timings.drain_report_period,
@@ -500,6 +497,14 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
     Some(timing)
 }
 
+/// Hidden timings no longer used, accepted and ignored so that a deployment setting one still
+/// starts: the quiet DAGs' memory, replaced by the stored next fire times (decision 485).
+const RETIRED_TIMINGS: [&str; 3] = [
+    "MASTER__QUIET_DAG_AFTER",
+    "MASTER__QUIET_DAG_WAKE_AHEAD",
+    "MASTER__QUIET_DAG_FULL_PASS_INTERVAL",
+];
+
 /// The fixed timings, with what `SCHEDR_HIDDEN__*` variables set.
 fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError> {
     let mut timings = Timings::default();
@@ -507,7 +512,7 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
         let Some(key) = name.strip_prefix(HIDDEN_PREFIX) else {
             continue;
         };
-        if HIDDEN_LIMITS.contains(&key) {
+        if HIDDEN_LIMITS.contains(&key) || RETIRED_TIMINGS.contains(&key) {
             continue;
         }
         let Some(timing) = timing_named(&mut timings, key) else {

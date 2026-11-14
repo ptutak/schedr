@@ -121,13 +121,25 @@ status = "done"
 done = 2026-11-14
 
 [[steps]]
-id = "M5.1f"
-title = "The idle cost"
+id = "M5.1f1"
+title = "The idle cost: one probe a tick, the moments stored"
 scope = '''
-a standalone with nothing to do (measured 2026-11-13 on the examples' DAGs, SQLite): about 22 queries a second (6,724 in 5 min; the master's 1 s tick reads commands, queued runs, retries and ready tasks each time, about 14 kinds), in the 1.0.0 release build 1.9 % of a core, 44 wakeups a second and 1.3 MiB written to disk in 3 min (about 0.6 GiB a day), 46 MiB resident (the debug build 5.2 %, 51 wakeups a second, 96 MiB); the fork servers idle. Work skipped when nothing changed (the change notifications, or a mark the writers set), the polls that remain at their own slower pace
+(decision 485) a standalone with nothing to do (measured 2026-11-14 on the examples' DAGs, SQLite, release build, 10 min): 22.5 queries a second (the 1 s tick's round parts each read their inputs, about 20 kinds), 2.0 % of a core, about 200 context switches a second over its threads, 4.4 MiB written in 10 min, 52 MiB resident. Each tick starts with one probe statement (`Database::probe`) answering for each read a round makes whether it would find anything; a read whose check says no isn't made, and a write ending takes the probe again. Every check reads a stored row or column; a moment worked out from code each tick gets a column: a scheduled DAG's `next_fire_at` (one migration on both databases, with its index). A trigger's moments (an event trigger's window, a generator's `restart_if_idle`) go with the trigger round (M5.1f2); a wait step's `max_wait` needs none, read only once the step is ready or its retry due, both stored. The lease, the masters' row, gauges and the notification sender at their own paces
 '''
 done_when = '''
-an idle standalone's queries, wakeups and CPU measured before and after over 10 minutes (release build), the polls left each with a reason, the numbers in the guide; no start, round or trigger latency lost (stress 1, 9, 23)
+an idle standalone's statements about 1 a second (22.5), its CPU, wakeups and writes measured before and after over 10 minutes (release build), the polls left each with a reason, the numbers in the guide; a test per check (work for the part makes it true, none false) and per column (its writers keep it, a rebuild from scratch matches what is stored), on both databases; no start, round or trigger latency lost (stress 1, 9, 23)
+'''
+status = "done"
+done = 2026-11-14
+
+[[steps]]
+id = "M5.1f2"
+title = "Triggers and events in a round of their own"
+scope = '''
+(decision 485) the trigger pass (starts, stops and restarts, `RunOf` and named-event runs, the `wait_for` hand-off if it moves cleanly) in a loop of its own beside the tick, taking the core lock per transaction, woken at once by a named event posted, a run's end recorded, a `TriggerEvent` or a trigger stopping or failing, and by the tick's probe for a trigger's moment, stored in a column of its own (an event trigger's window, a generator's `restart_if_idle`), so a switched-on trigger costs no read each tick; the main round no longer runs it; a `TriggerEvent` or a posted event wakes only the trigger loop, never the round's probe, and the main round is woken only when a run was queued (the user, 2026-11-14: an event that creates none costs the main loop nothing): the queued run is the stored record its probe finds (`QueuedRuns`, so a lost wake costs a tick at most and a new leader finds it), the wake in memory as a recorded `Finished`'s, with its 50 ms gap (the user chose this, option A, over a separate attention row); a worker's events are still stored in its turn, which then wakes the round
+'''
+done_when = '''
+the time from an event to its run measured idle and under load (stress 23 and the trigger scenarios), the numbers in the guide; a test per wake, and the trigger round getting in between a busy round's parts; no other latency lost
 '''
 status = "planned"
 
@@ -190,10 +202,10 @@ status = "planned"
 id = "M5.1l"
 title = "Throughput and start latency on the Metrics page"
 scope = '''
-tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.1a times them
+tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.1a times them; the DAGs page's view by deployment
 '''
 done_when = '''
-not set yet: after M5.1a's breakdown
+those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated; and the DAGs page switching between all DAGs in one list (as now) and one tab per deployment with its DAGs only (the user, 2026-11-14), remembered per viewer, with UI tests
 '''
 status = "planned"
 

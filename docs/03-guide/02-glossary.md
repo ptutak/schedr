@@ -126,19 +126,19 @@ The names used across the documentation, the API and the logs.
 
 **Round** (tick)
 : One pass of the master's scheduling loop: commands, the scheduler, dispatching, parse-job
-  timeouts, lost workers. The scheduler visits each busy DAG and the quiet DAGs woken that
-  round. See [The master](04-master.md).
+  timeouts, lost workers. It starts with one statement, the probe, and skips each read the
+  probe found nothing for. The scheduler visits the DAGs due that round. See
+  [The master](04-master.md).
 
 **Busy DAG**
-: A DAG the leading master visits every round. It has a run running or queued, a fire time
-  within the [wake-ahead time](14-timings.md#fixed-timings) (60 s), or its last active visit was less than
-  the [quiet wait](14-timings.md#fixed-timings) (60 s) ago. See [The master](04-master.md#busy-and-quiet-dags).
+: A DAG a round visits: its stored next fire time has come or isn't known, it has a run
+  queued, or a command, an ended run or a new version marked it. See
+  [The master](04-master.md#busy-and-quiet-dags).
 
 **Quiet DAG**
-: A DAG rounds skip until it wakes: nothing in progress, and no fire time that near. Its
-  timer, a mark (a queued run, a run ending, a command, a new version), the sweep or the ID
-  check wakes it. The list is the leading master's memory; the first round of a term visits
-  every DAG. See [The master](04-master.md#busy-and-quiet-dags).
+: A DAG a round skips: nothing due. The database says which (the stored next fire times and
+  the queued runs), so a standby taking over decides the same way; the first round of a
+  term visits every DAG. See [The master](04-master.md#busy-and-quiet-dags).
 
 **Worker ID** and **incarnation**
 : The worker ID is stable across restarts (by default the host name, which is the pod name in

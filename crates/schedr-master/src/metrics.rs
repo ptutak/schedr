@@ -186,15 +186,15 @@ const DAGS: MetricDoc = MetricDoc {
     name: "master_dags",
     kind: MetricKind::Gauge,
     labels: &["state"],
-    help: "DAGs that can run, by how rounds treat them: busy (visited every round) or quiet \
-        (visited when woken); held: those whose file fails to import (no runs until it does)",
+    help: "DAGs that can run, as of the last scheduler round: busy (it visited them) or quiet \
+        (nothing due); held: those whose file fails to import (no runs until it does)",
 };
 const DAG_WAKES: MetricDoc = MetricDoc {
     name: "master_dag_wakes",
     kind: MetricKind::Counter,
     labels: &["reason"],
-    help: "Quiet DAGs woken, by reason; sweep counts only a DAG the sweep or the ID check found with \
-        something to do (a missed wake)",
+    help: "DAGs a scheduler round visited after its term's first, by reason: timer, unknown (no \
+        next fire time stored), command, run_queued, run_ended, new_version",
 };
 
 const TRIGGERS: MetricDoc = MetricDoc {
@@ -417,9 +417,9 @@ pub struct MasterMetrics {
     pub leading: Gauge,
     /// Started attempts of replaced incarnations still held (decision 443).
     pub replaced_held: Gauge,
-    /// DAGs that can run, by `busy` / `quiet`.
+    /// DAGs that can run, by `busy` (the last scheduler round visited it) / `quiet` / `held`.
     pub dags: Family<StateLabels, Gauge>,
-    /// Quiet DAGs woken, by reason.
+    /// DAGs a scheduler round visited after its term's first, by why (decision 485).
     pub dag_wakes: Family<ReasonLabels, Counter>,
     /// Triggers by state.
     pub triggers: Family<StateLabels, Gauge>,

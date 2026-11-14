@@ -725,6 +725,68 @@ async fn attempts_and_outputs_move_a_task_forward() {
 }
 
 #[tokio::test]
+async fn the_rounds_probe_and_stored_next_fire_times_work_on_postgres() {
+    // Decision 485: the probe statement, a round skipping by it, the scheduled DAGs' stored
+    // next fire times (migration 0002) and the succeeded times read the same as on SQLite.
+    use schedr_db::probe::Check;
+    let (db, version) = with_dag().await;
+    let now = ts(NOW);
+    let probe = db.probe(now).await.unwrap();
+    assert!(
+        Check::ALL.iter().all(|&c| !probe.found(c)),
+        "a new trigger starts paused (decision 459): nothing to do, {probe:?}"
+    );
+    db.set_paused_at(&sync(), false, now).await.unwrap();
+    let probe = db.probe(now).await.unwrap();
+    assert!(
+        Check::ALL
+            .iter()
+            .all(|&c| probe.found(c) == (c == Check::Scheduled)),
+        "only the schedule, its next fire time unknown, is found: {probe:?}"
+    );
+    assert_eq!(db.scheduled_due(now).await.unwrap(), [(sync(), None)]);
+    let next = ts("2026-10-22T01:00:00Z");
+    db.set_next_fire(&sync(), next).await.unwrap();
+    assert_eq!(db.scheduled_due(now).await.unwrap(), []);
+    assert_eq!(
+        db.scheduled_due(next).await.unwrap(),
+        [(sync(), Some(next))]
+    );
+    assert_eq!(
+        db.next_fires().await.unwrap(),
+        [(sync(), Some(next))].into()
+    );
+    db.set_next_fire(&sync(), schedr_db::dags::NO_FIRE)
+        .await
+        .unwrap();
+    assert_eq!(db.scheduled_due(next).await.unwrap(), []);
+    // A round skips a read its probe found empty, and sees a write made in it.
+    let found = db
+        .in_round(now, std::time::Duration::ZERO, async {
+            assert!(db.skipped(Check::QueuedRuns).await.unwrap());
+            db.insert_run(&run(&version, RunKind::Manual, RunState::Queued, NOW))
+                .await
+                .unwrap();
+            db.dags_with_queued_runs().await.unwrap()
+        })
+        .await;
+    assert_eq!(found, [sync()]);
+    let done = "2026-10-21T01:00:00Z";
+    db.insert_run(&run(&version, RunKind::Scheduled, RunState::Success, done))
+        .await
+        .unwrap();
+    db.insert_run(&run(&version, RunKind::Scheduled, RunState::Failed, NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.succeeded_times(&sync(), ts("2026-10-20T00:00:00Z"), next)
+            .await
+            .unwrap(),
+        std::collections::BTreeSet::from([ts(done)])
+    );
+}
+
+#[tokio::test]
 async fn a_groups_starts_dags_and_cleared_strikes_are_stored_on_postgres() {
     // M5.1d: a turn's starts in a statement for each start method, the runs' DAGs read at
     // once, a DAG's wait steps' strikes cleared at once.

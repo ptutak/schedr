@@ -236,9 +236,6 @@ pub fn master_settings(config: &Config) -> Settings {
         listen_retry: config.timings.listen_retry,
         quiet: schedr_master::quiet::QuietSettings {
             enabled: config.master.quiet_dags,
-            after: config.timings.quiet_dag_after,
-            wake_ahead: config.timings.quiet_dag_wake_ahead,
-            full_pass_interval: config.timings.quiet_dag_full_pass_interval,
         },
         // At most 1 GiB (checked when the configuration is read).
         max_message_size: usize::try_from(config.grpc.max_message_size).unwrap_or(usize::MAX),

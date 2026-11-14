@@ -115,6 +115,8 @@ impl Database {
             connection: Arc::new(tokio::sync::Mutex::new(scoped)),
         };
         let mut result = CURRENT.scope(scope.clone(), work).await;
+        // Stored or not, the round's probe is taken again (decision 485).
+        let _wrote = Wrote(self);
         let mut scoped = scope.connection.lock().await;
         if result.is_ok() && scoped.broken {
             result = Err(DbError::TransactionFailed.into());
@@ -189,3 +191,13 @@ impl Database {
 
 #[cfg(test)]
 mod tests;
+
+/// Counts a write transaction's end when dropped: on every return of `atomically` after the
+/// work ran, its commit or rollback included (decision 485).
+struct Wrote<'a>(&'a Database);
+
+impl Drop for Wrote<'_> {
+    fn drop(&mut self) {
+        self.0.wrote();
+    }
+}

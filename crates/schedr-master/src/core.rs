@@ -85,7 +85,7 @@ pub struct Settings {
     pub listen_retry: Duration,
     /// How its loop and its parse jobs are paced.
     pub timings: MasterTimings,
-    /// Which DAGs a round visits (`[master] quiet_dag*`).
+    /// Which DAGs a round visits (`[master] quiet_dags`, decision 485).
     pub quiet: QuietSettings,
     /// The largest message a worker may send (`[grpc] max_message_size`).
     pub max_message_size: usize,

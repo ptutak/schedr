@@ -70,9 +70,6 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__HANDED_CALL_MIN` | 1 min | The least an `@sensor(wait_for=...)`'s call gets once it is handed a run that ended within its `max_wait`, though little or none of that is left. |
 | `SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT` | 10 s | Time a lost worker's cleanup waits before it moves to another worker, on top of the cancel grace: a worker only cut off has stopped the task by then. |
 | `SCHEDR_HIDDEN__MASTER__LISTEN_RETRY` | 30 min | How often the master retries starting command listening after failure; it polls meanwhile. |
-| `SCHEDR_HIDDEN__MASTER__QUIET_DAG_AFTER` | 1 min | Time after the last active visit before a formerly busy DAG becomes quiet, unless its fire time is within the wake-ahead time. An otherwise idle DAG is quiet at once. |
-| `SCHEDR_HIDDEN__MASTER__QUIET_DAG_WAKE_AHEAD` | 1 min | How far ahead of its next fire time a quiet DAG wakes and becomes busy. |
-| `SCHEDR_HIDDEN__MASTER__QUIET_DAG_FULL_PASS_INTERVAL` | 1 min | Every quiet DAG is visited within this time, spread over rounds, and every DAG's ID and version are checked against memory. It bounds a missed wake's delay approximately. |
 | `SCHEDR_HIDDEN__MASTER__ROUND_GAP` | 50 ms | Minimum gap between extra rounds under a stream of finished tasks. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_RETRY` | 30 s | Wait before retrying failed notifications; polling continues meanwhile. |
 | `SCHEDR_HIDDEN__MASTER__ALIVE_INTERVAL` | 5 s | How often the master's loop turns at least while waiting; it must stay shorter than the loop stall timeout, or a waiting master looks stuck. |
@@ -84,6 +81,11 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_FIRST` | 30 s | First wait before retrying a failed parse job; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_MAX` | 10 min | Longest wait before retrying a failed parse job. |
 | `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT` | 10 s | How often the master writes its row of the deployment's nodes. |
+
+Three master timings are retired: `QUIET_DAG_AFTER`, `QUIET_DAG_WAKE_AHEAD` and
+`QUIET_DAG_FULL_PASS_INTERVAL` (the `MASTER` group): which DAGs a round visits comes from the
+database now ([Busy and quiet DAGs](04-master.md#busy-and-quiet-dags)). They are still
+accepted, so an old deployment starts, and have no effect.
 
 ### Database
 

@@ -10,5 +10,5 @@ Timings where zero has a defined meaning remain allowed.
 '''
 history = "archive/PROJECT.md#D238"
 step = "M4.8t"
-checked = 2026-11-12
+checked = 2026-11-14
 code = ["crates/schedr-config/src/loader.rs::check_not_zero"]

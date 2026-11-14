@@ -6,10 +6,11 @@ topic = "configuration"
 section = "Timings and limits"
 summary = '''
 `SCHEDR_HIDDEN__<SECTION>__<NAME>` changes a fixed timing at startup.
-Each setting is warned about; unknown names and invalid durations stop startup.
+Each setting is warned about; unknown names and invalid durations stop startup, but for
+the retired quiet-DAG timings (`RETIRED_TIMINGS`, decision 485), accepted and ignored.
 '''
 history = "archive/PROJECT.md#D233"
 step = "M4.8t"
 also = ["deployment"]
-checked = 2026-11-12
+checked = 2026-11-14
 code = ["crates/schedr-config/src/loader.rs::hidden_timings"]

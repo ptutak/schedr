@@ -90,6 +90,9 @@ pub struct Database {
     identity: Arc<()>,
     /// How the master learns of new commands (see [`Database::with_notifications`]).
     notifications: Arc<Notifications>,
+    /// Write transactions ended (shared by clones): a round's probe taken before one is taken
+    /// again (decision 485, [`crate::probe`]).
+    writes: Arc<std::sync::atomic::AtomicU64>,
     /// Writes made to fail, for tests (shared by clones; decision 98).
     #[cfg(any(test, feature = "testing"))]
     faults: Arc<crate::faults::Faults>,
@@ -262,6 +265,7 @@ impl From<Pool> for Database {
             dags: Arc::default(),
             identity: Arc::default(),
             notifications: Arc::default(),
+            writes: Arc::default(),
             #[cfg(any(test, feature = "testing"))]
             faults: Arc::default(),
         }
@@ -369,6 +373,7 @@ impl Database {
             dags: self.dags.clone(),
             identity: self.identity.clone(),
             notifications: self.notifications.clone(),
+            writes: self.writes.clone(),
             #[cfg(any(test, feature = "testing"))]
             faults: self.faults.clone(),
             fence: Some(Arc::new(Fence {
@@ -423,6 +428,18 @@ impl Database {
     }
 
     /// The same for every clone of this database (see [`Database::atomically`]).
+    /// A write transaction ended, stored or not (decision 485): a round's probe is taken again
+    /// before its next read.
+    pub(crate) fn wrote(&self) {
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Write transactions ended so far.
+    pub(crate) fn write_ends(&self) -> u64 {
+        self.writes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub(crate) const fn identity(&self) -> &Arc<()> {
         &self.identity
     }

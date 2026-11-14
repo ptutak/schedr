@@ -15,4 +15,4 @@ roots later by a redeploy, and the UI alone is useful).
 history = "JOURNAL.md#D476"
 step = "M5.1b2"
 code = ["crates/schedr/src/roles.rs::warn_without_dag_roots"]
-checked = 2026-11-13
+checked = 2026-11-14

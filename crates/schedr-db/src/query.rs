@@ -163,7 +163,12 @@ macro_rules! in_tx {
                 }
             })
         };
-        db.limited(db.query_timeout() * $limits, run).await?
+        let ended = db.limited(db.query_timeout() * $limits, run).await;
+        // Inside `atomically`, its end counts the write instead.
+        if $crate::scope::current(db).is_none() {
+            db.wrote();
+        }
+        ended?
     }};
 }
 pub(crate) use in_tx;

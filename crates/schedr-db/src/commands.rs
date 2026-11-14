@@ -20,6 +20,14 @@ use crate::query::{
     Starting, db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, to_json,
 };
 
+/// The rows of pending commands: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! pending_from {
+    () => {
+        "FROM commands WHERE status = 'pending'"
+    };
+}
+pub(crate) use pending_from;
+
 #[cfg(test)]
 mod tests;
 
@@ -364,10 +372,16 @@ impl Database {
     ///
     /// [`DbError::Sqlx`] if the query fails.
     pub async fn pending_commands(&self, limit: u32) -> Result<Vec<PendingCommand>, DbError> {
-        const PENDING: &str = "SELECT id{text}, payload{text}, requested_by, \
-            {ts<}requested_at{>ts}, {ts<}applying_at{>ts} FROM commands \
-            WHERE status = 'pending' ORDER BY requested_at, id LIMIT $1";
+        const PENDING: &str = concat!(
+            "SELECT id{text}, payload{text}, requested_by, \
+            {ts<}requested_at{>ts}, {ts<}applying_at{>ts} ",
+            pending_from!(),
+            " ORDER BY requested_at, id LIMIT $1"
+        );
         type Row = (String, String, String, String, Option<String>);
+        if self.skipped(crate::probe::Check::Commands).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, PENDING))
                 .bind(i64::from(limit))

@@ -140,6 +140,34 @@ impl Database {
             .collect()
     }
 
+    /// As [`Self::covered_times`], by successful runs only: the fire times no scheduled run
+    /// will take any more (decision 485).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn succeeded_times(
+        &self,
+        dag_id: &DagId,
+        from: Timestamp,
+        to: Timestamp,
+    ) -> Result<BTreeSet<Timestamp>, DbError> {
+        const SUCCEEDED: &str = "SELECT DISTINCT {ts<}planned_for{>ts} FROM runs \
+            WHERE dag_id = $1 AND planned_for >= $2{ts} AND planned_for <= $3{ts} \
+            AND state = 'success'";
+        let rows: Vec<(String,)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, SUCCEEDED))
+                .bind(dag_id.as_str())
+                .bind(db_time(from))
+                .bind(db_time(to))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.iter()
+            .map(|(at,)| parse_time("runs.planned_for", at))
+            .collect()
+    }
+
     /// A backfill, with its runs counted by state; `None` for an unknown ID.
     ///
     /// # Errors

@@ -51,14 +51,14 @@ the code. Roughly:
 `schedr_master_tick_duration_seconds` has 29 buckets, each √2 times the last, from 1 ms to
 about 16 s. A round's p99 one bucket worse is about 1.4 times the previous bucket, so
 [scenario 14](11-stress.md) can tell that from a doubling. `schedr_master_dags` counts DAGs
-that can run by `state`: `busy` (visited every round), `quiet` (visited when woken), or
-`held` (the file that defines it fails to import, so it gets no runs until the file does).
+that can run by `state`, as of the last scheduler round: `busy` (that round visited it),
+`quiet` (it didn't: nothing was due), or `held` (the file that defines it fails to import, so
+it gets no runs until the file does). An idle deployment shows none busy between fire times.
 A held DAG is also counted as `busy` or `quiet`, so adding the three series counts it twice.
 [A held DAG](06-parsing.md#a-held-dag) is when that series moves.
-`schedr_master_dag_wakes_total` counts quiet DAGs woken, by `reason`: `timer`, `command`,
-`run_queued`, `run_ended`, `new_version`, `sweep`. `sweep` increments only when the sweep or
-the ID check found the DAG with something to do (a run running or queued, or one that round
-created). That is a missed wake, and the counter staying at zero is the healthy case. See
+`schedr_master_dag_wakes_total` counts the DAGs visited after a term's first round, by
+`reason`: `timer` (its stored next fire time came), `unknown` (its next fire time wasn't known:
+a new version, a pause or unpause), `command`, `run_queued`, `run_ended`, `new_version`. See
 [Busy and quiet DAGs](04-master.md#busy-and-quiet-dags).
 
 `schedr_master_triggers{state}` counts triggers of DAGs that want them running: `running`,

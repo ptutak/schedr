@@ -14,6 +14,14 @@ use uuid::Uuid;
 use crate::database::{Database, DbError};
 use crate::query::{db_time, from_name, in_tx, on_pool, parse_time, sql, sql_text};
 
+/// The rows of queued runs: the read's `FROM ... WHERE` and its probe check's (decision 485).
+macro_rules! queued_from {
+    () => {
+        "FROM runs WHERE state = 'queued'"
+    };
+}
+pub(crate) use queued_from;
+
 #[cfg(test)]
 mod tests;
 
@@ -42,7 +50,7 @@ fn last_scheduled_query(count: usize) -> String {
     )
 }
 
-fn dag_id_of(text: String) -> Result<DagId, DbError> {
+pub(crate) fn dag_id_of(text: String) -> Result<DagId, DbError> {
     DagId::new(text).map_err(|e| DbError::InvalidData {
         what: "dag_id",
         reason: e.to_string(),
@@ -544,7 +552,10 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or a stored DAG ID doesn't read.
     pub async fn dags_with_queued_runs(&self) -> Result<Vec<DagId>, DbError> {
-        const QUEUED: &str = "SELECT DISTINCT dag_id FROM runs WHERE state = 'queued'";
+        const QUEUED: &str = concat!("SELECT DISTINCT dag_id ", queued_from!());
+        if self.skipped(crate::probe::Check::QueuedRuns).await? {
+            return Ok(Vec::new());
+        }
         let rows: Vec<String> = on_pool!(self, |pool, backend| {
             sqlx::query_scalar(sql(backend, QUEUED))
                 .fetch_all(pool)

@@ -177,6 +177,39 @@ impl Plan<'_> {
         covered: &BTreeSet<Timestamp>,
     ) -> Vec<RunTimes> {
         let free = self.free_places(running).min(MAX_RUNS_PER_PASS);
+        self.due_times(last_scheduled, free, now, covered)
+            .into_iter()
+            .map(|planned_for| RunTimes {
+                planned_for,
+                since: self.fire_time_since(planned_for),
+            })
+            .collect()
+    }
+
+    /// The first fire time still due at `now` after `last_scheduled`, whatever the places
+    /// free, leaving out `covered` (decision 485: the scheduler visits the DAG again while
+    /// one waits).
+    #[must_use]
+    pub fn first_waiting(
+        &self,
+        last_scheduled: Option<Timestamp>,
+        now: Timestamp,
+        covered: &BTreeSet<Timestamp>,
+    ) -> Option<Timestamp> {
+        self.due_times(last_scheduled, 1, now, covered)
+            .into_iter()
+            .next()
+    }
+
+    /// The fire times due at `now` after `last_scheduled`, at most `free`, leaving out
+    /// `covered`.
+    fn due_times(
+        &self,
+        last_scheduled: Option<Timestamp>,
+        free: usize,
+        now: Timestamp,
+        covered: &BTreeSet<Timestamp>,
+    ) -> Vec<Timestamp> {
         if free == 0 {
             return Vec::new();
         }
@@ -203,12 +236,7 @@ impl Plan<'_> {
         {
             due.push(latest);
         }
-        due.into_iter()
-            .map(|planned_for| RunTimes {
-                planned_for,
-                since: self.fire_time_since(planned_for),
-            })
-            .collect()
+        due
     }
 
     /// How many more runs may run (`usize::MAX` without a limit).

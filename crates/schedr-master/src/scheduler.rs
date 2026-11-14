@@ -6,13 +6,17 @@
 //! stored before anything else happens to them, and a scheduled run is unique per
 //! `planned_for`, so a pass repeated after a crash creates nothing twice.
 //!
-//! Which DAGs a pass looks at is [`QuietDags`]'s choice: every DAG, or the busy ones and the
-//! quiet ones woken (see archive/PROJECT.md, "Quiet DAGs").
+//! Which DAGs a pass looks at is [`QuietDags`]'s choice (decision 485): every DAG, or those the
+//! database finds due (a scheduled DAG's stored next fire time come or unknown, a queued run)
+//! and those marked. After each visit a scheduled DAG's next fire time is stored when it
+//! changed: the visit's own time while due runs wait (held, at `max_active_runs`, past the
+//! round's share), else its next fire time, [`NO_FIRE`] when it has none.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
+use schedr_db::dags::NO_FIRE;
 use schedr_db::runs::{ActiveDag, Held, NewRun, QueuedRun};
 use schedr_db::{Database, DbError};
 use schedr_model::{DagId, RunKind, RunState};
@@ -20,7 +24,7 @@ use schedr_model::{DagId, RunKind, RunState};
 use crate::fire_times::{FireTimes, FireTimesError};
 use crate::metrics::MasterMetrics;
 use crate::planning::{ManualRunError, Plan, RunTimes, manual_planned_for, runs_to_start};
-use crate::quiet::{QuietDags, QuietSettings, Round, Visit, Visited, WakeReason, Wakes};
+use crate::quiet::{QuietDags, QuietSettings, Visit, Visited, WakeReason, Wakes};
 
 /// The most scheduled runs a round creates for one DAG: a DAG catching up after a long pause
 /// goes over a few rounds, the earliest first (B18).
@@ -219,15 +223,27 @@ impl Scheduler {
     ///
     /// [`SchedulerError::Db`] if the database fails (the pass stops; what was stored stays).
     pub async fn pass(&self, now: Timestamp) -> Result<Pass, SchedulerError> {
-        // Any queued run wakes its DAG, whatever stored it (one small query by the index of
-        // unfinished runs): no path that queues a run needs to remember a mark.
+        // What the database finds due (decision 485), whatever stored it: a queued run, a
+        // scheduled DAG whose stored next fire time has come or isn't known. Both through the
+        // round's probe: an idle round reads neither.
+        let mut due = Vec::new();
+        let mut stored = HashMap::new();
         if self.quiet().enabled() {
             for dag in self.db.dags_with_queued_runs().await? {
-                self.wakes.wake(&dag, WakeReason::RunQueued);
+                due.push((dag, WakeReason::RunQueued));
+            }
+            for (dag, at) in self.db.scheduled_due(now).await? {
+                let reason = if at.is_some() {
+                    WakeReason::Timer
+                } else {
+                    WakeReason::Unknown
+                };
+                due.push((dag.clone(), reason));
+                stored.insert(dag, at);
             }
         }
-        let round = self.quiet().round(now);
-        let result = self.visit(round, now).await;
+        let visit = self.quiet().round(due);
+        let result = self.visit(visit, stored, now).await;
         if result.is_err() {
             // Nothing the round would have changed is kept: the next one retries it.
             self.quiet().round_failed();
@@ -235,20 +251,24 @@ impl Scheduler {
         result
     }
 
-    /// The round's work: the DAGs `round` names visited at `now`.
-    async fn visit(&self, round: Round, now: Timestamp) -> Result<Pass, SchedulerError> {
+    /// The round's work: the DAGs `visit` names visited at `now`; `stored`, the next fire times
+    /// stored of those the database found due (read for the others when it visits all).
+    async fn visit(
+        &self,
+        visit: Visit,
+        mut stored: HashMap<DagId, Option<Timestamp>>,
+        now: Timestamp,
+    ) -> Result<Pass, SchedulerError> {
         let mut pass = Pass::default();
-        let visit = match round.visit {
-            Visit::Some(mut dags) if round.check => {
-                // Every DAG's ID and version against memory: one missed by every mark too.
-                let versions = self.db.active_dag_versions().await?;
-                dags.extend(self.quiet().checked(&versions));
-                dags.sort();
-                dags.dedup();
-                Visit::Some(dags)
+        match &visit {
+            // Nothing due: nothing read.
+            Visit::Some(dags) if dags.is_empty() => {
+                self.quiet().round_done(&visit, &HashSet::new());
+                return Ok(pass);
             }
-            visit => visit,
-        };
+            Visit::All => stored = self.db.next_fires().await?,
+            Visit::Some(_) => {}
+        }
         // The DAGs' runs at once: a round costs a few queries, not three per DAG (B12), and
         // reads only the DAGs it visits.
         let (overview, active_dags) = match &visit {
@@ -281,34 +301,17 @@ impl Scheduler {
                 first_seen: active.first_seen,
             };
             let mut running = overview.running(&active.dag.id);
+            let mut waiting = None;
             let queued = overview.queued(&active.dag.id);
-            let mut new_runs = 0;
             let mut skipped = false;
             // Held (decision 72): its fire times create nothing (missed, as when paused) and
             // its queued runs wait.
             let held = active.held.as_ref();
             if !active.paused && held.is_none() {
                 let last = overview.last_scheduled(&active.dag.id);
-                let due = self.due_runs(&plan, last, running, now).await?;
-                // At most so many a DAG a round: a long catch-up goes over a few (B18).
-                for times in due.into_iter().take(SCHEDULED_PER_ROUND) {
-                    // The defaults, checked when the DAG was validated.
-                    let params = match run_params(&active, None) {
-                        Ok(params) => params,
-                        Err(error) => {
-                            self.skip(&mut pass, &active.dag.id, error);
-                            skipped = true;
-                            break;
-                        }
-                    };
-                    let new = new_run(&active, RunKind::Scheduled, times, now, SCHEDULER, &params);
-                    if let Some(run_id) = self.db.insert_run(&new).await? {
-                        running += 1;
-                        new_runs += 1;
-                        pass.created
-                            .push(created(&active, run_id, RunKind::Scheduled, times));
-                    }
-                }
+                (waiting, skipped) = self
+                    .create_due(&mut pass, &active, &plan, last, &mut running, now)
+                    .await?;
             }
             if !skipped {
                 self.passed(&active.dag.id);
@@ -318,18 +321,80 @@ impl Scheduler {
                     .extend(self.start_queued(queued, &plan, running, now).await?);
             }
             let why = held.map(|h| h.reason(active.dag.id.as_str()));
-            let found = Visited {
-                version: &active.version_id,
-                active: running > 0 || new_runs > 0 || !queued.is_empty(),
-                // Not paused when held: visited at its fire times, to see the hold lift.
-                paused: active.paused,
-                held: why.as_deref(),
-                next_fire: plan.next_fire_after(now),
-            };
-            self.quiet().visited(&active.dag.id, found, now);
+            // When to visit it next, stored when it changed (decision 485): while due runs wait,
+            // the first of them, and while it is held (to see the hold lift), a time come
+            // already, so each round visits it again with no write; else its next fire time.
+            // A paused one isn't due until unpausing clears it.
+            if active.dag.trigger.kind() == Some("schedule") && !active.paused {
+                let stored_at = stored.get(&active.dag.id).copied().flatten();
+                let next = if held.is_some() {
+                    stored_at.filter(|at| *at <= now).unwrap_or(now)
+                } else if let Some(first) = waiting {
+                    first.min(now)
+                } else {
+                    plan.next_fire_after(now).unwrap_or(NO_FIRE)
+                };
+                if stored.get(&active.dag.id) != Some(&Some(next)) {
+                    self.db.set_next_fire(&active.dag.id, next).await?;
+                }
+            }
+            self.quiet().visited(
+                &active.dag.id,
+                Visited {
+                    held: why.as_deref(),
+                },
+            );
         }
         self.quiet().round_done(&visit, &seen);
         Ok(pass)
+    }
+
+    /// Creates `active`'s due scheduled runs at `now` (at most [`SCHEDULED_PER_ROUND`]), `last`
+    /// its last scheduled one; `running` counts those created. Returns the first fire time
+    /// still waiting, if any, and whether the DAG was skipped (its defaults).
+    async fn create_due(
+        &self,
+        pass: &mut Pass,
+        active: &ActiveDag,
+        plan: &Plan<'_>,
+        last: Option<Timestamp>,
+        running: &mut u32,
+        now: Timestamp,
+    ) -> Result<(Option<Timestamp>, bool), SchedulerError> {
+        let due = self.due_runs(plan, last, *running, now).await?;
+        let capped = due.len() > SCHEDULED_PER_ROUND;
+        let mut last_created = last;
+        // At most so many a DAG a round: a long catch-up goes over a few (B18).
+        for times in due.into_iter().take(SCHEDULED_PER_ROUND) {
+            // The defaults, checked when the DAG was validated.
+            let params = match run_params(active, None) {
+                Ok(params) => params,
+                Err(error) => {
+                    self.skip(pass, &active.dag.id, error);
+                    return Ok((None, true));
+                }
+            };
+            last_created = last_created.max(Some(times.planned_for));
+            let new = new_run(active, RunKind::Scheduled, times, now, SCHEDULER, &params);
+            if let Some(run_id) = self.db.insert_run(&new).await? {
+                *running += 1;
+                pass.created
+                    .push(created(active, run_id, RunKind::Scheduled, times));
+            }
+        }
+        // Due runs that wait (decision 485): past the round's share, or a fire time still due,
+        // for a free place or behind a run of another kind that may yet fail (one that
+        // succeeded takes it for good). A DAG skipped for its defaults waits for new code
+        // instead.
+        let waiting = match plan.first_waiting(last_created, now, &BTreeSet::new()) {
+            Some(first) if capped => Some(first),
+            None => None,
+            Some(first) => {
+                let done = self.db.succeeded_times(&active.dag.id, first, now).await?;
+                plan.first_waiting(last_created, now, &done)
+            }
+        };
+        Ok((waiting, false))
     }
 
     /// Creates a manual run for `requested` (`--for`) or now, by `user`; it starts at once

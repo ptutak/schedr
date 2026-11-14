@@ -17,6 +17,7 @@ pub mod lease;
 pub mod named_events;
 pub mod nodes;
 pub mod notifications;
+pub mod probe;
 mod query;
 pub mod reads;
 pub mod retention;

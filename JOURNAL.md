@@ -972,3 +972,36 @@ resends a result unacknowledged at two heartbeats), each repeat read again and e
 - **Chosen: 80** (Claude's, as the user asked): the burst recorded as fast as at any size, no
   figure worse than the noise. Scenario 13 spawned (8.6 to 9.2 tasks a second) showed no trend.
 - **Not chosen:** 40 (a burst recorded 0.4 s later), 120 or 160 (slower starts, no gain).
+
+### <a id="D485"></a>2026-11-14: each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own (decision 485)
+
+- **Question:** M5.1f, the idle cost. An idle standalone (release build, the examples' DAGs,
+  SQLite, measured 2026-11-14 over 10 minutes) makes 22.5 statements a second, 2.0 % of a core,
+  about 200 context switches a second over its threads, 4.4 MiB written in 10 minutes: every 1 s
+  tick, each round part reads its inputs and finds nothing (the trigger rows three times a
+  round, open attempts and ready instances twice, active DAGs and current parses, then about ten
+  more once each).
+- **Options:** (A) rounds gated by the change signals the database triggers write, a slow safety
+  pass, time-based parts sleeping to their next due time; (B) the idle tick stretched from 1 s to
+  5 s after a few empty rounds; (C) B with the trigger rows read once and the DAGs only on a
+  change; (D) an event-driven master keeping the state in memory, each write path marking what it
+  touched, a timer queue for what comes due; (E) the 1 s tick kept, opening with one probe
+  statement whose checks (an `EXISTS` or `MIN` on an index each) say which parts have work.
+- **Chosen: E** (the user), with two rules of theirs: everything goes through the one probe
+  statement a tick, and a check always reads a stored row or column, so a moment worked out from
+  code each tick (a scheduled DAG's next fire time, an event trigger's window, a generator's
+  `restart_if_idle`, a wait step's `max_wait` deadline) gets a column, kept by whoever sets it.
+  And triggers and events are to be faster than the rest: they get a round of their own (the
+  user's idea; Claude had proposed wakes into the main round), woken at once by a named event
+  posted, a run's end recorded, a `TriggerEvent`, a trigger stopping or failing, and by the
+  probe for their moments, so a busy main round (4.1 s at p99 in stress 1) no longer holds them.
+  The columns stay with the round of its own: wakes cover what happens, not what comes due, and
+  stored moments survive a restart or a takeover and can be shown. Built as M5.1f1 (the probe and
+  the columns) and M5.1f2 (the trigger round).
+- **Risks named:** a column a writer forgets goes stale with no polling behind it (a test per
+  writer, and one rebuilding every column from scratch against what is stored); a check drifting
+  from its part's query (each check kept next to its part's, a test per check); the trigger round
+  being new concurrency against the dispatcher (a paranoid review).
+- **Not chosen:** A (relies on the database triggers: a write they don't cover waits for the
+  safety pass), B and C (up to 5 s more latency at idle), D (an in-memory model of the state the
+  database already holds).

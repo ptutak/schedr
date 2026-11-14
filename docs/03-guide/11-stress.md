@@ -99,8 +99,9 @@ scraped for 1 minute (5 minutes full): the difference of
 and unpaused (300 times the scale, or 1,000 full). The cron is minute 0 of the UTC hour
 twelve hours ahead, `catchup` off and no `start`, so a fire before the DAG was stored does
 not run and none fires while the scenario lasts. After the unpause the scenario waits until
-`schedr_master_dags{state="quiet"}` reaches that count (up to 3 minutes): each idle DAG turns
-quiet on its next visit. Then the same 20 s settle and window run again. The scenario fails
+`schedr_master_dags{state="quiet"}` reaches that count (up to 3 minutes): unpausing leaves
+a DAG's next fire time unknown, so the next round visits it and stores the time twelve
+hours ahead, and the DAG is quiet from then on. Then the same 20 s settle and window run again. The scenario fails
 on a window with no counted rounds, a metrics scrape that is not 200, a busy DAG that did
 not fire in that window, or a quiet DAG with a scheduled run. It also fails when the mean
 round beside the quiet DAGs is over 2.0 times the mean alone, or the p99 over 1.5 times.
