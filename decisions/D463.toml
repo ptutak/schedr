@@ -15,3 +15,5 @@ scraping each process's `/metrics` (no process records that address, and it give
 history = "JOURNAL.md#D463"
 step = "M5.1h"
 also = ["protocol", "workers"]
+code = ["crates/schedr-model/src/usage.rs", "crates/schedr-agent/src/memory.rs::node_usage", "crates/schedr-agent/src/memory.rs::RunningMemory", "crates/schedr-master/src/core.rs::USAGE_EVERY", "crates/schedr-db/src/nodes.rs::set_worker_usage", "crates/schedr-api/src/views.rs::WorkerUsageView"]
+checked = 2026-11-14

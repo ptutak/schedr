@@ -1050,6 +1050,7 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
                 .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
     };
     let (seen, left) = against_script(2, Start::With(vec![]), script, done).await;
+    assert_a_heartbeat_says_what_the_worker_uses(&seen);
     // Results arrive from background work, so only the order of what is sent at once holds.
     let mut sent = kinds(&seen);
     sent.sort_unstable();
@@ -1074,6 +1075,28 @@ async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run
         "a result is kept until it is acknowledged: {left:?}"
     );
     assert_results_name_their_code(&seen, 2);
+}
+
+/// Decision 463: a heartbeat says what the worker uses (a test's process: /proc is there); this
+/// executor has neither fork servers nor tasks measured.
+fn assert_a_heartbeat_says_what_the_worker_uses(seen: &[pb::WorkerMessage]) {
+    let usage = seen
+        .iter()
+        .find_map(|m| match &m.message {
+            Some(worker_message::Message::Heartbeat(beat)) => beat.usage.clone(),
+            _ => None,
+        })
+        .expect("a heartbeat with its usage");
+    let process = usage.process.expect("the agent's process");
+    assert!(
+        process.resident_bytes > 0 && process.cpu_seconds > 0.0,
+        "{process:?}"
+    );
+    assert_eq!(
+        (usage.fork_servers_bytes, usage.tasks_bytes),
+        (0, 0),
+        "this executor has neither"
+    );
 }
 
 fn heartbeats(messages: &[pb::WorkerMessage]) -> usize {
@@ -1813,6 +1836,7 @@ fn with_memory_adds_the_peak_and_says_why_a_task_was_killed() {
     };
     let seen = crate::memory::MemorySeen {
         peak: 130 << 20,
+        last: 130 << 20,
         over: Some(130 << 20),
     };
     with_memory(&mut killed, seen, Some(100 << 20));
@@ -1832,6 +1856,7 @@ fn with_memory_adds_the_peak_and_says_why_a_task_was_killed() {
         &mut fine,
         crate::memory::MemorySeen {
             peak: 5 << 20,
+            last: 5 << 20,
             over: None,
         },
         Some(100 << 20),
@@ -2288,6 +2313,7 @@ fn command_needing_secret(
         forks: None,
         watchers: crate::watchers::WatcherHosts::default(),
         secrets: Arc::new(stores),
+        running_memory: crate::memory::RunningMemory::default(),
     };
     let task = json!({
         "id": "load",
@@ -2529,6 +2555,7 @@ async fn command_with_connection(
         forks: None,
         watchers: crate::watchers::WatcherHosts::default(),
         secrets: Arc::new(crate::secrets::SecretStores::none()),
+        running_memory: crate::memory::RunningMemory::default(),
     };
     let task = json!({
         "id": "load",
@@ -2831,6 +2858,7 @@ fn attempt_with_timed_cleanup(
         forks: None,
         watchers: crate::watchers::WatcherHosts::default(),
         secrets: Arc::new(crate::secrets::SecretStores::none()),
+        running_memory: crate::memory::RunningMemory::default(),
     };
     let line = |text: &str| json!({"argv": [[{"text": "sh"}], [{"text": "-c"}], [{"text": text}]]});
     let out = dir.path().join("out").display().to_string();

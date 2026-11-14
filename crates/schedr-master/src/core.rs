@@ -38,6 +38,11 @@ pub(crate) mod triggers;
 #[cfg(test)]
 mod tests;
 
+/// How often a worker's usage is written from its heartbeats (decision 463): a minute, the
+/// samples' own step (decision 464), so the stored figure is never older than a sample needs
+/// and a heartbeat adds no statement in between.
+pub const USAGE_EVERY: SignedDuration = SignedDuration::from_secs(60);
+
 /// How long a script root may be unreported before it counts as absent (decision 303).
 pub const DEFAULT_SCRIPT_ROOT_GRACE: Duration = Duration::from_mins(5);
 
@@ -389,6 +394,8 @@ struct Connection {
     secret_storages: Option<BTreeSet<String>>,
     /// What its wait step hosts looked like when last written to the registry.
     watcher_hosts: Vec<pb::WatcherHost>,
+    /// When what it uses was last written to the registry (decision 463).
+    usage_at: Option<Timestamp>,
 }
 
 /// What has arrived from workers before the master handled it (cheap to clone; clones share
@@ -834,6 +841,7 @@ impl MasterCore {
                     live: false,
                     secret_storages: None,
                     watcher_hosts: Vec::new(),
+                    usage_at: None,
                 },
             );
             restored += 1;
@@ -1012,6 +1020,7 @@ impl MasterCore {
                 live: true,
                 secret_storages: Some(register.secret_storages.iter().cloned().collect()),
                 watcher_hosts: Vec::new(),
+                usage_at: None,
             },
         );
         let protocol = register
@@ -1143,6 +1152,63 @@ impl MasterCore {
         }
     }
 
+    /// What a worker uses, by part (decision 463), written at most once every [`USAGE_EVERY`]:
+    /// for people, a failed write logged (the next heartbeat writes it).
+    async fn heard_of_usage(&mut self, worker_id: &str, usage: pb::WorkerUsage, now: Timestamp) {
+        let Some(connection) = self.connections.get_mut(worker_id) else {
+            return;
+        };
+        if connection
+            .usage_at
+            .is_some_and(|at| now.duration_since(at) < USAGE_EVERY)
+        {
+            return;
+        }
+        let Some(process) = usage.process else {
+            return;
+        };
+        // Within the limits before anything keeps it (B183).
+        let limits = self.settings.worker_report;
+        let largest_tasks = limits
+            .take(worker_id, "largest tasks", usage.largest_tasks)
+            .into_iter()
+            .map(|task| schedr_model::usage::TaskMemory {
+                attempt_id: limits.cut(task.attempt_id),
+                dag_id: limits.cut(task.dag_id),
+                run_id: limits.cut(task.run_id),
+                task_id: limits.cut(task.task_id),
+                map_index: task.map_index,
+                bytes: task.bytes,
+            })
+            .collect();
+        let record = schedr_model::usage::WorkerUsage {
+            process: schedr_model::usage::NodeUsage {
+                resident_bytes: process.resident_bytes,
+                // A worker's own figure: never a NaN or an infinity in the stored JSON.
+                cpu_seconds: if process.cpu_seconds.is_finite() {
+                    process.cpu_seconds.max(0.0)
+                } else {
+                    0.0
+                },
+                container_bytes: process.container_bytes,
+                container_limit_bytes: process.container_limit_bytes,
+            },
+            fork_servers_bytes: usage.fork_servers_bytes,
+            watcher_hosts_bytes: usage.watcher_hosts_bytes,
+            tasks_bytes: usage.tasks_bytes,
+            largest_tasks,
+        };
+        // Housekeeping: nothing a trigger depends on (decision 486).
+        match self
+            .db
+            .quietly(self.db.set_worker_usage(worker_id, &record))
+            .await
+        {
+            Ok(()) => connection.usage_at = Some(now),
+            Err(error) => tracing::warn!(worker_id, %error, "what the worker uses not recorded"),
+        }
+    }
+
     /// For people, like the last heartbeat: a failed write is logged, not the message's failure
     /// (the next heartbeat that differs from what was written writes it).
     async fn heard_of_hosts(&mut self, worker_id: &str, hosts: Vec<pb::WatcherHost>) {
@@ -1236,6 +1302,9 @@ impl MasterCore {
             }
             worker_message::Message::Heartbeat(beat) => {
                 self.heard_of_hosts(worker_id, beat.watcher_hosts).await;
+                if let Some(usage) = beat.usage {
+                    self.heard_of_usage(worker_id, usage, now).await;
+                }
                 self.triggers_reported(worker_id, &beat.running_triggers)
                     .await?
             }

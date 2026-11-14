@@ -54,7 +54,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D466 | 2026-11-13 | user | planned (M5.1j) | ui-cli | UI charts are SVG drawn by the server |
 | D465 | 2026-11-13 | user | planned (M5.1j) | ui-cli | A Metrics page with memory and CPU over time |
 | D464 | 2026-11-13 | user | planned (M5.1i) | observability | The master keeps a sample of each process a minute |
-| D463 | 2026-11-13 | user | planned (M5.1h) | observability | Masters, workers and the webserver report their memory and CPU |
+| D463 | 2026-11-13 | user | built M5.1h | observability | Masters, workers and the webserver report their memory and CPU |
 | D462 | 2026-11-13 | user | built M5.1g | ui-cli | The Deployments page has a Status block above its graph |
 | D461 | 2026-11-12 | user | planned (1.0.0) | ui-cli | A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck |
 | D460 | 2026-11-12 | user | planned (1.0.0) | protocol | Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started |

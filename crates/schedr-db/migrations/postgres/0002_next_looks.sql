@@ -66,3 +66,9 @@ CREATE TRIGGER runs_ended_waits AFTER UPDATE OF state ON runs
 CREATE TRIGGER runs_inserted_ended_waits AFTER INSERT ON runs
     FOR EACH ROW WHEN (NEW.state IN ('success', 'failed', 'cancelled'))
     EXECUTE FUNCTION schedr_run_ended_waits();
+
+-- Decision 463: what each master and worker uses (memory, CPU, the container's memory and
+-- limit; a worker's by part), as it last said: a master with its row, a worker's at most once
+-- a minute from its heartbeats. NULL: not known (an older worker, no /proc).
+ALTER TABLE masters ADD COLUMN usage JSONB;
+ALTER TABLE workers ADD COLUMN usage JSONB;

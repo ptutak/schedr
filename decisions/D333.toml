@@ -12,5 +12,5 @@ tracebacks are not masked.
 history = "archive/PROJECT.md#D333"
 step = "M4.11L"
 also = ["code-delivery"]
-checked = 2026-11-09
+checked = 2026-11-14
 code = ["crates/schedr-agent/src/fork.rs::pass_env", "crates/schedr-agent/src/env.rs::task_environment"]

@@ -45,6 +45,8 @@ pub struct ApiState {
     /// This webserver as a node of its deployment (`GET /api/v1/deployment`), its
     /// configuration masked.
     pub node: Arc<crate::views::NodeView>,
+    /// What this process uses now (decision 463); none by default (the binary reads `/proc`).
+    pub usage: fn() -> Option<schedr_model::usage::NodeUsage>,
 }
 
 impl ApiState {
@@ -71,7 +73,9 @@ impl ApiState {
                 host: String::new(),
                 schedr_version: env!("CARGO_PKG_VERSION").to_owned(),
                 config: serde_json::json!({}),
+                usage: None,
             }),
+            usage: || None,
         }
     }
 
@@ -100,6 +104,12 @@ impl ApiState {
             max_event_size: bytes,
             ..self
         }
+    }
+
+    /// This state reading what its process uses with `usage` (decision 463).
+    #[must_use]
+    pub fn with_usage(self, usage: fn() -> Option<schedr_model::usage::NodeUsage>) -> Self {
+        Self { usage, ..self }
     }
 
     /// This state's webserver shown as `node` (its configuration masked by the caller).

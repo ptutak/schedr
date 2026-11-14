@@ -51,6 +51,8 @@ pub fn webserver_node(config: serde_json::Value) -> schedr_api::views::NodeView 
         host: host_name(),
         schedr_version: env!("CARGO_PKG_VERSION").to_owned(),
         config,
+        // Read for each answer instead (`ApiState::usage`, decision 463).
+        usage: None,
     }
 }
 
@@ -77,6 +79,9 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
     let beats = async {
         loop {
             let problems = master.problems.now();
+            // What its process uses (decision 463): in standalone the worker's and the
+            // webserver's too.
+            let usage = schedr_agent::memory::this_node();
             let node = MasterNode {
                 master_id: &master.master_id,
                 process_id: process_id(),
@@ -85,6 +90,7 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
                 config: &master.config,
                 started_at,
                 problems: &problems,
+                usage: usage.as_ref(),
             };
             // Housekeeping: nothing a trigger depends on (decision 486).
             match db

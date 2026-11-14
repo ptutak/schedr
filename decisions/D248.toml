@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D248"
 step = "M4.8b"
 also = ["workers", "protocol"]
 code = ["crates/schedr-agent/src/agent.rs"]
-checked = 2026-11-13
+checked = 2026-11-14

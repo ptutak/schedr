@@ -2064,6 +2064,13 @@ async fn a_deployments_nodes_are_recorded_and_read() {
         error: true,
         message: "a round failed".to_owned(),
     }];
+    // Decision 463: what it uses, stored as JSON with its row.
+    let usage = schedr_model::usage::NodeUsage {
+        resident_bytes: 80 << 20,
+        cpu_seconds: 1.25,
+        container_bytes: Some(200 << 20),
+        container_limit_bytes: None,
+    };
     let master = |id: &'static str, now: &str| {
         let master = MasterNode {
             master_id: id,
@@ -2073,6 +2080,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
             config: &config,
             started_at: ts("2026-11-01T08:00:00Z"),
             problems: &problems,
+            usage: Some(&usage),
         };
         let db = &db;
         let now = ts(now);
@@ -2127,8 +2135,20 @@ async fn a_deployments_nodes_are_recorded_and_read() {
             master_id: Some("m-b".to_owned()),
             process_id: Some("p2".to_owned()),
             config: Some(worker),
+            usage: None,
         }]
     );
+    let masters = db.masters(ts("2026-11-01T08:00:00Z")).await.unwrap();
+    assert!(masters.iter().all(|m| m.usage.as_ref() == Some(&usage)));
+    let parts = schedr_model::usage::WorkerUsage {
+        process: usage.clone(),
+        fork_servers_bytes: 1,
+        watcher_hosts_bytes: 2,
+        tasks_bytes: 3,
+        largest_tasks: Vec::new(),
+    };
+    db.set_worker_usage("w1", &parts).await.unwrap();
+    assert_eq!(db.worker_nodes().await.unwrap()[0].usage, Some(parts));
 }
 
 #[tokio::test]

@@ -34,7 +34,7 @@ use crate::views::{
     InstanceQuery, LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView,
     PauseRequest, ProblemView, ResourceList, ResourceView, RunDetail, RunList, RunView, RunsQuery,
     SensorList, SensorView, TaskView, TestConnectionRequest, TriggerList, TriggerRequest,
-    TriggerView, WorkerList, WorkerNodeView, WorkerView,
+    TriggerView, WorkerList, WorkerNodeView, WorkerUsageView, WorkerView,
 };
 
 #[cfg(test)]
@@ -140,13 +140,21 @@ pub async fn get_deployment(
                 schedr_version: worker.schedr_version,
                 master_id: node.as_ref().and_then(|n| n.master_id.clone()),
                 process_id: node.as_ref().and_then(|n| n.process_id.clone()),
+                usage: node
+                    .as_ref()
+                    .and_then(|n| n.usage.clone())
+                    .map(WorkerUsageView::from),
                 config: node.and_then(|n| n.config),
                 worker_id: worker.id,
             }
         })
         .collect();
     Ok(Json(DeploymentView {
-        webserver: NodeView::clone(&state.node),
+        // What it uses now (decision 463), read for each answer.
+        webserver: NodeView {
+            usage: (state.usage)().map(crate::views::NodeUsageView::from),
+            ..NodeView::clone(&state.node)
+        },
         masters: masters.into_iter().map(MasterView::from).collect(),
         workers,
         user: user.0,

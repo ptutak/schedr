@@ -165,7 +165,8 @@ scope = '''
 done_when = '''
 each process's figures reach the database or the answer; an older worker without the field is still served; tests on both databases
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1i"

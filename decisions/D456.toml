@@ -16,4 +16,4 @@ history = "JOURNAL.md#D456"
 step = "n/a"
 also = ["deployment", "state", "protocol"]
 code = ["crates/schedr-proto/src/version.rs::PROTOCOL_VERSION", "crates/schedr-db/src/status.rs", "scripts/release.py"]
-checked = 2026-11-12
+checked = 2026-11-14

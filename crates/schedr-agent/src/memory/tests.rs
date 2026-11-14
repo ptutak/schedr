@@ -234,6 +234,7 @@ async fn over_budget_records_the_peak_and_completes_past_the_budget() {
         *seen.lock().unwrap(),
         MemorySeen {
             peak: 3000 * 1024,
+            last: 3000 * 1024,
             over: Some(3000 * 1024)
         }
     );
@@ -371,4 +372,109 @@ fn a_task_asking_for_its_own_budget_is_watched_with_it_the_ceiling_is_the_limit_
     );
     assert_eq!(ceiling(1000, Reserve::Percent(10)), 900);
     assert_eq!(ceiling(1000, Reserve::Bytes(2000)), 0);
+}
+
+#[test]
+fn a_nodes_usage_is_its_resident_memory_cpu_and_its_containers_memory_and_limit() {
+    // Decision 463.
+    let proc = TempDir::new().unwrap();
+    std::fs::create_dir_all(proc.path().join("self")).unwrap();
+    // utime 250, stime 50 ticks (fields 14 and 15), the command holding a space and a ')'.
+    let mut stat = "42 (schedr) x) S".to_owned();
+    for n in 4..=52 {
+        stat.push(' ');
+        stat.push_str(match n {
+            14 => "250",
+            15 => "50",
+            _ => "0",
+        });
+    }
+    std::fs::write(proc.path().join("self/stat"), stat).unwrap();
+    std::fs::write(proc.path().join("self/statm"), "1000 300 10 1 0 50 0\n").unwrap();
+    std::fs::write(proc.path().join("self/cgroup"), "0::/pod/c1\n").unwrap();
+    let cgroup = TempDir::new().unwrap();
+    let c1 = cgroup.path().join("pod/c1");
+    std::fs::create_dir_all(&c1).unwrap();
+    std::fs::write(c1.join("memory.current"), "52428800\n").unwrap();
+    std::fs::write(cgroup.path().join("pod/memory.max"), "1073741824\n").unwrap();
+    let usage = crate::memory::node_usage(proc.path(), cgroup.path(), 4096, 100).unwrap();
+    assert_eq!(
+        usage,
+        schedr_model::usage::NodeUsage {
+            resident_bytes: 300 * 4096,
+            cpu_seconds: 3.0,
+            container_bytes: Some(50 << 20),
+            container_limit_bytes: Some(1 << 30),
+        }
+    );
+    // Outside a cgroup v2: the process's own only.
+    std::fs::write(proc.path().join("self/cgroup"), "4:memory:/x\n").unwrap();
+    let usage = crate::memory::node_usage(proc.path(), cgroup.path(), 4096, 100).unwrap();
+    assert_eq!(
+        (usage.container_bytes, usage.container_limit_bytes),
+        (None, None)
+    );
+    // No /proc: nothing.
+    let empty = TempDir::new().unwrap();
+    assert_eq!(
+        crate::memory::node_usage(empty.path(), cgroup.path(), 4096, 100),
+        None
+    );
+}
+
+#[test]
+fn running_tasks_are_reported_largest_first_with_their_latest_sample_until_dropped() {
+    // Decision 463: what the heartbeat names.
+    let memory = crate::memory::RunningMemory::default();
+    let named = |attempt: &str, task: &str| schedr_model::usage::TaskMemory {
+        attempt_id: attempt.to_owned(),
+        dag_id: "sync".to_owned(),
+        run_id: "r1".to_owned(),
+        task_id: task.to_owned(),
+        map_index: None,
+        bytes: 0,
+    };
+    let (small, large) = (SharedSeen::default(), SharedSeen::default());
+    let first = memory.watch(named("a1", "extract"), small.clone());
+    let second = memory.watch(named("a2", "load"), large.clone());
+    small.lock().unwrap().last = 10;
+    {
+        let mut seen = large.lock().unwrap();
+        seen.peak = 900;
+        seen.last = 500;
+    }
+    assert_eq!(
+        memory
+            .now()
+            .iter()
+            .map(|t| (t.task_id.as_str(), t.bytes))
+            .collect::<Vec<_>>(),
+        [("load", 500), ("extract", 10)],
+        "the latest sample, not the peak"
+    );
+    drop(second);
+    assert_eq!(memory.now().len(), 1);
+    drop(first);
+    assert_eq!(memory.now(), []);
+}
+
+#[test]
+fn a_fork_servers_measure_with_a_pss_unread_is_no_measure() {
+    // Grok's review of M5.1h: a shim without its PSS left the server's own uncounted and
+    // published 0; now the last measure stays.
+    let proc = fake_proc(&[
+        (100, 100, Some(8000), 10),
+        (101, 100, None, 10),
+        (200, 200, Some(1000), 10),
+    ]);
+    assert_eq!(
+        crate::fork::servers_memory(proc.path(), &[200]),
+        Some(1000 * 1024)
+    );
+    assert_eq!(crate::fork::servers_memory(proc.path(), &[100, 200]), None);
+    assert_eq!(
+        crate::fork::servers_memory(proc.path(), &[]),
+        Some(0),
+        "none up: none"
+    );
 }

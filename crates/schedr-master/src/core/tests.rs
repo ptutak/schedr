@@ -379,6 +379,76 @@ async fn a_tick_applies_commands_and_assigns_the_task_which_then_runs_to_the_end
 }
 
 #[tokio::test]
+async fn what_a_worker_uses_is_kept_at_most_once_a_minute() {
+    // Decision 463: from its heartbeats, a statement a minute at most per worker.
+    let mut core = with_dag().await;
+    let beat = |resident_bytes: u64, cpu_seconds: f64| {
+        worker_message::Message::Heartbeat(pb::Heartbeat {
+            usage: Some(pb::WorkerUsage {
+                process: Some(pb::NodeUsage {
+                    resident_bytes,
+                    cpu_seconds,
+                    container_bytes: Some(900),
+                    container_limit_bytes: None,
+                }),
+                fork_servers_bytes: 10,
+                watcher_hosts_bytes: 20,
+                tasks_bytes: 30,
+                largest_tasks: vec![pb::TaskMemory {
+                    attempt_id: "a1".to_owned(),
+                    dag_id: "sync".to_owned(),
+                    run_id: "r1".to_owned(),
+                    task_id: "load".to_owned(),
+                    map_index: None,
+                    bytes: 30,
+                }],
+            }),
+            ..pb::Heartbeat::default()
+        })
+    };
+    let stored = async |core: &MasterCore| {
+        core.db.worker_nodes().await.unwrap()[0]
+            .usage
+            .clone()
+            .expect("stored")
+    };
+    core.handle("w1", beat(100, 1.5), later(1)).await.unwrap();
+    let first = stored(&core).await;
+    assert_eq!(first.process.resident_bytes, 100);
+    assert_eq!(first.process.container_bytes, Some(900));
+    assert_eq!(
+        (
+            first.fork_servers_bytes,
+            first.watcher_hosts_bytes,
+            first.tasks_bytes
+        ),
+        (10, 20, 30)
+    );
+    assert_eq!(first.largest_tasks[0].task_id, "load");
+    // Within the minute: kept as it was.
+    core.handle("w1", beat(200, 2.0), later(40)).await.unwrap();
+    assert_eq!(stored(&core).await.process.resident_bytes, 100);
+    // A minute on: the latest; a figure that isn't one is stored as 0.
+    core.handle("w1", beat(300, f64::NAN), later(61))
+        .await
+        .unwrap();
+    let last = stored(&core).await;
+    assert_eq!(
+        (last.process.resident_bytes, last.process.cpu_seconds),
+        (300, 0.0)
+    );
+    // A heartbeat without it (an older worker) changes nothing.
+    core.handle(
+        "w1",
+        worker_message::Message::Heartbeat(pb::Heartbeat::default()),
+        later(200),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored(&core).await.process.resident_bytes, 300);
+}
+
+#[tokio::test]
 async fn what_a_worker_says_of_its_hosts_is_kept_for_people() {
     let mut core = with_dag().await;
     let host = pb::WatcherHost {

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D167"
 step = "M4.6b"
 also = ["outcomes", "serialization"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-agent/src/mask.rs::mask_json", "crates/schedr-agent/src/mask.rs::MaskSet"]
-checked = 2026-11-13
+checked = 2026-11-14

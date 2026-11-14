@@ -1088,6 +1088,45 @@
         ],
         "type": "object"
       },
+      "NodeUsageView": {
+        "description": "A schedr process's memory and CPU, and its container's (decision 463).",
+        "properties": {
+          "container_bytes": {
+            "description": "Its cgroup's memory now; none outside a cgroup v2.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "container_limit_bytes": {
+            "description": "Its container's memory limit; none when unlimited.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cpu_seconds": {
+            "description": "CPU time used (user and system) since it started, in seconds.",
+            "format": "double",
+            "type": "number"
+          },
+          "resident_bytes": {
+            "description": "Resident memory, in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "resident_bytes",
+          "cpu_seconds"
+        ],
+        "type": "object"
+      },
       "NodeView": {
         "description": "A process of the deployment.",
         "properties": {
@@ -1106,6 +1145,17 @@
           "schedr_version": {
             "description": "Its schedr version.",
             "type": "string"
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NodeUsageView",
+                "description": "What its process uses (decision 463): the webserver's now, a master's as its row last\nsaid; none when not known (no `/proc`, an older node)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1545,6 +1595,50 @@
           "sensor",
           "strikes",
           "switched_off_at"
+        ],
+        "type": "object"
+      },
+      "TaskMemoryView": {
+        "description": "A running task's memory, named.",
+        "properties": {
+          "attempt_id": {
+            "description": "The attempt.",
+            "type": "string"
+          },
+          "bytes": {
+            "description": "Its memory, in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dag_id": {
+            "description": "Its DAG.",
+            "type": "string"
+          },
+          "map_index": {
+            "description": "Its map index; none for an unmapped task.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "Its run.",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "Its task.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "dag_id",
+          "run_id",
+          "task_id",
+          "bytes"
         ],
         "type": "object"
       },
@@ -2024,6 +2118,17 @@
             "description": "`active`, `draining`, `disconnected`, `offline` or `lost`.",
             "type": "string"
           },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkerUsageView",
+                "description": "What it uses, by part, as it last said (decision 463); none from an older worker."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "worker_id": {
             "description": "Its ID.",
             "type": "string"
@@ -2033,6 +2138,47 @@
           "worker_id",
           "state",
           "schedr_version"
+        ],
+        "type": "object"
+      },
+      "WorkerUsageView": {
+        "description": "A worker's memory by part (decision 463), as it last said (written at most once a minute).",
+        "properties": {
+          "fork_servers_bytes": {
+            "description": "Its fork servers', together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "largest_tasks": {
+            "description": "The largest of them, largest first.",
+            "items": {
+              "$ref": "#/components/schemas/TaskMemoryView"
+            },
+            "type": "array"
+          },
+          "process": {
+            "$ref": "#/components/schemas/NodeUsageView",
+            "description": "The agent's own process (in standalone the master's and the webserver's too)."
+          },
+          "tasks_bytes": {
+            "description": "Its running tasks', together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watcher_hosts_bytes": {
+            "description": "Its wait step hosts', together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "process",
+          "fork_servers_bytes",
+          "watcher_hosts_bytes",
+          "tasks_bytes"
         ],
         "type": "object"
       },

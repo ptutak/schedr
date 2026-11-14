@@ -206,6 +206,9 @@ impl State {
 struct Server {
     kind: Kind,
     interpreter: String,
+    /// Its process group while it is up (0: none): whose memory the heartbeat reports
+    /// (decision 463).
+    group: std::sync::atomic::AtomicI32,
     state: Mutex<State>,
     metrics: ForkMetrics,
     board: Arc<WarningBoard>,
@@ -303,6 +306,8 @@ impl Server {
 #[derive(Debug, Clone)]
 pub struct ForkServers {
     servers: Arc<Vec<Server>>,
+    /// The servers' memory together, as last measured (decision 463).
+    memory: Arc<std::sync::atomic::AtomicU64>,
     warnings: watch::Receiver<Vec<pb::WorkerWarning>>,
     /// How long a server may take to answer a request.
     answer_timeout: Duration,
@@ -334,6 +339,8 @@ pub struct ForkSetup {
     pub import_retry: Duration,
     /// How long what it does may take.
     pub timeouts: crate::attempt::WorkerTimeouts,
+    /// How often its servers' memory is measured (the watchdog's interval, decision 463).
+    pub memory_interval: Duration,
 }
 
 impl ForkServers {
@@ -378,6 +385,7 @@ impl ForkServers {
             process,
             preload: config.preload.clone(),
             import_retry: config.import_retry,
+            memory_interval: setup.memory.interval,
             timeouts: setup.timeouts,
         };
         Some(Self::start(&setup, metrics))
@@ -406,6 +414,7 @@ impl ForkServers {
             .map(|(kind, _)| Server {
                 kind: *kind,
                 interpreter: setup.interpreter.clone(),
+                group: std::sync::atomic::AtomicI32::new(0),
                 state: Mutex::new(State::Down),
                 metrics: metrics.clone(),
                 board: Arc::clone(&board),
@@ -433,11 +442,24 @@ impl ForkServers {
                 timeouts.fork_preload,
             ));
         }
+        let memory = Arc::default();
+        tokio::spawn(measure(
+            Arc::downgrade(&servers),
+            Arc::clone(&memory),
+            setup.memory_interval,
+        ));
         Self {
             servers,
+            memory,
             warnings: watching,
             answer_timeout: setup.timeouts.fork_answer,
         }
+    }
+
+    /// The servers' memory together (PSS), as last measured; 0 before the first measure.
+    #[must_use]
+    pub fn memory(&self) -> u64 {
+        self.memory.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Waits until each server takes requests or something is wrong with one, for at most
@@ -526,6 +548,48 @@ impl ForkServers {
     }
 }
 
+/// Measures the servers that are up every `every` into `memory`, until they are gone: the
+/// processes of each one's group (PSS; its shims too, a forked task leading a group of its own).
+/// A measure that can't be read (a PSS missing, Grok's review of M5.1h) keeps the last one.
+async fn measure(
+    servers: std::sync::Weak<Vec<Server>>,
+    memory: Arc<std::sync::atomic::AtomicU64>,
+    every: Duration,
+) {
+    let mut tick = tokio::time::interval(every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        let Some(all) = servers.upgrade() else {
+            return;
+        };
+        let groups: Vec<i32> = all
+            .iter()
+            .map(|server| server.group.load(std::sync::atomic::Ordering::Relaxed))
+            .filter(|group| *group > 0)
+            .collect();
+        drop(all);
+        let measured = tokio::task::spawn_blocking(move || {
+            servers_memory(std::path::Path::new("/proc"), &groups)
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(total) = measured {
+            memory.store(total, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// The memory of the processes in `groups` together (PSS); `None` when one's can't be read.
+#[must_use]
+pub fn servers_memory(proc_root: &std::path::Path, groups: &[i32]) -> Option<u64> {
+    groups
+        .iter()
+        .map(|group| crate::memory::group_memory(proc_root, *group, false))
+        .sum()
+}
+
 /// Keeps fork server `index` running while its [`ForkServers`] lives: starts it, restarts it
 /// with backoff when it dies or can't start, retries a failing import for
 /// `import_retry`, and stops for good once it is disabled otherwise.
@@ -549,6 +613,9 @@ async fn keep_up(
                         return;
                     };
                     let server = &all[index];
+                    server
+                        .group
+                        .store(os.id(), std::sync::atomic::Ordering::Relaxed);
                     let mut state = server.state.lock().await;
                     server.set(
                         &mut state,
@@ -567,6 +634,7 @@ async fn keep_up(
                     return;
                 };
                 let server = &all[index];
+                server.group.store(0, std::sync::atomic::Ordering::Relaxed);
                 let mut state = server.state.lock().await;
                 if matches!(*state, State::Disabled(_)) {
                     return;

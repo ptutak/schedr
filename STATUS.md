@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-14)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1h, Memory and CPU reported (decisions D463). Done when: each process's figures reach the database or the answer; an older worker without the field is still served; tests on both databases
-- **Then:** M5.1i, M5.1j, M5.1k, M5.1l, M5.1m.
+- **Next step:** M5.1i, The samples table (decisions D464). Done when: samples written, rolled up and deleted on both databases, with a statement count per minute under a stated bound; the guide's retention section names them
+- **Then:** M5.1j, M5.1k, M5.1l, M5.1m, M5.1n.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
@@ -18,9 +18,9 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D487 (2026-11-14): a waiting wait_for step stores its deadline and what it waits for
 - D486 (2026-11-14): the trigger loop runs after any write, at a stored moment, or for a posted event
 - D485 (2026-11-14): each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
+- M5.1h (2026-11-14): Memory and CPU reported
 - M5.1g (2026-11-14): The Status block
 - M5.1f2 (2026-11-14): Triggers and events in a round of their own
-- M5.1f1 (2026-11-14): The idle cost: one probe a tick, the moments stored
 
 ## In progress
 

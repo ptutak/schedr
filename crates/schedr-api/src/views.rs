@@ -1171,6 +1171,93 @@ pub struct NodeView {
     /// Its effective configuration, masked.
     #[schema(value_type = Object)]
     pub config: serde_json::Value,
+    /// What its process uses (decision 463): the webserver's now, a master's as its row last
+    /// said; none when not known (no `/proc`, an older node).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<NodeUsageView>,
+}
+
+/// A schedr process's memory and CPU, and its container's (decision 463).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct NodeUsageView {
+    /// Resident memory, in bytes.
+    pub resident_bytes: u64,
+    /// CPU time used (user and system) since it started, in seconds.
+    pub cpu_seconds: f64,
+    /// Its cgroup's memory now; none outside a cgroup v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_bytes: Option<u64>,
+    /// Its container's memory limit; none when unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_limit_bytes: Option<u64>,
+}
+
+impl From<schedr_model::usage::NodeUsage> for NodeUsageView {
+    fn from(usage: schedr_model::usage::NodeUsage) -> Self {
+        Self {
+            resident_bytes: usage.resident_bytes,
+            cpu_seconds: usage.cpu_seconds,
+            container_bytes: usage.container_bytes,
+            container_limit_bytes: usage.container_limit_bytes,
+        }
+    }
+}
+
+/// A worker's memory by part (decision 463), as it last said (written at most once a minute).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerUsageView {
+    /// The agent's own process (in standalone the master's and the webserver's too).
+    pub process: NodeUsageView,
+    /// Its fork servers', together.
+    pub fork_servers_bytes: u64,
+    /// Its wait step hosts', together.
+    pub watcher_hosts_bytes: u64,
+    /// Its running tasks', together.
+    pub tasks_bytes: u64,
+    /// The largest of them, largest first.
+    #[serde(default)]
+    pub largest_tasks: Vec<TaskMemoryView>,
+}
+
+/// A running task's memory, named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TaskMemoryView {
+    /// The attempt.
+    pub attempt_id: String,
+    /// Its DAG.
+    pub dag_id: String,
+    /// Its run.
+    pub run_id: String,
+    /// Its task.
+    pub task_id: String,
+    /// Its map index; none for an unmapped task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_index: Option<u32>,
+    /// Its memory, in bytes.
+    pub bytes: u64,
+}
+
+impl From<schedr_model::usage::WorkerUsage> for WorkerUsageView {
+    fn from(usage: schedr_model::usage::WorkerUsage) -> Self {
+        Self {
+            process: usage.process.into(),
+            fork_servers_bytes: usage.fork_servers_bytes,
+            watcher_hosts_bytes: usage.watcher_hosts_bytes,
+            tasks_bytes: usage.tasks_bytes,
+            largest_tasks: usage
+                .largest_tasks
+                .into_iter()
+                .map(|t| TaskMemoryView {
+                    attempt_id: t.attempt_id,
+                    dag_id: t.dag_id,
+                    run_id: t.run_id,
+                    task_id: t.task_id,
+                    map_index: t.map_index,
+                    bytes: t.bytes,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// A problem a node has now (decision 129): shown on its node, yellow for a warning, red for
@@ -1237,6 +1324,9 @@ pub struct WorkerNodeView {
     /// Its attempts still running.
     #[serde(default)]
     pub running: u32,
+    /// What it uses, by part, as it last said (decision 463); none from an older worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<WorkerUsageView>,
     /// Its problems now: lost or offline (errors), what it reports wrong, the import errors
     /// of files it parsed (warnings).
     #[serde(default)]
@@ -1253,6 +1343,7 @@ impl From<schedr_db::nodes::MasterRecord> for MasterView {
                 host: master.host,
                 schedr_version: master.schedr_version,
                 config: master.config,
+                usage: master.usage.map(NodeUsageView::from),
             },
             started_at: master.started_at,
             heard_at: master.heard_at,

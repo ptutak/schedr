@@ -122,6 +122,7 @@ fn retrying_servers(
         preload: preload.iter().map(|p| (*p).to_owned()).collect(),
         import_retry,
         timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
+        memory_interval: Duration::from_millis(100),
     };
     setup
         .process
@@ -512,6 +513,20 @@ async fn a_killed_fork_server_is_restarted() {
 }
 
 #[tokio::test]
+async fn the_fork_servers_memory_is_measured_while_they_are_up() {
+    // Decision 463: what the heartbeat reports as the fork servers' part.
+    let dir = root();
+    let (forks, metrics) = servers(python(), dir.path(), &["json"]);
+    assert_eq!(forks.memory(), 0, "not measured yet");
+    until("both servers are up", || {
+        state(&metrics, "preloaded", "up") == 1 && state(&metrics, "bare", "up") == 1
+    })
+    .await;
+    // Two Python interpreters: some megabytes each.
+    until("their memory is measured", || forks.memory() > 4 << 20).await;
+}
+
+#[tokio::test]
 async fn a_failing_import_is_retried_and_the_server_comes_up_once_it_imports() {
     let dir = root();
     let ready = dir.path().join("ready");
@@ -856,6 +871,7 @@ async fn the_fork_servers_start_before_the_log_directory_exists() {
         preload: vec!["json".to_owned()],
         import_retry: Duration::ZERO,
         timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
+        memory_interval: Duration::from_millis(100),
     };
     let _forks = ForkServers::start(&setup, &metrics);
     until("both servers are up", || {

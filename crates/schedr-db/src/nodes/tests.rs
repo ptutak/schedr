@@ -25,6 +25,7 @@ fn master<'a>(id: &'a str, config: &'a serde_json::Value) -> MasterNode<'a> {
         config,
         started_at: ts("2026-11-01T08:00:00Z"),
         problems: &[],
+        usage: None,
     }
 }
 
@@ -143,13 +144,84 @@ async fn a_workers_node_is_recorded_after_its_registration() {
                 master_id: Some("m-a".to_owned()),
                 process_id: Some("p1".to_owned()),
                 config: Some(config),
+                usage: None,
             },
             WorkerNode {
                 worker_id: "w2".to_owned(),
                 master_id: None,
                 process_id: None,
                 config: None,
+                usage: None,
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn a_masters_and_a_workers_usage_are_stored_and_read_back() {
+    // Decision 463: a master's with its row, a worker's on its own.
+    let db = migrated().await;
+    let config = json!({});
+    let node = schedr_model::usage::NodeUsage {
+        resident_bytes: 80 << 20,
+        cpu_seconds: 12.5,
+        container_bytes: Some(200 << 20),
+        container_limit_bytes: Some(1 << 30),
+    };
+    let beat = MasterNode {
+        usage: Some(&node),
+        ..master("m-a", &config)
+    };
+    db.heartbeat_master(&beat, ts("2026-11-01T08:00:05Z"))
+        .await
+        .unwrap();
+    let masters = db.masters(ts("2026-11-01T08:00:00Z")).await.unwrap();
+    assert_eq!(masters[0].usage.as_ref(), Some(&node));
+    // The next heartbeat without it (no /proc): not known any more.
+    db.heartbeat_master(&master("m-a", &config), ts("2026-11-01T08:00:15Z"))
+        .await
+        .unwrap();
+    let masters = db.masters(ts("2026-11-01T08:00:00Z")).await.unwrap();
+    assert_eq!(masters[0].usage, None);
+
+    let usage = schedr_model::usage::WorkerUsage {
+        process: schedr_model::usage::NodeUsage {
+            container_bytes: None,
+            container_limit_bytes: None,
+            ..node
+        },
+        fork_servers_bytes: 30 << 20,
+        watcher_hosts_bytes: 40 << 20,
+        tasks_bytes: 500 << 20,
+        largest_tasks: vec![schedr_model::usage::TaskMemory {
+            attempt_id: "a1".to_owned(),
+            dag_id: "sync".to_owned(),
+            run_id: "r1".to_owned(),
+            task_id: "load".to_owned(),
+            map_index: Some(3),
+            bytes: 400 << 20,
+        }],
+    };
+    let queues = vec!["default".to_owned()];
+    for id in ["w1", "w2"] {
+        db.register_worker(
+            &WorkerRegistration {
+                id,
+                incarnation: "0190a0a0-0000-7000-8000-000000000001",
+                protocol_version: "2.1",
+                schedr_version: "1.1.0",
+                queues: &queues,
+                slots: 2,
+                watcher_slots: 0,
+                log_endpoint: "",
+            },
+            ts("2026-11-01T08:00:00Z"),
+        )
+        .await
+        .unwrap();
+    }
+    db.set_worker_usage("w1", &usage).await.unwrap();
+    let nodes = db.worker_nodes().await.unwrap();
+    assert_eq!(nodes[0].usage.as_ref(), Some(&usage));
+    assert_eq!(nodes[1].usage, None, "never said");
 }

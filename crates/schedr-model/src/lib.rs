@@ -21,6 +21,7 @@ pub mod states;
 pub mod task;
 pub mod trigger;
 pub mod types;
+pub mod usage;
 pub mod value;
 pub mod version;
 

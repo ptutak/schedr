@@ -1031,6 +1031,7 @@ pub async fn serve_api(
         .with_event_timings(timings.events)
         .with_refresh(timings.refresh)
         .with_node(node)
+        .with_usage(schedr_agent::memory::this_node)
         .with_logs(std::sync::Arc::new(
             HttpLogSource::new(tls.clone())
                 .with_timeouts(timings.worker_connect, timings.worker_request),
@@ -1187,6 +1188,7 @@ pub async fn run_worker(
             observed.metrics.watchers.clone(),
         ),
         secrets: std::sync::Arc::clone(&agent.secrets),
+        running_memory: schedr_agent::memory::RunningMemory::default(),
     };
     let mut agent = Agent::new(agent, executor, uuid::Uuid::now_v7().to_string())
         .with_metrics(observed.metrics);

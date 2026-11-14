@@ -796,6 +796,31 @@ async fn deployment_workers(db: &schedr_db::Database) -> serde_json::Value {
     db.set_worker_node("w1", Some("m-b"), Some("p-2"), Some(&worker))
         .await
         .unwrap();
+    // What it uses, as its heartbeat said (decision 463).
+    db.set_worker_usage(
+        "w1",
+        &schedr_model::usage::WorkerUsage {
+            process: schedr_model::usage::NodeUsage {
+                resident_bytes: 50,
+                cpu_seconds: 1.0,
+                container_bytes: Some(900),
+                container_limit_bytes: None,
+            },
+            fork_servers_bytes: 100,
+            watcher_hosts_bytes: 200,
+            tasks_bytes: 300,
+            largest_tasks: vec![schedr_model::usage::TaskMemory {
+                attempt_id: "a1".to_owned(),
+                dag_id: "sync".to_owned(),
+                run_id: "r1".to_owned(),
+                task_id: "load".to_owned(),
+                map_index: None,
+                bytes: 300,
+            }],
+        },
+    )
+    .await
+    .unwrap();
     db.set_worker_warnings(
         "w1",
         &[schedr_db::workers::WorkerWarning {
@@ -849,6 +874,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
                 config: &config,
                 started_at: ts("2026-10-21T07:00:00Z"),
                 problems: if id == "m-a" { &late } else { &[] },
+                usage: None,
             },
             ts(heard),
         )
@@ -864,8 +890,18 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
         host: "web".to_owned(),
         schedr_version: "1.0.0".to_owned(),
         config: json!({"webserver": {"port": 8080}}),
+        usage: None,
     });
     state.clock = fixed_now;
+    // Decision 463: the webserver's own, read for the answer.
+    state.usage = || {
+        Some(schedr_model::usage::NodeUsage {
+            resident_bytes: 64 << 20,
+            cpu_seconds: 2.5,
+            container_bytes: None,
+            container_limit_bytes: Some(1 << 30),
+        })
+    };
     let app = router(state);
 
     let (status, body) = get(&app, "/api/v1/deployment").await;
@@ -873,7 +909,9 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
     assert_eq!(
         body["webserver"],
         json!({"process_id": "p-3", "host": "web", "schedr_version": "1.0.0",
-               "config": {"webserver": {"port": 8080}}})
+               "config": {"webserver": {"port": 8080}},
+               "usage": {"resident_bytes": 64 << 20, "cpu_seconds": 2.5,
+                         "container_limit_bytes": 1 << 30}})
     );
     // Heard from in the last 30 s, the leader first.
     assert_eq!(
@@ -896,6 +934,12 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
             {"worker_id": "w1", "state": "active", "schedr_version": "1.0.0",
              "master_id": "m-b", "process_id": "p-2", "config": worker,
              "queues": ["default", "large"], "slots": 2, "running": 0,
+             "usage": {"process": {"resident_bytes": 50, "cpu_seconds": 1.0,
+                                   "container_bytes": 900},
+                       "fork_servers_bytes": 100, "watcher_hosts_bytes": 200,
+                       "tasks_bytes": 300,
+                       "largest_tasks": [{"attempt_id": "a1", "dag_id": "sync",
+                                          "run_id": "r1", "task_id": "load", "bytes": 300}]},
              "problems": [{"error": false, "message": "tasks start slower"}]},
             {"worker_id": "w2", "state": "lost", "schedr_version": "1.0.0",
              "master_id": null, "process_id": null, "config": null,

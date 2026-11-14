@@ -102,12 +102,77 @@ impl MemoryWatch {
 pub struct MemorySeen {
     /// The highest sample, in bytes (0: never measured).
     pub peak: u64,
+    /// The latest sample, in bytes (0: never measured): what the heartbeat reports
+    /// (decision 463).
+    pub last: u64,
     /// The sample over the budget that got the task killed.
     pub over: Option<u64>,
 }
 
 /// The watchdog's record of one attempt, shared with whoever reports it.
 pub type SharedSeen = Arc<Mutex<MemorySeen>>;
+
+/// The running tasks' memory, each named, as their watchdogs last measured it (decision 463):
+/// what the heartbeat reports (cheap to clone; clones share it).
+#[derive(Debug, Clone, Default)]
+pub struct RunningMemory(
+    Arc<Mutex<std::collections::BTreeMap<String, (schedr_model::usage::TaskMemory, SharedSeen)>>>,
+);
+
+/// A task in [`RunningMemory`] until it is dropped.
+#[derive(Debug)]
+pub struct Watched {
+    memory: RunningMemory,
+    attempt_id: String,
+}
+
+impl Drop for Watched {
+    fn drop(&mut self) {
+        self.memory.inner().remove(&self.attempt_id);
+    }
+}
+
+impl RunningMemory {
+    fn inner(
+        &self,
+    ) -> std::sync::MutexGuard<
+        '_,
+        std::collections::BTreeMap<String, (schedr_model::usage::TaskMemory, SharedSeen)>,
+    > {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Counts the task `named` (its `bytes` ignored) with what its watchdog records in `seen`,
+    /// until the returned value is dropped.
+    #[must_use]
+    pub fn watch(&self, named: schedr_model::usage::TaskMemory, seen: SharedSeen) -> Watched {
+        let attempt_id = named.attempt_id.clone();
+        self.inner().insert(attempt_id.clone(), (named, seen));
+        Watched {
+            memory: self.clone(),
+            attempt_id,
+        }
+    }
+
+    /// Each running task with its latest sample, largest first.
+    #[must_use]
+    pub fn now(&self) -> Vec<schedr_model::usage::TaskMemory> {
+        let mut tasks: Vec<schedr_model::usage::TaskMemory> = self
+            .inner()
+            .values()
+            .map(|(named, seen)| schedr_model::usage::TaskMemory {
+                bytes: seen.lock().unwrap_or_else(PoisonError::into_inner).last,
+                ..named.clone()
+            })
+            .collect();
+        tasks.sort_by(|a, b| {
+            b.bytes
+                .cmp(&a.bytes)
+                .then_with(|| a.attempt_id.cmp(&b.attempt_id))
+        });
+        tasks
+    }
+}
 
 /// The smallest cgroup v2 `memory.max` on the way from the agent's cgroup (in
 /// `<proc_root>/self/cgroup`) up to `cgroup_root`; `None` when there is none (unlimited,
@@ -134,6 +199,57 @@ pub fn cgroup_limit(proc_root: &Path, cgroup_root: &Path) -> io::Result<Option<u
             return Ok(limit);
         }
     }
+}
+
+/// The memory of the agent's own cgroup v2 now (its `memory.current`, from its line in
+/// `<proc_root>/self/cgroup`); `None` outside a cgroup v2 or where it can't be read.
+#[must_use]
+pub fn cgroup_current(proc_root: &Path, cgroup_root: &Path) -> Option<u64> {
+    let cgroups = std::fs::read_to_string(proc_root.join("self/cgroup")).ok()?;
+    let path = cgroups.lines().find_map(|line| line.strip_prefix("0::"))?;
+    let dir = cgroup_root.join(path.trim_start_matches('/'));
+    std::fs::read_to_string(dir.join("memory.current"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// This process's memory and CPU from `proc_root` (`self/stat`, `self/statm`), in pages of
+/// `page` bytes and `ticks` a second, and its container's from `cgroup_root` (decision 463);
+/// `None` without `/proc`.
+#[must_use]
+pub fn node_usage(
+    proc_root: &Path,
+    cgroup_root: &Path,
+    page: u64,
+    ticks: u64,
+) -> Option<schedr_model::usage::NodeUsage> {
+    let stat = std::fs::read_to_string(proc_root.join("self/stat")).ok()?;
+    let statm = std::fs::read_to_string(proc_root.join("self/statm")).ok()?;
+    // After the command (field 2, in parentheses): field 3 is [0].
+    let fields: Vec<&str> = stat[stat.rfind(')')? + 1..].split_whitespace().collect();
+    let field = |n: usize| fields.get(n - 3)?.parse::<u64>().ok();
+    let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    #[expect(clippy::cast_precision_loss, reason = "seconds from clock ticks")]
+    let cpu_seconds = (field(14)? + field(15)?) as f64 / ticks.max(1) as f64;
+    Some(schedr_model::usage::NodeUsage {
+        resident_bytes: resident_pages.saturating_mul(page),
+        cpu_seconds,
+        container_bytes: cgroup_current(proc_root, cgroup_root),
+        container_limit_bytes: cgroup_limit(proc_root, cgroup_root).ok().flatten(),
+    })
+}
+
+/// [`node_usage`] of this process, from `/proc` and `/sys/fs/cgroup`.
+#[must_use]
+pub fn this_node() -> Option<schedr_model::usage::NodeUsage> {
+    node_usage(
+        Path::new("/proc"),
+        Path::new("/sys/fs/cgroup"),
+        u64::try_from(rustix::param::page_size()).unwrap_or(4096),
+        rustix::param::clock_ticks_per_second(),
+    )
 }
 
 /// The most one task may take of `limit`: what `reserve` leaves (decision 437).
@@ -253,12 +369,13 @@ pub async fn over_budget(
         let Some(used) =
             tokio::task::spawn_blocking(move || group_memory(&root, pgid, rss_fallback))
                 .await
-                .unwrap_or(Some(0))
+                .unwrap_or(None)
         else {
             continue;
         };
         let mut record = seen.lock().unwrap_or_else(PoisonError::into_inner);
         record.peak = record.peak.max(used);
+        record.last = used;
         if let Some(budget) = watch.budget
             && used > budget
         {

@@ -8,8 +8,18 @@ const fn v(major: u32, minor: u32) -> ProtocolVersion {
 }
 
 #[test]
-fn the_current_version_is_2_0() {
-    assert_eq!(PROTOCOL_VERSION, v(2, 0));
+fn the_current_version_is_2_1() {
+    // 2.1 for 1.1.0: the heartbeat's usage (decision 463), moved once for the release.
+    assert_eq!(PROTOCOL_VERSION, v(2, 1));
+}
+
+#[test]
+fn a_1_0_workers_protocol_2_0_is_served() {
+    // Upgrading the master first: its 1.0.0 workers keep working, sending no usage.
+    assert_eq!(
+        check_worker_version(PROTOCOL_VERSION, Some(v(2, 0))),
+        Ok(())
+    );
 }
 
 #[rstest]

@@ -189,6 +189,45 @@ message Heartbeat {
   repeated WatcherHost watcher_hosts = 4;
   // Its number moved to `WorkerMessage.clock.sequence`, which numbers every message (B240).
   reserved 6;
+  // What its process and its children use (decision 463; protocol 2.1): none from an older
+  // worker.
+  WorkerUsage usage = 7;
+}
+
+// A schedr process's memory and CPU, and its container's (decision 463).
+message NodeUsage {
+  // Resident memory, in bytes.
+  uint64 resident_bytes = 1;
+  // CPU time used (user and system) since it started, in seconds.
+  double cpu_seconds = 2;
+  // Its cgroup's memory now (`memory.current`); none outside a cgroup v2.
+  optional uint64 container_bytes = 3;
+  // The smallest `memory.max` on the way up from its cgroup; none when unlimited.
+  optional uint64 container_limit_bytes = 4;
+}
+
+// A worker's memory by part (decision 463): the agent's own process, then what it started.
+message WorkerUsage {
+  NodeUsage process = 1;
+  // Its fork servers' memory (PSS), together.
+  uint64 fork_servers_bytes = 2;
+  // Its wait step hosts', together (each one's in `Heartbeat.watcher_hosts`).
+  uint64 watcher_hosts_bytes = 3;
+  // Its running tasks', together, as their memory watchdog last measured them.
+  uint64 tasks_bytes = 4;
+  // The largest of them, largest first (at most 5).
+  repeated TaskMemory largest_tasks = 5;
+}
+
+// A running task's memory, named.
+message TaskMemory {
+  string attempt_id = 1;
+  string dag_id = 2;
+  string run_id = 3;
+  string task_id = 4;
+  // Its map index; none for an unmapped task.
+  optional uint32 map_index = 5;
+  uint64 bytes = 6;
 }
 
 // A process running a worker's wait steps, or a code set whose hosts were lost: for people.

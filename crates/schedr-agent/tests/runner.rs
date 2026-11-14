@@ -606,6 +606,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
         forks: None,
         watchers: schedr_agent::watchers::WatcherHosts::default(),
         secrets: Arc::new(SecretStores::none()),
+        running_memory: schedr_agent::memory::RunningMemory::default(),
     };
     let registry: Registry = serde_json::from_value(json!({
         "connections": {"fine": {"name": "fine", "params": {}},

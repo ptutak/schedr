@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D20"
 step = "M2.5.4a"
 also = ["observability"]
 code = ["crates/schedr-agent/src/fork.rs::Cause"]
-checked = 2026-11-09
+checked = 2026-11-14

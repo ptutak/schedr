@@ -221,6 +221,12 @@ pub trait Executor: Clone + Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Its fork servers' memory together and its running tasks', largest first, as last
+    /// measured, for the heartbeat (decision 463): it can't wait.
+    fn memory_parts(&self) -> (u64, Vec<schedr_model::usage::TaskMemory>) {
+        (0, Vec::new())
+    }
+
     /// Parses `files` of the root `root` in `dir`, with the other roots' copies `code`.
     fn parse(
         &self,
@@ -317,6 +323,8 @@ pub struct ProcessExecutor {
     pub watchers: crate::watchers::WatcherHosts,
     /// The worker's secret storages.
     pub secrets: Arc<SecretStores>,
+    /// Its running tasks' memory, for the heartbeat (decision 463).
+    pub running_memory: crate::memory::RunningMemory,
 }
 
 impl Executor for ProcessExecutor {
@@ -330,6 +338,13 @@ impl Executor for ProcessExecutor {
 
     fn watcher_hosts(&self) -> Vec<pb::WatcherHost> {
         self.watchers.reports()
+    }
+
+    fn memory_parts(&self) -> (u64, Vec<schedr_model::usage::TaskMemory>) {
+        (
+            self.forks.as_ref().map_or(0, ForkServers::memory),
+            self.running_memory.now(),
+        )
     }
 
     fn warnings(&self) -> watch::Receiver<Vec<pb::WorkerWarning>> {
@@ -740,6 +755,24 @@ impl ProcessExecutor {
         result
     }
 
+    /// Where `spec`'s watchdog records what it sees, and the task counted in the heartbeat's
+    /// memory with it while the second value lives (decision 463).
+    fn watched(&self, spec: &AttemptSpec) -> (SharedSeen, crate::memory::Watched) {
+        let seen = SharedSeen::default();
+        let watched = self.running_memory.watch(
+            schedr_model::usage::TaskMemory {
+                attempt_id: spec.attempt_id.clone(),
+                dag_id: spec.run.dag_id.clone(),
+                run_id: spec.run.run_id.clone(),
+                task_id: spec.task.id.to_string(),
+                map_index: spec.run.map_index,
+                bytes: 0,
+            },
+            seen.clone(),
+        );
+        (seen, watched)
+    }
+
     async fn run_planned(
         &self,
         spec: &AttemptSpec,
@@ -760,7 +793,7 @@ impl ProcessExecutor {
             interrupt_grace: self.drain_terminate_period,
             poll: self.setup.timeouts.stop_poll,
         };
-        let seen = SharedSeen::default();
+        let (seen, _reported) = self.watched(spec);
         let memory = self.setup.memory.for_task(spec.task.settings.memory_bytes);
         // The watchdog's kill is one more reason to stop, in the same channel.
         let oom = stop.sender();
@@ -944,6 +977,10 @@ pub const ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 /// one (B41), so a long stall of the master queues a few copies of each result, not one a
 /// heartbeat.
 pub const MAX_RESEND_GAP: u32 = 32;
+
+/// The largest running tasks a heartbeat names (decision 463): what a node's panel lists; the
+/// rest are in `tasks_bytes`.
+pub const LARGEST_TASKS: usize = 5;
 
 /// How many times a result is sent again over one session before the agent gives the session
 /// up and reconnects: its registration's journal then settles the result (acknowledged, or
@@ -2355,13 +2392,45 @@ impl<E: Executor> Agent<E> {
     /// A heartbeat, and the unacknowledged results due to be sent again; the session's end
     /// if one was sent too often already.
     fn heartbeat_message(&self) -> pb::WorkerMessage {
+        let watcher_hosts = self.executor.watcher_hosts();
+        let usage = self.usage(&watcher_hosts);
         wrap(worker_message::Message::Heartbeat(pb::Heartbeat {
             free_slots: self.free_slots(),
             free_watcher_slots: self.free_watcher_slots(),
             running_attempt_ids: self.running(),
             running_triggers: self.triggers.keys().cloned().collect(),
-            watcher_hosts: self.executor.watcher_hosts(),
+            watcher_hosts,
+            usage,
         }))
+    }
+
+    /// What the worker uses, by part (decision 463); none without `/proc`.
+    fn usage(&self, watcher_hosts: &[pb::WatcherHost]) -> Option<pb::WorkerUsage> {
+        let node = crate::memory::this_node()?;
+        let (fork_servers_bytes, tasks) = self.executor.memory_parts();
+        Some(pb::WorkerUsage {
+            process: Some(pb::NodeUsage {
+                resident_bytes: node.resident_bytes,
+                cpu_seconds: node.cpu_seconds,
+                container_bytes: node.container_bytes,
+                container_limit_bytes: node.container_limit_bytes,
+            }),
+            fork_servers_bytes,
+            watcher_hosts_bytes: watcher_hosts.iter().map(|h| h.memory_bytes).sum(),
+            tasks_bytes: tasks.iter().map(|t| t.bytes).sum(),
+            largest_tasks: tasks
+                .into_iter()
+                .take(LARGEST_TASKS)
+                .map(|t| pb::TaskMemory {
+                    attempt_id: t.attempt_id,
+                    dag_id: t.dag_id,
+                    run_id: t.run_id,
+                    task_id: t.task_id,
+                    map_index: t.map_index,
+                    bytes: t.bytes,
+                })
+                .collect(),
+        })
     }
 
     fn send_heartbeat(

@@ -7,7 +7,7 @@
 use jiff::{SignedDuration, Timestamp};
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, in_tx, on_pool, parse_time, sql, storable_json};
+use crate::query::{db_time, from_json, in_tx, on_pool, parse_time, sql, storable_json, to_json};
 
 #[cfg(test)]
 mod tests;
@@ -26,7 +26,7 @@ pub struct NodeProblem {
 }
 
 /// A master as it heartbeats.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MasterNode<'a> {
     /// Its ID: its lease holder's.
     pub master_id: &'a str,
@@ -42,6 +42,8 @@ pub struct MasterNode<'a> {
     pub started_at: Timestamp,
     /// Its problems now.
     pub problems: &'a [NodeProblem],
+    /// What its process uses now (decision 463); none without `/proc`.
+    pub usage: Option<&'a schedr_model::usage::NodeUsage>,
 }
 
 /// A master as stored.
@@ -65,6 +67,8 @@ pub struct MasterRecord {
     pub leading: bool,
     /// Its problems when it last wrote its row.
     pub problems: Vec<NodeProblem>,
+    /// What its process used then (decision 463).
+    pub usage: Option<schedr_model::usage::NodeUsage>,
 }
 
 /// A worker's node: which master it registered with, its process and configuration.
@@ -78,6 +82,8 @@ pub struct WorkerNode {
     pub process_id: Option<String>,
     /// Its effective configuration, masked.
     pub config: Option<serde_json::Value>,
+    /// What it used, by part, as it last said (decision 463; written at most once a minute).
+    pub usage: Option<schedr_model::usage::WorkerUsage>,
 }
 
 impl Database {
@@ -94,17 +100,18 @@ impl Database {
         now: Timestamp,
     ) -> Result<(), DbError> {
         const UPSERT: &str = "INSERT INTO masters (master_id, process_id, host, schedr_version, \
-            config, started_at, heard_at, problems) \
-            VALUES ($1, $2, $3, $4, $5{json}, $6{ts}, $7{ts}, $8{json}) \
+            config, started_at, heard_at, problems, usage) \
+            VALUES ($1, $2, $3, $4, $5{json}, $6{ts}, $7{ts}, $8{json}, $9{json}) \
             ON CONFLICT (master_id) DO UPDATE SET process_id = excluded.process_id, \
             host = excluded.host, schedr_version = excluded.schedr_version, \
             config = excluded.config, heard_at = excluded.heard_at, \
-            problems = excluded.problems";
+            problems = excluded.problems, usage = excluded.usage";
         const PRUNE: &str = "DELETE FROM masters WHERE heard_at < $1{ts}";
         let config = storable_json(master.config.to_string());
         let problems = storable_json(
             serde_json::to_string(master.problems).unwrap_or_else(|_| "[]".to_owned()),
         );
+        let usage = master.usage.map(to_json);
         let gone = now
             .checked_sub(MASTER_ROW_KEPT)
             .unwrap_or(Timestamp::UNIX_EPOCH);
@@ -118,6 +125,7 @@ impl Database {
                 .bind(db_time(master.started_at))
                 .bind(db_time(now))
                 .bind(&problems)
+                .bind(&usage)
                 .execute(&mut *tx)
                 .await?;
             sqlx::query(sql(backend, PRUNE))
@@ -136,8 +144,8 @@ impl Database {
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn masters(&self, since: Timestamp) -> Result<Vec<MasterRecord>, DbError> {
         const MASTERS: &str = "SELECT m.master_id, m.process_id, m.host, m.schedr_version, \
-            m.config{text}, {ts<}m.started_at{>ts}, {ts<}m.heard_at{>ts}, m.problems{text} \
-            FROM masters m WHERE m.heard_at >= $1{ts} ORDER BY m.master_id";
+            m.config{text}, {ts<}m.started_at{>ts}, {ts<}m.heard_at{>ts}, m.problems{text}, \
+            m.usage{text} FROM masters m WHERE m.heard_at >= $1{ts} ORDER BY m.master_id";
         type Row = (
             String,
             String,
@@ -147,6 +155,7 @@ impl Database {
             String,
             String,
             String,
+            Option<String>,
         );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, MASTERS))
@@ -158,7 +167,17 @@ impl Database {
         let mut masters = rows
             .into_iter()
             .map(
-                |(master_id, process_id, host, version, config, started, heard, problems)| {
+                |(
+                    master_id,
+                    process_id,
+                    host,
+                    version,
+                    config,
+                    started,
+                    heard,
+                    problems,
+                    usage,
+                )| {
                     Ok(MasterRecord {
                         leading: holder.as_deref() == Some(master_id.as_str()),
                         master_id,
@@ -169,6 +188,7 @@ impl Database {
                         started_at: parse_time("masters.started_at", &started)?,
                         heard_at: parse_time("masters.heard_at", &heard)?,
                         problems: from_json("masters.problems", &problems)?,
+                        usage: usage.map(|u| from_json("masters.usage", &u)).transpose()?,
                     })
                 },
             )
@@ -211,14 +231,20 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn worker_nodes(&self) -> Result<Vec<WorkerNode>, DbError> {
-        const NODES: &str = "SELECT worker_id, master_id, process_id, config{text} FROM workers \
-            ORDER BY worker_id";
-        type Row = (String, Option<String>, Option<String>, Option<String>);
+        const NODES: &str = "SELECT worker_id, master_id, process_id, config{text}, usage{text} \
+            FROM workers ORDER BY worker_id";
+        type Row = (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, NODES)).fetch_all(pool).await?
         });
         rows.into_iter()
-            .map(|(worker_id, master_id, process_id, config)| {
+            .map(|(worker_id, master_id, process_id, config, usage)| {
                 Ok(WorkerNode {
                     worker_id,
                     master_id,
@@ -226,8 +252,30 @@ impl Database {
                     config: config
                         .map(|c| from_json("workers.config", &c))
                         .transpose()?,
+                    usage: usage.map(|u| from_json("workers.usage", &u)).transpose()?,
                 })
             })
             .collect()
+    }
+
+    /// Records what a worker uses, by part (decision 463).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_worker_usage(
+        &self,
+        worker_id: &str,
+        usage: &schedr_model::usage::WorkerUsage,
+    ) -> Result<(), DbError> {
+        const SET: &str = "UPDATE workers SET usage = $1{json} WHERE worker_id = $2";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(to_json(usage))
+                .bind(worker_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
     }
 }
