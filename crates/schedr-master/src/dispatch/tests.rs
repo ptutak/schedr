@@ -3607,6 +3607,67 @@ async fn a_success_forgets_its_strikes() {
 }
 
 #[tokio::test]
+async fn a_success_in_a_group_forgets_its_strikes() {
+    // M5.1d: a group's wait steps cleared together, as `finished` clears each.
+    let (mut dispatcher, db, _) = with_run(sensor_dag()).await;
+    db.strike_wait_step(("sync", "wait"), 3, "h1", ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let done = pb::Finished {
+        wait_step: true,
+        ..finished(&attempt, pb::AttemptStatus::Success, &json!(1))
+    };
+    dispatcher
+        .finished_group("w1", &[done], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(db.wait_step_strikes("sync", "wait").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_strike_after_a_success_of_the_same_wait_step_in_a_group_stays() {
+    // Grok's review of M5.1d: two runs of one wait step, the first succeeding and then the
+    // second struck, in one group: one by one the success clears the strikes and the strike
+    // stays, switching it off at one strike; the group cleared after the strike.
+    let mut dag = sensor_dag();
+    dag.max_active_runs = Some(2);
+    let (dispatcher, db, _) = with_run(dag).await;
+    another_run(&db).await;
+    let mut dispatcher = dispatcher.with_switch_off_after(1);
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    assert_eq!(out.len(), 2, "both runs' wait steps assigned");
+    let (first, second) = (
+        assignment(&out[0]).attempt_id.clone(),
+        assignment(&out[1]).attempt_id.clone(),
+    );
+    for attempt in [&first, &second] {
+        dispatcher
+            .started("w1", &started(attempt), ts(NOW))
+            .await
+            .unwrap();
+    }
+    let success = pb::Finished {
+        wait_step: true,
+        ..finished(&first, pb::AttemptStatus::Success, &json!(1))
+    };
+    let struck = pb::Finished {
+        wait_step: true,
+        struck: true,
+        code_hash: "h1".to_owned(),
+        ..finished(&second, pb::AttemptStatus::Failed, &json!(null))
+    };
+    dispatcher
+        .finished_group("w1", &[success, struck], ts(NOW))
+        .await
+        .unwrap();
+    let off = db.wait_step_strikes("sync", "wait").await.unwrap().unwrap();
+    assert_eq!((off.strikes, off.off_code.as_deref()), (1, Some("h1")));
+    assert!(off.off_at.is_some());
+}
+
+#[tokio::test]
 async fn a_wait_step_takes_a_watcher_slot_and_leaves_the_task_slots_alone() {
     let (mut dispatcher, _db, _) = with_run(sensor_dag()).await;
     dispatcher
@@ -4937,6 +4998,18 @@ async fn a_moved_cleanup_adopted_unrecorded_isnt_taken_back() {
 /// Twenty independent tasks, each with a downstream reading its output, all started on `w1`
 /// (20 slots): the dispatcher, the database, the run and the attempts.
 async fn twenty_started() -> (Dispatcher, Database, String, Vec<String>) {
+    let (mut dispatcher, db, run_id, attempts) = twenty_assigned().await;
+    for attempt in &attempts {
+        dispatcher
+            .started("w1", &started(attempt), ts(NOW))
+            .await
+            .unwrap();
+    }
+    (dispatcher, db, run_id, attempts)
+}
+
+/// [`twenty_started`] before any `Started`.
+async fn twenty_assigned() -> (Dispatcher, Database, String, Vec<String>) {
     let rows = |n: usize| json!({"rows": {"ref": {"kind": "output", "task": format!("e{n}")}}});
     let mut tasks = Vec::new();
     let mut edges = Vec::new();
@@ -4962,13 +5035,101 @@ async fn twenty_started() -> (Dispatcher, Database, String, Vec<String>) {
         .map(|o| assignment(o).attempt_id.clone())
         .collect();
     assert_eq!(attempts.len(), 20);
-    for attempt in &attempts {
-        dispatcher
-            .started("w1", &started(attempt), ts(NOW))
-            .await
-            .unwrap();
-    }
     (dispatcher, db, run_id, attempts)
+}
+
+#[tokio::test]
+async fn a_turns_starts_take_a_write_for_each_start_method_and_answer_as_one_by_one() {
+    // M5.1d: twenty `Started`s (half forked), a repeat and an unknown attempt, together and
+    // one by one: the same starts stored, the same cancel answered, two writes instead of one
+    // for each.
+    let group = |attempts: &[String]| -> Vec<pb::Started> {
+        let mut group: Vec<pb::Started> = attempts
+            .iter()
+            .enumerate()
+            .map(|(n, a)| pb::Started {
+                start_method: if n % 2 == 0 {
+                    pb::StartMethod::Fork
+                } else {
+                    pb::StartMethod::Spawn
+                }
+                .into(),
+                ..started(a)
+            })
+            .collect();
+        group.push(started(&attempts[0]));
+        group.push(started("0190d0b4-0000-7000-8000-000000000000"));
+        group
+    };
+    let stored = |db: Database, attempts: Vec<String>| async move {
+        let refs: Vec<&str> = attempts.iter().map(String::as_str).collect();
+        let mut rows: Vec<(usize, bool)> = db
+            .attempts_by_ids(&refs)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| {
+                (
+                    attempts.iter().position(|id| *id == a.id).unwrap(),
+                    a.started,
+                )
+            })
+            .collect();
+        rows.sort_unstable();
+        rows
+    };
+    let (mut alone, alone_db, _, alone_attempts) = twenty_assigned().await;
+    alone_db.count_writes();
+    let mut one_by_one = Vec::new();
+    for started in group(&alone_attempts) {
+        one_by_one.extend(alone.started("w1", &started, ts(NOW)).await.unwrap());
+    }
+    let alone_writes = alone_db.writes();
+    let (mut together, db, _, attempts) = twenty_assigned().await;
+    db.count_writes();
+    let answered = together
+        .started_group("w1", &group(&attempts), ts(NOW))
+        .await
+        .unwrap();
+    assert!(db.writes() <= 2, "{} writes together", db.writes());
+    assert!(alone_writes >= 20, "{alone_writes} writes one by one");
+    let cancelled = |out: &[Outgoing]| -> Vec<String> {
+        out.iter()
+            .map(|o| match &o.message.message {
+                Some(pb::master_message::Message::CancelAttempt(c)) => c.attempt_id.clone(),
+                other => panic!("expected a cancel: {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(cancelled(&answered), cancelled(&one_by_one));
+    assert_eq!(cancelled(&answered).len(), 1, "the unknown attempt");
+    assert_eq!(
+        stored(db, attempts).await,
+        stored(alone_db, alone_attempts).await
+    );
+}
+
+#[tokio::test]
+async fn a_repeated_finish_in_a_later_group_is_acknowledged_without_a_write() {
+    // M5.1d: a result sent again before its acknowledgement came (scenario 23: about 360 of
+    // 500) was taken alone, its attempt read again and its end written to no effect.
+    let (mut dispatcher, db, run_id, attempts) = twenty_started().await;
+    let success = finished(&attempts[0], pb::AttemptStatus::Success, &json!(1));
+    dispatcher
+        .finished_group("w1", std::slice::from_ref(&success), ts(NOW))
+        .await
+        .unwrap();
+    db.count_writes();
+    let acks = dispatcher
+        .finished_group("w1", &[success], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(acks.len(), 1);
+    assert_eq!(db.writes(), 0);
+    assert_eq!(
+        state_of(&db, &run_id, "e0").await.0,
+        TaskInstanceState::Success
+    );
 }
 
 #[tokio::test]

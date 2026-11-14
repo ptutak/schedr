@@ -100,12 +100,13 @@ done = 2026-11-13
 id = "M5.1d"
 title = "Pokes and rounds through PgBouncer"
 scope = '''
-statements counted per transaction on Postgres behind PgBouncer after M5.1c's set-based round; then set-based where the count still points: assignment's per-item claim, `try_number` and insert, `first_start` once per sensor instead of twice, a wait step's per-item finish reads (`count_strike`, `run_dag`, `clear_wait_step`); `ready_instances` reading only what a round can assign, cleanups still first; a `TriggerRun` timed again after M5.1c3 (one transaction)
+statements counted per transaction on Postgres behind PgBouncer after M5.1c's set-based round; then set-based where the count still points: assignment's per-item claim, `try_number` and insert, `first_start` once per sensor instead of twice, a wait step's per-item finish reads (`count_strike`, `run_dag`, `clear_wait_step`); `ready_instances` reading only what a round can assign, cleanups still first; a `TriggerRun` timed again after M5.1c3 (one transaction). Built: statements counted per scenario (`make stress STRESS_STATEMENTS=1`); a turn's `Started`s in one read and a statement per start method; a group's wait steps' strikes in one read and a statement per DAG; a result sent again acknowledged without a read or a write (note 6). The claim, `try_number` and `first_start` were set-based in M5.1c1; the `TriggerRun` timing left out (its part of a round is 0.4-0.8 s at p99 now). Reviewed by Grok in paranoid mode: a group's success of a wait step cleared after a later strike of the same step (two runs of it), fixed: cleared before any strike
 '''
 done_when = '''
-pokes p99 under 7 s (11.1 s after M4B); scenario 6's round p99 at scenario 1's
+a wait step's end recorded sooner in scenario 23: `await` p99 less its 1 s check (2.9 s after M5.1c3; the user, 2026-11-14: the pokes' figure is mostly where the file opens in their 5 s cycle, 7.75 s after M5.1c3), and no repeated end of an attempt already ended; statements per transaction counted (`make stress STRESS_STATEMENTS=1`); scenario 6's round p99 at scenario 1's (met after M5.1c3: 4.1 s both)
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1e"

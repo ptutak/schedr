@@ -15,4 +15,4 @@ the lease; refusing the new incarnation until the old one is lost.
 history = "JOURNAL.md#D443"
 step = "B230"
 code = ["crates/schedr-master/src/dispatch.rs::end_replaced", "crates/schedr-master/src/dispatch.rs::incarnation_replaced", "crates/schedr-master/src/service.rs::is_current", "crates/schedr-db/src/attempts.rs::mark_replaced"]
-checked = 2026-11-13
+checked = 2026-11-14

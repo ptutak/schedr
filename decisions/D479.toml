@@ -14,3 +14,4 @@ at once (12 cores shared; B245 and B247 already show under load).
 history = "JOURNAL.md#D479"
 step = "M5.1c1"
 code = ["Makefile", "python/tests/integration/test_connection_types.py"]
+checked = 2026-11-14

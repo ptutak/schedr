@@ -11,5 +11,5 @@ The wheel and image CI job waits for the strict documentation build.
 history = "archive/PROJECT.md#D29"
 step = "M3.1"
 also = ["deployment"]
-checked = 2026-11-11
+checked = 2026-11-14
 code = ["Makefile::docs-dist", "Makefile::server-image"]

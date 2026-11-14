@@ -6,25 +6,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-13)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1d, Pokes and rounds through PgBouncer. Done when: pokes p99 under 7 s (11.1 s after M4B); scenario 6's round p99 at scenario 1's
-- **Then:** M5.1e, M5.1f, M5.1g, M5.1h, M5.1i.
+- **Next step:** M5.1e, The turn size from data. Done when: the default set from the measured trade-off between start latency and throughput, the numbers in the stress guide
+- **Then:** M5.1f, M5.1g, M5.1h, M5.1i, M5.1j.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- N6 (2026-11-14): M5.1d judged on the recording of a wait step's end, not the pokes' figure
 - D483 (2026-11-13): a command is one transaction, the lock released between commands
 - N5 (2026-11-13): M5.1c2: what a round's commands spend (stress 13 and 23)
 - D481 (2026-11-13): the round's assignments set-based; tasks past the cap pending (decisions 481, 482)
 - D480 (2026-11-13): the core lock released at the end of each transaction (decision 480; replaces 468)
-- D479 (2026-11-13): the Python integration tests on several processes
+- M5.1d (2026-11-14): Pokes and rounds through PgBouncer
 - M5.1c3 (2026-11-13): A command one transaction, the lock released between commands
 - M5.1c2 (2026-11-13): The commands measured
-- M5.1c1 (2026-11-13): The core lock per transaction; the round's assignments set-based
 
 ## In progress
 
-- M5.1a-M5.1c3 done 2026-11-13. M5.1c1: the core lock per round part and per turn transaction (D469, D480), the round's assignments set-based (D481, D482): stress 23 all_in_s 14.5 s -> 4.2 s, a turn's lock wait p99 6.6 s -> 1.6 s. M5.1c2: a TriggerRun cost about 64 ms over eight steps (N5). M5.1c3: a command one transaction, the lock per command, only its DAG read (D483): commands part p99 3.3 s -> 1.6 s bucket in 13, 0.8 s in 23, a turn's lock wait at most 0.8 s. Paused for the user to free storage; next M5.1d (PgBouncer, the TriggerRun timed again). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
+- M5.1a-M5.1d done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`); a turn's starts, wait-step clears and repeated results set-based or acknowledged only: stress 23's wait-step end recorded in 1.2 s (2.9 s), scenario 1 27.3 tasks/s (22.1), 6 26.7 (21.3). Next M5.1e (the turn size from data). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
 - Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
@@ -35,7 +35,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Rules in force
 
-- Commits and pushes pre-accepted from M5.1a to the end of M5.1f (the user, 2026-11-13), after each step's review, `make check` and `make docs`; stop at any decision that is the user's, or where building shows an accepted design doesn't hold.
+- Commits and pushes pre-accepted from M5.1a to the end of M5.1, through M5.1m (the user, 2026-11-13; the release R1.1 not included); no pending label in the UI (the user), after each step's review, `make check` and `make docs`; stop at any decision that is the user's, or where building shows an accepted design doesn't hold.
 - One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10).
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).

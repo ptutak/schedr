@@ -932,3 +932,17 @@ user's decision after M5.1c1 and M5.1c2's review.
   transaction, so not here; batches of about 10 commands with a savepoint each are the follow-up if
   commits still show after M5.1c3.
 - **Not chosen:** C (the lock held for the batch, against decision 480), D.
+
+### <a id="N6"></a>2026-11-14: M5.1d judged on the recording of a wait step's end, not the pokes' figure (note 6)
+
+
+M5.1d's baseline after M5.1c3 (stress 23, Postgres): pokes p99 7.75 s (11.1 s after M4B), short
+of the step's "under 7 s". A poke checks every 5 s, and the stress run opens its file just after
+the pokes checked, so about 5 s of it is the wait for the next check; schedr's own share, the end
+recorded, is about 1.8 s, as the `await` steps (checking every second) show. The user's decision:
+M5.1d is judged on that recording (`await` p99 less its 1 s check, 2.9 s now) and on no attempt
+ended twice, not on the pokes' figure, which a run opening the file mid-cycle could meet with no
+change at all. The same baseline counted the statements (`make stress STRESS_STATEMENTS=1`): about
+8,000 in 35 s, 2.3 s of the server's time, so the database isn't busy; the work is round trips,
+and about 360 of the 500 wait steps' results were sent twice (the stress setup's 1 s heartbeat
+resends a result unacknowledged at two heartbeats), each repeat read again and ended to no effect.

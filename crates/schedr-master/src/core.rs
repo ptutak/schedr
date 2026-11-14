@@ -1773,8 +1773,12 @@ impl MasterCore {
         // (Grok's review: a `Started` that started nothing is answered with a cancel).
         let mut out = Vec::new();
         let handled = Box::pin(db.atomically(async {
-            for started in &group.started {
-                out.extend(dispatcher.started(worker_id, started, now).await?);
+            if !group.started.is_empty() {
+                out.extend(
+                    dispatcher
+                        .started_group(worker_id, &group.started, now)
+                        .await?,
+                );
             }
             if !group.finished.is_empty() {
                 out.extend(

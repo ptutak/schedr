@@ -11,4 +11,4 @@ The DAG page lists its backfills with their runs' counts by state and a Cancel b
 history = "JOURNAL.md#D403"
 step = "M4.12b"
 code = ["crates/schedr-api/src/views.rs::kind_label", "crates/schedr-ui/src/pages.rs::BackfillRow", "crates/schedr-db/src/reads.rs::BackfillPlace"]
-checked = 2026-11-12
+checked = 2026-11-14

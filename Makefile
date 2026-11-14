@@ -391,6 +391,9 @@ demo-clean: demo-down ## Stop the demo and drop its generated passwords and keys
 PGBOUNCER_IMAGE := docker.io/edoburu/pgbouncer:v1.26.0-p0@sha256:b17551c776ef7e5769ef80b956d20f85e2fd25dd8912d31d58f782aad495b711
 STRESS_PROFILE ?= quick
 STRESS ?=
+# `STRESS_STATEMENTS=1`: Postgres counts its statements (`pg_stat_statements`), written to
+# target/stress/statements.txt at the end (scripts/stress-statements.sql; M5.1d).
+STRESS_STATEMENTS ?=
 
 stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<filter>)
 	@set -e; \
@@ -400,7 +403,9 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 	$(CONTAINER) network create $$net >/dev/null; \
 	trap '$(CONTAINER) rm -f '$$pg' '$$bouncer' >/dev/null; $(CONTAINER) network rm '$$net' >/dev/null' EXIT; \
 	$(CONTAINER) run -d --rm --name $$pg --network $$net -e POSTGRES_PASSWORD=schedr \
-		-p 127.0.0.1::5432 $(POSTGRES_IMAGE) -c max_connections=500 >/dev/null; \
+		-p 127.0.0.1::5432 $(POSTGRES_IMAGE) -c max_connections=500 \
+		$(if $(STRESS_STATEMENTS),-c shared_preload_libraries=pg_stat_statements \
+			-c pg_stat_statements.max=10000) >/dev/null; \
 	$(CONTAINER) run -d --rm --name $$bouncer --network $$net -e DB_HOST=$$pg \
 		-e DB_USER=postgres -e DB_PASSWORD=schedr -e AUTH_TYPE=scram-sha-256 \
 		-e POOL_MODE=transaction -e MAX_CLIENT_CONN=1000 -e DEFAULT_POOL_SIZE=40 \
@@ -414,8 +419,13 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	export SCHEDR_STRESS_PROFILE=$(STRESS_PROFILE); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
-	cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast \
-		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)')
+	rc=0; cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast \
+		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)') || rc=$$?; \
+	$(if $(STRESS_STATEMENTS),mkdir -p target/stress; \
+		$(CONTAINER) exec -i $$pg psql -q -U postgres -d postgres \
+			< scripts/stress-statements.sql > target/stress/statements.txt; \
+		echo "statements: target/stress/statements.txt";) \
+	exit $$rc
 
 smoke:           ## Build the release wheel and smoke-test it (install, dags test, standalone run)
 	rm -f dist/*manylinux*x86_64.whl dist/*-linux_x86_64.whl

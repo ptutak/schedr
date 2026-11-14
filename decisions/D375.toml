@@ -13,4 +13,4 @@ changed after `checked`. `code` entries are `path::symbol`; a summary names keys
 history = "JOURNAL.md#D375"
 step = "n/a"
 code = ["scripts/records.py::unknown_names", "scripts/records.py::affected", "scripts/records.py::stale"]
-checked = 2026-11-09
+checked = 2026-11-14

@@ -141,6 +141,29 @@ impl Database {
         Ok(())
     }
 
+    /// Clears the strikes of DAG `dag_id`'s wait steps `task_ids`, as [`Self::clear_wait_step`]
+    /// does each, in one statement (M5.1d).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn clear_wait_steps(&self, dag_id: &str, task_ids: &[&str]) -> Result<(), DbError> {
+        const CLEAR: &str = "DELETE FROM wait_step_strikes \
+            WHERE dag_id = $1 AND task_id IN (SELECT value FROM {json_each}($2{json}))";
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+        let list = crate::query::to_json(&task_ids);
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, CLEAR))
+                .bind(dag_id)
+                .bind(&list)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
     /// Forgets its strikes (a success, or switched on by hand). Returns whether it had any.
     ///
     /// # Errors

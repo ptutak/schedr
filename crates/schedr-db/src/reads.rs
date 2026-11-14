@@ -327,6 +327,28 @@ impl Database {
         }
     }
 
+    /// The DAG of each of `run_ids` that exists, by run (M5.1d: a group's wait steps cleared
+    /// with one read, where [`Self::run_dag`] reads a run's DAG whole).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails.
+    pub async fn run_dag_ids(&self, run_ids: &[&str]) -> Result<BTreeMap<String, String>, DbError> {
+        const DAGS: &str = "SELECT id{text}, dag_id FROM runs \
+            WHERE id IN (SELECT value{uuid} FROM {json_each}($1{json}))";
+        if run_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let list = crate::query::to_json(&run_ids);
+        let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
+            sqlx::query_as(sql(backend, DAGS))
+                .bind(&list)
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(rows.into_iter().collect())
+    }
+
     /// How many instances mapped task `task_id` has in a run (its whole row not counted).
     ///
     /// # Errors

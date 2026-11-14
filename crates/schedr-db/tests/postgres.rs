@@ -725,6 +725,47 @@ async fn attempts_and_outputs_move_a_task_forward() {
 }
 
 #[tokio::test]
+async fn a_groups_starts_dags_and_cleared_strikes_are_stored_on_postgres() {
+    // M5.1d: a turn's starts in a statement for each start method, the runs' DAGs read at
+    // once, a DAG's wait steps' strikes cleared at once.
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let unknown = "0190d0b4-0000-7000-8000-000000000000";
+    assert_eq!(
+        db.mark_started_many(&[attempt_id.as_str(), unknown], "fork", ts(NOW))
+            .await
+            .unwrap(),
+        std::collections::BTreeSet::from([attempt_id.clone()])
+    );
+    assert!(db.attempt(&attempt_id).await.unwrap().unwrap().started);
+    assert_eq!(
+        db.run_dag_ids(&[run_id.as_str(), unknown]).await.unwrap(),
+        BTreeMap::from([(run_id.clone(), "sync".to_owned())])
+    );
+    db.strike_wait_step(("sync", "extract"), 3, "sha256:h1", ts(NOW))
+        .await
+        .unwrap();
+    db.strike_wait_step(("sync", "load"), 3, "sha256:h1", ts(NOW))
+        .await
+        .unwrap();
+    db.clear_wait_steps("sync", &["extract", "other"])
+        .await
+        .unwrap();
+    assert_eq!(db.wait_step_strikes("sync", "extract").await.unwrap(), None);
+    assert!(
+        db.wait_step_strikes("sync", "load")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn failures_retries_requeues_and_cancels_are_stored() {
     let (db, run_id) = with_instances().await;
     let ready = db.ready_instances(ts(NOW)).await.unwrap();

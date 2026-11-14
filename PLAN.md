@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.1d, Pokes and rounds through PgBouncer.
+**Next:** M5.1e, The turn size from data.
 
 ## M0: Foundations
 
@@ -236,8 +236,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1c1 | The core lock per transaction; the round's assignments set-based | done 2026-11-13 | D469, D479, D480, D481, D482 |
 | M5.1c2 | The commands measured | done 2026-11-13 |  |
 | M5.1c3 | A command one transaction, the lock released between commands | done 2026-11-13 | D483 |
-| M5.1d | Pokes and rounds through PgBouncer | **next** |  |
-| M5.1e | The turn size from data | planned |  |
+| M5.1d | Pokes and rounds through PgBouncer | done 2026-11-14 |  |
+| M5.1e | The turn size from data | **next** |  |
 | M5.1f | The idle cost | planned |  |
 | M5.1g | The Status block | planned | D462 |
 | M5.1h | Memory and CPU reported | planned | D463 |

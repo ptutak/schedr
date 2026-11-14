@@ -1329,6 +1329,9 @@ def run(argv: list[str], paths: Paths) -> bool:
         if lines:
             print("\n".join(lines))
     elif command == "note" and len(args) in (1, 2) and args[0].strip():
+        # As below: `note --help` once appended a note titled "--help" to the journal.
+        if args[0].strip().startswith("-"):
+            return False
         print(new_note(paths.root, args[0].strip(), *args[1:]))
     elif command in ("decision", "question") and len(args) == 1 and args[0].strip():
         # An option (`--help`) is no title: it would make a record named after it.

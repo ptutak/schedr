@@ -17,4 +17,4 @@ stress 23).
 history = "JOURNAL.md#D481"
 step = "M5.1c1"
 code = ["crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-13
+checked = 2026-11-14

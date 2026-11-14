@@ -13,4 +13,4 @@ counts a turn's statements.
 history = "JOURNAL.md#D396"
 step = "M4B.5"
 code = ["crates/schedr-master/src/dispatch.rs::finished_group", "crates/schedr-master/src/execution.rs::attempts_finished", "crates/schedr-db/src/attempts.rs::end_attempts", "crates/schedr-db/src/instances.rs::store_outputs", "crates/schedr-agent/src/journal.rs::write_many", "crates/schedr-agent/src/agent.rs::on_done_group"]
-checked = 2026-11-13
+checked = 2026-11-14

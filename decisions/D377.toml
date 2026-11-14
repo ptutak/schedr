@@ -13,4 +13,4 @@ Notes are numbered without gaps and listed in STATUS.md's Recent.
 history = "JOURNAL.md#D377"
 step = "n/a"
 code = ["scripts/records.py::new_note", "scripts/records.py::note_problems"]
-checked = 2026-11-09
+checked = 2026-11-14

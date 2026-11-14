@@ -1981,10 +1981,7 @@ impl Dispatcher {
         started: &pb::Started,
         now: Timestamp,
     ) -> Result<Option<Outgoing>, DispatchError> {
-        let method = match pb::StartMethod::try_from(started.start_method) {
-            Ok(pb::StartMethod::Fork) => "fork",
-            _ => "spawn",
-        };
+        let method = start_method(started);
         let attempt = self.db.attempt(&started.attempt_id).await?;
         if let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id)
             && self
@@ -2002,6 +1999,62 @@ impl Dispatcher {
             return Ok(None);
         }
         Ok(Some(cancel(worker_id, &started.attempt_id)))
+    }
+
+    /// A turn's `Started`s together (M5.1d), as [`Self::started`] handles each: the attempts
+    /// read in one query, their starts recorded in a statement for each start method. One that
+    /// isn't this worker's, or is no longer running, is answered with a cancel.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Db`] if the database fails: the caller's transaction rolls back, and
+    /// the messages are handled one by one.
+    pub async fn started_group(
+        &mut self,
+        worker_id: &str,
+        group: &[pb::Started],
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
+        let ids: Vec<&str> = group.iter().map(|s| s.attempt_id.as_str()).collect();
+        let attempts: BTreeMap<String, StoredAttempt> = self
+            .db
+            .attempts_by_ids(&ids)
+            .await?
+            .into_iter()
+            .filter(|a| a.worker_id == worker_id)
+            .map(|a| (a.id.clone(), a))
+            .collect();
+        // Each attempt's last start method, as one by one would leave it.
+        let mut methods: BTreeMap<&str, &str> = BTreeMap::new();
+        for started in group {
+            if attempts.contains_key(&started.attempt_id) {
+                methods.insert(&started.attempt_id, start_method(started));
+            }
+        }
+        let mut running = BTreeSet::new();
+        for method in ["fork", "spawn"] {
+            let of: Vec<&str> = methods
+                .iter()
+                .filter(|&(_, m)| *m == method)
+                .map(|(id, _)| *id)
+                .collect();
+            running.extend(self.db.mark_started_many(&of, method, now).await?);
+        }
+        for id in &running {
+            let attempt = &attempts[id];
+            // A start already recorded changes only the method: no witness of this write.
+            if !attempt.started {
+                self.witnesses.push((attempt.id.clone(), Witness::Started));
+            }
+            // It found a worker: who rejected it before doesn't matter any more.
+            self.rejections.remove(&attempt.instance_id);
+            self.code_missing.remove(&attempt.instance_id);
+        }
+        Ok(group
+            .iter()
+            .filter(|s| !running.contains(&s.attempt_id))
+            .map(|s| cancel(worker_id, &s.attempt_id))
+            .collect())
     }
 
     /// Whether `worker_id` surely never started `attempt_id`, as its messages' echo says
@@ -2219,6 +2272,7 @@ impl Dispatcher {
         }
         let mut ends = Vec::with_capacity(common.len());
         let mut results = Vec::with_capacity(common.len());
+        let mut cleared = Vec::new();
         for &(attempt, finished) in common {
             let status = attempt_status_from_proto(finished.status).map_err(|e| {
                 DispatchError::BadMessage {
@@ -2226,7 +2280,17 @@ impl Dispatcher {
                     reason: e.to_string(),
                 }
             })?;
-            self.count_strike(attempt, finished, status, now).await?;
+            // A wait step's success clears its strikes: the group's together, below, but
+            // before any strike after it (Grok's review: two runs of one wait step, a success
+            // then a struck failure, keep the strike, as one by one).
+            if finished.wait_step && !finished.struck && status == AttemptStatus::Success {
+                cleared.push(attempt);
+            } else {
+                if finished.wait_step && finished.struck {
+                    self.clear_wait_steps(&std::mem::take(&mut cleared)).await?;
+                }
+                self.count_strike(attempt, finished, status, now).await?;
+            }
             let cleanup = finished
                 .cleanup
                 .as_ref()
@@ -2243,6 +2307,7 @@ impl Dispatcher {
             .zip(&ends)
             .map(|((attempt, _), end)| (attempt.id.as_str(), end))
             .collect();
+        self.clear_wait_steps(&cleared).await?;
         let recorded = self.db.end_attempts(&rows, now).await?;
         let mut by_run: BTreeMap<&str, Vec<(&TaskId, i32, &AttemptResult)>> = BTreeMap::new();
         for ((attempt, result), end) in results.iter().zip(&ends) {
@@ -2301,6 +2366,7 @@ impl Dispatcher {
                 // Gone, or a repeat: acknowledged only (as `finished` does).
                 None => {}
                 Some(_) if !first => {}
+                Some(attempt) if is_repeat(attempt, finished, worker_id) => {}
                 // In its place (Grok's review): what came before it stored first, so a mapped
                 // sibling's success before an uncommon failure stays a success, as one by one.
                 Some(_) => {
@@ -2604,6 +2670,32 @@ impl Dispatcher {
         self.current_code
             .get(dag.location.root.as_str())
             .is_some_and(|(accepted, _)| !accepted.is_empty() && !accepted.contains(code))
+    }
+
+    /// The strikes of wait steps that succeeded cleared, as [`Self::count_strike`] does each:
+    /// their DAGs read in one query, a statement for each DAG. A run that can't be read is
+    /// left as `count_strike` leaves it.
+    async fn clear_wait_steps(&self, succeeded: &[&StoredAttempt]) -> Result<(), DispatchError> {
+        if succeeded.is_empty() {
+            return Ok(());
+        }
+        let runs: BTreeSet<&str> = succeeded.iter().map(|a| a.run_id.as_str()).collect();
+        let runs: Vec<&str> = runs.into_iter().collect();
+        let dags = self.db.run_dag_ids(&runs).await.unwrap_or_default();
+        let mut by_dag: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for attempt in succeeded {
+            if let Some(dag_id) = dags.get(&attempt.run_id) {
+                by_dag
+                    .entry(dag_id)
+                    .or_default()
+                    .insert(attempt.task_id.as_str());
+            }
+        }
+        for (dag_id, tasks) in by_dag {
+            let tasks: Vec<&str> = tasks.into_iter().collect();
+            self.db.clear_wait_steps(dag_id, &tasks).await?;
+        }
+        Ok(())
     }
 
     /// Counts how a wait step's attempt ended, the first time it is told (decision 338).
@@ -3878,6 +3970,24 @@ const fn by_master(status: AttemptStatus) -> AttemptResult {
 /// An attempt's end and result as `finished` says, with `error_summary` and `cleanup` as read.
 /// Whether a `Finished` takes the common path of [`Dispatcher::finished_group`]: its worker's
 /// own attempt, not ended, never moved, its whole result (not a rest), its code there.
+/// How a `Started` says its task started: forked, or spawned (also when it doesn't say).
+fn start_method(started: &pb::Started) -> &'static str {
+    match pb::StartMethod::try_from(started.start_method) {
+        Ok(pb::StartMethod::Fork) => "fork",
+        _ => "spawn",
+    }
+}
+
+/// Whether `finished` repeats this worker's result already stored for `attempt` (sent again
+/// before its acknowledgement came, M5.1d): acknowledged only, as [`Dispatcher::finished`]
+/// would end up doing, without its reads and writes.
+fn is_repeat(attempt: &StoredAttempt, finished: &pb::Finished, worker_id: &str) -> bool {
+    attempt.worker_id == worker_id
+        && attempt.status.is_some()
+        && attempt.cleanup_moves == 0
+        && !finished.cleanup.as_ref().is_some_and(|c| c.rest)
+}
+
 fn is_common(attempt: &StoredAttempt, finished: &pb::Finished, worker_id: &str) -> bool {
     attempt.worker_id == worker_id
         && attempt.status.is_none()

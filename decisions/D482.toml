@@ -15,4 +15,4 @@ per-task statements (in stress 23, 10.8 s, 4.8 s and 1.5 s of 17.6 s of assignme
 history = "JOURNAL.md#D481"
 step = "M5.1c1"
 code = ["crates/schedr-master/src/dispatch.rs"]
-checked = 2026-11-13
+checked = 2026-11-14

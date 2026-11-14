@@ -12,4 +12,4 @@ scripts/records.py as indexes: one line per item saying where the details are.
 history = "JOURNAL.md#D368"
 step = "n/a"
 code = ["scripts/records.py", "plan/README.md"]
-checked = 2026-11-09
+checked = 2026-11-14

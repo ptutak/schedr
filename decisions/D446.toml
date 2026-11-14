@@ -15,4 +15,4 @@ tokio's paused time; fewer rules.
 history = "JOURNAL.md#D445"
 step = "M4B.0"
 code = ["crates/schedr-agent/tests/clock_sim.rs::run", "crates/schedr-agent/tests/clock_sim/master.rs::simulate", "crates/schedr-master/src/dispatch.rs::Weakened"]
-checked = 2026-11-13
+checked = 2026-11-14

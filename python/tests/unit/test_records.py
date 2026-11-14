@@ -582,6 +582,10 @@ def test_an_option_given_as_a_title_makes_no_record(tmp_path: Path) -> None:
     assert module.main(["records.py", "decision", "--help"], module.Paths(tmp_path)) == 2
     assert not (tmp_path / "decisions" / "D2.toml").exists()
     assert module.main(["records.py", "question", "-h"], module.Paths(tmp_path)) == 2
+    journal = tmp_path / "JOURNAL.md"
+    journal.write_text("# Journal\n")
+    assert module.main(["records.py", "note", "--help"], module.Paths(tmp_path)) == 2
+    assert journal.read_text() == "# Journal\n"
 
 
 def test_the_topics_are_read_from_the_design_readme(tmp_path: Path) -> None:

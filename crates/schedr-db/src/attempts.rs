@@ -1234,6 +1234,38 @@ impl Database {
         Ok(updated == 1)
     }
 
+    /// Records `Started` for several running attempts started by `start_method`, as
+    /// [`Self::mark_started`] does each, in one statement (M5.1d). Returns the IDs still
+    /// running.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn mark_started_many(
+        &self,
+        attempt_ids: &[&str],
+        start_method: &str,
+        now: Timestamp,
+    ) -> Result<BTreeSet<String>, DbError> {
+        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}), \
+            start_method = $2, moved_at = NULL \
+            WHERE id IN (SELECT value{uuid} FROM {json_each}($3{json})) AND status IS NULL \
+            RETURNING id{text}";
+        if attempt_ids.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let list = crate::query::to_json(&attempt_ids);
+        let started: Vec<String> = in_tx!(self, |tx, backend| {
+            sqlx::query_scalar(sql(backend, START))
+                .bind(db_time(now))
+                .bind(start_method)
+                .bind(&list)
+                .fetch_all(&mut *tx)
+                .await?
+        });
+        Ok(started.into_iter().collect())
+    }
+
     /// Records that a running attempt has started, with no start method: its worker
     /// reconnected with it in its journal, its `Started` perhaps lost (B50). A start already
     /// recorded is kept.

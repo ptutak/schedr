@@ -13,4 +13,4 @@ step = "M4.8b2"
 unverified = ["the task's retry waits too"]
 also = ["assignment", "workers"]
 code = ["crates/schedr-master/src/dispatch/tests.rs", "crates/schedr-master/src/dispatch.rs::NO_CLEANUP_WORKER"]
-checked = 2026-11-13
+checked = 2026-11-14

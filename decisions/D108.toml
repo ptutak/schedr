@@ -13,5 +13,5 @@ dropped, and registration adopts open attempts whose start record was refused.
 history = "archive/PROJECT.md#D108"
 step = "M4.3e"
 also = ["protocol", "state"]
-checked = 2026-11-13
+checked = 2026-11-14
 code = ["crates/schedr-master/src/core.rs::CoreError", "crates/schedr-db/src/database.rs::is_data_fault"]

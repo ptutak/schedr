@@ -143,6 +143,7 @@ assigned to started (`assigned_to_started_p99_without_s`,
 make stress                          # all scenarios, the quick profile
 make stress STRESS=failover          # scenarios whose name matches
 make stress STRESS_PROFILE=full      # the large profile (an hour's soak)
+make stress STRESS_STATEMENTS=1      # also count Postgres's statements
 ```
 
 `make stress` starts Postgres and PgBouncer in containers and removes them afterwards. The
@@ -150,6 +151,10 @@ make stress STRESS_PROFILE=full      # the large profile (an hour's soak)
 the machine, at most four times; **full** is fixed and larger. Each scenario writes its numbers
 to `target/stress/<scenario>.json` (in CI, an artifact of the run): the profile, the metrics,
 and what failed, if anything. A scenario that fails also prints the logs of every process.
+With `STRESS_STATEMENTS=1`, Postgres loads `pg_stat_statements` and the run ends by writing
+`target/stress/statements.txt`: for each scenario's database its transactions and statements,
+then the statements run most often and those that took longest. Run one scenario at a time
+to read it: the databases are named at random.
 
 ## Baseline
 
@@ -429,3 +434,28 @@ for each command on its own, and a turn waits at most one command.
 | the round's commands part | 1.6 s | 0.8 s | 0.8 s |
 | a turn waiting for the lock | 0.8 s | 0.4 s | 0.8 s |
 | a round, all its parts | 2.9 s | 2.0 s | 2.9 s |
+
+### Statements counted (M5.1d, 2026-11-14)
+
+Counted with `STRESS_STATEMENTS=1` after M5.1c3, scenario 23 ran about 8,000 statements in 35 s,
+2.3 s of Postgres's time: the database isn't busy, the cost is the round trips. Three things
+were done one item at a time inside a turn's groups: each `Started` read its attempt and wrote
+its start (1,000 statements for 500 starts), each wait step that succeeded read its run's DAG
+twice and cleared its strikes, and a result sent again before its acknowledgement came (about
+360 of the 500 here: the stress setup's 1 s heartbeat resends a result unacknowledged at two
+heartbeats) was taken alone, read again and ended to no effect. Now a group's starts are one
+read and a statement for each start method, its wait steps' strikes one read and a statement
+for each DAG, and a repeat is acknowledged without a read or a write.
+
+| | Before | After |
+|---|---|---|
+| 23: statements in the run | 7,978 | 5,523 |
+| 23: a wait step's end recorded (`await` p99 less its 1 s check) | 2.9 s | 1.2 s |
+| 23: all 500 started (`all_in_s`) | 3.2 s | 1.1 s |
+| 23: a round, p99 | 2.9 s | 1.4 s |
+| 1: tasks a second | 22.1 | 27.3 |
+| 6 (through PgBouncer): tasks a second | 21.3 | 26.7 |
+| 1 and 6: a round, p99 | 4.1 s | 4.1 s |
+
+The pokes' figure (7.75 s, then 4.4 s) is mostly where the file opens in their 5 s cycle, so
+the step is judged on the `await` steps (note 6).

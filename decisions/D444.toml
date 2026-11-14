@@ -16,4 +16,4 @@ suspend (`CLOCK_BOOTTIME`); fencing by timeline only; restarting workers after a
 history = "JOURNAL.md#D444"
 step = "B231"
 code = ["crates/schedr-master/src/core.rs::takeover_wait", "crates/schedr-agent/src/agent.rs::older_leader", "crates/schedr-master/src/service.rs::with_epoch"]
-checked = 2026-11-13
+checked = 2026-11-14
