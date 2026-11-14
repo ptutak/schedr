@@ -52,7 +52,7 @@ const ROUND_PART: MetricDoc = MetricDoc {
     kind: MetricKind::Histogram,
     labels: &["part"],
     help: "How long each part of a round took, the core lock held (commands: commands applied \
-        and their follow-ups; scheduler: the scheduler's pass; triggers; prepare: runs prepared \
+        and their follow-ups; scheduler: the scheduler's pass; triggers: the trigger loop's pass, beside the rounds; prepare: runs prepared \
         and retries queued; expire: assignments expired and replaced incarnations ended; assign: \
         cleanups, chained runs and assignments; rest: parse jobs expired, workers lost)",
 };

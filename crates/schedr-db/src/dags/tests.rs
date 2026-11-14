@@ -645,7 +645,8 @@ fn every_write_of_a_trigger_row_sets_its_next_fire_time() {
         }
     }
     assert_eq!(
-        writes, 5,
-        "the writes known: SET, PAUSE, SWITCH, CONFLICT_SWITCH, REMOVE_SWITCH"
+        writes, 8,
+        "the writes known: SET, the trigger loop's CLAIM and SET if unchanged, PAUSE, SWITCH, \
+         CONFLICT_SWITCH, REMOVE_SWITCH, and a posted event's LISTENERS (decision 486)"
     );
 }

@@ -62,7 +62,7 @@ and holds up the workers' messages and the lease:
 |---|---|---|
 | 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. Each command is one transaction, its decision with it, and the round takes the lock for each command on its own (decision 483): a command whose transaction fails leaves nothing stored and sends nothing, and stays pending. |
 | 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again (if finding them fails, it is tried again each round). |
-| 3 | **Scheduler** | Visits the DAGs [due](#busy-and-quiet-dags): scheduled ones whose stored next fire time has come or isn't known, those with queued runs, and those a command, an ended run or a new version marked (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), starts queued runs while the DAG is under `max_active_runs`, and stores when to visit each scheduled DAG next. Its trigger passes also start runs for matching `RunOf` and posted named events. |
+| 3 | **Scheduler** | Visits the DAGs [due](#busy-and-quiet-dags): scheduled ones whose stored next fire time has come or isn't known, those with queued runs, and those a command, an ended run or a new version marked (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), starts queued runs while the DAG is under `max_active_runs`, and stores when to visit each scheduled DAG next. Triggers have [a loop of their own](#the-trigger-loop). |
 | 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after the worker lease (60 s by default) (not one whose `Started` has arrived and waits to be handled, nor one whose worker is disconnected within its lease or, after a restart, not registered again yet: it may come back with the task done); assigns ready tasks to workers (resource cleanups first, then oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). [Resource cleanups](../02-dags/16-resources.md) bypass those limits. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. Once a round has made its 50 assignments it stops going through the ready tasks: the rest show "pending: waiting for a round with room" (up to 500 a round) and go in the next rounds; a wait step among them switched off or out of `max_wait` still ends in that round (decision 481). The round reads its ready wait steps' switch-off marks and first starts once, and claims its assignments together, in a few statements (decision 482). |
 | 5 | **Parse jobs** | Moves parse jobs that have run longer than `[master] parse_job_timeout` (10 minutes by default) to another worker with the same code. |
 | 6 | **Lost workers** | Marks a worker not heard from for the [worker lease](14-timings.md#fixed-timings) (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one (a task with `cleanup_anywhere` only after the cancel grace and the cleanup move wait: the worker may have started it and be stopping it). |
@@ -71,7 +71,7 @@ A backfill command creates the backfill and all its queued runs at once, in one
 transaction. They start oldest first as places free, after other kinds of queued runs and
 within `max_active_runs`; they can start while the DAG is paused.
 
-The named-event trigger pass reads events of the DAG's name from one minute before the
+The [trigger loop](#the-trigger-loop)'s named-event pass reads events of the DAG's name from one minute before the
 newest event it acted on, bounded by when the DAG became live. The lookback
 (`SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK`) covers posts whose time was recorded before a
 later post but whose transaction committed after it. The pass skips keys the DAG already
@@ -204,8 +204,53 @@ that run on their own intervals, each needed while idle:
 | Gauges | 15 s | Run, task and worker counts for metrics. |
 | A worker's last heartbeat | at most every 10 s | Shown in the UI's workers list (liveness itself is kept in memory). |
 
-A switched-on `RunOf` or event trigger still has the trigger pass read every round, until the
-triggers' round of their own (M5.1f2).
+A switched-on trigger costs nothing while idle either: the [trigger loop](#the-trigger-loop)
+looks only when something was written or a stored moment came, and a waiting `wait_for` step
+is [parked](#waiting-steps-are-parked).
+
+### The trigger loop
+
+The triggers of `RunOf`, `@trigger` and `EventNamed` DAGs are looked after by a loop of their
+own, beside the rounds, taking the master's lock for its pass as a round part does: it starts,
+stops and restarts the triggers on workers' watchers, and starts runs for the `RunOf` and
+named-event DAGs. It runs at once when this master starts leading, then again when:
+
+- a write ended anywhere in this master (a worker's message stored, a round's work, a
+  command): whatever a trigger depends on changes with a write. Housekeeping writes don't
+  count: the lease, the master's node row, a worker's last heartbeat, the outbox, retention;
+- a named event was posted through the API: Postgres announces it on a channel of its own
+  (`schedr_events`), and the post clears the stored next look of the DAGs waiting for that
+  name, so a lost notification, or SQLite, is caught by the next tick's probe;
+- a trigger's stored moment came, found by the tick's probe: its window opening or closing,
+  the end of a failed trigger's wait before it starts again, a generator's `restart_if_idle`.
+  The loop stores the earliest one ahead after each pass (in `next_fire_at`, as a schedule
+  stores its next fire time); a `RunOf` or named-event DAG stores none.
+
+At most one pass every 50 ms, and a pass is skipped by one small statement when no trigger is
+switched on or running. A pass that wrote (a run queued, a trigger started or stopped) wakes
+a round at once, as a finished task does: the round starts the run. So an event's run starts
+within moments, not at the next tick, and a busy round never holds a trigger up. A posted event
+wakes the round only when steps wait for it ([below](#waiting-steps-are-parked)); one nobody
+waits for isn't announced at all.
+
+Measured on a standalone (the examples' `ship_paid`, SQLite, a release build): from a `paid`
+event posted to its run started, 47 ms at the median and 56 ms at most, idle, and 54 ms and
+93 ms beside 75 other runs; before the trigger loop, 1.5 s and 1.9 s idle (the event found by
+the next tick, its run started at the one after). From the `packed` event posted to the parked
+step waiting for it ended: 18 ms (19 ms at most) idle, 18 ms (37 ms) under load; before, 0.5 s
+(0.9 s).
+
+### Waiting steps are parked
+
+A `wait_for` step the master holds (another DAG's run, a named event; it takes no worker) is
+looked at when it becomes ready, and then **parked**: it stores its `max_wait` deadline as
+when to look again, and what it waits for, so no round reads it meanwhile. It is parked before
+the look, so whatever happens after the look wakes it. It is looked at again when:
+
+- a run or a task of the DAG it waits for ends (a database trigger, whatever stored the end);
+- an event of the name it waits for is posted;
+- its deadline comes (it ends `TimedOut`);
+- its own state changes (a retry, a cancel): its look is dropped.
 
 ## When a task is ready
 

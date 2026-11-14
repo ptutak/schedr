@@ -90,8 +90,17 @@ impl Database {
             ON CONFLICT (posted_by, request_key) WHERE request_key IS NOT NULL DO NOTHING";
         const BY_KEY: &str = "SELECT id{text}, name, key, data{text} FROM named_events \
             WHERE posted_by = $1 AND request_key = $2";
+        // Its listeners looked at by the master's trigger loop (decision 486): their stored
+        // next time cleared, once until the loop has looked (a burst writes each row once).
+        const LISTENERS: &str = "UPDATE dag_triggers SET next_fire_at = NULL \
+            WHERE event_name = $1 AND next_fire_at IS NOT NULL";
+        // And the `wait_for` steps waiting for it (decision 487): looked at by the next round.
+        const WAITERS: &str = "UPDATE task_instances SET look_at = NULL \
+            WHERE waits_event = $1 AND look_at IS NOT NULL";
         let id = Uuid::now_v7().to_string();
         let data = to_json(event.data);
+        // What it woke (decision 486): its triggers' listeners, its waiting steps.
+        let mut woke = (false, false);
         let earlier: Option<(String, String, String, String)> = in_tx!(self, |tx, backend| {
             let inserted = sqlx::query(sql(backend, INSERT))
                 .bind(&id)
@@ -106,6 +115,17 @@ impl Database {
                 .await?
                 .rows_affected();
             if inserted == 1 {
+                let listeners = sqlx::query(sql(backend, LISTENERS))
+                    .bind(event.name)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                let waiters = sqlx::query(sql(backend, WAITERS))
+                    .bind(event.name)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                woke = (listeners > 0, waiters > 0);
                 None
             } else {
                 Some(
@@ -118,6 +138,21 @@ impl Database {
             }
         });
         let Some((earlier, name, key, stored)) = earlier else {
+            // The waiting steps are the round's: told at once in this process (a standalone);
+            // the master elsewhere by the notification, which says what to look at. Nobody
+            // waiting, nothing sent.
+            if woke.1 {
+                self.waits_woken();
+            }
+            let payload = match woke {
+                (true, true) => Some("tw"),
+                (true, false) => Some("t"),
+                (false, true) => Some("w"),
+                (false, false) => None,
+            };
+            if let Some(payload) = payload {
+                self.notify(crate::commands::EVENTS_CHANNEL, payload).await;
+            }
             return Ok(Posted::New(id));
         };
         let stored: serde_json::Value = from_json("named_events.data", &stored)?;

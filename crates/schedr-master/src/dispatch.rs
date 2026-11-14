@@ -425,6 +425,9 @@ pub struct Dispatcher {
     /// The run each `@sensor(wait_for=...)` assigned this round is given, by instance
     /// (decision 353): its function's first argument.
     handing: BTreeMap<String, serde_json::Value>,
+    /// Tells the master's trigger loop to look (decision 486): a watcher slot or a trigger's
+    /// state changed in memory only, with no write to wake it (Grok's review of M5.1f2).
+    trigger_wake: std::sync::Arc<tokio::sync::Notify>,
     /// The least such a call gets of its `max_wait`, the run having ended within it.
     handed_call_min: Duration,
     /// The largest message a worker takes (`[grpc] max_message_size`): a run handed to
@@ -515,6 +518,7 @@ impl Dispatcher {
             adopted_unrecorded: BTreeSet::new(),
             set_aside: BTreeMap::new(),
             handing: BTreeMap::new(),
+            trigger_wake: std::sync::Arc::default(),
             handed_call_min: DEFAULT_HANDED_CALL_MIN,
             max_message_size: crate::service::DEFAULT_MAX_MESSAGE_SIZE,
             cleanup_move_wait: SignedDuration::try_from(DEFAULT_CLEANUP_MOVE_WAIT)
@@ -1363,6 +1367,15 @@ impl Dispatcher {
                 continue;
             };
             let deadline = self.deadline(since, *max_wait_ms);
+            // Parked before the look (decision 487): looked at again at its deadline, or when a
+            // run or task of that DAG ends.
+            self.db
+                .park_wait(
+                    &waiting.instance_id,
+                    deadline,
+                    (Some(run_of.dag.as_str()), None),
+                )
+                .await?;
             let found = self
                 .matching_run(run_of, waiting.planned_for, since, None, deadline)
                 .await?;
@@ -1417,6 +1430,14 @@ impl Dispatcher {
             }
             None => return Ok(false),
         };
+        // Parked before the look (decision 487), as a `wait_for` node is.
+        self.db
+            .park_wait(
+                &waiting.instance_id,
+                deadline,
+                (Some(run_of.dag.as_str()), None),
+            )
+            .await?;
         // A retry gets the run it was handed, unless its function said `NOT_YET` to it: the
         // data a call failed on isn't swapped for a newer run's (decision 353).
         let again = wait
@@ -3829,9 +3850,17 @@ impl Dispatcher {
         self.workers.reserve_wait_step(worker, instance, false, now);
     }
 
-    /// A trigger gave up its watcher slot.
+    /// A trigger gave up its watcher slot: the trigger loop looks (another may start there).
     pub fn trigger_released(&mut self, instance: &str) {
         self.workers.release(instance);
+        self.trigger_wake.notify_one();
+    }
+
+    /// What the trigger loop waits on besides writes: told when a trigger's state changes in
+    /// memory only.
+    #[must_use]
+    pub fn trigger_wake(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        self.trigger_wake.clone()
     }
 
     /// What a run started by an event gets of it: nothing for any other run.

@@ -86,7 +86,11 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
                 started_at,
                 problems: &problems,
             };
-            match db.heartbeat_master(&node, Timestamp::now()).await {
+            // Housekeeping: nothing a trigger depends on (decision 486).
+            match db
+                .quietly(db.heartbeat_master(&node, Timestamp::now()))
+                .await
+            {
                 Ok(()) => failing = false,
                 Err(error) => {
                     let usable = db

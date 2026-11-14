@@ -643,15 +643,15 @@ impl Database {
             .collect()
     }
 
-    /// Every scheduled DAG's stored next fire time (`None`: not known), for a round visiting
-    /// every DAG (decision 485).
+    /// Every trigger's stored next time (`None`: not known): a scheduled DAG's next fire time,
+    /// for a round visiting every DAG (decision 485), and an event trigger's next moment, for
+    /// the trigger loop (decision 486).
     ///
     /// # Errors
     ///
     /// [`DbError`] if the query fails or a stored time doesn't read.
     pub async fn next_fires(&self) -> Result<HashMap<DagId, Option<Timestamp>>, DbError> {
-        const ALL: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers \
-            WHERE kind = 'schedule'";
+        const ALL: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers";
         let rows: Vec<(String, Option<String>)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, ALL)).fetch_all(pool).await?
         });
@@ -665,15 +665,76 @@ impl Database {
             .collect()
     }
 
-    /// Stores scheduled DAG `dag_id`'s next fire time (decision 485): when the master visits it
-    /// next ([`NO_FIRE`]: none ahead). A DAG without a schedule's switch changes nothing.
+    /// The trigger loop's looks, taken at the start of its pass (decision 486): each trigger it
+    /// looks after whose look isn't known (`NULL`: a named event posted, a new version, an
+    /// unpause) is set to [`NO_FIRE`] first, then all are read. A post from then on finds a
+    /// look to clear, and is announced; one before it is in the pass's scans (Grok's second
+    /// review of M5.1f2: a post while the look was already `NULL` cleared nothing, and the
+    /// pass's store hid it). The pass looks at every trigger anyway; the look only wakes it.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails or a stored time doesn't read.
+    pub async fn claim_looks(&self) -> Result<HashMap<DagId, Option<Timestamp>>, DbError> {
+        const CLAIM: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} \
+            WHERE kind IN ('run_of', 'event') AND NOT paused AND next_fire_at IS NULL";
+        const ALL: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers";
+        let rows: Vec<(String, Option<String>)> = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, CLAIM))
+                .bind(db_time(NO_FIRE))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query_as(sql(backend, ALL))
+                .fetch_all(&mut *tx)
+                .await?
+        });
+        rows.into_iter()
+            .map(|(dag, at)| {
+                let at = at
+                    .map(|at| parse_time("dag_triggers.next_fire_at", &at))
+                    .transpose()?;
+                Ok((crate::runs::dag_id_of(dag)?, at))
+            })
+            .collect()
+    }
+
+    /// As [`Self::set_next_fire`], only while the stored time is still `was`: a time cleared
+    /// meanwhile (a named event posted during the trigger pass, Grok's review of M5.1f2) is
+    /// left cleared, for the probe to find. A look not known is never stored over: whatever
+    /// cleared it is looked at by the next pass. Returns whether it was stored.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn set_next_fire_if(
+        &self,
+        dag_id: &DagId,
+        was: Timestamp,
+        at: Timestamp,
+    ) -> Result<bool, DbError> {
+        const SET: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} WHERE dag_id = $2 \
+            AND next_fire_at = $3{ts}";
+        let stored = in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, SET))
+                .bind(db_time(at))
+                .bind(dag_id.as_str())
+                .bind(db_time(was))
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(stored == 1)
+    }
+
+    /// Stores when the master looks at `dag_id`'s trigger next ([`NO_FIRE`]: nothing ahead): a
+    /// scheduled DAG's next fire time (decision 485), an event trigger's next moment (decision
+    /// 486). A DAG without a trigger's row changes nothing.
     ///
     /// # Errors
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn set_next_fire(&self, dag_id: &DagId, at: Timestamp) -> Result<(), DbError> {
-        const SET: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} \
-            WHERE dag_id = $2 AND kind = 'schedule'";
+        const SET: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} WHERE dag_id = $2";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
                 .bind(db_time(at))
@@ -771,8 +832,10 @@ impl Database {
         // kind ($2), paused; else kept, paused by $3. `live_since` (decision 353) with it: kept
         // while it stays live with the same trigger, set when it comes back unpaused or its
         // trigger changes ($4), cleared while it is paused, in conflict or removed.
-        const SWITCH: &str = "INSERT INTO dag_triggers (dag_id, kind, paused, live_since) \
-            VALUES ($1, $2, TRUE, NULL) ON CONFLICT (dag_id) DO UPDATE SET \
+        // `event_name` ($6, decision 486): what an `EventNamed` waits for, so a post clears
+        // only its listeners' stored time.
+        const SWITCH: &str = "INSERT INTO dag_triggers (dag_id, kind, paused, live_since, \
+            event_name) VALUES ($1, $2, TRUE, NULL, $6) ON CONFLICT (dag_id) DO UPDATE SET \
             paused = CASE WHEN dag_triggers.kind <> excluded.kind THEN TRUE \
                 ELSE (dag_triggers.paused OR $3) END, \
             live_since = CASE WHEN dag_triggers.kind <> excluded.kind \
@@ -780,7 +843,7 @@ impl Database {
                 WHEN EXISTS (SELECT 1 FROM dags d WHERE d.dag_id = $1 \
                     AND d.removed_at IS NULL AND d.conflict IS NULL) AND NOT $4 \
                 THEN COALESCE(dag_triggers.live_since, $5{ts}) ELSE $5{ts} END, \
-            kind = excluded.kind, next_fire_at = NULL";
+            kind = excluded.kind, event_name = excluded.event_name, next_fire_at = NULL";
         const NO_SWITCH: &str = "DELETE FROM dag_triggers WHERE dag_id = $1";
         const CURRENT: &str = "UPDATE dags SET current_version_id = (SELECT id FROM dag_versions \
             WHERE dag_id = $1 AND parse_result_id = $2{uuid}), \
@@ -846,6 +909,12 @@ impl Database {
                                 .bind(*pause)
                                 .bind(new_trigger)
                                 .bind(&now)
+                                .bind(match &dag.trigger {
+                                    schedr_model::Trigger::EventNamed { event } => {
+                                        Some(event.name.as_str())
+                                    }
+                                    _ => None,
+                                })
                                 .execute(&mut *tx)
                                 .await?;
                         } else {

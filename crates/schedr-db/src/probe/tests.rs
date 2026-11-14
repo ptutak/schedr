@@ -190,6 +190,7 @@ async fn probed(db: &Database, now: Timestamp) -> Vec<(Check, bool)> {
                     | Check::Unstarted
                     | Check::UnstartedCleanups
                     | Check::Triggers
+                    | Check::TriggersDue
             )
         })
         .map(|&c| (c, probe.found(c)))
@@ -476,4 +477,308 @@ async fn a_rounds_probe_looking_ahead_finds_what_comes_due_before_the_next_tick(
         })
         .await;
     assert!(skipped, "due after the next tick: skipped");
+}
+
+#[tokio::test]
+async fn a_trigger_is_due_until_its_next_look_is_stored_and_a_posted_event_clears_its_listeners() {
+    // Decision 486: a `RunOf` or event trigger switched on, its next look unknown, is due; a
+    // look stored ahead isn't until then; posting an event clears the stored look of only the
+    // DAGs waiting for that name, once until it is stored again.
+    let (db, _) = with_dag().await;
+    let now = ts(NOW);
+    let due = |at: Timestamp| {
+        let db = db.clone();
+        async move { db.probe(at).await.unwrap().found(Check::TriggersDue) }
+    };
+    define(
+        &db,
+        dag_of(
+            "after",
+            &json!({"kind": "run_of", "run_of": {"dag": "sync"}}),
+        ),
+    )
+    .await;
+    define(
+        &db,
+        dag_of(
+            "paid",
+            &json!({"kind": "event_named", "event": {"name": "paid"}}),
+        ),
+    )
+    .await;
+    define(
+        &db,
+        dag_of(
+            "shipped",
+            &json!({"kind": "event_named", "event": {"name": "shipped"}}),
+        ),
+    )
+    .await;
+    assert!(!due(now).await, "new triggers start paused (decision 459)");
+    for name in ["after", "paid", "shipped"] {
+        db.set_paused_at(&DagId::new(name).unwrap(), false, now)
+            .await
+            .unwrap();
+    }
+    assert!(due(now).await, "switched on, the next look unknown");
+    for name in ["after", "paid", "shipped"] {
+        db.set_next_fire(&DagId::new(name).unwrap(), crate::dags::NO_FIRE)
+            .await
+            .unwrap();
+    }
+    assert!(!due(now).await, "nothing ahead");
+    let soon = ts("2026-10-21T08:00:05Z");
+    db.set_next_fire(&DagId::new("after").unwrap(), soon)
+        .await
+        .unwrap();
+    assert!(!due(now).await);
+    assert!(due(soon).await, "its moment came");
+    db.set_next_fire(&DagId::new("after").unwrap(), crate::dags::NO_FIRE)
+        .await
+        .unwrap();
+    let event = crate::named_events::NewNamedEvent {
+        name: "paid",
+        key: "order-1",
+        data: &json!({}),
+        at: now,
+    };
+    db.post_named_event(&event, "anna", None, now)
+        .await
+        .unwrap();
+    let fires = db.next_fires().await.unwrap();
+    assert_eq!(
+        (
+            fires[&DagId::new("paid").unwrap()],
+            fires[&DagId::new("shipped").unwrap()],
+            fires[&DagId::new("after").unwrap()],
+        ),
+        (None, Some(crate::dags::NO_FIRE), Some(crate::dags::NO_FIRE)),
+        "only the DAG waiting for `paid` looked at"
+    );
+    assert!(due(now).await);
+}
+
+#[tokio::test]
+async fn a_parked_wait_is_looked_at_again_when_what_it_waits_for_happens() {
+    // Decision 487: migration 0002's triggers on SQLite (the Postgres test has its own). A step
+    // parked waiting for DAG `sync` comes back when a task or a run of `sync` ends, one waiting
+    // for an event when it is posted, and a parked step whose own state changes loses its look.
+    let (db, version) = with_dag().await;
+    let now = ts(NOW);
+    let later = ts("2026-10-21T09:00:00Z");
+    let running = run(&db, &version, RunState::Running, NOW).await;
+    db.create_instances(
+        &running,
+        &[
+            (id("extract"), -1, TaskInstanceState::Queued),
+            (id("load"), -1, TaskInstanceState::Scheduled),
+        ],
+        now,
+    )
+    .await
+    .unwrap();
+    let extract = db.ready_instances(now).await.unwrap()[0]
+        .instance_id
+        .clone();
+    let ready = || async { db.ready_instances(now).await.unwrap().len() };
+    let update = |task: &str, state, used_retry| InstanceUpdate {
+        task_id: id(task),
+        map_index: -1,
+        state,
+        ready_at: Some(now),
+        outcome: None,
+        used_retry,
+        reason: None,
+        map_sizes: None,
+    };
+    db.park_wait(&extract, later, (Some("sync"), None))
+        .await
+        .unwrap();
+    assert_eq!(ready().await, 0, "parked");
+    db.update_instances(
+        &running,
+        &[update("load", TaskInstanceState::Skipped, false)],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready().await, 1, "a task of its DAG ended");
+    db.park_wait(&extract, later, (None, Some("paid")))
+        .await
+        .unwrap();
+    assert_eq!(ready().await, 0);
+    let event = crate::named_events::NewNamedEvent {
+        name: "paid",
+        key: "o-1",
+        data: &json!({}),
+        at: now,
+    };
+    db.post_named_event(&event, "anna", None, now)
+        .await
+        .unwrap();
+    assert_eq!(ready().await, 1, "its event posted");
+    db.park_wait(&extract, later, (Some("sync"), None))
+        .await
+        .unwrap();
+    db.update_instances(
+        &running,
+        &[update("extract", TaskInstanceState::UpForRetry, true)],
+        now,
+    )
+    .await
+    .unwrap();
+    db.update_instances(
+        &running,
+        &[update("extract", TaskInstanceState::Queued, false)],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready().await, 1, "its own state changed: no look left");
+    db.park_wait(&extract, later, (Some("sync"), None))
+        .await
+        .unwrap();
+    let other = run(&db, &version, RunState::Running, "2026-10-21T06:00:00Z").await;
+    assert_eq!(ready().await, 0);
+    db.finish_run(&other, RunState::Success, now).await.unwrap();
+    assert_eq!(ready().await, 1, "a run of its DAG ended");
+    assert!(
+        db.ready_instances(later).await.unwrap().len() == 1,
+        "and at its time anyway"
+    );
+}
+
+/// The statement of migration `text` filling stored rows' event names (decision 486).
+fn event_name_fill(text: &str) -> &str {
+    let start = text
+        .find("UPDATE dag_triggers")
+        .expect("the fill in migration 0002");
+    let end = start + text[start..].find(';').unwrap();
+    &text[start..end]
+}
+
+#[tokio::test]
+async fn migration_0002_fills_the_event_name_of_triggers_stored_before_it() {
+    // Grok's review of M5.1f2: an upgraded database's `EventNamed` rows had no name until the
+    // DAG was parsed again, so a post found no listener. The migration's own statement, run on
+    // a row as one stored before it: the name from the DAG's current definition, none for
+    // another kind.
+    let (db, _) = with_dag().await;
+    define(
+        &db,
+        dag_of(
+            "paid",
+            &json!({"kind": "event_named", "event": {"name": "paid"}}),
+        ),
+    )
+    .await;
+    define(
+        &db,
+        dag_of(
+            "after",
+            &json!({"kind": "run_of", "run_of": {"dag": "sync"}}),
+        ),
+    )
+    .await;
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite")
+    };
+    let names = || async {
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT dag_id, event_name FROM dag_triggers ORDER BY dag_id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    };
+    let stored = vec![
+        ("after".to_owned(), None),
+        ("paid".to_owned(), Some("paid".to_owned())),
+    ];
+    assert_eq!(names().await, stored, "written with the trigger's row");
+    sqlx::query("UPDATE dag_triggers SET event_name = NULL")
+        .execute(pool)
+        .await
+        .unwrap();
+    let fill = event_name_fill(include_str!("../../migrations/sqlite/0002_next_looks.sql"));
+    sqlx::query(sqlx::AssertSqlSafe(fill.to_owned()))
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(names().await, stored);
+}
+
+#[tokio::test]
+async fn a_handed_step_is_no_longer_parked_and_a_look_cleared_during_a_pass_stays_cleared() {
+    // Grok's review of M5.1f2: a sensor handed its run but not assigned that round (no slot,
+    // the round's assignments made) is ready for the next round; and the trigger loop's store
+    // of a look doesn't overwrite one a post cleared after the pass read it.
+    let (db, version) = with_dag().await;
+    let now = ts(NOW);
+    let running = run(&db, &version, RunState::Running, NOW).await;
+    db.create_instances(
+        &running,
+        &[(id("extract"), -1, TaskInstanceState::Queued)],
+        now,
+    )
+    .await
+    .unwrap();
+    let extract = db.ready_instances(now).await.unwrap()[0]
+        .instance_id
+        .clone();
+    db.park_wait(&extract, ts("2026-10-21T09:00:00Z"), (Some("orders"), None))
+        .await
+        .unwrap();
+    assert_eq!(db.ready_instances(now).await.unwrap().len(), 0);
+    db.hand_run(&extract, &running, now).await.unwrap();
+    assert_eq!(
+        db.ready_instances(now).await.unwrap().len(),
+        1,
+        "handed: ready"
+    );
+
+    define(
+        &db,
+        dag_of(
+            "paid",
+            &json!({"kind": "event_named", "event": {"name": "paid"}}),
+        ),
+    )
+    .await;
+    let paid = DagId::new("paid").unwrap();
+    db.set_paused_at(&paid, false, now).await.unwrap();
+    let data = json!({});
+    let event = |key| crate::named_events::NewNamedEvent {
+        name: "paid",
+        key,
+        data: &data,
+        at: now,
+    };
+    // Unknown (as defined), and posted again while unknown: the post clears nothing.
+    db.post_named_event(&event("o-1"), "anna", None, now)
+        .await
+        .unwrap();
+    assert_eq!(db.next_fires().await.unwrap()[&paid], None);
+    // The pass takes it: claimed, so a post during the pass finds a look to clear.
+    let looks = db.claim_looks().await.unwrap();
+    assert_eq!(looks[&paid], Some(crate::dags::NO_FIRE));
+    assert!(
+        !db.probe(now).await.unwrap().found(Check::TriggersDue),
+        "claimed"
+    );
+    db.post_named_event(&event("o-2"), "anna", None, now)
+        .await
+        .unwrap();
+    // The pass's store (it looked at o-1 only) leaves the cleared look alone.
+    assert!(
+        !db.set_next_fire_if(&paid, crate::dags::NO_FIRE, crate::dags::NO_FIRE)
+            .await
+            .unwrap()
+    );
+    assert_eq!(db.next_fires().await.unwrap()[&paid], None);
+    assert!(db.probe(now).await.unwrap().found(Check::TriggersDue));
+    // A paused trigger's unknown look isn't claimed (unpaused, it is looked at).
+    db.set_paused_at(&paid, true, now).await.unwrap();
+    db.claim_looks().await.unwrap();
+    assert_eq!(db.next_fires().await.unwrap()[&paid], None, "paused");
 }

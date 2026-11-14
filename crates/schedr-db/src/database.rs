@@ -93,6 +93,12 @@ pub struct Database {
     /// Write transactions ended (shared by clones): a round's probe taken before one is taken
     /// again (decision 485, [`crate::probe`]).
     writes: Arc<std::sync::atomic::AtomicU64>,
+    /// Told when a write transaction ended outside [`Database::quietly`] (shared by clones):
+    /// what the master's trigger loop waits on (decision 486).
+    changed: Arc<tokio::sync::Notify>,
+    /// Told when a named event posted here cleared waiting steps' looks (decision 487): the
+    /// master's round looks at once, not at its next tick.
+    waits: Arc<tokio::sync::Notify>,
     /// Writes made to fail, for tests (shared by clones; decision 98).
     #[cfg(any(test, feature = "testing"))]
     faults: Arc<crate::faults::Faults>,
@@ -266,10 +272,17 @@ impl From<Pool> for Database {
             identity: Arc::default(),
             notifications: Arc::default(),
             writes: Arc::default(),
+            changed: Arc::default(),
+            waits: Arc::default(),
             #[cfg(any(test, feature = "testing"))]
             faults: Arc::default(),
         }
     }
+}
+
+tokio::task_local! {
+    /// Set inside [`Database::quietly`]: its writes don't tell [`Database::changed`].
+    static QUIET: ();
 }
 
 impl Database {
@@ -374,6 +387,8 @@ impl Database {
             identity: self.identity.clone(),
             notifications: self.notifications.clone(),
             writes: self.writes.clone(),
+            changed: self.changed.clone(),
+            waits: self.waits.clone(),
             #[cfg(any(test, feature = "testing"))]
             faults: self.faults.clone(),
             fence: Some(Arc::new(Fence {
@@ -427,12 +442,45 @@ impl Database {
         &self.notifications
     }
 
-    /// The same for every clone of this database (see [`Database::atomically`]).
     /// A write transaction ended, stored or not (decision 485): a round's probe is taken again
-    /// before its next read.
+    /// before its next read, and, outside [`Database::quietly`], [`Database::changed`] is told
+    /// (decision 486).
     pub(crate) fn wrote(&self) {
         self.writes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if QUIET.try_with(|()| ()).is_err() {
+            self.changed.notify_one();
+        }
+    }
+
+    /// Waits until a write transaction ended outside [`Database::quietly`] since the last wait
+    /// returned (writes in between are one wake): the master's trigger loop (decision 486).
+    pub async fn changed(&self) {
+        self.changed.notified().await;
+    }
+
+    /// A named event posted cleared waiting steps' looks.
+    pub(crate) fn waits_woken(&self) {
+        self.waits.notify_one();
+    }
+
+    /// Waits until a named event posted in this process cleared waiting steps' looks since the
+    /// last wait returned (decision 487): the master's round looks at them at once.
+    pub async fn waits_due(&self) {
+        self.waits.notified().await;
+    }
+
+    /// Runs `work` with its writes left out of [`Database::changed`]: housekeeping that changes
+    /// nothing a trigger depends on (the lease, the master's row, a worker's last heartbeat),
+    /// and the trigger loop's own writes.
+    pub async fn quietly<F: std::future::Future>(&self, work: F) -> F::Output {
+        QUIET.scope((), work).await
+    }
+
+    /// Write transactions ended so far, in this process (shared by clones).
+    #[must_use]
+    pub fn writes_ended(&self) -> u64 {
+        self.write_ends()
     }
 
     /// Write transactions ended so far.
@@ -440,6 +488,7 @@ impl Database {
         self.writes.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// The same for every clone of this database (see [`Database::atomically`]).
     pub(crate) const fn identity(&self) -> &Arc<()> {
         &self.identity
     }

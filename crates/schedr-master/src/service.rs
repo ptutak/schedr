@@ -131,6 +131,12 @@ pub struct Hub {
     /// Told when a worker's `Finished` was recorded: a round runs at once instead of at the
     /// next tick, its downstream tasks ready (decision 42B; [`ROUND_GAP`] after the last).
     finished: Arc<tokio::sync::Notify>,
+    /// Told when the trigger loop must look (decision 486): a trigger's stored moment came
+    /// (the tick's probe), a named event was announced.
+    triggers_due: Arc<tokio::sync::Notify>,
+    /// Set when a trigger pass failed: the next tick wakes the loop again, as a failed round
+    /// is tried again at the next (Grok's review of M5.1f2).
+    triggers_failed: Arc<std::sync::atomic::AtomicBool>,
     /// Its problems now, written with its row (decision 129).
     problems: Problems,
     /// How its loop is paced.
@@ -186,6 +192,9 @@ impl Hub {
             arrivals: core.arrivals(),
             leading: Arc::new(watch::Sender::new(true)),
             finished: Arc::new(tokio::sync::Notify::new()),
+            // The dispatcher's: a trigger's state changing in memory wakes the loop too.
+            triggers_due: core.dispatcher().trigger_wake(),
+            triggers_failed: Arc::default(),
             problems: Problems::default(),
             listen_retry: None,
             core: Arc::new(Mutex::new(core)),
@@ -298,7 +307,12 @@ impl Hub {
                 () = &mut stop => return,
                 () = self.while_leading() => {}
             }
-            let full = match sender.pass((self.clock)(), || *self.leading.borrow()).await {
+            // Housekeeping: nothing a trigger depends on (decision 486).
+            let full = match self
+                .db
+                .quietly(sender.pass((self.clock)(), || *self.leading.borrow()))
+                .await
+            {
                 Ok(pass) => {
                     pass.sent + pass.retried + pass.dropped
                         >= crate::notifications::sender::BATCH as usize
@@ -341,14 +355,17 @@ impl Hub {
                 () = self.while_leading() => {}
             }
             let leading = || *self.leading.borrow();
-            match crate::retention::pass(
-                &self.db,
-                &settings,
-                (self.clock)(),
-                leading,
-                &self.metrics,
-            )
-            .await
+            // Housekeeping: what it deletes is past anything a trigger waits for (decision 486).
+            match self
+                .db
+                .quietly(crate::retention::pass(
+                    &self.db,
+                    &settings,
+                    (self.clock)(),
+                    leading,
+                    &self.metrics,
+                ))
+                .await
             {
                 Ok(pass) if pass.any() => tracing::info!(
                     runs = pass.runs,
@@ -433,7 +450,22 @@ impl Hub {
         // delivered too (B7); a failed part ends the round, as before. The round's reads the
         // probe finds empty are skipped (decision 485): an idle tick is one statement.
         Box::pin(self.db.in_round((self.clock)(), ahead, async {
+            // The trigger pass is the trigger loop's (decision 486): woken when a trigger's
+            // stored moment has come, or its last pass failed.
+            if self
+                .triggers_failed
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+                || !self
+                    .db
+                    .skipped_at(schedr_db::probe::Check::TriggersDue, (self.clock)())
+                    .await?
+            {
+                self.triggers_due.notify_one();
+            }
             for part in RoundPart::ALL {
+                if part == RoundPart::Triggers {
+                    continue;
+                }
                 if part == RoundPart::Commands {
                     self.commands().await?;
                     continue;
@@ -578,8 +610,14 @@ impl Hub {
         let mut keeper = leadership.map(|leadership| {
             self.set_leading(leadership.leads(std::time::Instant::now()));
             let hub = self.clone();
-            tokio::spawn(async move { hub.keep_leading(leadership, released).await })
+            // The lease's writes are housekeeping (decision 486).
+            tokio::spawn(async move {
+                let db = hub.db.clone();
+                db.quietly(hub.keep_leading(leadership, released)).await;
+            })
         });
+        // Ends with this loop, however it returns.
+        let _triggers = self.start_triggers();
         let mut ticks = tokio::time::interval(interval);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut alive = tokio::time::interval(self.timings.alive);
@@ -602,7 +640,9 @@ impl Hub {
                 () = self.finished.notified() => Wake::Finished,
                 () = async { tokio::time::sleep_until(round_due.expect("guarded")).await },
                     if round_due.is_some() => Wake::RoundDue,
-                listened = next_command(notifications.as_mut(), &mut paused_until, &self.problems) => {
+                listened = next_command(
+                    notifications.as_mut(), &mut paused_until, &self.problems, &self.triggers_due,
+                ) => {
                     match listened {
                         Listened::Command => Wake::Command,
                         Listened::Failed(error) => Wake::NotificationsFailed(error),
@@ -647,10 +687,7 @@ impl Hub {
                 }
                 Wake::Command => {
                     paused_until = None;
-                    self.problems.clear(ProblemKind::Notifications);
-                    if let Some(notifications) = notifications.as_mut() {
-                        notifications.skip_arrived().await;
-                    }
+                    self.command_announced(notifications.as_mut()).await;
                     ticks.reset();
                 }
                 Wake::NotificationsFailed(error) => {
@@ -674,6 +711,104 @@ impl Hub {
             self.timed_tick(interval).await;
             round_due = None;
             last_round = Some(tokio::time::Instant::now());
+        }
+    }
+
+    /// A command was announced: notifications work again, and those already arrived are taken
+    /// with it (one round for a burst); an event among them wakes the trigger loop.
+    async fn command_announced(&self, notifications: Option<&mut CommandNotifications>) {
+        self.problems.clear(ProblemKind::Notifications);
+        if let Some(notifications) = notifications
+            && notifications.skip_arrived().await
+        {
+            self.triggers_due.notify_one();
+        }
+    }
+
+    /// Starts the trigger loop beside the master's loop: it stops when what this returns is
+    /// dropped.
+    fn start_triggers(&self) -> impl Drop {
+        let (stop, stopped) = watch::channel(false);
+        let hub = self.clone();
+        let task = tokio::spawn(async move { Box::pin(hub.run_triggers(stopped)).await });
+        scopeguard_stop(stop, task)
+    }
+
+    /// The trigger loop (decisions 485 and 486): the trigger pass at once, then again whenever
+    /// a write ended elsewhere in this process, a trigger's stored moment came (the tick's
+    /// probe) or a named event was announced, at most once every [`ROUND_GAP`] and only while
+    /// this master leads, until `stop` turns true. A pass is skipped by one `EXISTS` when no
+    /// trigger it looks after is switched on or running; its own writes wake nothing of it, and
+    /// a pass that wrote (a run queued) wakes the round, as a recorded `Finished` does.
+    async fn run_triggers(&self, mut stop: watch::Receiver<bool>) {
+        let mut last: Option<tokio::time::Instant> = None;
+        loop {
+            if let Some(last) = last {
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    () = tokio::time::sleep_until(last + self.timings.round_gap) => {}
+                }
+            }
+            if *stop.borrow() {
+                return;
+            }
+            if *self.leading.borrow() {
+                Box::pin(self.trigger_pass()).await;
+                last = Some(tokio::time::Instant::now());
+            }
+            loop {
+                tokio::select! {
+                    _ = stop.changed() => return,
+                    () = self.db.changed() => break,
+                    () = self.triggers_due.notified() => break,
+                    // Steps a post in this process woke are the round's (decision 487): no
+                    // pass for them.
+                    () = self.db.waits_due() => self.finished.notify_one(),
+                    // Leading again after a pause: what changed meanwhile is looked at.
+                    () = async {
+                        let mut leading = self.leading.subscribe();
+                        let _ = leading.wait_for(|leads| *leads).await;
+                    }, if !*self.leading.borrow() => break,
+                }
+            }
+        }
+    }
+
+    /// One pass of the trigger loop, its messages delivered.
+    async fn trigger_pass(&self) {
+        let now = (self.clock)();
+        match self.db.exists(schedr_db::probe::Check::Triggers, now).await {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => {
+                tracing::warn!(%error, "the trigger pass failed; trying again at the next tick");
+                self.triggers_failed
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+        }
+        let before = self.db.writes_ended();
+        let mut outgoing = Vec::new();
+        let result = self
+            .db
+            .quietly(async {
+                Box::pin(self.core_for("triggers").await.round_part(
+                    RoundPart::Triggers,
+                    (self.clock)(),
+                    &mut outgoing,
+                ))
+                .await
+            })
+            .await;
+        self.deliver(outgoing).await;
+        if self.db.writes_ended() != before {
+            // A run queued, a trigger started or stopped: the round starts what it can.
+            self.finished.notify_one();
+        }
+        if let Err(error) = result {
+            tracing::warn!(%error, "the trigger pass failed; trying again at the next tick");
+            self.triggers_failed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -1702,17 +1837,47 @@ async fn next_command(
     notifications: Option<&mut CommandNotifications>,
     paused_until: &mut Option<tokio::time::Instant>,
     problems: &Problems,
+    triggers_due: &tokio::sync::Notify,
 ) -> Listened {
     if let Some(until) = *paused_until {
         tokio::time::sleep_until(until).await;
         *paused_until = None;
         problems.clear(ProblemKind::Notifications);
     }
-    match notifications {
-        Some(notifications) => match notifications.next().await {
-            Ok(()) => Listened::Command,
+    let Some(notifications) = notifications else {
+        return std::future::pending().await;
+    };
+    loop {
+        return match notifications.next().await {
+            Ok(schedr_db::commands::Notified::Command) => Listened::Command,
+            // For the trigger loop (decision 486), and the round only when steps wait for it
+            // (decision 487).
+            Ok(schedr_db::commands::Notified::Event { triggers, waiters }) => {
+                if triggers {
+                    triggers_due.notify_one();
+                }
+                if !waiters {
+                    continue;
+                }
+                Listened::Command
+            }
             Err(error) => Listened::Failed(error),
-        },
-        None => std::future::pending().await,
+        };
     }
+}
+
+/// Stops the trigger loop when dropped: `stop` turned true. A pass under way ends first (cut
+/// off halfway, its transaction and the core's memory would be left in between); the loop
+/// then returns at its next wait.
+fn scopeguard_stop(stop: watch::Sender<bool>, task: tokio::task::JoinHandle<()>) -> impl Drop {
+    struct Guard(
+        watch::Sender<bool>,
+        #[expect(dead_code, reason = "detached on drop")] tokio::task::JoinHandle<()>,
+    );
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = self.0.send(true);
+        }
+    }
+    Guard(stop, task)
 }

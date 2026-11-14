@@ -33,6 +33,15 @@ impl Dispatcher {
             return Ok(());
         };
         let deadline = self.deadline(since, max_wait_ms);
+        // Parked before the look (decision 487): looked at again at its deadline, or when an
+        // event of that name is posted.
+        self.db
+            .park_wait(
+                &waiting.instance_id,
+                deadline,
+                (None, Some(event.name.as_str())),
+            )
+            .await?;
         let ended = match self.event_key(waiting, event).await? {
             Err(reason) => WaitEnd::Refused {
                 reason: format!("its event's key: {reason}"),
@@ -83,6 +92,14 @@ impl Dispatcher {
         (deadline, now): (Timestamp, Timestamp),
         reasons: &mut Vec<(String, String)>,
     ) -> Result<bool, DispatchError> {
+        // Parked before the look (decision 487), as a `wait_for` node is.
+        self.db
+            .park_wait(
+                &waiting.instance_id,
+                deadline,
+                (None, Some(event.name.as_str())),
+            )
+            .await?;
         let key = match self.event_key(waiting, event).await? {
             Ok(key) => key,
             Err(reason) => {

@@ -1,0 +1,24 @@
+title = "A waiting wait_for step stores its deadline and what it waits for"
+date = 2026-11-14
+by = "user"
+status = "active"
+topic = "triggers"
+section = "Placement and ordering"
+summary = '''
+A `wait_for` step the master holds (another DAG's run, or a named event; no worker, decision
+380) is no longer looked at every tick while it waits: before each look it is parked:
+`look_at` is its `max_wait` deadline (the ready check skips it until then), and `waits_dag` or
+`waits_event` name what it waits for. That DAG's run or task ending (row triggers on `state`, both
+backends), that event posted, or its own state changing clears `look_at`, so the next round's
+probe finds it.
+Not chosen: the deadline alone, re-checked on any write (a busy master would look at every
+waiting step on every write).
+'''
+history = "JOURNAL.md#D487"
+step = "M5.1f2"
+code = [
+    "crates/schedr-db/src/run_of.rs::park_wait",
+    "crates/schedr-master/src/dispatch.rs::wait_for_runs",
+    "crates/schedr-db/migrations/postgres/0002_next_looks.sql",
+]
+checked = 2026-11-14

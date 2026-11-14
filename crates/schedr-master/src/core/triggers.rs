@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
+use schedr_db::dags::NO_FIRE;
 use schedr_db::run_of::{RunOfFrom, RunOfSeen};
 use schedr_db::runs::ActiveDag;
 use schedr_db::triggers::{STOPPED_BACK_PRESSURE, STOPPED_RETURNED, TriggerRecord};
@@ -54,13 +55,42 @@ fn wanted(active: &ActiveDag, now: Timestamp) -> bool {
 
 /// Whether a generator found nothing for its `restart_if_idle`; a poke's calls have their limit.
 fn idle_too_long(record: &TriggerRecord, dag: &ActiveDag, now: Timestamp) -> bool {
+    idle_deadline(record, dag).is_some_and(|at| at < now)
+}
+
+/// When the trigger loop must look at `dag`'s trigger again on its own (decision 486), at `now`
+/// after a pass: the earliest of its window opening or closing, its restart's backoff ending
+/// and a generator's `restart_if_idle` coming; [`NO_FIRE`] when none is ahead (a `RunOf` or an
+/// `EventNamed` has none: what it waits for is a write). A `restart_if_idle` passed already
+/// (the pass couldn't restart it) comes back as `now`: looked at again at the next tick.
+fn next_look(dag: &ActiveDag, record: Option<&TriggerRecord>, now: Timestamp) -> Timestamp {
+    let Trigger::Event { start, end, .. } = &dag.dag.trigger else {
+        return NO_FIRE;
+    };
+    let running = record.is_some_and(|r| r.instance_id.is_some());
+    let backoff = record.filter(|_| !running).and_then(|r| r.not_before);
+    let idle = record
+        .filter(|_| running)
+        .and_then(|r| idle_deadline(r, dag));
+    [*start, *end, backoff, idle]
+        .into_iter()
+        .flatten()
+        .filter(|at| *at > now || Some(*at) == idle)
+        .map(|at| at.max(now))
+        .min()
+        .unwrap_or(NO_FIRE)
+}
+
+/// When a running generator has found nothing for its `restart_if_idle` (a poke's calls have
+/// their limit, so a poke has none).
+fn idle_deadline(record: &TriggerRecord, dag: &ActiveDag) -> Option<Timestamp> {
     let Trigger::Event {
         task,
         restart_if_idle_ms: Some(idle),
         ..
     } = &dag.dag.trigger
     else {
-        return false;
+        return None;
     };
     if matches!(
         task.kind,
@@ -69,13 +99,14 @@ fn idle_too_long(record: &TriggerRecord, dag: &ActiveDag, now: Timestamp) -> boo
             ..
         }
     ) {
-        return false;
+        return None;
     }
-    let since = record.last_event_at.max(record.started_at);
-    let idle = SignedDuration::from_millis(i64::try_from(*idle).unwrap_or(i64::MAX));
+    let since = record.last_event_at.max(record.started_at)?;
     since
-        .and_then(|since| since.checked_add(idle).ok())
-        .is_some_and(|at| at < now)
+        .checked_add(SignedDuration::from_millis(
+            i64::try_from(*idle).unwrap_or(i64::MAX),
+        ))
+        .ok()
 }
 
 /// What an `@trigger(wait_for=RunOf(...))` waits for, and its `run_retries` (decision 353).
@@ -134,6 +165,9 @@ impl MasterCore {
         if self.db.skipped(schedr_db::probe::Check::Triggers).await? {
             return Ok(());
         }
+        // The looks taken before anything is read: one cleared during the pass (a named event
+        // posted after its scan) stays cleared (Grok's reviews of M5.1f2).
+        let looks = self.db.claim_looks().await?;
         let records = self.db.triggers().await?;
         let active = self.db.active_dags().await?;
         let queued: BTreeMap<String, i64> =
@@ -170,6 +204,39 @@ impl MasterCore {
         {
             self.event_named_pass(dag, queued_of(dag.dag.id.as_str()), now)
                 .await?;
+        }
+        Box::pin(self.store_next_looks(&active, &looks, now)).await
+    }
+
+    /// Stores, for each trigger the pass looks after, when it must look again (decision 486),
+    /// where that changed: the tick's probe wakes the loop then. What happens in between (an
+    /// event, a run ending, a worker gone) is a write, which wakes it anyway.
+    /// `stored` is what was stored when the pass began: a look changed since isn't overwritten.
+    async fn store_next_looks(
+        &self,
+        active: &[ActiveDag],
+        stored: &std::collections::HashMap<DagId, Option<Timestamp>>,
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        let records = self.db.triggers().await?;
+        for dag in active.iter().filter(|a| !a.paused) {
+            if !matches!(
+                dag.dag.trigger,
+                Trigger::Event { .. } | Trigger::RunOf { .. } | Trigger::EventNamed { .. }
+            ) {
+                continue;
+            }
+            let record = records.iter().find(|r| r.dag_id == dag.dag.id.as_str());
+            let next = next_look(dag, record, now);
+            match stored.get(&dag.dag.id) {
+                Some(Some(was)) if *was != next => {
+                    self.db.set_next_fire_if(&dag.dag.id, *was, next).await?;
+                }
+                // Not known when taken (cleared between the claim and the read) or its row
+                // came with this pass (a new version): left for the next pass, which the
+                // tick's probe wakes for it, to claim.
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -706,6 +773,9 @@ impl MasterCore {
         message: worker_message::Message,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
+        // What it changes may be in memory only (a trigger stopping, a call done): the trigger
+        // loop looks (Grok's review of M5.1f2).
+        self.dispatcher.trigger_wake().notify_one();
         match message {
             worker_message::Message::TriggerEvent(event) => {
                 Box::pin(self.trigger_event(worker_id, event, now)).await

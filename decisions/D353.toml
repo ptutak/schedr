@@ -17,4 +17,4 @@ history = "archive/PROJECT.md#D353"
 step = "M4.11d"
 also = ["wait-steps", "triggers"]
 code = ["crates/schedr-agent/src/agent.rs", "crates/schedr-api/src/routes.rs", "crates/schedr-api/src/views.rs", "python/schedr/run_of.py::RunOf", "crates/schedr-db/src/run_of.rs::runs_of"]
-checked = 2026-11-13
+checked = 2026-11-14

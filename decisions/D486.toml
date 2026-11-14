@@ -1,0 +1,31 @@
+title = "The trigger loop runs after any write, at a stored moment, or for a posted event"
+date = 2026-11-14
+by = "user"
+status = "active"
+topic = "triggers"
+section = "Placement and ordering"
+summary = '''
+The trigger pass runs in a loop of its own beside the round (decision 485), woken when a write
+ended in this master outside `Database::quietly` (a worker's message, a round's work, a stream
+ending; not the lease, the node row, heartbeats, the outbox, retention), when a named event its
+triggers wait for is posted (Postgres: `EVENTS_CHANNEL`, announced only when something waits;
+the post clears those triggers' stored look), and by the tick's probe when a trigger's stored
+moment (`next_fire_at`: the earliest of its window's edges, a restart's backoff, a generator's
+`restart_if_idle`, written only by the loop) has come or isn't known; also when a trigger's
+state changes in memory (`trigger_wake`: a call done, a stop's ack, a slot freed) and at the
+next tick after a failed pass. A pass first claims the looks not known (`claim_looks`) and
+stores a new one only over the value it took, so a post during the pass stays seen. At most
+one pass every 50 ms, skipped by one `EXISTS` when no trigger is switched on or running. A pass that wrote wakes the round (option
+A of 2026-11-14). Not chosen: a wake at each place an input changes (one forgotten leaves a
+trigger stuck).
+'''
+history = "JOURNAL.md#D486"
+step = "M5.1f2"
+code = [
+    "crates/schedr-master/src/service.rs::run_triggers",
+    "crates/schedr-master/src/core/triggers.rs::next_look",
+    "crates/schedr-db/src/database.rs::quietly",
+    "crates/schedr-db/src/commands.rs::EVENTS_CHANNEL",
+    "crates/schedr-db/migrations/sqlite/0002_next_looks.sql",
+]
+checked = 2026-11-14

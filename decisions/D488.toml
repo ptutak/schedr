@@ -1,0 +1,18 @@
+title = "Standalone takes --dag-path and --script-path"
+date = 2026-11-14
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "code-delivery"
+section = "Roots and the scan"
+also = ["scripts", "configuration"]
+summary = '''
+`schedr standalone` takes `--dag-path PATH` and `--script-path PATH`, each repeatable and taking
+`.`; given, a list replaces `SCHEDR_DAG_PATH` / `SCHEDR_SCRIPT_PATH` and the file's `[dags] path` /
+`[scripts] path`, as other options override. A root given as `.` is named after the folder it
+is, as any other path; the lists keep their rules (decision 299). Only the standalone role takes
+them. Not chosen: `--cwd-dag-path` / `--cwd-script-path` (`.` says it), adding to the lists,
+a fixed name for `.`, the worker role too.
+'''
+history = "JOURNAL.md#D488"  # <a id="D488"></a> starts its JOURNAL.md entry
+step = "M5.1n"  # the plan step that builds it; "later"; "n/a" for a rule
+code = []

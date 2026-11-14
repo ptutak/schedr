@@ -24,6 +24,16 @@ macro_rules! trigger_pass_from {
 }
 pub(crate) use trigger_pass_from;
 
+/// The rows of the triggers the trigger loop looks after (`RunOf`, events) switched on whose
+/// stored next moment has come or isn't known (decision 486): what the tick's probe wakes
+/// the loop for.
+macro_rules! triggers_due_from {
+    () => {
+        "FROM dag_triggers WHERE kind IN ('run_of', 'event') AND NOT paused AND (next_fire_at IS NULL OR next_fire_at <= $1{ts})"
+    };
+}
+pub(crate) use triggers_due_from;
+
 #[cfg(test)]
 mod tests;
 

@@ -124,7 +124,7 @@ done = 2026-11-14
 id = "M5.1f1"
 title = "The idle cost: one probe a tick, the moments stored"
 scope = '''
-(decision 485) a standalone with nothing to do (measured 2026-11-14 on the examples' DAGs, SQLite, release build, 10 min): 22.5 queries a second (the 1 s tick's round parts each read their inputs, about 20 kinds), 2.0 % of a core, about 200 context switches a second over its threads, 4.4 MiB written in 10 min, 52 MiB resident. Each tick starts with one probe statement (`Database::probe`) answering for each read a round makes whether it would find anything; a read whose check says no isn't made, and a write ending takes the probe again. Every check reads a stored row or column; a moment worked out from code each tick gets a column: a scheduled DAG's `next_fire_at` (one migration on both databases, with its index). A trigger's moments (an event trigger's window, a generator's `restart_if_idle`) go with the trigger round (M5.1f2); a wait step's `max_wait` needs none, read only once the step is ready or its retry due, both stored. The lease, the masters' row, gauges and the notification sender at their own paces
+(decision 485) a standalone with nothing to do (measured 2026-11-14 on the examples' DAGs, SQLite, release build, 10 min): 22.5 queries a second (the 1 s tick's round parts each read their inputs, about 20 kinds), 2.0 % of a core, about 200 context switches a second over its threads, 4.4 MiB written in 10 min, 52 MiB resident. Each tick starts with one probe statement (`Database::probe`) answering for each read a round makes whether it would find anything; a read whose check says no isn't made, and a write ending takes the probe again. Every check reads a stored row or column; a moment worked out from code each tick gets a column: a scheduled DAG's `next_fire_at` (one migration on both databases, with its index). A trigger's moments (an event trigger's window, a generator's `restart_if_idle`) go with the trigger round (M5.1f2); a wait step's `max_wait` was thought to need none (wrong: a master-held `wait_for` step is looked at every tick while it waits; decision 487, built in M5.1f2). The lease, the masters' row, gauges and the notification sender at their own paces
 '''
 done_when = '''
 an idle standalone's statements about 1 a second (22.5), its CPU, wakeups and writes measured before and after over 10 minutes (release build), the polls left each with a reason, the numbers in the guide; a test per check (work for the part makes it true, none false) and per column (its writers keep it, a rebuild from scratch matches what is stored), on both databases; no start, round or trigger latency lost (stress 1, 9, 23)
@@ -136,12 +136,13 @@ done = 2026-11-14
 id = "M5.1f2"
 title = "Triggers and events in a round of their own"
 scope = '''
-(decision 485) the trigger pass (starts, stops and restarts, `RunOf` and named-event runs, the `wait_for` hand-off if it moves cleanly) in a loop of its own beside the tick, taking the core lock per transaction, woken at once by a named event posted, a run's end recorded, a `TriggerEvent` or a trigger stopping or failing, and by the tick's probe for a trigger's moment, stored in a column of its own (an event trigger's window, a generator's `restart_if_idle`), so a switched-on trigger costs no read each tick; the main round no longer runs it; a `TriggerEvent` or a posted event wakes only the trigger loop, never the round's probe, and the main round is woken only when a run was queued (the user, 2026-11-14: an event that creates none costs the main loop nothing): the queued run is the stored record its probe finds (`QueuedRuns`, so a lost wake costs a tick at most and a new leader finds it), the wake in memory as a recorded `Finished`'s, with its 50 ms gap (the user chose this, option A, over a separate attention row); a worker's events are still stored in its turn, which then wakes the round
+(decision 485) the trigger pass (starts, stops and restarts, `RunOf` and named-event runs, the `wait_for` hand-off if it moves cleanly) in a loop of its own beside the tick, taking the core lock per transaction, woken at once by a named event posted, a run's end recorded, a `TriggerEvent` or a trigger stopping or failing, and by the tick's probe for a trigger's moment, stored in a column of its own (an event trigger's window, a generator's `restart_if_idle`), so a switched-on trigger costs no read each tick; the main round no longer runs it (decision 486: the loop runs after any write, at a stored moment, or for a posted event; its moments in one column, `next_fire_at`); a waiting `wait_for` step stores its deadline (`look_at`) and what it waits for in index columns (`waits_dag`, `waits_event`), cleared by that DAG's run or task ending or that event posted (decision 487); a `TriggerEvent` or a posted event wakes only the trigger loop, never the round's probe, and the main round is woken only when a run was queued (the user, 2026-11-14: an event that creates none costs the main loop nothing): the queued run is the stored record its probe finds (`QueuedRuns`, so a lost wake costs a tick at most and a new leader finds it), the wake in memory as a recorded `Finished`'s, with its 50 ms gap (the user chose this, option A, over a separate attention row); a worker's events are still stored in its turn, which then wakes the round
 '''
 done_when = '''
 the time from an event to its run measured idle and under load (stress 23 and the trigger scenarios), the numbers in the guide; a test per wake, and the trigger round getting in between a busy round's parts; no other latency lost
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1g"
@@ -158,7 +159,7 @@ status = "planned"
 id = "M5.1h"
 title = "Memory and CPU reported"
 scope = '''
-(decision 463): resident memory, CPU time and the cgroup's memory and limit in the masters row, the worker's heartbeat (a protocol field, minor version up; the worker's breakdown: agent, fork servers, watcher hosts, tasks) and the webserver's `/deployment` answer
+(decision 463): resident memory, CPU time and the cgroup's memory and limit in the masters row, the worker's heartbeat (a protocol field; the minor version up to 2.1, once for 1.1.0, the user 2026-11-14; the worker's breakdown: agent, fork servers, watcher hosts, tasks) and the webserver's `/deployment` answer
 '''
 done_when = '''
 each process's figures reach the database or the answer; an older worker without the field is still served; tests on both databases
@@ -169,7 +170,7 @@ status = "planned"
 id = "M5.1i"
 title = "The samples table"
 scope = '''
-(decision 464): a migration on both databases; the leading master writes a sample per process a minute; 15-minute rollups of averages and peaks; retention deletes past 24 h and 30 days
+(decision 464): in the open migration on both databases (`0002_*`: one file per backend until a release ships it, the user 2026-11-14); the leading master writes a sample per process a minute; 15-minute rollups of averages and peaks; retention deletes past 24 h and 30 days
 '''
 done_when = '''
 samples written, rolled up and deleted on both databases, with a statement count per minute under a stated bound; the guide's retention section names them
@@ -213,7 +214,7 @@ status = "planned"
 id = "M5.1m"
 title = "The start time from the worker"
 scope = '''
-nice to have (the user, 2026-11-13): `Started` carries the worker's start time (an additive protocol field, minor version), turned into master time with the worker's estimate (decision 448), recorded as `started_at`; the master's own time for an older worker. Today `started_at` is the master's time when it handles the message, so it includes the wait for the core's lock
+nice to have (the user, 2026-11-13): `Started` carries the worker's start time (an additive protocol field in 2.1, the version M5.1h set: moved once between releases), turned into master time with the worker's estimate (decision 448), recorded as `started_at`; the master's own time for an older worker. Today `started_at` is the master's time when it handles the message, so it includes the wait for the core's lock
 '''
 done_when = '''
 `started_at` within the clock-skew bound of the worker's start under stress 9, 13 and 23; an older worker's falls back; a "started → recorded" figure in the stress report
@@ -221,10 +222,21 @@ done_when = '''
 status = "planned"
 
 [[steps]]
+id = "M5.1n"
+title = "Standalone takes its DAG and script directories on the command line"
+scope = '''
+(the user, 2026-11-14: a "Getting started" with the DAGs in the working folder) `schedr standalone --dag-path PATH` and `--script-path PATH`, each repeatable and taking `.`, over `SCHEDR_DAG_PATH` and `SCHEDR_SCRIPT_PATH`; the two lists keep their rules (none repeated or nested in its own list, the names apart, decision 299: `.` for both would clash), and a DAG root's own modules import without a script root (to be checked); the details, `--cwd-*` forms included, settled with the user at the step
+'''
+done_when = '''
+`schedr standalone --migrate --dag-path .` in a folder of DAG files runs them, its helpers importing; the guide's getting started uses it; tests for the options and their errors
+'''
+status = "planned"
+
+[[steps]]
 id = "R1.1"
 title = "Release 1.1.0"
 scope = '''
-after M5.1: the version bumped, the changelog, an rc rehearsal (the release workflow, the wheel on TestPyPI and the images checked by hand), then 1.1.0; the protocol's minor version as M5.1h and M5.1m leave it, the new migrations (M5.1i) checked on an upgraded 1.0.0 database
+first the stress suite's table for the release (the user, 2026-11-14): the quick profile on 1.0.0's code and on M5.1's, one after the other the same evening on an otherwise idle machine (scenarios timed against each other, so never two at once nor beside builds), as "After M5.1" on the stress page in the M4B table's form (before, after, change, verdict); after M5.1: the version bumped, the changelog, an rc rehearsal (the release workflow, the wheel on TestPyPI and the images checked by hand), then 1.1.0; the protocol's minor version as M5.1h and M5.1m leave it, the new migrations (M5.1i) checked on an upgraded 1.0.0 database
 '''
 done_when = '''
 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say

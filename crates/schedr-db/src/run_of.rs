@@ -106,6 +106,35 @@ impl Database {
             .collect()
     }
 
+    /// Parks a `wait_for` step the master holds before looking at it (decision 487): the round
+    /// skips it until `look_at` (its `max_wait` deadline), or until what it waits for, run or
+    /// task of DAG `waits_dag` ending or event `waits_event` posted, clears it. Stored first, so
+    /// what ends after the look clears it, and what ended before is seen by the look. Only a
+    /// queued instance is parked.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn park_wait(
+        &self,
+        instance_id: &str,
+        look_at: Timestamp,
+        (waits_dag, waits_event): (Option<&str>, Option<&str>),
+    ) -> Result<(), DbError> {
+        const PARK: &str = "UPDATE task_instances SET look_at = $1{ts}, waits_dag = $2, \
+            waits_event = $3 WHERE id = $4{uuid} AND state = 'queued'";
+        in_tx!(self, |tx, backend| {
+            sqlx::query(sql(backend, PARK))
+                .bind(db_time(look_at))
+                .bind(waits_dag)
+                .bind(waits_event)
+                .bind(instance_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
     /// Since when a queued task instance is ready, if it is.
     ///
     /// # Errors
@@ -380,7 +409,9 @@ impl Database {
     }
 
     /// Records the run handed to an `@sensor(wait_for=...)`'s function as it is assigned, and
-    /// when it (or its task) ended.
+    /// when it (or its task) ended. It waits no more: its park is dropped (decision 487), so a
+    /// round that couldn't assign it (no free slot, the round's assignments made) leaves it for
+    /// the next (Grok's review of M5.1f2).
     ///
     /// # Errors
     ///
@@ -391,8 +422,8 @@ impl Database {
         run_id: &str,
         ended_at: Timestamp,
     ) -> Result<(), DbError> {
-        const HAND: &str = "UPDATE task_instances SET handed_run = $2, handed_at = $3{ts} \
-            WHERE id = $1{uuid}";
+        const HAND: &str = "UPDATE task_instances SET handed_run = $2, handed_at = $3{ts}, \
+            look_at = NULL WHERE id = $1{uuid}";
         // Fenced: a master that lost its lease doesn't overwrite what the leader handed.
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, HAND))

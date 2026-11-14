@@ -404,6 +404,125 @@ async fn the_loop_ticks_until_stopped() {
     assert!(text.contains("command_latency_seconds_count 1"), "{text}");
 }
 
+/// Defines `id`, started by `trigger`, unpaused (a new trigger starts paused, decision 459).
+async fn define_unpaused(db: &Database, id: &str, trigger: serde_json::Value) {
+    let dag: schedr_model::Dag = serde_json::from_value(json!({
+        "produced_by": "1.0", "id": id, "location": {"root": "etl", "path": format!("{id}.py")},
+        "trigger": trigger, "initial_since": null, "max_active_runs": 5,
+        "tasks": [{
+            "id": "extract", "kind": "python",
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }],
+        "edges": []
+    }))
+    .unwrap();
+    let parse_id = db
+        .insert_parse(&schedr_db::dags::NewParse {
+            root: "etl",
+            content_hash: id,
+            schedr_version: "1.0.0",
+            worker_id: "w1",
+            parsed_at: fixed_now(),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    let change = schedr_db::dags::DagChange::Define {
+        dag: Box::new(dag),
+        parse_id,
+        pause: false,
+    };
+    db.apply_dag_changes(&[change], fixed_now()).await.unwrap();
+    db.set_paused(&DagId::new(id).unwrap(), false)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_posted_event_starts_its_run_from_the_trigger_loop_without_a_tick() {
+    // Decisions 485 and 486: the trigger pass is the trigger loop's, woken by a write (on
+    // Postgres a notification too), and the run it queues wakes the round: with a tick of ten
+    // minutes, the event posted after the first round still has its run running within moments.
+    let (hub, db, _client) = connected_with(Timestamp::now).await;
+    define_unpaused(
+        &db,
+        "paid",
+        json!({"kind": "event_named", "event": {"name": "paid"}}),
+    )
+    .await;
+    // Running: the round the loop woke (as a `Finished` does) started it.
+    let runs_of_paid = |db: Database| async move {
+        let filter = schedr_db::reads::RunFilter {
+            dag_id: Some(DagId::new("paid").unwrap()),
+            state: Some(schedr_model::RunState::Running),
+            limit: 10,
+            ..Default::default()
+        };
+        db.runs(&filter).await.unwrap().len()
+    };
+    let posted = {
+        let db = db.clone();
+        async move {
+            // After the loop's first round and pass.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let event = schedr_db::named_events::NewNamedEvent {
+                name: "paid",
+                key: "order-1",
+                data: &json!({}),
+                at: Timestamp::now(),
+            };
+            db.post_named_event(&event, "anna", None, Timestamp::now())
+                .await
+                .unwrap();
+            let posted = std::time::Instant::now();
+            loop {
+                if runs_of_paid(db.clone()).await == 1 {
+                    return posted.elapsed();
+                }
+                assert!(
+                    posted.elapsed() < Duration::from_secs(5),
+                    "no run of `paid`"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    };
+    let (took, ()) = tokio::join!(
+        posted,
+        hub.run(
+            Duration::from_mins(10),
+            None,
+            tokio::time::sleep(Duration::from_secs(6))
+        )
+    );
+    assert!(
+        took < Duration::from_secs(1),
+        "the event's run took {took:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_trigger_pass_is_tried_again_at_the_next_tick() {
+    // Grok's review of M5.1f2: a pass that failed had no wake left (its write consumed); the
+    // next tick wakes the loop again, as a failed round is tried at the next.
+    let (hub, _db, _client) = connected().await;
+    hub.triggers_failed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    hub.tick().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), hub.triggers_due.notified())
+        .await
+        .expect("the trigger loop woken");
+    assert!(
+        !hub.triggers_failed
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "once"
+    );
+}
+
 #[tokio::test]
 async fn every_message_carries_the_masters_clock_and_its_number() {
     // B225: the clock on every message names this master's timeline, master time and the
@@ -2504,7 +2623,12 @@ async fn the_pause_after_a_notifications_failure_ends_by_itself() {
     let mut paused_until = Some(started + NOTIFICATION_RETRY);
     let waited = tokio::time::timeout(
         NOTIFICATION_RETRY + Duration::from_secs(1),
-        next_command(None, &mut paused_until, &problems),
+        next_command(
+            None,
+            &mut paused_until,
+            &problems,
+            &tokio::sync::Notify::new(),
+        ),
     )
     .await;
     // Without notifications nothing comes; the pause ended meanwhile.
@@ -2517,7 +2641,12 @@ async fn the_pause_after_a_notifications_failure_ends_by_itself() {
     let mut paused_until = Some(until);
     let cut = tokio::time::timeout(
         Duration::from_secs(1),
-        next_command(None, &mut paused_until, &problems),
+        next_command(
+            None,
+            &mut paused_until,
+            &problems,
+            &tokio::sync::Notify::new(),
+        ),
     )
     .await;
     assert!(cut.is_err());

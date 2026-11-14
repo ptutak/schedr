@@ -3852,13 +3852,7 @@ async fn a_wait_for_an_event_ends_with_the_first_of_its_key_posted_since_its_run
         .unwrap();
     let (state, _) = state_of(&db, &run_id, "wait").await;
     assert_eq!(state, TaskInstanceState::Queued);
-    let reason = db
-        .ready_instances(later(1))
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|r| r.task_id == id("wait"))
-        .and_then(|r| r.queued_reason);
+    let reason = reason_of(&db, &run_id, "wait").await;
     assert_eq!(
         reason.as_deref(),
         Some("waiting for event `paid` with key `o-1`")
@@ -4008,6 +4002,43 @@ async fn output_of(db: &Database, run_id: &str, task: &str) -> Json {
 }
 
 #[tokio::test]
+async fn a_waiting_step_is_parked_until_a_run_of_its_dag_ends_or_its_time_runs_out() {
+    // Decision 487: no round looks at a `wait_for` step while it waits; a run of the DAG it
+    // waits for ending (stored ended, or ending) makes it ready again, and so does its
+    // `max_wait` (60 s) running out.
+    let (mut dispatcher, db, run_id) =
+        with_run(waiting_dag(&json!({"dag": "orders", "lag_ms": 0}), false)).await;
+    let ready = |at: Timestamp| {
+        let db = db.clone();
+        async move {
+            db.ready_instances(at)
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.task_id == id("wait"))
+        }
+    };
+    dispatcher
+        .step_into(ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
+    assert!(!ready(later(1)).await, "parked");
+    // Another day's run of `orders` ends: looked at, and parked again.
+    orders_run(&db, ts("2026-10-20T08:00:00Z"), RunState::Success, later(1)).await;
+    assert!(ready(later(1)).await, "a run of its DAG ended");
+    dispatcher
+        .step_into(later(2), &mut Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "wait").await.0,
+        TaskInstanceState::Queued
+    );
+    assert!(!ready(later(2)).await, "parked again");
+    assert!(ready(later(60)).await, "its time ran out");
+}
+
+#[tokio::test]
 async fn a_wait_for_ends_with_the_run_it_waits_for_and_says_what_it_waits_for_meanwhile() {
     let (mut dispatcher, db, run_id) =
         with_run(waiting_dag(&json!({"dag": "orders", "lag_ms": 0}), false)).await;
@@ -4019,20 +4050,9 @@ async fn a_wait_for_ends_with_the_run_it_waits_for_and_says_what_it_waits_for_me
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Queued
     );
-    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
-    let wait = run
-        .instances
-        .iter()
-        .find(|i| i.task_id == id("wait"))
-        .unwrap();
     assert_eq!(
-        db.ready_instances(later(1))
-            .await
-            .unwrap()
-            .iter()
-            .find(|r| r.instance_id == wait.id)
-            .and_then(|r| r.queued_reason.clone()),
-        Some("waiting for a run of `orders`; no DAG `orders` is loaded".to_owned())
+        reason_of(&db, &run_id, "wait").await.as_deref(),
+        Some("waiting for a run of `orders`; no DAG `orders` is loaded")
     );
     // Another day's run doesn't count; the one planned for the same moment does.
     orders_run(&db, ts("2026-10-20T08:00:00Z"), RunState::Success, later(1)).await;
@@ -4761,13 +4781,7 @@ async fn a_wait_s_key_from_a_field_named_as_a_secret_is_hidden_in_its_reason() {
         .step_into(later(1), &mut Vec::new())
         .await
         .unwrap();
-    let reason = db
-        .ready_instances(later(1))
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|r| r.task_id == id("wait"))
-        .and_then(|r| r.queued_reason);
+    let reason = reason_of(&db, &run_id, "wait").await;
     assert_eq!(
         reason.as_deref(),
         Some("waiting for event `paid` with key `****`")

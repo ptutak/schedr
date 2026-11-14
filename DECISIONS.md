@@ -29,6 +29,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D488 | 2026-11-14 | user | planned (M5.1n) | code-delivery | Standalone takes --dag-path and --script-path |
+| D487 | 2026-11-14 | user | built M5.1f2 | triggers | A waiting wait_for step stores its deadline and what it waits for |
+| D486 | 2026-11-14 | user | built M5.1f2 | triggers | The trigger loop runs after any write, at a stored moment, or for a posted event |
 | D485 | 2026-11-14 | user | built M5.1f1 | assignment | Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own |
 | D484 | 2026-11-14 | claude | built M5.1e | workers | A worker's turn takes up to 80 messages |
 | D483 | 2026-11-13 | user | built M5.1c3 | workers | A command is one transaction, the core lock released between commands; it reads only its own DAG |
@@ -625,6 +628,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### code-delivery
 
+- D488: Standalone takes --dag-path and --script-path
 - D331: A named file inside a DAG root keeps that root
 - D330: DAG checks use the shipped copy filtered by .schedrignore
 - D329: A DAG belongs to the module running its with block
@@ -946,6 +950,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### triggers
 
+- D487: A waiting wait_for step stores its deadline and what it waits for
+- D486: The trigger loop runs after any write, at a stored moment, or for a posted event
 - D459: A DAG's trigger has its own row with its switch; no row, no trigger
 - D394: A cycle through trigger=RunOf across DAGs isn't caught
 - D354: `EventNamed` waits for events posted through the API

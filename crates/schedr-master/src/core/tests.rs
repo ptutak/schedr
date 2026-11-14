@@ -1032,7 +1032,7 @@ fn finished_with_cleanup(
 async fn a_waiting_cleanup_goes_back_to_its_worker_holding_handles_the_master_lacks() {
     // B169: cut off past its lease, the worker registered a handle the master never got; the
     // cleanup moved with none. Back while the move waits, it is the only one with them all.
-    let (mut core, attempt_id) = moved_away_from_w1().await;
+    let (mut core, attempt_id) = Box::pin(moved_away_from_w1()).await;
     let (registered, _) = core
         .register(&register("w1", "i1", running(&attempt_id, 1)), later(62))
         .await
@@ -1076,7 +1076,7 @@ async fn a_waiting_cleanup_goes_back_to_its_worker_holding_handles_the_master_la
 #[tokio::test]
 async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_its_result() {
     // B169: the move ran elsewhere without the handle the master never got.
-    let (mut core, attempt_id) = moved_away_from_w1().await;
+    let (mut core, attempt_id) = Box::pin(moved_away_from_w1()).await;
     let (_, out) = core
         .register(&register("w2", "i2", vec![]), later(62))
         .await
@@ -2742,7 +2742,7 @@ fn ack_of(outgoing: &[Outgoing]) -> Option<u64> {
 
 #[tokio::test]
 async fn a_new_key_queues_a_run_and_a_repeat_only_moves_the_bookmark() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     assert_eq!(assign.after, None);
     assert_eq!(assign.failures, 0);
     assert_eq!(assign.dag_id, "sync");
@@ -2765,7 +2765,7 @@ async fn a_new_key_queues_a_run_and_a_repeat_only_moves_the_bookmark() {
 
 #[tokio::test]
 async fn what_an_old_instance_found_is_acknowledged_and_not_stored() {
-    let (mut core, mut assign) = with_trigger().await;
+    let (mut core, mut assign) = Box::pin(with_trigger()).await;
     assign.instance_id = "someone-else".to_owned();
     let answer = core
         .handle("w1", found(&assign, 1, "a"), later(2))
@@ -2782,7 +2782,7 @@ async fn what_an_old_instance_found_is_acknowledged_and_not_stored() {
 
 #[tokio::test]
 async fn pausing_stops_a_trigger_and_it_comes_back_from_its_bookmark() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     core.handle("w1", found(&assign, 1, "a"), later(2))
         .await
         .unwrap();
@@ -2812,7 +2812,7 @@ async fn pausing_stops_a_trigger_and_it_comes_back_from_its_bookmark() {
 
 #[tokio::test]
 async fn a_failed_trigger_starts_again_only_after_its_wait() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
         dag_id: assign.dag_id.clone(),
         instance_id: assign.instance_id.clone(),
@@ -2834,7 +2834,7 @@ async fn a_failed_trigger_starts_again_only_after_its_wait() {
 
 #[tokio::test]
 async fn a_lost_worker_gives_up_its_trigger_and_one_it_reports_late_is_stopped() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     core.register(&register("w2", "i2", vec![]), later(2))
         .await
         .unwrap();
@@ -2863,7 +2863,7 @@ async fn a_lost_worker_gives_up_its_trigger_and_one_it_reports_late_is_stopped()
 
 #[tokio::test]
 async fn a_worker_coming_back_with_its_trigger_keeps_it() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     core.disconnected("w1", later(2)).await.unwrap();
     let mut back = register("w1", "i1", vec![]);
     back.running_triggers = vec![assign.instance_id.clone()];
@@ -2879,7 +2879,7 @@ async fn a_worker_coming_back_with_its_trigger_keeps_it() {
 
 #[tokio::test]
 async fn a_manual_run_of_an_event_dag_is_refused_without_an_event() {
-    let (core, _) = with_trigger().await;
+    let (core, _) = Box::pin(with_trigger()).await;
     let refused = core
         .scheduler
         .trigger(&DagId::new("sync").unwrap(), None, "anna", later(2))
@@ -2911,7 +2911,7 @@ async fn a_trigger_given_nowhere_keeps_no_slot() {
 
 #[tokio::test]
 async fn what_a_trigger_of_an_older_version_found_starts_nothing() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     let schedr_db::Pool::Sqlite(pool) = core.db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
@@ -2932,7 +2932,7 @@ async fn what_a_trigger_of_an_older_version_found_starts_nothing() {
 
 #[tokio::test]
 async fn new_code_or_a_withdrawn_root_stops_a_trigger_also_under_a_new_master() {
-    let (core, assign) = with_trigger().await;
+    let (core, assign) = Box::pin(with_trigger()).await;
     let db = core.db.clone();
     // A new master, over the same data; the worker returns with its trigger, at other code.
     let mut restarted = MasterCore::new(db, Settings::default());
@@ -2960,7 +2960,7 @@ async fn new_code_or_a_withdrawn_root_stops_a_trigger_also_under_a_new_master() 
 
 #[tokio::test]
 async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     core.register(&register("w2", "i2", vec![]), later(2))
         .await
         .unwrap();
@@ -3032,7 +3032,7 @@ async fn what_cant_be_an_event_fails_the_trigger_and_stores_nothing() {
             ..pb::TriggerEvent::default()
         },
     ] {
-        let (mut core, assign) = with_trigger().await;
+        let (mut core, assign) = Box::pin(with_trigger()).await;
         let event = pb::TriggerEvent {
             dag_id: assign.dag_id.clone(),
             instance_id: assign.instance_id.clone(),
@@ -3061,7 +3061,7 @@ async fn what_cant_be_an_event_fails_the_trigger_and_stores_nothing() {
 
 #[tokio::test]
 async fn a_long_error_is_kept_short() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
         dag_id: assign.dag_id.clone(),
         instance_id: assign.instance_id.clone(),
@@ -3089,7 +3089,7 @@ fn stopped_with(assign: &pb::AssignTrigger, kind: &str, struck: bool) -> worker_
 
 #[tokio::test]
 async fn a_generator_that_returned_stays_stopped_until_new_code() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     core.handle(
         "w1",
         stopped_with(&assign, "trigger_returned", false),
@@ -3176,7 +3176,7 @@ async fn too_many_queued_runs_stop_a_trigger_until_they_have_started() {
 
 #[tokio::test]
 async fn a_trigger_that_keeps_blocking_is_switched_off_until_new_code() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     let mut given = assign;
     for at in [2, 100, 200] {
         core.handle(
@@ -3201,7 +3201,7 @@ async fn a_trigger_that_keeps_blocking_is_switched_off_until_new_code() {
 
 #[tokio::test]
 async fn a_poke_report_is_kept_and_a_call_that_went_well_clears_it() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     core.db
         .strike_wait_step(("sync", "found"), 3, "h1", later(1))
         .await
@@ -3238,6 +3238,68 @@ async fn a_poke_report_is_kept_and_a_call_that_went_well_clears_it() {
 }
 
 #[tokio::test]
+async fn a_trigger_message_wakes_the_trigger_loop_though_it_writes_nothing() {
+    // Grok's review of M5.1f2: what a trigger message changes may be in memory only (a call
+    // done, a trigger stopping and its slot freed): the trigger loop is told, not left to the
+    // next write.
+    let (mut core, assign) = Box::pin(with_trigger()).await;
+    let wake = core.dispatcher().trigger_wake();
+    // The pass that gave the trigger out freed nothing; drop any wake from before.
+    let _ = tokio::time::timeout(Duration::from_millis(10), wake.notified()).await;
+    core.handle(
+        "w1",
+        worker_message::Message::TriggerPoked(pb::TriggerPoked {
+            dag_id: assign.dag_id.clone(),
+            instance_id: assign.instance_id.clone(),
+            at: None,
+            error: String::new(),
+            failures: 0,
+        }),
+        later(2),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), wake.notified())
+        .await
+        .expect("the trigger loop told");
+}
+
+#[tokio::test]
+async fn a_trigger_outside_its_window_is_looked_at_when_it_opens_and_when_it_closes() {
+    // Decision 486: the window's edges are stored as when to look next, so nothing reads in
+    // between; a trigger past its window has nothing ahead. (Within one worker lease: a worker
+    // silent longer is lost, its trigger forgotten.)
+    let mut file = serde_json::to_value(event_file()).unwrap();
+    file["dags"][0]["trigger"]["start"] = json!(later(10).to_string());
+    file["dags"][0]["trigger"]["end"] = json!(later(40).to_string());
+    let file = serde_json::from_value(file).unwrap();
+    let mut core = with_dag_of(&file).await;
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, false).await.unwrap();
+    assert_eq!(
+        assign_of(&core.tick(later(1)).await.unwrap()),
+        None,
+        "not open yet"
+    );
+    assert_eq!(core.db.next_fires().await.unwrap()[&dag], Some(later(10)));
+    assert!(
+        assign_of(&core.tick(later(10)).await.unwrap()).is_some(),
+        "open"
+    );
+    assert_eq!(core.db.next_fires().await.unwrap()[&dag], Some(later(40)));
+    let told = core.tick(later(41)).await.unwrap();
+    assert!(
+        told.iter()
+            .any(|o| matches!(message(o), master_message::Message::CancelTrigger(_))),
+        "closed: stopped"
+    );
+    assert_eq!(
+        core.db.next_fires().await.unwrap()[&dag],
+        Some(schedr_db::dags::NO_FIRE)
+    );
+}
+
+#[tokio::test]
 async fn a_generator_finding_nothing_for_its_idle_time_starts_again() {
     let mut file = serde_json::to_value(event_file()).unwrap();
     file["dags"][0]["trigger"]["restart_if_idle_ms"] = json!(60_000);
@@ -3247,7 +3309,13 @@ async fn a_generator_finding_nothing_for_its_idle_time_starts_again() {
         .set_paused(&DagId::new("sync").unwrap(), false)
         .await
         .unwrap();
+    // Decision 486: when to look again is stored, the idle time from its start or last event.
+    let look = |core: &MasterCore| {
+        let db = core.db.clone();
+        async move { db.next_fires().await.unwrap()[&DagId::new("sync").unwrap()] }
+    };
     let first = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
+    assert_eq!(look(&core).await, Some(later(61)), "60 s after its start");
     assert_eq!(assign_of(&core.tick(later(30)).await.unwrap()), None);
     core.handle("w1", found(&first, 1, "a"), later(40))
         .await
@@ -3257,7 +3325,13 @@ async fn a_generator_finding_nothing_for_its_idle_time_starts_again() {
         None,
         "it found one"
     );
+    assert_eq!(look(&core).await, Some(later(100)), "60 s after its event");
     let told = core.tick(later(120)).await.unwrap();
+    assert_eq!(
+        look(&core).await,
+        Some(later(180)),
+        "60 s after its restart"
+    );
     assert!(
         told.iter()
             .any(|o| matches!(message(o), master_message::Message::CancelTrigger(_)))
@@ -3270,7 +3344,7 @@ async fn a_generator_finding_nothing_for_its_idle_time_starts_again() {
 
 #[tokio::test]
 async fn a_trigger_told_to_stop_keeps_its_slot_and_its_strike_counts() {
-    let (mut core, assign) = with_trigger().await;
+    let (mut core, assign) = Box::pin(with_trigger()).await;
     let dag = DagId::new("sync").unwrap();
     core.db.set_paused(&dag, true).await.unwrap();
     core.tick(later(2)).await.unwrap();
@@ -3718,7 +3792,7 @@ async fn with_waiting_trigger(run_retries: Option<u32>) -> MasterCore {
 
 #[tokio::test]
 async fn a_trigger_waiting_for_runs_is_called_once_for_each_that_ends_with_it() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     assert!(
         assign_of(&core.tick(later(2)).await.unwrap()).is_none(),
         "nothing ended: not called"
@@ -3757,7 +3831,7 @@ async fn a_trigger_waiting_for_runs_is_called_once_for_each_that_ends_with_it() 
 
 #[tokio::test]
 async fn a_trigger_waiting_for_runs_gets_the_same_run_after_failing_until_its_retries_are_used() {
-    let mut core = with_waiting_trigger(Some(1)).await;
+    let mut core = Box::pin(with_waiting_trigger(Some(1))).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
@@ -3795,7 +3869,7 @@ async fn a_trigger_waiting_for_runs_gets_the_same_run_after_failing_until_its_re
 
 #[tokio::test]
 async fn skip_passes_the_run_a_trigger_keeps_failing_on_but_not_while_it_is_called() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
@@ -3861,7 +3935,7 @@ async fn skip_passes_the_run_a_trigger_keeps_failing_on_but_not_while_it_is_call
 
 #[tokio::test]
 async fn a_waiting_trigger_interrupted_or_cancelled_keeps_its_run() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     // Asked to stop by its worker (draining): no error, but not done.
@@ -3874,7 +3948,7 @@ async fn a_waiting_trigger_interrupted_or_cancelled_keeps_its_run() {
 
 #[tokio::test]
 async fn a_waiting_trigger_s_call_ends_with_its_run_passed_or_not_at_all() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
@@ -3899,7 +3973,7 @@ async fn a_waiting_trigger_s_call_ends_with_its_run_passed_or_not_at_all() {
 
 #[tokio::test]
 async fn a_new_run_after_a_pause_has_its_own_retries_and_a_return_clears_strikes() {
-    let mut core = with_waiting_trigger(Some(1)).await;
+    let mut core = Box::pin(with_waiting_trigger(Some(1))).await;
     orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     core.handle(
@@ -3946,7 +4020,7 @@ async fn a_new_run_after_a_pause_has_its_own_retries_and_a_return_clears_strikes
 
 #[tokio::test]
 async fn a_skip_applied_before_its_decision_was_stored_is_applied_again() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     core.handle(
@@ -3986,7 +4060,7 @@ async fn a_skip_applied_before_its_decision_was_stored_is_applied_again() {
 
 #[tokio::test]
 async fn a_call_being_stopped_is_not_made_again_until_it_has_ended() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     core.register(&register("w2", "i2", vec![]), later(3))
@@ -4141,7 +4215,7 @@ async fn a_run_too_big_to_send_is_a_failed_call_that_run_retries_pass() {
 
 #[tokio::test]
 async fn a_call_a_restarted_master_doesnt_know_holds_back_waiting_triggers_until_it_ends() {
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     // A worker coming back with a call this master never gave (its DAG unknown here).
     let mut back = register("w2", "i2", vec![]);
@@ -4388,7 +4462,7 @@ async fn only_named_events_are_kept_as_passed_and_a_removed_dag_s_are_forgotten(
             .await
             .unwrap()
     };
-    let mut core = with_waiting_trigger(None).await;
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
     orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     core.handle("w1", returned(&assign), later(3))

@@ -1135,7 +1135,8 @@ impl MasterCore {
                 connection.persisted = now;
                 // A sign of life in the registry is for people: a failed write mustn't cost
                 // the message it came with (the next interval writes it again).
-                if let Err(error) = self.db.worker_seen(worker_id, now).await {
+                // Housekeeping: nothing a trigger depends on (decision 486).
+                if let Err(error) = self.db.quietly(self.db.worker_seen(worker_id, now)).await {
                     tracing::warn!(worker_id, %error, "worker's last heartbeat not recorded");
                 }
             }
@@ -1507,7 +1508,7 @@ impl MasterCore {
             RoundPart::Scheduler => (self.scheduler.pass(now).await)
                 .map(|_| ())
                 .map_err(CoreError::from),
-            RoundPart::Triggers => self.trigger_pass(now, outgoing).await,
+            RoundPart::Triggers => Box::pin(self.trigger_pass(now, outgoing)).await,
             RoundPart::Prepare => {
                 (self.dispatcher.prepare(now, outgoing).await).map_err(CoreError::from)
             }

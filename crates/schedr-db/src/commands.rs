@@ -69,29 +69,64 @@ pub async fn listening_is_safe(
 /// The Postgres notification channel a new command is announced on.
 pub const COMMANDS_CHANNEL: &str = "schedr_commands";
 
-/// Notifications of new commands (Postgres only): a dedicated connection listening on
-/// [`COMMANDS_CHANNEL`].
+/// The channel a named event posted through the API is announced on (decision 486): the
+/// master's trigger loop looks at once. A lost one is found by the next tick's probe (the post
+/// cleared its listeners' stored time).
+pub const EVENTS_CHANNEL: &str = "schedr_events";
+
+/// Notifications of new commands and posted named events (Postgres only): a dedicated
+/// connection listening on [`COMMANDS_CHANNEL`] and [`EVENTS_CHANNEL`].
 #[derive(Debug)]
 pub struct CommandNotifications {
     listener: PgListener,
 }
 
+/// What a notification announced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notified {
+    /// A new command ([`COMMANDS_CHANNEL`]).
+    Command,
+    /// A named event posted ([`EVENTS_CHANNEL`], decisions 486 and 487): whether it cleared
+    /// triggers' looks (the trigger loop's), and waiting steps' (the round's).
+    Event {
+        /// Triggers waiting for its name.
+        triggers: bool,
+        /// Steps waiting for it.
+        waiters: bool,
+    },
+}
+
 impl CommandNotifications {
     /// Waits for the next notification. A lost connection is re-established (a notification
-    /// sent meanwhile is lost; polling picks the command up).
+    /// sent meanwhile is lost; polling picks the command up, the probe the event).
     ///
     /// # Errors
     ///
     /// [`DbError::Sqlx`] if the connection fails and can't be re-established.
-    pub async fn next(&mut self) -> Result<(), DbError> {
-        self.listener.recv().await?;
-        Ok(())
+    pub async fn next(&mut self) -> Result<Notified, DbError> {
+        let notification = self.listener.recv().await?;
+        Ok(if notification.channel() == EVENTS_CHANNEL {
+            let payload = notification.payload();
+            Notified::Event {
+                triggers: payload.contains('t'),
+                waiters: payload.contains('w'),
+            }
+        } else {
+            Notified::Command
+        })
     }
 
     /// Takes the notifications that already arrived, without waiting: one tick handles every
-    /// pending command, so a burst needs one tick, not one per command.
-    pub async fn skip_arrived(&mut self) {
-        while let Ok(Ok(_)) = tokio::time::timeout(Duration::ZERO, self.listener.recv()).await {}
+    /// pending command, so a burst needs one tick, not one per command. Returns whether an
+    /// event was among them.
+    pub async fn skip_arrived(&mut self) -> bool {
+        let mut event = false;
+        while let Ok(Ok(notification)) =
+            tokio::time::timeout(Duration::ZERO, self.listener.recv()).await
+        {
+            event |= notification.channel() == EVENTS_CHANNEL;
+        }
+        event
     }
 }
 
@@ -245,21 +280,24 @@ impl Database {
                 Submitted::KeyTaken
             });
         }
+        self.notify(COMMANDS_CHANNEL, &id).await;
+        Ok(Submitted::New(id))
+    }
+
+    /// Announces `id`, stored already, on `channel` (Postgres, notifications on): a failed
+    /// notification only delays it to the master's next poll, so it isn't an error (a retried
+    /// request would store it twice).
+    pub(crate) async fn notify(&self, channel: &str, id: &str) {
         if let Pool::Postgres(pool) = self.pool()
             && self.notifications().on
-        {
-            // The command is stored: a failed notification only delays it to the master's
-            // next poll, so it isn't an error (a retried request would store it twice).
-            if let Err(error) = sqlx::query("SELECT pg_notify($1, $2)")
-                .bind(COMMANDS_CHANNEL)
-                .bind(&id)
+            && let Err(error) = sqlx::query("SELECT pg_notify($1, $2)")
+                .bind(channel)
+                .bind(id)
                 .execute(pool)
                 .await
-            {
-                tracing::warn!(%error, command_id = %id, "command stored, notification failed");
-            }
+        {
+            tracing::warn!(%error, channel, id, "stored, its notification failed");
         }
-        Ok(Submitted::New(id))
     }
 
     /// Listens for new commands: notifications on Postgres, through `notifications_url` if
@@ -296,7 +334,9 @@ impl Database {
             }
             Listening::Ready(listener) => listener,
         };
-        listener.listen(COMMANDS_CHANNEL).await?;
+        listener
+            .listen_all([COMMANDS_CHANNEL, EVENTS_CHANNEL])
+            .await?;
         Ok(Some(CommandNotifications { listener }))
     }
 

@@ -59,7 +59,7 @@ pub(crate) use chained_from;
 /// The rows queued for assignment at `$1`: the read's `FROM ... WHERE` and its probe check's (decision 485).
 macro_rules! ready_from {
     () => {
-        "FROM task_instances t JOIN runs r ON r.id = t.run_id JOIN dag_versions v ON v.id = r.dag_version_id JOIN parse_results p ON p.id = v.parse_result_id WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND r.state = 'running' AND t.cancel_requested_at IS NULL"
+        "FROM task_instances t JOIN runs r ON r.id = t.run_id JOIN dag_versions v ON v.id = r.dag_version_id JOIN parse_results p ON p.id = v.parse_result_id WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND (t.look_at IS NULL OR t.look_at <= $1{ts}) AND r.state = 'running' AND t.cancel_requested_at IS NULL"
     };
 }
 pub(crate) use ready_from;

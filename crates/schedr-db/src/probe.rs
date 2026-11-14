@@ -60,11 +60,14 @@ pub enum Check {
     /// The master's trigger pass: a trigger of a kind the pass looks after switched on, or one
     /// running on a worker (to be stopped when it no longer should run).
     Triggers,
+    /// A trigger the trigger loop looks after whose stored next moment has come or isn't known
+    /// (decision 486): the tick wakes the loop.
+    TriggersDue,
 }
 
 impl Check {
     /// Every check, in the probe's column order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Commands,
         Self::QueuedRuns,
         Self::Scheduled,
@@ -80,6 +83,7 @@ impl Check {
         Self::Unstarted,
         Self::UnstartedCleanups,
         Self::Triggers,
+        Self::TriggersDue,
     ];
 
     /// Its `FROM ... WHERE` text; `$1` is the round's time.
@@ -100,6 +104,7 @@ impl Check {
             Self::Unstarted => crate::attempts::unstarted_any_time_from!(),
             Self::UnstartedCleanups => crate::attempts::unstarted_cleanups_any_time_from!(),
             Self::Triggers => crate::triggers::trigger_pass_from!(),
+            Self::TriggersDue => crate::triggers::triggers_due_from!(),
         }
     }
 
@@ -178,6 +183,23 @@ impl Database {
         };
         probe.found.copy_from_slice(&found);
         Ok(probe)
+    }
+
+    /// Whether `check`'s read would find anything at `now`: its one `EXISTS` alone, for a loop
+    /// that needs only it (the trigger loop, decision 486).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the statement fails.
+    pub async fn exists(&self, check: Check, now: Timestamp) -> Result<bool, DbError> {
+        let statement = format!("SELECT EXISTS (SELECT 1 {})", check.from());
+        let found: bool = on_pool!(self, |pool, backend| {
+            sqlx::query_scalar(sql_text(backend, &statement))
+                .bind(db_time(now))
+                .fetch_one(pool)
+                .await?
+        });
+        Ok(found)
     }
 
     /// Runs `work` as a master's round at `now`: its reads that the probe says find nothing are

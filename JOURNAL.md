@@ -1005,3 +1005,80 @@ resends a result unacknowledged at two heartbeats), each repeat read again and e
 - **Not chosen:** A (relies on the database triggers: a write they don't cover waits for the
   safety pass), B and C (up to 5 s more latency at idle), D (an in-memory model of the state the
   database already holds).
+
+### <a id="D486"></a>2026-11-14: the trigger loop runs after any write, at a stored moment, or for a posted event (decision 486)
+
+- **Question:** M5.1f2 moves the trigger pass into a loop of its own (decision 485). Some of
+  its inputs live only in the master's memory: which workers are connected, drained, the roots
+  each offers, the triggers being stopped. A stored moment covers what comes due, not those:
+  what wakes the loop for them?
+- **Options:** (A) after any write: a round or a worker's turn that wrote something (the
+  database's write counter moved), plus a stream ending, a posted named event and a stored
+  moment come, at most once every 50 ms, the pass gated by its own probe; (B) an explicit wake
+  at each of about eleven places an input changes (a registration, a stream ending, a drain, a
+  worker's roots, the three trigger messages, commands, new versions, a run ending, queued runs
+  started).
+- **Chosen: A** (the user, Claude's recommendation): every change of those inputs comes with a
+  write, or is a stream ending, woken explicitly, so there is nothing to forget; an idle master
+  writes nothing and runs no pass; a busy one runs about a pass a round, as before, outside the
+  round. Event triggers keep their next moment in `dag_triggers.next_fire_at` (for them: when the
+  master looks at the trigger next), so the tick's one probe wakes the loop; a named event
+  posted through the API also clears it for the event triggers, found within a tick on SQLite,
+  and notified at once on Postgres. A run the loop queues wakes the round as a `Finished` does
+  (option A of 2026-11-14: the queued run is the stored record, the wake in memory).
+- **Not chosen:** B (one place forgotten leaves a trigger unstarted or unstopped until a
+  takeover, with nothing to show it).
+- **Then, the same day:** how the triggers' moments are stored. (1) One column, "when the
+  trigger loop looks next": `dag_triggers.next_fire_at`, the earliest of the window opening or
+  closing, a restart's backoff and a generator's `restart_if_idle`, written only by the loop
+  after its pass; (2) a column each (`live_from` and `live_until` copied from the code,
+  `idle_restart_at` written at every event, the existing `not_before`), four probe conditions.
+  **Chosen: 1** (the user, Claude's recommendation): no copy of the code's `start`/`end`
+  (decision 459 refused one), no write per event, one writer; why a trigger is looked at can be
+  shown by working it out from the trigger and its definition. Not chosen: 2 (four writers to
+  keep in step, a hot row under a stream of events).
+
+### <a id="D487"></a>2026-11-14: a waiting wait_for step stores its deadline and what it waits for (decision 487)
+
+- **Question:** M5.1f1's plan said a wait step's `max_wait` needs no column, read only once the
+  step is ready. That was wrong (the user asked where the fourth column was): a `wait_for` step
+  the master holds (decision 380: no worker) stays a queued instance, so the Ready check finds
+  it and the assign part reads and checks it every tick while it waits.
+- **Options:** (A) while it waits, its `ready_at` is its deadline, and index columns on the
+  instance name what it waits for (a DAG, an event's name): that DAG's run or task ending, or
+  that event posted, sets `ready_at` back for exactly those steps; (B) the deadline alone, the
+  step looked at again on any write, as the trigger loop is (decision 486).
+- **Chosen: A** (the user, Claude's recommendation). Not chosen: B (a busy master would look at
+  every waiting step on every write).
+- **Then, the same day:** how a parked step's look is cleared when what it waits for ends.
+  Claude had built database triggers without asking (migration 0003); the user asked how they
+  work and which way is more robust. (A) database triggers: every writer covered, future ones,
+  set-based statements and other processes included; (B) the code that ends a run or a task
+  clears the looks, with a test scanning the statements (as good as its matching). **Chosen: A**
+  (the user), as **row** triggers on both backends (`AFTER UPDATE OF state ... FOR EACH ROW WHEN`
+  the state really changed, and `AFTER INSERT` for a row stored ended): Claude's first Postgres
+  version used statement triggers with transition tables, which can't be limited to `state`, so
+  they ran on every update of `runs` and `task_instances`, and a `pg_trigger_depth()` guard that
+  would skip a run ended by another trigger. Their cost is to be confirmed by stress 1 and 23 on
+  Postgres before the commit. Not chosen: B (a writer worded differently slips past the test).
+- **Then, the same day:** measured on Postgres, the row triggers cost nothing visible: stress 23's
+  await p99 1.82 s (f1 on the same day 1.79-1.83 s), stress 1 26.9 tasks/s. Before the commit the
+  user asked for the unreleased migrations to be one file: f1's `0002_next_fire.sql` and this
+  step's `0003_waits.sql` became `0002_next_looks.sql` on both backends. A migration is edited in
+  place until a release ships it, and left as it is afterwards; `0001_initial.sql` shipped in
+  1.0.0.
+
+### <a id="D488"></a>2026-11-14: standalone takes its DAG and script folders on the command line (decision 488)
+
+For a "Getting started" with the DAG files in the working folder (M5.1n), asked before the
+remaining M5.1 steps were run unattended. Claude found that a root given as `.` fails today
+(`normalize(".")` is empty, so the root has no name).
+- **Names:** (A) `--dag-path` / `--script-path`, repeatable, `.` allowed; (B) also
+  `--cwd-dag-path` / `--cwd-script-path`. **Chosen: A** (the user, Claude's recommendation).
+  Not chosen: B (two spellings of `.`).
+- **With the environment and the file:** (A) the option replaces the list; (B) adds to it.
+  **Chosen: A**, as `--ops-port` and the rest override. Not chosen: B (a stale
+  `SCHEDR_DAG_PATH` would join silently).
+- **The name of `.`:** (A) the folder's own name, as any path; (B) a fixed `dags` / `scripts`.
+  **Chosen: A**. Not chosen: B (`.` for both is still one folder in two lists).
+- **Roles:** (A) standalone only; (B) the worker too. **Chosen: A**, the guide's case.

@@ -787,6 +787,110 @@ async fn the_rounds_probe_and_stored_next_fire_times_work_on_postgres() {
 }
 
 #[tokio::test]
+async fn a_parked_wait_is_looked_at_again_when_what_it_waits_for_happens_on_postgres() {
+    // Decision 487: migration 0002's row triggers. A step parked waiting for DAG `sync`
+    // comes back when a run of `sync` ends or a task of it ends, a step parked waiting for an
+    // event when it is posted, and a parked step whose own state changes loses its look.
+    let (db, run_id) = with_instances().await;
+    let now = ts(NOW);
+    let later = ts("2026-10-21T09:00:00Z");
+    let extract = db.ready_instances(now).await.unwrap()[0]
+        .instance_id
+        .clone();
+    let ready = |db: Database| async move { db.ready_instances(ts(NOW)).await.unwrap().len() };
+    let park = |dag: Option<&'static str>, event: Option<&'static str>| {
+        let (db, extract) = (db.clone(), extract.clone());
+        async move { db.park_wait(&extract, later, (dag, event)).await.unwrap() }
+    };
+    park(Some("sync"), None).await;
+    assert_eq!(ready(db.clone()).await, 0, "parked");
+    // A task of `sync` ends (this run's `load`, skipped).
+    db.update_instances(
+        &run_id,
+        &[InstanceUpdate {
+            task_id: id("load"),
+            map_index: -1,
+            state: TaskInstanceState::Skipped,
+            ready_at: None,
+            outcome: None,
+            used_retry: false,
+            reason: None,
+            map_sizes: None,
+        }],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready(db.clone()).await, 1, "a task of its DAG ended");
+    park(None, Some("paid")).await;
+    assert_eq!(ready(db.clone()).await, 0);
+    let event = schedr_db::named_events::NewNamedEvent {
+        name: "paid",
+        key: "o-1",
+        data: &json!({}),
+        at: now,
+    };
+    db.post_named_event(&event, "anna", None, now)
+        .await
+        .unwrap();
+    assert_eq!(ready(db.clone()).await, 1, "its event posted");
+    park(Some("sync"), None).await;
+    db.update_instances(
+        &run_id,
+        &[InstanceUpdate {
+            task_id: id("extract"),
+            map_index: -1,
+            state: TaskInstanceState::UpForRetry,
+            ready_at: Some(now),
+            outcome: None,
+            used_retry: true,
+            reason: None,
+            map_sizes: None,
+        }],
+        now,
+    )
+    .await
+    .unwrap();
+    db.update_instances(
+        &run_id,
+        &[InstanceUpdate {
+            task_id: id("extract"),
+            map_index: -1,
+            state: TaskInstanceState::Queued,
+            ready_at: Some(now),
+            outcome: None,
+            used_retry: false,
+            reason: None,
+            map_sizes: None,
+        }],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ready(db.clone()).await,
+        1,
+        "its own state changed: no look left"
+    );
+    // A run of `sync` ends.
+    park(Some("sync"), None).await;
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    let other = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Running,
+            "2026-10-21T06:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready(db.clone()).await, 0);
+    db.finish_run(&other, RunState::Success, now).await.unwrap();
+    assert_eq!(ready(db.clone()).await, 1, "a run of its DAG ended");
+}
+
+#[tokio::test]
 async fn a_groups_starts_dags_and_cleared_strikes_are_stored_on_postgres() {
     // M5.1d: a turn's starts in a statement for each start method, the runs' DAGs read at
     // once, a DAG's wait steps' strikes cleared at once.
@@ -949,6 +1053,123 @@ async fn a_new_command_notifies_the_listener() {
         .await
         .expect("a notification within 10 s")
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_posted_event_announces_what_it_woke_and_nothing_when_nobody_waits() {
+    // Decisions 486 and 487: the events channel says whether triggers or waiting steps wait
+    // for the name; an event nobody waits for isn't announced.
+    use schedr_db::commands::Notified;
+    let (db, _) = with_instances().await;
+    let mut notifications = db
+        .command_notifications()
+        .await
+        .unwrap()
+        .expect("Postgres has notifications");
+    let post = |name: &'static str, key: &'static str| {
+        let db = db.clone();
+        async move {
+            let event = schedr_db::named_events::NewNamedEvent {
+                name,
+                key,
+                data: &json!({}),
+                at: ts(NOW),
+            };
+            db.post_named_event(&event, "anna", None, ts(NOW))
+                .await
+                .unwrap();
+        }
+    };
+    post("nobody", "k-1").await;
+    let extract = db.ready_instances(ts(NOW)).await.unwrap()[0]
+        .instance_id
+        .clone();
+    db.park_wait(&extract, ts("2026-10-21T09:00:00Z"), (None, Some("packed")))
+        .await
+        .unwrap();
+    post("packed", "k-2").await;
+    let first = tokio::time::timeout(std::time::Duration::from_secs(10), notifications.next())
+        .await
+        .expect("a notification within 10 s")
+        .unwrap();
+    assert_eq!(
+        first,
+        Notified::Event {
+            triggers: false,
+            waiters: true
+        },
+        "the first one announced is the waited-for event: `nobody` sent none"
+    );
+}
+
+#[tokio::test]
+async fn a_post_after_the_trigger_pass_took_its_looks_is_announced_and_its_look_kept() {
+    // Grok's second review of M5.1f2: a post while a listener's look was already unknown
+    // cleared nothing and announced nothing, and the pass's store hid it. The pass now claims
+    // the unknown looks before its scans: a post after that clears one, and is announced.
+    use schedr_db::commands::Notified;
+    let (db, _) = with_dag().await;
+    let mut paid = serde_json::to_value(dag()).unwrap();
+    paid["id"] = json!("paid");
+    paid["location"]["path"] = json!("paid.py");
+    paid["trigger"] = json!({"kind": "event_named", "event": {"name": "paid"}});
+    let paid: Dag = serde_json::from_value(paid).unwrap();
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "sha256:h2",
+            schedr_version: "1.0.0",
+            worker_id: "w1",
+            parsed_at: ts(NOW),
+            files: &[],
+        })
+        .await
+        .unwrap();
+    db.apply_dag_changes(
+        &[DagChange::Define {
+            dag: Box::new(paid),
+            parse_id,
+            pause: false,
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let paid = DagId::new("paid").unwrap();
+    db.set_paused_at(&paid, false, ts(NOW)).await.unwrap();
+    let looks = db.claim_looks().await.unwrap();
+    assert_eq!(looks[&paid], Some(schedr_db::dags::NO_FIRE));
+    let mut notifications = db
+        .command_notifications()
+        .await
+        .unwrap()
+        .expect("Postgres has notifications");
+    let event = schedr_db::named_events::NewNamedEvent {
+        name: "paid",
+        key: "o-1",
+        data: &json!({}),
+        at: ts(NOW),
+    };
+    db.post_named_event(&event, "anna", None, ts(NOW))
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(10), notifications.next())
+        .await
+        .expect("a notification within 10 s")
+        .unwrap();
+    assert_eq!(
+        first,
+        Notified::Event {
+            triggers: true,
+            waiters: false
+        }
+    );
+    assert!(
+        !db.set_next_fire_if(&paid, schedr_db::dags::NO_FIRE, schedr_db::dags::NO_FIRE)
+            .await
+            .unwrap()
+    );
+    assert_eq!(db.next_fires().await.unwrap()[&paid], None);
 }
 
 #[tokio::test]
