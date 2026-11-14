@@ -270,6 +270,13 @@ impl Stress {
                     &key,
                 );
             }
+            // A start on its worker to its recording (M5.1m): what `started_at` no longer counts.
+            put(
+                metrics,
+                "schedr_master_start_recorded_seconds",
+                "",
+                "started_recorded",
+            );
             for part in ["started", "finished", "rest"] {
                 let labels = format!("part=\"{part}\"");
                 let key = format!("turn_{part}");

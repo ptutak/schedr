@@ -32,6 +32,13 @@ const TICK_DURATION: MetricDoc = MetricDoc {
     labels: &[],
     help: "How long each tick of the master's loop took",
 };
+const START_RECORDED: MetricDoc = MetricDoc {
+    name: "master_start_recorded_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "From a task's start on its worker (in master time, as the worker estimates it) to \
+        the master recording it: the wait for the core's lock and the message's way (M5.1m)",
+};
 const CORE_LOCK_WAIT: MetricDoc = MetricDoc {
     name: "master_core_lock_wait_seconds",
     kind: MetricKind::Histogram,
@@ -252,6 +259,7 @@ pub const METRICS: &[MetricDoc] = &[
     TRIGGER_BACK_PRESSURE_STOPS,
     TRIGGER_IDLE_RESTARTS,
     TICK_DURATION,
+    START_RECORDED,
     CORE_LOCK_WAIT,
     TURN_PART,
     TURN_MESSAGES,
@@ -371,6 +379,8 @@ type Histograms<L> = Family<L, Histogram, fn() -> Histogram>;
 pub struct MasterMetrics {
     /// How long each tick of the loop took.
     pub tick_duration: Histogram,
+    /// From a task's start on its worker to the master recording it.
+    pub start_recorded: Histogram,
     /// How long the core lock was waited for, by who waited.
     pub core_lock_wait: Histograms<ByLabels>,
     /// How long each part of a worker's turn held the core lock.
@@ -449,6 +459,12 @@ impl Default for MasterMetrics {
             // 1 ms to about 16 s, each bucket √2 times the last: fine enough for scenario 14
             // to tell a round's p99 one step worse from two (M2.5.2).
             tick_duration: Histogram::new(exponential_buckets(0.001, std::f64::consts::SQRT_2, 29)),
+            // 1 ms to about 16 s, as the ticks.
+            start_recorded: Histogram::new(exponential_buckets(
+                0.001,
+                std::f64::consts::SQRT_2,
+                29,
+            )),
             // 0.1 ms to about 26 s, each bucket 2 times the last.
             core_lock_wait: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(0.0001, 2.0, 19))
@@ -554,6 +570,11 @@ impl MasterMetrics {
             TICK_DURATION.name,
             TICK_DURATION.help,
             self.tick_duration.clone(),
+        );
+        r.register(
+            START_RECORDED.name,
+            START_RECORDED.help,
+            self.start_recorded.clone(),
         );
         self.register_lock(r);
         r.register(RUNS.name, RUNS.help, self.runs.clone());

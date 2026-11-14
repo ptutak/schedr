@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D490 | 2026-11-14 | user | built M5.1m | assignment | started_at is the worker's start, in master time |
 | D489 | 2026-11-14 | user | planned (M5.1o) | wait-steps | @sensor.poke and @trigger.poke accept a plain def |
 | D488 | 2026-11-14 | user | planned (M5.1n) | code-delivery | Standalone takes --dag-path and --script-path |
 | D487 | 2026-11-14 | user | built M5.1f2 | triggers | A waiting wait_for step stores its deadline and what it waits for |
@@ -532,6 +533,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### assignment
 
+- D490: started_at is the worker's start, in master time
 - D485: Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
 - D482: The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch
 - D481: Tasks past a round's assignment cap are not visited; they show as pending

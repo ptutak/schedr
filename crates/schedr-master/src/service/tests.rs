@@ -227,6 +227,7 @@ async fn a_worker_registers_parses_runs_a_task_and_is_acknowledged() {
         .send(wrap(worker_message::Message::Started(pb::Started {
             attempt_id: assign.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         })))
         .await
         .unwrap();
@@ -938,6 +939,7 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
         .send(wrap(worker_message::Message::Started(pb::Started {
             attempt_id: assign.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         })))
         .await
         .unwrap();
@@ -1103,6 +1105,7 @@ async fn a_cancel_reaches_the_worker_when_a_later_step_of_its_round_fails() {
         .send(wrap(worker_message::Message::Started(pb::Started {
             attempt_id: assign.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         })))
         .await
         .unwrap();
@@ -1403,6 +1406,7 @@ async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
         .send(wrap(worker_message::Message::Started(pb::Started {
             attempt_id: assign.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         })))
         .await
         .unwrap();
@@ -1459,6 +1463,7 @@ async fn a_turns_groups_each_take_the_lock_so_a_round_gets_in_between() {
         worker_message::Message::Started(pb::Started {
             attempt_id: assign.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         }),
         worker_message::Message::Finished(pb::Finished {
             attempt_id: assign.attempt_id.clone(),
@@ -1587,6 +1592,7 @@ fn started_msg(attempt_id: &str) -> worker_message::Message {
     worker_message::Message::Started(pb::Started {
         attempt_id: attempt_id.to_owned(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     })
 }
 
@@ -1861,6 +1867,7 @@ fn a_failed_groups_messages_go_alone_at_most_ten_a_turn() {
         worker_message::Message::Started(pb::Started {
             attempt_id: format!("a{n}"),
             start_method: 0,
+            ..pb::Started::default()
         })
     };
     let (queue, mut queued) = mpsc::unbounded_channel();
@@ -1943,6 +1950,7 @@ async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
         worker_message::Message::Started(pb::Started {
             attempt_id: extract.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         }),
         worker_message::Message::Finished(pb::Finished {
             attempt_id: extract.attempt_id.clone(),

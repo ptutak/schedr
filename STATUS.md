@@ -7,20 +7,20 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
 - **Next step:** M5.1j, The Metrics page (decisions D465, D466). Done when: the page renders every range on both databases and in light and dark; live refresh once a minute; UI browser tests; a guide page on it
-- **Then:** M5.1k, M5.1l, M5.1m, M5.1n, M5.1o.
+- **Then:** M5.1k, M5.1l, M5.1n, M5.1o, R1.1.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D490 (2026-11-14): started_at is the worker's start
 - N8 (2026-11-14): samples by process, the webserver's its own (note 8; on D464)
 - D489 (2026-11-14): a poke may be a plain def
 - N7 (2026-11-14): The UI isn't built or tested for phones (corrects D466)
 - D488 (2026-11-14): standalone takes its DAG and script folders on the command line
-- D487 (2026-11-14): a waiting wait_for step stores its deadline and what it waits for
+- M5.1m (2026-11-14): The start time from the worker
 - M5.1i (2026-11-14): The samples table
 - M5.1h (2026-11-14): Memory and CPU reported
-- M5.1g (2026-11-14): The Status block
 
 ## In progress
 

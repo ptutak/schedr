@@ -1287,7 +1287,9 @@ impl Database {
         rows.into_iter().map(stored_attempt).collect()
     }
 
-    /// Records `Started` for a running attempt. Returns whether it is still running.
+    /// Records `Started` for a running attempt, started `at` (the worker's start in master
+    /// time, M5.1m, never before its assignment; a start already recorded is kept). Returns
+    /// whether it is still running.
     ///
     /// # Errors
     ///
@@ -1296,10 +1298,12 @@ impl Database {
         &self,
         attempt_id: &str,
         start_method: &str,
-        now: Timestamp,
+        at: Timestamp,
     ) -> Result<bool, DbError> {
-        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}), \
+        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, \
+            CASE WHEN $1{ts} < assigned_at THEN assigned_at ELSE $1{ts} END), \
             start_method = $2, moved_at = NULL WHERE id = $3{uuid} AND status IS NULL";
+        let now = at;
         let updated = in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, START))
                 .bind(db_time(now))
@@ -1312,30 +1316,43 @@ impl Database {
         Ok(updated == 1)
     }
 
-    /// Records `Started` for several running attempts started by `start_method`, as
-    /// [`Self::mark_started`] does each, in one statement (M5.1d). Returns the IDs still
-    /// running.
+    /// Records `Started` for several running attempts started by `start_method`, each `at` its
+    /// own time, as [`Self::mark_started`] does each, in one statement (M5.1d, M5.1m). Returns
+    /// the IDs still running.
     ///
     /// # Errors
     ///
     /// [`DbError::Sqlx`] if the statement fails.
     pub async fn mark_started_many(
         &self,
-        attempt_ids: &[&str],
+        starts: &[(&str, Timestamp)],
         start_method: &str,
-        now: Timestamp,
     ) -> Result<BTreeSet<String>, DbError> {
-        const START: &str = "UPDATE attempts SET started_at = COALESCE(started_at, $1{ts}), \
-            start_method = $2, moved_at = NULL \
-            WHERE id IN (SELECT value{uuid} FROM {json_each}($3{json})) AND status IS NULL \
-            RETURNING id{text}";
-        if attempt_ids.is_empty() {
+        // Each start a pair `[id, time]` of a JSON list, read as rows on each database.
+        const SQLITE: &str = "UPDATE attempts SET started_at = COALESCE(attempts.started_at, \
+            CASE WHEN p.at < attempts.assigned_at THEN attempts.assigned_at ELSE p.at END), \
+            start_method = $1, moved_at = NULL \
+            FROM (SELECT json_extract(value, '$[0]') AS id, json_extract(value, '$[1]') AS at \
+            FROM json_each($2)) p \
+            WHERE attempts.id = p.id AND attempts.status IS NULL RETURNING attempts.id";
+        const POSTGRES: &str = "UPDATE attempts a SET started_at = COALESCE(a.started_at, \
+            CASE WHEN p.at < a.assigned_at THEN a.assigned_at ELSE p.at END), \
+            start_method = $1, moved_at = NULL \
+            FROM (SELECT (value->>0)::uuid AS id, (value->>1)::timestamptz AS at \
+            FROM jsonb_array_elements($2::jsonb)) p \
+            WHERE a.id = p.id AND a.status IS NULL RETURNING a.id::text";
+        if starts.is_empty() {
             return Ok(BTreeSet::new());
         }
-        let list = crate::query::to_json(&attempt_ids);
+        let pairs: Vec<(&str, String)> =
+            starts.iter().map(|(id, at)| (*id, db_time(*at))).collect();
+        let list = crate::query::to_json(&pairs);
         let started: Vec<String> = in_tx!(self, |tx, backend| {
-            sqlx::query_scalar(sql(backend, START))
-                .bind(db_time(now))
+            let query = match backend {
+                crate::backend::Backend::Sqlite => SQLITE,
+                crate::backend::Backend::Postgres => POSTGRES,
+            };
+            sqlx::query_scalar(sql(backend, query))
                 .bind(start_method)
                 .bind(&list)
                 .fetch_all(&mut *tx)

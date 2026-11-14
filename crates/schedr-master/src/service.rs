@@ -174,7 +174,11 @@ impl Hub {
     /// A hub over `core`, with the system clock.
     #[must_use]
     pub fn new(core: MasterCore) -> Self {
-        Self::with_clock(core.with_steady(crate::clock::monotonic), Timestamp::now)
+        Self::with_clock(
+            core.with_steady(crate::clock::monotonic)
+                .with_wall(Timestamp::now),
+            Timestamp::now,
+        )
     }
 
     /// A hub over `core` with another clock (tests).

@@ -109,9 +109,12 @@ is how long each waited for it: `turn`, `round`, `register`, `upload`, `stream` 
 `schedr_master_turn_part_seconds{part}` is how long each part of a turn held it, and
 `schedr_master_turn_messages{part}` how many messages that part had: `started` (the turn's
 `Started`s, stored together), `finished` (its `Finished`s) and `rest` (heartbeats, warnings and
-the other messages). The master records a task's `started_at` when its `Started` part runs, so
-a long wait for the lock shows as a late `started_at`, while the task itself started when the
-worker sent `Started`.
+the other messages). A task's `started_at` is when its worker started it: the worker sends its
+start in the master's time as it estimates it (within half a round trip), and the master
+records that, never before the assignment nor after the message arrived.
+`schedr_master_start_recorded_seconds` is how long after the start the master recorded it, the
+wait for the lock included. A 1.0.0 worker sends no start time: its tasks' `started_at` is when
+the master handled their `Started`.
 
 `schedr_worker_fork_servers` is a gauge: one series per interpreter, kind and state. `kind`
 is `preloaded` or `bare`. `state` is `up`, `down` or `disabled`. The current state is 1 and

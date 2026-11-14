@@ -740,6 +740,14 @@ impl MasterCore {
         self
     }
 
+    /// The wall clock read with master time where the two are compared (M5.1m; production:
+    /// [`Timestamp::now`], set by [`crate::service::Hub::new`]; tests: the times they pass).
+    #[must_use]
+    pub fn with_wall(mut self, wall: fn() -> Timestamp) -> Self {
+        self.dispatcher.set_wall(wall);
+        self
+    }
+
     /// Switches one of its liveness safeguards off (the clock simulator's mutation tests,
     /// decision 446). Never in a master.
     #[doc(hidden)]

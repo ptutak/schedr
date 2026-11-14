@@ -292,6 +292,7 @@ async fn cancelling_a_running_run_stops_its_attempts_and_a_finished_one_is_rejec
     let started = pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     };
     world
         .dispatcher
@@ -1204,6 +1205,7 @@ async fn a_cancel_whose_transaction_fails_at_any_write_sends_nothing_and_keeps_i
     let started = pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     };
     world
         .dispatcher
@@ -1334,6 +1336,7 @@ async fn a_cancel_whose_commit_answer_is_lost_is_sent_only_if_it_landed() {
         let started = pb::Started {
             attempt_id: assign.attempt_id.clone(),
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         };
         world
             .dispatcher

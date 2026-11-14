@@ -246,7 +246,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1j | The Metrics page | **next** | D465, D466 |
 | M5.1k | Task memory charts | planned | D467 |
 | M5.1l | Throughput and start latency on the Metrics page | planned |  |
-| M5.1m | The start time from the worker | planned |  |
+| M5.1m | The start time from the worker | done 2026-11-14 | D490 |
 | M5.1n | Standalone takes its DAG and script directories on the command line | planned | D488 |
 | M5.1o | A poke may be a plain def | planned | D489 |
 | R1.1 | Release 1.1.0 | planned |  |

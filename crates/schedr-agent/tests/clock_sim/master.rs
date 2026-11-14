@@ -1436,6 +1436,7 @@ impl Sim {
         let started = pb::Started {
             attempt_id: id,
             start_method: pb::StartMethod::Spawn.into(),
+            ..pb::Started::default()
         };
         self.up(inst, worker_message::Message::Started(started));
     }

@@ -233,6 +233,7 @@ async fn a_finished_message_is_stored_whole_or_not_at_all() {
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     // The run's own write fails: the last of the `Finished`'s writes (and so does the run's
@@ -356,6 +357,7 @@ async fn a_tick_applies_commands_and_assigns_the_task_which_then_runs_to_the_end
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     assert_eq!(core.handle("w1", started, ts(NOW)).await.unwrap(), []);
     let finished = worker_message::Message::Finished(pb::Finished {
@@ -803,6 +805,7 @@ async fn a_worker_silent_past_its_lease_is_lost_and_its_attempts_with_it() {
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
@@ -1012,6 +1015,7 @@ async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_bac
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
@@ -1064,6 +1068,7 @@ async fn moved_away_from_w1() -> (MasterCore, String) {
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
@@ -1246,6 +1251,7 @@ async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     // The task succeeded; w1 was cut off while it cleaned up.
@@ -1375,6 +1381,7 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
@@ -1505,6 +1512,7 @@ async fn a_start_or_result_that_couldnt_be_stored_keeps_the_attempt_from_being_t
             worker_message::Message::Started(pb::Started {
                 attempt_id: id.clone(),
                 start_method: pb::StartMethod::Spawn.into(),
+                ..pb::Started::default()
             })
         };
         // As the stream's reader records it on arrival.
@@ -1544,6 +1552,7 @@ async fn started_attempt(core: &mut MasterCore) -> String {
     let started = worker_message::Message::Started(pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     });
     core.handle("w1", started, ts(NOW)).await.unwrap();
     assign.attempt_id.clone()
@@ -2037,6 +2046,7 @@ mod faults {
             let started = worker_message::Message::Started(pb::Started {
                 attempt_id: assign.attempt_id.clone(),
                 start_method: pb::StartMethod::Spawn.into(),
+                ..pb::Started::default()
             });
             core.handle("w1", started, ts(NOW)).await.unwrap();
             let run_id = assign.run.as_ref().unwrap().run_id.clone();
@@ -2128,6 +2138,7 @@ mod faults {
                 started: vec![pb::Started {
                     attempt_id: self.attempt_id.clone(),
                     start_method: pb::StartMethod::Spawn.into(),
+                    ..pb::Started::default()
                 }],
                 finished: Vec::new(),
             };
@@ -2577,6 +2588,7 @@ async fn a_kept_result_the_database_refuses_doesnt_hold_its_worker_for_ever() {
     let started = pb::Started {
         attempt_id: assign.attempt_id.clone(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     };
     core.handle("w1", worker_message::Message::Started(started), ts(NOW))
         .await

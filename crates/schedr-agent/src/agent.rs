@@ -2941,6 +2941,18 @@ impl<E: Executor> Agent<E> {
         self.start_planned(spec, planned, to_master, received);
     }
 
+    /// A `Started` for `attempt_id` started now by `method`, with the start in master time as
+    /// this session estimates it (M5.1m).
+    fn started(&self, attempt_id: &str, method: pb::StartMethod) -> pb::Started {
+        let estimate = self.master_time.estimate(Local::now());
+        pb::Started {
+            attempt_id: attempt_id.to_owned(),
+            start_method: method.into(),
+            started_master_ms: estimate.map(|(_, ms)| ms),
+            started_timeline: estimate.map_or(0, |(timeline, _)| timeline),
+        }
+    }
+
     /// An assignment journaled: started (`Started`, then launched), failed before it could
     /// start, or rejected, as `planned` says.
     fn start_planned(
@@ -2950,10 +2962,9 @@ impl<E: Executor> Agent<E> {
         to_master: &ToMaster,
         received: std::time::Instant,
     ) {
-        let started = wrap(worker_message::Message::Started(pb::Started {
-            attempt_id: spec.attempt_id.clone(),
-            start_method: pb::StartMethod::Spawn.into(),
-        }));
+        let started = wrap(worker_message::Message::Started(
+            self.started(&spec.attempt_id, pb::StartMethod::Spawn),
+        ));
         match planned {
             Err(NotRun::Rejected { reason, detail }) => {
                 self.release_code(&spec.attempt_id);
@@ -3482,10 +3493,9 @@ impl<E: Executor> Agent<E> {
         received: std::time::Instant,
     ) {
         let id = spec.attempt_id.clone();
-        let _ = to_master.send(wrap(worker_message::Message::Started(pb::Started {
-            attempt_id: id.clone(),
-            start_method: pb::StartMethod::Spawn.into(),
-        })));
+        let _ = to_master.send(wrap(worker_message::Message::Started(
+            self.started(&id, pb::StartMethod::Spawn),
+        )));
         self.metrics
             .assign_to_started
             .observe(received.elapsed().as_secs_f64());
@@ -4375,6 +4385,8 @@ fn forked_started(attempt_id: &str) -> pb::WorkerMessage {
     wrap(worker_message::Message::Started(pb::Started {
         attempt_id: attempt_id.to_owned(),
         start_method: pb::StartMethod::Fork.into(),
+        // The first `Started`'s time is kept: this one says only the method.
+        ..pb::Started::default()
     }))
 }
 

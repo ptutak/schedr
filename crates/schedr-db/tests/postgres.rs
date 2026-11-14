@@ -902,13 +902,26 @@ async fn a_groups_starts_dags_and_cleared_strikes_are_stored_on_postgres() {
         .unwrap()
         .unwrap();
     let unknown = "0190d0b4-0000-7000-8000-000000000000";
+    // M5.1m: each with its own time, never before its assignment.
+    let before = ts(NOW)
+        .checked_sub(jiff::SignedDuration::from_hours(1))
+        .unwrap();
     assert_eq!(
-        db.mark_started_many(&[attempt_id.as_str(), unknown], "fork", ts(NOW))
+        db.mark_started_many(&[(attempt_id.as_str(), before), (unknown, ts(NOW))], "fork")
             .await
             .unwrap(),
         std::collections::BTreeSet::from([attempt_id.clone()])
     );
     assert!(db.attempt(&attempt_id).await.unwrap().unwrap().started);
+    let attempts = db
+        .instance_attempts(&run_id, &ready[0].task_id, ready[0].map_index)
+        .await
+        .unwrap();
+    assert_eq!(
+        attempts[0].started_at,
+        Some(ts(NOW)),
+        "clamped to its assignment"
+    );
     assert_eq!(
         db.run_dag_ids(&[run_id.as_str(), unknown]).await.unwrap(),
         BTreeMap::from([(run_id.clone(), "sync".to_owned())])

@@ -1117,3 +1117,20 @@ process ID, the leader folding a process's roles into one row. The leading maste
 webserver (it has no row), so a webserver in a process of its own writes its own sample a minute;
 a standalone's is the master's. The deletes past 24 h and 30 d run with the rollup, in the
 sampler, not in the `[retention]` pass: their ages are hidden timings, not `[retention]` keys.
+
+### <a id="D490"></a>2026-11-14: started_at is the worker's start (decision 490)
+
+M5.1m, the user's "nice to have" of 2026-11-13, kept for 1.1.0 (the user, 2026-11-14: it fixes
+time measures, so it goes into the metrics too). `started_at` was the master's time when it
+handled `Started`, so it counted the wait for the core's lock (stress showed seconds). Claude
+built it from what the worker already has: its best master-time sample bounds master time now
+between `master_ms + (now - arrived)` and `master_ms + (now - sent)`; the worker sends the middle
+(off by at most half the round trip, with the drift allowance), the master converts it to its
+wall clock and clamps it to the assignment and the arrival; set-based as before (pairs of id and
+time). The protocol field goes into 2.1 with M5.1h's (moved once per release, the user). Not
+chosen: the master converting a worker's wall clock (skewed), the lower bound (always early).
+Grok's review found two early biases, both fixed: the estimate took the tightest lower bound's
+sample, which can be a reply stamped at once and delivered late (now the sample with the
+narrowest round trip, its error growing with the drift allowance as it ages); and the master
+compared a wall time read before the lock and transaction with master time read later (now
+both read together in `start_time`, as `HeartbeatAcks::steady_now` does).

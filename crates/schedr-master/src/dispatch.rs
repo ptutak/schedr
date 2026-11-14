@@ -392,6 +392,9 @@ pub struct Dispatcher {
     trust_unknown: bool,
     /// Master time, which its timers count on (B228; see [`crate::clock`]).
     steady: crate::clock::Steady,
+    /// The wall clock, read with `steady` at one instant where the two are compared (M5.1m;
+    /// production: the system's); `None`: the `now` handed (tests on [`crate::clock::as_given`]).
+    wall: Option<fn() -> Timestamp>,
     /// When each cleanup waiting to move may go to another worker, in master time (D256, B228);
     /// after a restart, a whole wait from when it is first seen.
     move_not_before: BTreeMap<String, Timestamp>,
@@ -526,6 +529,7 @@ impl Dispatcher {
             lease: DEFAULT_LEASE,
             trust_unknown: false,
             steady: crate::clock::as_given,
+            wall: None,
             move_not_before: BTreeMap::new(),
             replaced_since: BTreeMap::new(),
             no_hold: false,
@@ -1990,6 +1994,30 @@ impl Dispatcher {
         tally.assigned = tally.assigned.saturating_sub(1);
     }
 
+    /// When `started` began, received `now`: the worker's start in this master's time
+    /// (M5.1m) turned into the wall clock `now` is on, never after `now`; `now` itself from an
+    /// older worker, without its estimate, or on another master's timeline.
+    fn start_time(&self, started: &pb::Started, now: Timestamp) -> Timestamp {
+        let Some(ms) = started.started_master_ms else {
+            return now;
+        };
+        if started.started_timeline != crate::clock::timeline() {
+            return now;
+        }
+        let Ok(at) = Timestamp::from_millisecond(ms) else {
+            return now;
+        };
+        // How long ago in master time, the same span ago on the wall clock, both read now:
+        // `now` was read earlier, before the lock and the transaction (Grok's review of M5.1m).
+        let wall = self.wall.map_or(now, |wall| wall());
+        let ago = (self.steady)(wall).duration_since(at);
+        if ago.is_negative() {
+            return now;
+        }
+        self.metrics.start_recorded.observe(ago.as_secs_f64());
+        wall.checked_sub(ago).map_or(now, |start| start.min(now))
+    }
+
     /// A worker reported `Started`. Returns a `CancelAttempt` if the attempt was taken back,
     /// ended or belongs to another worker.
     ///
@@ -2003,11 +2031,12 @@ impl Dispatcher {
         now: Timestamp,
     ) -> Result<Option<Outgoing>, DispatchError> {
         let method = start_method(started);
+        let at = self.start_time(started, now);
         let attempt = self.db.attempt(&started.attempt_id).await?;
         if let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id)
             && self
                 .db
-                .mark_started(&started.attempt_id, method, now)
+                .mark_started(&started.attempt_id, method, at)
                 .await?
         {
             // A start already recorded changes only the method: no witness of this write.
@@ -2045,21 +2074,26 @@ impl Dispatcher {
             .filter(|a| a.worker_id == worker_id)
             .map(|a| (a.id.clone(), a))
             .collect();
-        // Each attempt's last start method, as one by one would leave it.
-        let mut methods: BTreeMap<&str, &str> = BTreeMap::new();
+        // Each attempt's last start method, as one by one would leave it, and its first
+        // `Started`'s time (a later one is kept by the database anyway).
+        let mut methods: BTreeMap<&str, (&str, Timestamp)> = BTreeMap::new();
         for started in group {
             if attempts.contains_key(&started.attempt_id) {
-                methods.insert(&started.attempt_id, start_method(started));
+                let at = self.start_time(started, now);
+                methods
+                    .entry(&started.attempt_id)
+                    .and_modify(|(method, _)| *method = start_method(started))
+                    .or_insert((start_method(started), at));
             }
         }
         let mut running = BTreeSet::new();
         for method in ["fork", "spawn"] {
-            let of: Vec<&str> = methods
+            let of: Vec<(&str, Timestamp)> = methods
                 .iter()
-                .filter(|&(_, m)| *m == method)
-                .map(|(id, _)| *id)
+                .filter(|&(_, (m, _))| *m == method)
+                .map(|(id, (_, at))| (*id, *at))
                 .collect();
-            running.extend(self.db.mark_started_many(&of, method, now).await?);
+            running.extend(self.db.mark_started_many(&of, method).await?);
         }
         for id in &running {
             let attempt = &attempts[id];
@@ -2087,6 +2121,11 @@ impl Dispatcher {
     /// Times this dispatcher on `steady` (see [`crate::clock`]).
     pub fn set_steady(&mut self, steady: crate::clock::Steady) {
         self.steady = steady;
+    }
+
+    /// Reads the wall clock from `wall` where it is compared with master time (M5.1m).
+    pub fn set_wall(&mut self, wall: fn() -> Timestamp) {
+        self.wall = Some(wall);
     }
 
     /// A worker rejected an assignment.

@@ -143,6 +143,7 @@ fn started(attempt_id: &str) -> pb::Started {
     pb::Started {
         attempt_id: attempt_id.to_owned(),
         start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
     }
 }
 
@@ -287,6 +288,112 @@ async fn a_forked_start_is_stored_as_fork() {
     dispatcher.started("w1", &forked, ts(NOW)).await.unwrap();
     let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
     assert_eq!(attempts[0].start_method.as_deref(), Some("fork"));
+}
+
+/// The wall clock read where a start is placed: 35 s after `NOW`, later than the `now` handed.
+fn wall_later() -> Timestamp {
+    ts(NOW)
+        .checked_add(jiff::SignedDuration::from_secs(35))
+        .unwrap()
+}
+
+/// Master time read at that instant, as production's ignores what it is handed: 1000 s ahead.
+fn master_later(_now: Timestamp) -> Timestamp {
+    wall_later()
+        .checked_add(jiff::SignedDuration::from_secs(1000))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_start_is_placed_by_the_wall_and_master_clocks_read_together() {
+    // Grok's review of M5.1m: `now` is read before the lock and the transaction; master time
+    // later. The worker started at master time 1003 s after `NOW`, so 3 s after it on the wall.
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    dispatcher.set_steady(master_later);
+    dispatcher.set_wall(wall_later);
+    let start = pb::Started {
+        started_master_ms: Some(
+            ts(NOW)
+                .checked_add(jiff::SignedDuration::from_secs(1003))
+                .unwrap()
+                .as_millisecond(),
+        ),
+        started_timeline: crate::clock::timeline(),
+        ..started(&attempt)
+    };
+    let arrived = ts(NOW)
+        .checked_add(jiff::SignedDuration::from_secs(5))
+        .unwrap();
+    dispatcher.started("w1", &start, arrived).await.unwrap();
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(
+        attempts[0].started_at,
+        ts(NOW).checked_add(jiff::SignedDuration::from_secs(3)).ok()
+    );
+}
+
+#[tokio::test]
+async fn a_start_is_recorded_at_the_workers_time_on_this_masters_timeline() {
+    // M5.1m: the worker's start in this master's time (here the dispatcher's clock is the time
+    // given); none, another timeline, or later than arriving: the arrival; before the
+    // assignment: the assignment.
+    let at = |ms_after: i64| {
+        Some(
+            ts(NOW)
+                .checked_add(jiff::SignedDuration::from_millis(ms_after))
+                .unwrap()
+                .as_millisecond(),
+        )
+    };
+    for (said, timeline, recorded) in [
+        (at(2_000), crate::clock::timeline(), at(2_000)),
+        (
+            at(2_000),
+            crate::clock::timeline().wrapping_add(1),
+            at(5_000),
+        ),
+        (None, 0, at(5_000)),
+        (at(9_000), crate::clock::timeline(), at(5_000)),
+        (at(-60_000), crate::clock::timeline(), at(0)),
+    ] {
+        let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let attempt = assignment(&out[0]).attempt_id.clone();
+        let start = pb::Started {
+            started_master_ms: said,
+            started_timeline: timeline,
+            ..started(&attempt)
+        };
+        let arrived = Timestamp::from_millisecond(at(5_000).unwrap()).unwrap();
+        // One alone, and in a turn's group.
+        dispatcher
+            .started_group("w1", &[start], arrived)
+            .await
+            .unwrap();
+        let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+        assert_eq!(
+            attempts[0].started_at.map(Timestamp::as_millisecond),
+            recorded,
+            "said {said:?} on {timeline}"
+        );
+    }
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let start = pb::Started {
+        started_master_ms: at(1_500),
+        started_timeline: crate::clock::timeline(),
+        ..started(&attempt)
+    };
+    let arrived = Timestamp::from_millisecond(at(5_000).unwrap()).unwrap();
+    dispatcher.started("w1", &start, arrived).await.unwrap();
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(
+        attempts[0].started_at.map(Timestamp::as_millisecond),
+        at(1_500)
+    );
 }
 
 /// `extract` and `audit`, independent: both ready at once.

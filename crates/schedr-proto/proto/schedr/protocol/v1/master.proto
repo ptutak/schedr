@@ -257,6 +257,11 @@ message CodeVersionChanged {
 message Started {
   string attempt_id = 1;
   StartMethod start_method = 2;
+  // When it started, in the master's time as the worker estimates it (M5.1m; protocol 2.1):
+  // master milliseconds on `started_timeline`. None from an older worker, or without a sample:
+  // the master records its own time.
+  optional int64 started_master_ms = 3;
+  uint64 started_timeline = 4;
 }
 
 enum StartMethod {

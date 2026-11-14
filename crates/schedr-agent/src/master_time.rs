@@ -116,6 +116,20 @@ impl Sample {
     }
 }
 
+impl Sample {
+    /// Half its round trip: how far its estimate of master time may be off, but for drift.
+    fn half_round_trip(&self) -> Duration {
+        self.arrived.boot.saturating_sub(self.sent.boot) / 2
+    }
+
+    /// Whether this later sample estimates master time from now on at least as closely as
+    /// `older`: its half round trip within `older`'s plus the drift allowance since `older`.
+    fn places_as_closely_as(&self, older: &Self) -> bool {
+        let since = self.sent.boot.saturating_sub(older.sent.boot);
+        self.half_round_trip() <= older.half_round_trip() + since / 1000 * DRIFT_PER_MILLE
+    }
+}
+
 /// How far `master_ms` (Unix milliseconds) lies outside `from..=to`: zero inside it.
 fn wall_skew(master_ms: i64, from: SystemTime, to: SystemTime) -> Duration {
     let master = SystemTime::UNIX_EPOCH
@@ -204,6 +218,9 @@ pub struct MasterTime {
     /// Samples of the master's current timeline over the window, each looser than the one
     /// before it and later: the first is the tightest (a monotonic queue).
     samples: VecDeque<Sample>,
+    /// The sample that places master time now most closely (M5.1m): the narrowest round trip,
+    /// its error growing with the drift allowance as it ages.
+    narrowest: Option<Sample>,
     /// How far back the tightest sample is looked for.
     window: Duration,
     /// The latest master message's stamp.
@@ -219,6 +236,7 @@ impl Clone for MasterTime {
         Self {
             outbox: Arc::new(Mutex::new(lock(&self.outbox).clone())),
             samples: self.samples.clone(),
+            narrowest: self.narrowest,
             window: self.window,
             last: self.last,
             heard_sent: self.heard_sent,
@@ -239,6 +257,7 @@ impl MasterTime {
         Self {
             outbox: SharedOutbox::default(),
             samples: VecDeque::new(),
+            narrowest: None,
             window,
             last: None,
             heard_sent: None,
@@ -271,6 +290,23 @@ impl MasterTime {
         self.last
     }
 
+    /// Master time at `now` as the narrowest sample says (M5.1m): its stamp was made after the
+    /// worker sent what it heard and before it arrived, so master time now is within
+    /// `master_ms + (now - arrived)` and `master_ms + (now - sent)`; the middle, with its
+    /// timeline. `None` without a sample, or after a pause the boot clock didn't count.
+    /// (Not the tightest lower bound's sample: a reply stamped at once and delivered late is
+    /// that, and its middle lies half the late return behind; Grok's review of M5.1m.)
+    #[must_use]
+    pub fn estimate(&self, now: Local) -> Option<(u64, i64)> {
+        let best = self.narrowest?;
+        if paused(best.sent, now) {
+            return None;
+        }
+        let middle = best.sent.boot + best.arrived.boot.saturating_sub(best.sent.boot) / 2;
+        let since = i64::try_from(now.boot.saturating_sub(middle).as_millis()).ok()?;
+        Some((best.timeline, best.master_ms.checked_add(since)?))
+    }
+
     /// The best sample's age and round trip at `now`; `None` without one.
     #[must_use]
     pub fn reading(&self, now: Local) -> Option<SampleReading> {
@@ -300,6 +336,7 @@ impl MasterTime {
             .is_some_and(|best| best.timeline != clock.timeline)
         {
             self.samples.clear();
+            self.narrowest = None;
         }
         // Those before it won't be named again: the master's messages come in order.
         let (number, sent) = {
@@ -327,6 +364,12 @@ impl MasterTime {
         // unusable: the new one replaces them, tighter or not.
         if self.best().is_some_and(|best| paused(best.sent, sent)) {
             self.samples.clear();
+        }
+        if self
+            .narrowest
+            .is_none_or(|old| paused(old.sent, sent) || sample.places_as_closely_as(&old))
+        {
+            self.narrowest = Some(sample);
         }
         // Those it is at least as tight as are never the tightest again; those older than the
         // window are past it (the newest always stays).
@@ -446,6 +489,40 @@ mod tests {
         assert!(time.past(60_000, Duration::from_secs(2), at(8_990)));
         // A deadline already behind the sample: passed.
         assert!(time.past(49_000, Duration::ZERO, at(1001)));
+    }
+
+    #[test]
+    fn master_time_now_is_estimated_from_the_middle_of_the_best_samples_round_trip() {
+        // M5.1m: the Register sent at 1000 ms, the master's 50 000 arrived at 1200: its stamp
+        // was made between them, so 2000 ms after their middle it is about 52 000.
+        let mut time = opened(1000);
+        assert_eq!(time.estimate(at(1001)), None, "no sample yet");
+        time.heard(&clock(7, 50_000, 0), at(1200));
+        assert_eq!(time.estimate(at(3100)), Some((7, 52_000)));
+        // A pause the boot clock didn't count (the wall clock ran far ahead): no estimate.
+        let paused = Local {
+            boot: Duration::from_millis(3100),
+            wall: SystemTime::UNIX_EPOCH + Duration::from_secs(3600),
+        };
+        assert_eq!(time.estimate(paused), None);
+    }
+
+    #[test]
+    fn the_estimate_takes_the_narrowest_round_trip_not_the_tightest_lower_bound() {
+        // Grok's review of M5.1m: the Register stamped at once (master 100) and delivered
+        // late (boot 10 000) stays the tightest lower bound; a heartbeat sent at 11 000,
+        // stamped 11 200 and back at 11 100 places master time far better.
+        let mut time = opened(0);
+        time.heard(&clock(7, 100, 0), at(10_000));
+        assert_eq!(time.estimate(at(10_000)), Some((7, 5100)));
+        assert_eq!(time.sent(at(11_000)), 1);
+        time.heard(&clock(7, 11_200, 1), at(11_100));
+        assert_eq!(time.estimate(at(20_000)), Some((7, 20_150)));
+        // A wider one later doesn't replace it; the deadlines still use the lower bound.
+        assert_eq!(time.sent(at(12_000)), 2);
+        time.heard(&clock(7, 12_400, 2), at(12_600));
+        assert_eq!(time.estimate(at(20_000)), Some((7, 20_150)));
+        assert_eq!(time.best().map(|b| b.master_ms), Some(100));
     }
 
     #[test]

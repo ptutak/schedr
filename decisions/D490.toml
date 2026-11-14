@@ -1,0 +1,18 @@
+title = "started_at is the worker's start, in master time"
+date = 2026-11-14
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "assignment"
+section = "Placement and ordering"
+also = ["observability", "protocol"]
+summary = '''
+`Started` carries the task's start in the master's time as the worker estimates it, the middle
+of the round trip of its sample with the narrowest one (`started_master_ms`, `started_timeline`, protocol
+2.1). On its own timeline the master records that as `started_at`, never before the assignment
+nor after the message arrived, from the wall and master clocks read at one instant; otherwise (a 1.0.0 worker, no sample, another master's timeline)
+its own time, as before. `schedr_master_start_recorded_seconds` times a start to its recording.
+'''
+history = "JOURNAL.md#D490"  # <a id="D490"></a> starts its JOURNAL.md entry
+step = "M5.1m"  # the plan step that builds it; "later"; "n/a" for a rule
+checked = 2026-11-14
+code = ["crates/schedr-agent/src/master_time.rs::estimate", "crates/schedr-master/src/dispatch.rs::start_time", "crates/schedr-db/src/attempts.rs::mark_started_many"]

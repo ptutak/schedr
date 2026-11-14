@@ -222,7 +222,8 @@ nice to have (the user, 2026-11-13): `Started` carries the worker's start time (
 done_when = '''
 `started_at` within the clock-skew bound of the worker's start under stress 9, 13 and 23; an older worker's falls back; a "started → recorded" figure in the stress report
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1n"
