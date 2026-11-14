@@ -258,7 +258,7 @@ impl Database {
             .collect()
     }
 
-    /// Records what a worker uses, by part (decision 463).
+    /// Records what a worker uses, by part (decision 463), as measured `now`.
     ///
     /// # Errors
     ///
@@ -267,12 +267,15 @@ impl Database {
         &self,
         worker_id: &str,
         usage: &schedr_model::usage::WorkerUsage,
+        now: Timestamp,
     ) -> Result<(), DbError> {
-        const SET: &str = "UPDATE workers SET usage = $1{json} WHERE worker_id = $2";
+        const SET: &str =
+            "UPDATE workers SET usage = $1{json}, usage_at = $3{ts} WHERE worker_id = $2";
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, SET))
                 .bind(to_json(usage))
                 .bind(worker_id)
+                .bind(db_time(now))
                 .execute(&mut *tx)
                 .await?;
         });

@@ -52,3 +52,31 @@ pub struct TaskMemory {
     /// Its memory, in bytes.
     pub bytes: u64,
 }
+
+/// A worker's memory by part, without its process's own figures: what a sample keeps of it
+/// (decision 464).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerParts {
+    /// Its fork servers', together.
+    pub fork_servers_bytes: u64,
+    /// Its wait step hosts', together.
+    pub watcher_hosts_bytes: u64,
+    /// Its running tasks', together.
+    pub tasks_bytes: u64,
+    /// The largest of them, largest first.
+    #[serde(default)]
+    pub largest_tasks: Vec<TaskMemory>,
+}
+
+impl WorkerUsage {
+    /// Its parts, its process's figures left out.
+    #[must_use]
+    pub fn parts(&self) -> WorkerParts {
+        WorkerParts {
+            fork_servers_bytes: self.fork_servers_bytes,
+            watcher_hosts_bytes: self.watcher_hosts_bytes,
+            tasks_bytes: self.tasks_bytes,
+            largest_tasks: self.largest_tasks.clone(),
+        }
+    }
+}

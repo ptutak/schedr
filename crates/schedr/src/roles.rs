@@ -251,6 +251,13 @@ pub fn master_settings(config: &Config) -> Settings {
             config.timings.retention_interval,
             config.limits.retention_batch,
         ),
+        samples: schedr_master::samples::SampleSettings {
+            interval: config.timings.sample_interval,
+            minutes_kept: config.timings.samples_kept,
+            rollups_kept: config.timings.rollups_kept,
+        },
+        // Standalone sets it: its webserver is this process.
+        with_webserver: false,
     }
 }
 
@@ -679,6 +686,7 @@ pub async fn serve_master(
         .map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))?;
     let listen_retry = settings.listen_retry;
     let retention = settings.retention;
+    let sampling = (settings.samples, settings.with_webserver);
     let (notifications, retry) = match db.command_notifications().await {
         Ok(notifications) => (notifications, false),
         Err(error) => {
@@ -748,6 +756,11 @@ pub async fn serve_master(
     tokio::spawn({
         let (hub, stop) = (hub.clone(), stop.clone());
         async move { hub.run_retention(retention, until(stop)).await }
+    });
+    tokio::spawn({
+        let (hub, stop) = (hub.clone(), stop.clone());
+        let own = (crate::node::process_id().to_owned(), sampling.1);
+        async move { hub.run_samples(sampling.0, own, until(stop)).await }
     });
     let grpc = tonic::transport::Server::builder()
         .add_service(hub.service())
@@ -1827,6 +1840,14 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         None => return Ok(()),
         Some(waited) => waited?,
     }
+    // Its own sample a minute (decision 464): in a process of its own, no master samples it.
+    tokio::spawn(schedr_master::samples::sample_webserver(
+        db.clone(),
+        config.timings.sample_interval,
+        crate::node::process_id().to_owned(),
+        schedr_agent::memory::this_node,
+        until(stop.clone()),
+    ));
     let address = SocketAddr::new(config.webserver.bind, config.webserver.port);
     let listener = listen(address).await?;
     let bound = listener.local_addr().unwrap_or(address);

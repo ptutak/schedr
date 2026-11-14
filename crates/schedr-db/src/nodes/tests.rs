@@ -220,7 +220,9 @@ async fn a_masters_and_a_workers_usage_are_stored_and_read_back() {
         .await
         .unwrap();
     }
-    db.set_worker_usage("w1", &usage).await.unwrap();
+    db.set_worker_usage("w1", &usage, ts("2026-11-14T10:00:00Z"))
+        .await
+        .unwrap();
     let nodes = db.worker_nodes().await.unwrap();
     assert_eq!(nodes[0].usage.as_ref(), Some(&usage));
     assert_eq!(nodes[1].usage, None, "never said");

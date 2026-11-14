@@ -25,6 +25,7 @@ pub mod problems;
 pub mod progress;
 pub mod quiet;
 pub mod retention;
+pub mod samples;
 pub mod scheduler;
 pub mod service;
 pub mod validate;

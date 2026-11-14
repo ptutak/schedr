@@ -169,6 +169,13 @@ pub struct Timings {
     /// How often the master's retention job deletes what `[retention]` no longer keeps
     /// (decision 432).
     pub retention_interval: Duration,
+    /// How often the leading master samples each process, and a webserver itself (decision
+    /// 464).
+    pub sample_interval: Duration,
+    /// How long the minute samples are kept.
+    pub samples_kept: Duration,
+    /// How long the 15-minute rollups are kept.
+    pub rollups_kept: Duration,
     /// The first wait before a failed parse job is tried again; it doubles up to
     /// `parse_retry_max`.
     pub parse_retry_first: Duration,
@@ -272,6 +279,9 @@ impl Default for Timings {
             outbox_retry_first: Duration::from_secs(10),
             outbox_retry_max: Duration::from_secs(3600),
             retention_interval: Duration::from_hours(1),
+            sample_interval: Duration::from_mins(1),
+            samples_kept: Duration::from_hours(24),
+            rollups_kept: Duration::from_hours(24 * 30),
             parse_retry_first: Duration::from_secs(30),
             parse_retry_max: Duration::from_mins(10),
             node_heartbeat: Duration::from_secs(10),

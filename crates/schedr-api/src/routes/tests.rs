@@ -818,6 +818,7 @@ async fn deployment_workers(db: &schedr_db::Database) -> serde_json::Value {
                 bytes: 300,
             }],
         },
+        ts(NOW),
     )
     .await
     .unwrap();

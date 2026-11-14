@@ -6,21 +6,21 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-14)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1i, The samples table (decisions D464). Done when: samples written, rolled up and deleted on both databases, with a statement count per minute under a stated bound; the guide's retention section names them
-- **Then:** M5.1j, M5.1k, M5.1l, M5.1m, M5.1n.
+- **Next step:** M5.1j, The Metrics page (decisions D465, D466). Done when: the page renders every range on both databases and in light and dark; live refresh once a minute; UI browser tests; a guide page on it
+- **Then:** M5.1k, M5.1l, M5.1m, M5.1n, M5.1o.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- N8 (2026-11-14): samples by process, the webserver's its own (note 8; on D464)
+- D489 (2026-11-14): a poke may be a plain def
 - N7 (2026-11-14): The UI isn't built or tested for phones (corrects D466)
 - D488 (2026-11-14): standalone takes its DAG and script folders on the command line
 - D487 (2026-11-14): a waiting wait_for step stores its deadline and what it waits for
-- D486 (2026-11-14): the trigger loop runs after any write, at a stored moment, or for a posted event
-- D485 (2026-11-14): each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
+- M5.1i (2026-11-14): The samples table
 - M5.1h (2026-11-14): Memory and CPU reported
 - M5.1g (2026-11-14): The Status block
-- M5.1f2 (2026-11-14): Triggers and events in a round of their own
 
 ## In progress
 

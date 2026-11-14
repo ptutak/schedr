@@ -2147,8 +2147,55 @@ async fn a_deployments_nodes_are_recorded_and_read() {
         tasks_bytes: 3,
         largest_tasks: Vec::new(),
     };
-    db.set_worker_usage("w1", &parts).await.unwrap();
+    db.set_worker_usage("w1", &parts, ts("2026-11-14T10:00:00Z"))
+        .await
+        .unwrap();
     assert_eq!(db.worker_nodes().await.unwrap()[0].usage, Some(parts));
+}
+
+#[tokio::test]
+async fn samples_are_stored_read_and_deleted_on_postgres() {
+    // Decision 464: the same statements as on SQLite.
+    use schedr_db::samples::{MINUTE, Sample};
+    let db = fresh().await;
+    let sample = |at: &str, resident: u64, cpu: Option<f64>| Sample {
+        process_id: "p1".to_owned(),
+        step_s: MINUTE,
+        at: ts(at),
+        roles: BTreeMap::from([("worker".to_owned(), "w1".to_owned())]),
+        resident_avg: resident,
+        resident_peak: resident,
+        cpu_seconds: Some(3.5),
+        cpu_avg: cpu,
+        cpu_peak: cpu,
+        container_avg: None,
+        container_peak: None,
+        container_limit: None,
+        parts: Some(schedr_model::usage::WorkerParts {
+            fork_servers_bytes: 1,
+            watcher_hosts_bytes: 2,
+            tasks_bytes: 3,
+            largest_tasks: Vec::new(),
+        }),
+    };
+    let samples = vec![
+        sample("2026-11-14T10:00:00Z", 100, None),
+        sample("2026-11-14T10:01:00Z", 201, Some(0.25)),
+    ];
+    db.insert_samples(&samples).await.unwrap();
+    db.insert_samples(&samples).await.unwrap();
+    let all = |step| db.samples(step, ts("2026-11-14T00:00:00Z"), ts("2026-11-15T00:00:00Z"));
+    assert_eq!(all(MINUTE).await.unwrap(), samples);
+    assert_eq!(
+        db.oldest_minute_sample().await.unwrap(),
+        Some(ts("2026-11-14T10:00:00Z"))
+    );
+    assert_eq!(
+        db.delete_old_samples(MINUTE, ts("2026-11-14T11:00:00Z"))
+            .await
+            .unwrap(),
+        2
+    );
 }
 
 #[tokio::test]

@@ -29,6 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D489 | 2026-11-14 | user | planned (M5.1o) | wait-steps | @sensor.poke and @trigger.poke accept a plain def |
 | D488 | 2026-11-14 | user | planned (M5.1n) | code-delivery | Standalone takes --dag-path and --script-path |
 | D487 | 2026-11-14 | user | built M5.1f2 | triggers | A waiting wait_for step stores its deadline and what it waits for |
 | D486 | 2026-11-14 | user | built M5.1f2 | triggers | The trigger loop runs after any write, at a stored moment, or for a posted event |
@@ -53,7 +54,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D467 | 2026-11-13 | user | planned (M5.1k) | ui-cli | A task's peak memory over its attempts is charted |
 | D466 | 2026-11-13 | user | planned (M5.1j) | ui-cli | UI charts are SVG drawn by the server |
 | D465 | 2026-11-13 | user | planned (M5.1j) | ui-cli | A Metrics page with memory and CPU over time |
-| D464 | 2026-11-13 | user | planned (M5.1i) | observability | The master keeps a sample of each process a minute |
+| D464 | 2026-11-13 | user | built M5.1i | observability | The master keeps a sample of each process a minute |
 | D463 | 2026-11-13 | user | built M5.1h | observability | Masters, workers and the webserver report their memory and CPU |
 | D462 | 2026-11-13 | user | built M5.1g | ui-cli | The Deployments page has a Status block above its graph |
 | D461 | 2026-11-12 | user | planned (1.0.0) | ui-cli | A DAG page's actions are one row; Restart only for a trigger stopped, failing or stuck |
@@ -1010,6 +1011,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### wait-steps
 
+- D489: @sensor.poke and @trigger.poke accept a plain def
 - D478: User-set deadlines count on the wall clock
 - D458: A sensor poke tolerates overruns of every: it fails after poke_overruns in a row, or one at three times every
 - D393: first_of doesn't cancel the tasks that didn't win

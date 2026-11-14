@@ -180,7 +180,11 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         lease_period: config.timings.lease_period,
         retention: log_retention(config),
         log_mode: crate::roles::log_mode(config),
-        master: master_settings(config),
+        master: schedr_master::core::Settings {
+            // Its webserver is this process: sampled with the master (decision 464).
+            with_webserver: true,
+            ..master_settings(config)
+        },
         outbox: master_outbox(config, env)?,
         tick: config.timings.tick_interval,
         agent: agent_settings(config, env, &data_dir, STANDALONE_RESERVE)?,

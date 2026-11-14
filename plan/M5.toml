@@ -177,7 +177,8 @@ scope = '''
 done_when = '''
 samples written, rolled up and deleted on both databases, with a statement count per minute under a stated bound; the guide's retention section names them
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1j"
@@ -231,6 +232,17 @@ scope = '''
 '''
 done_when = '''
 `schedr standalone --migrate --dag-path .` in a folder of DAG files runs them, its helpers importing; the guide's getting started uses it; tests for the options and their errors
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.1o"
+title = "A poke may be a plain def"
+scope = '''
+(decision 489, the user 2026-11-14) `@sensor.poke(every=...)` and `@trigger.poke(every=...)` (`batch=` too) take a plain `def` beside an `async def`: an overload on each poke decorator's type after the async one, the load-time checks letting it through, each call run on the host's threads with the step's context, log and secrets, within its form's call window and stopped past it as a `to_thread` call is (decision 337); the hosts' pool sized from their wait steps instead of Python's default (min(32, CPUs + 4)), counted in their tied threads; a plain function returning a coroutine awaited; `@sensor`, `@trigger` and the `wait_for=` forms stay `async def`; the docs on thread safety, client timeouts and the GIL
+'''
+done_when = '''
+a plain poke of each kind runs, returns NOT_YET or events, overruns and is stopped like the async one, on both kinds of host; 100 plain pokes on one host start on time (stress 23 with plain pokes); the types accept both forms and refuse a plain `@sensor` or `@trigger` (typing tests); the guide's wait step and trigger pages say when to choose which
 '''
 status = "planned"
 

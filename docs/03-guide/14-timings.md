@@ -78,6 +78,9 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_FIRST` | 10 s | First wait before retrying a failed notification; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_MAX` | 1 h | Longest wait before retrying a failed notification. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_INTERVAL` | 1 h | How often the leading master runs retention. |
+| `SCHEDR_HIDDEN__MASTER__SAMPLE_INTERVAL` | 1 min | How often the leading master samples each process, and a webserver in a process of its own itself. |
+| `SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT` | 24 h | How long minute samples are kept. |
+| `SCHEDR_HIDDEN__MASTER__ROLLUPS_KEPT` | 30 d | How long the 15-minute rollups are kept. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_FIRST` | 30 s | First wait before retrying a failed parse job; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_MAX` | 10 min | Longest wait before retrying a failed parse job. |
 | `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT` | 10 s | How often the master writes its row of the deployment's nodes. |

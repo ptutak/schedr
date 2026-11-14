@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.1i, The samples table.
+**Next:** M5.1j, The Metrics page.
 
 ## M0: Foundations
 
@@ -242,12 +242,13 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1f2 | Triggers and events in a round of their own | done 2026-11-14 | D486, D487 |
 | M5.1g | The Status block | done 2026-11-14 | D462 |
 | M5.1h | Memory and CPU reported | done 2026-11-14 | D463 |
-| M5.1i | The samples table | **next** | D464 |
-| M5.1j | The Metrics page | planned | D465, D466 |
+| M5.1i | The samples table | done 2026-11-14 | D464 |
+| M5.1j | The Metrics page | **next** | D465, D466 |
 | M5.1k | Task memory charts | planned | D467 |
 | M5.1l | Throughput and start latency on the Metrics page | planned |  |
 | M5.1m | The start time from the worker | planned |  |
 | M5.1n | Standalone takes its DAG and script directories on the command line | planned | D488 |
+| M5.1o | A poke may be a plain def | planned | D489 |
 | R1.1 | Release 1.1.0 | planned |  |
 | M5.2a | The recording stub and the comparison | planned | D475 |
 | M5.2b | The rewrite: the authoring core | planned | D470, D471 |

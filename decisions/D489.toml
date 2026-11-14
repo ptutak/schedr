@@ -1,0 +1,19 @@
+title = "@sensor.poke and @trigger.poke accept a plain def"
+date = 2026-11-14
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "wait-steps"
+section = "What a wait step is"
+also = ["triggers"]
+summary = '''
+`@sensor.poke(every=...)` and `@trigger.poke(every=...)` (with or without `batch=`) take a plain
+`def` beside an `async def`: each call runs on its host's threads (`to_thread`, with the step's
+context, log and secrets) and must end within the call's window, the same as the async form's (a
+sensor's up to three times `every` with its overruns, a trigger's `every`); past it, it is
+stopped as a `to_thread` call is (decision 337). The pool is sized from the host's wait steps, and
+a plain function returning a coroutine is awaited. `@sensor`, `@trigger` and the `wait_for=`
+forms stay `async def`. Not chosen: async only.
+'''
+history = "JOURNAL.md#D489"  # <a id="D489"></a> starts its JOURNAL.md entry
+step = "M5.1o"  # the plan step that builds it; "later"; "n/a" for a rule
+code = []

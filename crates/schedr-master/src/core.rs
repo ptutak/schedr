@@ -106,6 +106,11 @@ pub struct Settings {
     pub worker_report: ReportLimits,
     /// `[retention]` and its job's timing (decisions 430-435).
     pub retention: crate::retention::RetentionSettings,
+    /// How processes are sampled and their samples kept (decision 464).
+    pub samples: crate::samples::SampleSettings,
+    /// Whether this master's own process runs the webserver too (standalone): its sample says
+    /// so, and no webserver samples it again.
+    pub with_webserver: bool,
 }
 
 /// How the master's loop and its parse jobs are paced.
@@ -218,6 +223,8 @@ impl Default for Settings {
             backfill_max_runs: crate::scheduler::backfill::DEFAULT_MAX_RUNS,
             worker_report: ReportLimits::default(),
             retention: crate::retention::RetentionSettings::default(),
+            samples: crate::samples::SampleSettings::default(),
+            with_webserver: false,
         }
     }
 }
@@ -1201,7 +1208,7 @@ impl MasterCore {
         // Housekeeping: nothing a trigger depends on (decision 486).
         match self
             .db
-            .quietly(self.db.set_worker_usage(worker_id, &record))
+            .quietly(self.db.set_worker_usage(worker_id, &record, now))
             .await
         {
             Ok(()) => connection.usage_at = Some(now),

@@ -1091,3 +1091,29 @@ user: "No one is going to use this on the phone, you can drop those tests altoge
 promise that charts stack and tables scroll on a phone is dropped: the Metrics page and its
 charts (M5.1j-l) get no phone layout and no tests for one. The existing `max-width: 900px`
 rules stay as they are.
+
+### <a id="D489"></a>2026-11-14: a poke may be a plain def (decision 489)
+
+The user asked whether `@sensor.poke` and `@trigger.poke` take both a plain `def` and an
+`async def`. Claude read the code: both take `async def` only (the decorators' `Protocol`s, and
+the checks in `sensors.py` and `event_triggers.py`). The user: allow a plain `def` for the pokes,
+which "just have to end in the timeout window"; the pure `@sensor` and `@trigger` stay async.
+Claude listed what it takes, from the code: a thread can be asked to stop but not cancelled (one
+stuck in C ends its host after the grace, as a stuck `to_thread` call does now); the hosts' pool
+(`_WatcherThreads`) has Python's default size, min(32, CPUs + 4), too small for stress 23's 100
+pokes; a plain wrapper returning a coroutine must be awaited (as tasks do); sync pokes run in
+parallel, so user state must be thread-safe; a CPU-bound poke holds the GIL; the two pokes' call
+windows differ (a sensor's up to three times `every`, a trigger's `every`), and a plain one keeps
+its form's. Its view: worth it, safer than the usual mistake of an `async def` that blocks the
+loop. The user: add it as the last step of M5.1 (M5.1o). Claude took the `wait_for=` forms as
+"not pokes", so async only, as the user's line drew it; to be confirmed. Not chosen: async only.
+
+### <a id="N8"></a>2026-11-14: samples by process, the webserver's its own (note 8; on D464)
+
+Building M5.1i, a side note pointed out that a standalone's master, worker and webserver are one
+process reporting the same figures (M5.1h): samples by node would chart it three times and a
+deployment's total three times too high. D464 said "per process"; the samples are keyed by
+process ID, the leader folding a process's roles into one row. The leading master can't read a
+webserver (it has no row), so a webserver in a process of its own writes its own sample a minute;
+a standalone's is the master's. The deletes past 24 h and 30 d run with the rollup, in the
+sampler, not in the `[retention]` pass: their ages are hidden timings, not `[retention]` keys.

@@ -5,11 +5,14 @@ status = "active"
 topic = "observability"
 section = "Metrics in the UI"
 summary = '''
-The leading master writes one sample per process a minute (memory, CPU, the container's memory
-and limit, a worker's breakdown) into a samples table (a new migration on both databases). Kept a
-minute apart for 24 h, then rolled up into 15-minute averages and peaks kept 30 days; retention
-deletes older ones, its ages hidden values. Not chosen: one a minute for 7 days without a rollup.
+One sample per process a minute (memory, CPU cores since the last, the container's memory and
+limit, a worker's parts and largest tasks) in `samples` (the open `0002` migration), keyed by
+process: the leading master writes its masters' and workers' (a standalone one row, its roles
+master, worker and webserver), a webserver in a process of its own its own. Each closed
+15-minute window is rolled up into averages and peaks; minute rows are kept 24 h, rollups 30 d
+(hidden timings), deleted by the sampler. Not chosen: one a minute for 7 days without a rollup.
 '''
 history = "JOURNAL.md#D464"
 step = "M5.1i"
 also = ["state"]
+code = ["crates/schedr-db/src/samples.rs", "crates/schedr-master/src/samples.rs::Sampler", "crates/schedr-master/src/samples.rs::sample_webserver"]

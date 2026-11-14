@@ -72,3 +72,32 @@ CREATE TRIGGER runs_inserted_ended_waits AFTER INSERT ON runs
 -- a minute from its heartbeats. NULL: not known (an older worker, no /proc).
 ALTER TABLE masters ADD COLUMN usage JSONB;
 ALTER TABLE workers ADD COLUMN usage JSONB;
+-- When the master stored it: a sample's CPU counts over the time between two of them.
+ALTER TABLE workers ADD COLUMN usage_at TIMESTAMPTZ;
+
+-- Decision 464: a sample of each schedr process a minute (step 60), written by the leading
+-- master (its masters and workers, one row per process however many roles it runs) and by each
+-- webserver in a process of its own; and 15-minute averages and peaks of them (step 900).
+-- Minute rows are kept 24 h, rollups 30 days (hidden timings).
+CREATE TABLE samples (
+    process_id      TEXT NOT NULL,
+    step_s          INTEGER NOT NULL,
+    at              TIMESTAMPTZ NOT NULL,
+    -- What the process runs, as JSON text: each role ("master", "worker", "webserver") with its
+    -- node's ID (text on both databases, so a rollup takes it with MAX).
+    roles           TEXT NOT NULL,
+    resident_avg    BIGINT NOT NULL,
+    resident_peak   BIGINT NOT NULL,
+    -- CPU time used since the process started, in seconds (minute rows only).
+    cpu_seconds     DOUBLE PRECISION,
+    -- Cores used since the sample before (none for a process's first).
+    cpu_avg         DOUBLE PRECISION,
+    cpu_peak        DOUBLE PRECISION,
+    container_avg   BIGINT,
+    container_peak  BIGINT,
+    container_limit BIGINT,
+    -- A worker's memory by part and its largest tasks (minute rows only).
+    parts           JSONB,
+    PRIMARY KEY (process_id, step_s, at)
+);
+CREATE INDEX samples_by_time ON samples (step_s, at);

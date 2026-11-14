@@ -388,6 +388,44 @@ impl Hub {
         }
     }
 
+    /// Samples each process a minute while this master leads (decision 464): its masters and
+    /// workers, one row per process (`process_id`, this master's own, gets its webserver role
+    /// with `with_webserver`), the rollups and deletes once a window closes, until `stop`
+    /// completes. A failing pass is logged; the next one goes on.
+    pub async fn run_samples(
+        &self,
+        settings: crate::samples::SampleSettings,
+        (process_id, with_webserver): (String, bool),
+        stop: impl Future<Output = ()>,
+    ) {
+        tokio::pin!(stop);
+        let mut sampler = crate::samples::Sampler::default();
+        let also_runs: std::collections::BTreeMap<String, String> = if with_webserver {
+            std::collections::BTreeMap::from([("webserver".to_owned(), process_id.clone())])
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        loop {
+            tokio::select! {
+                () = &mut stop => return,
+                () = self.while_leading() => {}
+            }
+            let own = (!also_runs.is_empty()).then_some((process_id.as_str(), &also_runs));
+            // Housekeeping: nothing a trigger depends on (decision 486).
+            if let Err(error) = self
+                .db
+                .quietly(sampler.pass(&self.db, &settings, (self.clock)(), own))
+                .await
+            {
+                tracing::warn!(%error, "sampling the processes failed; trying again in a minute");
+            }
+            tokio::select! {
+                () = &mut stop => return,
+                () = tokio::time::sleep(settings.interval) => {}
+            }
+        }
+    }
+
     /// Refreshes the gauges taken from the database; a failure is logged (the gauges keep
     /// their last values).
     pub async fn refresh_gauges(&self) {

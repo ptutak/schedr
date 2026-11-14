@@ -508,6 +508,24 @@ from one DAG per transaction. `schedr_retention_deleted{kind}` counts what it de
 `outputs`, it counts runs whose outputs were removed. Worker task logs have their own
 [retention](05-workers.md#logs), independent of these ages.
 
+## Samples of each process
+
+Once a minute the leading master stores a sample of each schedr process for the Metrics page:
+its memory, its CPU (cores used between two measures), its container's memory and limit,
+and a worker's memory by part with its largest tasks. Each process has one row, whatever roles
+it runs: a standalone is one process, sampled once, its row naming the master, the worker and
+the webserver. The figures are what each master's row and each worker's heartbeat last said; a
+worker's are written at most once a minute. A webserver in a process of its own stores its own
+sample.
+
+Every 15 minutes the minute samples are rolled up into each process's averages and peaks. Minute
+samples are kept for a day and rollups for 30 days; these ages are fixed timings
+(`SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT`, `SCHEDR_HIDDEN__MASTER__ROLLUPS_KEPT`, see
+[Fixed timings](14-timings.md#fixed-timings)), not `[retention]` keys. The leader makes three
+statements a minute for this (two reads, one insert) and four more when a window closes (its
+minutes read, its rollup written, two deletes). A leader that starts, or comes back after a
+gap, rolls up every window not rolled yet before anything is deleted.
+
 ## Gauges
 
 Every 15 s the loop also counts runs, tasks and workers by state with one read-only query, for

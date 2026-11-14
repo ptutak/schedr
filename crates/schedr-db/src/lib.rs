@@ -23,6 +23,7 @@ pub mod reads;
 pub mod retention;
 pub mod run_of;
 pub mod runs;
+pub mod samples;
 mod scope;
 pub mod secrets;
 pub mod status;
