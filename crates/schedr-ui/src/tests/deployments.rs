@@ -486,3 +486,146 @@ async fn a_problem_an_older_webserver_sent_in_clear_is_masked() {
     assert!(!html.contains("hunter2"), "{html}");
     assert!(html.contains("a round failed: postgres://u:****@db/s"));
 }
+
+#[test]
+fn the_status_block_counts_each_deployments_masters_workers_slots_problems_and_versions() {
+    // Decision 462: a line per deployment, in their order.
+    use crate::deployments::status;
+    let mut etl = distributed();
+    etl["workers"][0]["slots"] = json!(8);
+    etl["workers"][0]["running"] = json!(3);
+    let workers = etl["workers"].as_array_mut().unwrap();
+    // A draining worker's slots aren't offered; a lost one's version is no longer run.
+    let mut draining = worker("w4", "draining", Some(LEADER), Some("p-w4"));
+    draining["slots"] = json!(4);
+    draining["running"] = json!(1);
+    workers.push(draining);
+    let mut lost = worker("w3", "lost", None, None);
+    lost["schedr_version"] = json!("0.9.0");
+    lost["problems"] = json!([{"error": true, "message": "lost: it stopped answering"}]);
+    workers.push(lost);
+    etl["workers"][1]["problems"] =
+        json!([{"error": false, "message": "disconnected: lost unless it comes back"}]);
+    etl["masters"][1]["problems"] =
+        json!([{"error": true, "message": "a round failed: postgres://u:hunter2@db/s"}]);
+    let rows = status(&[asked("etl", etl)]);
+    let row = &rows[0];
+    assert_eq!((row.leaders, row.standbys, row.leaderless()), (1, 1, false));
+    assert_eq!(
+        row.workers,
+        [
+            ("active", 1),
+            ("draining", 1),
+            ("disconnected", 1),
+            ("lost", 1)
+        ]
+    );
+    assert_eq!((row.running, row.slots), (3, 8), "active workers only");
+    assert_eq!((row.errors(), row.warnings()), (2, 1));
+    assert_eq!(
+        row.problems
+            .iter()
+            .map(|p| (
+                p.error,
+                p.node.as_str(),
+                p.message.as_str(),
+                p.href.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                true,
+                "master 0000000b",
+                "a round failed: postgres://u:****@db/s",
+                &*format!("#node.etl.master.{STANDBY}")
+            ),
+            (
+                true,
+                "worker w3",
+                "lost: it stopped answering",
+                "#node.etl.worker.w3"
+            ),
+            (
+                false,
+                "worker w2",
+                "disconnected: lost unless it comes back",
+                "#node.etl.worker.w2"
+            ),
+        ],
+        "errors first, masked, each opening its node's panel"
+    );
+    assert_eq!(row.versions, [("1.0.0".to_owned(), 6)]);
+    assert!(!row.mixed(), "the lost worker's 0.9.0 isn't run any more");
+}
+
+#[test]
+fn the_status_block_warns_of_no_leader_mixed_versions_and_an_unreachable_deployment() {
+    use crate::deployments::status;
+    let mut etl = distributed();
+    etl["masters"][0]["role"] = json!("standby");
+    etl["workers"][0]["schedr_version"] = json!("1.1.0");
+    // An older webserver sends no slots: counted as none.
+    let down = Asked {
+        name: "ml".to_owned(),
+        proof: "mTLS",
+        answer: Err("connection refused".to_owned()),
+        took: Duration::from_millis(1500),
+    };
+    let rows = status(&[asked("etl", etl), down]);
+    assert!(rows[0].leaderless());
+    assert_eq!((rows[0].running, rows[0].slots), (0, 0));
+    assert!(rows[0].mixed());
+    assert_eq!(
+        rows[0].versions,
+        [("1.0.0".to_owned(), 4), ("1.1.0".to_owned(), 1)]
+    );
+    assert_eq!(rows[1].unreachable.as_deref(), Some("connection refused"));
+    assert_eq!(rows[1].took, "1500 ms");
+    assert!(!rows[1].leaderless(), "not known: not said");
+    assert_eq!(rows[1].href, "#node.ml.webserver");
+}
+
+#[tokio::test]
+async fn the_deployments_page_shows_the_status_block_above_the_graph() {
+    let app = two_deployments();
+    let (_, html) = get(&app, "/deployments", &[]).await;
+    assert!(
+        html.find("status-block").unwrap() < html.find("svg class=\"deployment\"").unwrap(),
+        "above the graph"
+    );
+    let cells = texts(&html, "table.status-block tbody tr:first-child td");
+    assert_eq!(cells[0], "etl");
+    assert_eq!(cells[1], "1 leading · 1 standing by");
+    assert_eq!(cells[2], "1 active · 1 disconnected");
+    assert_eq!(cells[3], "0 / 0");
+    assert!(cells[4].starts_with("1 error · 1 warning"), "{}", cells[4]);
+    assert_eq!(
+        attrs(&html, "table.status-block .status-problems a", "href"),
+        [
+            format!("#node.etl.master.{STANDBY}"),
+            "#node.etl.worker.w2".to_owned()
+        ]
+    );
+    assert_eq!(cells[5], "1.0.0");
+    let down = texts(&html, "table.status-block tbody tr:nth-child(2) td");
+    assert_eq!(down[0], "ml");
+    assert!(down[1].starts_with("Unreachable: "), "{}", down[1]);
+    assert!(down[1].contains("gave up after"), "{}", down[1]);
+}
+
+#[tokio::test]
+async fn the_status_blocks_no_leader_and_mixed_versions_are_marked() {
+    let mut view = distributed();
+    view["masters"][0]["role"] = json!("standby");
+    view["workers"][0]["schedr_version"] = json!("1.1.0");
+    let app = ui(vec![deployment("etl", with_deployment(view))]);
+    let (_, html) = get(&app, "/deployments", &[]).await;
+    assert_eq!(
+        texts(&html, "table.status-block td.error"),
+        ["no leader · 2 standing by"]
+    );
+    assert_eq!(
+        texts(&html, "table.status-block td.mono"),
+        ["mixed 1.0.0 (4), 1.1.0 (1)"]
+    );
+}

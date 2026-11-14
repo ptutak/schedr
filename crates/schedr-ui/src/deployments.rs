@@ -7,7 +7,7 @@
 //! as TOML. Every configuration was masked by the node it belongs to before it left that
 //! node's process, and is masked again before it is shown.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -945,6 +945,167 @@ fn worker_panel(deployment: &str, view: &DeploymentView, worker: &WorkerNodeView
     }
 }
 
+/// The worker states in the order the Status block counts them: the ones that need a look
+/// first after `active`.
+pub const WORKER_STATES: [&str; 5] = ["active", "draining", "disconnected", "lost", "offline"];
+
+/// A problem in the Status block's list, opening its node's panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusProblem {
+    /// An error; a warning otherwise.
+    pub error: bool,
+    /// The node it is on (`master 1a2b3c4d`, `worker w1`).
+    pub node: String,
+    /// What it is.
+    pub message: String,
+    /// Its node's panel.
+    pub href: String,
+}
+
+/// A deployment's line in the Status block above the graph (decision 462).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusRow {
+    /// The deployment.
+    pub name: String,
+    /// Its webserver's panel.
+    pub href: String,
+    /// Why its webserver couldn't be reached; none when it answered.
+    pub unreachable: Option<String>,
+    /// How long the answer (or giving up) took.
+    pub took: String,
+    /// Its masters leading (one, unless the lease is changing hands) and standing by.
+    pub leaders: usize,
+    /// Its standbys.
+    pub standbys: usize,
+    /// Its workers by state, those there are: `active`, `draining`, `disconnected`, `lost`,
+    /// `offline`, in that order.
+    pub workers: Vec<(&'static str, usize)>,
+    /// The attempts running on its active workers.
+    pub running: u32,
+    /// Its active workers' task slots.
+    pub slots: u32,
+    /// Its nodes' problems, errors first.
+    pub problems: Vec<StatusProblem>,
+    /// Its schedr versions, each with how many processes run it (webserver, masters and the
+    /// workers not gone): more than one is warned.
+    pub versions: Vec<(String, usize)>,
+}
+
+impl StatusRow {
+    /// How many of its problems are errors.
+    #[must_use]
+    pub fn errors(&self) -> usize {
+        self.problems.iter().filter(|p| p.error).count()
+    }
+
+    /// How many are warnings.
+    #[must_use]
+    pub fn warnings(&self) -> usize {
+        self.problems.len() - self.errors()
+    }
+
+    /// No master leads: nothing is scheduled.
+    #[must_use]
+    pub const fn leaderless(&self) -> bool {
+        self.unreachable.is_none() && self.leaders == 0
+    }
+
+    /// Its processes run more than one version.
+    #[must_use]
+    pub fn mixed(&self) -> bool {
+        self.versions.len() > 1
+    }
+}
+
+/// The Status block: a line per deployment as asked, in their order (decision 462).
+#[must_use]
+pub fn status(deployments: &[Asked]) -> Vec<StatusRow> {
+    deployments.iter().map(status_row).collect()
+}
+
+/// One deployment's line.
+fn status_row(asked: &Asked) -> StatusRow {
+    let name = &asked.name;
+    let mut row = StatusRow {
+        name: name.clone(),
+        href: format!("#{}", webserver_anchor(name)),
+        unreachable: None,
+        took: format!("{} ms", asked.took.as_millis()),
+        leaders: 0,
+        standbys: 0,
+        workers: Vec::new(),
+        running: 0,
+        slots: 0,
+        problems: Vec::new(),
+        versions: Vec::new(),
+    };
+    let view = match &asked.answer {
+        Err(error) => {
+            row.unreachable = Some(error.clone());
+            return row;
+        }
+        Ok(view) => view,
+    };
+    let mut versions: BTreeMap<&str, usize> = BTreeMap::new();
+    *versions.entry(&view.webserver.schedr_version).or_default() += 1;
+    for master in &view.masters {
+        if master.role == "leader" {
+            row.leaders += 1;
+        } else {
+            row.standbys += 1;
+        }
+        *versions.entry(&master.node.schedr_version).or_default() += 1;
+        let href = format!("#{}", master_anchor(name, &master.master_id));
+        row.problems.extend(
+            masked_problems(&master.problems)
+                .into_iter()
+                .map(|p| StatusProblem {
+                    error: p.error,
+                    node: format!("master {}", short(&master.master_id)),
+                    message: p.message,
+                    href: href.clone(),
+                }),
+        );
+    }
+    let mut states: BTreeMap<usize, usize> = BTreeMap::new();
+    for worker in &view.workers {
+        let at = WORKER_STATES
+            .iter()
+            .position(|s| *s == worker.state)
+            .unwrap_or(WORKER_STATES.len() - 1);
+        *states.entry(at).or_default() += 1;
+        if worker.state == "active" {
+            row.running += worker.running;
+            row.slots += worker.slots;
+        }
+        if !matches!(worker.state.as_str(), "offline" | "lost") {
+            *versions.entry(&worker.schedr_version).or_default() += 1;
+        }
+        let href = format!("#{}", worker_anchor(name, &worker.worker_id));
+        row.problems.extend(
+            masked_problems(&worker.problems)
+                .into_iter()
+                .map(|p| StatusProblem {
+                    error: p.error,
+                    node: format!("worker {}", worker.worker_id),
+                    message: p.message,
+                    href: href.clone(),
+                }),
+        );
+    }
+    row.workers = states
+        .into_iter()
+        .map(|(at, count)| (WORKER_STATES[at], count))
+        .collect();
+    // Errors first, each kind in node order.
+    row.problems.sort_by_key(|p| !p.error);
+    row.versions = versions
+        .into_iter()
+        .map(|(version, count)| (version.to_owned(), count))
+        .collect();
+    row
+}
+
 /// Each deployment's nodes (asked at once), in deployment order, each with how long its answer
 /// took.
 async fn ask_all<T: Transport + Send + Sync + 'static>(
@@ -971,6 +1132,7 @@ async fn ask_all<T: Transport + Send + Sync + 'static>(
 #[template(path = "deployments.html")]
 struct DeploymentsPage {
     page: Page,
+    status: Vec<StatusRow>,
     graph: Graph,
     panels: Vec<NodePanel>,
 }
@@ -1004,6 +1166,7 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
     render(
         &DeploymentsPage {
             page,
+            status: status(&asked),
             graph,
             panels,
         },

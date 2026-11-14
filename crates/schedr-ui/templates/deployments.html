@@ -4,6 +4,29 @@
 <h1>Deployments</h1>
 <div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change, every 15s" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 <p class="dim">Everything this UI shows. Each frame is a deployment, each rectangle around nodes a process (in standalone one for all of them). Click a node for its panel beside the graph: its facts, its problems and its configuration. Secrets are never shown: each node masks its own configuration before it leaves its process.</p>
+<table class="list status-block" aria-label="Each deployment's status">
+  <thead>
+    <tr><th>Deployment</th><th>Masters</th><th>Workers</th><th>Slots in use</th><th>Problems</th><th>Versions</th></tr>
+  </thead>
+  <tbody>
+  {% for row in status %}
+    <tr>
+      <td><a href="{{ row.href }}">{{ row.name }}</a></td>
+      {% if let Some(error) = row.unreachable %}
+      <td colspan="5"><span class="error">Unreachable: {{ error }}</span> <span class="dim">(gave up after {{ row.took }})</span></td>
+      {% else %}
+      <td{% if row.leaderless() %} class="error"{% endif %}>{% if row.leaderless() %}no leader{% else %}{{ row.leaders }} leading{% endif %}{% if row.standbys > 0 %} · {{ row.standbys }} standing by{% endif %}</td>
+      <td>{% if row.workers.is_empty() %}<span class="dim">none</span>{% else %}{% for (state, count) in row.workers %}{% if !loop.first %} · {% endif %}<span class="worker-state {{ state }}">{{ count }} {{ state }}</span>{% endfor %}{% endif %}</td>
+      <td>{{ row.running }} / {{ row.slots }}</td>
+      <td>{% if row.problems.is_empty() %}<span class="dim">none</span>{% else %}<details class="status-problems"><summary>{% if row.errors() > 0 %}<span class="error">{{ row.errors() }} error{% if row.errors() != 1 %}s{% endif %}</span>{% endif %}{% if row.errors() > 0 && row.warnings() > 0 %} · {% endif %}{% if row.warnings() > 0 %}<span class="warning-text">{{ row.warnings() }} warning{% if row.warnings() != 1 %}s{% endif %}</span>{% endif %}</summary>
+        <ul class="problems">{% for problem in row.problems %}<li class="{% if problem.error %}error{% else %}warning{% endif %}"><a href="{{ problem.href }}">{{ problem.node }}</a>: {{ problem.message }}</li>{% endfor %}</ul>
+      </details>{% endif %}</td>
+      <td class="mono">{% if row.mixed() %}<span class="badge warning">mixed</span> {% for (version, count) in row.versions %}{% if !loop.first %}, {% endif %}{{ version }} ({{ count }}){% endfor %}{% else %}{% for (version, _) in row.versions %}{{ version }}{% endfor %}{% endif %}</td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 <p class="legend dim">
   <svg width="28" height="10" aria-hidden="true"><line class="edge http" x1="0" y1="5" x2="28" y2="5"></line></svg> HTTP
   <svg width="28" height="10" aria-hidden="true"><line class="edge database" x1="0" y1="5" x2="28" y2="5"></line></svg> database

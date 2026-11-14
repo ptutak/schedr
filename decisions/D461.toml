@@ -17,4 +17,4 @@ window (warned `clock_skew` past 2 s) can be shown stuck wrongly. Not chosen: Re
 history = "JOURNAL.md#D461"
 step = "1.0.0"
 code = ["crates/schedr-api/src/routes.rs::poke_stuck", "crates/schedr-ui/src/pages.rs::TriggerPanel"]
-checked = 2026-11-12
+checked = 2026-11-14

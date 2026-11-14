@@ -1082,3 +1082,12 @@ remaining M5.1 steps were run unattended. Claude found that a root given as `.` 
 - **The name of `.`:** (A) the folder's own name, as any path; (B) a fixed `dags` / `scripts`.
   **Chosen: A**. Not chosen: B (`.` for both is still one folder in two lists).
 - **Roles:** (A) standalone only; (B) the worker too. **Chosen: A**, the guide's case.
+
+### <a id="N7"></a>2026-11-14: The UI isn't built or tested for phones (note 7; corrects D466)
+
+
+While building M5.1g's Status block, Claude wrapped its table to scroll on a narrow screen; the
+user: "No one is going to use this on the phone, you can drop those tests altogether." D466's
+promise that charts stack and tables scroll on a phone is dropped: the Metrics page and its
+charts (M5.1j-l) get no phone layout and no tests for one. The existing `max-width: 900px`
+rules stay as they are.

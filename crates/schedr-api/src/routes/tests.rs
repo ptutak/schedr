@@ -895,16 +895,16 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
         json!([
             {"worker_id": "w1", "state": "active", "schedr_version": "1.0.0",
              "master_id": "m-b", "process_id": "p-2", "config": worker,
-             "queues": ["default", "large"],
+             "queues": ["default", "large"], "slots": 2, "running": 0,
              "problems": [{"error": false, "message": "tasks start slower"}]},
             {"worker_id": "w2", "state": "lost", "schedr_version": "1.0.0",
              "master_id": null, "process_id": null, "config": null,
-             "queues": ["default", "large"],
+             "queues": ["default", "large"], "slots": 2, "running": 0,
              "problems": [{"error": true,
                            "message": "lost: it stopped answering, its attempts were given up"}]},
             {"worker_id": "w3", "state": "offline", "schedr_version": "1.0.0",
              "master_id": null, "process_id": null, "config": null,
-             "queues": ["default", "large"], "problems": []},
+             "queues": ["default", "large"], "slots": 2, "running": 0, "problems": []},
         ])
     );
     assert_eq!(body["user"], "anonymous");

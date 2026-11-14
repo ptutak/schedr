@@ -11,5 +11,5 @@ and defaults are shown masked. Code-authored text is shown as written where code
 history = "archive/PROJECT.md#D142"
 step = "M4.5a"
 also = ["secrets"]
-checked = 2026-11-12
+checked = 2026-11-14
 code = ["crates/schedr-api/src/views.rs::mask_data", "crates/schedr-config/src/masked.rs::mask_data"]

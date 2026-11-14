@@ -11,4 +11,4 @@ Its instance rows follow in map-index order.
 history = "archive/PROJECT.md#D80"
 step = "M4.3c"
 code = ["crates/schedr-api/src/views.rs", "crates/schedr-api/src/routes.rs::run_tasks", "crates/schedr-api/src/routes.rs::get_run"]
-checked = 2026-11-12
+checked = 2026-11-14

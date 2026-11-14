@@ -15,3 +15,5 @@ by state in the block (left to the Metrics page).
 history = "JOURNAL.md#D462"
 step = "M5.1g"
 also = ["observability"]
+code = ["crates/schedr-ui/src/deployments.rs::status", "crates/schedr-api/src/views.rs::WorkerNodeView", "crates/schedr-ui/templates/deployments.html"]
+checked = 2026-11-14

@@ -1231,6 +1231,12 @@ pub struct WorkerNodeView {
     /// The queues it serves.
     #[serde(default)]
     pub queues: Vec<String>,
+    /// Its task slots (decision 462; 0 from an older webserver).
+    #[serde(default)]
+    pub slots: u32,
+    /// Its attempts still running.
+    #[serde(default)]
+    pub running: u32,
     /// Its problems now: lost or offline (errors), what it reports wrong, the import errors
     /// of files it parsed (warnings).
     #[serde(default)]

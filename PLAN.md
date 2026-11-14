@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.1g, The Status block.
+**Next:** M5.1h, Memory and CPU reported.
 
 ## M0: Foundations
 
@@ -240,8 +240,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1e | The turn size from data | done 2026-11-14 | D484 |
 | M5.1f1 | The idle cost: one probe a tick, the moments stored | done 2026-11-14 | D485 |
 | M5.1f2 | Triggers and events in a round of their own | done 2026-11-14 | D486, D487 |
-| M5.1g | The Status block | **next** | D462 |
-| M5.1h | Memory and CPU reported | planned | D463 |
+| M5.1g | The Status block | done 2026-11-14 | D462 |
+| M5.1h | Memory and CPU reported | **next** | D463 |
 | M5.1i | The samples table | planned | D464 |
 | M5.1j | The Metrics page | planned | D465, D466 |
 | M5.1k | Task memory charts | planned | D467 |

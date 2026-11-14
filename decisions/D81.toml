@@ -11,4 +11,4 @@ With an index it returns that instance’s output and outcome.
 history = "archive/PROJECT.md#D81"
 step = "M4.3c"
 code = ["crates/schedr-client/src/lib.rs", "crates/schedr-api/src/routes.rs::get_output", "crates/schedr-api/src/views.rs::OutputView"]
-checked = 2026-11-12
+checked = 2026-11-14

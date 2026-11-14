@@ -11,4 +11,4 @@ The schema and protocol can still be edited in place.
 history = "archive/PROJECT.md#D124"
 step = "n/a"
 code = ["crates/schedr-ui/src/deployments.rs"]
-checked = 2026-11-08
+checked = 2026-11-14

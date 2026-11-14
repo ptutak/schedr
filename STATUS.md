@@ -6,25 +6,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-14)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1g, The Status block (decisions D462). Done when: the block shows masters by role, workers by state, slots, problems, mixed versions and unreachable deployments; a UI test per state; the guide's Deployments section says so
-- **Then:** M5.1h, M5.1i, M5.1j, M5.1k, M5.1l.
+- **Next step:** M5.1h, Memory and CPU reported (decisions D463). Done when: each process's figures reach the database or the answer; an older worker without the field is still served; tests on both databases
+- **Then:** M5.1i, M5.1j, M5.1k, M5.1l, M5.1m.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- N7 (2026-11-14): The UI isn't built or tested for phones (corrects D466)
 - D488 (2026-11-14): standalone takes its DAG and script folders on the command line
 - D487 (2026-11-14): a waiting wait_for step stores its deadline and what it waits for
 - D486 (2026-11-14): the trigger loop runs after any write, at a stored moment, or for a posted event
 - D485 (2026-11-14): each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
-- D484 (2026-11-14): a worker's turn takes up to 80 messages
+- M5.1g (2026-11-14): The Status block
 - M5.1f2 (2026-11-14): Triggers and events in a round of their own
 - M5.1f1 (2026-11-14): The idle cost: one probe a tick, the moments stored
-- M5.1e (2026-11-14): The turn size from data
 
 ## In progress
 
-- M5.1a-M5.1f2 done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`). M5.1e: a turn takes up to 80 messages (D484). M5.1f1 (D485): one probe statement a round, `next_fire_at` stored. M5.1f2 (D486, D487): the trigger pass in a loop of its own, woken by writes, stored looks and posted events (paid -> run started 1.53 s -> 47 ms idle); waiting steps parked, cleared by row triggers; the unreleased migrations one file, `0002_next_looks.sql` (edited in place until a release). Next M5.1g (the Status block), then to M5.1m and M5.1n (`schedr standalone --dag-path/--script-path`, details with the user). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
+- M5.1a-M5.1f2 done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`). M5.1e: a turn takes up to 80 messages (D484). M5.1f1 (D485): one probe statement a round, `next_fire_at` stored. M5.1f2 (D486, D487): the trigger pass in a loop of its own, woken by writes, stored looks and posted events (paid -> run started 1.53 s -> 47 ms idle); waiting steps parked, cleared by row triggers; the unreleased migrations one file, `0002_next_looks.sql` (edited in place until a release). M5.1g (the Status block) committed, its review joint with j-l. Order: h, i, m, then j, k, l, then M5.1n and M5.1n (`schedr standalone --dag-path/--script-path`, details with the user). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
 - For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
 - Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
@@ -36,7 +36,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Rules in force
 
 - Commits and pushes pre-accepted from M5.1a to the end of M5.1, through M5.1m (the user, 2026-11-13; the release R1.1 not included); no pending label in the UI (the user), after each step's review, `make check` and `make docs`; stop at any decision that is the user's, or where building shows an accepted design doesn't hold.
-- One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10).
+- One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10); always at high effort; the UI steps M5.1g, j, k and l share one review after M5.1l, each committed after its checks meanwhile (the user, 2026-11-14).
 - Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).
 - Before stating how something behaves, read the code or run it, and say which.

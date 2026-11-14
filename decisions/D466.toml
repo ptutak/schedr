@@ -7,8 +7,8 @@ section = "Pages and live updates"
 summary = '''
 Charts are SVG rendered on the server like the DAG graphs (decision 22), with no JavaScript chart
 library: a point's value shows on hover from its `<title>`, and an open chart refreshes once a
-minute on the page's live stream (decision 175). Light and dark from the UI's colour tokens; on a
-phone charts stack and tables scroll in their own box. Not chosen: a vendored library such as
+minute on the page's live stream (decision 175). Light and dark from the UI's colour tokens; no
+layout or tests for a phone (the user, 2026-11-14: nobody uses it there). Not chosen: a vendored library such as
 uPlot (hover and zoom); Grafana dashboards in the Helm chart, for now.
 '''
 history = "JOURNAL.md#D466"

@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D121"
 step = "M4.4b"
 also = ["deployment"]
 code = ["crates/schedr-ui/src/deployments.rs::graph"]
-checked = 2026-11-09
+checked = 2026-11-14

@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D343"
 step = "M4.11a4"
 also = ["workers", "wait-steps"]
 code = ["crates/schedr-api/src/views.rs::WatcherHostView", "crates/schedr-api/src/views.rs::SensorView"]
-checked = 2026-11-12
+checked = 2026-11-14

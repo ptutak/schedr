@@ -16,4 +16,4 @@ step = "M4.4b"
 unverified = ["offline workers are grey"]
 also = ["ui-cli", "workers"]
 code = ["crates/schedr-api/src/routes.rs", "crates/schedr-db/src/nodes.rs::NodeProblem", "crates/schedr-api/src/views.rs::ProblemView"]
-checked = 2026-11-12
+checked = 2026-11-14

@@ -153,7 +153,8 @@ scope = '''
 done_when = '''
 the block shows masters by role, workers by state, slots, problems, mixed versions and unreachable deployments; a UI test per state; the guide's Deployments section says so
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1h"
@@ -236,7 +237,7 @@ status = "planned"
 id = "R1.1"
 title = "Release 1.1.0"
 scope = '''
-first the stress suite's table for the release (the user, 2026-11-14): the quick profile on 1.0.0's code and on M5.1's, one after the other the same evening on an otherwise idle machine (scenarios timed against each other, so never two at once nor beside builds), as "After M5.1" on the stress page in the M4B table's form (before, after, change, verdict); after M5.1: the version bumped, the changelog, an rc rehearsal (the release workflow, the wheel on TestPyPI and the images checked by hand), then 1.1.0; the protocol's minor version as M5.1h and M5.1m leave it, the new migrations (M5.1i) checked on an upgraded 1.0.0 database
+first the stress suite's table for the release (the user, 2026-11-14): the quick profile on 1.0.0's code and on M5.1's, one after the other the same evening on an otherwise idle machine (scenarios timed against each other, so never two at once nor beside builds), as "After M5.1" on the stress page in the M4B table's form (before, after, change, verdict); after M5.1: the version bumped, the changelog, then 1.1.0 tagged without an rc (the user, 2026-11-14: the release workflow and the builds are 1.0.0's, unchanged), after three local checks: the `0002` migration on a 1.0.0 database that ran DAGs (SQLite and Postgres, 1.0.0 from PyPI, then 1.1.0 on it), protocol 2.0 against 2.1 both ways (a 1.0.0 worker with a 1.1.0 master and the other way round), and `twine check` of the wheel (its page is now `PYPI.md`)
 '''
 done_when = '''
 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say

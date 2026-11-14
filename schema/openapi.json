@@ -2004,9 +2004,21 @@
             },
             "type": "array"
           },
+          "running": {
+            "description": "Its attempts still running.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "schedr_version": {
             "description": "Its schedr version.",
             "type": "string"
+          },
+          "slots": {
+            "description": "Its task slots (decision 462; 0 from an older webserver).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           },
           "state": {
             "description": "`active`, `draining`, `disconnected`, `offline` or `lost`.",
