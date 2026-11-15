@@ -42,7 +42,10 @@ def seeded(standalone: dict[str, str]) -> dict[str, str]:
         ],
     }
     rows = []
-    for minute in range(1, 24 * 60, 3):
+    # Every minute, as a running process is sampled: one sampled one minute in three counts in
+    # a bucket for its share of the deployment's sampled minutes, so the newest bucket's
+    # "tasks" moved with where the standalone's own start fell (CI, 2026-11-15: 1.5 GiB).
+    for minute in range(1, 24 * 60):
         at = _at(now - timedelta(minutes=minute))
         wave = (minute % 120) * MIB
         worker_resident = 180 * MIB + wave
