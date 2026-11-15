@@ -55,25 +55,6 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-| 3 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
-
-## B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): a_worker_that_exits_before_a_stalled_master_takes_its_deregister_is_offline_after: the master never handled the Deregister once.
-`crates/schedr/tests/roles.rs:1206` (added for B239 on 2026-11-12) failed once in
-`make test-integration` (`left: Some("disconnected")`), passing 6 of 6 alone and in the runs
-before. `forget` drops the connection when a `Deregister` is handled, so `disconnected` last
-means the master never handled it: the worker sent it (its drain log stops after "draining")
-while the master was frozen (SIGSTOP 3 s), waited `deregister_wait` (1 s) and exited. Not
-known: whether the frame was still in the worker's buffers at exit, or the master, back from
-the freeze and not leading at first (its lease late), read the stream's end before it. The
-suite alone was running (no standalone). The master's reader keeps order: a stream's end
-comes only after every message queued (`next_to_handle`), so the master can't take the end
-first. A theory, not shown: the exiting worker's socket still held unread bytes (an answer in
-flight as the master froze), so Linux closed it with RST, and an RST makes the frozen master's
-kernel drop what it hadn't read yet, the `Draining` and `Deregister` frames. First step: catch it
-with the master's log at debug, or capture the socket's close (FIN or RST) in a loop of the test
-under load.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 

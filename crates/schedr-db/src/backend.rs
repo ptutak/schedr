@@ -175,6 +175,41 @@ fn percent_decoded(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Where `url`'s database is, for a person to check: a Postgres server's `host:port` (or its
+/// socket's folder) as sqlx reads the URL (its `host=` and `port=` parameters, the `PG*`
+/// variables, the defaults), a SQLite file's path; never its user or password (the user,
+/// 2026-11-15: a role waiting for its database names where, so a typo shows).
+#[must_use]
+pub fn database_place(url: &str) -> String {
+    if let Some(path) = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+    {
+        let path = path.split('?').next().unwrap_or_default();
+        return if path.is_empty() || path == ":memory:" {
+            "memory".to_owned()
+        } else {
+            path.to_owned()
+        };
+    }
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return "an unreadable URL".to_owned();
+    }
+    let Ok(options) = url.parse::<sqlx::postgres::PgConnectOptions>() else {
+        return "an unreadable URL".to_owned();
+    };
+    let (host, port) = (options.get_host(), options.get_port());
+    if let Some(socket) = options.get_socket() {
+        format!("{} (port {port})", socket.display())
+    } else if host.starts_with('/') {
+        format!("{host} (port {port})")
+    } else if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 fn redact_user_info(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_owned();

@@ -286,7 +286,7 @@ fn worker_and_tls_defaults() {
             memory_reserve: None,
             runner_start_timeout: Duration::from_secs(30),
             fork_server_preload_timeout: Duration::from_mins(5),
-            cleanup_timeout: Duration::from_mins(5),
+            cleanup_timeout: None,
             resource_cleanup_timeout: Duration::from_mins(30),
             fork_server_import_retry: Duration::from_mins(20),
         }
@@ -484,4 +484,24 @@ fn debug_hides_a_password_split_by_a_line_break() {
     config.database.url = Some("postgres://db/x?pass\nword=\thunter2".to_owned());
     let shown = format!("{:?}", config.database);
     assert!(!shown.contains("hunter2"), "{shown}");
+}
+
+/// B252: the default cleanup timeout fits in the default grace period (a longer one is lost
+/// when the pod is killed), follows a longer grace up to 5 minutes, and a set one is kept.
+#[test]
+fn the_default_cleanup_timeout_fits_in_the_grace_period() {
+    let defaults = Config::default();
+    assert_eq!(defaults.cleanup_room(), Duration::from_secs(25));
+    assert_eq!(defaults.cleanup_timeout(), Duration::from_secs(25));
+    let chart = parse("[worker]\ntermination_grace_period = \"600s\"").unwrap();
+    assert_eq!(chart.cleanup_timeout(), Duration::from_mins(5));
+    let set = parse("[worker]\ncleanup_timeout = \"6m\"").unwrap();
+    assert_eq!(set.cleanup_timeout(), Duration::from_mins(6));
+    // A grace the drain takes whole (allowed) still leaves a cleanup a second.
+    let whole = parse("[worker]\ntermination_grace_period = \"5s\"").unwrap();
+    assert_eq!(whole.cleanup_room(), Duration::ZERO);
+    assert_eq!(whole.cleanup_timeout(), Duration::from_secs(1));
+    // Left out of the configuration a node shows when not set.
+    let shown = serde_json::to_value(&defaults).unwrap();
+    assert!(shown["worker"].get("cleanup_timeout").is_none(), "{shown}");
 }

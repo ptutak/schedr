@@ -180,6 +180,17 @@ pub fn deserialize_size<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error
     d.deserialize_str(SizeVisitor)
 }
 
+/// A serde `deserialize_with` helper for optional duration fields (`None` when left out).
+///
+/// # Errors
+///
+/// Fails for a value that isn't a string, or a string [`parse_duration`] rejects.
+pub fn deserialize_optional_duration<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Duration>, D::Error> {
+    deserialize_duration(d).map(Some)
+}
+
 /// A serde `deserialize_with` helper for optional size fields (`None` when left out).
 ///
 /// # Errors
@@ -235,6 +246,21 @@ pub fn format_size(bytes: u64) -> String {
 /// The serializer's.
 pub fn serialize_duration<S: Serializer>(duration: &Duration, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&format_duration(*duration))
+}
+
+/// A serde `serialize_with` helper for optional duration fields (see [`format_duration`]).
+///
+/// # Errors
+///
+/// The serializer's.
+pub fn serialize_optional_duration<S: Serializer>(
+    duration: &Option<Duration>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match duration {
+        Some(duration) => s.serialize_some(&format_duration(*duration)),
+        None => s.serialize_none(),
+    }
 }
 
 /// A serde `serialize_with` helper for optional size fields (see [`format_size`]).

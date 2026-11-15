@@ -241,6 +241,73 @@ impl DbError {
         }
     }
 
+    /// Whether the database couldn't be reached for now, so a role starting should wait and
+    /// try again rather than exit (the user, 2026-11-15, after B247): a time limit (a query's,
+    /// or the pool's wait for a connection), a connection refused, reset or lost, a pool closed,
+    /// or Postgres saying it can't take connections yet (starting up, shutting down, too many
+    /// connections, a connection exception). Not a wrong URL, password or TLS setting, a schema
+    /// to migrate or anything about data: those fail the same way again.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::QueryTimeout(_)
+            | Self::Sqlx(
+                sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_),
+            ) => true,
+            // The database's own trouble, as a statement's retry tells it (the review of
+            // M5.1q): a connection lost or refused (08: PgBouncer's own refusals too, a full
+            // pool among them), out of connections or resources, starting or shutting down,
+            // a statement timeout, a lock not given; SQLite busy, locked, full or unopenable.
+            // Not a wrong password, database or TLS setting.
+            Self::Sqlx(sqlx::Error::Database(error)) => {
+                let postgres = error
+                    .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+                    .is_some();
+                error
+                    .code()
+                    .is_some_and(|code| databases_trouble(postgres, &code))
+            }
+            _ => false,
+        }
+    }
+
+    /// What a role waiting for its database says about this error: no text the database
+    /// server wrote (it may name the user: "too many connections for role ..."), only the
+    /// error's kind or code (the user, 2026-11-15: the warning names only the host).
+    #[must_use]
+    pub fn waiting_reason(&self) -> String {
+        match self {
+            Self::QueryTimeout(limit) => format!("no answer within {limit:?}"),
+            Self::Sqlx(sqlx::Error::PoolTimedOut) => "no connection in time".to_owned(),
+            Self::Sqlx(sqlx::Error::PoolClosed) => "its connection pool is closed".to_owned(),
+            // The operating system's words (refused, unreachable, a name not found).
+            Self::Sqlx(sqlx::Error::Io(error)) => error.to_string(),
+            Self::Sqlx(sqlx::Error::Database(error)) => {
+                let code = error.code().unwrap_or_default();
+                let named = match &*code {
+                    "57P03" => "it is starting up",
+                    "57P01" | "57P02" => "it is shutting down",
+                    "53300" => "too many connections",
+                    "57014" => "a statement timed out",
+                    "5" | "517" => "it is busy",
+                    "6" | "262" => "it is locked",
+                    _ => "",
+                };
+                match (named, &*code) {
+                    ("", "") => "an error with no code".to_owned(),
+                    ("", code) => format!("error {code}"),
+                    (named, code) => format!("{named}, error {code}"),
+                }
+            }
+            // Its kind's name only (`Sqlx(Tls`, `NotLeading`): the rest may carry server text.
+            other => {
+                let named = format!("{other:?}");
+                let kind = named.split([' ', '{', '"', ',']).next().unwrap_or_default();
+                kind.trim_end_matches('(').to_owned()
+            }
+        }
+    }
+
     /// Whether this is about the data a statement touched (stored data that won't read, a
     /// statement the database refuses for its data: a constraint, a trigger), not the
     /// database's own trouble (unreachable, a time limit, its own statement limit, a deadlock
@@ -658,7 +725,11 @@ impl Database {
     ///
     /// Returns [`DbError::Sqlx`] if reading the applied migrations fails.
     pub async fn schema_status(&self) -> Result<SchemaStatus, DbError> {
-        let applied = self.applied_checksums().await?;
+        // Within the query limit: a read hung on a quiet connection is tried again (the review
+        // of M5.1q), not waited for while the role stays starting.
+        let applied = self
+            .limited(self.query_timeout(), self.applied_checksums())
+            .await?;
         let embedded: Vec<(i64, &[u8])> = self
             .backend()
             .migrator()

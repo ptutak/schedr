@@ -90,6 +90,9 @@ pub struct Standalone {
     pub node_heartbeat: Duration,
     /// How long a gone master's row stays (`SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT`).
     pub node_row_kept: Duration,
+    /// How often it tries again to reach a database it can't reach at its start
+    /// (`SCHEDR_HIDDEN__WEBSERVER__SCHEMA_RETRY`).
+    pub schema_retry: Duration,
     /// The DAG versions kept parsed (`SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED`).
     pub dag_versions_cached: usize,
     /// How long the worker gets to stop once the master failed: its tasks are interrupted at
@@ -205,6 +208,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         auth_timings: crate::roles::auth_timings(&config.timings, &config.limits),
         node_heartbeat: config.timings.node_heartbeat,
         node_row_kept: config.timings.node_row_kept,
+        schema_retry: config.timings.schema_retry,
         dag_versions_cached: config.limits.dag_versions_cached,
         worker_stop_after_failure: config.timings.worker_stop_after_failure,
         ui: Some(LocalUi {
@@ -286,6 +290,10 @@ impl Standalone {
 ///
 /// [`AppError`] if the data directory, the database or a port can't be set up, the schema
 /// isn't up to date (without `migrate`), or the master fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the start in order: data, database, servers, roles"
+)]
 pub async fn run(
     setup: Standalone,
     listening: impl FnOnce(Listening),
@@ -321,7 +329,15 @@ pub async fn run(
     // The ops port answers (`/readyz`: starting) meanwhile. One master per database: an
     // up-to-date schema lets the API and the worker start while the master waits for the
     // lease (a standby); with `--migrate`, one to migrate is migrated by the lease's holder.
-    let db = setup.database().await?;
+    let connected = crate::roles::once_reached(
+        ("standalone", &setup.database_url),
+        setup.schema_retry,
+        shutdown.clone(),
+        || setup.database(),
+    );
+    let Some(db) = connected.await? else {
+        return Ok(());
+    };
     let secrets = setup.secret_storage.for_role(Some(&db))?;
     let (master_id, problems, heartbeat) = heartbeat(&db, setup.node_beat(), &stopped);
     let mut agent = setup.agent;
@@ -331,7 +347,7 @@ pub async fn run(
         &db,
         &setup.database_url,
         lease,
-        shutdown.clone(),
+        (shutdown.clone(), setup.schema_retry),
         ("standalone", master_id),
     );
     let Some(leadership) = leading.await? else {

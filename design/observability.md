@@ -161,7 +161,7 @@ None.
 
 ## Open
 
-None.
+- Q28: A ready-to-started line on the Metrics page Proposal: A third series on the Metrics page's start latency: ready → started (`started_at` less the instance's `ready_at`), the wait before any worker takes a task. `ready_at` is overwritten by a retry, so it is exact only for an instance's latest attempt. Not for 1.1.0 (the user, 2026-11-15).
 
 Details and edge cases, with the reasons; read them before changing this:
 

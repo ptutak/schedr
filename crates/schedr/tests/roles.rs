@@ -1174,30 +1174,59 @@ fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_peri
 }
 
 #[test]
-fn a_worker_that_exits_before_a_stalled_master_takes_its_deregister_is_offline_after() {
-    // B239: the worker gives the master until `deregister_by` to take its `Deregister`, then
-    // exits; a master stalled meanwhile (here frozen) still reads it and marks it offline.
+fn a_stopping_worker_waits_for_a_stalled_master_to_take_its_deregister() {
+    // B239, B242: the worker waits until `deregister_by` for the master to take its
+    // `Deregister` (a worker gone after 1 s dropped the frame with its connection, and was
+    // shown disconnected); a master stalled meanwhile (here frozen) reads it once it runs again
+    // and marks it offline, and the worker exits then.
     let mut cluster = Cluster::new(None, "100ms");
     let (code, err) = cluster.schedr(&["db", "migrate"]);
     assert_eq!(code, 0, "{err}");
-    cluster.start("master");
+    // Frozen 8 s, past the old 5 s wait (B242), so the leases are longer than the harness's:
+    // the worker's (30 s) and the master's own (20 s), or the thawed master would find the
+    // worker lost, or its lead gone.
+    cluster.start_with(
+        "master",
+        &[
+            ("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "30s"),
+            ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "20s"),
+        ],
+    );
     cluster.start("webserver");
     cluster.start_with(
         "worker",
-        &[("SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT", "1s")],
+        &[("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "25s")],
     );
     cluster.wait("the worker to register", || {
         cluster.worker_state("w1").as_deref() == Some("active")
     });
     cluster.signal("master", "STOP");
+    // The one origin: the thaw's 8 s and the worker's wait both count from the freeze.
     let frozen = Instant::now();
-    let exited = cluster.terminate_within("worker", Duration::from_secs(10));
-    // Under the worker lease (5 s in tests): the master would otherwise find it lost.
-    std::thread::sleep(Duration::from_secs(3).saturating_sub(frozen.elapsed()));
-    cluster.signal("master", "CONT");
+    let master = cluster.pid("master").to_string();
+    let thaw = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        let status = std::process::Command::new("kill")
+            .args(["-s", "CONT", &master])
+            .status();
+        assert!(
+            status.as_ref().is_ok_and(std::process::ExitStatus::success),
+            "{status:?}"
+        );
+    });
+    let exited = cluster.terminate_within("worker", Duration::from_secs(25));
+    // When it exited, not when the thaw thread ends.
+    let took = frozen.elapsed();
+    thaw.join().unwrap();
     assert!(
         exited.is_some_and(|s| s.success()),
         "{exited:?}\n{}",
+        cluster.logs()
+    );
+    // It waited for the master, frozen 8 s, instead of leaving after 5 s as before.
+    assert!(
+        took >= Duration::from_secs(8),
+        "the worker left after {took:?}\n{}",
         cluster.logs()
     );
     cluster.wait_for("the worker to leave", Duration::from_secs(20), || {

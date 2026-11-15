@@ -418,3 +418,42 @@ async fn debug_hides_the_notifications_urls_password() {
     assert!(!shown.contains("debug_s3cret"), "{shown}");
     assert!(shown.contains("postgres://u:***@db/s"), "{shown}");
 }
+
+#[tokio::test]
+async fn a_database_not_reachable_for_now_is_transient_a_wrong_setting_isnt() {
+    // The user, 2026-11-15 (after B247): a role starting waits for the first, exits on the
+    // second.
+    for transient in [
+        DbError::QueryTimeout(Duration::from_secs(1)),
+        DbError::Sqlx(sqlx::Error::PoolTimedOut),
+        DbError::Sqlx(sqlx::Error::PoolClosed),
+        DbError::Sqlx(sqlx::Error::Io(std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused,
+        ))),
+    ] {
+        assert!(transient.is_transient(), "{transient}");
+    }
+    // Nothing listens on port 1: refused, transient.
+    let refused = Database::connect_with_timeout(
+        "postgres://schedr:schedr@127.0.0.1:1/schedr",
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.is_transient(), "{refused}");
+    for lasting in [
+        DbError::Sqlx(sqlx::Error::Configuration("bad url".into())),
+        DbError::InvalidData {
+            what: "runs.state",
+            reason: "x".to_owned(),
+        },
+        DbError::NotLeading,
+    ] {
+        assert!(!lasting.is_transient(), "{lasting}");
+    }
+    // A URL not naming a database schedr knows.
+    let unsupported = Database::connect("mysql://localhost/schedr")
+        .await
+        .unwrap_err();
+    assert!(!unsupported.is_transient(), "{unsupported}");
+}

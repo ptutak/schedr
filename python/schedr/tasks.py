@@ -1308,7 +1308,7 @@ def task(  # noqa: PLR0913 (the task's options, by keyword)
             task's parameters, and ``handles: list[A | B]``: the attempt's ``cleanup_handle``
             values. It must be idempotent; a cleanup that keeps failing fails the run.
         cleanup_timeout: How long one try of the cleanup may run (default: the worker's
-            ``cleanup_timeout``, 5 minutes).
+            ``cleanup_timeout``: 5 minutes, or less to fit in its grace period).
         cleanup_retries: How many times a failed cleanup is retried (default 3).
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
         cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost

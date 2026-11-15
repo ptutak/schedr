@@ -251,6 +251,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1n | Standalone takes its DAG and script directories on the command line | done 2026-11-15 | D488 |
 | M5.1o | A poke may be a plain def | done 2026-11-15 | D489 |
 | M5.1p | Tunable constants as hidden settings | done 2026-11-15 | D493 |
+| M5.1q | A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits | done 2026-11-15 | D495, D496, D497 |
 | R1.1 | Release 1.1.0 | **next** |  |
 | M5.2a | The recording stub and the comparison | planned | D475 |
 | M5.2b | The rewrite: the authoring core | planned | D470, D471 |

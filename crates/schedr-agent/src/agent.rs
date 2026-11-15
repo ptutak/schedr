@@ -4753,8 +4753,12 @@ fn fitted_file(file: pb::ParsedFile, limit: usize) -> pb::ParsedFile {
     }
 }
 
-/// How long a deregistered agent waits for the master to end the stream.
-pub const DEREGISTER_WAIT: Duration = Duration::from_secs(5);
+/// How long a deregistered agent waits for the master to end the stream, at most: until the
+/// drain's `deregister_by` (B237) by default, longer than any grace period. A stalled master
+/// still takes the `Deregister` once it reads again, the worker then shown offline (B242: a
+/// worker gone after 5 s dropped the unsent frame with its connection, and was shown
+/// disconnected).
+pub const DEREGISTER_WAIT: Duration = Duration::from_hours(1);
 
 /// How often a drain checks its deadline and whether it is done.
 pub const DRAIN_TICK: Duration = Duration::from_millis(100);

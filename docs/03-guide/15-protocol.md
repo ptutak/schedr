@@ -194,7 +194,7 @@ sequenceDiagram
     M->>M: Keep result, instance cleaning_up
     loop Cleanup tries and retry delays, slot remains held
         W->>W: Run cleanup with handles and secrets
-        Note over W: cleanup_timeout: 5 min default per try, stop a timed-out try
+        Note over W: cleanup_timeout: at most 5 min by default, per try, stop a timed-out try
     end
     W->>M: Finished (task and cleanup results)
     M-->>W: FinishedAck
@@ -240,7 +240,7 @@ sequenceDiagram
             W->>M: TaskEnded (saved task result)
         end
         W->>W: Restart cleanup with saved handles, all tries and freshly read secrets
-        Note over W: cleanup_timeout: 5 min default per try, stop a timed-out try
+        Note over W: cleanup_timeout: at most 5 min by default, per try, stop a timed-out try
         W->>M: Finished (task and cleanup results)
         M-->>W: FinishedAck
     else Attempt already ended: Kill
@@ -379,7 +379,7 @@ sequenceDiagram
         P-->>W: Interrupted
         W->>M: TaskEnded (interrupted)
         W->>W: Run cleanup, do not stop cleanup at drain deadline
-        Note over W: cleanup_timeout: 5 min default per try, timeout stops that try
+        Note over W: cleanup_timeout: at most 5 min by default, per try, timeout stops that try
     else Other task still running at stop deadline
         W->>P: SIGTERM
         Note over W,P: drain_terminate_period: 3 s default, SIGKILL remaining process group

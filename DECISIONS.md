@@ -5,7 +5,9 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ## Open questions
 
-None.
+| # | Asked | Topic | Question | Proposal |
+|---|---|---|---|---|
+| Q28 | 2026-11-15 | observability | A ready-to-started line on the Metrics page | A third series on the Metrics page's start latency: ready → started (`started_at` less the instance's `ready_at`), the wait before any worker takes a task. `ready_at` is overwritten by a retry, so it is exact only for an instance's latest attempt. Not for 1.1.0 (the user, 2026-11-15). |
 
 ## Deferred questions
 
@@ -29,6 +31,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D497 | 2026-11-15 | user | built M5.1q | workers | An unset cleanup timeout fits in the grace period |
+| D496 | 2026-11-15 | user | built M5.1q | state | A role starting waits for a database it can't reach yet |
+| D495 | 2026-11-15 | user | built M5.1q | workers | A stopping worker waits for the master to take its Deregister |
 | D494 | 2026-11-15 | user | built M5.1l2 | observability | Throughput and start latency come from the attempts table |
 | D493 | 2026-11-15 | user | built M5.1p | configuration | Tunable constants are hidden settings |
 | D492 | 2026-11-15 | claude | built M5.1j | observability | The Metrics endpoints keep their final buckets between requests |
@@ -902,6 +907,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### state
 
+- D496: A role starting waits for a database it can't reach yet
 - D440: Retention also keeps the runs catchup counts as done, and runs still read
 - D435: An output deleted by retention answers 410 Gone
 - D434: Named events go with `[retention] events`
@@ -1046,6 +1052,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D497: An unset cleanup timeout fits in the grace period
+- D495: A stopping worker waits for the master to take its Deregister
 - D484: A worker's turn takes up to 80 messages
 - D483: A command is one transaction, the core lock released between commands; it reads only its own DAG
 - D480: The core lock released at the end of each transaction; one turn for all workers only if commits limit
