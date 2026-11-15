@@ -1,11 +1,11 @@
 # The master
 
-The master is the only process that makes decisions. It holds an in-memory view of the
+The master makes the scheduling decisions. It holds an in-memory view of the
 workers (who is connected, their slots, queues and code) and keeps everything else in the
-database. There is one master per database (below); when it restarts, it reads its state
+database. One master leads per database (below); when it restarts, it reads its state
 back from the database.
 
-All of its work runs under **one lock**, taken for one piece of work at a time: each part of a
+Scheduling and worker messages share **one lock**, taken for one piece of work at a time: each part of a
 round (below), and each transaction of a worker's messages. Each piece sees a consistent view
 and two never interleave; between them the lock goes to whoever waited first, so a worker's
 `Started` doesn't wait for a whole round, nor a round for another worker's whole turn
@@ -53,19 +53,40 @@ same timer. On SQLite neither side listens. The master's commands wait for the n
 The writes append a row to `changes`, and the webserver reads the new rows every second, so
 the pages still follow each change while those triggers are on.
 
-A round does six things, in order. Each handles at most so many items a round (commands 50,
-new runs' task instances 2,000, assignments 50, expiries 50, retries 100, scheduled runs 10 a
-DAG, waiting reasons 100), the rest first in the next round, so that no round takes seconds
-and holds up the workers' messages and the lease:
+A round limits each kind of work so a backlog leaves room for worker messages and lease
+renewals. With the default limits, it works through these stages:
 
-| # | Step | What it does |
-|---|---|---|
-| 1 | **Commands** | Applies the pending commands, oldest first (at most 50 a round) (trigger, cancel, pause, retry, drain, …), then records its decision: `applied` with what it produced, or `rejected` with the reason. A cancel produces a message to the worker running the attempt. Each command is one transaction, its decision with it, and the round takes the lock for each command on its own (decision 483): a command whose transaction fails leaves nothing stored and sends nothing, and stays pending. |
-| 2 | **Drains and resumes** | A worker just drained has its parse jobs moved to other workers; one just resumed may get parse jobs again (if finding them fails, it is tried again each round). |
-| 3 | **Scheduler** | Visits the DAGs [due](#busy-and-quiet-dags): scheduled ones whose stored next fire time has come or isn't known, those with queued runs, and those a command, an ended run or a new version marked (every DAG, when `[master] quiet_dags` is off, and on a term's first round). Reads their running count, last scheduled run and queued runs, inserts the runs that are due unless the DAG is paused (at most 10 a DAG a round), starts queued runs while the DAG is under `max_active_runs`, and stores when to visit each scheduled DAG next. Triggers have [a loop of their own](#the-trigger-loop). |
-| 4 | **Dispatcher** | Creates the task instances of runs that just started (tasks with no upstream task `queued`, empty ones completed, the rest waiting for their edges); queues failed tasks whose retry delay has passed; takes back assignments with no `Started` after the worker lease (60 s by default) (not one whose `Started` has arrived and waits to be handled, nor one whose worker is disconnected within its lease or, after a restart, not registered again yet: it may come back with the task done); assigns ready tasks to workers (resource cleanups first, then oldest ready first), storing each attempt before its `AssignTask` is built. A task over one of its [concurrency limits](../02-dags/05-defaults.md#concurrency-limits) waits first, whatever the workers ("waiting: `max_active_per_run` (10) reached"). [Resource cleanups](../02-dags/16-resources.md) bypass those limits. A task no worker can take gets a reason ("no active worker serves queue `gpu`", "waiting for a free slot …"), shown in the API; a round writes at most 100 of these, the rest in the next rounds. Once a round has made its 50 assignments it stops going through the ready tasks: the rest show "pending: waiting for a round with room" (up to 500 a round) and go in the next rounds; a wait step among them switched off or out of `max_wait` still ends in that round (decision 481). The round reads its ready wait steps' switch-off marks and first starts once, and claims its assignments together, in a few statements (decision 482). |
-| 5 | **Parse jobs** | Moves parse jobs that have run longer than `[master] parse_job_timeout` (10 minutes by default) to another worker with the same code. |
-| 6 | **Lost workers** | Marks a worker not heard from for the [worker lease](14-timings.md#fixed-timings) (60 s) as `lost`, and ends its attempts: those it started `lost`, each using a retry; those it never started `assignment_expired`, to run again without one (a task with `cleanup_anywhere` only after the cancel grace and the cleanup move wait: the worker may have started it and be stopping it). |
+1. **Commands.** Apply up to 50 pending commands, oldest first. Each command and its decision
+   (`applied` or `rejected`) use one transaction and one turn under the lock. A failed
+   transaction leaves the command pending and sends nothing. Drains move parse jobs to other
+   workers; resumes allow parse jobs again. Failed follow-ups are tried again in later rounds.
+2. **Scheduler.** Visit [busy DAGs](#busy-and-quiet-dags), create up to 10 scheduled runs per
+   DAG, and start queued runs within `max_active_runs`. Paused or held DAGs create no scheduled
+   runs; held DAGs also keep queued runs waiting. Store when each scheduled DAG next needs a
+   visit. Event triggers have [a loop of their own](#the-trigger-loop).
+3. **Prepare tasks.** Create task instances for runs that just started, up to 2,000 instances
+   per round. Complete ready empty tasks, queue tasks whose edges allow them to run, and queue
+   up to 100 retries whose delay has passed.
+4. **Take back unstarted assignments.** Take back up to 50 assignments whose worker's message
+   numbers show it handled the assignment without starting it. These end `assignment_expired`
+   and run again without using a retry. An assignment not known to be unstarted stays until
+   the worker's messages, reconnection or loss decide it; age alone does not expire it.
+5. **Assign ready tasks.** Assign up to 50, resource cleanups first, then oldest ready first.
+   Store attempts before building their `AssignTask` messages. Tasks over a
+   [concurrency limit](../02-dags/05-defaults.md#concurrency-limits) wait regardless of available
+   workers; resource cleanups bypass these limits. The API shows why other tasks wait, such as
+   "no active worker serves queue `gpu`". Write up to 100 waiting reasons and up to 500
+   "pending: waiting for a round with room" reasons for tasks beyond the assignment limit.
+6. **Parse jobs and lost workers.** Reassign parse jobs past `[master] parse_job_timeout`
+   (10 minutes by default), preferring another worker with the same code. Mark workers silent
+   past their [lease](14-timings.md#fixed-timings) (60 s by default) `lost`. Attempts known
+   never started end `assignment_expired` without a retry; others end `lost` and use a retry.
+   With `cleanup_anywhere`, an uncertain start waits through the cancel grace and cleanup
+   move wait before that decision.
+
+Wait steps switched off or past `max_wait` still end in the round even after the assignment
+limit is reached. The dispatcher reads ready wait steps' switch-off marks and first starts
+once, and stores the round's assignments together in one transaction.
 
 A backfill command creates the backfill and all its queued runs at once, in one
 transaction. They start oldest first as places free, after other kinds of queued runs and
@@ -91,10 +112,10 @@ counted per assignment in the database (one master holds the lease), so the chec
 query. `max_active_tasks` and `max_active` are the DAG's **current** version's (one value at
 a time across its runs), `max_active_per_run` the run's own version's.
 
-When the round ends, the master sends the messages it built (`AssignTask`, `CancelAttempt`,
-`AssignParse`) down the workers' streams. A message for a worker without a live stream is
-dropped, because each kind is recovered another way. An assignment expires in a later round
-and the task is assigned again. A cancel is sent again when the worker reconnects and reports
+After each part of a round, the master sends the messages it built (`AssignTask`,
+`CancelAttempt`, `AssignParse`) down the workers' streams. A message for a worker without a live stream is
+dropped, because each kind is recovered another way. An assignment is recovered from the worker's message numbers,
+journal on reconnection, or loss; the task can then be assigned again. A cancel is sent again when the worker reconnects and reports
 the attempt.
 
 A round that fails (the database returns an error) is logged, and the next one goes on. The
@@ -115,13 +136,12 @@ set aside.
 
 ### A round is never cut short
 
-Each step is a series of separate writes, so stopping a round partway is like a crash in the
-middle of it, and a round can't be undone halfway: it always runs to its end, or to the first
-error the database returns. What such an error leaves behind is made safe instead:
+A round can commit several transactions. It cannot be undone as a whole, so it runs to its
+end or to the first database error. Commands and assignment batches are atomic within it. What such an error leaves behind is made safe instead:
 
-- **A command is safe to apply again.** It is marked "being applied" before its first write,
-  and decided after its last. One found still pending with the mark was cut off partway, and
-  is applied again: a manual run takes its command's ID, so the repeat finds the run the
+- **A command is safe to apply again.** Its "being applied" mark, changes and
+  decision are stored in one transaction. Older pending commands may still carry that mark
+  from an interrupted application; these are safe to apply again: a manual run takes its command's ID, so the repeat finds the run the
   first try made, and a repeat that finds what it asks for already holding (the run or task
   already cancelled, the task already queued, the worker already resumed) is decided
   applied, not rejected. Anything else wrong with it (an unknown task, say) is still a
@@ -229,7 +249,7 @@ named-event DAGs. It runs at once when this master starts leading, then again wh
 At most one pass every 50 ms, and a pass is skipped by one small statement when no trigger is
 switched on or running. A pass that wrote (a run queued, a trigger started or stopped) wakes
 a round at once, as a finished task does: the round starts the run. So an event's run starts
-within moments, not at the next tick, and a busy round never holds a trigger up. A posted event
+within moments, not at the next tick, and the trigger pass can run between parts of a busy round. A posted event
 wakes the round only when steps wait for it ([below](#waiting-steps-are-parked)); one nobody
 waits for isn't announced at all.
 
@@ -275,7 +295,9 @@ arrived.
 It starts and advances [`TriggerDagOperator`](../02-dags/23-chained-runs.md) attempts,
 creating their target runs and waiting for them when requested, without a worker or slot.
 It also ends [`wait_for(RunOf(...))`](../02-dags/21-wait-for.md) when the other run or
-task ends, or the wait times out. It also resolves the key of each queued [`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run) each round and ends it with the first matching event posted since the run was created, or `TimedOut`. While waiting, the step is `queued` with a reason. For an `@sensor(wait_for=...)`, the
+task ends, or the wait times out. A [`wait_for(EventNamed(...))`](../02-dags/22-events.md#waiting-in-a-run)
+ends with the first matching event posted since the run was created and no later than its
+deadline, or `TimedOut`. Waiting steps are [parked](#waiting-steps-are-parked) between looks. While waiting, the step is `queued` with a reason. For an `@sensor(wait_for=...)`, the
 dispatcher waits without a slot, then assigns a call with the matching run or the first
 matching event posted since the run was created and no later than its deadline. A retry
 gets the same item; `NOT_YET` waits for a later match.
@@ -290,21 +312,21 @@ stream is still the worker's: the round and other workers' turns get in between.
 `Finished`. A forked Python task sends `Started` twice, the second with `start_method` `fork`.)
 
 In a turn, the `Started`s are stored together in one transaction, then the `Finished`s in
-another: one lease check and one commit for each group instead of one per message. Heartbeats
-and warnings are handled after them. Any other message (`Rejected`, `Draining`, a code
+another. Each group needs one lease check and one commit. Heartbeats and warnings are handled
+after the groups. Any other message (`Rejected`, `Draining`, a code
 report, a trigger's) is a barrier: what came before it is stored first, then it is handled
 alone, as before.
 
-```{mermaid}
-flowchart LR
-    turn[A turn: up to 80 waiting messages] --> sort{Message}
-    sort -->|Started| startGroup[Started group]
-    sort -->|Finished| finishGroup[Finished group]
-    sort -->|Heartbeat, Warnings| after[After the groups]
-    sort -->|anything else| barrier[Barrier]
-    barrier --> flush[Store the groups so far, then handle it alone]
-    startGroup --> tx1[One transaction]
-    finishGroup --> tx2[One transaction, after the first]
+```mermaid
+flowchart TD
+    messages["Waiting worker messages"] --> group["Collect Started and Finished"]
+    group --> starts["Store Started group: one transaction"]
+    starts --> finishes["Store Finished group: one transaction"]
+    finishes --> after["Handle heartbeats and warnings"]
+    after --> barrier{"A barrier message?"}
+    barrier -->|yes| alone["Handle it alone"]
+    alone --> messages
+    barrier -->|no| done["End turn at its message limit"]
 ```
 
 The `Finished`s of a group are written together too: their attempts read in one query, their
@@ -328,8 +350,8 @@ nothing twice.
 
 Tasks' API calls arrive from the agent on the Control stream. Under the master's lease, the
 master runs them in process through the API router as the task or trigger, only for an open
-attempt or trigger on that worker and only on the allow-list (currently `GET` and `POST`
-`/api/v1/events`). The agent keeps unanswered calls and resends them after reconnecting,
+attempt or trigger on that worker and only on the allow-list: `GET` and `POST`
+`/api/v1/events`, and `POST /api/v1/notifications` for the task's own notifications. The agent keeps unanswered calls and resends them after reconnecting,
 giving up after a minute. `[grpc] max_message_size` limits requests (413 before sending)
 and answers (502 if too large); a command's context has a separate 1 MiB limit.
 
@@ -363,8 +385,8 @@ doesn't declare live workers lost.
 start, assign them again, and get busier still with the extra writes (B11, found by the stress
 suite).
 
-Parse results arrive as separate unary calls (`UploadParseResult`). So do large task inputs,
-which workers fetch with `FetchInputs`; these are read from the database without the master's
+Parse results arrive on separate client-streaming calls (`UploadParseResult`). Large task
+inputs are fetched with `FetchInputs`; these are read from the database without the master's
 lock, so a busy master doesn't hold a task's start up.
 
 ## One master per database: the lease
@@ -407,15 +429,16 @@ counter).
 
 **What the database rules out.** The master's own clock can't tell when its writes arrive: a
 write sent while it led can be held up by the network or a connection pooler's queue until
-after its lease expired. So every write of the master runs in a transaction that first checks
+after its lease expired. So every scheduling write of the master runs in a transaction that first checks
 the lease is still its own (holder and takeover counter), and is refused once another master
 took it over. On Postgres that check also holds the lease's row until the write commits, so a
 takeover waits for writes in progress; SQLite runs one write at a time anyway. On Postgres the
 transaction's start, its time limit and the check go to the database as one message, so a
 master's write costs one round trip more than its statements alone (the commit). Two masters
-can't both change the database, whatever their clocks or the network do.
+can't both write scheduling state, whatever their clocks or the network do. Standbys still
+write their own node rows.
 
-```{mermaid}
+```mermaid
 sequenceDiagram
     participant A as master A (leading)
     participant DB as database
@@ -441,8 +464,8 @@ lock at its start (`BEGIN IMMEDIATE`), waiting for another writer instead of fai
 
 ## Starting up
 
-At start the master takes the lease (above), then checks that the database schema matches its version, then reads back the
-worker registry. Every worker that isn't gone counts as `disconnected` from that moment, and
+At start the master checks the schema before waiting for the lease. With `--migrate`, it
+takes the lease before migrating. Once it leads, it reads back the worker registry. Every worker that isn't gone counts as `disconnected` from that moment, and
 its lease starts again from zero once a master it may have replaced can no longer answer it:
 `lease_period` less `query_timeout` (20 s by default), how long that master may still believe
 it leads (decision 444). The master's own downtime never counts against workers. A worker that
@@ -504,7 +527,7 @@ retention is enabled. An explicit backfill over an old range sees deleted runs a
 creates them again.
 
 The leading master runs retention every hour beside its main loop, deleting batches of runs
-from one DAG per transaction. `schedr_retention_deleted{kind}` counts what it deletes; for
+from one DAG per transaction. `schedr_retention_deleted_total{kind}` counts what it deletes; for
 `outputs`, it counts runs whose outputs were removed. Worker task logs have their own
 [retention](05-workers.md#logs), independent of these ages.
 

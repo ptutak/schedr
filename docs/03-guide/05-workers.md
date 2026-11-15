@@ -2,8 +2,9 @@
 
 A worker is the Rust **agent** (`schedr worker`) plus the subprocesses it starts. The agent
 never runs user code itself: tasks and parse jobs run in child processes, so a
-crash or a memory spike in user code doesn't take the agent down. A worker needs no
-database. All it needs is `[worker] master_url`.
+crash stays outside the agent and the memory watchdog can stop a task over budget. A worker
+needs no database connection. Configure `[worker] master_url`, its DAG code and interpreter,
+and TLS for its internal links; see [Deployment](10-deployment.md).
 
 ## The agent's loop
 
@@ -44,8 +45,9 @@ The agent ends any stream silent for a lease, whatever it runs, and acts on no m
 arriving past that limit. This also applies while fetching inputs: a late chunk is ignored,
 the task is not started and no rejection is sent. On its first stream, before it knows the
 lease, it drops a `Registered` at least as old as the lease stated in that reply and registers
-again. The master takes back an unstarted assignment two heartbeat intervals after that lease
-(decision 450).
+again. The master uses the worker's message numbers and journal on reconnection to take back
+assignments known never started; age alone does not expire them
+([message numbers](17-master-clock.md#message-numbers-and-their-echo-b240)).
 
 The agent journals what ends meanwhile, and reconnects after a backoff that doubles from 200 ms
 to 30 s, with jitter, so
@@ -67,8 +69,7 @@ For each root, the master picks a connected, active worker that is not drained a
 root at the current parse's exact hash. It picks the one running the fewest attempts, then
 by worker name. A worker on older code, or newer code not parsed yet, isn't picked: the
 connection definitions come from that parse. `--worker NAME` asks for a particular one, which
-must
-meet the same conditions. If no suitable worker is found, the command is rejected.
+must meet the same conditions. If no suitable worker is found, the command is rejected.
 
 A worker runs one connection check or test at a time. Its time starts when the job arrives,
 including its wait for its turn and secret reads: 30 s for a check, or the test's `--timeout`
@@ -116,8 +117,7 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    `spawn`.
 3. **The process.** A Python task runs `python -m schedr.runner task`, forked from a fork
    server when the task allows it and a server can, otherwise in a new process. A command runs
-   through
-   the shell when it is a string, or directly when it is a list of arguments. It inherits
+   through the shell when it is a string, or directly when it is a list of arguments. It inherits
    the attempt's context channel, `SCHEDR_CTX_FD`
    ([A command's context channel](#a-commands-context-channel)). Each starts in
    its own process group, so cancelling or killing reaches the whole
@@ -156,11 +156,12 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
 
 Sensors for one interpreter and set of root copies run as coroutines in a spawned,
 long-lived host. A new code set uses another host; each stops when its last wait step ends.
-They take watcher slots (`[watchers] slots`, 500 by default), not task slots; with none free a wait
-step stays `queued` and says why. A draining worker hands its pokes to other workers at once, using
-no retry, and full-control wait steps get the drain's grace time. The host imports each DAG file once, shares module globals, and
-uses the worker's log directory as its working directory and the allowed environment plus
-`pass_env`. Run-specific values come from `dag_ctx` and `task_ctx`; use absolute paths.
+They take watcher slots (`[watchers] slots`, 500 by default). With none free, a wait step stays
+`queued` and says why. A draining worker hands its pokes to other workers at once, using no
+retry. Full-control wait steps get the drain's grace time.
+
+The host imports each DAG file once and shares module globals. Its working directory is the
+worker's log directory; its environment is the allowed environment plus `pass_env`. Run-specific values come from `dag_ctx` and `task_ctx`; use absolute paths.
 Blocking the event loop holds up the host's other wait steps.
 Wait steps on a host share memory and can read each other's secrets; separate teams that
 must be isolated with separate queues and workers.
@@ -254,9 +255,9 @@ waits up to 30 s to be taken, and 30 s to be answered.
 
 Tasks' API calls go from the agent to the master on the Control stream. Under the master's
 lease, the master runs them in process through the API router as the task or trigger, only
-for an open attempt or trigger on that worker and only on the allow-list (currently `GET`
-and `POST /api/v1/events`). The agent keeps unanswered calls and resends them after a
-reconnect, giving up after a minute (so a command's API call waits up to that, not 30 s).
+for an open attempt or trigger on that worker and only on the allow-list: `GET` and
+`POST /api/v1/events`, and `POST /api/v1/notifications` for its own notifications. The agent keeps unanswered calls and resends them after a
+reconnect, giving up after a minute. The CLI allows that minute plus 30 s to read the answer.
 `[grpc] max_message_size` limits requests (413 before
 sending) and answers (502 if too large); a command's context has a separate 1 MiB limit.
 
@@ -274,7 +275,7 @@ the commands print, and the messages when a call cannot be done, is
 
 ## The fork server
 
-The runner has a third mode, `python -m schedr.runner fork_server`. It imports a list of
+The runner's `python -m schedr.runner fork_server` mode preloads code for child processes. It imports a list of
 libraries once, then starts one process per request. The process runs the same `task` or
 `parse` code a spawned runner runs, with its own channel, log and process group. On Linux
 the worker starts this mode for the interpreter `[dags] interpreter` names, when that
@@ -333,8 +334,8 @@ package, a typo in the list).
 
 **The servers.** On Linux the worker starts them when the worker starts. With a `preload`
 list there are two: a preloaded one, sent that list, and a bare one, sent no modules. Both
-load all of `schedr` first (but its runner and `schedr.testing`), with what it imports,
-such as pydantic: a child then imports none of it again, about 200 ms a task. Without a
+load `schedr` first, except its runner and `schedr.testing`, along with dependencies such as
+pydantic. Children reuse those imports, saving about 200 ms per task in the measured setup. Without a
 list there is only the bare one. Each
 server's own output is appended to `fork-server-preloaded.log` or `fork-server-bare.log`
 in the worker's log directory, beside the task logs.
@@ -534,9 +535,8 @@ running.
 It waits for `Continue` before reporting `TaskEnded` and restarting cleanup with its handles,
 all tries and freshly read secrets. A task interrupted while running gets a `lost` result; one
 already cleaning keeps its task result. `Kill` discards the waiting cleanup; `CLEAN_REST`
-stops any still-running task and cleans the handles the moved cleanup did not have. Even a
-record
-without a process identity gets cleanup, since the agent cannot tell whether it started. A
+stops any still-running task and cleans the handles the moved cleanup did not have. Even a record without a process identity gets cleanup: the agent cannot tell whether its
+process started. A
 journal write failure is logged; a result not written can be lost on restart before its ack.
 
 A process group is identified by its ID and its leader's start time, so a recycled PID is
@@ -547,7 +547,7 @@ journal: a second agent with the same ID and data directory exits at once.
 ## Memory
 
 All tasks on a worker share the pod's memory limit. If the kernel's out-of-memory killer
-fires, it kills everything in the container, the agent included. So the agent enforces
+fires, it can kill the agent as well as tasks. So the agent enforces
 **budgets** itself for task and parse processes and watcher hosts:
 
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
@@ -562,8 +562,9 @@ fires, it kills everything in the container, the agent included. So the agent en
   A zombie (a child not yet reaped) holds no memory and counts as nothing.
 - A group over its budget gets **SIGKILL at once**: a spike can't wait for a grace period.
   The attempt ends `oom_killed` (using a retry), with "exceeded memory budget … (… used)".
-- With no limit found (cgroup v1, a Linux laptop), the worker accepts any task budget and
-  enforces its own `memory=` if set. Otherwise memory is measured but not limited.
+- With no cgroup limit found (for example, cgroup v1 or an unlimited host), the worker accepts
+  any task budget. It enforces `memory=` when set, otherwise `[worker] memory_budget` when
+  set. With neither, memory is measured but not limited.
 - Without `/proc` (macOS) there is no cgroup limit and a task's memory can't be read, so the
   watchdog neither measures nor kills.
 
@@ -577,10 +578,10 @@ For `hard_memory_limit=True`, the worker starts the internal `schedr task-exec`,
 group, with the same descriptors. See [Task memory](../02-dags/02-tasks.md#memory) for the
 allocation behavior and the cost of starting a capped Python task.
 
-Task process attempts report their peak memory, shown in the API, and their `start_method` once
-`Started` has been stored. `usage`, stored with the result, is separate. For a forked
-process its peak resident size includes the fork server's pages. This peak is the watchdog's
-PSS, which counts only a share of those pages (see [The fork server](#the-fork-server)).
+Task attempts report the watchdog's peak memory, shown in the API, and `start_method` once
+`Started` has been stored. The watchdog uses PSS when available, counting only a share of
+shared pages. A forked process also reports `usage.peak_rss_bytes` with its result: that
+separate figure includes shared pages in full. See [The fork server](#the-fork-server).
 
 ## Draining
 
@@ -596,12 +597,13 @@ assigning to it, and the agent rejects anything sent before the master knew. Run
 | − the fixed [report period](14-timings.md#fixed-timings), 2 s | What still runs gets SIGKILL (`drain_terminate_period`, 3 s, after the SIGTERM). |
 | until the end (the ack and deregister waits stop shortly before it) | The interrupted tasks are reported `interrupted` (run again elsewhere without using a retry); the agent waits for the master's acknowledgements, up to half the report period before the end (1 s by default), sends `Deregister`, gives the master until a quarter of it before the end to take it, and exits 0 within the grace period. |
 
-A running cleanup may outlast the grace period: the agent waits for it, but a pod killed
-meanwhile
-is lost. A cleanup held for the master's answer does not hold up a drain; the journal keeps it.
-At its start the agent logs if `[worker] cleanup_timeout` cannot fit in the grace period, and it
-logs once for each task whose own `cleanup_timeout` cannot. The two times must
-fit in the grace period, else the worker doesn't start. A second
+A running cleanup may outlast the grace period. The agent waits for it, but a pod killed
+meanwhile is lost. A cleanup held for the master's answer does not hold up a drain; the journal keeps it.
+Left unset, `[worker] cleanup_timeout` fits: the shorter of 5 minutes and what the drain
+leaves of the grace period (25 s with the default 30 s; decision 497). At its start the agent
+logs if one set by hand cannot fit, and it logs once for each task whose own `cleanup_timeout`
+cannot. Only the drain's terminate and report periods must fit within the termination grace period;
+otherwise the worker does not start. A cleanup that cannot fit produces a warning. A second
 SIGTERM interrupts at once.
 
 **For maintenance**, `schedr workers drain <id>` is a command. The worker gets no new tasks or
@@ -612,8 +614,8 @@ master and the worker.
 ## Logs
 
 The agent serves its task logs on its **log endpoint** (`[worker] log_port`, 8081):
-`GET /logs/{attempt_id}?from=&limit=`, at most 1 MiB and 64 KiB per request (a part and the
-bytes before it, see below). Response headers give the
+`GET /logs/{attempt_id}?from=&limit=`, at most 1 MiB plus 64 KiB per request (a log part and
+the bytes before it, see below). Response headers give the
 current size, whether the attempt still runs, and which worker answered. The webserver is
 the only client. It finds the worker that ran the attempt and that worker's current address in
 the database, and passes the log on (`GET …/attempts/{try}/log`). If another worker answers at

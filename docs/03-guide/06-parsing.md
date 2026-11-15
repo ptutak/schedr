@@ -1,28 +1,31 @@
 # Parsing and code versions
 
-DAG files are Python. The master has no Python and never runs user code, so it can't read
-them. Workers do, and send the master the result as plain data. Script roots contain
+DAG files are Python. The master never imports them or runs user code. Workers import
+them and send the result as plain data. Script roots contain
 `schedr.toml` declarations instead; the agent reads them in Rust. This page covers how code
 gets from a git repository to a DAG the master can schedule, and which code a task runs.
 
 ## From files to DAGs
 
 ```mermaid
-flowchart LR
-    git["git-sync"] -- "new checkout" --> files["DAG root<br/>on the worker"]
-    files -- "scan every 30 s,<br/>settle 5 s, hash" --> agent["agent"]
-    agent -- "CodeVersionChanged<br/>(root, hash)" --> master["master"]
-    master -- "AssignParse<br/>(one worker)" --> agent2["agent"]
-    agent2 -- "import each matching .py file<br/>in its own runner" --> runner["python runners"]
-    agent2 -- "UploadParseResult<br/>(DAG JSON, import errors)" --> master
-    master -- "store DAG versions" --> db[("database")]
+sequenceDiagram
+    participant W as worker
+    participant M as master
+    participant DB as database
+    W->>W: scan, settle, hash and copy
+    W->>M: CodeVersionChanged (root, hash)
+    M->>W: AssignParse (one worker per job)
+    W->>W: import matching files in separate runners
+    W->>M: UploadParseResult (one file per message)
+    M->>DB: store parse and DAG versions
 ```
 
 1. **Detect.** Every `[dags] poll_interval` (30 s) the agent scans each root, following
    symbolic links, which is how git-sync switches checkouts. A changed root must then stay
    unchanged for `[dags] settle_time` (5 s), so a half-written checkout is never read.
 2. **Hash and copy.** The agent copies the root's files into its own read-only copy (below)
-   and hashes every file, not only `.py` files, by path and contents. Every worker with the
+   and hashes every scanned file, not only `.py` files, by path and contents. The scan skips
+   `.git`, `__pycache__`, `*.pyc` and paths excluded by `.schedrignore`. Every worker with the
    same code gets the same hash. Only a new hash is reported.
 3. **Report.** `CodeVersionChanged(root, hash)` goes to the master. Every worker reports on its
    own, but the master creates **one parse job per (root, hash, schedr version)**.
@@ -41,7 +44,10 @@ flowchart LR
    Only `schedr dags check` shows them; the agent doesn't upload them.
 5. **Upload.** The agent sends the DAG JSON and the import errors per file.
    The master validates them and stores a new DAG version for each DAG that changed. A new
-   trigger, or one of another kind, is stored **paused** ([Pausing](../02-dags/04-schedules.md#pausing)). The upload is a stream: a header, then one message per file, so
+   trigger, or one of another kind, is stored **paused**
+   ([Pausing](../02-dags/04-schedules.md#pausing)).
+
+   The upload is a stream: a header, then one message per file, so
    only a single file's size counts against `[grpc] max_message_size` (64 MiB by
    default), which the master sends the worker in `Registered`. A file whose parse result is
    bigger is uploaded as its import error, `ParseResultTooLarge`, naming the setting. That,
@@ -72,9 +78,10 @@ A bad file is reported as the import error `InvalidScriptConfig`, with each job-
 problem prefixed by the job name, for example ``job `report_daily`:``. See [Plain scripts](../02-dags/17-plain-scripts.md).
 
 A parse job that hasn't finished after `[master] parse_job_timeout` (10 minutes by default),
-or whose worker is lost, goes to the next
-worker that reported the same hash. A worker that connects again gets back the jobs it held,
-since a result finished while it was away is dropped; one still running answers instead of a second parse. Parse jobs live only in the master's memory. After a
+or whose worker is lost, is reassigned to a worker with the same hash. Another worker is
+preferred; the same one can receive it again if there is no other candidate. A worker that
+reconnects gets back the jobs it held. A result finished while it was away is dropped; a
+parse still running answers the repeated assignment instead of starting a second parse. Parse jobs live only in the master's memory. After a
 master restart, workers report their hashes again and the jobs are created again. A
 stored parse is parsed again only when a file of it failed transiently
 ([Parsed again](#parsed-again)).
@@ -141,8 +148,8 @@ A file that has never imported defines none yet.
 ### A held DAG
 
 The hold is the file's, so every DAG defined in that file is held while the error is in
-the root's current parse. The scheduler creates no run of it. A fire time during the hold
-is missed, as while the DAG is paused. A manual trigger is rejected. The reason names the
+the root's current parse. The scheduler creates no run of it during the hold. Once it lifts,
+missed fire times follow the DAG's `catchup` setting. A manual trigger is rejected. The reason names the
 DAG, the file and the error, and says what to change: for a result that is too large, for
 a DAG the checks refuse, for a path outside the root, or, for anything else, that the file
 has to import. A queued run is not started. A run that has already started is not
@@ -180,22 +187,25 @@ The master logs a warning naming those files, and the import error stays listed.
 ## Which code runs: only the newest
 
 Workers can report different hashes of a root for a while, as git-sync catches up pod by pod.
-schedr keeps no old code, so it runs **only the newest code**:
+schedr assigns new work to workers with **current or newer code**. Running attempts keep
+their code copies:
 
 - The root's **current** hash is the one workers switched to most recently. A switch is a
   worker moving to new code (a hash not seen before) or back to code recorded before the one
   it leaves (a revert, which counts as new code). A worker moving to code recorded later is
-  catching up and changes nothing, as does a lagging worker going through older revisions. This is kept in the database
-  (`root_hashes`), so a restarted master decides the same. Switches keep the order the master
+  catching up and changes nothing, as does a lagging worker going through older revisions.
+  The database keeps this order in `root_hashes`, so a restarted master decides the same. Switches keep the order the master
   saw them in, even if its clock steps back.
 - The current hash's parse defines the root's DAGs.
 - The root's tasks go **only to workers at the current hash**, or at a newer one being parsed.
   `AssignTask` carries the expected hash, and a worker whose code moved meanwhile rejects the
   task with `CODE_MISMATCH`, to be tried again 35 s later (about git-sync's interval plus the
   settle time).
-- A task waiting for code says so ("waiting for workers serving queue `default` to have the
-  newest code of root `etl`"). A task that waits longer than `[master] code_wait` (10 min)
-  becomes `unschedulable`; `schedr tasks retry` gives it another chance.
+- A task with no worker reporting accepted code stays `queued` and says why ("waiting for
+  workers serving queue `default` to have the newest code of root `etl`"). If every eligible
+  worker rejects the task, it can become `unschedulable`. When any rejection is for missing
+  code, this waits at least `[master] code_wait` (10 min by default) from the first code
+  rejection. `schedr tasks retry` gives it another chance.
 
 What a worker imports, for a parse job and for a task, is **its own copy of the code it
 hashed**. When a root settles, the agent copies its scanned files into its data directory
@@ -228,8 +238,8 @@ place) leaves running jobs alone. So:
 - **Only the hashed files are in it.** What `.schedrignore` excludes is not shipped to
   parsing or tasks, so read such a file by its full path under the configured root.
   `dags check` uses the same filtered copy, so ignored files cannot be imported there either.
-- A copy is removed once newer code replaced it and nothing running uses it: one or two per
-  root at a time.
+- A copy is removed once newer code replaced it and nothing uses it. Long-running tasks,
+  watcher hosts and recovered cleanups can retain several old copies across deployments.
 
 Code under a DAG root is compiled from its source at every import, never taken from a
 `.pyc` (Python's own check can miss a change made within a second), and no `.pyc` is written
