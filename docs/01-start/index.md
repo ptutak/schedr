@@ -75,6 +75,10 @@ in it, `dags/sync.py`:
   `~/.local/share/schedr` (`$XDG_DATA_HOME/schedr` if that is set).
 - **Addresses:** the API and the web UI on `http://127.0.0.1:8080`, from this machine only.
 
+If a configured database is temporarily unreachable, `schedr standalone` waits and retries.
+The log names the database host and port, or file. A bad URL, password or TLS setting is
+still an error. Ctrl-C also stops a start that is waiting for the database.
+
 Leave it running and use a second terminal for the rest. By default, `schedr` scans for
 changes every 30 s and waits for files to stay unchanged for 5 s before copying and parsing
 them. Allow time for that wait and the import after a scan finds your file.
@@ -133,9 +137,12 @@ off unless the trigger asks for it ([Schedules](../02-dags/04-schedules.md)).
 
 ### Stop it
 
-Ctrl-C starts shutdown. The worker stops taking new tasks. With the defaults, running tasks
-get 25 s to finish, followed by 3 s between SIGTERM and SIGKILL and 2 s to report results.
-The process then gives up its lease on the database and exits, so the next start can take over.
+Ctrl-C starts shutdown. The worker stops taking new tasks. With the defaults, tasks without
+a cleanup get 25 s to finish; tasks with a cleanup are stopped earlier to leave time for
+one cleanup try. The drain also reserves 3 s between SIGTERM and SIGKILL and 2 s to report
+results and leave. While connected, the worker waits for the master to record its departure,
+within the drain's remaining time. The process then gives up its database lease and exits,
+so the next start can take over.
 Starting it again keeps everything: the DAGs, the runs, the logs.
 
 The web UI signs no one in here. That is fine on `127.0.0.1`; before you open it to a network,
@@ -145,10 +152,9 @@ read [Network and security: Sign-in](../03-guide/08-network.md#sign-in).
 
 ### DAG files in the project folder
 
-Instead of a `dags` folder, the project folder itself can hold the DAG files. Give
-`--dag-path .`, and keep the virtual environment out with a `.schedrignore` file (gitignore
-syntax): schedr reads every file under a DAG folder, and would otherwise copy `.venv` and try
-the `.py` files in it as DAG files.
+DAG files can live directly in the project folder. Use `--dag-path .` and exclude the
+virtual environment with `.schedrignore` (gitignore syntax). Otherwise, `schedr` copies
+`.venv` with the DAG root and imports Python files in it whose bytes contain `schedr`.
 
 ```text
 my-schedr/
@@ -166,14 +172,15 @@ my-schedr/
 .venv/bin/schedr standalone --migrate --dag-path .
 ```
 
-The folder is named after itself: `schedr dags list` shows the DAG defined in
-`my-schedr:sync.py`. Anything else you keep in the folder that isn't code (notes, data, test
-outputs) goes in `.schedrignore` too: a change to any file there counts as new code.
+The root takes the folder's name: `schedr dags list` shows the definition at
+`my-schedr:sync.py`. Exclude notes, data and test outputs with `.schedrignore` too. Files
+that remain in the scan count toward the code hash, so changing them creates a new code
+version.
 
 ### A plain script
 
-A script that isn't a DAG runs too: a `schedr.toml` next to it declares it as a job. In a
-folder of its own, say `scripts`:
+To run a script without writing a DAG, declare a job in `schedr.toml`. Put both files in
+a script folder, such as `scripts`:
 
 ```text
 my-schedr/
@@ -200,9 +207,10 @@ schedule = "0 6 * * *"
 .venv/bin/schedr standalone --migrate --script-path scripts
 ```
 
-`interpreter = "python"` is the project's `.venv`, as for DAG files. A job needs a schedule to
-become a DAG of its own, but like every new DAG it starts paused: until you unpause it, it runs
-only when triggered by hand. Its ID is the folder, the file and the job:
+`interpreter = "python"` selects the built-in Python interpreter, which finds the project
+virtual environment as described above. A scheduled job becomes a one-task DAG and starts
+paused. You can run it by hand while paused. Its ID combines the root, declaration file and
+job name:
 
 ```sh
 .venv/bin/schedr runs trigger 'scripts:schedr.toml#hello'
@@ -210,8 +218,9 @@ only when triggered by hand. Its ID is the folder, the file and the job:
 .venv/bin/schedr tasks logs <run-id> hello
 ```
 
-Both flags can be given together, and each can be repeated. [Plain scripts](../02-dags/17-plain-scripts.md)
-lists every key of a job: arguments, environment, secrets, retries, parameters.
+Use `--dag-path` and `--script-path` together to load both kinds of root; repeat either
+flag for more folders. [Plain scripts](../02-dags/17-plain-scripts.md) lists the job settings,
+including arguments, environment variables, secrets, retries and parameters.
 
 ## Next steps
 

@@ -66,9 +66,9 @@ An allocation past the cap fails inside the task instead of causing a kill: Pyth
 a program that reserves a lot up front, such as the JVM or Go, may fail. A capped Python
 task starts in a fresh process and is never forked, so it takes a little longer to start.
 
-A resource's cleanup gets its setup's budget and cap. A wait step (`@sensor` or
-`wait_for`) has no budget of its own: it shares its host's `[watchers] memory_budget`.
-Memory options on a wait step are refused when the DAG loads. See
+A resource's cleanup gets its setup's budget and cap. A `@sensor` has no budget of its
+own: it shares its host's `[watchers] memory_budget`. The master completes `wait_for`
+without a watcher host or process. Memory options on either are refused when the DAG loads. See
 [Workers: Memory](../03-guide/05-workers.md#memory) for how the worker enforces budgets.
 
 ## Async tasks
@@ -83,7 +83,8 @@ For waiting for an external event, see [Wait steps](18-sensors.md).
 ```
 
 `@task`, `@branch`, `@resource` setups and cleanups can be async functions. Async
-generators are refused as tasks, as they are for triggers. Each async attempt runs in its
+generators are refused as tasks. A generator `@trigger` requires an async generator instead
+([Event triggers](19-triggers.md)). Each async attempt runs in its
 own event loop. When its main coroutine ends, leftover tasks are cancelled; errors from
 them are logged as warnings and do not change the attempt's result. A timeout or cancel
 cancels the coroutine, allowing `finally` and `async with` exits to run within the grace

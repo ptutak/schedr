@@ -109,11 +109,23 @@ directly in the cleanup command.
 
 ## Time and retries
 
-`cleanup_timeout` limits each cleanup try; when omitted, `[worker] cleanup_timeout` supplies it
-(five minutes by default; see [Timings](../03-guide/14-timings.md)). `cleanup_retries` is the
-number of retries after a failure (default three), and `cleanup_retry_delay` is the delay
-before each retry (default 30 seconds). Set them on the task or in `StepDefaults`. A cancel
-does not stop a cleanup already running; its timeout still applies.
+`cleanup_timeout` limits each cleanup try. A task or `StepDefaults` can set it; otherwise
+`[worker] cleanup_timeout` applies. When that setting is unset, the worker uses the shorter
+of five minutes and the time its drain leaves for cleanup, with a minimum of one second.
+With the defaults, that is 25 seconds: the 30-second `termination_grace_period` minus
+3 seconds for termination and 2 seconds for reporting and departure. An explicit worker
+setting is kept, even if it exceeds that time. See [Timings](../03-guide/14-timings.md).
+
+`cleanup_retries` is the number of retries after a failure (default three).
+`cleanup_retry_delay` is the delay before each retry (default 30 seconds). Set them on the
+task or in `StepDefaults`. A cancel does not stop a cleanup already running; its timeout
+still applies.
+
+During a drain, the worker stops a task early enough to leave time for one cleanup try.
+With the default 25-second cleanup timeout and 30-second drain, a task with cleanup is
+interrupted as shutdown begins. A cleanup already running continues. Retries and their
+delays can exceed the drain's time; a pod or service manager may then kill the worker before
+cleanup finishes.
 
 The attempt holds its worker slot through cleanup, retries and their delays. Its instance is
 `cleaning_up` while it waits; downstream tasks and a task retry wait for cleanup to finish.
