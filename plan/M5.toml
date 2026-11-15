@@ -225,7 +225,8 @@ scope = '''
 done_when = '''
 the two charts on the Metrics page for every range, light and dark, their reads bounded (an index used, measured on a large table), API and UI browser tests, the guide's Metrics page updated
 '''
-status = "planned"
+status = "done"
+done = 2026-11-15
 
 [[steps]]
 id = "M5.1m"

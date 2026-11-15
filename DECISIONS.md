@@ -29,7 +29,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D494 | 2026-11-15 | user | planned (M5.1l2) | observability | Throughput and start latency come from the attempts table |
+| D494 | 2026-11-15 | user | built M5.1l2 | observability | Throughput and start latency come from the attempts table |
 | D493 | 2026-11-15 | user | built M5.1p | configuration | Tunable constants are hidden settings |
 | D492 | 2026-11-15 | claude | built M5.1j | observability | The Metrics endpoints keep their final buckets between requests |
 | D491 | 2026-11-14 | user | built M5.1j | ui-cli | A process's memory includes its tasks; memory is split by kind |

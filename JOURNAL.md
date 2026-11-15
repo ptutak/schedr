@@ -1478,3 +1478,27 @@ accept loop or an events subscription (limits are 1 to 16,777,216); a code retry
 overflowed a timestamp parked its task for good (timings are at most 3650 days, and the
 deadline saturates); `dags test` kept its own client timeouts; the pending reason named the
 constant instead of the configured cap.
+
+### <a id="N16"></a>2026-11-15: M5.1l2 built: the attempt charts on the Metrics page (note 16; on D494)
+
+Built as decision 494 says, read from the attempts: per bucket, the attempts ended by how
+(`success`; `failed`, `timed_out`, `oom_killed` as failed; the rest as stopped), and the
+exact nearest-rank p50 and p95 of `started_at - assigned_at` for those started, below zero
+read as zero. `GET /api/v1/metrics/tasks` keeps a range's final buckets between requests, the
+samples' way (decision 492, the same `METRICS_FINAL_AFTER`), so a refresh reads the last few
+buckets; on SQLite a first read of 30 days of a million attempts took 2 to 3 s for the ends and
+5 to 8 s for the latency (a throwaway bench), an hour 3 to 10 ms.
+
+Found while building: the two indexes on `ended_at` and `started_at`, plain at first, took the
+plan of the rounds' read of unstarted attempts (`started_at IS NULL`) from `attempts_open`;
+they are partial (`IS NOT NULL`), which the range reads imply, and a test checks each read's
+plan. The attempts ended draw as a stacked bar per bucket (`Spec::bars`): as an area, buckets
+with nothing between them drew spikes. And a stacked area's point alone between gaps drew
+nothing (the memory by kind of samples three minutes apart); it is a bar now, as a line's lone
+point is a dot.
+
+Small choices of Claude's: the charts sit below the processes' table and show without samples;
+an attempt read failing leaves the processes' charts with a warning of its own. Not built: a
+"ready → started" line (the wait before a worker takes a task): `ready_at` is overwritten by a
+retry, so it would be exact only for an instance's last attempt; the guide says what the
+latency leaves out, and the line is the user's call.

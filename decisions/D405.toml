@@ -8,7 +8,8 @@ summary = '''
 The scheduler creates no scheduled run for a fire time with a successful, queued or running run of
 any kind (a backfill's, a manual one): D400's rule the other way, so a period isn't run twice.
 Covered fire times take no place, and with `catchup` the ones after them follow. A covering run
-that fails later leaves its day without a scheduled run: it is rerun by hand.
+that fails later no longer covers its fire time: a pass while that time is still due (the latest
+one, or any with `catchup`) creates its scheduled run; one no longer due is rerun by hand.
 '''
 history = "JOURNAL.md#D405"
 step = "M4.12b"

@@ -6,7 +6,7 @@
 <div class="metrics-choices">
   <nav class="choices" aria-label="Range">{% for choice in ranges %}<a href="{{ choice.href }}"{% if choice.current %} class="current" aria-current="true"{% endif %}>{{ choice.label }}</a>{% endfor %}</nav>
   {% if !deployments.is_empty() %}<nav class="choices" aria-label="Deployment">{% for choice in deployments %}<a href="{{ choice.href }}"{% if choice.current %} class="current" aria-current="true"{% endif %}>{{ choice.label }}</a>{% endfor %}</nav>{% endif %}
-  <span class="dim">Each process's memory and CPU, sampled once a minute by the leading master; times in {{ zone }}. Hover a chart for its values.</span>
+  <span class="dim">Each process's memory and CPU, sampled once a minute by the leading master, and the attempts that ended and started; times in {{ zone }}. Hover a chart for its values.</span>
 </div>
 {% for section in sections %}
 <section class="metrics-deployment">
@@ -62,6 +62,20 @@
     </table>
   </div>
   {% endif %}
+  {% match section.flow %}
+  {% when Ok with (flow) %}
+  <div class="metrics-flow">
+    <h3>Attempts ended</h3>
+    <p class="legend chart-legend">{% for item in flow.ended_legend %}<span class="key"><span class="swatch s{{ item.slot }}"></span>{{ item.label }}</span>{% endfor %}</p>
+    <div class="chart-box">{{ flow.ended|safe }}</div>
+    <h3>Start latency</h3>
+    <p class="legend chart-legend">{% for item in flow.latency_legend %}<span class="key"><span class="swatch s{{ item.slot }}"></span>{{ item.label }}</span>{% endfor %}</p>
+    <div class="chart-box">{{ flow.latency|safe }}</div>
+    <p class="dim">From assignment to the worker's start, of the attempts started in each point; failed counts timed out and OOM-killed, stopped counts cancelled, interrupted, lost and expired.</p>
+  </div>
+  {% when Err with (error) %}
+  {% if section.error.is_none() %}<div class="banner warning">Attempts unavailable: {{ error }}</div>{% endif %}
+  {% endmatch %}
 </section>
 {% endfor %}
 </div>

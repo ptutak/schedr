@@ -3082,3 +3082,56 @@ async fn a_tasks_attempt_peaks_and_a_dags_are_read_on_postgres() {
         ("extract", [5_000_000_u64].as_slice(), 1)
     );
 }
+
+#[tokio::test]
+async fn the_throughput_and_start_latency_are_read_on_postgres() {
+    // M5.1l2 (decision 494): the buckets, the window functions and the milliseconds on
+    // Postgres; a start and an end in their minute's last half-second stay in it (Grok's review:
+    // the cast of the epoch rounded them into the next).
+    let (db, _run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    // Assigned at 08:00:00.250, started at 08:00:59.700, ended at 08:00:59.600 (the master's
+    // clock, before the worker's start as it estimates it: a bound, not an order).
+    let started = ts("2026-10-21T08:00:59.700Z");
+    assert!(
+        db.mark_started(&attempt_id, "spawn", started)
+            .await
+            .unwrap()
+    );
+    let end = AttemptEnd::by_master(AttemptStatus::Failed);
+    assert!(
+        db.end_attempt(&attempt_id, &end, ts("2026-10-21T08:00:59.600Z"))
+            .await
+            .unwrap()
+    );
+    let minute = ts("2026-10-21T08:00:00Z");
+    let range = (
+        ts(NOW)
+            .checked_sub(jiff::SignedDuration::from_hours(1))
+            .unwrap(),
+        ts(NOW)
+            .checked_add(jiff::SignedDuration::from_hours(1))
+            .unwrap(),
+    );
+    let ended = db.attempts_ended(range, 60).await.unwrap();
+    assert_eq!(
+        ended
+            .iter()
+            .map(|e| (e.at, e.status.as_str(), e.count))
+            .collect::<Vec<_>>(),
+        [(minute, "failed", 1)]
+    );
+    let latency = db.start_latency(range, 60).await.unwrap();
+    assert_eq!(
+        latency
+            .iter()
+            .map(|l| (l.at, l.started, l.p50_ms, l.p95_ms))
+            .collect::<Vec<_>>(),
+        [(minute, 1, 59_450, 59_450)]
+    );
+}

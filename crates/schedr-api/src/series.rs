@@ -142,7 +142,7 @@ pub struct SeriesQuery {
 }
 
 /// The range a query names.
-fn range_of(name: Option<&str>) -> Result<Range, ApiError> {
+pub(crate) fn range_of(name: Option<&str>) -> Result<Range, ApiError> {
     name.map_or(Ok(Range::Day), |name| {
         Range::parse(name).ok_or_else(|| {
             ApiError::BadRequest(format!(

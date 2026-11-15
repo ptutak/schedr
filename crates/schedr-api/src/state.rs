@@ -49,6 +49,8 @@ pub struct ApiState {
     pub usage: fn() -> Option<schedr_model::usage::NodeUsage>,
     /// The Metrics endpoints' final buckets, kept between requests.
     pub series: Arc<crate::series::cache::SeriesCache>,
+    /// The Metrics page's throughput and start latency's final buckets, kept the same way.
+    pub flow: Arc<crate::task_flow::FlowCache>,
     /// How far its reads reach and what they allow (decision 493).
     pub limits: ApiLimits,
 }
@@ -81,6 +83,7 @@ impl ApiState {
             }),
             usage: || None,
             series: Arc::default(),
+            flow: Arc::default(),
             limits: ApiLimits::default(),
         }
     }

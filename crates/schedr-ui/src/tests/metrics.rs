@@ -46,12 +46,35 @@ fn samples(range: &str) -> Value {
     })
 }
 
+/// A range's attempts: three buckets, two with attempts ended, one with starts.
+fn flow(range: &str) -> Value {
+    let bucket = |at: &str, ended: [u64; 3], started: u64, p: Option<[u64; 2]>| {
+        json!({
+            "at": at, "succeeded": ended[0], "failed": ended[1], "stopped": ended[2],
+            "started": started, "start_p50_ms": p.map(|p| p[0]), "start_p95_ms": p.map(|p| p[1])
+        })
+    };
+    json!({
+        "range": range, "step_s": 360,
+        "from": "2026-11-14T09:48:00Z", "to": "2026-11-14T10:00:00Z",
+        "buckets": [
+            bucket("2026-11-14T09:48:00Z", [12, 2, 1], 14, Some([180, 2400])),
+            bucket("2026-11-14T09:54:00Z", [8, 0, 0], 0, None),
+            bucket("2026-11-14T10:00:00Z", [0, 0, 0], 3, Some([90, 650])),
+        ]
+    })
+}
+
 fn with_samples() -> Scripted {
     let mut etl = etl();
     for range in ["1h", "24h", "7d", "30d"] {
         etl.answers.insert(
             format!("/api/v1/metrics/samples?range={range}"),
             (200, samples(range)),
+        );
+        etl.answers.insert(
+            format!("/api/v1/metrics/tasks?range={range}"),
+            (200, flow(range)),
         );
     }
     etl.answers.insert(
@@ -71,8 +94,8 @@ async fn the_page_charts_each_deployments_processes_and_lists_them_by_peak() {
         ["24 h"],
         "24 h at first; one deployment: no deployment choice"
     );
-    // Memory (whole), memory by kind, CPU.
-    assert_eq!(html.matches(r#"<svg class="chart""#).count(), 3);
+    // Memory (whole), memory by kind, CPU; attempts ended, start latency.
+    assert_eq!(html.matches(r#"<svg class="chart""#).count(), 5);
     assert!(html.contains("tasks 3.0 GiB"), "the kinds' legend");
     // By peak: the worker (its tasks with it) first.
     let first = texts(&html, "table.metrics-table tbody tr:first-child td");
@@ -92,10 +115,71 @@ async fn the_page_charts_each_deployments_processes_and_lists_them_by_peak() {
     for range in ["1h", "7d", "30d"] {
         let (status, html) = get(&app, &format!("/metrics?range={range}"), &[]).await;
         assert_eq!(status, StatusCode::OK, "{range}");
-        assert_eq!(html.matches(r#"<svg class="chart""#).count(), 3, "{range}");
+        assert_eq!(html.matches(r#"<svg class="chart""#).count(), 5, "{range}");
     }
     let (status, _) = get(&app, "/metrics?range=2h", &[]).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn the_attempts_ended_and_their_start_latency_are_charted_with_their_totals() {
+    let app = ui(vec![deployment("etl", with_samples())]);
+    let (_, html) = get(&app, "/metrics", &[]).await;
+    assert_eq!(
+        texts(&html, ".metrics-flow h3"),
+        ["Attempts ended", "Start latency"]
+    );
+    assert_eq!(
+        texts(&html, ".metrics-flow .legend .key"),
+        [
+            "succeeded 20",
+            "failed 2",
+            "stopped 1",
+            "p50, highest 180 ms",
+            "p95, highest 2.4 s"
+        ]
+    );
+    // Seconds on the latency axis from a second up; whole attempts on the other.
+    assert!(html.contains(">1 s<"), "a tick in seconds");
+    assert!(!html.contains(">0.5<"), "no half an attempt");
+}
+
+#[tokio::test]
+async fn attempts_that_cant_be_read_leave_the_samples_charted() {
+    let mut etl = with_samples();
+    etl.answers.insert(
+        "/api/v1/metrics/tasks?range=24h".to_owned(),
+        (500, json!({"error": "the database is gone"})),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/metrics", &[]).await;
+    assert_eq!(html.matches(r#"<svg class="chart""#).count(), 3);
+    let warnings = texts(&html, ".banner.warning");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].starts_with("Attempts unavailable: "),
+        "{warnings:?}"
+    );
+}
+
+#[tokio::test]
+async fn samples_that_cant_be_read_still_chart_the_attempts() {
+    // Grok's review of M5.1l2: the attempt charts need no samples.
+    let mut etl = with_samples();
+    etl.answers.insert(
+        "/api/v1/metrics/samples?range=24h".to_owned(),
+        (500, json!({"error": "samples are gone"})),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/metrics", &[]).await;
+    let warnings = texts(&html, ".banner.warning");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("Unavailable: "), "{warnings:?}");
+    assert_eq!(
+        texts(&html, ".metrics-flow h3"),
+        ["Attempts ended", "Start latency"]
+    );
+    assert_eq!(html.matches(r#"<svg class="chart""#).count(), 2);
 }
 
 #[tokio::test]
@@ -133,8 +217,10 @@ async fn an_unreachable_deployment_says_so_and_the_others_are_charted() {
         deployment("ml", down),
     ]);
     let (_, html) = get(&app, "/metrics", &[]).await;
-    assert_eq!(html.matches(r#"<svg class="chart""#).count(), 3);
-    assert!(texts(&html, ".banner.warning")[0].starts_with("Unavailable: "));
+    assert_eq!(html.matches(r#"<svg class="chart""#).count(), 5);
+    let warnings = texts(&html, ".banner.warning");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("Unavailable: "));
     // Two deployments: a choice of each.
     assert_eq!(
         texts(&html, "nav[aria-label=Deployment] a"),

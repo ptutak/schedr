@@ -8,11 +8,14 @@ summary = '''
 The Metrics page's throughput and start latency are read from the attempts table, per
 deployment, over the page's ranges and buckets: attempts ended per bucket by how they ended, and
 the start latency (`started_at` less `assigned_at`, the worker's start in master time, decision
-490) as p50 and p95. No worker reports timings, no protocol field, nothing stored in `samples`;
-an index on `attempts (ended_at)` in the open migration. Not chosen: workers reporting M5.1a's
+490) as p50 and p95, exact (the nearest rank), from `GET /api/v1/metrics/tasks`. No worker
+reports timings, no protocol field, nothing stored in `samples`; partial indexes on `attempts
+(ended_at)` and `(started_at)` in the open migration, and a range's final buckets kept between
+requests as the samples' are (decision 492). Not chosen: workers reporting M5.1a's
 stage timers in their heartbeat (a protocol field, new sample columns), moving the step out of
 M5.1.
 '''
 history = "JOURNAL.md#D494"  # <a id="D494"></a> starts its JOURNAL.md entry
 step = "M5.1l2"  # the plan step that builds it; "later"; "n/a" for a rule
-code = []
+code = ["crates/schedr-db/src/task_flow.rs::attempts_ended", "crates/schedr-db/src/task_flow.rs::start_latency", "crates/schedr-api/src/task_flow.rs::task_flow", "crates/schedr-api/src/task_flow.rs::FlowCache", "crates/schedr-ui/src/metrics/flow.rs::charts"]
+checked = 2026-11-15
