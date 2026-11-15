@@ -1,7 +1,7 @@
 # Secret storage
 
-Where the values behind a DAG's `secrets['path']['key']` live, and who reads them. How a DAG
-names and uses a secret is [Secrets](../02-dags/13-secrets.md).
+A DAG names secrets with `secrets['path']['key']`. This page explains where their values
+live and who reads them. To use them in a DAG, see [Secrets](../02-dags/13-secrets.md).
 
 A DAG may give a fallback for a missing key (`.get(key, fallback)`). It is written in the
 DAG, shown in the DAG's JSON, the API and the UI, and never masked: **never put a real secret
@@ -48,7 +48,7 @@ as a separate value. Values filled into a URL by a t-string are percent-encoded.
 [Built-in types](../02-dags/14-connections.md#built-in-types) for the forms and their rules.
 When a client needs a file path, the built-in types pass keys and certificates through an
 anonymous memory file on Linux, never a disk. Elsewhere they use a temporary file, mode
-0600, removed when the client has read it.
+0600, removed when the connection's file context closes.
 
 Two kinds of storage exist:
 
@@ -129,7 +129,7 @@ schema must be up to date. In Kubernetes, run them with `kubectl exec` in the po
 |---|---|
 | `schedr secrets set etl/db password=- user=etl` | Sets keys; the secret's other keys are kept. `key=@FILE` is a file's content exactly; `key=-` reads standard input, one trailing newline dropped, so a value stays out of the shell's history. |
 | `schedr secrets list [etl/]` | Paths and key names, never values. |
-| `schedr secrets get etl/db#password` | Prints one value; `get etl/db` prints the whole secret as JSON. The only way to see a value. |
+| `schedr secrets get etl/db#password` | Prints one value; `get etl/db` prints the whole secret as JSON. Prints values to standard output. |
 | `schedr secrets delete etl/db` | Deletes the secret, all its keys. |
 | `schedr secrets export --to DIR` | Writes each secret as `DIR/<path>.json` (mode 0600), for Vault. |
 | `schedr secrets new-key` | Prints a new key for `SCHEDR_SECRET_KEY`. |
@@ -142,8 +142,8 @@ standalone's data folder as `secret.key` and set the documentation examples' sec
 missing. They reuse the key and leave existing secret keys in place.
 
 **Moving to Vault**, e.g. before moving from standalone to separate roles (workers have no
-database, so they can't read `db`): `schedr secrets export --to DIR` refuses a `DIR` that isn't
-empty and prints nothing. Then load each file with `vault kv put secret/<path> @DIR/<path>.json`,
+database, so they can't read `db`): `schedr secrets export --to DIR` requires a new or empty directory. It prints the
+number of secrets exported and the next steps, without their values. Then load each file with `vault kv put secret/<path> @DIR/<path>.json`,
 configure the Vault storage as the default, and delete `DIR`.
 
 ## Vault
@@ -163,18 +163,22 @@ as its JSON text, as `vault kv get -field=` prints it: `5432` is `"5432"`, `true
   for development. A token in the configuration file is a startup error.
 
 Nothing is sent to Vault before the first read, so a worker starts while Vault is down. The
-agent then keeps its token, renews it at two thirds of its time to live, and logs in again
-when renewal fails. A read refused with Kubernetes auth logs in again once and retries.
+agent keeps its token and, if it is renewable, renews it at two thirds of its time to live
+(with a minimum wait of 1 s). With Kubernetes auth it logs in again when renewal fails;
+with a supplied token it retries renewal while that token is still valid. A read refused with Kubernetes auth logs in again once and retries.
 Reads never wait for a renewal while the token is still good.
 
-**Answers:** a 404 on a secret is `secret_not_found`; 400, 401 and 403, and a 404 on a login
-(a wrong auth mount), are `secret_denied`, with Vault's own message; anything else, an
-answer that isn't a KV v2 secret, a timeout (`[secret_storage.<name>] request_timeout`, 30 s by default) or no connection is
-`secret_unavailable`, which is retried. The client follows no redirect: the next host would
+**Answers:** Vault's JSON 404 response to a secret read is `secret_not_found`. A
+non-JSON 404, such as a proxy's error page, is `secret_unavailable`. Responses 400, 401
+and 403, and a 404 on a login or token lookup, are `secret_denied`, with Vault's message
+when present. Other errors, an answer that is not a KV v2 secret, a timeout
+(`[secret_storage.<name>] request_timeout`, 30 s by default) or no connection are
+`secret_unavailable`, which allows a retry under the task's retry policy. The client follows no redirect: the next host would
 get the token.
 
 Values are kept in the agent's memory for `cache_ttl` (60 s by default), so many short
-tasks don't each call Vault. A changed secret is seen after at most that long.
+tasks don't each call Vault. A new read fetches a changed secret once the cache entry expires. An attempt keeps
+values it has already fetched for that attempt.
 
 ## In the chart
 

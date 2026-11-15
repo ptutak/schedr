@@ -34,9 +34,10 @@ to = ["oncall@example.com", "ops@example.com"]
 `ui_url` supplies links; without it they are null. `default_events` applies when a DAG
 lists a channel without events. `give_up_after` limits retries, `timeout` limits one delivery,
 and `max_per_attempt` limits a task's own sends. `ca_file` adds PEM CAs to the system's
-trust roots for webhooks and the mail server. `dag_urls` defaults to empty; the other defaults
-are shown above, except that `ui_url` and `ca_file` are unset. All server channels are available
-by name to every DAG.
+trust roots for webhooks and the mail server. The defaults are `RUN_FAILED`, 24 h, 10 s
+and 100 sends per attempt. `ui_url` and `ca_file` are unset, `dag_urls` and the channel
+list are empty, and no SMTP host is configured. All server channels are available by
+name to every DAG.
 
 A server webhook posts the fixed JSON if `body` is absent. In a configured body, strings
 may contain `"{name}"` placeholders from the [table](../02-dags/24-notifications.md#bodies);
@@ -58,7 +59,8 @@ file refuses a password. Login with `tls = "none"` is refused. The deployment's 
 configuration shows a password as `****`.
 
 An email channel has `type = "email"` and `to = [...]`; it takes no webhook settings. The
-master reads recipients when sending, so a changed list applies to queued emails. If a channel
+master looks up recipients in its current configuration when sending. Restarting the master
+with a changed list therefore applies that list to queued emails. If a channel
 is removed, its queued emails go nowhere and are retried until `give_up_after`.
 
 Each notification produces one plain-text email with every recipient in To. Its subject is the
@@ -71,8 +73,8 @@ TCP ServiceEntry for the mail server; see [Deployment](10-deployment.md).
 
 ## DAG webhooks and network access
 
-The master makes the POST from where it runs, with access potentially including its database,
-API and cloud metadata. `dag_urls` limits where DAG files can direct it (SSRF). A URL must
+The master makes the POST from where it runs, which may also reach the database, API and cloud metadata. `dag_urls` limits the
+addresses DAG files can make the master call. A URL must
 match an allowed entry's scheme, host and port, and its path must equal the allowed path or
 continue at a `/` boundary. Userinfo is refused. For example, `/schedr` permits
 `/schedr/mail` but not `/schedr-other`. DAG webhook URLs are visible in DAG files and JSON;
@@ -88,8 +90,9 @@ The HTTP client uses `HTTPS_PROXY` and `NO_PROXY` where configured. Under Istio
 
 ## Delivery
 
-The outbox row is written with the event. The leading master sends it at least once: a receiver
-may get a duplicate after a failure or failover. A successful delivery deletes the row. For
+The notification is stored in the outbox in the same transaction as its event. The
+leading master delivers it and retries failures. A receiver may get a duplicate after
+a failure or failover, so it must be able to handle the same message again. A successful delivery deletes the row. For
 webhooks, a 4xx response other than 408 or 429 is logged, counted and dropped immediately. 408, 429,
 5xx, connection errors and timeouts are retried with a doubling wait up to a maximum, until
 `give_up_after`; then the row is logged, counted and dropped. For SMTP, a permanent refusal
@@ -98,6 +101,6 @@ exchange. If the mail server takes a message but does not answer, the retry send
 
 The hidden timings `SCHEDR_HIDDEN__MASTER__OUTBOX_POLL`,
 `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_FIRST` and `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_MAX`
-control polling and backoff. `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` limits a filled template body
+control polling and backoff (5 s, 10 s and 1 h by default). `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` limits a filled template body
 to 1 MiB by default. The master's `schedr_notifications_sent` and
 `schedr_notifications_failed` metrics count deliveries and dropped notifications by channel.

@@ -1,8 +1,8 @@
 # Timings
 
 Some timings depend on the deployment: those are configuration keys that can be tuned. The
-others are fixed because they are tied to one another or to correctness. All are read once
-when a process starts; a change takes a restart.
+others have fixed defaults because they depend on each other or keep the system correct.
+All are read once when a process starts; a change takes a restart.
 
 ## Public timing keys
 
@@ -26,14 +26,21 @@ These are the duration keys in the [configuration reference](../_generated/04-re
 | `[worker] cleanup_timeout` | 5 min, or what fits in `termination_grace_period` (25 s with its default) | Limit for each per-task cleanup try when the task doesn't set its own. Left unset, it fits in the grace period less the drain's terminate and report periods, so a cleanup isn't lost when the pod is killed at the grace period's end (B252). Raise it for slow systems, or lower it to free slots sooner. The attempt holds its slot meanwhile. |
 | `[worker] resource_cleanup_timeout` | 30 min | Limit for each resource cleanup try without its own `timeout=`. Raise it for slow teardowns, or lower it to notice a hang sooner; retries each get the same limit. |
 | `[worker] fork_server_import_retry` | 20 min | How long a failed preload import is retried with backoff. Change it for dependencies slow to become ready; `0s` disables retry. Threads after preloading and version mismatches are never retried. |
+| `[watchers] block_limit` | 30 s | How long a wait step may hold its host's event loop without reaching an `await`. Past it, the host is killed. Raise it only when a step needs longer between awaits. |
+| `[sensors] default_max_wait` | 24 h | How long a wait step without its own `max_wait` waits before it returns `TimedOut`. |
+| `[notifications] timeout` | 10 s | Limit for one delivery. A timeout counts as a failed delivery and allows a retry. |
+| `[notifications] give_up_after` | 24 h | How long to retry a notification before dropping it. |
 | `[tls] reload_interval` | 30 s | How often TLS files are read for changes. Shorten it for faster rotation, or lengthen it for fewer reads. |
 | `[secret_storage.<name>] request_timeout` | 30 s | Limit for one Vault request. Raise it for a slow or distant Vault; a task waits this long at most for a hung request. |
 | `[secret_storage.<name>] connect_timeout` | 10 s | Limit for connecting to Vault. Raise it on a slow network. |
-| `[secret_storage.<name>] cache_ttl` | 60 s | Time a fetched secret stays in the agent's memory. Change it for freshness; `0s` fetches every time. |
+| `[secret_storage.<name>] cache_ttl` | 60 s | Time a fetched secret stays in the worker's shared cache. `0s` disables that cache; an attempt still keeps the values it already fetched. |
+
+The `[retention]` ages also take durations, or `forever`; see the configuration reference.
 
 A key that can't work at zero stops the start when set to `0s`: `[dags] poll_interval` and
 `parse_file_timeout`, `[master] parse_job_timeout`, `[webserver] worker_request_timeout` and
-`connection_test_timeout`, `[worker] log_retention`, `runner_start_timeout`,
+`connection_test_timeout`, `[notifications] timeout`, `[sensors] default_max_wait`,
+`[worker] log_retention`, `runner_start_timeout`,
 `fork_server_preload_timeout`, `cleanup_timeout` and `resource_cleanup_timeout`, `[tls] reload_interval` (with TLS on), and
 a storage's `request_timeout` and `connect_timeout`. Elsewhere zero means something: no wait, no
 retry, no cache.
@@ -45,8 +52,8 @@ configuration. A wrong value can run a task twice or lose a healthy worker. It e
 tests and experiments and can change or go without notice.
 
 These variables work only in the environment. Setting one of these timings in a config file,
-a flag or a `SCHEDR_CONFIG__*` variable fails as an unknown key. Each hidden variable set is
-warned about at startup. An unknown name, a bad duration, zero or more than 3650 days stops
+a flag or a `SCHEDR_CONFIG__*` variable fails as an unknown key. Each active override is
+warned about at startup; retired names are accepted and ignored. An unknown name, a bad duration, zero or more than 3650 days stops
 the start.
 
 Some timings stay in the binary: those a task's own process uses (`schedr task-ctx`, `dag-ctx`
@@ -60,11 +67,12 @@ reason.
 
 | Variable | Default | What it does and what depends on it |
 |---|---|---|
-| `SCHEDR_HIDDEN__MASTER__TICK_INTERVAL` | 1 s | Runs the master's scheduler, commands and dispatch loop; rounds and their work depend on it. |
+| `SCHEDR_HIDDEN__MASTER__TICK_INTERVAL` | 1 s | Paces scheduler, command and dispatch rounds. Triggers and events also have a separate loop woken by progress. |
 | `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF` | 5 s | First wait before restarting a failed event trigger; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__TRIGGER_RESTART_BACKOFF_MAX` | 5 min | Longest wait before restarting a failed event trigger. |
 | `SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL` | 10 s | How often workers send heartbeats, set by the master and sent to workers; worker liveness depends on messages arriving. |
 | `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` | 60 s | A worker silent this long is lost; its attempts are ended (an unstarted assignment needs no timeout: it is taken back once the worker's messages show it never started, decision 460). A replaced incarnation's attempts are held this long; a worker also ends a stream silent this long. At least four times the heartbeat interval, and longer than the master's lead (`LEASE_PERIOD` less `QUERY_TIMEOUT`, 20 s by default), or schedr refuses to start: with the lease period at least three query timeouts, it must be longer than twice the query timeout. |
+| `SCHEDR_HIDDEN__MASTER__EVENT_LOOKBACK` | 1 min | How far before the newest event already handled an `EventNamed` trigger looks for events stored late. |
 | `SCHEDR_HIDDEN__MASTER__SCRIPT_ROOT_GRACE` | 5 min | Time without a report from any alive worker before a script root is omitted from the uses sent to workers, counted from master startup too. |
 | `SCHEDR_HIDDEN__MASTER__LEASE_PERIOD` | 30 s | Master's database lease; renewed every third of it. A standby takes over at most this long after a crash. At least three times `QUERY_TIMEOUT` and shorter than the stall limit below; less `QUERY_TIMEOUT` (the master's lead), shorter than `LEASE_TIMEOUT` (decision 444). Lowering the worker lease can mean lowering this too. |
 | `SCHEDR_HIDDEN__MASTER__READ_BACK_WINDOW` | 3 s | After a commit is cut off or the connection lost, the master checks whether it was stored for this long, holding its lock; rounds and worker messages wait. If not seen, it is taken as not stored. |
@@ -170,7 +178,7 @@ The CLI's and `schedr ui`'s requests to a webserver.
 |---|---|---|
 | `SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT` | 5 s | How long connecting to a webserver may take; a black-holed address fails after it. |
 | `SCHEDR_HIDDEN__CLIENT__REQUEST_TIMEOUT` | 30 s | How long one request may take, from connecting to the end of its answer. Raise it for a slow link or a large list; a hung webserver holds a command, or a UI page, this long. A stream (a page's live part, a log tail) has its own limit. |
-| `SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT` | 30 s | How long the CLI and the UI wait for the master's decision on a command (a trigger, a retry) before saying it is still pending; the command is applied either way. |
+| `SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT` | 30 s | How long the CLI waits for a command's decision before reporting it as still pending. The master can decide later. UI actions poll until a decision; this does not limit that polling. |
 | `SCHEDR_HIDDEN__DAGS__TEST_RUN_TIMEOUT` | 1 h | How long `schedr dags test` waits for its run; a task hanging past its own timeout is stopped before. |
 
 ### Standalone
@@ -209,12 +217,12 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT` | 4096 | The most characters of each text in them (a host's code, a warning's message); longer ones are cut. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |
-| `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages of one worker the master handles in one turn of its lock; its `Started`s are stored together in one transaction, then its `Finished`s in another. More holds rounds and other workers up longer. |
-| `SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND` | 50 | The most assignments a round makes, a few statements each; the rest of the ready tasks go in the next rounds, the longest ready first. More starts a burst sooner and makes each round, which holds the master's lock, longer. |
+| `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages from one worker handled in a turn. Its `Started`s are stored in one transaction, then its `Finished`s in another, with the core lock released between groups. More makes each group longer. |
+| `SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND` | 50 | The most assignments a round makes in a batch transaction. The rest wait for later rounds, the longest ready first. More starts a burst sooner and holds the core lock longer for that transaction. |
 | `SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND` | 50 | The most assignments a round takes back as never started. |
 | `SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND` | 100 | The most waiting reasons a round writes, a statement each; they are only shown, so the rest wait a round. |
 | `SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND` | 500 | The most pending reasons a round writes, in one statement, for the tasks past its assignments (decision 481). |
-| `SCHEDR_HIDDEN__MASTER__COMMANDS_PER_ROUND` | 50 | The most commands a round applies (about 8 ms each); a burst goes over a few rounds, the oldest first. |
+| `SCHEDR_HIDDEN__MASTER__COMMANDS_PER_ROUND` | 50 | The most commands a round applies, oldest first. Each command has its own transaction and holds the core lock for that transaction. |
 | `SCHEDR_HIDDEN__MASTER__SCHEDULED_RUNS_PER_ROUND` | 10 | The most scheduled runs a round creates for one DAG; one catching up after a long pause goes over a few rounds, the earliest first. |
 | `SCHEDR_HIDDEN__MASTER__STARTED_INSTANCES_PER_ROUND` | 2000 | The most task instances a round creates for runs that just started; a run is never split, so a run wider than this still starts whole, alone. |
 | `SCHEDR_HIDDEN__MASTER__RETRIES_PER_ROUND` | 100 | The most failed tasks a round queues again once their retry delay passed. |
