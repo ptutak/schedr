@@ -25,7 +25,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## In progress
 
 - M5.1 done 2026-11-15 (M5.1a-M5.1q; M5.1q: B242, D495-D497, B252). Every bug fixed but B38 and B39 (the user: they wait for M6). Stress, 1.0.0 against M5.1, on the guide's Stress tests page ("After M5.1"); the three regressions it couldn't explain (command decided p99, forked start p50, soak memory) not logged (the user).
-- The docs review for 1.1.0 (Codex Sol, high; rewrites asked for by the user): batch B (guide 01-09) and batch A (README, Getting started, Writing DAGs) merged; batch C (guide 10-18) running in `schedr-codex-docs-C` (branch codex/docs-C), to be verified and merged into 1.1.0.
+- The docs review for 1.1.0 done (Codex Sol, high; rewrites asked for by the user): batches B (guide 01-09), A (README, Getting started, Writing DAGs) and C (guide 10-18) merged, 163 corrections in all, each with its evidence and sampled by Claude.
 - The 1.1.0 release notes in CHANGELOG.md, written and uncommitted: they wait for the user's reading.
 - Then stop just before R1.1 (the release itself is the user's).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
@@ -46,7 +46,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Colleagues
 
-Codex at 30% of its week (5 h window 30%) after M5.1q's two reviews and docs batch A; batch C running. Grok unused this week. Usage logs in the skills' `USAGE.md`.
+Codex at 35% of its week (5 h window 58%) after M5.1q's two reviews and the docs review. Grok unused this week. Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 
