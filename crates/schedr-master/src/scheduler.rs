@@ -156,6 +156,10 @@ pub struct Scheduler {
     wakes: Wakes,
     /// The DAGs skipped, with why, as last logged; one that passes again is forgotten.
     skipped: Arc<Mutex<HashMap<DagId, String>>>,
+    /// The most scheduled runs a round creates for one DAG (decision 493).
+    scheduled_per_round: usize,
+    /// Each DAG's plan's bounds.
+    plan_limits: crate::planning::PlanLimits,
 }
 
 impl Scheduler {
@@ -174,7 +178,25 @@ impl Scheduler {
             quiet: Arc::new(Mutex::new(QuietDags::new(settings, wakes.clone()))),
             wakes,
             skipped: Arc::default(),
+            scheduled_per_round: SCHEDULED_PER_ROUND,
+            plan_limits: crate::planning::PlanLimits::default(),
         }
+    }
+
+    /// The scheduler with the master's bounds (decision 493).
+    #[must_use]
+    pub fn with_limits(
+        mut self,
+        rounds: &crate::core::RoundLimits,
+        for_tolerance: std::time::Duration,
+    ) -> Self {
+        self.scheduled_per_round = rounds.scheduled_runs;
+        self.plan_limits = crate::planning::PlanLimits {
+            runs_per_pass: rounds.planning_pass_runs,
+            for_tolerance: jiff::SignedDuration::try_from(for_tolerance)
+                .unwrap_or(jiff::SignedDuration::MAX),
+        };
+        self
     }
 
     /// `error` skips `dag_id` in `pass`: logged when it is new for that DAG.
@@ -299,6 +321,7 @@ impl Scheduler {
                 dag: &active.dag,
                 fire_times: &fire_times,
                 first_seen: active.first_seen,
+                limits: self.plan_limits,
             };
             let mut running = overview.running(&active.dag.id);
             let mut waiting = None;
@@ -362,10 +385,10 @@ impl Scheduler {
         now: Timestamp,
     ) -> Result<(Option<Timestamp>, bool), SchedulerError> {
         let due = self.due_runs(plan, last, *running, now).await?;
-        let capped = due.len() > SCHEDULED_PER_ROUND;
+        let capped = due.len() > self.scheduled_per_round;
         let mut last_created = last;
         // At most so many a DAG a round: a long catch-up goes over a few (B18).
-        for times in due.into_iter().take(SCHEDULED_PER_ROUND) {
+        for times in due.into_iter().take(self.scheduled_per_round) {
             // The defaults, checked when the DAG was validated.
             let params = match run_params(active, None) {
                 Ok(params) => params,
@@ -534,6 +557,7 @@ impl Scheduler {
             dag: &active.dag,
             fire_times: &fire_times,
             first_seen: active.first_seen,
+            limits: self.plan_limits,
         };
         let planned_for = manual_planned_for(requested, now);
         let nearest = self.db.nearest_earlier_run(dag_id, planned_for).await?;

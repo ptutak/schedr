@@ -829,11 +829,15 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .split('`')
         .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
         .collect();
-    assert_eq!(names.len(), 77, "{names:?}");
+    assert_eq!(names.len(), 118, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
+        // The lease at least four heartbeats (B226); the Metrics buckets final and the minute
+        // samples kept past the rollup's grace (decision 492, Codex's review of M5.1p).
         let value = if name.ends_with("LEASE_TIMEOUT") {
             "1m"
+        } else if name.ends_with("METRICS_FINAL_AFTER") || name.ends_with("SAMPLES_KEPT") {
+            "1h"
         } else {
             "1s"
         };
@@ -921,7 +925,7 @@ fn hidden_limits_are_whole_numbers_above_zero() {
             load(None, &env(&[(name, bad)]), &[]).unwrap_err(),
             ConfigError::BadHiddenTiming {
                 name: name.to_owned(),
-                reason: format!("must be a whole number above zero, got `{bad}`"),
+                reason: format!("must be a whole number from 1 to 16777216, got `{bad}`"),
             }
         );
     }
@@ -1234,4 +1238,333 @@ fn a_rename_names_a_flags_relative_path_as_it_names_the_variables() {
     )
     .unwrap();
     assert_eq!(config.dag_roots[0].name, "renamed");
+}
+
+/// Decision 493's timings, each set by its variable (each a different value, so a variable
+/// setting another's field would fail; falling, so the rollup grace stays below the final time).
+#[test]
+fn decision_493s_hidden_timings_each_set_their_own() {
+    let given = [
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER", "50000s"),
+        ("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE", "49999s"),
+        ("SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_WINDOW", "49998s"),
+        ("SCHEDR_HIDDEN__EVENTS__FUTURE_TOLERANCE", "49997s"),
+        ("SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE", "49996s"),
+        ("SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY", "49995s"),
+        ("SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT", "49994s"),
+        ("SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT", "49993s"),
+        ("SCHEDR_HIDDEN__CLIENT__REQUEST_TIMEOUT", "49992s"),
+        ("SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT", "49991s"),
+        ("SCHEDR_HIDDEN__DAGS__TEST_RUN_TIMEOUT", "49990s"),
+    ];
+    let config = load(None, &env(&given), &[]).unwrap();
+    let set = [
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER",
+            config.timings.metrics_final_after,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE",
+            config.timings.sample_rollup_grace,
+        ),
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_WINDOW",
+            config.timings.memory_peaks_window,
+        ),
+        (
+            "SCHEDR_HIDDEN__EVENTS__FUTURE_TOLERANCE",
+            config.timings.event_future_tolerance,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE",
+            config.timings.for_future_tolerance,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY",
+            config.timings.code_retry_delay,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT",
+            config.timings.node_row_kept,
+        ),
+        (
+            "SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT",
+            config.timings.client_connect_timeout,
+        ),
+        (
+            "SCHEDR_HIDDEN__CLIENT__REQUEST_TIMEOUT",
+            config.timings.client_request_timeout,
+        ),
+        (
+            "SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT",
+            config.timings.client_command_wait,
+        ),
+        (
+            "SCHEDR_HIDDEN__DAGS__TEST_RUN_TIMEOUT",
+            config.timings.dags_test_run_timeout,
+        ),
+    ];
+    for ((name, text), (named, value)) in given.iter().zip(set) {
+        assert_eq!(*name, named);
+        assert_eq!(Ok(value), parse_duration(text), "{name}");
+    }
+    assert_eq!(config.timings.overridden.len(), given.len());
+}
+
+/// Decision 493's limits, each set by its variable.
+#[test]
+#[expect(clippy::too_many_lines, reason = "a row for each of the 30 limits")]
+fn decision_493s_hidden_limits_each_set_their_own() {
+    let given = [
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_KEYS", "7"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_BUCKETS", "8"),
+        ("SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_RUNS", "9"),
+        ("SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND", "10"),
+        ("SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND", "11"),
+        ("SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND", "12"),
+        ("SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND", "13"),
+        ("SCHEDR_HIDDEN__MASTER__COMMANDS_PER_ROUND", "14"),
+        ("SCHEDR_HIDDEN__MASTER__SCHEDULED_RUNS_PER_ROUND", "15"),
+        ("SCHEDR_HIDDEN__MASTER__STARTED_INSTANCES_PER_ROUND", "16"),
+        ("SCHEDR_HIDDEN__MASTER__RETRIES_PER_ROUND", "17"),
+        ("SCHEDR_HIDDEN__MASTER__RUNS_PER_PLANNING_PASS", "18"),
+        ("SCHEDR_HIDDEN__MASTER__RUN_OF_RUNS_PER_PASS", "19"),
+        (
+            "SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN",
+            "20",
+        ),
+        ("SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER", "21"),
+        ("SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS", "22"),
+        ("SCHEDR_HIDDEN__WORKER__RESULTS_PER_JOURNAL_GROUP", "23"),
+        ("SCHEDR_HIDDEN__WORKER__STARTS_PER_JOURNAL_GROUP", "24"),
+        ("SCHEDR_HIDDEN__WORKER__RESULT_RESENDS", "25"),
+        ("SCHEDR_HIDDEN__WORKER__RESULT_RESEND_GAP_MAX", "26"),
+        ("SCHEDR_HIDDEN__WORKER__UNACKED_MESSAGES_KEPT", "27"),
+        ("SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS", "28"),
+        ("SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN", "29"),
+        ("SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG", "30"),
+        ("SCHEDR_HIDDEN__WEBSERVER__EVENTS_BACKLOG", "31"),
+        ("SCHEDR_HIDDEN__UI__EVENTS_BACKLOG", "32"),
+        ("SCHEDR_HIDDEN__WEBSERVER__AUTH_REMEMBERED_MAX", "33"),
+        ("SCHEDR_HIDDEN__DATABASE__CHANGES_POLL_ROWS", "34"),
+        ("SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED", "35"),
+        ("SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE", "36"),
+    ];
+    let config = load(None, &env(&given), &[]).unwrap();
+    let set = [
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_KEYS",
+            config.limits.metrics_cache_keys,
+        ),
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_BUCKETS",
+            config.limits.metrics_cache_buckets,
+        ),
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_RUNS",
+            config.limits.memory_peaks_runs,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND",
+            config.limits.assignments_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND",
+            config.limits.expiries_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND",
+            config.limits.waiting_reasons_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND",
+            config.limits.pending_reasons_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__COMMANDS_PER_ROUND",
+            config.limits.commands_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__SCHEDULED_RUNS_PER_ROUND",
+            config.limits.scheduled_runs_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__STARTED_INSTANCES_PER_ROUND",
+            config.limits.started_instances_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__RETRIES_PER_ROUND",
+            config.limits.retries_per_round,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__RUNS_PER_PLANNING_PASS",
+            config.limits.runs_per_planning_pass,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__RUN_OF_RUNS_PER_PASS",
+            config.limits.run_of_runs_per_pass,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN",
+            config.limits.failed_group_messages_per_turn,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER",
+            config.limits.worker_stream_buffer,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS",
+            config.limits.notifications_per_pass,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__RESULTS_PER_JOURNAL_GROUP",
+            config.limits.results_per_journal_group,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__STARTS_PER_JOURNAL_GROUP",
+            config.limits.starts_per_journal_group,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__RESULT_RESENDS",
+            config.limits.result_resends,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__RESULT_RESEND_GAP_MAX",
+            config.limits.result_resend_gap_max,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__UNACKED_MESSAGES_KEPT",
+            config.limits.unacked_messages_kept,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS",
+            config.limits.unsent_connection_answers,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN",
+            config.limits.task_connections_open,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG",
+            config.limits.watcher_log_backlog,
+        ),
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__EVENTS_BACKLOG",
+            config.limits.webserver_events_backlog,
+        ),
+        (
+            "SCHEDR_HIDDEN__UI__EVENTS_BACKLOG",
+            config.limits.ui_events_backlog,
+        ),
+        (
+            "SCHEDR_HIDDEN__WEBSERVER__AUTH_REMEMBERED_MAX",
+            config.limits.auth_remembered_max,
+        ),
+        (
+            "SCHEDR_HIDDEN__DATABASE__CHANGES_POLL_ROWS",
+            config.limits.changes_poll_rows,
+        ),
+        (
+            "SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED",
+            config.limits.dag_versions_cached,
+        ),
+        (
+            "SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE",
+            config.limits.tls_handshakes_at_once,
+        ),
+    ];
+    for ((name, text), (named, value)) in given.iter().zip(set) {
+        assert_eq!(*name, named);
+        assert_eq!(text.parse::<usize>().unwrap(), value, "{name}");
+    }
+    assert_eq!(config.limits.overridden.len(), given.len());
+    let error = load(
+        None,
+        &env(&[("SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND", "0")]),
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("must be a whole number from 1 to 16777216"),
+        "{error}"
+    );
+}
+
+#[rstest]
+#[case(&[("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE", "15m")])]
+#[case(&[("SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER", "2m")])]
+fn a_rollup_grace_not_shorter_than_the_metrics_final_time_is_refused(
+    #[case] vars: &[(&str, &str)],
+) {
+    let error = load(None, &env(vars), &[]).unwrap_err().to_string();
+    assert!(
+        error.contains("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE")
+            && error
+                .contains("must be shorter than `SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER`"),
+        "{error}"
+    );
+    let shorter = [
+        ("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE", "5m"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER", "6m"),
+    ];
+    assert!(load(None, &env(&shorter), &[]).is_ok());
+}
+
+#[test]
+fn a_rollup_grace_reaching_the_minute_samples_retention_is_refused() {
+    // Codex's review of M5.1p: a window's minutes were deleted before its rollup.
+    let vars = [
+        ("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE", "25h"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER", "26h"),
+    ];
+    let error = load(None, &env(&vars), &[]).unwrap_err().to_string();
+    assert!(
+        error.contains("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE")
+            && error.contains("must be shorter than `SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT`"),
+        "{error}"
+    );
+    let kept = [
+        ("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE", "25h"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER", "26h"),
+        ("SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT", "26h"),
+    ];
+    assert!(load(None, &env(&kept), &[]).is_ok());
+}
+
+#[rstest]
+#[case(
+    "SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE",
+    "2305843009213693952",
+    "from 1 to 16777216"
+)]
+#[case(
+    "SCHEDR_HIDDEN__WEBSERVER__EVENTS_BACKLOG",
+    "16777217",
+    "from 1 to 16777216"
+)]
+#[case(
+    "SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY",
+    "3651d",
+    "at most 3650 days"
+)]
+fn hidden_values_past_their_ceiling_are_refused(
+    #[case] name: &str,
+    #[case] value: &str,
+    #[case] reason: &str,
+) {
+    // Codex's review of M5.1p: tokio panicked on such limits; a deadline overflowed.
+    let error = load(None, &env(&[(name, value)]), &[])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(name) && error.contains(reason), "{error}");
+}
+
+#[test]
+fn hidden_values_at_their_ceiling_load() {
+    let vars = [
+        ("SCHEDR_HIDDEN__WEBSERVER__EVENTS_BACKLOG", "16777216"),
+        ("SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY", "3650d"),
+    ];
+    assert!(load(None, &env(&vars), &[]).is_ok());
 }

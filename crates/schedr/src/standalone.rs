@@ -88,6 +88,10 @@ pub struct Standalone {
     pub auth_timings: schedr_api::auth::AuthTimings,
     /// How often its row of the deployment's nodes is written.
     pub node_heartbeat: Duration,
+    /// How long a gone master's row stays (`SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT`).
+    pub node_row_kept: Duration,
+    /// The DAG versions kept parsed (`SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED`).
+    pub dag_versions_cached: usize,
     /// How long the worker gets to stop once the master failed: its tasks are interrupted at
     /// once (nothing could record them), so this is only for a worker stuck on its way out
     /// (B151).
@@ -198,11 +202,13 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         ui_token_file: config.webserver.ui_token_file.clone(),
         api_timings: crate::roles::ApiTimings::of(config),
         change_notifications: config.database.change_notifications,
-        auth_timings: crate::roles::auth_timings(&config.timings),
+        auth_timings: crate::roles::auth_timings(&config.timings, &config.limits),
         node_heartbeat: config.timings.node_heartbeat,
+        node_row_kept: config.timings.node_row_kept,
+        dag_versions_cached: config.limits.dag_versions_cached,
         worker_stop_after_failure: config.timings.worker_stop_after_failure,
         ui: Some(LocalUi {
-            timings: crate::roles::ui_timings(&config.timings),
+            timings: crate::roles::ui_timings(&config.timings, &config.limits),
             docs_dir: docs_dir(config),
         }),
         migrate: false,
@@ -239,11 +245,33 @@ async fn bind(setup: &Standalone) -> Result<([tokio::net::TcpListener; 4], Liste
 }
 
 impl Standalone {
+    /// Its database, connected, with its notifications and DAG cache as configured.
+    async fn database(&self) -> Result<Database, AppError> {
+        Ok(
+            Database::connect_with_timeout(&self.database_url, self.query_timeout)
+                .await?
+                .with_notifications(self.notifications, self.notifications_url.clone())
+                .with_dag_versions_cached(self.dag_versions_cached),
+        )
+    }
+
+    /// Its master's row: the configuration shown, how often it is written and how long it
+    /// stays once gone.
+    const fn node_beat(&self) -> (&serde_json::Value, (Duration, Duration)) {
+        (&self.config, (self.node_heartbeat, self.node_row_kept))
+    }
+
     /// What the master's loop runs with: its tick, the events' limit and the notifications.
-    fn master_loop(&self) -> (Duration, usize, MasterOutbox) {
+    fn master_loop(
+        &self,
+    ) -> (
+        Duration,
+        (usize, schedr_api::state::ApiLimits),
+        MasterOutbox,
+    ) {
         (
             self.tick,
-            self.api_timings.max_event_size,
+            (self.api_timings.max_event_size, self.api_timings.limits),
             self.outbox.clone(),
         )
     }
@@ -278,8 +306,6 @@ pub async fn run(
     let auth = standalone_auth(&setup, addresses.http)?;
     listening(addresses);
     let (tick, max_event_size, outbox) = setup.master_loop();
-    let mut agent = setup.agent;
-    agent.log_endpoint = format!("http://{}", addresses.logs);
 
     // The master and the API stop once the worker has drained.
     let (stop, stopped) = watch::channel(0);
@@ -295,12 +321,12 @@ pub async fn run(
     // The ops port answers (`/readyz`: starting) meanwhile. One master per database: an
     // up-to-date schema lets the API and the worker start while the master waits for the
     // lease (a standby); with `--migrate`, one to migrate is migrated by the lease's holder.
-    let db = Database::connect_with_timeout(&setup.database_url, setup.query_timeout)
-        .await?
-        .with_notifications(setup.notifications, setup.notifications_url.clone());
-    agent.secrets = setup.secret_storage.for_role(Some(&db))?;
-    let (master_id, problems, heartbeat) =
-        heartbeat(&db, (&setup.config, setup.node_heartbeat), &stopped);
+    let db = setup.database().await?;
+    let secrets = setup.secret_storage.for_role(Some(&db))?;
+    let (master_id, problems, heartbeat) = heartbeat(&db, setup.node_beat(), &stopped);
+    let mut agent = setup.agent;
+    agent.log_endpoint = format!("http://{}", addresses.logs);
+    agent.secrets = secrets;
     let leading = lead(
         &db,
         &setup.database_url,
@@ -429,7 +455,7 @@ pub async fn ended_within(
 /// writing task.
 fn heartbeat(
     db: &Database,
-    (config, beat): (&serde_json::Value, Duration),
+    (config, (beat, row_kept)): (&serde_json::Value, (Duration, Duration)),
     stopped: &watch::Receiver<u32>,
 ) -> (String, Problems, tokio::task::JoinHandle<()>) {
     let problems = Problems::default();
@@ -438,6 +464,7 @@ fn heartbeat(
         config: config.clone(),
         problems: problems.clone(),
         heartbeat: beat,
+        row_kept,
     };
     let master_id = identity.master_id.clone();
     let task = tokio::spawn(heartbeat_master(db.clone(), identity, stopped.clone()));

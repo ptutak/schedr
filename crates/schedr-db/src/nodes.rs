@@ -87,9 +87,7 @@ pub struct WorkerNode {
 }
 
 impl Database {
-    /// Writes `master`'s heartbeat (its row, made or brought up to date), and removes the rows
-    /// of masters not heard from for [`MASTER_ROW_KEPT`]. A standby heartbeats too: called on
-    /// a database not [fenced](Database::fenced).
+    /// As [`Self::heartbeat_master_keeping`], rows kept for [`MASTER_ROW_KEPT`].
     ///
     /// # Errors
     ///
@@ -98,6 +96,23 @@ impl Database {
         &self,
         master: &MasterNode<'_>,
         now: Timestamp,
+    ) -> Result<(), DbError> {
+        self.heartbeat_master_keeping(master, now, MASTER_ROW_KEPT)
+            .await
+    }
+
+    /// Writes `master`'s heartbeat (its row, made or brought up to date), and removes the rows
+    /// of masters not heard from for `kept` (`SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT`). A standby
+    /// heartbeats too: called on a database not [fenced](Database::fenced).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn heartbeat_master_keeping(
+        &self,
+        master: &MasterNode<'_>,
+        now: Timestamp,
+        kept: SignedDuration,
     ) -> Result<(), DbError> {
         const UPSERT: &str = "INSERT INTO masters (master_id, process_id, host, schedr_version, \
             config, started_at, heard_at, problems, usage) \
@@ -112,9 +127,7 @@ impl Database {
             serde_json::to_string(master.problems).unwrap_or_else(|_| "[]".to_owned()),
         );
         let usage = master.usage.map(to_json);
-        let gone = now
-            .checked_sub(MASTER_ROW_KEPT)
-            .unwrap_or(Timestamp::UNIX_EPOCH);
+        let gone = now.checked_sub(kept).unwrap_or(Timestamp::UNIX_EPOCH);
         in_tx!(self, |tx, backend| {
             sqlx::query(sql(backend, UPSERT))
                 .bind(master.master_id)

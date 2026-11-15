@@ -177,7 +177,10 @@ async fn a_tasks_last_attempts_are_read_oldest_first_across_runs_and_instances()
         ],
     )
     .await;
-    let peaks = db.task_attempt_peaks("sync", "extract", 30).await.unwrap();
+    let peaks = db
+        .task_attempt_peaks("sync", "extract", 30, PEAKS_PER_TASK)
+        .await
+        .unwrap();
     let seen: Vec<_> = peaks
         .iter()
         .map(|p| {
@@ -202,13 +205,18 @@ async fn a_tasks_last_attempts_are_read_oldest_first_across_runs_and_instances()
     assert_eq!(peaks[1].run_id, uuid(1, 1));
     assert_eq!(peaks[1].ended_at, ts("2026-11-14T10:03:00Z"));
     // The newest `count`, still oldest first.
-    let last = db.task_attempt_peaks("sync", "extract", 2).await.unwrap();
+    let last = db
+        .task_attempt_peaks("sync", "extract", 2, PEAKS_PER_TASK)
+        .await
+        .unwrap();
     assert_eq!(
         last.iter().map(|p| p.map_index).collect::<Vec<_>>(),
         [Some(0), Some(1)]
     );
     assert_eq!(
-        db.task_attempt_peaks("other", "extract", 30).await.unwrap(),
+        db.task_attempt_peaks("other", "extract", 30, PEAKS_PER_TASK)
+            .await
+            .unwrap(),
         []
     );
 }
@@ -229,7 +237,7 @@ async fn a_dags_peaks_are_by_task_since_a_time_with_a_peak_and_capped() {
     });
     seed(&db, &version, &attempts).await;
     let tasks = db
-        .dag_task_peaks("sync", ts("2026-11-14T10:00:00Z"))
+        .dag_task_peaks("sync", ts("2026-11-14T10:00:00Z"), PEAKS_PER_TASK)
         .await
         .unwrap();
     assert_eq!(tasks.len(), 2);
@@ -247,7 +255,7 @@ async fn a_dags_peaks_are_by_task_since_a_time_with_a_peak_and_capped() {
     assert_eq!(load.peaks.iter().min(), Some(&3));
     // Only attempts ended since: run 0's ended at 10:02.
     let later = db
-        .dag_task_peaks("sync", ts("2026-11-14T10:08:00Z"))
+        .dag_task_peaks("sync", ts("2026-11-14T10:08:00Z"), PEAKS_PER_TASK)
         .await
         .unwrap();
     assert_eq!(later.len(), 1);
@@ -271,7 +279,10 @@ async fn the_last_attempts_are_the_last_to_end_whatever_their_runs_order() {
         ],
     )
     .await;
-    let peaks = db.task_attempt_peaks("sync", "extract", 2).await.unwrap();
+    let peaks = db
+        .task_attempt_peaks("sync", "extract", 2, PEAKS_PER_TASK)
+        .await
+        .unwrap();
     assert_eq!(
         peaks
             .iter()
@@ -299,7 +310,7 @@ async fn a_backfill_of_old_moments_ending_now_counts_in_the_dags_peaks() {
     )
     .await;
     let tasks = db
-        .dag_task_peaks("sync", ts("2026-11-14T00:00:00Z"))
+        .dag_task_peaks("sync", ts("2026-11-14T00:00:00Z"), PEAKS_PER_TASK)
         .await
         .unwrap();
     let mut peaks = tasks[0].peaks.clone();

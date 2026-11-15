@@ -261,6 +261,10 @@ pub struct ClientArgs {
     /// Print JSON instead of human-readable output.
     #[arg(long, global = true)]
     pub json: bool,
+    /// How long it waits for the webserver: from the configuration once it is read
+    /// (`SCHEDR_HIDDEN__CLIENT__*`), never a flag.
+    #[arg(skip)]
+    pub timeouts: schedr_client::Timeouts,
 }
 
 /// `schedr dags ...`.
@@ -833,6 +837,22 @@ impl Command {
             });
         }
         Ok(overrides)
+    }
+
+    /// Its webserver client's arguments, for a command reaching one.
+    pub const fn client_args_mut(&mut self) -> Option<&mut ClientArgs> {
+        match self {
+            Self::Dags { client, .. }
+            | Self::Runs { client, .. }
+            | Self::Tasks { client, .. }
+            | Self::Connections { client, .. }
+            | Self::Sensors { client, .. }
+            | Self::Triggers { client, .. }
+            | Self::Events { client, .. }
+            | Self::Resources { client, .. }
+            | Self::Workers { client, .. } => Some(client),
+            _ => None,
+        }
     }
 
     /// The milestone in which this command starts working (see archive/PROJECT.md, Roadmap), or

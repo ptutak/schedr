@@ -23,7 +23,7 @@ mod tests;
 pub const CHARTED_ATTEMPTS: u32 = 30;
 
 /// How far back the DAG page's peaks reach.
-const PEAKS_OVER: SignedDuration = SignedDuration::from_hours(30 * 24);
+pub const PEAKS_OVER: SignedDuration = SignedDuration::from_hours(30 * 24);
 
 /// A task's last ended attempts' peak memory, all its runs and instances (decision 467).
 #[utoipa::path(get, path = "/api/v1/dags/{dag_id}/tasks/{task_id}/memory", tag = "dags",
@@ -38,7 +38,12 @@ pub async fn task_memory(
     let dag = known_dag(&state, &dag_id).await?;
     let attempts = state
         .db
-        .task_attempt_peaks(dag_id.as_str(), &task_id, CHARTED_ATTEMPTS)
+        .task_attempt_peaks(
+            dag_id.as_str(),
+            &task_id,
+            CHARTED_ATTEMPTS,
+            state.limits.memory_peaks_runs,
+        )
         .await?;
     let defined = limits(&dag)
         .into_iter()
@@ -68,9 +73,12 @@ pub async fn dag_memory(
     let dag_id = parse_dag_id(&dag_id)?;
     let dag = known_dag(&state, &dag_id).await?;
     let since = (state.clock)()
-        .checked_sub(PEAKS_OVER)
+        .checked_sub(state.limits.memory_peaks_window)
         .unwrap_or(Timestamp::UNIX_EPOCH);
-    let peaks = state.db.dag_task_peaks(dag_id.as_str(), since).await?;
+    let peaks = state
+        .db
+        .dag_task_peaks(dag_id.as_str(), since, state.limits.memory_peaks_runs)
+        .await?;
     Ok(Json(DagMemoryList {
         since,
         tasks: ranked(peaks, &limits(&dag)),

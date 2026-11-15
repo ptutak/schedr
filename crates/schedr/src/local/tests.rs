@@ -12,6 +12,7 @@ fn client_args(json: bool) -> ClientArgs {
         token: None,
         user: None,
         json,
+        timeouts: schedr_client::Timeouts::default(),
     }
 }
 

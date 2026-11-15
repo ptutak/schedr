@@ -232,14 +232,17 @@ pub struct AuthTimings {
     /// How long a check that passed is remembered (`auth_remembered`). A change of the users
     /// forgets them all.
     pub remembered: std::time::Duration,
+    /// How many are remembered at once, the oldest dropped first (`auth_remembered_max`).
+    pub remembered_max: usize,
 }
 
 impl Default for AuthTimings {
-    /// [`RECHECK`] and [`REMEMBERED`].
+    /// [`RECHECK`], [`REMEMBERED`] and `MAX_REMEMBERED`.
     fn default() -> Self {
         Self {
             recheck: RECHECK,
             remembered: REMEMBERED,
+            remembered_max: MAX_REMEMBERED,
         }
     }
 }
@@ -431,7 +434,7 @@ impl Users {
                 return valid;
             }
             passed.until.retain(|_, until| *until > now);
-            if passed.until.len() >= MAX_REMEMBERED
+            if passed.until.len() >= self.timings.remembered_max
                 && let Some(oldest) = passed
                     .until
                     .iter()

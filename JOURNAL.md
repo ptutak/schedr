@@ -1345,3 +1345,136 @@ Codex's review (`01a1de10`) found three, all confirmed and fixed with tests: `..
 lexically picked the wrong folder past a symbolic link (`live/../dags`); a path not in UTF-8
 was copied lossily, so another folder could be picked; and paths made absolute no longer
 matched a relative rename the variable's accept. Hence the rule above.
+
+
+### <a id="D493"></a>2026-11-15: tunable constants are hidden settings (decision 493)
+
+The user, reading the Metrics cache's 15-minute `FINAL_AFTER`: "any other hidden constants not
+'HIDDEN' yet?" Claude listed the ones added since 1.0.0; the user: "sweep over all constants and
+evalute, provide a descriptive name and add in "p" step as HIDDEN as you recommend." Built as
+M5.1p, the last step of M5.1. The rule it applies was the user's already (a new value is a key or
+hidden; a binary constant needs a really good reason); this extends it to the constants from
+before it.
+
+Sweep of every numeric and duration constant (2026-11-15): 251 in the crates' sources, 30 in
+`python/schedr`. Each is (A) already a key or a `SCHEDR_HIDDEN__*` variable, (B) fixed for a
+reason, or (C) a tunable with neither: these become hidden, their defaults unchanged.
+
+(C) Timings (SCHEDR_HIDDEN__...):
+- WEBSERVER__METRICS_FINAL_AFTER (15 min, series cache FINAL_AFTER)
+- MASTER__SAMPLE_ROLLUP_GRACE (2 min, samples ROLL_GRACE; must stay below METRICS_FINAL_AFTER, checked at load)
+- WEBSERVER__MEMORY_PEAKS_WINDOW (30 days, attempt_memory PEAKS_OVER)
+- WEBSERVER__EVENT_FUTURE_TOLERANCE (1 min, named_events AT_TOLERANCE)
+- MASTER__FOR_FUTURE_TOLERANCE (1 min, planning FOR_TOLERANCE)
+- MASTER__CODE_RETRY_DELAY (35 s, dispatch CODE_RETRY_DELAY: the git-sync interval differs)
+- MASTER__NODE_ROW_KEPT (1 h, nodes MASTER_ROW_KEPT)
+- CLIENT__CONNECT_TIMEOUT (5 s), CLIENT__REQUEST_TIMEOUT (30 s), CLIENT__COMMAND_WAIT (30 s): schedr-client, the CLI's and `schedr ui`'s
+- DAGS__TEST_RUN_TIMEOUT (1 h, local TEST_RUN_TIMEOUT)
+
+(C) Limits (whole numbers above zero):
+- WEBSERVER__METRICS_CACHE_KEYS (64), WEBSERVER__METRICS_CACHE_BUCKETS (100,000)
+- WEBSERVER__MEMORY_PEAKS_RUNS (1000, PEAKS_PER_TASK)
+- MASTER__ASSIGNMENTS_PER_ROUND (50), MASTER__EXPIRIES_PER_ROUND (50),
+  MASTER__WAITING_REASONS_PER_ROUND (100), MASTER__PENDING_REASONS_PER_ROUND (500),
+  MASTER__COMMANDS_PER_ROUND (50), MASTER__SCHEDULED_RUNS_PER_ROUND (10),
+  MASTER__STARTED_INSTANCES_PER_ROUND (2000), MASTER__RETRIES_PER_ROUND (100)
+- MASTER__RUNS_PER_PLANNING_PASS (100, MAX_RUNS_PER_PASS), MASTER__RUN_OF_RUNS_PER_PASS (50)
+- MASTER__FAILED_GROUP_MESSAGES_PER_TURN (10, ALONE_PER_TURN)
+- MASTER__WORKER_STREAM_BUFFER (1024, STREAM_BUFFER)
+- MASTER__NOTIFICATIONS_PER_PASS (50, sender BATCH)
+- WORKER__RESULTS_PER_JOURNAL_GROUP (32), WORKER__STARTS_PER_JOURNAL_GROUP (32)
+- WORKER__RESULT_RESENDS (8, MAX_RESENDS), WORKER__RESULT_RESEND_GAP_MAX (32, MAX_RESEND_GAP)
+- WORKER__UNACKED_MESSAGES_KEPT (100,000, SENT_KEPT)
+- WORKER__UNSENT_CONNECTION_ANSWERS (16)
+- WORKER__TASK_CONNECTIONS_OPEN (64, ctx MAX_CONNECTIONS)
+- WORKER__WATCHER_LOG_BACKLOG (16, ROUTE_MESSAGES)
+- WEBSERVER__EVENTS_BACKLOG (1024), UI__EVENTS_BACKLOG (1024)
+- WEBSERVER__AUTH_REMEMBERED_MAX (1000)
+- DATABASE__CHANGES_POLL_ROWS (1000)
+- DATABASE__DAG_VERSIONS_CACHED (4096, DagCache::MAX)
+- TLS__HANDSHAKES_AT_ONCE (256, MAX_HANDSHAKES)
+
+A bug, fixed (no new value): MASTERS_HEARD (samples) and MASTERS_HEARD_WITHIN (routes), 30 s,
+assume the 10 s node heartbeat that SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT changes: three
+heartbeats instead.
+
+(B) Fixed, and why:
+- Data format and protocol: MINUTE, ROLLUP (stored `step_s`), USAGE_EVERY (the samples' step),
+  PROTOCOL_VERSION, CTX_PROTOCOL, CLOCK_FIELD, INPUT_CHUNK, GRPC_DEFAULT_LIMIT,
+  MESSAGE_OVERHEAD, RESULT_OVERHEAD, INLINE_INPUTS_LIMIT, MAX_CTX_MESSAGE_SIZE,
+  MAX_MESSAGE_SIZE (runner), MAX_VALUE_SIZE, MAX_HANDLES_SIZE, EVENT_BODY_ROOM, NONCE_LEN.
+- Parameter limits of the databases: the *_PER_STATEMENT, *_PER_QUERY, ROWS_PER_INSERT.
+- Operating system and physics: MAX_FDS_PER_DATAGRAM, exit codes and signals, DRIFT_PER_MILLE,
+  PAUSE_SLACK, PAUSE_PER_MILLE, fire_times MARGIN (daylight saving), HTTPS_PORT.
+- Contracts users see (decisions, the API, the DSL's defaults): MAX_ID_LEN, MAX_EVENT_KEY,
+  MAX_PARAMS_BYTES, MAX_INPUTS, MAX_LAG, MAX_CONNECTION_SIZE, the list sizes and maxima
+  (DEFAULT_RUNS, MAX_RUNS, DEFAULT_EVENTS, MAX_EVENTS, DAG_BACKFILLS, MAX_REQUEST_KEY), the
+  log chunk sizes, MAX_NAME, MIN_UI_TOKEN, the DSL's default retries and sizes, MIN_BUDGET and
+  MIN_TASK_MEMORY (no Python starts below), MAX_CONNECTION_TEST_MS.
+- Derived from another value: WORKERS_HEARD and PARTS_WITHIN (USAGE_EVERY), refresh_limit
+  (the loop stall), WRITE_LIMITS and BATCH_LIMITS (the query timeout), PROBE_ROUNDS and
+  PROBE_LIMITS (the pooler check), RENEW_AT (Vault's two thirds).
+- Display: the UI's geometry, page sizes, tails, SERIES, CHARTED_ATTEMPTS, LARGEST_TASKS, NEAR,
+  EVENTS_SHOWN, MAX_FAILED_TASKS, MAX_ERROR_CHARS, RUNNER_OUTPUT_LINES, POLL_MS.
+- Small loop and buffer bounds with no deployment reason: COPY_BUFFER, GONE_RUNS_OF_A_LOOK,
+  BRANCH_READS, LEADER_LOOKUP, COMMAND_TRIES, the client's POLL_INTERVAL and STREAM_TIMEOUT.
+- Shared by two processes, so one side's setting would break the other: API_CALL_LIMIT (the
+  in-task CLI waits it and its answer time), CONNECTION_CHECK_TIMEOUT_MS (the worker's limit is
+  the master's deadline).
+- In a task's process, before any configuration is read: the in-task CLI's and `schedr`
+  Python's timeouts (ANSWER_TIMEOUT, API_ANSWER_TIMEOUT, _TIMEOUT) and Python's other numbers.
+
+(A) Already a key or hidden: the rest (every DEFAULT_* behind a key, and the 70 hidden timings).
+Three first taken for (C) are a key's default though their doc comments don't say so: fork
+PRELOAD_TIMEOUT (`[worker] fork_server_preload_timeout`), PARSE_JOB_TIMEOUT (`[master]
+parse_job_timeout`), the logs' REQUEST_TIMEOUT (`[webserver] worker_request_timeout`); their
+comments say it in M5.1p.
+
+Not chosen: public keys for these (each is a tuning knob for an odd deployment, unsupported as
+the other hidden ones are); one variable for a group (the caps are measured one by one, B18).
+
+### <a id="D494"></a>2026-11-15: throughput and start latency come from the attempts table (decision 494)
+
+M5.1l2 waited for where its numbers come from. Claude found the attempts table holds them:
+`assigned_at`, `started_at` (the worker's start in master time since decision 490) and
+`ended_at`. Options: (A) read them from attempts; (B) workers report M5.1a's stage timers in
+their heartbeat, stored per minute in `samples`; (C) move the step out of M5.1. **Chosen: A**
+(the user, Claude's recommendation). Not chosen: B (a protocol field, 2.1 to 2.2, new sample
+columns and rollups, for the stages inside a worker that the stress page already measures); C.
+
+The same round of questions, before the user left Claude to finish M5.1 and the stress runs:
+- **B250** (a root holding a `.venv` scans it): the user chose to leave the scan as it is.
+  Getting started keeps its DAGs in their own folder (`--dag-path dags`), and the guide says to
+  add a `.schedrignore` where a root holds a virtualenv. Not chosen: skipping folders holding
+  `pyvenv.cfg`; skipping hidden folders (a task's data in one would no longer count). B250 is
+  closed as documented.
+- **Decision 489's open point** confirmed: the `wait_for=` forms aren't pokes and stay
+  `async def`.
+- **Getting started** (`--dag-path dags`) is committed with M5.1, not kept for the user to read.
+
+### <a id="N15"></a>2026-11-15: M5.1p built: 41 hidden settings and the masters' window (note 15; on D493)
+
+
+Built as decision 493 says: 11 timings and 30 limits (the two event backlogs are two), each read
+by the loader into `Timings` or `HiddenLimits` and carried to its use; their defaults are the
+constants they replaced (a test compares them), and a test sets each and reads it back where
+the roles are built. `SAMPLE_ROLLUP_GRACE` not shorter than `METRICS_FINAL_AFTER` stops the
+start. The masters' "heard within" window, in the samples and on the Deployments page, is three
+node heartbeats; a fixed 30 s dropped a master whose `NODE_HEARTBEAT` was a minute (tests for
+both).
+
+Small choices of Claude's: the event tolerance is `EVENTS__FUTURE_TOLERANCE`, not under
+`WEBSERVER`, since tasks post events through their master too; the notifications' cap is the
+sender's, carried with the outbox; the worker's limits ride in `WorkerTimeouts`, which already
+held non-durations (the watcher budget, the overruns), so no test changed its setup; the
+client's timeouts ride in `ClientArgs` as a field clap skips, filled once the configuration is
+read. The timings guide lists each with what depends on it and its restrictions, and a section
+says what stays in the binary and why.
+
+Codex's review found five, all fixed with a test each: a rollup grace past the minute samples'
+retention lost a window's minutes before their rollup (the grace with its 15-minute window must
+now be shorter than `MASTER__SAMPLES_KEPT`); a limit past tokio's bounds panicked the TLS
+accept loop or an events subscription (limits are 1 to 16,777,216); a code retry delay that
+overflowed a timestamp parked its task for good (timings are at most 3650 days, and the
+deadline saturates); `dags test` kept its own client timeouts; the pending reason named the
+constant instead of the configured cap.

@@ -74,6 +74,11 @@ pub struct EventTimings {
     pub retry: Duration,
     /// How often changes are read where they aren't announced (`changes_poll_interval`).
     pub changes_poll: Duration,
+    /// The most rows of SQLite's `changes` one read takes (`DATABASE__CHANGES_POLL_ROWS`).
+    pub changes_rows: usize,
+    /// The changes a slow stream may fall behind by before it gets `refresh`
+    /// (`WEBSERVER__EVENTS_BACKLOG`).
+    pub backlog: usize,
 }
 
 impl Default for EventTimings {
@@ -84,6 +89,8 @@ impl Default for EventTimings {
             keep_alive: KEEP_ALIVE,
             retry: RETRY,
             changes_poll: schedr_db::changes::POLL_INTERVAL,
+            changes_rows: schedr_db::changes::POLL_ROWS,
+            backlog: BACKLOG,
         }
     }
 }
@@ -126,7 +133,7 @@ impl Feed {
     pub fn subscribe(&self) -> broadcast::Receiver<Live> {
         self.sender
             .get_or_init(|| {
-                let (sender, _) = broadcast::channel(BACKLOG);
+                let (sender, _) = broadcast::channel(self.timings.backlog.max(1));
                 tokio::spawn(follow(
                     self.db.clone(),
                     sender.clone(),
@@ -158,7 +165,8 @@ async fn follow(
             }
         };
         let changes = if on {
-            db.changes(timings.changes_poll).await
+            db.changes_reading(timings.changes_poll, timings.changes_rows)
+                .await
         } else {
             Ok(None)
         };

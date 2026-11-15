@@ -83,10 +83,10 @@ impl Entry {
     }
 }
 
-/// The first bucket not final at `to`, in buckets of `bucket_s`.
+/// The first bucket not final at `to`, in buckets of `bucket_s`, final `after` their end.
 #[must_use]
-pub fn final_to(to: Timestamp, bucket_s: u32) -> Timestamp {
-    floor(to.checked_sub(FINAL_AFTER).unwrap_or(to), bucket_s)
+pub fn final_to(to: Timestamp, bucket_s: u32, after: SignedDuration) -> Timestamp {
+    floor(to.checked_sub(after).unwrap_or(to), bucket_s)
 }
 
 /// A key's entry, shared by the requests asking for it, and when it was last used.
@@ -97,9 +97,48 @@ type Slot = (u64, Arc<tokio::sync::Mutex<Entry>>);
 pub struct SeriesCache {
     entries: Mutex<HashMap<Key, Slot>>,
     uses: std::sync::atomic::AtomicU64,
+    limits: CacheLimits,
+}
+
+/// When the cache's buckets are final, and how much it keeps (decision 493).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheLimits {
+    /// A bucket's age past its end when it is final
+    /// (`SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER`).
+    pub final_after: SignedDuration,
+    /// The keys kept (`SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_KEYS`).
+    pub keys: usize,
+    /// The buckets kept for one key (`SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_BUCKETS`).
+    pub buckets: usize,
+}
+
+impl Default for CacheLimits {
+    /// [`FINAL_AFTER`], `KEYS` and `BUCKETS`.
+    fn default() -> Self {
+        Self {
+            final_after: FINAL_AFTER,
+            keys: KEYS,
+            buckets: BUCKETS,
+        }
+    }
 }
 
 impl SeriesCache {
+    /// An empty cache keeping as `limits` say.
+    #[must_use]
+    pub fn new(limits: CacheLimits) -> Self {
+        Self {
+            limits,
+            ..Self::default()
+        }
+    }
+
+    /// Its limits.
+    #[must_use]
+    pub const fn limits(&self) -> CacheLimits {
+        self.limits
+    }
+
     /// `key`'s entry, locked: a request reading it holds it, the next waits.
     pub async fn entry(
         &self,
@@ -109,7 +148,7 @@ impl SeriesCache {
         let used = self.uses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let entry = {
             let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-            if !entries.contains_key(&key) && entries.len() >= KEYS {
+            if !entries.contains_key(&key) && entries.len() >= self.limits.keys {
                 // Not one a request holds or waits for: another for its key would make a
                 // second lock beside it (Codex's review of M5.1j). All held: one key more.
                 let oldest = entries
@@ -142,13 +181,14 @@ pub fn merged(kept: &[Bucket], read: Vec<Bucket>, from: Timestamp) -> Vec<Bucket
 }
 
 /// Keeps `buckets`' final ones (before `final_to`) of a range starting `from` in `entry`,
-/// unless too many.
+/// unless more than `most`.
 pub fn keep_buckets(
     entry: &mut Entry,
     buckets: &[Bucket],
     (from, final_to): (Timestamp, Timestamp),
+    most: usize,
 ) {
-    if buckets.len() > BUCKETS {
+    if buckets.len() > most {
         *entry = Entry::default();
         return;
     }

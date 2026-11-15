@@ -167,7 +167,7 @@ type Routes = Arc<StdMutex<HashMap<u64, mpsc::Sender<RunnerMessage>>>>;
 /// The messages of a watcher waiting for its attempt: past them its host's socket waits too, so a
 /// wait step printing faster than its log is written slows down, and the agent's memory holds at
 /// most this many (each up to `_LOG_CHUNK`, 4 MiB, for text).
-const ROUTE_MESSAGES: usize = 16;
+pub const ROUTE_MESSAGES: usize = 16;
 
 /// A running host.
 #[derive(Debug)]
@@ -570,7 +570,7 @@ impl WatcherHosts {
             host
         };
         let watcher = self.next_watcher.fetch_add(1, Ordering::Relaxed);
-        let (route, messages) = mpsc::channel(ROUTE_MESSAGES);
+        let (route, messages) = mpsc::channel(setup.timeouts.watcher_log_backlog.max(1));
         host.routes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

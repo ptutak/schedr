@@ -403,3 +403,47 @@ async fn a_failed_delete_is_done_at_the_next_pass() {
         .unwrap();
     assert_eq!(db.oldest_minute_sample().await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn a_master_is_sampled_while_heard_within_three_of_its_heartbeats() {
+    // Decision 493: the window follows `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT`; a fixed 30 s
+    // dropped a master writing its row every minute.
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let config = serde_json::json!({});
+    let node = usage(64, 1.0);
+    db.heartbeat_master(
+        &schedr_db::nodes::MasterNode {
+            master_id: "m-a",
+            process_id: "p1",
+            host: "h",
+            schedr_version: "1.1.0",
+            config: &config,
+            started_at: ts("2026-11-14T09:00:00Z"),
+            problems: &[],
+            usage: Some(&node),
+        },
+        ts("2026-11-14T10:00:00Z"),
+    )
+    .await
+    .unwrap();
+    let at = ts("2026-11-14T10:00:45Z");
+    let every_ten = SampleSettings::default();
+    let gone = Sampler::default()
+        .pass(&db, &every_ten, at, None)
+        .await
+        .unwrap();
+    assert_eq!(gone.written, 0, "45 s is past three heartbeats of 10 s");
+    let every_minute = SampleSettings {
+        node_heartbeat: Duration::from_mins(1),
+        ..SampleSettings::default()
+    };
+    let heard = Sampler::default()
+        .pass(&db, &every_minute, at, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        heard.written, 1,
+        "45 s is within three heartbeats of a minute"
+    );
+}

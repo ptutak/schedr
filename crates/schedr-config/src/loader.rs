@@ -217,6 +217,7 @@ pub fn load(
     let mut config: Config = figment.extract()?;
     config.timings = hidden_timings(env)?;
     check_lease(&config.timings)?;
+    check_metrics_final(&config.timings)?;
     config.limits = hidden_limits(env)?;
     check_secrets_in_file(&figment, &config)?;
     let worker = &config.worker;
@@ -392,12 +393,42 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 5] = [
+const HIDDEN_LIMITS: [&str; 35] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
     "MASTER__NOTIFICATION_BODY",
     "MASTER__RETENTION_BATCH",
     "MASTER__MESSAGES_PER_TURN",
+    "WEBSERVER__METRICS_CACHE_KEYS",
+    "WEBSERVER__METRICS_CACHE_BUCKETS",
+    "WEBSERVER__MEMORY_PEAKS_RUNS",
+    "MASTER__ASSIGNMENTS_PER_ROUND",
+    "MASTER__EXPIRIES_PER_ROUND",
+    "MASTER__WAITING_REASONS_PER_ROUND",
+    "MASTER__PENDING_REASONS_PER_ROUND",
+    "MASTER__COMMANDS_PER_ROUND",
+    "MASTER__SCHEDULED_RUNS_PER_ROUND",
+    "MASTER__STARTED_INSTANCES_PER_ROUND",
+    "MASTER__RETRIES_PER_ROUND",
+    "MASTER__RUNS_PER_PLANNING_PASS",
+    "MASTER__RUN_OF_RUNS_PER_PASS",
+    "MASTER__FAILED_GROUP_MESSAGES_PER_TURN",
+    "MASTER__WORKER_STREAM_BUFFER",
+    "MASTER__NOTIFICATIONS_PER_PASS",
+    "WORKER__RESULTS_PER_JOURNAL_GROUP",
+    "WORKER__STARTS_PER_JOURNAL_GROUP",
+    "WORKER__RESULT_RESENDS",
+    "WORKER__RESULT_RESEND_GAP_MAX",
+    "WORKER__UNACKED_MESSAGES_KEPT",
+    "WORKER__UNSENT_CONNECTION_ANSWERS",
+    "WORKER__TASK_CONNECTIONS_OPEN",
+    "WORKER__WATCHER_LOG_BACKLOG",
+    "WEBSERVER__EVENTS_BACKLOG",
+    "UI__EVENTS_BACKLOG",
+    "WEBSERVER__AUTH_REMEMBERED_MAX",
+    "DATABASE__CHANGES_POLL_ROWS",
+    "DATABASE__DAG_VERSIONS_CACHED",
+    "TLS__HANDSHAKES_AT_ONCE",
 ];
 
 /// The fixed limits, with what `SCHEDR_HIDDEN__*` variables set: whole numbers above zero.
@@ -410,16 +441,50 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             Some("MASTER__NOTIFICATION_BODY") => &mut limits.notification_body,
             Some("MASTER__RETENTION_BATCH") => &mut limits.retention_batch,
             Some("MASTER__MESSAGES_PER_TURN") => &mut limits.messages_per_turn,
+            Some("WEBSERVER__METRICS_CACHE_KEYS") => &mut limits.metrics_cache_keys,
+            Some("WEBSERVER__METRICS_CACHE_BUCKETS") => &mut limits.metrics_cache_buckets,
+            Some("WEBSERVER__MEMORY_PEAKS_RUNS") => &mut limits.memory_peaks_runs,
+            Some("MASTER__ASSIGNMENTS_PER_ROUND") => &mut limits.assignments_per_round,
+            Some("MASTER__EXPIRIES_PER_ROUND") => &mut limits.expiries_per_round,
+            Some("MASTER__WAITING_REASONS_PER_ROUND") => &mut limits.waiting_reasons_per_round,
+            Some("MASTER__PENDING_REASONS_PER_ROUND") => &mut limits.pending_reasons_per_round,
+            Some("MASTER__COMMANDS_PER_ROUND") => &mut limits.commands_per_round,
+            Some("MASTER__SCHEDULED_RUNS_PER_ROUND") => &mut limits.scheduled_runs_per_round,
+            Some("MASTER__STARTED_INSTANCES_PER_ROUND") => &mut limits.started_instances_per_round,
+            Some("MASTER__RETRIES_PER_ROUND") => &mut limits.retries_per_round,
+            Some("MASTER__RUNS_PER_PLANNING_PASS") => &mut limits.runs_per_planning_pass,
+            Some("MASTER__RUN_OF_RUNS_PER_PASS") => &mut limits.run_of_runs_per_pass,
+            Some("MASTER__FAILED_GROUP_MESSAGES_PER_TURN") => {
+                &mut limits.failed_group_messages_per_turn
+            }
+            Some("MASTER__WORKER_STREAM_BUFFER") => &mut limits.worker_stream_buffer,
+            Some("MASTER__NOTIFICATIONS_PER_PASS") => &mut limits.notifications_per_pass,
+            Some("WORKER__RESULTS_PER_JOURNAL_GROUP") => &mut limits.results_per_journal_group,
+            Some("WORKER__STARTS_PER_JOURNAL_GROUP") => &mut limits.starts_per_journal_group,
+            Some("WORKER__RESULT_RESENDS") => &mut limits.result_resends,
+            Some("WORKER__RESULT_RESEND_GAP_MAX") => &mut limits.result_resend_gap_max,
+            Some("WORKER__UNACKED_MESSAGES_KEPT") => &mut limits.unacked_messages_kept,
+            Some("WORKER__UNSENT_CONNECTION_ANSWERS") => &mut limits.unsent_connection_answers,
+            Some("WORKER__TASK_CONNECTIONS_OPEN") => &mut limits.task_connections_open,
+            Some("WORKER__WATCHER_LOG_BACKLOG") => &mut limits.watcher_log_backlog,
+            Some("WEBSERVER__EVENTS_BACKLOG") => &mut limits.webserver_events_backlog,
+            Some("UI__EVENTS_BACKLOG") => &mut limits.ui_events_backlog,
+            Some("WEBSERVER__AUTH_REMEMBERED_MAX") => &mut limits.auth_remembered_max,
+            Some("DATABASE__CHANGES_POLL_ROWS") => &mut limits.changes_poll_rows,
+            Some("DATABASE__DAG_VERSIONS_CACHED") => &mut limits.dag_versions_cached,
+            Some("TLS__HANDSHAKES_AT_ONCE") => &mut limits.tls_handshakes_at_once,
             _ => continue,
         };
         *limit = text
             .trim()
             .parse::<usize>()
             .ok()
-            .filter(|n| *n > 0)
+            .filter(|n| (1..=MOST_HIDDEN_LIMIT).contains(n))
             .ok_or_else(|| ConfigError::BadHiddenTiming {
                 name: name.clone(),
-                reason: format!("must be a whole number above zero, got `{text}`"),
+                reason: format!(
+                    "must be a whole number from 1 to {MOST_HIDDEN_LIMIT}, got `{text}`"
+                ),
             })?;
         limits.overridden.push(name.clone());
     }
@@ -502,6 +567,17 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "TLS__ACCEPT_RETRY" => &mut timings.accept_retry,
         "MASTER__TRIGGER_RESTART_BACKOFF" => &mut timings.trigger_restart_backoff,
         "MASTER__TRIGGER_RESTART_BACKOFF_MAX" => &mut timings.trigger_restart_backoff_max,
+        "WEBSERVER__METRICS_FINAL_AFTER" => &mut timings.metrics_final_after,
+        "MASTER__SAMPLE_ROLLUP_GRACE" => &mut timings.sample_rollup_grace,
+        "WEBSERVER__MEMORY_PEAKS_WINDOW" => &mut timings.memory_peaks_window,
+        "EVENTS__FUTURE_TOLERANCE" => &mut timings.event_future_tolerance,
+        "MASTER__FOR_FUTURE_TOLERANCE" => &mut timings.for_future_tolerance,
+        "MASTER__CODE_RETRY_DELAY" => &mut timings.code_retry_delay,
+        "MASTER__NODE_ROW_KEPT" => &mut timings.node_row_kept,
+        "CLIENT__CONNECT_TIMEOUT" => &mut timings.client_connect_timeout,
+        "CLIENT__REQUEST_TIMEOUT" => &mut timings.client_request_timeout,
+        "CLIENT__COMMAND_WAIT" => &mut timings.client_command_wait,
+        "DAGS__TEST_RUN_TIMEOUT" => &mut timings.dags_test_run_timeout,
         _ => return None,
     };
     Some(timing)
@@ -514,6 +590,14 @@ const RETIRED_TIMINGS: [&str; 3] = [
     "MASTER__QUIET_DAG_WAKE_AHEAD",
     "MASTER__QUIET_DAG_FULL_PASS_INTERVAL",
 ];
+
+/// The highest a hidden limit takes (Codex's review of M5.1p): far above any default, and
+/// below what tokio's channels and semaphores refuse with a panic.
+pub const MOST_HIDDEN_LIMIT: usize = 1 << 24;
+
+/// The longest a hidden timing takes, ten years (Codex's review of M5.1p): a deadline from now
+/// stays a time.
+pub const LONGEST_HIDDEN_TIMING: std::time::Duration = std::time::Duration::from_hours(3650 * 24);
 
 /// The fixed timings, with what `SCHEDR_HIDDEN__*` variables set.
 fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError> {
@@ -541,9 +625,46 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
                 reason: "must be longer than zero".to_owned(),
             });
         }
+        if *timing > LONGEST_HIDDEN_TIMING {
+            return Err(ConfigError::BadHiddenTiming {
+                name: name.clone(),
+                reason: format!("must be at most 3650 days, got `{text}`"),
+            });
+        }
         timings.overridden.push(name.clone());
     }
     Ok(timings)
+}
+
+/// A Metrics bucket final only after its samples' rollup: a webserver keeping one sooner would
+/// never show a sample stored within the rollup's grace (decision 492).
+///
+/// And the minute samples kept past a window's rollup (Codex's review of M5.1p): a window's
+/// first minute, 15 minutes and the grace before it is rolled up, would be deleted unrolled.
+fn check_metrics_final(timings: &Timings) -> Result<(), ConfigError> {
+    let rolled_after = timings
+        .sample_rollup_grace
+        .saturating_add(std::time::Duration::from_mins(15));
+    if rolled_after >= timings.samples_kept {
+        return Err(ConfigError::BadHiddenTiming {
+            name: format!("{HIDDEN_PREFIX}MASTER__SAMPLE_ROLLUP_GRACE"),
+            reason: format!(
+                "with the 15-minute window, must be shorter than \
+                 `{HIDDEN_PREFIX}MASTER__SAMPLES_KEPT` ({:?}), got {:?}",
+                timings.samples_kept, timings.sample_rollup_grace
+            ),
+        });
+    }
+    if timings.sample_rollup_grace >= timings.metrics_final_after {
+        return Err(ConfigError::BadHiddenTiming {
+            name: format!("{HIDDEN_PREFIX}MASTER__SAMPLE_ROLLUP_GRACE"),
+            reason: format!(
+                "must be shorter than `{HIDDEN_PREFIX}WEBSERVER__METRICS_FINAL_AFTER` ({:?}), got {:?}",
+                timings.metrics_final_after, timings.sample_rollup_grace
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The lease at least four heartbeats: under one, a worker is lost between two beats; with

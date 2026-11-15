@@ -37,7 +37,7 @@ pub struct AttemptPeak {
 pub struct TaskPeaks {
     /// The task.
     pub task_id: String,
-    /// The peaks read, at most [`PEAKS_PER_TASK`], in no order.
+    /// The peaks read, at most the runs asked for, in no order.
     pub peaks: Vec<u64>,
     /// Of those attempts, how many were killed for their memory.
     pub oom_killed: u32,
@@ -45,7 +45,8 @@ pub struct TaskPeaks {
 
 impl Database {
     /// The last `count` attempts of `task_id` of DAG `dag_id` to end, all its instances, the
-    /// oldest first: of its [`PEAKS_PER_TASK`] runs ended last and those still going.
+    /// oldest first: of its `runs` ended last (`SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_RUNS`,
+    /// [`PEAKS_PER_TASK`] by default) and those still going.
     ///
     /// # Errors
     ///
@@ -55,6 +56,7 @@ impl Database {
         dag_id: &str,
         task_id: &str,
         count: u32,
+        runs: u32,
     ) -> Result<Vec<AttemptPeak>, DbError> {
         // Codex's review of M5.1k: the last to end, whatever their runs' order. An attempt ends
         // before its run, so it is among the runs ended since or still going: the DAG's
@@ -76,7 +78,7 @@ impl Database {
                 .bind(dag_id)
                 .bind(task_id)
                 .bind(i64::from(count))
-                .bind(i64::from(PEAKS_PER_TASK))
+                .bind(i64::from(runs))
                 .fetch_all(pool)
                 .await?
         });
@@ -100,9 +102,9 @@ impl Database {
         Ok(peaks)
     }
 
-    /// Each task of DAG `dag_id` with attempts ended since `since`, of its [`PEAKS_PER_TASK`]
-    /// runs ended last since then and those still going: the peaks of its newest
-    /// [`PEAKS_PER_TASK`] that have one, by task.
+    /// Each task of DAG `dag_id` with attempts ended since `since`, of its `runs` runs ended
+    /// last since then and those still going: the peaks of its newest `runs` that have one, by
+    /// task.
     ///
     /// # Errors
     ///
@@ -111,6 +113,7 @@ impl Database {
         &self,
         dag_id: &str,
         since: Timestamp,
+        runs: u32,
     ) -> Result<Vec<TaskPeaks>, DbError> {
         // The runs ended since, newest first (`runs_ended`), and those still going
         // (`runs_unfinished`): a DAG running every minute reads a thousand runs, not 30 days of
@@ -132,7 +135,7 @@ impl Database {
             sqlx::query_as(sql(backend, PEAKS))
                 .bind(dag_id)
                 .bind(db_time(since))
-                .bind(i64::from(PEAKS_PER_TASK))
+                .bind(i64::from(runs))
                 .fetch_all(pool)
                 .await?
         });

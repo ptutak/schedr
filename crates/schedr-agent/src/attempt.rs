@@ -410,6 +410,27 @@ pub struct WorkerTimeouts {
     /// The wall-clock difference from the master, beyond the round trip, that is warned about
     /// (`clock_skew_warning`, decision 449).
     pub clock_skew_warning: Duration,
+    /// The most results kept in the journal as one group (`RESULTS_PER_JOURNAL_GROUP`).
+    pub results_per_journal_group: usize,
+    /// The most assignments whose journal records are written as one group
+    /// (`STARTS_PER_JOURNAL_GROUP`).
+    pub starts_per_journal_group: usize,
+    /// How many times a result is sent again over one session before it reconnects
+    /// (`RESULT_RESENDS`).
+    pub result_resends: u32,
+    /// The most heartbeats between two sends of an unacknowledged result
+    /// (`RESULT_RESEND_GAP_MAX`).
+    pub result_resend_gap_max: u32,
+    /// The messages kept waiting to be heard of (`UNACKED_MESSAGES_KEPT`).
+    pub unacked_messages_kept: usize,
+    /// The connections jobs' answers kept while no master listens
+    /// (`UNSENT_CONNECTION_ANSWERS`).
+    pub unsent_connection_answers: usize,
+    /// The most context connections a task may have open at once (`TASK_CONNECTIONS_OPEN`).
+    pub task_connections_open: usize,
+    /// A wait step's messages waiting for its attempt before its host waits too
+    /// (`WATCHER_LOG_BACKLOG`).
+    pub watcher_log_backlog: usize,
 }
 
 impl Default for WorkerTimeouts {
@@ -441,6 +462,14 @@ impl Default for WorkerTimeouts {
             accept_retry: Duration::from_millis(100),
             master_sample_window: crate::master_time::DEFAULT_SAMPLE_WINDOW,
             clock_skew_warning: crate::master_time::DEFAULT_SKEW_WARNING,
+            results_per_journal_group: crate::agent::RESULTS_PER_GROUP,
+            starts_per_journal_group: crate::agent::STARTS_PER_GROUP,
+            result_resends: crate::agent::MAX_RESENDS,
+            result_resend_gap_max: crate::agent::MAX_RESEND_GAP,
+            unacked_messages_kept: crate::master_time::SENT_KEPT,
+            unsent_connection_answers: crate::agent::UNSENT_ANSWERS,
+            task_connections_open: crate::ctx::MAX_CONNECTIONS,
+            watcher_log_backlog: crate::watchers::ROUTE_MESSAGES,
         }
     }
 }

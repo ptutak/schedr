@@ -29,6 +29,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D494 | 2026-11-15 | user | planned (M5.1l2) | observability | Throughput and start latency come from the attempts table |
+| D493 | 2026-11-15 | user | built M5.1p | configuration | Tunable constants are hidden settings |
 | D492 | 2026-11-15 | claude | built M5.1j | observability | The Metrics endpoints keep their final buckets between requests |
 | D491 | 2026-11-14 | user | built M5.1j | ui-cli | A process's memory includes its tasks; memory is split by kind |
 | D490 | 2026-11-14 | user | built M5.1m | assignment | started_at is the worker's start, in master time |
@@ -661,6 +663,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### configuration
 
+- D493: Tunable constants are hidden settings
 - D332: DAG parse concurrency defaults to four files
 - D241: Some timings remain constants
 - D240: Inline server timings use the hidden configuration
@@ -772,6 +775,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### observability
 
+- D494: Throughput and start latency come from the attempts table
 - D492: The Metrics endpoints keep their final buckets between requests
 - D464: The master keeps a sample of each process a minute
 - D463: Masters, workers and the webserver report their memory and CPU

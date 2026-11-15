@@ -107,6 +107,8 @@ pub struct Commander {
     metrics: MasterMetrics,
     /// The most fire times a backfill's range may have (`[backfill] max_runs`).
     backfill_max_runs: u32,
+    /// The most commands a round applies (decision 493).
+    per_round: u32,
 }
 
 /// A command's decision: applied or rejected, why, and what it produced.
@@ -120,7 +122,15 @@ impl Commander {
             db,
             metrics: MasterMetrics::default(),
             backfill_max_runs: crate::scheduler::backfill::DEFAULT_MAX_RUNS,
+            per_round: COMMANDS_PER_ROUND,
         }
+    }
+
+    /// The commander applying at most `per_round` commands a round.
+    #[must_use]
+    pub const fn with_commands_per_round(mut self, per_round: u32) -> Self {
+        self.per_round = per_round;
+        self
     }
 
     /// Refuses a backfill whose range has more than `max_runs` fire times (`[backfill]
@@ -182,7 +192,7 @@ impl Commander {
     ///
     /// [`CommandError::Db`] if the database fails.
     pub async fn pending(&self) -> Result<Vec<PendingCommand>, CommandError> {
-        Ok(self.db.pending_commands(COMMANDS_PER_ROUND).await?)
+        Ok(self.db.pending_commands(self.per_round).await?)
     }
 
     /// Applies one command in one transaction, its decision with it (decision 483): what it

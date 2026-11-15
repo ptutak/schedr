@@ -7,10 +7,10 @@ section = "Sources and validation"
 summary = '''
 M4.8u passes hidden timings through each crate's own struct with defaults in the
 server, worker and webserver, including `auth_remembered` and `auth_recheck`. The
-client, `task-ctx` and the CLI's commands don't use these timings (the binary reads the
-configuration file for every command but `task-ctx` and `dag-ctx`).
+client and the CLI's commands use the client timeouts since decision 493; `task-ctx` and
+`dag-ctx` read no configuration and use none.
 '''
 history = "archive/PROJECT.md#D236"
 step = "M4.8u"
-checked = 2026-11-14
+checked = 2026-11-15
 code = ["crates/schedr-master/src/core.rs::MasterTimings"]

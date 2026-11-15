@@ -213,9 +213,15 @@ place) leaves running jobs alone. So:
 - **Never write into a DAG root.** Every file under it counts for its hash, not only `.py`
   files, so a task writing a log, a mark or an output file there (by the root's configured
   path) changes the code under its own run: once the root settles, the worker reports a new
-  hash, and the tasks assigned for the old one are rejected (`CODE_MISMATCH`) and wait 35 s.
+  hash, and the tasks assigned for the old one are rejected (`CODE_MISMATCH`) and wait 35 s
+  (`SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY`).
   Each write starts it again. Write to a temporary directory or an output folder outside every
   root, or exclude the path with `.schedrignore` (excluded files aren't hashed).
+- **Keep a virtualenv out of a DAG root.** Only `.git` and `__pycache__` folders are skipped,
+  hidden ones scanned too, so a `.venv` in a root is hashed and copied whole, and each `.py`
+  file in it mentioning `schedr` (the package's own) parsed as a DAG file: an import error
+  each. Keep the DAG files in a folder of their own (`schedr standalone --dag-path dags`), or
+  add `.venv/` to the root's `.schedrignore`.
 - **Other DAG roots are on `sys.path` at their copies.** A parse also sees the other DAG
   roots and script roots at their copies. These copies are kept while the parse runs; task
   copies are kept while the task or its recovered cleanup runs.

@@ -19,12 +19,13 @@ file in it, `dags/sync.py`:
 ## Start it
 
 ```sh
-SCHEDR_DAG_PATH=dags .venv/bin/schedr standalone --migrate
+.venv/bin/schedr standalone --migrate --dag-path dags
 ```
 
-- **`SCHEDR_DAG_PATH`** names the directories schedr watches for DAG files (several are
-  separated by `:`). Without it, standalone watches none: it starts with the warning "no DAG
-  directories", and has nothing to run.
+- **`--dag-path dags`** is the folder schedr watches for DAG files, named after it (`dags`);
+  repeat it for more. Without it (or `SCHEDR_DAG_PATH`, the same list from the environment),
+  standalone watches none: it starts with the warning "no DAG directories", and has nothing to
+  run.
 - **`--migrate`** creates the database on the first start, and updates it after an upgrade.
 - **Python:** tasks and DAG files run with the project's `.venv`, found by itself (an active
   virtualenv, then `.venv` or `venv` in this directory or a parent, then `python3`). The first

@@ -49,6 +49,8 @@ pub struct ApiState {
     pub usage: fn() -> Option<schedr_model::usage::NodeUsage>,
     /// The Metrics endpoints' final buckets, kept between requests.
     pub series: Arc<crate::series::cache::SeriesCache>,
+    /// How far its reads reach and what they allow (decision 493).
+    pub limits: ApiLimits,
 }
 
 impl ApiState {
@@ -79,6 +81,17 @@ impl ApiState {
             }),
             usage: || None,
             series: Arc::default(),
+            limits: ApiLimits::default(),
+        }
+    }
+
+    /// This state with the webserver's limits, its Metrics cache's included (decision 493).
+    #[must_use]
+    pub fn with_limits(self, limits: ApiLimits, cache: crate::series::cache::CacheLimits) -> Self {
+        Self {
+            limits,
+            series: Arc::new(crate::series::cache::SeriesCache::new(cache)),
+            ..self
         }
     }
 
@@ -159,5 +172,31 @@ impl ApiState {
     #[must_use]
     pub fn with_logs(self, logs: Arc<dyn LogSource>) -> Self {
         Self { logs, ..self }
+    }
+}
+
+/// How far the webserver's reads reach and what its writes allow, each a
+/// `SCHEDR_HIDDEN__WEBSERVER__*` value (decision 493).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApiLimits {
+    /// How far back the DAG page's memory p95s reach (`MEMORY_PEAKS_WINDOW`).
+    pub memory_peaks_window: jiff::SignedDuration,
+    /// The runs, and one task's attempts, a p95 is taken from at most (`MEMORY_PEAKS_RUNS`).
+    pub memory_peaks_runs: u32,
+    /// How far ahead of now a posted event's `at` may be (`SCHEDR_HIDDEN__EVENTS__FUTURE_TOLERANCE`).
+    pub event_future_tolerance: jiff::SignedDuration,
+    /// A master heard from within this long is on the Deployments page: three of its node
+    /// heartbeats (`SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT`).
+    pub masters_heard_within: jiff::SignedDuration,
+}
+
+impl Default for ApiLimits {
+    fn default() -> Self {
+        Self {
+            memory_peaks_window: crate::attempt_memory::PEAKS_OVER,
+            memory_peaks_runs: schedr_db::task_memory::PEAKS_PER_TASK,
+            event_future_tolerance: crate::named_events::AT_TOLERANCE,
+            masters_heard_within: crate::routes::MASTERS_HEARD_WITHIN,
+        }
     }
 }

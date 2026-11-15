@@ -1144,7 +1144,8 @@ async fn test_dag(
                         test,
                         &format!("http://{}", listening.http),
                         (&data, &logs),
-                        json,
+                        (json, config.timings.dags_test_run_timeout),
+                        crate::roles::client_timeouts(config),
                         out,
                     )
                     .await
@@ -1311,13 +1312,15 @@ async fn drive(
     test: &TestRun,
     api: &str,
     (data, logs): (&Path, &Path),
-    json: bool,
+    (json, run_timeout): (bool, Duration),
+    timeouts: schedr_client::Timeouts,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
+    // The configured client timeouts (Codex's review of M5.1p: `dags test` kept its own).
     let client = Client::new(
-        HttpTransport::new(api, Auth::None),
+        HttpTransport::new(api, Auth::None).with_timeouts(timeouts),
         Duration::from_millis(100),
-        Duration::from_secs(60),
+        timeouts.command_wait,
     );
     let location = wait_for_dag(&client, dag).await?;
     unpause_chained(&client).await?;
@@ -1359,7 +1362,7 @@ async fn drive(
         if ["success", "failed", "cancelled"].contains(&detail.run.state.as_str()) {
             break detail;
         }
-        if started.elapsed() > TEST_RUN_TIMEOUT {
+        if started.elapsed() > run_timeout {
             return Err(AppError::Failed(format!(
                 "run {run_id} didn't finish in time"
             )));

@@ -53,6 +53,8 @@ pub struct Sender {
     backoff: Backoff,
     /// The mail server's transport, when `[notifications.smtp]` has a host.
     smtp: Option<AsyncSmtpTransport<Tokio1Executor>>,
+    /// The most notifications a pass delivers (decision 493).
+    per_pass: u32,
 }
 
 /// What a pass did.
@@ -101,11 +103,20 @@ impl Sender {
             metrics,
             backoff,
             smtp,
+            per_pass: BATCH,
         })
     }
 
-    /// Delivers what is due at `now`, at most [`BATCH`], while `leading` says this master still
-    /// leads: it is asked before each delivery, so a master that lost its lease mid-pass starts
+    /// The sender delivering at most `per_pass` notifications a pass
+    /// (`SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS`).
+    #[must_use]
+    pub const fn with_per_pass(mut self, per_pass: u32) -> Self {
+        self.per_pass = per_pass;
+        self
+    }
+
+    /// Delivers what is due at `now`, at most its `per_pass` ([`BATCH`] by default), while
+    /// `leading` says this master still leads: it is asked before each delivery, so a master that lost its lease mid-pass starts
     /// no more (Codex's review of M4.13a).
     ///
     /// # Errors
@@ -113,7 +124,7 @@ impl Sender {
     /// [`DbError`] if the outbox can't be read or written.
     pub async fn pass(&self, now: Timestamp, leading: impl Fn() -> bool) -> Result<Pass, DbError> {
         let mut pass = Pass::default();
-        for notification in self.db.due_notifications(now, BATCH).await? {
+        for notification in self.db.due_notifications(now, self.per_pass).await? {
             if !leading() {
                 break;
             }

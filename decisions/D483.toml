@@ -18,4 +18,4 @@ the lock held for the whole batch and savepoints not built); leaving them as the
 history = "JOURNAL.md#D483"
 step = "M5.1c3"
 code = ["crates/schedr-master/src/commands.rs"]
-checked = 2026-11-13
+checked = 2026-11-15

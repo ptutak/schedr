@@ -51,6 +51,9 @@ pub struct UiTimings {
     pub retry_first: Duration,
     /// The longest one (`relay_retry_max`).
     pub retry_max: Duration,
+    /// The changes a slow browser may fall behind by before it gets `refresh`
+    /// (`UI__EVENTS_BACKLOG`).
+    pub backlog: usize,
 }
 
 impl Default for UiTimings {
@@ -63,6 +66,7 @@ impl Default for UiTimings {
             tail_give_up: TAIL_GIVE_UP,
             retry_first: RETRY_FIRST,
             retry_max: RETRY_MAX,
+            backlog: BACKLOG,
         }
     }
 }
@@ -170,7 +174,7 @@ impl Relays {
     ) -> broadcast::Receiver<Change> {
         self.senders[index]
             .get_or_init(|| {
-                let (sender, _) = broadcast::channel(BACKLOG);
+                let (sender, _) = broadcast::channel(ui.timings.backlog.max(1));
                 let changed = Arc::clone(&self.changed[index]);
                 changed.store(now_millis(), Ordering::Relaxed);
                 tokio::spawn(relay(Arc::clone(ui), index, sender.clone(), changed));

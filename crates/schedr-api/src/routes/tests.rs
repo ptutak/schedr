@@ -2388,3 +2388,48 @@ async fn a_tasks_attempt_peaks_and_the_dags_p95s_are_read_with_the_limit() {
     let (status, _) = get(&app, "/api/v1/dags/ghost/memory").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn the_deployment_lists_masters_heard_within_three_of_their_heartbeats() {
+    // Decision 493: with `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT` at a minute, a master heard a
+    // minute ago is still there (a fixed 30 s dropped it).
+    let (_, db, _) = api().await;
+    let config = json!({});
+    db.heartbeat_master(
+        &schedr_db::nodes::MasterNode {
+            master_id: "m-slow",
+            process_id: "p-1",
+            host: "node-a",
+            schedr_version: "1.1.0",
+            config: &config,
+            started_at: ts("2026-10-21T07:00:00Z"),
+            problems: &[],
+            usage: None,
+        },
+        ts("2026-10-21T07:59:00Z"),
+    )
+    .await
+    .unwrap();
+    let listed = async |limits: crate::state::ApiLimits| {
+        let mut state = ApiState::new(db.clone(), None)
+            .with_limits(limits, crate::series::cache::CacheLimits::default());
+        state.clock = fixed_now;
+        let (status, body) = get(&router(state), "/api/v1/deployment").await;
+        assert_eq!(status, StatusCode::OK);
+        body["masters"].as_array().unwrap().len()
+    };
+    assert_eq!(
+        listed(crate::state::ApiLimits::default()).await,
+        0,
+        "past 30 s"
+    );
+    let a_minute = crate::state::ApiLimits {
+        masters_heard_within: jiff::SignedDuration::from_mins(3),
+        ..crate::state::ApiLimits::default()
+    };
+    assert_eq!(
+        listed(a_minute).await,
+        1,
+        "within three heartbeats of a minute"
+    );
+}

@@ -115,7 +115,7 @@ pub async fn get_deployment(
     Extension(user): Extension<User>,
 ) -> ApiResult<DeploymentView> {
     let since = (state.clock)()
-        .checked_sub(MASTERS_HEARD_WITHIN)
+        .checked_sub(state.limits.masters_heard_within)
         .unwrap_or(Timestamp::UNIX_EPOCH);
     let masters = state.db.masters(since).await?;
     // The import errors of files each worker parsed: a warning on its node.
@@ -206,7 +206,8 @@ fn worker_problems(
     problems
 }
 
-/// How lately a master must have written its row to be shown (it writes it every 10 s).
+/// How lately a master must have written its row to be shown by default: three of its node
+/// heartbeats of 10 s (the webserver passes its own, from `node_heartbeat`).
 pub const MASTERS_HEARD_WITHIN: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
 
 /// Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones

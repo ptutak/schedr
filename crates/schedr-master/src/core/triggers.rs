@@ -150,7 +150,7 @@ fn backoff(failures: u32, first: Duration, most: Duration) -> Duration {
 }
 
 /// How many runs one pass starts for a DAG started by `RunOf`; the rest wait for the next.
-const RUNS_OF_A_PASS: u32 = 50;
+pub const RUNS_OF_A_PASS: u32 = 50;
 
 impl MasterCore {
     /// Stops the triggers that should not run where they are, and starts those that should run
@@ -242,14 +242,15 @@ impl MasterCore {
     }
 
     /// How many runs a pass may start for a DAG with `queued` event runs waiting: at most
-    /// [`RUNS_OF_A_PASS`], and what `[triggers] max_queued_events` leaves room for.
+    /// its `run_of_runs` ([`RUNS_OF_A_PASS`] by default), and what `[triggers] max_queued_events` leaves room for.
     fn pass_room(&self, queued: i64) -> u32 {
         let most = self.settings.max_queued_events;
+        let per_pass = self.settings.rounds.run_of_runs;
         if most == 0 {
-            RUNS_OF_A_PASS
+            per_pass
         } else {
             let left = i64::from(most).saturating_sub(queued);
-            u32::try_from(left.clamp(0, i64::from(RUNS_OF_A_PASS))).unwrap_or(0)
+            u32::try_from(left.clamp(0, i64::from(per_pass))).unwrap_or(0)
         }
     }
 

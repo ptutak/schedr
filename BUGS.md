@@ -53,15 +53,14 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B250: a DAG root holding a virtualenv scans it: `--dag-path .` in a project folder parses its .venv | 6 | medium | likely | usability |
-| 2 | B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load | 2 | low | possible | tests |
-| 3 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 4 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-| 5 | B251: a readiness test saw the master still ready 50 ms after its stop, under a review's build load (Suspected) | 1 | low | rare | tests |
-| 6 | B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected) | 1 | low | rare | tests |
-| 7 | B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected) | 1 | low | rare | tests |
-| 8 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
-| 9 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+| 1 | B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load | 2 | low | possible | tests |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 4 | B251: a readiness test saw the master still ready 50 ms after its stop, under a review's build load (Suspected) | 1 | low | rare | tests |
+| 5 | B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected) | 1 | low | rare | tests |
+| 6 | B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected) | 1 | low | rare | tests |
+| 7 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
+| 8 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
 
 ## B251: a readiness test saw the master still ready 50 ms after its stop, under a review's build load (Suspected)
 
@@ -70,22 +69,6 @@ Reported by Codex in its M5.1n review (session `01a1de10`): the broader unit run
 passed and this one failure, while it was building and running other tests in its worktree.
 Passed in Claude's runs the same night. First step: read what the test waits on after the stop,
 and whether 50 ms is a fixed sleep where it should wait for the state to change.
-
-## B250: a DAG root holding a virtualenv scans it: `--dag-path .` in a project folder parses its .venv
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): the scan skips only `.git` and `__pycache__` (hidden folders included, `standard_filters(false)`): a `.venv` in a root is hashed whole and its `.py` files mentioning `schedr` parsed.
-Found building M5.1n (decision 488): its point is `schedr standalone --dag-path .` in the folder
-of one's DAG files, and the project folder of Getting started holds the `.venv` too. Shown with
-`schedr dags check <folder>` on a folder with `mine.py` and `.venv/lib/site-packages/lib_dag.py`
-(both define a DAG): `2 file(s), 1 DAG(s), 1 error(s)`, the second an import error ("a dot in a
-file or folder name has no import name"). A real `.venv` holds the schedr package, whose files
-mention `schedr`, and the whole of site-packages counts for the root's content hash, so a
-change anywhere in it is a new code version. Configured roots (git checkouts) rarely hold one.
-
-The fix is for the user to choose (it changes what every root scans): skip hidden folders as
-`.git` is; skip a folder holding `pyvenv.cfg` (any virtualenv, named as it may be); or leave the
-scan and have Getting started keep the DAGs in a folder of their own (`--dag-path dags`) or
-write a `.schedrignore`. Until then, Getting started uses `--dag-path dags`.
 
 ## B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected)
 

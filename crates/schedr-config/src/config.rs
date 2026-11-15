@@ -222,6 +222,32 @@ pub struct Timings {
     pub trigger_restart_backoff: Duration,
     /// The most it waits.
     pub trigger_restart_backoff_max: Duration,
+    /// How long after its end a Metrics bucket is final, kept by the webserver between requests
+    /// (decision 492): longer than the rollup's grace, with room for the writers' clocks. (`WEBSERVER__METRICS_FINAL_AFTER`)
+    pub metrics_final_after: Duration,
+    /// How long after its end a samples window waits to be rolled up, so a sample stored late is
+    /// in it; shorter than `metrics_final_after`. (`MASTER__SAMPLE_ROLLUP_GRACE`)
+    pub sample_rollup_grace: Duration,
+    /// How far back the DAG page's memory p95s reach (decision 467). (`WEBSERVER__MEMORY_PEAKS_WINDOW`)
+    pub memory_peaks_window: Duration,
+    /// How far ahead of the clock a posted event's `at` may be, posted to a webserver or by a
+    /// task through its master (`EVENTS__FUTURE_TOLERANCE`).
+    pub event_future_tolerance: Duration,
+    /// How far ahead of the master's clock a run's `--for` may be. (`MASTER__FOR_FUTURE_TOLERANCE`)
+    pub for_future_tolerance: Duration,
+    /// When a task whose code wasn't on its worker yet is tried again: about a git-sync interval
+    /// and the settle time. (`MASTER__CODE_RETRY_DELAY`)
+    pub code_retry_delay: Duration,
+    /// How long a master's row stays after its last heartbeat before it is removed. (`MASTER__NODE_ROW_KEPT`)
+    pub node_row_kept: Duration,
+    /// How long the CLI and `schedr ui` wait to connect to a webserver. (`CLIENT__CONNECT_TIMEOUT`)
+    pub client_connect_timeout: Duration,
+    /// How long one request of the CLI or `schedr ui` to a webserver may take. (`CLIENT__REQUEST_TIMEOUT`)
+    pub client_request_timeout: Duration,
+    /// How long the CLI and `schedr ui` wait for the master's decision on a command. (`CLIENT__COMMAND_WAIT`)
+    pub client_command_wait: Duration,
+    /// How long `schedr dags test` waits for its run. (`DAGS__TEST_RUN_TIMEOUT`)
+    pub dags_test_run_timeout: Duration,
     /// The `SCHEDR_HIDDEN__*` variables set, each warned about when starting.
     pub overridden: Vec<String>,
 }
@@ -303,6 +329,17 @@ impl Default for Timings {
             accept_retry: Duration::from_millis(100),
             trigger_restart_backoff: Duration::from_secs(5),
             trigger_restart_backoff_max: Duration::from_mins(5),
+            metrics_final_after: Duration::from_mins(15),
+            sample_rollup_grace: Duration::from_mins(2),
+            memory_peaks_window: Duration::from_hours(30 * 24),
+            event_future_tolerance: Duration::from_mins(1),
+            for_future_tolerance: Duration::from_mins(1),
+            code_retry_delay: Duration::from_secs(35),
+            node_row_kept: Duration::from_hours(1),
+            client_connect_timeout: Duration::from_secs(5),
+            client_request_timeout: Duration::from_secs(30),
+            client_command_wait: Duration::from_secs(30),
+            dags_test_run_timeout: Duration::from_hours(1),
             overridden: Vec::new(),
         }
     }
@@ -481,13 +518,73 @@ pub struct HiddenLimits {
     /// The most messages of one worker the master handles in one turn of its lock
     /// (`MASTER__MESSAGES_PER_TURN`, M4B.3): its `Started`s and `Finished`s stored together.
     pub messages_per_turn: usize,
+    /// The Metrics cache's keys at most (each range, all processes or one; decision 492). (`WEBSERVER__METRICS_CACHE_KEYS`)
+    pub metrics_cache_keys: usize,
+    /// The buckets the Metrics cache keeps for one key at most; past them it reads each time. (`WEBSERVER__METRICS_CACHE_BUCKETS`)
+    pub metrics_cache_buckets: usize,
+    /// The runs, and one task's attempts, a memory p95 is taken from at most (decision 467). (`WEBSERVER__MEMORY_PEAKS_RUNS`)
+    pub memory_peaks_runs: usize,
+    /// The most assignments a round makes. (`MASTER__ASSIGNMENTS_PER_ROUND`)
+    pub assignments_per_round: usize,
+    /// The most assignments a round takes back as never started. (`MASTER__EXPIRIES_PER_ROUND`)
+    pub expiries_per_round: usize,
+    /// The most waiting reasons a round writes (a statement each). (`MASTER__WAITING_REASONS_PER_ROUND`)
+    pub waiting_reasons_per_round: usize,
+    /// The most pending reasons a round writes for the tasks past its cap (decision 481). (`MASTER__PENDING_REASONS_PER_ROUND`)
+    pub pending_reasons_per_round: usize,
+    /// The most commands a round applies. (`MASTER__COMMANDS_PER_ROUND`)
+    pub commands_per_round: usize,
+    /// The most scheduled runs a round creates for one DAG. (`MASTER__SCHEDULED_RUNS_PER_ROUND`)
+    pub scheduled_runs_per_round: usize,
+    /// The most task instances a round creates for runs that just started. (`MASTER__STARTED_INSTANCES_PER_ROUND`)
+    pub started_instances_per_round: usize,
+    /// The most failed tasks a round queues again. (`MASTER__RETRIES_PER_ROUND`)
+    pub retries_per_round: usize,
+    /// The most runs the scheduler creates for one DAG in one pass. (`MASTER__RUNS_PER_PLANNING_PASS`)
+    pub runs_per_planning_pass: usize,
+    /// The most runs one pass starts for a DAG started by `RunOf`. (`MASTER__RUN_OF_RUNS_PER_PASS`)
+    pub run_of_runs_per_pass: usize,
+    /// The most messages of a failed group handled one by one in a turn (M4B.3). (`MASTER__FAILED_GROUP_MESSAGES_PER_TURN`)
+    pub failed_group_messages_per_turn: usize,
+    /// The messages that wait for a worker before it is taken for one that stopped reading. (`MASTER__WORKER_STREAM_BUFFER`)
+    pub worker_stream_buffer: usize,
+    /// The most notifications one pass of the sender delivers. (`MASTER__NOTIFICATIONS_PER_PASS`)
+    pub notifications_per_pass: usize,
+    /// The most results a worker keeps in its journal as one group (M4B.5). (`WORKER__RESULTS_PER_JOURNAL_GROUP`)
+    pub results_per_journal_group: usize,
+    /// The most assignments whose journal records a worker writes as one group (M5.1b). (`WORKER__STARTS_PER_JOURNAL_GROUP`)
+    pub starts_per_journal_group: usize,
+    /// How many times a worker sends a result again over one session before it reconnects. (`WORKER__RESULT_RESENDS`)
+    pub result_resends: usize,
+    /// The most heartbeats between two sends of an unacknowledged result (B41). (`WORKER__RESULT_RESEND_GAP_MAX`)
+    pub result_resend_gap_max: usize,
+    /// The messages a worker keeps waiting to be heard of (B240), the oldest dropped first. (`WORKER__UNACKED_MESSAGES_KEPT`)
+    pub unacked_messages_kept: usize,
+    /// The connections jobs' answers a worker keeps while no master listens. (`WORKER__UNSENT_CONNECTION_ANSWERS`)
+    pub unsent_connection_answers: usize,
+    /// The most connections a task may have open to its agent at once. (`WORKER__TASK_CONNECTIONS_OPEN`)
+    pub task_connections_open: usize,
+    /// The messages of a wait step waiting for its attempt before its host waits too. (`WORKER__WATCHER_LOG_BACKLOG`)
+    pub watcher_log_backlog: usize,
+    /// The changes a slow event stream may fall behind by before it gets `refresh`. (`WEBSERVER__EVENTS_BACKLOG`)
+    pub webserver_events_backlog: usize,
+    /// The changes a slow browser may fall behind by before it gets `refresh`. (`UI__EVENTS_BACKLOG`)
+    pub ui_events_backlog: usize,
+    /// The password checks remembered at once, the oldest dropped first. (`WEBSERVER__AUTH_REMEMBERED_MAX`)
+    pub auth_remembered_max: usize,
+    /// The most rows of SQLite's `changes` one read takes. (`DATABASE__CHANGES_POLL_ROWS`)
+    pub changes_poll_rows: usize,
+    /// The DAG versions a process keeps parsed before clearing them. (`DATABASE__DAG_VERSIONS_CACHED`)
+    pub dag_versions_cached: usize,
+    /// How many TLS handshakes may run at once; beyond them accepting waits. (`TLS__HANDSHAKES_AT_ONCE`)
+    pub tls_handshakes_at_once: usize,
     /// The `SCHEDR_HIDDEN__*` variables that changed one.
     pub overridden: Vec<String>,
 }
 
 impl Default for HiddenLimits {
     /// 256 records of each kind, 4096 characters of each text, 1 MiB a notification, 100 runs
-    /// a retention transaction, 80 messages a turn (decision 484).
+    /// a retention transaction, 80 messages a turn (decision 484); the rest as each says.
     fn default() -> Self {
         Self {
             worker_report_records: 256,
@@ -495,6 +592,36 @@ impl Default for HiddenLimits {
             notification_body: 1 << 20,
             retention_batch: 100,
             messages_per_turn: 80,
+            metrics_cache_keys: 64,
+            metrics_cache_buckets: 100_000,
+            memory_peaks_runs: 1000,
+            assignments_per_round: 50,
+            expiries_per_round: 50,
+            waiting_reasons_per_round: 100,
+            pending_reasons_per_round: 500,
+            commands_per_round: 50,
+            scheduled_runs_per_round: 10,
+            started_instances_per_round: 2000,
+            retries_per_round: 100,
+            runs_per_planning_pass: 100,
+            run_of_runs_per_pass: 50,
+            failed_group_messages_per_turn: 10,
+            worker_stream_buffer: 1024,
+            notifications_per_pass: 50,
+            results_per_journal_group: 32,
+            starts_per_journal_group: 32,
+            result_resends: 8,
+            result_resend_gap_max: 32,
+            unacked_messages_kept: 100_000,
+            unsent_connection_answers: 16,
+            task_connections_open: 64,
+            watcher_log_backlog: 16,
+            webserver_events_backlog: 1024,
+            ui_events_backlog: 1024,
+            auth_remembered_max: 1000,
+            changes_poll_rows: 1000,
+            dag_versions_cached: 4096,
+            tls_handshakes_at_once: 256,
             overridden: Vec::new(),
         }
     }

@@ -1,0 +1,18 @@
+title = "Throughput and start latency come from the attempts table"
+date = 2026-11-15
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "observability"  # a topic of design/README.md
+section = "Metrics page"  # the subheading of the topic's page it goes under
+summary = '''
+The Metrics page's throughput and start latency are read from the attempts table, per
+deployment, over the page's ranges and buckets: attempts ended per bucket by how they ended, and
+the start latency (`started_at` less `assigned_at`, the worker's start in master time, decision
+490) as p50 and p95. No worker reports timings, no protocol field, nothing stored in `samples`;
+an index on `attempts (ended_at)` in the open migration. Not chosen: workers reporting M5.1a's
+stage timers in their heartbeat (a protocol field, new sample columns), moving the step out of
+M5.1.
+'''
+history = "JOURNAL.md#D494"  # <a id="D494"></a> starts its JOURNAL.md entry
+step = "M5.1l2"  # the plan step that builds it; "later"; "n/a" for a rule
+code = []

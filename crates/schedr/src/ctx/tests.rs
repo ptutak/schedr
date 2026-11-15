@@ -36,6 +36,7 @@ fn info(version: &str) -> CtxInfo {
         handles: None,
         resource: None,
         api: None,
+        max_connections: schedr_agent::ctx::MAX_CONNECTIONS,
     }
 }
 

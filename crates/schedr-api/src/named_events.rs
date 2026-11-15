@@ -25,7 +25,7 @@ use crate::views::{NamedEventList, NamedEventView, PostEventRequest};
 pub const DEFAULT_MAX_EVENT_SIZE: usize = 1024 * 1024;
 
 /// How far ahead of now an event's `at` may be, for clock skew: as the master's `--for`.
-const AT_TOLERANCE: jiff::SignedDuration = jiff::SignedDuration::from_mins(1);
+pub const AT_TOLERANCE: jiff::SignedDuration = jiff::SignedDuration::from_mins(1);
 
 /// What a post's body may hold besides its data: the name, the key (1 KiB), the time, the JSON.
 pub const EVENT_BODY_ROOM: usize = 16 * 1024;
@@ -86,7 +86,7 @@ pub async fn post_event(
     }
     let now = (state.clock)();
     // As `--for`: a run planned years ahead would start now (Grok's review).
-    let ahead = now.checked_add(AT_TOLERANCE);
+    let ahead = now.checked_add(state.limits.event_future_tolerance);
     if let (Some(at), Ok(ahead)) = (request.at, ahead)
         && at > ahead
     {

@@ -220,10 +220,10 @@ done = 2026-11-15
 id = "M5.1l2"
 title = "Throughput and start latency on the Metrics page"
 scope = '''
-tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.1a times them; split from M5.1l
+(decision 494, the user 2026-11-15: from the attempts table) attempts ended per bucket by how they ended, and assigned → started p50 and p95, per deployment over the Metrics page's ranges; an index on `attempts (ended_at)` in the open migration; split from M5.1l
 '''
 done_when = '''
-those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated
+the two charts on the Metrics page for every range, light and dark, their reads bounded (an index used, measured on a large table), API and UI browser tests, the guide's Metrics page updated
 '''
 status = "planned"
 
@@ -259,6 +259,18 @@ scope = '''
 '''
 done_when = '''
 a plain poke of each kind runs, returns NOT_YET or events, overruns and is stopped like the async one, on both kinds of host; 100 plain pokes on one host start on time (stress 23 with plain pokes); the types accept both forms and refuse a plain `@sensor` or `@trigger` (typing tests); the guide's wait step and trigger pages say when to choose which
+'''
+status = "done"
+done = 2026-11-15
+
+[[steps]]
+id = "M5.1p"
+title = "Tunable constants as hidden settings"
+scope = '''
+(decision 493, the user 2026-11-15: "sweep over all constants and evaluate, provide a descriptive name and add in 'p' step as HIDDEN as you recommend") the 11 timings and 30 limits the sweep found, each a `SCHEDR_HIDDEN__*` variable read by the loader and carried to its use, the default unchanged; `MASTER__SAMPLE_ROLLUP_GRACE` refused at load unless below `WEBSERVER__METRICS_FINAL_AFTER`; the masters' "heard within" windows (samples and the Deployments page) three node heartbeats instead of a fixed 30 s; the configuration reference's hidden list
+'''
+done_when = '''
+each variable changes its value (a test per group, the loader's parsing and refusals tested), the defaults' values asserted equal to the constants they replace; a node heartbeat of 60 s keeps the masters on the Deployments page and in the samples
 '''
 status = "done"
 done = 2026-11-15

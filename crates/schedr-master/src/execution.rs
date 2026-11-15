@@ -192,6 +192,8 @@ pub struct Execution {
     max_instances: usize,
     /// `[notifications]`.
     notifications: Arc<Notifications>,
+    /// How much a round does at most (decision 493).
+    rounds: crate::core::RoundLimits,
 }
 
 impl Execution {
@@ -204,6 +206,7 @@ impl Execution {
             wakes: Wakes::default(),
             max_instances: DEFAULT_MAX_INSTANCES,
             notifications: Arc::default(),
+            rounds: crate::core::RoundLimits::default(),
         }
     }
 
@@ -225,6 +228,11 @@ impl Execution {
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub const fn set_max_instances(&mut self, max_instances: usize) {
         self.max_instances = max_instances;
+    }
+
+    /// How much a round does at most (decision 493).
+    pub const fn set_rounds(&mut self, rounds: crate::core::RoundLimits) {
+        self.rounds = rounds;
     }
 
     /// Finishes run `run_id` of `dag` with `result`, queues its notifications with it (decision
@@ -361,7 +369,7 @@ impl Execution {
             // At most so many instances a round (a run is never split, and one is always
             // made): many runs starting at once go over a few rounds (B18).
             let tasks = run.dag.tasks.len();
-            if !prepared.is_empty() && created + tasks > INSTANCES_PER_ROUND {
+            if !prepared.is_empty() && created + tasks > self.rounds.started_instances {
                 break;
             }
             created += tasks;
@@ -611,7 +619,7 @@ impl Execution {
     pub async fn queue_due_retries(&self, now: Timestamp) -> Result<usize, ExecutionError> {
         let mut due = self.db.due_retries(now).await?;
         // At most so many a round, the earliest due first; the rest in the next ones (B18).
-        due.truncate(RETRIES_PER_ROUND);
+        due.truncate(self.rounds.retries);
         for (run_id, task_id, map_index) in &due {
             let queued = InstanceUpdate {
                 ready_at: Some(now),

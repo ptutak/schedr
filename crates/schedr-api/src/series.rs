@@ -182,11 +182,12 @@ pub async fn list_samples(
         .sample_buckets((read_from, cut, to), range.bucket_s(), process)
         .await?;
     let buckets = cache::merged(&entry.buckets, read, from);
-    let final_to = cache::final_to(to, range.bucket_s());
+    let limits = state.series.limits();
+    let final_to = cache::final_to(to, range.bucket_s(), limits.final_after);
     let read_latest = state.db.latest_of(read_from, to, process).await?;
     let mut latest_of = cache::merged_latest(&entry.latest, read_latest, from);
     entry.latest.clone_from(&latest_of);
-    cache::keep_buckets(&mut entry, &buckets, (from, final_to));
+    cache::keep_buckets(&mut entry, &buckets, (from, final_to), limits.buckets);
     drop(entry);
     // A deployment's total in a bucket divides by these (memory by kind), read with the
     // buckets in one statement.
@@ -278,7 +279,7 @@ pub async fn memory_totals(
         &mut entry,
         read,
         from,
-        cache::final_to(to, range.bucket_s()),
+        cache::final_to(to, range.bucket_s(), state.series.limits().final_after),
     );
     drop(entry);
     Ok(Json(MemoryTotals {

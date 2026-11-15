@@ -52,7 +52,7 @@ where
     T: Into<OsString> + Clone,
 {
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let cli = match cli::Cli::try_parse_from(&args) {
+    let mut cli = match cli::Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(e) if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
             return report(out, &e.to_string(), 0);
@@ -102,6 +102,13 @@ where
         Ok(config) => config,
         Err(e) => return report(err, &format!("error: {e}\n"), e.exit_code()),
     };
+    if let Some(client) = cli.command.client_args_mut() {
+        client.timeouts = schedr_client::Timeouts {
+            connect: config.timings.client_connect_timeout,
+            request: config.timings.client_request_timeout,
+            command_wait: config.timings.client_command_wait,
+        };
+    }
     if let Err(message) = logging::init(&config.log, stdout_is_terminal) {
         return report(err, &format!("error: {message}\n"), 1);
     }

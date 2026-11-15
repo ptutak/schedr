@@ -8,7 +8,7 @@ use schedr_config::{Config, ConfigError, FileSource, Override, config_file, load
 use schedr_db::{Database, DbError, SchemaStatus, redact_password};
 
 use crate::cli::{ClientArgs, Command, DagsCommand, DbCommand};
-use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL, WAIT_TIMEOUT};
+use crate::client::{Auth, Client, ClientError, HttpTransport, POLL_INTERVAL};
 use crate::interpreter::{Host, apply};
 use crate::times::local_zone;
 use crate::user::{Output, run_dags, run_runs, run_tasks, run_workers};
@@ -310,7 +310,11 @@ pub fn connect_to(
         args.user.as_deref(),
         env.get("SCHEDR_PASSWORD").map(String::as_str),
     );
-    Client::new(HttpTransport::new(url, auth), POLL_INTERVAL, WAIT_TIMEOUT)
+    Client::new(
+        HttpTransport::new(url, auth).with_timeouts(args.timeouts),
+        POLL_INTERVAL,
+        args.timeouts.command_wait,
+    )
 }
 
 /// The client and output settings of a user CLI command: the server ([`connect_to`]),

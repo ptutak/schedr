@@ -111,6 +111,64 @@ pub struct Settings {
     /// Whether this master's own process runs the webserver too (standalone): its sample says
     /// so, and no webserver samples it again.
     pub with_webserver: bool,
+    /// How much one round or pass does at most (decision 493).
+    pub rounds: RoundLimits,
+    /// How far ahead of the master's clock a run's `--for` may be
+    /// (`SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE`).
+    pub for_future_tolerance: Duration,
+    /// When a task whose code wasn't on its worker yet is tried again
+    /// (`SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY`).
+    pub code_retry_delay: Duration,
+    /// The most messages of a failed group handled one by one in a turn
+    /// (`SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN`, M4B.3).
+    pub failed_group_messages_per_turn: usize,
+    /// The messages that wait for a worker before it is taken for one that stopped reading
+    /// (`SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER`).
+    pub worker_stream_buffer: usize,
+}
+
+/// How much one round or pass of the master does at most (B18's caps, decision 493), each a
+/// `SCHEDR_HIDDEN__MASTER__*` limit: a burst goes over a few rounds instead of holding one up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoundLimits {
+    /// Assignments made (`ASSIGNMENTS_PER_ROUND`).
+    pub assignments: usize,
+    /// Assignments taken back as never started (`EXPIRIES_PER_ROUND`).
+    pub expiries: usize,
+    /// Waiting reasons written, a statement each (`WAITING_REASONS_PER_ROUND`).
+    pub waiting_reasons: usize,
+    /// Pending reasons written for the tasks past the cap (`PENDING_REASONS_PER_ROUND`).
+    pub pending_reasons: usize,
+    /// Commands applied (`COMMANDS_PER_ROUND`).
+    pub commands: u32,
+    /// Scheduled runs created for one DAG (`SCHEDULED_RUNS_PER_ROUND`).
+    pub scheduled_runs: usize,
+    /// Task instances created for runs that just started (`STARTED_INSTANCES_PER_ROUND`).
+    pub started_instances: usize,
+    /// Failed tasks queued again (`RETRIES_PER_ROUND`).
+    pub retries: usize,
+    /// Runs the scheduler creates for one DAG in one pass (`RUNS_PER_PLANNING_PASS`).
+    pub planning_pass_runs: usize,
+    /// Runs one pass starts for a DAG started by `RunOf` (`RUN_OF_RUNS_PER_PASS`).
+    pub run_of_runs: u32,
+}
+
+impl Default for RoundLimits {
+    /// The caps measured in the stress runs (B18).
+    fn default() -> Self {
+        Self {
+            assignments: crate::dispatch::ASSIGNMENTS_PER_ROUND,
+            expiries: crate::dispatch::EXPIRIES_PER_ROUND,
+            waiting_reasons: crate::dispatch::REASONS_PER_ROUND,
+            pending_reasons: crate::dispatch::PENDING_PER_ROUND,
+            commands: crate::commands::COMMANDS_PER_ROUND,
+            scheduled_runs: crate::scheduler::SCHEDULED_PER_ROUND,
+            started_instances: crate::execution::INSTANCES_PER_ROUND,
+            retries: crate::execution::RETRIES_PER_ROUND,
+            planning_pass_runs: crate::planning::MAX_RUNS_PER_PASS,
+            run_of_runs: crate::core::triggers::RUNS_OF_A_PASS,
+        }
+    }
 }
 
 /// How the master's loop and its parse jobs are paced.
@@ -225,6 +283,11 @@ impl Default for Settings {
             retention: crate::retention::RetentionSettings::default(),
             samples: crate::samples::SampleSettings::default(),
             with_webserver: false,
+            rounds: RoundLimits::default(),
+            for_future_tolerance: crate::planning::FOR_TOLERANCE.unsigned_abs(),
+            code_retry_delay: crate::dispatch::CODE_RETRY_DELAY.unsigned_abs(),
+            failed_group_messages_per_turn: crate::service::ALONE_PER_TURN,
+            worker_stream_buffer: crate::service::STREAM_BUFFER,
         }
     }
 }
@@ -701,17 +764,21 @@ impl MasterCore {
             )
             .with_lease(settings.lease_timeout)
             .with_event_lookback(settings.event_lookback)
+            .with_code_retry_delay(settings.code_retry_delay)
             .with_arrivals(arrivals.clone());
         dispatcher.set_wakes(wakes.clone());
         dispatcher.set_max_instances(settings.max_instances);
-        let scheduler = Scheduler::with_quiet(db.clone(), settings.quiet, wakes);
+        dispatcher.set_rounds(settings.rounds);
+        let scheduler = Scheduler::with_quiet(db.clone(), settings.quiet, wakes)
+            .with_limits(&settings.rounds, settings.for_future_tolerance);
         dispatcher.set_scheduler(scheduler.clone());
         Self {
             discovery,
             dispatcher,
             scheduler,
             commander: Commander::new(db.clone())
-                .with_backfill_max_runs(settings.backfill_max_runs),
+                .with_backfill_max_runs(settings.backfill_max_runs)
+                .with_commands_per_round(settings.rounds.commands),
             connections: BTreeMap::new(),
             arrivals,
             metrics: MasterMetrics::default(),

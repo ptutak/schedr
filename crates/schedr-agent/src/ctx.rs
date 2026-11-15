@@ -59,6 +59,9 @@ pub struct CtxInfo {
     pub resource: Option<Arc<AttemptResource>>,
     /// What it calls schedr's REST API with (`schedr task-ctx api`, M4.11h); none: it can't.
     pub api: Option<crate::api::ApiCaller>,
+    /// The most connections the task may have open at once
+    /// (`SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN`).
+    pub max_connections: usize,
 }
 
 impl CtxInfo {
@@ -79,6 +82,7 @@ impl CtxInfo {
             handles: None,
             resource: None,
             api: None,
+            max_connections: MAX_CONNECTIONS,
         }
     }
 }
@@ -127,12 +131,13 @@ async fn accept(socket: UnixDatagram, info: Arc<CtxInfo>) {
         let Some(end) = connection(end) else {
             continue;
         };
-        if connections.len() >= MAX_CONNECTIONS {
-            tracing::debug!("a task has {MAX_CONNECTIONS} context connections open; refused one");
+        let most = info.max_connections.max(1);
+        if connections.len() >= most {
+            tracing::debug!("a task has {most} context connections open; refused one");
             // Said on the fresh connection (its buffer is empty, so the send doesn't wait),
             // then closed.
             let reason = format!(
-                "the task has {MAX_CONNECTIONS} context connections open, the most the agent \
+                "the task has {most} context connections open, the most the agent \
                  serves at once"
             );
             if let Ok(frame) = framed(&CtxAnswer::Error { reason }) {

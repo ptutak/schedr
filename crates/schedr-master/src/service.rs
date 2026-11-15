@@ -35,7 +35,7 @@ mod tests;
 pub const INPUT_CHUNK: usize = 1024 * 1024;
 
 /// How many messages wait for a worker before it is taken for one that stopped reading.
-const STREAM_BUFFER: usize = 1024;
+pub const STREAM_BUFFER: usize = 1024;
 
 /// A worker's stream of messages. Sending never waits (see [`Hub::deliver`]).
 /// A worker's stream to it (B240): each message's `MasterClock.sequence` is taken and the
@@ -120,6 +120,10 @@ pub struct Hub {
     /// The most messages of one worker in a turn of the core's lock
     /// (`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`, M4B.3).
     messages_per_turn: usize,
+    /// The most messages of a failed group handled one by one in a turn (decision 493).
+    alone_per_turn: usize,
+    /// The messages that wait for a worker before it is taken for one that stopped reading.
+    stream_buffer: usize,
     /// When each worker's latest message arrived (the core's).
     arrivals: Arrivals,
     /// How often to try listening for commands again while the loop has no notifications
@@ -190,6 +194,8 @@ impl Hub {
             refresh_limit: DEFAULT_REFRESH_LIMIT,
             max_message_size: core.settings().max_message_size,
             messages_per_turn: core.settings().messages_per_turn.max(1),
+            alone_per_turn: core.settings().failed_group_messages_per_turn.max(1),
+            stream_buffer: core.settings().worker_stream_buffer.max(1),
             timings: core.settings().timings,
             metrics: core.metrics().clone(),
             db: core.db().clone(),
@@ -955,8 +961,9 @@ impl Hub {
                     unsent(assigned.as_ref());
                     tracing::error!(
                         worker_id,
-                        "worker doesn't read its stream ({STREAM_BUFFER} messages waiting): \
-                         disconnected"
+                        "worker doesn't read its stream ({} messages waiting): \
+                         disconnected",
+                        self.stream_buffer
                     );
                     streams.remove(&worker_id);
                     stuck.push(worker_id);
@@ -1111,7 +1118,7 @@ impl Hub {
                     Ok(out) => self.sent(out, wakes).await,
                     Err(failed) => {
                         let mut failed = failed.into_messages().into_iter();
-                        for message in failed.by_ref().take(ALONE_PER_TURN) {
+                        for message in failed.by_ref().take(self.alone_per_turn) {
                             let (end, _) = self.alone_served(worker_id, stream, message).await;
                             if !matches!(end, TurnEnd::Goes) {
                                 return end;
@@ -1323,7 +1330,12 @@ impl Hub {
             };
             // Everything already queued, up to the turn's limit, in one turn of the lock: one
             // message per turn left a worker's messages behind every round in between (B12).
-            let turn = fill_turn(first, &mut carried, &mut queued, self.messages_per_turn);
+            let turn = fill_turn(
+                first,
+                &mut carried,
+                &mut queued,
+                (self.messages_per_turn, self.alone_per_turn),
+            );
             match self.turn((&worker_id, &stream), turn, &mut carried).await {
                 TurnEnd::Goes => {}
                 TurnEnd::Dropped => {
@@ -1428,7 +1440,7 @@ impl Hub {
             .iter()
             .filter(|message| message.worker_id == register.worker_id)
             .count();
-        let (sender, receiver) = mpsc::channel(STREAM_BUFFER + 1 + own);
+        let (sender, receiver) = mpsc::channel(self.stream_buffer + 1 + own);
         // Under the core's lock, as the registration: what an older stream's reader still
         // records is of another stream (B240).
         let stream = Outbound::new(sender, self.arrivals.new_stream(&register.worker_id));
@@ -1489,18 +1501,18 @@ impl Hub {
 
 /// What a worker's stream's server does next.
 /// A turn from `first`: the carried messages first, then what is queued, up to `limit`; a
-/// failed group's messages, each alone, at most [`ALONE_PER_TURN`] (Grok's review of M4B.3:
-/// the carried ones took a whole turn's).
+/// failed group's messages, each alone, at most `alone_limit` ([`ALONE_PER_TURN`] by default;
+/// Grok's review of M4B.3: the carried ones took a whole turn's).
 fn fill_turn(
     first: Turned,
     carried: &mut VecDeque<Turned>,
     queued: &mut mpsc::UnboundedReceiver<worker_message::Message>,
-    limit: usize,
+    (limit, alone_limit): (usize, usize),
 ) -> Vec<Turned> {
     let mut alone = usize::from(matches!(first, Turned::Alone(_)));
     let mut turn = vec![first];
     while turn.len() < limit {
-        if alone >= ALONE_PER_TURN && matches!(carried.front(), Some(Turned::Alone(_))) {
+        if alone >= alone_limit && matches!(carried.front(), Some(Turned::Alone(_))) {
             break;
         }
         let Some(next) = carried

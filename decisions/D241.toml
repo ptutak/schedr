@@ -6,10 +6,10 @@ topic = "configuration"
 section = "Hidden timings"
 summary = '''
 The production gauge-refresh limit is half of `loop_stall_timeout`.
-Migration-connection timings remain fixed, without `query_timeout`; client,
-`task-ctx` and CLI timings also remain constants.
+Migration-connection timings remain fixed, without `query_timeout`; `task-ctx`'s also
+remain constants (the client's became hidden timings with decision 493).
 '''
 history = "archive/PROJECT.md#D241"
 step = "M4.8u"
-checked = 2026-11-14
+checked = 2026-11-15
 code = ["crates/schedr-config/src/config.rs::gauge_refresh", "crates/schedr-config/src/config.rs::loop_stall_timeout"]

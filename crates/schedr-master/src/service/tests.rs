@@ -1873,12 +1873,27 @@ fn a_failed_groups_messages_go_alone_at_most_ten_a_turn() {
     let (queue, mut queued) = mpsc::unbounded_channel();
     queue.send(started(99)).unwrap();
     let mut carried: VecDeque<Turned> = (1..=20).map(|n| Turned::Alone(started(n))).collect();
-    let turn = fill_turn(Turned::Alone(started(0)), &mut carried, &mut queued, 40);
+    let turn = fill_turn(
+        Turned::Alone(started(0)),
+        &mut carried,
+        &mut queued,
+        (40, ALONE_PER_TURN),
+    );
     assert_eq!(turn.len(), 10);
     assert_eq!(carried.len(), 11);
-    let turn = fill_turn(carried.pop_front().unwrap(), &mut carried, &mut queued, 40);
+    let turn = fill_turn(
+        carried.pop_front().unwrap(),
+        &mut carried,
+        &mut queued,
+        (40, ALONE_PER_TURN),
+    );
     assert_eq!(turn.len(), 10);
-    let turn = fill_turn(carried.pop_front().unwrap(), &mut carried, &mut queued, 40);
+    let turn = fill_turn(
+        carried.pop_front().unwrap(),
+        &mut carried,
+        &mut queued,
+        (40, ALONE_PER_TURN),
+    );
     assert_eq!(turn.len(), 2, "the last carried one, then the queued one");
     assert!(matches!(turn[1], Turned::Grouped(_)));
 }

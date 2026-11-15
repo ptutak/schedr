@@ -99,11 +99,8 @@ struct Pick {
 }
 
 /// The reason shown for a ready task a round didn't reach (decision 481).
-fn pending_reason() -> String {
-    format!(
-        "pending: waiting for a round with room (a round assigns at most \
-         {ASSIGNMENTS_PER_ROUND})"
-    )
+fn pending_reason(most: usize) -> String {
+    format!("pending: waiting for a round with room (a round assigns at most {most})")
 }
 
 /// What a round's assignments read once, for all their ready tasks, instead of once a task at
@@ -227,7 +224,7 @@ pub const REASONS_PER_ROUND: usize = 100;
 
 /// The most pending reasons a round writes for the tasks past its cap (decision 481): one
 /// statement; a longer backlog gets them over the next rounds.
-const PENDING_PER_ROUND: usize = 500;
+pub const PENDING_PER_ROUND: usize = 500;
 
 /// When a task whose code wasn't on the worker yet is tried again: about the git-sync
 /// interval plus the settle time.
@@ -425,6 +422,10 @@ pub struct Dispatcher {
     /// Each DAG's current version, read at each round with tasks ready: the limits across runs
     /// are its (87A).
     current_versions: BTreeMap<DagId, String>,
+    /// How much a round does at most (decision 493).
+    rounds: crate::core::RoundLimits,
+    /// When a task whose code wasn't there yet is tried again.
+    code_retry_delay: SignedDuration,
     /// The run each `@sensor(wait_for=...)` assigned this round is given, by instance
     /// (decision 353): its function's first argument.
     handing: BTreeMap<String, serde_json::Value>,
@@ -542,6 +543,8 @@ impl Dispatcher {
             round_reads: None,
             active: Active::new(),
             current_versions: BTreeMap::new(),
+            rounds: crate::core::RoundLimits::default(),
+            code_retry_delay: CODE_RETRY_DELAY,
         }
         .with_code_wait(DEFAULT_CODE_WAIT)
     }
@@ -724,6 +727,20 @@ impl Dispatcher {
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub const fn set_max_instances(&mut self, max_instances: usize) {
         self.execution.set_max_instances(max_instances);
+    }
+
+    /// How much a round does at most (decision 493), its execution's part too.
+    pub const fn set_rounds(&mut self, rounds: crate::core::RoundLimits) {
+        self.rounds = rounds;
+        self.execution.set_rounds(rounds);
+    }
+
+    /// When a task whose code wasn't on its worker yet is tried again (see
+    /// [`CODE_RETRY_DELAY`]).
+    #[must_use]
+    pub fn with_code_retry_delay(mut self, delay: Duration) -> Self {
+        self.code_retry_delay = SignedDuration::try_from(delay).unwrap_or(SignedDuration::MAX);
+        self
     }
 
     /// The dispatcher with another code wait (see [`DEFAULT_CODE_WAIT`]).
@@ -1625,7 +1642,7 @@ impl Dispatcher {
         *tally.waiting.entry(reached.name).or_default() += 1;
         let reason = reached.reason();
         if ready.queued_reason.as_deref() != Some(reason.as_str())
-            && tally.reasons.len() < REASONS_PER_ROUND
+            && tally.reasons.len() < self.rounds.waiting_reasons
         {
             tally.reasons.push((ready.instance_id.clone(), reason));
         }
@@ -1666,7 +1683,7 @@ impl Dispatcher {
         let (mut failed, mut made) = (Vec::new(), 0);
         for (n, one) in ready.iter().enumerate() {
             // The round's cap holds here too (Grok's review of M5.1c1): the rest as in a batch.
-            if tally.assigned >= ASSIGNMENTS_PER_ROUND {
+            if tally.assigned >= self.rounds.assignments {
                 let db = self.db.clone();
                 let rest = Box::pin(db.atomically(self.past_the_cap(now, &ready[n..], &mut tally)));
                 if let Err(error) = rest.await {
@@ -1739,7 +1756,7 @@ impl Dispatcher {
         // together, then each one's message built (decision 482).
         let mut picks = Vec::new();
         for (n, one) in ready.iter().enumerate() {
-            if tally.assigned >= ASSIGNMENTS_PER_ROUND {
+            if tally.assigned >= self.rounds.assignments {
                 self.past_the_cap(now, &ready[n..], &mut tally).await?;
                 break;
             }
@@ -1785,7 +1802,7 @@ impl Dispatcher {
         rest: &[ReadyInstance],
         tally: &mut Tally,
     ) -> Result<(), DispatchError> {
-        let pending = pending_reason();
+        let pending = pending_reason(self.rounds.assignments);
         // At most a statement's worth a round (Grok's review): a reason stays once written,
         // so a longer backlog shows pending over the next rounds.
         let mut shown = 0;
@@ -1798,7 +1815,8 @@ impl Dispatcher {
                 continue;
             }
             *tally.waiting.entry("next_round").or_default() += 1;
-            if ready.queued_reason.as_deref() != Some(pending.as_str()) && shown < PENDING_PER_ROUND
+            if ready.queued_reason.as_deref() != Some(pending.as_str())
+                && shown < self.rounds.pending_reasons
             {
                 shown += 1;
                 tally
@@ -1886,7 +1904,7 @@ impl Dispatcher {
             *tally.waiting.entry(why).or_default() += 1;
             // At most so many a round: the rest in the next ones (B18).
             if ready.queued_reason.as_deref() != Some(reason.as_str())
-                && tally.reasons.len() < REASONS_PER_ROUND
+                && tally.reasons.len() < self.rounds.waiting_reasons
             {
                 tally.reasons.push((ready.instance_id.clone(), reason));
             }
@@ -2878,7 +2896,7 @@ impl Dispatcher {
             }
             if cleanup {
                 taken_back.push(attempt);
-            } else if expired.len() < EXPIRIES_PER_ROUND {
+            } else if expired.len() < self.rounds.expiries {
                 expired.push(attempt);
             }
         }
@@ -3693,7 +3711,11 @@ impl Dispatcher {
         if code {
             (
                 TaskInstanceState::Queued,
-                now.checked_add(CODE_RETRY_DELAY).ok(),
+                // Never none: a queued task without `ready_at` is never read as ready.
+                Some(
+                    now.checked_add(self.code_retry_delay)
+                        .unwrap_or(Timestamp::MAX),
+                ),
                 Some(format!(
                     "waiting for the code on the workers: {}",
                     rejected.detail

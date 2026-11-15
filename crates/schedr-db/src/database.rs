@@ -138,15 +138,28 @@ impl Default for Notifications {
 /// DAG definitions by version ID, each parsed once: a version never changes once stored, so
 /// what is cached never goes stale. Rounds read many rows of the same few versions (a wide
 /// DAG's ready tasks, every active DAG); each brought and parsed its whole definition (B13).
-/// Cleared when it holds [`DagCache::MAX`] versions (the current ones come back at once).
-#[derive(Debug, Default)]
+/// Cleared when it holds its most versions ([`DagCache::MAX`] by default,
+/// `SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED`): the current ones come back at once.
+#[derive(Debug)]
 pub(crate) struct DagCache(
     std::sync::Mutex<std::collections::HashMap<String, Arc<schedr_model::Dag>>>,
+    usize,
 );
 
+impl Default for DagCache {
+    fn default() -> Self {
+        Self::keeping(Self::MAX)
+    }
+}
+
 impl DagCache {
-    /// The most versions kept before clearing.
+    /// The most versions kept before clearing, by default.
     pub(crate) const MAX: usize = 4096;
+
+    /// An empty cache keeping at most `most` versions.
+    pub(crate) fn keeping(most: usize) -> Self {
+        Self(std::sync::Mutex::default(), most.max(1))
+    }
 
     pub(crate) fn get(&self, version_id: &str) -> Option<Arc<schedr_model::Dag>> {
         self.map().get(version_id).cloned()
@@ -154,7 +167,7 @@ impl DagCache {
 
     pub(crate) fn insert(&self, version_id: &str, dag: Arc<schedr_model::Dag>) {
         let mut map = self.map();
-        if map.len() >= Self::MAX {
+        if map.len() >= self.1 {
             map.clear();
         }
         map.insert(version_id.to_owned(), dag);
@@ -434,6 +447,14 @@ impl Database {
     #[must_use]
     pub fn with_notifications(mut self, on: bool, url: Option<String>) -> Self {
         self.notifications = Arc::new(Notifications { on, url });
+        self
+    }
+
+    /// This database keeping at most `most` DAG versions parsed (decision 493), a cache of its
+    /// own (made before its clones).
+    #[must_use]
+    pub fn with_dag_versions_cached(mut self, most: usize) -> Self {
+        self.dags = Arc::new(DagCache::keeping(most));
         self
     }
 

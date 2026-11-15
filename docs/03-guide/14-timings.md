@@ -46,11 +46,15 @@ tests and experiments and can change or go without notice.
 
 These variables work only in the environment. Setting one of these timings in a config file,
 a flag or a `SCHEDR_CONFIG__*` variable fails as an unknown key. Each hidden variable set is
-warned about at startup. An unknown name, a bad duration or zero stops the start.
+warned about at startup. An unknown name, a bad duration, zero or more than 3650 days stops
+the start.
 
-Some timings stay in the binary: those used by the CLI, `task-ctx` and the client, which do
-not load this configuration; the gauge refresh limit, half the loop stall timeout; and the
-migration connection timing, which has no query timeout to tie it to.
+Some timings stay in the binary: those a task's own process uses (`schedr task-ctx`, `dag-ctx`
+and the Python package), which reads no configuration; those two processes must agree on (a
+task's API call, a connections check: one side's setting would break the other); the gauge
+refresh limit, half the loop stall timeout; and the migration connection timing, which has no
+query timeout to tie it to. [What stays in the binary](#what-stays-in-the-binary) lists them by
+reason.
 
 ### Master
 
@@ -79,11 +83,15 @@ migration connection timing, which has no query timeout to tie it to.
 | `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_MAX` | 1 h | Longest wait before retrying a failed notification. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_INTERVAL` | 1 h | How often the leading master runs retention. |
 | `SCHEDR_HIDDEN__MASTER__SAMPLE_INTERVAL` | 1 min | How often the leading master samples each process, and a webserver in a process of its own itself. |
-| `SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT` | 24 h | How long minute samples are kept. |
+| `SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT` | 24 h | How long minute samples are kept. Must be longer than `MASTER__SAMPLE_ROLLUP_GRACE` and the 15-minute window. |
 | `SCHEDR_HIDDEN__MASTER__ROLLUPS_KEPT` | 30 d | How long the 15-minute rollups are kept. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_FIRST` | 30 s | First wait before retrying a failed parse job; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__PARSE_RETRY_MAX` | 10 min | Longest wait before retrying a failed parse job. |
-| `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT` | 10 s | How often the master writes its row of the deployment's nodes. |
+| `SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT` | 10 s | How often the master writes its row of the deployment's nodes. A master heard from within three of them is on the Deployments page and sampled; a longer interval keeps it there longer after it is gone. |
+| `SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT` | 1 h | How long a gone master's row stays before it is removed; the Deployments page shows only those heard from lately either way. |
+| `SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE` | 2 min | How long after its end a 15-minute window waits to be rolled up, so a sample stored late is in it. A sample stored later than this is missing from its rollup, and so from the 7- and 30-day charts. Must be shorter than `WEBSERVER__METRICS_FINAL_AFTER`, and with the 15-minute window shorter than `MASTER__SAMPLES_KEPT` (or a window's first minutes would be deleted before its rollup), or schedr refuses to start. |
+| `SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY` | 35 s | When a task whose code wasn't on its worker yet is tried again: about a git-sync interval and the settle time. Set it near your code delivery's interval; shorter only retries sooner, `[master] code_wait` still bounds the whole wait. |
+| `SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE` | 1 min | How far ahead of the master's clock a run's `--for` may be, for clocks apart; later is refused. Longer lets a run be planned for a moment that hasn't come. |
 
 Three master timings are retired: `QUIET_DAG_AFTER`, `QUIET_DAG_WAKE_AHEAD` and
 `QUIET_DAG_FULL_PASS_INTERVAL` (the `MASTER` group): which DAGs a round visits comes from the
@@ -110,6 +118,9 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WEBSERVER__AUTH_REMEMBERED` | 5 min | How long a successful password check is remembered; this only saves bcrypt runs, and a change of the users file forgets them all. |
 | `SCHEDR_HIDDEN__WEBSERVER__REQUESTS_GRACE` | 3 s | How long running requests get after the server stops before they are cut. |
 | `SCHEDR_HIDDEN__WEBSERVER__SCHEMA_RETRY` | 5 s | How often a webserver started before the migration checks again. |
+| `SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER` | 15 min | When a Metrics bucket is final: kept by the webserver between requests and never read again (decision 492). A sample stored later, such as from a process whose clock is behind by more, shows only after the webserver restarts. Must be longer than `MASTER__SAMPLE_ROLLUP_GRACE`. Longer reads more on each refresh. |
+| `SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_WINDOW` | 30 days | How far back the DAG page's memory p95s reach. Longer reads more attempts on each load of the page. |
+| `SCHEDR_HIDDEN__EVENTS__FUTURE_TOLERANCE` | 1 min | How far ahead of the clock a posted event's `at` may be, posted to a webserver or by a task through its master; later is refused. Set it on both roles. |
 
 ### UI
 
@@ -151,6 +162,17 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WORKER__VAULT_RENEW_CHECK` | 1 min | How often a Vault session with nothing to renew is checked again. |
 | `SCHEDR_HIDDEN__WORKER__VAULT_RENEW_RETRY` | 10 s | Wait before retrying a failed Vault renewal while the token lasts. |
 
+### Client
+
+The CLI's and `schedr ui`'s requests to a webserver.
+
+| Variable | Default | What it does and what depends on it |
+|---|---|---|
+| `SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT` | 5 s | How long connecting to a webserver may take; a black-holed address fails after it. |
+| `SCHEDR_HIDDEN__CLIENT__REQUEST_TIMEOUT` | 30 s | How long one request may take, from connecting to the end of its answer. Raise it for a slow link or a large list; a hung webserver holds a command, or a UI page, this long. A stream (a page's live part, a log tail) has its own limit. |
+| `SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT` | 30 s | How long the CLI and the UI wait for the master's decision on a command (a trigger, a retry) before saying it is still pending; the command is applied either way. |
+| `SCHEDR_HIDDEN__DAGS__TEST_RUN_TIMEOUT` | 1 h | How long `schedr dags test` waits for its run; a task hanging past its own timeout is stopped before. |
+
 ### Standalone
 
 | Variable | Default | What it does and what depends on it |
@@ -172,8 +194,14 @@ API's maximum; an invalid value stops startup.
 
 ## Fixed limits
 
-Five limits are set the same way, with the same warning: whole numbers above zero, in the
-environment only.
+These limits are set the same way, with the same warning: whole numbers from 1 to 16,777,216,
+in the environment only; anything else stops the start. The two events backlogs take their
+memory up front, a slot each. Each is a cap a deployment of an odd
+size might need to move: more does more at once and holds others up longer, less spreads a
+burst over more rounds or reads. The defaults are measured (B18's stress runs); change one only
+after measuring yours, and one at a time.
+
+### Master
 
 | Variable | Default | What it does and what depends on it |
 |---|---|---|
@@ -182,3 +210,71 @@ environment only.
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |
 | `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages of one worker the master handles in one turn of its lock; its `Started`s are stored together in one transaction, then its `Finished`s in another. More holds rounds and other workers up longer. |
+| `SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND` | 50 | The most assignments a round makes, a few statements each; the rest of the ready tasks go in the next rounds, the longest ready first. More starts a burst sooner and makes each round, which holds the master's lock, longer. |
+| `SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND` | 50 | The most assignments a round takes back as never started. |
+| `SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND` | 100 | The most waiting reasons a round writes, a statement each; they are only shown, so the rest wait a round. |
+| `SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND` | 500 | The most pending reasons a round writes, in one statement, for the tasks past its assignments (decision 481). |
+| `SCHEDR_HIDDEN__MASTER__COMMANDS_PER_ROUND` | 50 | The most commands a round applies (about 8 ms each); a burst goes over a few rounds, the oldest first. |
+| `SCHEDR_HIDDEN__MASTER__SCHEDULED_RUNS_PER_ROUND` | 10 | The most scheduled runs a round creates for one DAG; one catching up after a long pause goes over a few rounds, the earliest first. |
+| `SCHEDR_HIDDEN__MASTER__STARTED_INSTANCES_PER_ROUND` | 2000 | The most task instances a round creates for runs that just started; a run is never split, so a run wider than this still starts whole, alone. |
+| `SCHEDR_HIDDEN__MASTER__RETRIES_PER_ROUND` | 100 | The most failed tasks a round queues again once their retry delay passed. |
+| `SCHEDR_HIDDEN__MASTER__RUNS_PER_PLANNING_PASS` | 100 | The most runs the scheduler creates for one DAG in one pass (a `catchup` backlog with no `max_active_runs` goes on in the next). |
+| `SCHEDR_HIDDEN__MASTER__RUN_OF_RUNS_PER_PASS` | 50 | The most runs one pass starts for a DAG started by `RunOf`; `[triggers] max_queued_events` caps it too. |
+| `SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN` | 10 | The most messages of a failed group handled one by one in a turn (M4B.3), so a failing group doesn't hold the lock for a whole turn of single transactions. |
+| `SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER` | 1024 | The messages that wait for a worker before it is taken for one that stopped reading and disconnected. Less disconnects a slow worker sooner; more holds more memory per worker. |
+| `SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS` | 50 | The most notifications one pass of the sender delivers; the rest go in the next pass. |
+
+### Webserver and UI
+
+| Variable | Default | What it does and what depends on it |
+|---|---|---|
+| `SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_KEYS` | 64 | The Metrics cache's keys (each range, for all processes or one), the least recently used dropped first (one a request holds never). More keeps more process panels warm, in memory. |
+| `SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_BUCKETS` | 100,000 | The buckets kept for one key; a key with more (thousands of processes over 30 days) is read whole each time instead of held. |
+| `SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_RUNS` | 1000 | The runs a DAG's memory p95s are taken from, its last to end and those still going; and a task's attempts read for its chart. Bounds the query: more reads more on each load of the DAG page. |
+| `SCHEDR_HIDDEN__WEBSERVER__EVENTS_BACKLOG` | 1024 | The changes a slow event stream may fall behind by before it gets `refresh` (the page reloads its live part whole). |
+| `SCHEDR_HIDDEN__WEBSERVER__AUTH_REMEMBERED_MAX` | 1000 | The password checks remembered at once, the oldest dropped first; one dropped costs a bcrypt check again. |
+| `SCHEDR_HIDDEN__UI__EVENTS_BACKLOG` | 1024 | The changes a slow browser may fall behind by before it gets `refresh`. |
+
+### Database
+
+| Variable | Default | What it does and what depends on it |
+|---|---|---|
+| `SCHEDR_HIDDEN__DATABASE__CHANGES_POLL_ROWS` | 1000 | The most rows of SQLite's `changes` one poll reads; a burst larger goes over the next polls. |
+| `SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED` | 4096 | The DAG versions a process keeps parsed; past them the cache is cleared and the current ones are parsed again. More holds more memory in a deployment of many DAGs. |
+
+### Worker
+
+| Variable | Default | What it does and what depends on it |
+|---|---|---|
+| `SCHEDR_HIDDEN__WORKER__RESULTS_PER_JOURNAL_GROUP` | 32 | The most results a worker writes to its journal as one group (M4B.5), each a thread writing its file meanwhile. |
+| `SCHEDR_HIDDEN__WORKER__STARTS_PER_JOURNAL_GROUP` | 32 | The most assignments whose journal records are written as one group (M5.1b). |
+| `SCHEDR_HIDDEN__WORKER__RESULT_RESENDS` | 8 | How many times a result is sent again over one session before the worker reconnects, so that its registration's journal settles it. |
+| `SCHEDR_HIDDEN__WORKER__RESULT_RESEND_GAP_MAX` | 32 | The most heartbeats between two sends of an unacknowledged result; the gap doubles from one. |
+| `SCHEDR_HIDDEN__WORKER__UNACKED_MESSAGES_KEPT` | 100,000 | The messages a worker keeps waiting to be heard of, to read master time from (B240), the oldest dropped first. |
+| `SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS` | 16 | The connections jobs' answers a worker keeps while no master listens; older ones are dropped and their jobs end as lost. |
+| `SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN` | 64 | The most context connections a command task may have open to its agent at once; one more is refused with a message. |
+| `SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG` | 16 | A wait step's messages waiting for its attempt before its host waits too: a step printing faster than its log is written slows down instead of filling memory. |
+
+### TLS
+
+| Variable | Default | What it does and what depends on it |
+|---|---|---|
+| `SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE` | 256 | How many TLS handshakes a listener runs at once; beyond them accepting waits, so connections that never finish hold this many sockets, not all. |
+
+## What stays in the binary
+
+Every other number schedr uses is fixed for a reason (decision 493):
+
+- **Data and protocol:** what is stored or sent, such as the samples' minute and 15-minute
+  steps, the message sizes and chunks, the protocol's version and field numbers.
+- **The databases' parameter limits:** the rows or IDs one statement takes.
+- **The system:** the descriptors one datagram carries, exit codes and signals, clock drift
+  bounds, the daylight-saving margin.
+- **Contracts users see:** ID, key and parameter sizes, the API's list sizes, the DSL's defaults,
+  the smallest memory a Python process starts in.
+- **Derived from another value:** the workers' "heard within" windows (from the usage interval),
+  the write limits (from the query timeout), the gauge refresh limit (from the loop stall).
+- **Shared by two processes:** a task's API call limit, a connections check's limit.
+- **Display:** the UI's layout, page sizes and log tails, the eight series a chart draws.
+- **A task's own process:** `schedr task-ctx`, `dag-ctx` and the Python package read no
+  configuration.

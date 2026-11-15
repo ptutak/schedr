@@ -38,7 +38,7 @@ const PAUSE_PER_MILLE: u32 = 2;
 /// silent has ended. Every message is numbered (B240), so it is bounded by what a session sends
 /// over a round trip; dropped, the master's naming one finds nothing, and its cutoff counts
 /// from an earlier send (sooner, never later).
-const SENT_KEPT: usize = 100_000;
+pub const SENT_KEPT: usize = 100_000;
 
 /// How far back the tightest sample is looked for (decision 447,
 /// `SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW`).
@@ -164,7 +164,7 @@ pub struct SampleReading {
 /// master's messages it has handled (B240). Shared by [`MasterTime`], which reads the sends
 /// when a stamp names one, and the session's sender, which numbers and stamps each message as
 /// it queues it.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Outbox {
     /// What it sent and the master hasn't shown it heard: number, when sent.
     sent: VecDeque<(u64, Local)>,
@@ -172,6 +172,19 @@ pub struct Outbox {
     next: u64,
     /// The highest `MasterClock.sequence` handled.
     handled: u64,
+    /// The most messages kept waiting to be heard of (`SENT_KEPT` by default).
+    kept: usize,
+}
+
+impl Default for Outbox {
+    fn default() -> Self {
+        Self {
+            sent: VecDeque::new(),
+            next: 0,
+            handled: 0,
+            kept: SENT_KEPT,
+        }
+    }
 }
 
 impl Outbox {
@@ -179,7 +192,7 @@ impl Outbox {
     pub fn sent(&mut self, at: Local) -> u64 {
         let sequence = self.next;
         self.next += 1;
-        if self.sent.len() == SENT_KEPT {
+        if self.sent.len() >= self.kept {
             self.sent.pop_front();
         }
         self.sent.push_back((sequence, at));
@@ -251,6 +264,17 @@ impl Default for MasterTime {
 }
 
 impl MasterTime {
+    /// This, keeping at most `most` messages waiting to be heard of
+    /// (`SCHEDR_HIDDEN__WORKER__UNACKED_MESSAGES_KEPT`).
+    #[must_use]
+    pub fn keeping(self, most: usize) -> Self {
+        self.outbox
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .kept = most.max(1);
+        self
+    }
+
     /// Nothing known yet; the tightest sample looked for over `window`.
     #[must_use]
     pub fn with_window(window: Duration) -> Self {

@@ -3036,7 +3036,15 @@ async fn a_tasks_attempt_peaks_and_a_dags_are_read_on_postgres() {
         ..AttemptEnd::by_master(AttemptStatus::OomKilled)
     };
     assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
-    let peaks = db.task_attempt_peaks("sync", "extract", 30).await.unwrap();
+    let peaks = db
+        .task_attempt_peaks(
+            "sync",
+            "extract",
+            30,
+            schedr_db::task_memory::PEAKS_PER_TASK,
+        )
+        .await
+        .unwrap();
     assert_eq!(peaks.len(), 1);
     assert_eq!(
         (
@@ -3057,7 +3065,11 @@ async fn a_tasks_attempt_peaks_and_a_dags_are_read_on_postgres() {
         )
     );
     let tasks = db
-        .dag_task_peaks("sync", ts("2026-10-01T00:00:00Z"))
+        .dag_task_peaks(
+            "sync",
+            ts("2026-10-01T00:00:00Z"),
+            schedr_db::task_memory::PEAKS_PER_TASK,
+        )
         .await
         .unwrap();
     assert_eq!(tasks.len(), 1);

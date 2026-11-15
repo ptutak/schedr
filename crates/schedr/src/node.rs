@@ -67,6 +67,8 @@ pub struct MasterIdentity {
     pub problems: Problems,
     /// How often its row is written (`node_heartbeat`).
     pub heartbeat: std::time::Duration,
+    /// How long a gone master's row stays (`node_row_kept`).
+    pub row_kept: std::time::Duration,
 }
 
 /// Writes `master`'s row every `master.heartbeat` on `db` (not fenced: a standby writes too)
@@ -94,7 +96,14 @@ pub async fn heartbeat_master(db: Database, master: MasterIdentity, stop: watch:
             };
             // Housekeeping: nothing a trigger depends on (decision 486).
             match db
-                .quietly(db.heartbeat_master(&node, Timestamp::now()))
+                .quietly(
+                    db.heartbeat_master_keeping(
+                        &node,
+                        Timestamp::now(),
+                        jiff::SignedDuration::try_from(master.row_kept)
+                            .unwrap_or(jiff::SignedDuration::MAX),
+                    ),
+                )
                 .await
             {
                 Ok(()) => failing = false,

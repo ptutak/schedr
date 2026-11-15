@@ -25,7 +25,7 @@ pub const CHANGES_CHANNEL: &str = "schedr_changes";
 pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// At most this many rows of `changes` a read.
-const POLL_ROWS: i64 = 1_000;
+pub const POLL_ROWS: usize = 1_000;
 
 /// Something that changed.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -83,6 +83,7 @@ enum Source {
         db: Database,
         after: i64,
         interval: Duration,
+        rows: i64,
     },
 }
 
@@ -95,6 +96,20 @@ impl Database {
     ///
     /// [`DbError`] if the database can't be reached or checked.
     pub async fn changes(&self, poll: Duration) -> Result<Option<Changes>, DbError> {
+        self.changes_reading(poll, POLL_ROWS).await
+    }
+
+    /// As [`Self::changes`], SQLite's polls reading at most `rows` rows each
+    /// (`SCHEDR_HIDDEN__DATABASE__CHANGES_POLL_ROWS`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::changes`].
+    pub async fn changes_reading(
+        &self,
+        poll: Duration,
+        rows: usize,
+    ) -> Result<Option<Changes>, DbError> {
         match self.checked_listener().await? {
             Listening::NotPostgres => {
                 const LAST: &str = "SELECT COALESCE(MAX(seq), 0) FROM changes";
@@ -108,6 +123,7 @@ impl Database {
                         db: self.clone(),
                         after,
                         interval: poll,
+                        rows: i64::try_from(rows).unwrap_or(i64::MAX),
                     },
                 }))
             }
@@ -261,9 +277,10 @@ impl Changes {
                 db,
                 after,
                 interval,
+                rows,
             } => loop {
                 tokio::time::sleep(*interval).await;
-                let changes = read_after(db, after).await?;
+                let changes = read_after(db, after, *rows).await?;
                 if !changes.is_empty() {
                     return Ok(changes);
                 }
@@ -274,12 +291,12 @@ impl Changes {
 
 /// The `changes` rows after `after`, each change once; moves `after` past them. A gap before
 /// the first (rows pruned unread) is [`Change::Missed`].
-async fn read_after(db: &Database, after: &mut i64) -> Result<Vec<Change>, DbError> {
+async fn read_after(db: &Database, after: &mut i64, rows: i64) -> Result<Vec<Change>, DbError> {
     const AFTER: &str = "SELECT seq, change FROM changes WHERE seq > $1 ORDER BY seq LIMIT $2";
     let rows: Vec<(i64, String)> = on_pool!(db, |pool, backend| {
         sqlx::query_as(sql(backend, AFTER))
             .bind(*after)
-            .bind(POLL_ROWS)
+            .bind(rows)
             .fetch_all(pool)
             .await?
     });

@@ -5,7 +5,8 @@
 //! Handshakes run beside the accept loop, each with a time limit, so a slow or silent client
 //! holds up no one. A handshake that fails over certificates (e.g. a client without one from
 //! the CA) is logged as a warning; one that just ends (a TCP probe) only at debug level. At
-//! most [`MAX_HANDSHAKES`] run at once; beyond that, accepting waits.
+//! most its `handshakes_at_once` ([`MAX_HANDSHAKES`] by default) run at once; beyond that,
+//! accepting waits.
 
 use std::io;
 use std::net::SocketAddr;
@@ -165,7 +166,8 @@ async fn accept_loop(
     accept_retry: Duration,
     accepted: mpsc::Sender<(Conn, SocketAddr)>,
 ) {
-    let handshakes = Arc::new(Semaphore::new(MAX_HANDSHAKES));
+    let most = tls.as_ref().map_or(MAX_HANDSHAKES, Tls::handshakes_at_once);
+    let handshakes = Arc::new(Semaphore::new(most));
     loop {
         // Never fails: the semaphore isn't closed.
         let Ok(permit) = handshakes.clone().acquire_owned().await else {

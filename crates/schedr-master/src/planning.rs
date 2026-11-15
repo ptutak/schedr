@@ -62,6 +62,27 @@ pub struct Plan<'a> {
     pub fire_times: &'a FireTimes,
     /// When the master first stored it (its start, without `start`).
     pub first_seen: Timestamp,
+    /// How much it may create at once, and how far ahead a `--for` may be.
+    pub limits: PlanLimits,
+}
+
+/// A plan's bounds (decision 493).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanLimits {
+    /// The most runs one pass creates for the DAG (`SCHEDR_HIDDEN__MASTER__RUNS_PER_PLANNING_PASS`).
+    pub runs_per_pass: usize,
+    /// How far ahead of now `--for` may be (`SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE`).
+    pub for_tolerance: SignedDuration,
+}
+
+impl Default for PlanLimits {
+    /// [`MAX_RUNS_PER_PASS`] and [`FOR_TOLERANCE`].
+    fn default() -> Self {
+        Self {
+            runs_per_pass: MAX_RUNS_PER_PASS,
+            for_tolerance: FOR_TOLERANCE,
+        }
+    }
 }
 
 impl Plan<'_> {
@@ -127,7 +148,7 @@ impl Plan<'_> {
     ///
     /// # Errors
     ///
-    /// [`ManualRunError::InFuture`] if `requested` is after now (beyond [`FOR_TOLERANCE`]).
+    /// [`ManualRunError::InFuture`] if `requested` is after now (beyond its `for_tolerance`).
     pub fn manual_times(
         &self,
         requested: Option<Timestamp>,
@@ -136,7 +157,7 @@ impl Plan<'_> {
     ) -> Result<RunTimes, ManualRunError> {
         let planned_for = manual_planned_for(requested, now);
         if now
-            .checked_add(FOR_TOLERANCE)
+            .checked_add(self.limits.for_tolerance)
             .is_ok_and(|limit| planned_for > limit)
         {
             return Err(ManualRunError::InFuture { planned_for, now });
@@ -176,7 +197,7 @@ impl Plan<'_> {
         now: Timestamp,
         covered: &BTreeSet<Timestamp>,
     ) -> Vec<RunTimes> {
-        let free = self.free_places(running).min(MAX_RUNS_PER_PASS);
+        let free = self.free_places(running).min(self.limits.runs_per_pass);
         self.due_times(last_scheduled, free, now, covered)
             .into_iter()
             .map(|planned_for| RunTimes {

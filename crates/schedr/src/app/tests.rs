@@ -206,6 +206,7 @@ fn client_args(token: Option<&str>, user: Option<&str>, json: bool) -> ClientArg
         token: token.map(str::to_owned),
         user: user.map(str::to_owned),
         json,
+        timeouts: schedr_client::Timeouts::default(),
     }
 }
 

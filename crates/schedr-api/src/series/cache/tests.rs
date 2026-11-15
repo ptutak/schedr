@@ -66,7 +66,7 @@ fn a_key_of_too_many_buckets_isnt_kept() {
         covered: 1,
     };
     let mut entry = Entry::default();
-    keep_buckets(&mut entry, &vec![bucket; BUCKETS + 1], (now, now));
+    keep_buckets(&mut entry, &vec![bucket; BUCKETS + 1], (now, now), BUCKETS);
     assert_eq!((entry.final_to, entry.buckets.len()), (None, 0));
     assert_eq!(entry.read_from(now, now), now);
 }

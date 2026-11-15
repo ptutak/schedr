@@ -5,8 +5,8 @@ status = "active"
 topic = "configuration"
 section = "Timings and limits"
 summary = '''
-Every hidden timing must be nonzero.
-A zero hidden timing is refused.
+Every hidden timing must be nonzero and at most 3650 days (Codex's review of M5.1p: a
+deadline from now stays a time); a zero or longer one is refused.
 '''
 history = "archive/PROJECT.md#D234"
 step = "M4.8t"

@@ -23,6 +23,7 @@ fn info() -> CtxInfo {
         handles: None,
         resource: None,
         api: None,
+        max_connections: MAX_CONNECTIONS,
     }
 }
 

@@ -246,10 +246,11 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1j | The Metrics page | done 2026-11-14 | D465, D466, D491, D492 |
 | M5.1k | Task memory charts | done 2026-11-15 | D467 |
 | M5.1l1 | The DAGs page by deployment | done 2026-11-15 |  |
-| M5.1l2 | Throughput and start latency on the Metrics page | **next** |  |
+| M5.1l2 | Throughput and start latency on the Metrics page | **next** | D494 |
 | M5.1m | The start time from the worker | done 2026-11-14 | D490 |
 | M5.1n | Standalone takes its DAG and script directories on the command line | done 2026-11-15 | D488 |
 | M5.1o | A poke may be a plain def | done 2026-11-15 | D489 |
+| M5.1p | Tunable constants as hidden settings | done 2026-11-15 | D493 |
 | R1.1 | Release 1.1.0 | planned |  |
 | M5.2a | The recording stub and the comparison | planned | D475 |
 | M5.2b | The rewrite: the authoring core | planned | D470, D471 |

@@ -167,6 +167,7 @@ impl Scheduler {
             dag: &active.dag,
             fire_times,
             first_seen: active.first_seen,
+            limits: self.plan_limits,
         };
         let sinces: std::collections::BTreeMap<Timestamp, Timestamp> = times
             .iter()

@@ -27,6 +27,7 @@ async fn a_master_heartbeats_its_row_until_stopped() {
         db.clone(),
         MasterIdentity {
             heartbeat: MASTER_HEARTBEAT,
+            row_kept: std::time::Duration::from_hours(1),
             master_id: "m-1".to_owned(),
             config: config.clone(),
             problems: problems.clone(),

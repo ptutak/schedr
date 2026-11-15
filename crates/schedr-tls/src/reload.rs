@@ -20,6 +20,7 @@ mod tests;
 pub struct Tls {
     inner: Arc<Inner>,
     handshake_timeout: Duration,
+    handshakes_at_once: usize,
 }
 
 #[derive(Debug)]
@@ -73,6 +74,7 @@ impl Tls {
                 }),
             }),
             handshake_timeout: crate::incoming::HANDSHAKE_TIMEOUT,
+            handshakes_at_once: crate::incoming::MAX_HANDSHAKES,
         })
     }
 
@@ -89,6 +91,21 @@ impl Tls {
     #[must_use]
     pub const fn handshake_timeout(&self) -> Duration {
         self.handshake_timeout
+    }
+
+    /// This, running at most `most` handshakes at once (`SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE`).
+    #[must_use]
+    pub fn with_handshakes_at_once(self, most: usize) -> Self {
+        Self {
+            handshakes_at_once: most.max(1),
+            ..self
+        }
+    }
+
+    /// How many handshakes a listener runs at once.
+    #[must_use]
+    pub const fn handshakes_at_once(&self) -> usize {
+        self.handshakes_at_once
     }
 
     fn configs(&self) -> Configs {

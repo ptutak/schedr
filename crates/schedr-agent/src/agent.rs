@@ -773,6 +773,21 @@ impl ProcessExecutor {
         (seen, watched)
     }
 
+    /// A command task's context channel: its run, secrets, handles, resource and API.
+    fn command_ctx(
+        &self,
+        spec: &AttemptSpec,
+        (secrets, handles): (&Arc<AttemptSecrets>, &Arc<AttemptHandles>),
+        resource: Option<&Arc<AttemptResource>>,
+    ) -> CtxInfo {
+        let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
+        ctx.max_connections = self.setup.timeouts.task_connections_open;
+        (ctx.secrets, ctx.handles) = (Some(Arc::clone(secrets)), Some(Arc::clone(handles)));
+        ctx.resource = resource.cloned();
+        ctx.api.clone_from(&spec.api);
+        ctx
+    }
+
     async fn run_planned(
         &self,
         spec: &AttemptSpec,
@@ -856,10 +871,7 @@ impl ProcessExecutor {
                 run_python(&process, task, limits, stop, forks, &mut hold, spawned).await
             }
             Plan::Command(process) => {
-                let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
-                (ctx.secrets, ctx.handles) = (Some(Arc::clone(secrets)), Some(Arc::clone(handles)));
-                ctx.resource.clone_from(&resource);
-                ctx.api.clone_from(&spec.api);
+                let ctx = self.command_ctx(spec, (secrets, handles), resource.as_ref());
                 run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };
@@ -1002,7 +1014,7 @@ pub enum SessionEnd {
 /// Something happened in the background.
 /// The most results kept in the journal as one group (M4B.5): each a thread writing its file
 /// meanwhile.
-const RESULTS_PER_GROUP: usize = 32;
+pub const RESULTS_PER_GROUP: usize = 32;
 
 /// The next message from the master: one read ahead while gathering a burst first.
 async fn next_inbound(
@@ -1017,7 +1029,7 @@ async fn next_inbound(
 
 /// The most assignments whose journal records are written as one group (M5.1b), as many as
 /// [`RESULTS_PER_GROUP`] for the same reason: each a thread writing its file meanwhile.
-const STARTS_PER_GROUP: usize = 32;
+pub const STARTS_PER_GROUP: usize = 32;
 
 /// An assignment checked and planned, its journal record not yet written.
 struct Prepared {
@@ -1101,7 +1113,7 @@ struct WaitingCleanup {
 }
 
 /// How many connections jobs' answers the agent keeps while no master listens.
-const UNSENT_ANSWERS: usize = 16;
+pub const UNSENT_ANSWERS: usize = 16;
 
 /// The worker agent.
 #[derive(Debug)]
@@ -1276,6 +1288,7 @@ impl<E: Executor> Agent<E> {
     /// An agent with a new incarnation ID.
     #[must_use]
     pub fn new(settings: AgentSettings, executor: E, incarnation: String) -> Self {
+        let unacked_kept = settings.setup.timeouts.unacked_messages_kept;
         let sample_window = settings.setup.timeouts.master_sample_window;
         let watchers = settings
             .setup
@@ -1296,7 +1309,7 @@ impl<E: Executor> Agent<E> {
         Self {
             settings,
             executor,
-            master_time: MasterTime::with_window(sample_window),
+            master_time: MasterTime::with_window(sample_window).keeping(unacked_kept),
             leader_epoch: (0, None),
             clock_skew: None,
             carried_cutoff: None,
@@ -2210,7 +2223,7 @@ impl<E: Executor> Agent<E> {
         let mut alive = tokio::time::interval(timeouts.alive);
         // The unacknowledged results' resends (B41: the master failed to store one and kept
         // the stream).
-        let mut resends = Resends::default();
+        let mut resends = Resends::limited(timeouts.result_resends, timeouts.result_resend_gap_max);
         // A message read while gathering a burst of assignments, not one of them: handled
         // next, in its turn (M5.1b).
         let mut held_message = None;
@@ -2442,8 +2455,9 @@ impl<E: Executor> Agent<E> {
         self.send_poke_reports(to_master);
         let Some(due) = resends.due(self.unacked.keys()) else {
             return Some(SessionEnd::Lost(format!(
-                "a result is still unacknowledged after {MAX_RESENDS} sends; reconnecting, so \
-                 the master's reconciliation settles it"
+                "a result is still unacknowledged after {} sends; reconnecting, so the \
+                 master's reconciliation settles it",
+                resends.most
             )));
         };
         for id in due {
@@ -2478,7 +2492,7 @@ impl<E: Executor> Agent<E> {
         };
         let mut burst = vec![first];
         let mut sequences = vec![sequence];
-        while burst.len() < STARTS_PER_GROUP {
+        while burst.len() < self.settings.setup.timeouts.starts_per_journal_group {
             match futures_util::FutureExt::now_or_never(inbound.message()) {
                 Some(Ok(Some(pb::MasterMessage {
                     message: Some(master_message::Message::AssignTask(next)),
@@ -3158,7 +3172,7 @@ impl<E: Executor> Agent<E> {
         };
         let mut results = vec![self.result_ready(first)];
         let mut next = None;
-        while results.len() < RESULTS_PER_GROUP {
+        while results.len() < self.settings.setup.timeouts.results_per_journal_group {
             match self.done_rx.try_recv() {
                 Ok(Done::Attempt(finished)) => results.push(self.result_ready(finished)),
                 Ok(other) => {
@@ -3211,7 +3225,7 @@ impl<E: Executor> Agent<E> {
         let to_master = link.as_ref().map(|(to_master, _)| *to_master);
         let mut records = vec![first];
         let mut next = None;
-        while records.len() < STARTS_PER_GROUP {
+        while records.len() < self.settings.setup.timeouts.starts_per_journal_group {
             match self.done_rx.try_recv() {
                 Ok(Done::Spawned {
                     attempt_id,
@@ -4239,7 +4253,7 @@ impl<E: Executor> Agent<E> {
             let _ = to_master.send(wrap(worker_message::Message::ConnectionJobDone(done)));
         } else {
             // Sent once registered again (the master drops an answer it gave up on).
-            if self.unsent_answers.len() == UNSENT_ANSWERS {
+            if self.unsent_answers.len() >= self.settings.setup.timeouts.unsent_connection_answers {
                 self.unsent_answers.pop_front();
             }
             self.unsent_answers.push_back(done);
@@ -4500,14 +4514,24 @@ fn heartbeat_timer(period: Duration) -> tokio::time::Interval {
 
 /// When each unacknowledged result is sent again over a session, counted in heartbeats:
 /// first at the second heartbeat that finds it unacknowledged (at least one interval after it
-/// was sent), then after twice the last gap, up to [`MAX_RESEND_GAP`]; at most
-/// [`MAX_RESENDS`] times.
-#[derive(Debug, Default)]
+/// was sent), then after twice the last gap, up to its `gap_max` ([`MAX_RESEND_GAP`] by
+/// default); at most `most` times ([`MAX_RESENDS`]).
+#[derive(Debug)]
 struct Resends {
     /// Heartbeats so far.
     beat: u64,
     /// Per result: the heartbeat it is due at, the gap after that, and the sends so far.
     due: BTreeMap<String, Resend>,
+    /// The most sends of one result.
+    most: u32,
+    /// The longest gap, in heartbeats.
+    gap_max: u32,
+}
+
+impl Default for Resends {
+    fn default() -> Self {
+        Self::limited(MAX_RESENDS, MAX_RESEND_GAP)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4518,8 +4542,18 @@ struct Resend {
 }
 
 impl Resends {
+    /// None due yet; at most `most` sends of one, gaps of at most `gap_max` heartbeats.
+    fn limited(most: u32, gap_max: u32) -> Self {
+        Self {
+            beat: 0,
+            due: BTreeMap::new(),
+            most: most.max(1),
+            gap_max: gap_max.max(1),
+        }
+    }
+
     /// A heartbeat, `unacked` the results unacknowledged now: those due to be sent again; none
-    /// when one has been sent [`MAX_RESENDS`] times already and is due again (the session is
+    /// when one has been sent `most` times already and is due again (the session is
     /// given up).
     fn due<'a>(&mut self, unacked: impl Iterator<Item = &'a String>) -> Option<Vec<String>> {
         self.beat += 1;
@@ -4533,11 +4567,11 @@ impl Resends {
                 sent: 0,
             });
             if resend.at <= beat {
-                if resend.sent == MAX_RESENDS {
+                if resend.sent >= self.most {
                     return None;
                 }
                 send.push(id.clone());
-                resend.gap = resend.gap.saturating_mul(2).min(MAX_RESEND_GAP);
+                resend.gap = resend.gap.saturating_mul(2).min(self.gap_max);
                 resend.at = beat + u64::from(resend.gap);
                 resend.sent += 1;
             }

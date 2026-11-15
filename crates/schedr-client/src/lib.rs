@@ -246,6 +246,41 @@ pub struct HttpTransport {
     /// mTLS with this role's certificate (a webserver's UI port), and the client built from
     /// it, by the material's generation (rebuilt when the files change).
     tls: Option<(schedr_tls::Tls, CachedClient)>,
+    /// How long connecting and a request may take.
+    timeouts: Timeouts,
+}
+
+/// How long the CLI and `schedr ui` wait for a webserver, each a `SCHEDR_HIDDEN__CLIENT__*`
+/// timing (decision 493).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeouts {
+    /// Connecting (`CONNECT_TIMEOUT`).
+    pub connect: Duration,
+    /// One request (`REQUEST_TIMEOUT`).
+    pub request: Duration,
+    /// The master's decision on a command (`COMMAND_WAIT`).
+    pub command_wait: Duration,
+}
+
+impl Default for Timeouts {
+    /// [`CONNECT_TIMEOUT`], [`REQUEST_TIMEOUT`] and [`WAIT_TIMEOUT`].
+    fn default() -> Self {
+        Self {
+            connect: CONNECT_TIMEOUT,
+            request: REQUEST_TIMEOUT,
+            command_wait: WAIT_TIMEOUT,
+        }
+    }
+}
+
+/// A plain HTTP client with `timeouts`.
+fn plain_client(timeouts: Timeouts) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(timeouts.connect)
+        .timeout(timeouts.request)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("the HTTP client builds with connect and request timeouts")
 }
 
 impl HttpTransport {
@@ -260,18 +295,25 @@ impl HttpTransport {
     /// this does not happen in practice.
     #[must_use]
     pub fn new(server: &str, auth: Auth) -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("the HTTP client builds with connect and request timeouts");
+        let timeouts = Timeouts::default();
         Self {
-            client,
+            client: plain_client(timeouts),
+            timeouts,
             server: server.trim_end_matches('/').to_owned(),
             auth,
             ui_token: None,
             tls: None,
+        }
+    }
+
+    /// This transport waiting as `timeouts` say to connect and for a request (call it before
+    /// [`Self::with_tls`]).
+    #[must_use]
+    pub fn with_timeouts(self, timeouts: Timeouts) -> Self {
+        Self {
+            client: plain_client(timeouts),
+            timeouts,
+            ..self
         }
     }
 
@@ -283,7 +325,7 @@ impl HttpTransport {
     /// As [`Self::new`].
     #[must_use]
     pub fn with_tls(self, tls: schedr_tls::Tls) -> Self {
-        let client = mtls_client(&tls);
+        let client = mtls_client(&tls, self.timeouts);
         let cached = std::sync::Arc::new(std::sync::Mutex::new((tls.generation(), client)));
         Self {
             tls: Some((tls, cached)),
@@ -301,7 +343,7 @@ impl HttpTransport {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if cached.0 != generation {
-            *cached = (generation, mtls_client(tls));
+            *cached = (generation, mtls_client(tls, self.timeouts));
         }
         cached.1.clone()
     }
@@ -465,10 +507,10 @@ fn refuse_redirect(server: &str, response: &reqwest::Response) -> Result<(), Cli
 }
 
 /// An HTTP client presenting `tls`'s certificate (its `api_client` configuration).
-fn mtls_client(tls: &schedr_tls::Tls) -> reqwest::Client {
+fn mtls_client(tls: &schedr_tls::Tls, timeouts: Timeouts) -> reqwest::Client {
     reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(timeouts.connect)
+        .timeout(timeouts.request)
         .redirect(reqwest::redirect::Policy::none())
         .tls_backend_preconfigured((*tls.api_client()).clone())
         .build()

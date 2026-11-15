@@ -36,7 +36,7 @@ use schedr_api::auth::Auth;
 use schedr_api::logs::HttpLogSource;
 use schedr_api::metrics::ApiMetrics;
 use schedr_api::{ApiState, router};
-use schedr_config::config::Timings;
+use schedr_config::config::{HiddenLimits, Timings};
 use schedr_config::{AuthMode, AuthSection, Config, MemoryReserve, TlsMode};
 use schedr_db::{Backend, Database, SchemaStatus, redact_password};
 use schedr_master::core::{CoreError, MasterCore, Settings};
@@ -131,6 +131,25 @@ pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTi
         accept_retry: config.timings.accept_retry,
         master_sample_window: config.timings.master_sample_window,
         clock_skew_warning: config.timings.clock_skew_warning,
+        results_per_journal_group: config.limits.results_per_journal_group,
+        starts_per_journal_group: config.limits.starts_per_journal_group,
+        result_resends: limit_u32(config.limits.result_resends),
+        result_resend_gap_max: limit_u32(config.limits.result_resend_gap_max),
+        unacked_messages_kept: config.limits.unacked_messages_kept,
+        unsent_connection_answers: config.limits.unsent_connection_answers,
+        task_connections_open: config.limits.task_connections_open,
+        watcher_log_backlog: config.limits.watcher_log_backlog,
+    }
+}
+
+/// A hidden limit as a `u32`, the largest when it doesn't fit.
+const fn limit_u32(limit: usize) -> u32 {
+    if limit > u32::MAX as usize {
+        u32::MAX
+    } else {
+        #[expect(clippy::cast_possible_truncation, reason = "checked just above")]
+        let limit = limit as u32;
+        limit
     }
 }
 
@@ -145,6 +164,8 @@ pub struct MasterOutbox {
     pub poll: Duration,
     /// Whether they are delivered: `dags test` keeps them, to list (its run notifies no one).
     pub deliver: bool,
+    /// The most delivered in one pass (`SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS`).
+    pub per_pass: u32,
 }
 
 /// `[notifications]` with the values its webhooks' headers read from `env`.
@@ -193,6 +214,7 @@ pub fn master_outbox(
         },
         poll: config.timings.outbox_poll,
         deliver: true,
+        per_pass: u32::try_from(config.limits.notifications_per_pass).unwrap_or(u32::MAX),
     })
 }
 
@@ -255,9 +277,27 @@ pub fn master_settings(config: &Config) -> Settings {
             interval: config.timings.sample_interval,
             minutes_kept: config.timings.samples_kept,
             rollups_kept: config.timings.rollups_kept,
+            rollup_grace: config.timings.sample_rollup_grace,
+            node_heartbeat: config.timings.node_heartbeat,
         },
         // Standalone sets it: its webserver is this process.
         with_webserver: false,
+        rounds: schedr_master::core::RoundLimits {
+            assignments: config.limits.assignments_per_round,
+            expiries: config.limits.expiries_per_round,
+            waiting_reasons: config.limits.waiting_reasons_per_round,
+            pending_reasons: config.limits.pending_reasons_per_round,
+            commands: u32::try_from(config.limits.commands_per_round).unwrap_or(u32::MAX),
+            scheduled_runs: config.limits.scheduled_runs_per_round,
+            started_instances: config.limits.started_instances_per_round,
+            retries: config.limits.retries_per_round,
+            planning_pass_runs: config.limits.runs_per_planning_pass,
+            run_of_runs: u32::try_from(config.limits.run_of_runs_per_pass).unwrap_or(u32::MAX),
+        },
+        for_future_tolerance: config.timings.for_future_tolerance,
+        code_retry_delay: config.timings.code_retry_delay,
+        failed_group_messages_per_turn: config.limits.failed_group_messages_per_turn,
+        worker_stream_buffer: config.limits.worker_stream_buffer,
     }
 }
 
@@ -569,7 +609,10 @@ pub fn role_tls(config: &Config) -> Result<Option<Tls>, AppError> {
         key: file(&config.tls.key, "key")?,
     };
     Tls::load(files, &config.tls.worker_name, &config.tls.ui_name)
-        .map(|tls| tls.with_handshake_timeout(config.timings.handshake_timeout))
+        .map(|tls| {
+            tls.with_handshake_timeout(config.timings.handshake_timeout)
+                .with_handshakes_at_once(config.limits.tls_handshakes_at_once)
+        })
         .map(Some)
         .map_err(|e| AppError::BadArgument(e.to_string()))
 }
@@ -653,7 +696,10 @@ fn spawn_sender(
     let hub = hub.clone();
     tokio::spawn(async move {
         match Sender::new(db, outbox.settings, metrics, outbox.backoff) {
-            Ok(sender) => hub.run_sender(sender, outbox.poll, until(stop)).await,
+            Ok(sender) => {
+                let sender = sender.with_per_pass(outbox.per_pass);
+                hub.run_sender(sender, outbox.poll, until(stop)).await;
+            }
             Err(error) => tracing::error!(%error, "notifications can't be sent"),
         }
     });
@@ -670,7 +716,12 @@ fn spawn_sender(
 pub async fn serve_master(
     db: Database,
     settings: Settings,
-    (tick, problems, max_event_size, outbox): (Duration, Problems, usize, MasterOutbox),
+    (tick, problems, (max_event_size, api_limits), outbox): (
+        Duration,
+        Problems,
+        (usize, schedr_api::state::ApiLimits),
+        MasterOutbox,
+    ),
     listener: TcpListener,
     tls: Option<Tls>,
     leadership: impl Future<Output = Result<Leadership, AppError>>,
@@ -715,7 +766,7 @@ pub async fn serve_master(
     // nothing after (Codex's review).
     let task_api = crate::task_api::RouterTaskApi::new(
         leadership.fenced_db(),
-        max_event_size,
+        (max_event_size, api_limits),
         settings.max_message_size.saturating_sub(4096),
     );
     // Its writes through the lease: refused once another master took it over.
@@ -834,7 +885,8 @@ pub fn ui_deployments(
                 )));
             }
             let mut transport =
-                schedr_client::HttpTransport::new(&d.url, schedr_client::Auth::None);
+                schedr_client::HttpTransport::new(&d.url, schedr_client::Auth::None)
+                    .with_timeouts(client_timeouts(config));
             if let Some(path) = &d.token_file {
                 let token = schedr_api::auth::read_ui_token(path, config.timings.auth_recheck)
                     .map_err(|e| {
@@ -867,7 +919,7 @@ pub fn ui_deployments(
                 client: schedr_client::Client::new(
                     transport,
                     schedr_client::POLL_INTERVAL,
-                    schedr_client::WAIT_TIMEOUT,
+                    config.timings.client_command_wait,
                 ),
                 proof,
             })
@@ -904,7 +956,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
         &config.ui.auth,
         bound,
         None,
-        auth_timings(&config.timings),
+        auth_timings(&config.timings, &config.limits),
     )?;
     if config.ui.auth.mode == AuthMode::None
         && let Some(warning) =
@@ -920,7 +972,7 @@ pub async fn ui(config: &Config) -> Result<(), AppError> {
     let app = schedr_ui::router(schedr_ui::Ui {
         deployments,
         docs_dir: docs_dir(config),
-        timings: ui_timings(&config.timings),
+        timings: ui_timings(&config.timings, &config.limits),
         auth,
         config: masked(config),
         process_id: crate::node::process_id().to_owned(),
@@ -942,9 +994,19 @@ pub struct LocalUi {
     pub timings: schedr_ui::live::UiTimings,
 }
 
-/// How a UI's live pages are paced, by `timings`.
+/// How long the UI waits for its webservers (`SCHEDR_HIDDEN__CLIENT__*`, decision 493).
 #[must_use]
-pub const fn ui_timings(timings: &Timings) -> schedr_ui::live::UiTimings {
+pub const fn client_timeouts(config: &Config) -> schedr_client::Timeouts {
+    schedr_client::Timeouts {
+        connect: config.timings.client_connect_timeout,
+        request: config.timings.client_request_timeout,
+        command_wait: config.timings.client_command_wait,
+    }
+}
+
+/// How a UI's live pages are paced, by `timings`, and how far a browser may fall behind.
+#[must_use]
+pub const fn ui_timings(timings: &Timings, limits: &HiddenLimits) -> schedr_ui::live::UiTimings {
     schedr_ui::live::UiTimings {
         keep_alive: timings.ui_keep_alive,
         coalesce: timings.ui_coalesce,
@@ -952,15 +1014,20 @@ pub const fn ui_timings(timings: &Timings) -> schedr_ui::live::UiTimings {
         tail_give_up: timings.ui_tail_give_up,
         retry_first: timings.ui_relay_retry_first,
         retry_max: timings.ui_relay_retry_max,
+        backlog: limits.ui_events_backlog,
     }
 }
 
-/// How the users and the UI's token are followed, by `timings`.
+/// How the users and the UI's token are followed, by `timings`, and how much is remembered.
 #[must_use]
-pub const fn auth_timings(timings: &Timings) -> schedr_api::auth::AuthTimings {
+pub const fn auth_timings(
+    timings: &Timings,
+    limits: &HiddenLimits,
+) -> schedr_api::auth::AuthTimings {
     schedr_api::auth::AuthTimings {
         recheck: timings.auth_recheck,
         remembered: timings.auth_remembered,
+        remembered_max: limits.auth_remembered_max,
     }
 }
 
@@ -995,12 +1062,21 @@ pub struct ApiTimings {
     pub heartbeat: Duration,
     /// `[events] max_size`.
     pub max_event_size: usize,
+    /// How far its reads reach and what they allow (decision 493).
+    pub limits: schedr_api::state::ApiLimits,
+    /// Its Metrics cache's (decision 493).
+    pub cache: schedr_api::series::cache::CacheLimits,
+    /// How long its own UI waits for a command's decision (`CLIENT__COMMAND_WAIT`).
+    pub command_wait: Duration,
 }
 
 impl ApiTimings {
     /// The ones `config` sets.
     #[must_use]
-    pub const fn of(config: &Config) -> Self {
+    pub fn of(config: &Config) -> Self {
+        let signed = |duration: Duration| {
+            jiff::SignedDuration::try_from(duration).unwrap_or(jiff::SignedDuration::MAX)
+        };
         Self {
             requests_grace: config.timings.requests_grace,
             accept_retry: config.timings.accept_retry,
@@ -1009,6 +1085,8 @@ impl ApiTimings {
                 keep_alive: config.timings.events_keep_alive,
                 retry: config.timings.events_retry,
                 changes_poll: config.timings.changes_poll_interval,
+                changes_rows: config.limits.changes_poll_rows,
+                backlog: config.limits.webserver_events_backlog,
             },
             refresh: config.timings.refresh_interval,
             worker_connect: config.timings.worker_connect_timeout,
@@ -1020,6 +1098,24 @@ impl ApiTimings {
                 reason = "a size in bytes, a few MiB, on a 64-bit host"
             )]
             max_event_size: config.events.max_size as usize,
+            limits: schedr_api::state::ApiLimits {
+                memory_peaks_window: signed(config.timings.memory_peaks_window),
+                memory_peaks_runs: u32::try_from(config.limits.memory_peaks_runs)
+                    .unwrap_or(u32::MAX),
+                event_future_tolerance: signed(config.timings.event_future_tolerance),
+                masters_heard_within: signed(
+                    config
+                        .timings
+                        .node_heartbeat
+                        .saturating_mul(schedr_master::samples::MASTERS_HEARD_BEATS),
+                ),
+            },
+            cache: schedr_api::series::cache::CacheLimits {
+                final_after: signed(config.timings.metrics_final_after),
+                keys: config.limits.metrics_cache_keys,
+                buckets: config.limits.metrics_cache_buckets,
+            },
+            command_wait: config.timings.client_command_wait,
         }
     }
 }
@@ -1058,6 +1154,7 @@ pub async fn serve_api(
         .with_connection_test_timeout(timings.connection_test)
         .with_heartbeat_interval(timings.heartbeat)
         .with_max_event_size(timings.max_event_size)
+        .with_limits(timings.limits, timings.cache)
         .with_metrics(observed.metrics);
     observed.ready.ready();
     let api = router(state);
@@ -1066,7 +1163,7 @@ pub async fn serve_api(
             let client = schedr_client::Client::new(
                 schedr_client::RouterTransport::new(api.clone()),
                 schedr_client::POLL_INTERVAL,
-                schedr_client::WAIT_TIMEOUT,
+                timings.command_wait,
             );
             let deployments = vec![schedr_ui::Deployment {
                 name: LOCAL_DEPLOYMENT.to_owned(),
@@ -1252,7 +1349,8 @@ pub async fn connect_database(config: &Config, role: &str) -> Result<Database, A
         .with_notifications(
             config.database.notifications,
             config.database.notifications_url.clone(),
-        );
+        )
+        .with_dag_versions_cached(config.limits.dag_versions_cached);
     if db.backend() == Backend::Sqlite {
         tracing::warn!(
             "schedr {role} on SQLite: every role must run on this host, on a local disk; \
@@ -1700,6 +1798,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
         config: masked(config),
         problems: problems.clone(),
         heartbeat: config.timings.node_heartbeat,
+        row_kept: config.timings.node_row_kept,
     };
     let master_id = identity.master_id.clone();
     tokio::spawn(heartbeat_master(db.clone(), identity, stop.clone()));
@@ -1722,7 +1821,10 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
         (
             config.timings.tick_interval,
             problems,
-            usize::try_from(config.events.max_size).unwrap_or(usize::MAX),
+            (
+                usize::try_from(config.events.max_size).unwrap_or(usize::MAX),
+                ApiTimings::of(config).limits,
+            ),
             outbox,
         ),
         listener,
@@ -1862,7 +1964,7 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         &config.webserver.auth,
         bound,
         config.webserver.ui_token_file.as_deref(),
-        auth_timings(&config.timings),
+        auth_timings(&config.timings, &config.limits),
     )?;
     if config.webserver.auth.mode == AuthMode::None
         && let Some(warning) = no_auth_warning(bound, "set [webserver] bind = \"127.0.0.1\"")

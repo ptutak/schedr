@@ -40,6 +40,7 @@ fn with_plan<T>(dag: &Dag, check: impl FnOnce(&Plan<'_>) -> T) -> T {
         dag,
         fire_times: &fire_times,
         first_seen: ts("2026-09-15T00:00:00Z"),
+        limits: PlanLimits::default(),
     };
     check(&plan)
 }

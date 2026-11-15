@@ -151,7 +151,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
         (
             Duration::from_millis(10),
             Problems::default(),
-            1024 * 1024,
+            (1024 * 1024, schedr_api::state::ApiLimits::default()),
             master_outbox(&config(), &BTreeMap::new()).unwrap(),
         ),
         listen(loopback()).await.unwrap(),
@@ -1118,11 +1118,11 @@ fn the_fixed_timings_defaults_are_each_crates_own() {
         schedr_master::core::MasterTimings::default()
     );
     assert_eq!(
-        ui_timings(&config.timings),
+        ui_timings(&config.timings, &config.limits),
         schedr_ui::live::UiTimings::default()
     );
     assert_eq!(
-        auth_timings(&config.timings),
+        auth_timings(&config.timings, &config.limits),
         schedr_api::auth::AuthTimings::default()
     );
     let api = ApiTimings::of(&config);
@@ -1153,11 +1153,11 @@ fn a_hidden_timing_reaches_what_uses_it() {
     assert_eq!(master.alive, Duration::from_secs(1004));
     assert_eq!(master.parse_retry_max, Duration::from_secs(1005));
     assert_eq!(
-        ui_timings(&config.timings).coalesce,
+        ui_timings(&config.timings, &config.limits).coalesce,
         Duration::from_secs(1006)
     );
     assert_eq!(
-        auth_timings(&config.timings).remembered,
+        auth_timings(&config.timings, &config.limits).remembered,
         Duration::from_secs(1007)
     );
     assert_eq!(
@@ -1267,4 +1267,212 @@ fn only_a_worker_without_dag_directories_warns() {
     }];
     let silent = warnings_of(|| assert!(!warn_without_dag_roots(&config, true)));
     assert_eq!(silent, "");
+}
+
+/// Decision 493: the hidden settings' defaults are the constants they replaced, so a deployment
+/// setting none of them runs as before.
+#[test]
+fn the_hidden_settings_defaults_are_the_constants_they_replaced() {
+    let config = schedr_config::load(None, &BTreeMap::new(), &[]).unwrap();
+    let master = master_settings(&config);
+    let defaults = schedr_master::core::Settings::default();
+    assert_eq!(master.rounds, schedr_master::core::RoundLimits::default());
+    assert_eq!(
+        (
+            master.for_future_tolerance,
+            master.code_retry_delay,
+            master.failed_group_messages_per_turn,
+            master.worker_stream_buffer,
+        ),
+        (
+            defaults.for_future_tolerance,
+            defaults.code_retry_delay,
+            defaults.failed_group_messages_per_turn,
+            defaults.worker_stream_buffer,
+        )
+    );
+    assert_eq!(
+        master.samples,
+        schedr_master::samples::SampleSettings::default()
+    );
+    let api = ApiTimings::of(&config);
+    assert_eq!(api.limits, schedr_api::state::ApiLimits::default());
+    assert_eq!(api.cache, schedr_api::series::cache::CacheLimits::default());
+    assert_eq!(api.command_wait, schedr_client::WAIT_TIMEOUT);
+    assert_eq!(
+        (api.events.backlog, api.events.changes_rows),
+        (
+            schedr_api::events::EventTimings::default().backlog,
+            schedr_db::changes::POLL_ROWS
+        )
+    );
+    assert_eq!(
+        worker_timeouts(&config),
+        schedr_agent::attempt::WorkerTimeouts::default()
+    );
+    assert_eq!(client_timeouts(&config), schedr_client::Timeouts::default());
+    assert_eq!(
+        ui_timings(&config.timings, &config.limits),
+        schedr_ui::live::UiTimings::default()
+    );
+    assert_eq!(
+        auth_timings(&config.timings, &config.limits),
+        schedr_api::auth::AuthTimings::default()
+    );
+    assert_eq!(
+        master_outbox(&config, &BTreeMap::new()).unwrap().per_pass,
+        schedr_master::notifications::sender::BATCH
+    );
+    assert_eq!(
+        (
+            config.timings.node_row_kept,
+            config.timings.dags_test_run_timeout,
+            config.limits.tls_handshakes_at_once,
+            config.limits.dag_versions_cached,
+        ),
+        (
+            schedr_db::nodes::MASTER_ROW_KEPT.unsigned_abs(),
+            crate::local::TEST_RUN_TIMEOUT,
+            schedr_tls::incoming::MAX_HANDSHAKES,
+            4096,
+        )
+    );
+}
+
+/// Decision 493: each hidden setting reaches what the roles are built from.
+#[test]
+#[expect(clippy::too_many_lines, reason = "a check for each role's settings")]
+fn the_hidden_settings_reach_the_roles() {
+    let vars = [
+        ("SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND", "11"),
+        ("SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND", "12"),
+        ("SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND", "13"),
+        ("SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND", "14"),
+        ("SCHEDR_HIDDEN__MASTER__COMMANDS_PER_ROUND", "15"),
+        ("SCHEDR_HIDDEN__MASTER__SCHEDULED_RUNS_PER_ROUND", "16"),
+        ("SCHEDR_HIDDEN__MASTER__STARTED_INSTANCES_PER_ROUND", "17"),
+        ("SCHEDR_HIDDEN__MASTER__RETRIES_PER_ROUND", "18"),
+        ("SCHEDR_HIDDEN__MASTER__RUNS_PER_PLANNING_PASS", "19"),
+        ("SCHEDR_HIDDEN__MASTER__RUN_OF_RUNS_PER_PASS", "20"),
+        (
+            "SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN",
+            "21",
+        ),
+        ("SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER", "22"),
+        ("SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS", "23"),
+        ("SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE", "24s"),
+        ("SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY", "25s"),
+        ("SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE", "26s"),
+        ("SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT", "27s"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_FINAL_AFTER", "28m"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_KEYS", "29"),
+        ("SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_BUCKETS", "30"),
+        ("SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_WINDOW", "31h"),
+        ("SCHEDR_HIDDEN__WEBSERVER__MEMORY_PEAKS_RUNS", "32"),
+        ("SCHEDR_HIDDEN__EVENTS__FUTURE_TOLERANCE", "33s"),
+        ("SCHEDR_HIDDEN__WEBSERVER__EVENTS_BACKLOG", "34"),
+        ("SCHEDR_HIDDEN__WEBSERVER__AUTH_REMEMBERED_MAX", "35"),
+        ("SCHEDR_HIDDEN__DATABASE__CHANGES_POLL_ROWS", "36"),
+        ("SCHEDR_HIDDEN__UI__EVENTS_BACKLOG", "37"),
+        ("SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT", "38s"),
+        ("SCHEDR_HIDDEN__CLIENT__REQUEST_TIMEOUT", "39s"),
+        ("SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT", "40s"),
+        ("SCHEDR_HIDDEN__WORKER__RESULTS_PER_JOURNAL_GROUP", "41"),
+        ("SCHEDR_HIDDEN__WORKER__STARTS_PER_JOURNAL_GROUP", "42"),
+        ("SCHEDR_HIDDEN__WORKER__RESULT_RESENDS", "43"),
+        ("SCHEDR_HIDDEN__WORKER__RESULT_RESEND_GAP_MAX", "44"),
+        ("SCHEDR_HIDDEN__WORKER__UNACKED_MESSAGES_KEPT", "45"),
+        ("SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS", "46"),
+        ("SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN", "47"),
+        ("SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG", "48"),
+    ];
+    let env: BTreeMap<String, String> = vars
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    let config = schedr_config::load(None, &env, &[]).unwrap();
+    let master = master_settings(&config);
+    let r = master.rounds;
+    assert_eq!(
+        (
+            [
+                r.assignments,
+                r.expiries,
+                r.waiting_reasons,
+                r.pending_reasons
+            ],
+            [
+                r.scheduled_runs,
+                r.started_instances,
+                r.retries,
+                r.planning_pass_runs
+            ],
+            (r.commands, r.run_of_runs),
+        ),
+        ([11, 12, 13, 14], [16, 17, 18, 19], (15, 20))
+    );
+    assert_eq!(
+        (
+            master.failed_group_messages_per_turn,
+            master.worker_stream_buffer
+        ),
+        (21, 22)
+    );
+    assert_eq!(
+        master_outbox(&config, &BTreeMap::new()).unwrap().per_pass,
+        23
+    );
+    let secs = Duration::from_secs;
+    assert_eq!(
+        (master.for_future_tolerance, master.code_retry_delay),
+        (secs(24), secs(25))
+    );
+    assert_eq!(
+        (master.samples.rollup_grace, master.samples.node_heartbeat),
+        (secs(26), secs(27))
+    );
+    let api = ApiTimings::of(&config);
+    let signed = |s: i64| jiff::SignedDuration::from_secs(s);
+    assert_eq!(
+        api.cache,
+        schedr_api::series::cache::CacheLimits {
+            final_after: signed(28 * 60),
+            keys: 29,
+            buckets: 30,
+        }
+    );
+    assert_eq!(
+        api.limits,
+        schedr_api::state::ApiLimits {
+            memory_peaks_window: signed(31 * 3600),
+            memory_peaks_runs: 32,
+            event_future_tolerance: signed(33),
+            masters_heard_within: signed(3 * 27),
+        }
+    );
+    assert_eq!((api.events.backlog, api.events.changes_rows), (34, 36));
+    assert_eq!(
+        auth_timings(&config.timings, &config.limits).remembered_max,
+        35
+    );
+    assert_eq!(ui_timings(&config.timings, &config.limits).backlog, 37);
+    assert_eq!(
+        client_timeouts(&config),
+        schedr_client::Timeouts {
+            connect: secs(38),
+            request: secs(39),
+            command_wait: secs(40),
+        }
+    );
+    assert_eq!(api.command_wait, secs(40));
+    let w = worker_timeouts(&config);
+    assert_eq!(
+        (
+            [w.results_per_journal_group, w.starts_per_journal_group],
+            [w.result_resends, w.result_resend_gap_max],
+            [w.unacked_messages_kept, w.unsent_connection_answers],
+            [w.task_connections_open, w.watcher_log_backlog],
+        ),
+        ([41, 42], [43, 44], [45, 46], [47, 48])
+    );
 }

@@ -2502,6 +2502,35 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
 }
 
 #[tokio::test]
+async fn the_pending_reason_names_the_configured_cap() {
+    // Codex's review of M5.1p: it named the constant, not `MASTER__ASSIGNMENTS_PER_ROUND`.
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_tasks(2)).await;
+    dispatcher.set_rounds(crate::core::RoundLimits {
+        assignments: 1,
+        ..crate::core::RoundLimits::default()
+    });
+    dispatcher
+        .register("w1", "i1", &[], 4, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 1);
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let pending: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT queued_reason FROM task_instances WHERE state = 'queued'")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        pending,
+        [Some(
+            "pending: waiting for a round with room (a round assigns at most 1)".to_owned()
+        )]
+    );
+}
+
+#[tokio::test]
 async fn the_tasks_past_a_rounds_cap_show_pending_and_go_in_the_next() {
     // Decision 481: once a round has made its assignments it stops going through the ready
     // tasks: the rest show pending, in one write, and go in the next round.
@@ -2527,7 +2556,7 @@ async fn the_tasks_past_a_rounds_cap_show_pending_and_go_in_the_next() {
     assert!(
         pending
             .iter()
-            .all(|r| r.as_deref() == Some(pending_reason().as_str())),
+            .all(|r| r.as_deref() == Some(pending_reason(ASSIGNMENTS_PER_ROUND).as_str())),
         "{pending:?}"
     );
     assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 5);

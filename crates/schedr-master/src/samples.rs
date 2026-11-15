@@ -16,7 +16,7 @@ mod tests;
 
 /// How long after its end a window waits to be rolled up: a sample stored late (a webserver's
 /// timer, a slow insert) is in it by then.
-const ROLL_GRACE: SignedDuration = SignedDuration::from_mins(2);
+pub const ROLL_GRACE: SignedDuration = SignedDuration::from_mins(2);
 /// How the samples are taken and kept (hidden timings, decision 464).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SampleSettings {
@@ -26,6 +26,12 @@ pub struct SampleSettings {
     pub minutes_kept: Duration,
     /// How long rollups are kept (`MASTER__ROLLUPS_KEPT`, 30 days).
     pub rollups_kept: Duration,
+    /// How long after its end a window waits to be rolled up (`MASTER__SAMPLE_ROLLUP_GRACE`,
+    /// 2 minutes): a sample stored late is in it by then.
+    pub rollup_grace: Duration,
+    /// How often a master writes its row (`MASTER__NODE_HEARTBEAT`, 10 s): one heard from
+    /// within three of them is sampled.
+    pub node_heartbeat: Duration,
 }
 
 impl Default for SampleSettings {
@@ -34,12 +40,14 @@ impl Default for SampleSettings {
             interval: Duration::from_mins(1),
             minutes_kept: Duration::from_hours(24),
             rollups_kept: Duration::from_hours(24 * 30),
+            rollup_grace: ROLL_GRACE.unsigned_abs(),
+            node_heartbeat: Duration::from_secs(10),
         }
     }
 }
 
-/// A master heard from within this long is sampled (its row is written every 10 s).
-const MASTERS_HEARD: SignedDuration = SignedDuration::from_secs(30);
+/// A master heard from within this many of its heartbeats is sampled.
+pub const MASTERS_HEARD_BEATS: u32 = 3;
 
 /// A worker heard from within this long is sampled (its usage is written once a minute).
 const WORKERS_HEARD: SignedDuration = SignedDuration::from_secs(120);
@@ -200,7 +208,10 @@ impl Sampler {
         let minute = floor(now, MINUTE);
         let sources = db
             .sample_sources(
-                now.checked_sub(MASTERS_HEARD).unwrap_or(now),
+                now.checked_sub(within(
+                    settings.node_heartbeat.saturating_mul(MASTERS_HEARD_BEATS),
+                ))
+                .unwrap_or(now),
                 now.checked_sub(WORKERS_HEARD).unwrap_or(now),
             )
             .await?;
@@ -219,7 +230,8 @@ impl Sampler {
         // (Grok's review of M5.1i: a leader down across a boundary lost the windows it missed).
         // A window closes for rolling up a grace after its end, so that a webserver's sample
         // stored late is in it: a rollup isn't written again (Codex's review of M5.1j).
-        let closed = floor(minute.checked_sub(ROLL_GRACE).unwrap_or(minute), ROLLUP)
+        let grace = within(settings.rollup_grace);
+        let closed = floor(minute.checked_sub(grace).unwrap_or(minute), ROLLUP)
             .checked_sub(SignedDuration::from_secs(i64::from(ROLLUP)))
             .unwrap_or(minute);
         let window = SignedDuration::from_secs(i64::from(ROLLUP));
@@ -403,4 +415,9 @@ pub async fn sample_webserver(
             () = tokio::time::sleep(interval) => {}
         }
     }
+}
+
+/// `duration` as a signed one, the longest when it doesn't fit.
+fn within(duration: Duration) -> SignedDuration {
+    SignedDuration::try_from(duration).unwrap_or(SignedDuration::MAX)
 }

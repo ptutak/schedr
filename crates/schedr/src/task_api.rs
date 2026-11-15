@@ -21,11 +21,17 @@ pub struct RouterTaskApi {
 }
 
 impl RouterTaskApi {
-    /// The API over `db`, taking events of up to `max_event_size` bytes (`[events] max_size`),
-    /// giving answers of up to `max_answer` bytes.
+    /// The API over `db`, taking events of up to `max_event_size` bytes (`[events] max_size`)
+    /// within `limits`, giving answers of up to `max_answer` bytes.
     #[must_use]
-    pub fn new(db: Database, max_event_size: usize, max_answer: usize) -> Self {
-        let state = ApiState::new(db, None).with_max_event_size(max_event_size);
+    pub fn new(
+        db: Database,
+        (max_event_size, limits): (usize, schedr_api::state::ApiLimits),
+        max_answer: usize,
+    ) -> Self {
+        let state = ApiState::new(db, None)
+            .with_max_event_size(max_event_size)
+            .with_limits(limits, schedr_api::series::cache::CacheLimits::default());
         Self {
             router: router(state),
             max_answer,
