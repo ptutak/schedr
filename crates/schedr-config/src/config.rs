@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::roots::{PathList, Root};
 use crate::units::{
     DurationText, MemoryReserve, SizeText, deserialize_duration, deserialize_mode_text,
-    deserialize_optional_size, deserialize_size, serialize_duration, serialize_optional_size,
-    serialize_size,
+    deserialize_optional_duration, deserialize_optional_size, deserialize_size, serialize_duration,
+    serialize_optional_duration, serialize_optional_size, serialize_size,
 };
 
 #[cfg(test)]
@@ -127,7 +127,8 @@ pub struct Timings {
     /// How often the agent's loop turns at least, however quiet. Shorter than
     /// `loop_stall_timeout`, or a quiet agent looks stuck.
     pub worker_alive_interval: Duration,
-    /// How long a stopping worker waits for the master to take its deregistering.
+    /// How long a stopping worker waits for the master to take its deregistering, at most
+    /// (the drain's end bounds it; by default that end alone, B242).
     pub deregister_wait: Duration,
     /// How often a drain looks at what is left.
     pub drain_tick: Duration,
@@ -287,7 +288,7 @@ impl Default for Timings {
             reconnect_backoff_first: Duration::from_millis(200),
             reconnect_backoff_max: Duration::from_secs(30),
             worker_alive_interval: Duration::from_secs(5),
-            deregister_wait: Duration::from_secs(5),
+            deregister_wait: Duration::from_hours(1),
             drain_tick: Duration::from_millis(100),
             drain_ack_wait: Duration::from_secs(5),
             stop_poll: Duration::from_millis(100),
@@ -498,6 +499,31 @@ pub struct Config {
     /// The fixed limits, as `SCHEDR_HIDDEN__*` left them.
     #[serde(skip)]
     pub limits: HiddenLimits,
+}
+
+impl Config {
+    /// The longest a cleanup's try fits in a drain: the grace period less the drain's
+    /// terminate and report periods (25 s of the default 30 s).
+    #[must_use]
+    pub const fn cleanup_room(&self) -> Duration {
+        self.worker
+            .termination_grace_period
+            .saturating_sub(self.worker.drain_terminate_period)
+            .saturating_sub(self.timings.drain_report_period)
+    }
+
+    /// `[worker] cleanup_timeout`, or when not set the shorter of 5 minutes and
+    /// [`Self::cleanup_room`] (B252: the defaults agree with each other), at least 1 s: a
+    /// grace period the drain takes whole leaves none, and a zero would end every cleanup at
+    /// once.
+    #[must_use]
+    pub fn cleanup_timeout(&self) -> Duration {
+        self.worker.cleanup_timeout.unwrap_or_else(|| {
+            self.cleanup_room()
+                .min(Duration::from_mins(5))
+                .max(Duration::from_secs(1))
+        })
+    }
 }
 
 /// Fixed limits, like [`Timings`] not configuration: only `SCHEDR_HIDDEN__*` changes them.
@@ -1519,13 +1545,17 @@ pub struct WorkerSection {
     pub fork_server_preload_timeout: Duration,
     /// How long one try of a cleanup may run, for a task that doesn't set `cleanup_timeout`.
     /// The attempt holds its slot meanwhile: raise it if your cleanups wait on slow systems,
-    /// lower it to free slots sooner.
+    /// lower it to free slots sooner. When not set, 5 minutes or what a drain leaves of
+    /// `termination_grace_period` for a cleanup, whichever is shorter (25 s with the defaults;
+    /// B252: a longer one is lost when the pod is killed at the grace period's end), at least
+    /// 1 s.
     #[serde(
-        deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
+        deserialize_with = "deserialize_optional_duration",
+        serialize_with = "serialize_optional_duration",
+        skip_serializing_if = "Option::is_none"
     )]
-    #[schemars(with = "DurationText")]
-    pub cleanup_timeout: Duration,
+    #[schemars(with = "Option<DurationText>")]
+    pub cleanup_timeout: Option<Duration>,
     /// How long one try of a resource's cleanup may run, for one that doesn't set `timeout`.
     /// It ends a cleanup hung on a system that never answers, which can't be cancelled with
     /// its run and holds the run (and its `max_active_runs` slot) until it ends. Raise it for
@@ -1576,7 +1606,7 @@ impl Default for WorkerSection {
             memory_reserve: None,
             runner_start_timeout: Duration::from_secs(30),
             fork_server_preload_timeout: Duration::from_mins(5),
-            cleanup_timeout: Duration::from_mins(5),
+            cleanup_timeout: None,
             resource_cleanup_timeout: Duration::from_mins(30),
             fork_server_import_retry: Duration::from_mins(20),
         }

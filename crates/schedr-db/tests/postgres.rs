@@ -14,7 +14,7 @@ use schedr_db::dags::{DagChange, NewParse};
 use schedr_db::instances::InstanceUpdate;
 use schedr_db::reads::RunFilter;
 use schedr_db::runs::NewRun;
-use schedr_db::{Backend, Database, SchemaStatus};
+use schedr_db::{Backend, Database, DbError, Pool, SchemaStatus};
 use schedr_model::commands::{Command, CommandStatus};
 use schedr_model::runner::{ErrorSummary, ParsedFile};
 use schedr_model::{
@@ -3081,4 +3081,96 @@ async fn a_tasks_attempt_peaks_and_a_dags_are_read_on_postgres() {
         ),
         ("extract", [5_000_000_u64].as_slice(), 1)
     );
+}
+
+#[tokio::test]
+async fn the_throughput_and_start_latency_are_read_on_postgres() {
+    // M5.1l2 (decision 494): the buckets, the window functions and the milliseconds on
+    // Postgres; a start and an end in their minute's last half-second stay in it (Grok's review:
+    // the cast of the epoch rounded them into the next).
+    let (db, _run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    // Assigned at 08:00:00.250, started at 08:00:59.700, ended at 08:00:59.600 (the master's
+    // clock, before the worker's start as it estimates it: a bound, not an order).
+    let started = ts("2026-10-21T08:00:59.700Z");
+    assert!(
+        db.mark_started(&attempt_id, "spawn", started)
+            .await
+            .unwrap()
+    );
+    let end = AttemptEnd::by_master(AttemptStatus::Failed);
+    assert!(
+        db.end_attempt(&attempt_id, &end, ts("2026-10-21T08:00:59.600Z"))
+            .await
+            .unwrap()
+    );
+    let minute = ts("2026-10-21T08:00:00Z");
+    let range = (
+        ts(NOW)
+            .checked_sub(jiff::SignedDuration::from_hours(1))
+            .unwrap(),
+        ts(NOW)
+            .checked_add(jiff::SignedDuration::from_hours(1))
+            .unwrap(),
+    );
+    let ended = db.attempts_ended(range, 60).await.unwrap();
+    assert_eq!(
+        ended
+            .iter()
+            .map(|e| (e.at, e.status.as_str(), e.count))
+            .collect::<Vec<_>>(),
+        [(minute, "failed", 1)]
+    );
+    let latency = db.start_latency(range, 60).await.unwrap();
+    assert_eq!(
+        latency
+            .iter()
+            .map(|l| (l.at, l.started, l.p50_ms, l.p95_ms))
+            .collect::<Vec<_>>(),
+        [(minute, 1, 59_450, 59_450)]
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_password_isnt_waited_for() {
+    // The user, 2026-11-15 (after B247): a role starting waits for a database it can't reach
+    // yet, and exits at once on a setting that won't work.
+    let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect("SCHEDR_TEST_POSTGRES_URL");
+    // `postgres://user:password@host...`: the password swapped.
+    let (credentials, rest) = admin.split_once('@').expect("a URL with credentials");
+    let (user, _) = credentials.rsplit_once(':').expect("a password");
+    let url = format!("{user}:not-the-password@{rest}");
+    let error = Database::connect_with_timeout(&url, std::time::Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(!error.is_transient(), "{error}");
+}
+
+#[tokio::test]
+async fn a_statement_timeout_is_waited_for_and_named_without_the_servers_words() {
+    // The review of M5.1q: a schema read cut off by `statement_timeout` under load is the
+    // database's passing trouble, and the warning gives its code, not the server's text.
+    let admin = std::env::var("SCHEDR_TEST_POSTGRES_URL").expect("SCHEDR_TEST_POSTGRES_URL");
+    let db = Database::connect(&admin).await.unwrap();
+    let Pool::Postgres(pool) = db.pool() else {
+        unreachable!("Postgres here")
+    };
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SET statement_timeout = 10")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let error = DbError::from(
+        sqlx::query("SELECT pg_sleep(1)")
+            .execute(&mut *conn)
+            .await
+            .unwrap_err(),
+    );
+    assert!(error.is_transient(), "{error}");
+    assert_eq!(error.waiting_reason(), "a statement timed out, error 57014");
 }

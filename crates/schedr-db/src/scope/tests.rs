@@ -179,6 +179,10 @@ async fn a_refused_statement_is_the_datas_fault_and_a_busy_database_isnt() {
     .unwrap()
     .unwrap_err();
     assert!(!busy.is_data_fault(), "{busy}");
+    // A role starting waits for a busy database (the review of M5.1q), and says so in codes.
+    assert!(busy.is_transient(), "{busy}");
+    assert!(!duplicate.is_transient(), "{duplicate}");
+    assert_eq!(busy.waiting_reason(), "it is busy, error 5");
     assert!(!DbError::TransactionFailed.is_data_fault());
     assert!(!DbError::QueryTimeout(Duration::from_secs(1)).is_data_fault());
 }

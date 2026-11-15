@@ -21,6 +21,7 @@ pub mod named_events;
 pub mod routes;
 pub mod series;
 pub mod state;
+pub mod task_flow;
 pub mod version;
 pub mod views;
 
@@ -70,6 +71,7 @@ pub use state::ApiState;
         routes::get_deployment,
         series::list_samples,
         series::memory_totals,
+        task_flow::task_flow,
         attempt_memory::task_memory,
         attempt_memory::dag_memory,
         routes::list_import_errors,
@@ -167,6 +169,7 @@ fn metrics_routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/metrics/samples", get(series::list_samples))
         .route("/api/v1/metrics/memory", get(series::memory_totals))
+        .route("/api/v1/metrics/tasks", get(task_flow::task_flow))
         .route(
             "/api/v1/dags/{dag_id}/memory",
             get(attempt_memory::dag_memory),

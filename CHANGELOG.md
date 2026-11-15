@@ -9,6 +9,15 @@ schema and protocol changed in place (decision 156).
 
 Not released yet: the notes grow with M5.1 (performance, metrics in the UI).
 
+### Upgrading from 1.0.0
+
+- **Cleanups get 25 s by default outside the chart, not 5 minutes** (B252). Left unset,
+  `[worker] cleanup_timeout` is now the shorter of 5 minutes and what a drain leaves of
+  `termination_grace_period` for a cleanup: 25 s with the default 30 s grace, so a cleanup still
+  running when the pod is killed at the grace period's end isn't lost. This limits every
+  cleanup's try, also when nothing is shutting down. The Helm chart's 600 s grace keeps 5
+  minutes. Cleanups that take longer: set `cleanup_timeout` (and a grace period it fits in).
+
 ### Fixed
 
 - **A worker could start a task after its cutoff** (B246, critical, found by Grok's review of
@@ -21,12 +30,22 @@ Not released yet: the notes grow with M5.1 (performance, metrics in the UI).
   waited 20-30 s as a standby before scheduling anything. The master now gives the lease up
   when it stops cleanly, so the next start leads at once; after a crash it still waits the
   lease out.
+- **A stopping worker could show as lost** (B242). It left 5 s after sending its `Deregister`,
+  so a master stalled for longer (a slow database) never read it, and the worker showed as
+  disconnected, then lost. It now waits for the master until its grace period's end.
+- **Every start warned about the default `cleanup_timeout`** (B252): the default didn't fit in
+  the default grace period. It does now (see Upgrading).
 
 ### Changed
 
 - **A worker with no DAG directories warns at start** (decision 476): "no DAG directories",
   naming `SCHEDR_DAG_PATH` and `[dags] path`. Before, a standalone started without them showed
   only an empty UI.
+- **A role waits for a database it can't reach yet** (decision 496). The master, the webserver
+  and standalone started before their database (refused, timed out, Postgres starting up or out
+  of connections) used to exit; they now try again every 5 s, warning with the database's host
+  and port (never its user or password) at once and every minute. A wrong password, database
+  name or TLS setting still exits at once.
 - **PyPI shows a page of its own** (decision 477): installing and a first run, with links to the
   new **Getting started** section of the documentation, instead of the repository's README.
 

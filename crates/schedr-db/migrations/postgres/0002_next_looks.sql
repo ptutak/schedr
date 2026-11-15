@@ -119,3 +119,8 @@ CREATE TABLE samples (
     PRIMARY KEY (process_id, step_s, at)
 );
 CREATE INDEX samples_by_time ON samples (step_s, at);
+
+-- The Metrics page's throughput and start latency (decision 494): attempts by when they
+-- ended and when they started.
+CREATE INDEX attempts_ended ON attempts (ended_at) WHERE ended_at IS NOT NULL;
+CREATE INDEX attempts_started ON attempts (started_at) WHERE started_at IS NOT NULL;

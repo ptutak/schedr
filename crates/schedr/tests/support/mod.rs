@@ -594,6 +594,16 @@ impl Cluster {
 impl Cluster {
     /// Sends `signal` (`STOP`, `CONT`) to a role: SIGSTOP freezes it, as a stalled machine or
     /// a paused VM would.
+    /// A role's process ID.
+    pub fn pid(&self, name: &str) -> u32 {
+        self.roles
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap()
+            .child
+            .id()
+    }
+
     pub fn signal(&self, name: &str, signal: &str) {
         let role = self.roles.iter().find(|r| r.name == name).unwrap();
         assert!(

@@ -53,85 +53,8 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load | 2 | low | possible | tests |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-| 4 | B251: a readiness test saw the master still ready 50 ms after its stop, under a review's build load (Suspected) | 1 | low | rare | tests |
-| 5 | B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected) | 1 | low | rare | tests |
-| 6 | B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected) | 1 | low | rare | tests |
-| 7 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
-| 8 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
-
-## B251: a readiness test saw the master still ready 50 ms after its stop, under a review's build load (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): crates/schedr/src/roles/tests.rs:196 failed once with readiness `["master"]` where `[]` was expected after 50 ms, during Codex's M5.1n review; not retried.
-Reported by Codex in its M5.1n review (session `01a1de10`): the broader unit run stopped at 213
-passed and this one failure, while it was building and running other tests in its worktree.
-Passed in Claude's runs the same night. First step: read what the test waits on after the stop,
-and whether 50 ms is a fixed sleep where it should wait for the state to change.
-
-## B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): test_the_stop_signal_cancels_the_coroutine_and_its_finally_runs: no marker file at all (not even `cancelled`) in a loaded `make check`; passes alone 5 of 5.
-In `make check` on 2026-11-15 (M5.1j's code, beside a Codex review building and testing the
-workspace and a browser test) the run failed as expected, but the marker file didn't exist: the
-`except CancelledError` branch never ran, so the coroutine wasn't cancelled at its `await` — most
-likely the stop came at the 1 s timeout while the task's interpreter was still starting, and the
-grace ran out before any task code. Alone it passed 5 times out of 5. Not known: whether a stop
-before the coroutine's first await is handled as designed (then the test's 1 s needs a margin,
-or it should wait for the task to have started), or a stop during start-up skips the task's
-cleanup wrongly. First step: the agent's log of that attempt's stop under load, in a loop.
-
-## B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies: `pool timed out while waiting for an open connection` at the master's start.
-In `make check` on 2026-11-13 (M5.1b's code; the agent alone changed) the test waited too long
-for `schedr master: gRPC on` in the master's log; the master had failed with `database error:
-pool timed out while waiting for an open connection`, and the harness reported an I/O stall of
-about 2.4 s (497 ms full) across the system since the cluster started. The full `make check`
-right after passed it. Not known: whether the pool's acquire timeout is too short for a start
-under such a stall, or the container's Postgres was itself stalled. First step: the master's
-start-up pool timeout against the stall the harness measures, in a loop of the test under load.
-
-## B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): async_tasks_run_and_stop_cleanly_on_each_start_method_and_loop: `stopped_spawned` timed out (5.2 s) before writing its start marker.
-`crates/schedr/tests/roles.rs:1958` gives `stopped_forked` and `stopped_spawned` a 5 s
-`timeout`, which counts from the process's start, so for the spawned one it includes a new
-interpreter starting and importing `asyncio` or `uvloop`. In `make check` on 2026-11-13 (the
-whole suite in parallel) `on_asyncio`'s `stopped_spawned` ended `timed_out` after 5.235 s with
-no marker written: it never reached `note(...)`. Alone it passed 3 of 3 (13 s each). Fix: a
-timeout long enough for a spawn under load (e.g. 20 s) for the two stopped tasks; the test then
-takes that much longer.
-
-## B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): a_worker_that_exits_before_a_stalled_master_takes_its_deregister_is_offline_after: the master never handled the Deregister once.
-`crates/schedr/tests/roles.rs:1206` (added for B239 on 2026-11-12) failed once in
-`make test-integration` (`left: Some("disconnected")`), passing 6 of 6 alone and in the runs
-before. `forget` drops the connection when a `Deregister` is handled, so `disconnected` last
-means the master never handled it: the worker sent it (its drain log stops after "draining")
-while the master was frozen (SIGSTOP 3 s), waited `deregister_wait` (1 s) and exited. Not
-known: whether the frame was still in the worker's buffers at exit, or the master, back from
-the freeze and not leading at first (its lease late), read the stream's end before it. The
-suite alone was running (no standalone). The master's reader keeps order: a stream's end
-comes only after every message queued (`next_to_handle`), so the master can't take the end
-first. A theory, not shown: the exiting worker's socket still held unread bytes (an answer in
-flight as the master froze), so Linux closed it with RST, and an RST makes the frozen master's
-kernel drop what it hadn't read yet, the `Draining` and `Deregister` frames. First step: catch it
-with the master's log at debug, or capture the socket's close (FIN or RST) in a loop of the test
-under load.
-
-## B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, tests (score 1): the_fork_that_finds_a_late_thread_disables_the_server's forked.is_ok() failed once under the full suite's load.
-`crates/schedr-agent/tests/fork.rs:621`: `assert!(forked.is_ok())` failed once in
-`make test-integration` (2026-11-12, the run after `make check`'s), passing in the runs before.
-The test starts a thread 0.3 s after the preloaded module's import (a `SIGALRM` timer) and forks
-after waiting for the server's `up` state plus a fixed 1 s; under the suite's load the ordering
-of the server's ready, the timer and the request can shift. Neither the test nor the fork server
-changed in that diff (B240/D459/D461). Not reproduced alone yet; the error the fork returned
-wasn't printed (`is_ok()` only), so the first step is to print it.
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 

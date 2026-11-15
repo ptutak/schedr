@@ -481,3 +481,90 @@ scenarios 1, 13 and 23 at each size (the variable passes through to the test clu
 Steady throughput stays within about 4 % at every size, which is the runs' noise. The size
 shows in bursts: 500 wait steps ending at once are recorded in 3.9 s at 10 and in 1.6 s from 60
 up, while starts get slower again from 120. The default is 80 since then (decision 484).
+
+## After M5.1 (2026-11-15)
+
+M5.1 changed how the master spends its time: the core lock is taken per transaction, not per
+turn; a round's assignments and a command are written set-based, one transaction each; each
+tick asks the database once whether there is anything to do; triggers and events have a loop
+of their own; a worker's turn holds up to 80 messages. Measured on this laptop under WSL
+(quick profile, an idle machine): the whole suite on 1.0.0 (`v1.0.0`), then on M5.1
+(`79cc0bd6`), one after the other. Every scenario passed on both. Scenarios 2, 11, 13, 16 and
+22 ran twice more on each, alternating (the first M5.1 run of 10 to 14 overlapped a build);
+their rows are the median of three. "Noise" marks a change under about 5 %, or one the
+reruns showed swinging as far either way.
+
+**Assigned → started isn't the same measure on both.** In 1.0.0 `started_at` is when the
+master handled the worker's `Started`, so it includes the wait for the master's lock; since
+M5.1m it is the worker's own start, in master time (decision 490). M5.1 also reports that
+start's recording: `started_recorded` p99 is 0.4 to 1.0 s in these scenarios. So the time to
+a recorded start fell too, but by less than the column says.
+
+| Scenario | Metric | Better | 1.0.0 | M5.1 | Change | Verdict |
+|---|---|---|---|---|---|---|
+| 1 throughput | tasks_per_s | more | 16.96 | 26.74 | +58 % | better |
+| | run_p50_s | less | 90.9 | 58.0 | −36 % | better |
+| | run_p99_s | less | 134.6 | 80.7 | −40 % | better |
+| | wall_s | less | 167.9 | 113.6 | −32 % | better |
+| | round_p99_s | less | 2.90 | 2.90 | 0 % | same |
+| | assigned_to_started_p99_s | less | 4.51 | 0.56 | −88 % | better (see above) |
+| | parse_all_s | less | 17.59 | 16.40 | −7 % | better |
+| 2 command burst | command_decided_p99_s | less | 0.48 | 0.69 | +44 % | **worse** |
+| | trigger_calls_per_s | more | 15.39 | 16.69 | +8 % | better |
+| 3 worker churn | tasks_per_s | more | 5.06 | 5.16 | +2 % | same |
+| | lost_attempts | less | 11 | 7 | −36 % | better |
+| 4 master failover | run_p99_s | less | 46.7 | 44.5 | −5 % | better (noise) |
+| | round_p99_s | less | 1.45 | 2.05 | +41 % | worse (one bucket) |
+| 5 database stall | run_p99_s | less | 39.9 | 37.7 | −5 % | better (noise) |
+| 6 through PgBouncer | tasks_per_s | more | 15.57 | 25.97 | +67 % | better |
+| | run_p50_s | less | 100.3 | 59.4 | −41 % | better |
+| | run_p99_s | less | 146.3 | 83.8 | −43 % | better |
+| | wall_s | less | 181.2 | 116.9 | −36 % | better |
+| 6 PgBouncer failover | tasks_per_s | more | 6.99 | 7.36 | +5 % | better (noise) |
+| | round_p99_s | less | 1.45 | 4.10 | +183 % | worse (two buckets) |
+| 7 rolling restart | run_p99_s | less | 41.3 | 39.4 | −5 % | better (noise) |
+| 8 code churn | parse_all_s | less | 94.1 | 90.6 | −4 % | same |
+| 9 standalone on SQLite | tasks_per_s | more | 19.25 | 26.71 | +39 % | better |
+| | run_p50_s | less | 13.8 | 9.6 | −30 % | better |
+| | run_p99_s | less | 19.3 | 13.2 | −32 % | better |
+| | round_p99_s | less | 1.02 | 0.72 | −29 % | better |
+| 10 soak | run_p99_s | less | 14.3 | 12.5 | −12 % | better |
+| | master_rss_mib, webserver_rss_mib | less | 68, 51 | 72, 58 | +6 %, +14 % | worse, not explained |
+| | worker open files growth | none | 10 | 0 | | better |
+| 11 heavy output (3 runs) | tasks_per_s | more | 3.96 | 4.03 | +2 % | same |
+| | log_read_p99_s | less | 3.31 | 3.12 | −6 % | better |
+| 12 memory watchdog | oom_killed | 12 (as meant) | 12 | 12 | | same |
+| 13 Python, spawned (3 runs) | tasks_per_s | more | 7.87 | 7.69 | −2 % | same |
+| 13 Python, forked (3 runs) | tasks_per_s | more | 12.72 | 18.35 | +44 % | better |
+| | run_p99_s | less | 48.4 | 33.2 | −31 % | better |
+| | start_runner_p50_s | less | 0.04 | 0.08 | one bucket | **worse** |
+| 14 quiet DAGs | round_mean_ms, alone / beside 600 quiet | less | 97 / 119 | 36 / 42 | −63 % / −65 % | better |
+| 15 change signals | tasks_per_s, with / without | more | 16.68 / 17.13 | 24.44 / 24.43 | +47 % / +43 % | better |
+| | round_mean_with_ms | less | 726 | 984 | +36 % | worse (more work a round) |
+| 15b on SQLite | tasks_per_s, with / without | more | 19.04 / 19.19 | 25.43 / 25.64 | +34 % / +34 % | better |
+| 15c Python | tasks_per_s, with / without | more | 7.68 / 7.93 | 7.94 / 7.58 | +3 % / −4 % | same |
+| 16 concurrency limits (3 runs) | tasks_per_s | more | 8.54 | 8.48 | −1 % | same |
+| 17 silent cut | tries_run_twice, lost_attempts | 0, less | 0, 2 | 0, 2 | | same |
+| 18 one-way cut | tries_run_twice, lost_attempts | 0, less | 0, 6 | 0, 6 | | same |
+| 19 slow link | tries_run_twice, lost_attempts | 0, less | 0, 0 | 0, 0 | | same |
+| 20 frozen worker | tries_run_twice, lost_attempts | 0, less | 0, 2 | 0, 2 | | same |
+| 21 random chaos | tries_run_twice, lost_attempts | 0, less | 0, 30 | 0, 29 | | same |
+| | wall_s | less | 498 | 454 | −9 % | better |
+| 22 parse many files (3 runs) | 100 files, 4 at once: fork / spawn (s) | less | 2.07 / 14.87 | 2.00 / 15.30 | −4 % / +3 % | same |
+| 23 many sensors | all_in_s (all 500 started) | less | 20.52 | 1.09 | −95 % | better |
+| | await_response_p99_s | less | 4.99 | 1.58 | −68 % | better |
+| | poke_response_p99_s | less | 11.19 | 4.61 | −59 % | better |
+| | worker_held_mib | less | 97.1 | 102.6 | +6 % | worse (noise) |
+
+Throughput rose by a third to two thirds on Postgres, with PgBouncer or without, and on
+SQLite; forked Python tasks by 44 %, spawned ones not (each waits for a new interpreter:
+`start_runner` p50 1.28 s on both). Runs are about a third shorter. 500 wait steps all start within about a second instead
+of 20, and a round beside 600 quiet DAGs costs a third of what it did. The failure scenarios
+behave as before: no task ran twice, and as few or fewer attempts were lost.
+
+**What got worse:** a command's decision in scenario 2, 0.48 → 0.69 s at p99 in each of the
+three runs (one 1.0.0 run reached 1.21 s), while more trigger calls a second went through; and a
+forked runner's start, 0.04 → 0.08 s at p50, one bucket of the histogram; and the master's
+and the webserver's memory in the soak, +4 and +7 MiB. These three are not explained yet. The rounds' p99 rose a bucket or two in scenarios 4, 6 and 7 (its buckets are
+1.45, 2.05, 2.90 and 4.10 s, so one slow round moves it a whole step), while the runs there
+didn't get slower.

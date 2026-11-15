@@ -439,7 +439,9 @@ impl Default for WorkerTimeouts {
         Self {
             runner_start: crate::launch::RUNNER_START_TIMEOUT,
             fork_preload: crate::fork::PRELOAD_TIMEOUT,
-            cleanup: Duration::from_mins(5),
+            // What the default grace period leaves a cleanup (decision 497): 30 s less the
+            // drain's 3 s to terminate and 2 s to report.
+            cleanup: Duration::from_secs(25),
             sensor_max_wait: Duration::from_hours(24),
             watcher_block_limit: Duration::from_secs(30),
             watcher_import_limit: Duration::from_mins(1),

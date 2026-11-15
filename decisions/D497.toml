@@ -1,0 +1,18 @@
+title = "An unset cleanup timeout fits in the grace period"
+date = 2026-11-15
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "workers"  # a topic of design/README.md
+section = "Drain"  # the subheading of the topic's page it goes under
+summary = '''
+Left unset, `[worker] cleanup_timeout` is the shorter of 5 minutes and `Config::cleanup_room`
+(`termination_grace_period` less `drain_terminate_period` and the drain's report period: 25 s
+of the default 30 s), at least 1 s; under the chart's 600 s grace, 5 minutes. A value set by
+hand that doesn't fit is kept and warned about at the worker's start (B252: the defaults warned
+on every start). It limits every cleanup's try, not only a drain's; the 1.1.0 notes say so. Not
+chosen: a 25 s default everywhere; a longer default grace (330 s); warning only in pods.
+'''
+history = "JOURNAL.md#D497"  # <a id="D497"></a> starts its JOURNAL.md entry
+step = "M5.1q"  # the plan step that builds it; "later"; "n/a" for a rule
+code = ["crates/schedr-config/src/config.rs::cleanup_timeout", "crates/schedr-config/src/config.rs::cleanup_room"]
+checked = 2026-11-15

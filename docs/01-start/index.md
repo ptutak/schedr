@@ -141,6 +141,78 @@ Starting it again keeps everything: the DAGs, the runs, the logs.
 The web UI signs no one in here. That is fine on `127.0.0.1`; before you open it to a network,
 read [Network and security: Sign-in](../03-guide/08-network.md#sign-in).
 
+## Other layouts
+
+### DAG files in the project folder
+
+Instead of a `dags` folder, the project folder itself can hold the DAG files. Give
+`--dag-path .`, and keep the virtual environment out with a `.schedrignore` file (gitignore
+syntax): schedr reads every file under a DAG folder, and would otherwise copy `.venv` and try
+the `.py` files in it as DAG files.
+
+```text
+my-schedr/
+├── .schedrignore
+├── .venv/
+└── sync.py
+```
+
+```{code-block} text
+:caption: .schedrignore
+.venv/
+```
+
+```sh
+.venv/bin/schedr standalone --migrate --dag-path .
+```
+
+The folder is named after itself: `schedr dags list` shows the DAG defined in
+`my-schedr:sync.py`. Anything else you keep in the folder that isn't code (notes, data, test
+outputs) goes in `.schedrignore` too: a change to any file there counts as new code.
+
+### A plain script
+
+A script that isn't a DAG runs too: a `schedr.toml` next to it declares it as a job. In a
+folder of its own, say `scripts`:
+
+```text
+my-schedr/
+├── .venv/
+└── scripts/
+    ├── hello.py
+    └── schedr.toml
+```
+
+```python
+# scripts/hello.py
+print("hello from a script")
+```
+
+```toml
+# scripts/schedr.toml
+[jobs.hello]
+script = "hello.py"
+interpreter = "python"
+schedule = "0 6 * * *"
+```
+
+```sh
+.venv/bin/schedr standalone --migrate --script-path scripts
+```
+
+`interpreter = "python"` is the project's `.venv`, as for DAG files. A job needs a schedule to
+become a DAG of its own, but like every new DAG it starts paused: until you unpause it, it runs
+only when triggered by hand. Its ID is the folder, the file and the job:
+
+```sh
+.venv/bin/schedr runs trigger 'scripts:schedr.toml#hello'
+.venv/bin/schedr runs list 'scripts:schedr.toml#hello'
+.venv/bin/schedr tasks logs <run-id> hello
+```
+
+Both flags can be given together, and each can be repeated. [Plain scripts](../02-dags/17-plain-scripts.md)
+lists every key of a job: arguments, environment, secrets, retries, parameters.
+
 ## Next steps
 
 - **Write DAGs:** [Writing DAGs](../02-dags/index.md), starting with

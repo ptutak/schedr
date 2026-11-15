@@ -1174,30 +1174,59 @@ fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_peri
 }
 
 #[test]
-fn a_worker_that_exits_before_a_stalled_master_takes_its_deregister_is_offline_after() {
-    // B239: the worker gives the master until `deregister_by` to take its `Deregister`, then
-    // exits; a master stalled meanwhile (here frozen) still reads it and marks it offline.
+fn a_stopping_worker_waits_for_a_stalled_master_to_take_its_deregister() {
+    // B239, B242: the worker waits until `deregister_by` for the master to take its
+    // `Deregister` (a worker gone after 1 s dropped the frame with its connection, and was
+    // shown disconnected); a master stalled meanwhile (here frozen) reads it once it runs again
+    // and marks it offline, and the worker exits then.
     let mut cluster = Cluster::new(None, "100ms");
     let (code, err) = cluster.schedr(&["db", "migrate"]);
     assert_eq!(code, 0, "{err}");
-    cluster.start("master");
+    // Frozen 8 s, past the old 5 s wait (B242), so the leases are longer than the harness's:
+    // the worker's (30 s) and the master's own (20 s), or the thawed master would find the
+    // worker lost, or its lead gone.
+    cluster.start_with(
+        "master",
+        &[
+            ("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "30s"),
+            ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "20s"),
+        ],
+    );
     cluster.start("webserver");
     cluster.start_with(
         "worker",
-        &[("SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT", "1s")],
+        &[("SCHEDR_CONFIG__WORKER__TERMINATION_GRACE_PERIOD", "25s")],
     );
     cluster.wait("the worker to register", || {
         cluster.worker_state("w1").as_deref() == Some("active")
     });
     cluster.signal("master", "STOP");
+    // The one origin: the thaw's 8 s and the worker's wait both count from the freeze.
     let frozen = Instant::now();
-    let exited = cluster.terminate_within("worker", Duration::from_secs(10));
-    // Under the worker lease (5 s in tests): the master would otherwise find it lost.
-    std::thread::sleep(Duration::from_secs(3).saturating_sub(frozen.elapsed()));
-    cluster.signal("master", "CONT");
+    let master = cluster.pid("master").to_string();
+    let thaw = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        let status = std::process::Command::new("kill")
+            .args(["-s", "CONT", &master])
+            .status();
+        assert!(
+            status.as_ref().is_ok_and(std::process::ExitStatus::success),
+            "{status:?}"
+        );
+    });
+    let exited = cluster.terminate_within("worker", Duration::from_secs(25));
+    // When it exited, not when the thaw thread ends.
+    let took = frozen.elapsed();
+    thaw.join().unwrap();
     assert!(
         exited.is_some_and(|s| s.success()),
         "{exited:?}\n{}",
+        cluster.logs()
+    );
+    // It waited for the master, frozen 8 s, instead of leaving after 5 s as before.
+    assert!(
+        took >= Duration::from_secs(8),
+        "the worker left after {took:?}\n{}",
         cluster.logs()
     );
     cluster.wait_for("the worker to leave", Duration::from_secs(20), || {
@@ -1284,11 +1313,10 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
     let (code, err) = cluster.schedr(&["db", "migrate"]);
     assert_eq!(code, 0, "{err}");
-    let lease = [
-        ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "3s"),
-        ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "1s"),
-    ];
-    cluster.start_with("master", &lease);
+    // The harness's lease (6 s) and query timeout (2 s, the pool's acquire timeout too): 1 s
+    // gave up at the master's start under the suite's I/O stall (B247), and a longer one would
+    // make the master's lead outlast the harness's 5 s worker lease.
+    cluster.start("master");
     cluster.start("webserver");
     cluster.wait("the first master to lead", || {
         cluster.ops_get("master", "/readyz") == (200, "ok\n".to_owned())
@@ -1303,11 +1331,7 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     cluster.start_as(
         "master-2",
         "master",
-        &[
-            lease[0],
-            lease[1],
-            ("SCHEDR_CONFIG__MASTER__GRPC_PORT", "0"),
-        ],
+        &[("SCHEDR_CONFIG__MASTER__GRPC_PORT", "0")],
     );
     let standby_log = cluster.dir.path().join("master-2.log");
     cluster.wait("the second master to wait as a standby", || {
@@ -1956,11 +1980,13 @@ with Dag("{dag}"):
     async def ends_spawned() -> str:
         return await ends("{dag}.ends_spawned")
 
-    @task(timeout=timedelta(seconds=5))
+    # 20 s from the process's start: a spawn under the suite's load includes a new interpreter
+    # importing its loop (B245: 5 s ran out before the task's first line).
+    @task(timeout=timedelta(seconds=20))
     async def stopped_forked() -> None:
         await stopped("{dag}.stopped_forked")
 
-    @task(timeout=timedelta(seconds=5), fresh_process=True)
+    @task(timeout=timedelta(seconds=20), fresh_process=True)
     async def stopped_spawned() -> None:
         await stopped("{dag}.stopped_spawned")
 

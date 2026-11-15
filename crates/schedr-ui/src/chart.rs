@@ -32,6 +32,10 @@ pub enum Unit {
     Bytes,
     /// CPU cores.
     Cores,
+    /// A count of things (attempts), whole numbers.
+    Count,
+    /// Milliseconds, shown as ms below a second, then seconds.
+    Millis,
 }
 
 impl Unit {
@@ -41,6 +45,8 @@ impl Unit {
         match self {
             Self::Bytes => bytes(value),
             Self::Cores => format!("{value:.2} cores"),
+            Self::Count => format!("{value:.0}"),
+            Self::Millis => millis(value),
         }
     }
 }
@@ -59,6 +65,17 @@ pub fn bytes(n: f64) -> String {
         format!("{value:.0} B")
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// `ms` milliseconds as people read it: `850 ms`, `1.2 s`.
+#[must_use]
+pub fn millis(ms: f64) -> String {
+    let ms = ms.max(0.0);
+    if ms < 1000.0 {
+        format!("{ms:.0} ms")
+    } else {
+        format!("{:.1} s", ms / 1000.0)
     }
 }
 
@@ -96,6 +113,9 @@ pub struct Spec {
     /// Layers stacked on each other, the first at the bottom (memory by kind); a layer
     /// without a point at a time counts 0 there.
     pub stacked: Vec<Line>,
+    /// The stacked layers as a bar per point, across its step, instead of areas: counts in
+    /// buckets (attempts ended), which an area would draw as spikes between empty buckets.
+    pub bars: bool,
     /// The rest as one band, if any.
     pub band: Option<Band>,
     /// Dashed limits: a label, the slot of the line it belongs to, the value.
@@ -140,6 +160,8 @@ fn nice_step(max: f64, ticks: f64) -> f64 {
 
 /// The y axis's top and ticks for values up to `max` in `unit`.
 fn y_axis(max: f64, unit: Unit) -> (f64, Vec<f64>) {
+    // Whole ticks for whole things: no 0.2 of an attempt or of a millisecond.
+    let whole = unit == Unit::Count || (unit == Unit::Millis && max < 1000.0);
     let (scale, max) = match unit {
         // Ticks in the unit the top is shown in: 512 MiB, 1 GiB, 1.5 GiB.
         Unit::Bytes => {
@@ -149,10 +171,13 @@ fn y_axis(max: f64, unit: Unit) -> (f64, Vec<f64>) {
             }
             (scale, max / scale)
         }
-        Unit::Cores => (1.0, max),
+        // Ticks in seconds from a second up: 0.5 s, 1 s, 1.5 s.
+        Unit::Millis if max >= 1000.0 => (1000.0, max / 1000.0),
+        Unit::Cores | Unit::Count | Unit::Millis => (1.0, max),
     };
     let max = if max > 0.0 { max } else { 1.0 };
     let step = nice_step(max, 4.0);
+    let step = if whole { step.max(1.0) } else { step };
     let top = (max / step).ceil() * step;
     #[expect(
         clippy::cast_possible_truncation,
@@ -238,22 +263,7 @@ pub fn draw(spec: &Spec) -> String {
             );
         }
     }
-    let layers = stack(&spec.stacked);
-    for (layer, line) in spec.stacked.iter().enumerate() {
-        for run in runs(&layers, spec.step, |p| p.0) {
-            let below = |p: &(i64, Vec<f64>)| if layer == 0 { 0.0 } else { p.1[layer - 1] };
-            let d = area(
-                run.iter().map(|p| (x(p.0), y(p.1[layer]))),
-                run.iter().rev().map(|p| (x(p.0), y(below(p)))),
-            );
-            let _ = write!(
-                svg,
-                r#"<path class="area s{}" d="{d}Z"><title>{}</title></path>"#,
-                line.slot,
-                escape(&line.label)
-            );
-        }
-    }
+    stacked_layers(&mut svg, spec, (&x, &y));
     for (label, slot, value) in &limits {
         let _ = write!(
             svg,
@@ -319,6 +329,76 @@ pub struct Bars {
     pub limit: Option<(String, f64)>,
     /// The labels under the first bar and the last.
     pub ends: (String, String),
+}
+
+/// The stacked layers: areas, a lone point a bar; or all bars with [`Spec::bars`].
+fn stacked_layers(
+    svg: &mut String,
+    spec: &Spec,
+    (x, y): (&impl Fn(i64) -> f64, &impl Fn(f64) -> f64),
+) {
+    let layers = stack(&spec.stacked);
+    if spec.bars {
+        stacked_bars(svg, spec, &layers, (x, y));
+    } else {
+        // A point alone between gaps has no area: a bar, so it shows (as a line's dot).
+        let lone: Vec<(i64, Vec<f64>)> = runs(&layers, spec.step, |p| p.0)
+            .into_iter()
+            .filter(|run| run.len() == 1)
+            .flat_map(|run| run.iter().cloned())
+            .collect();
+        stacked_bars(svg, spec, &lone, (x, y));
+    }
+    for (layer, line) in spec.stacked.iter().enumerate().filter(|_| !spec.bars) {
+        for run in runs(&layers, spec.step, |p| p.0)
+            .into_iter()
+            .filter(|run| run.len() > 1)
+        {
+            let below = |p: &(i64, Vec<f64>)| if layer == 0 { 0.0 } else { p.1[layer - 1] };
+            let d = area(
+                run.iter().map(|p| (x(p.0), y(p.1[layer]))),
+                run.iter().rev().map(|p| (x(p.0), y(below(p)))),
+            );
+            let _ = write!(
+                svg,
+                r#"<path class="area s{}" d="{d}Z"><title>{}</title></path>"#,
+                line.slot,
+                escape(&line.label)
+            );
+        }
+    }
+}
+
+/// `layers` (the stacked tops at each point) as a bar per point across its step, a little
+/// narrower than it, each layer's part in its colour; an empty part isn't drawn.
+fn stacked_bars(
+    svg: &mut String,
+    spec: &Spec,
+    layers: &[(i64, Vec<f64>)],
+    (x, y): (&impl Fn(i64) -> f64, &impl Fn(f64) -> f64),
+) {
+    for (at, tops) in layers {
+        // The current bucket only up to the chart's end.
+        let left = x(*at);
+        let width = (x((at + spec.step).min(spec.to)) - left) * 0.8;
+        let left = left + width * 0.125;
+        for (layer, line) in spec.stacked.iter().enumerate() {
+            let below = if layer == 0 { 0.0 } else { tops[layer - 1] };
+            let top = tops[layer];
+            if top <= below {
+                continue;
+            }
+            let _ = write!(
+                svg,
+                r#"<rect class="area s{}" x="{left:.1}" y="{:.1}" width="{width:.1}" height="{:.1}"><title>{}: {}</title></rect>"#,
+                line.slot,
+                y(top),
+                y(below) - y(top),
+                escape(&line.label),
+                escape(&spec.unit.show(top - below)),
+            );
+        }
+    }
 }
 
 /// A bar chart drawn: its SVG.
@@ -515,7 +595,7 @@ fn area(top: impl Iterator<Item = (f64, f64)>, bottom: impl Iterator<Item = (f64
 /// A tick's label: in the unit the chart's top is shown in.
 fn axis_value(value: f64, unit: Unit) -> String {
     match unit {
-        Unit::Bytes if value == 0.0 => "0".to_owned(),
+        Unit::Bytes | Unit::Millis if value == 0.0 => "0".to_owned(),
         Unit::Bytes => {
             let text = bytes(value);
             text.replace(".0 ", " ")
@@ -523,6 +603,12 @@ fn axis_value(value: f64, unit: Unit) -> String {
         Unit::Cores => {
             let text = format!("{value:.2}");
             text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        }
+        Unit::Count => format!("{value:.0}"),
+        Unit::Millis if value < 1000.0 => format!("{value:.0} ms"),
+        Unit::Millis => {
+            let text = format!("{:.1}", value / 1000.0);
+            format!("{} s", text.trim_end_matches(".0"))
         }
     }
 }
@@ -658,6 +744,45 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn stacked_bars_draw_each_points_parts_and_skip_the_empty_ones() {
+        let layer = |label: &str, slot, points: Vec<(i64, f64)>| Line {
+            label: label.to_owned(),
+            slot,
+            points,
+        };
+        let svg = draw(&Spec {
+            unit: Unit::Count,
+            stacked: vec![
+                layer("succeeded", 1, vec![(0, 3.0), (60, 0.0), (120, 2.0)]),
+                layer("failed", 2, vec![(0, 1.0), (60, 0.0), (120, 0.0)]),
+            ],
+            bars: true,
+            ..spec()
+        });
+        // Three parts: 3 and 1 at the first point, 2 at the third; none for the zeros, and no
+        // area.
+        assert_eq!(svg.matches("<rect class=\"area s1\"").count(), 2, "{svg}");
+        assert_eq!(svg.matches("<rect class=\"area s2\"").count(), 1, "{svg}");
+        assert!(!svg.contains("<path class=\"area"), "{svg}");
+        assert!(svg.contains("<title>failed: 1</title>"), "{svg}");
+    }
+
+    #[test]
+    fn a_stacked_point_alone_between_gaps_is_a_bar() {
+        // Samples three minutes apart on a minute's step: each point alone, no area.
+        let svg = draw(&Spec {
+            stacked: vec![Line {
+                label: "tasks".to_owned(),
+                slot: 5,
+                points: vec![(0, 1024.0), (180, 2048.0), (240, 1024.0)],
+            }],
+            ..spec()
+        });
+        assert_eq!(svg.matches("<rect class=\"area s5\"").count(), 1, "{svg}");
+        assert_eq!(svg.matches("<path class=\"area s5\"").count(), 1, "{svg}");
+    }
+
     fn spec() -> Spec {
         Spec {
             title: "Memory <prod>".to_owned(),
@@ -679,6 +804,7 @@ mod tests {
             stacked: Vec::new(),
             limits: vec![("worker a's limit".to_owned(), 1, 4096.0)],
             zone: TimeZone::UTC,
+            bars: false,
         }
     }
 

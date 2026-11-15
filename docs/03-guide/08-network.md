@@ -6,11 +6,11 @@
 |---|---|---|---|
 | browser → web UI | HTTP, the pages, and long-lived streams for live updates | the browser | `[ui.auth]`: none, a sign-in proxy's header, or Basic (see [Sign-in](#sign-in)); TLS in front of it |
 | CLI → webserver | HTTP, REST API | the CLI | `[webserver.auth]`, as above (see [Sign-in](#sign-in)) |
-| web UI → webserver | HTTP, REST API, including one long-lived events stream per deployment | the UI | mTLS on the UI port, or the UI's token (see [Sign-in](#how-schedr-ui-proves-itself-to-a-webserver)); redirects are never followed |
-| worker → master | gRPC over HTTP/2: one bidirectional stream per worker, plus unary calls | the worker | mTLS, or the mesh |
+| web UI → webserver | HTTP, REST API, including one long-lived events stream per deployment | the UI | mTLS, mesh proof on the UI port, or the UI's token (see [Sign-in](#how-schedr-ui-proves-itself-to-a-webserver)); redirects are never followed |
+| worker → master | gRPC over HTTP/2: one bidirectional control stream, a parse-upload stream and input-fetch calls | the worker | mTLS, or the mesh |
 | webserver → worker | HTTP, the log endpoint | the webserver | mTLS, or the mesh |
 | master, webserver → database | Postgres or SQLite | the role | the database's own |
-| probes, Prometheus → any role | HTTP, the ops port | them | none: it serves no data |
+| probes, Prometheus → any role | HTTP, the ops port | them | none: health checks and metrics only |
 
 There is no link between the master and the webserver: the database carries commands one
 way and state the other. The web UI's only link is the REST API, including one long-lived
@@ -20,7 +20,7 @@ standalone` the UI is on the REST API's port, and that call stays inside the pro
 has no link to the master, the workers or the database.
 
 **Workers always connect to the master.** The master needs no address for its workers, and a
-worker only needs `[worker] master_url`. The stream stays open, so the master can still send
+worker uses `[worker] master_url` for that connection, with the TLS settings below. The stream stays open, so the master can still send
 work and cancels at once. Heartbeats every 10 s keep it alive through proxies and the mesh's
 idle timeouts.
 
@@ -47,9 +47,10 @@ the database TLS settings inside and outside the mesh.
 ## `[tls] mode`: who encrypts
 
 **`app` (the default): schedr does mTLS itself** on the master's gRPC port and on every
-worker's log endpoint.
+worker's log endpoint, and on the webserver's UI-only API port.
 
-- Each role gets `[tls] ca`, `cert` and `key`: PEM files, typically mounted from a Kubernetes
+- The master, workers and webserver get `[tls] ca`, `cert` and `key`; so does a `schedr ui`
+  connecting to an mTLS deployment. These are PEM files, typically mounted from a Kubernetes
   Secret. A role without them refuses to start, and says to set them or use `mode = "mesh"`.
 - Servers require a client certificate signed by the CA. A worker checks that the master's
   certificate names the host of `master_url`. The webserver checks that a worker's certificate
@@ -117,8 +118,8 @@ The same keys in both sections.
 
 A sign-in against LDAP (`mode = "ldap"`) is planned.
 
-In every mode, a header sent twice names no one, and a name with control characters or over
-256 characters isn't taken.
+An identity header sent twice names no one. Names with control characters or more than
+256 UTF-8 bytes are refused.
 
 #### The users file
 
@@ -128,15 +129,16 @@ writes the file and a Kubernetes Secret holding it:
 
 ```bash
 scripts/users-file.py --out ~/schedr-users anna ben
-kubectl apply -f ~/schedr-users/users-secret.yaml   # or the chart's auth.usersSecret
+kubectl apply -f ~/schedr-users/users-secret.yaml   # or the chart's webserver.auth.usersSecret
 ```
 
-A running schedr looks at the file every 5 seconds and reads it again when it has changed.
+When checking credentials, schedr looks for a file change at most once every 5 seconds. It
+uses modification time and length to detect a change, then reads the file again.
 A changed password or a removed user then takes effect, and checks remembered from the old
 file are forgotten. A Secret's mounted file is updated by Kubernetes within about a minute.
 A file that can't be read or doesn't parse leaves the users as they were and is logged as an
-error, and it is tried again 5 seconds later. A hash that isn't a whole bcrypt hash (its
-`$2b$` and cost, then 53 characters, as bcrypt writes them) doesn't parse. An empty file signs no one in.
+error, and it is tried again 5 seconds later. A hash must have a supported prefix (`$2a$`, `$2b$` or `$2y$`), a cost from 4 to 31, and
+53 characters of bcrypt base64 after the cost. An incomplete hash does not parse. An empty file signs no one in.
 
 bcrypt is slow on purpose (about 0.25 s at cost 12), and every request carries the password,
 since there are no sessions. So a check that passed is remembered for 5 minutes, by a keyed
@@ -146,14 +148,15 @@ An unknown name takes as long as a known one.
 ### How `schedr ui` proves itself to a webserver
 
 A webserver takes the name the UI passes on (`X-Schedr-User`) only from a caller it knows is
-`schedr ui`. Anyone else's `X-Schedr-User` is ignored. A UI it can't recognise is treated as
-any other caller: it is recorded as `anonymous`, or refused in `proxy_header` and `basic`.
+`schedr ui`. Anyone else's `X-Schedr-User` is ignored. A UI it can't recognise follows
+the ordinary authentication rules: `none` uses the configured identity header or
+`anonymous`; `proxy_header` requires its header, and `basic` requires credentials.
 
 | Proof | Webserver | `schedr ui` | Used |
 |---|---|---|---|
 | mTLS on the UI port | `[webserver] ui_port` (8083) in `[tls] mode = "app"`; the client certificate must name `[tls] ui_name` (`schedr-ui`). | `[[ui.deployments]] url = "https://<webserver>:8083"` and its own `[tls]` certificate. | Distributed, `app` mode. |
 | The mesh on the UI port | `[webserver] ui_port` in plain HTTP with `ui_port_in_mesh = true` in `[tls] mode = "mesh"`: a mesh policy lets only `schedr ui` reach it. | `url = "http://<webserver>:8083"`. | Distributed, `mesh` mode with Istio's AuthorizationPolicy. |
-| A shared token | `[webserver] ui_token_file`: at least 16 characters, read again when it changes. | `[[ui.deployments]] token_file`: the same token, sent in `X-Schedr-Ui-Token`. | Standalones in a federation; `mesh` mode without Istio's policy. |
+| A shared token | `[webserver] ui_token_file`: at least 16 UTF-8 bytes after trimming, read again when it changes. | `[[ui.deployments]] token_file`: the same token, sent in `X-Schedr-Ui-Token`. | Standalones in a federation; `mesh` mode without Istio's policy. |
 | In-process | Nothing to set. | Nothing to set. | A standalone's own UI. |
 
 The UI port follows `[tls] mode` as the links between the master and the workers do. In
@@ -176,25 +179,23 @@ API does, or the API's mode is `none`, kept internal, with people coming through
 (decision 41A). For a distributed release with its UI, the chart refuses the other pairs.
 For a `schedr ui` over other releases, nothing sees both sides, so it is the rule to follow.
 
-| `tls.mode` | `webserver.auth` | `ui.auth` | Browser → UI | UI → webserver | CLI → API | For |
-|---|---|---|---|---|---|---|
-| app | none | none | Open; the name from `identity_header` | mTLS | Open | Behind a mesh or network that signs people in |
-| app | none | proxy_header | The sign-in proxy | mTLS | Open, kept internal | People through the UI only |
-| app | none | basic | The users file | mTLS | Open, kept internal | A lab, people through the UI only |
-| app | proxy_header | proxy_header | The sign-in proxy | mTLS | The sign-in proxy | Kubernetes without a mesh |
-| app | basic | basic | The users file | mTLS | The users file (`--user`) | A lab, a small team |
-| mesh | none | none | Istio (Keycloak's token); the name from `identity_header` | The mesh on the UI port, else the token | Istio (`--token`) | **Istio with Keycloak** |
-| mesh | none | proxy_header | The sign-in proxy | The mesh, else the token | Open, kept internal | People through the UI only |
-| mesh | none | basic | The users file | The mesh, else the token | Open, kept internal | A lab in a mesh |
-| mesh | proxy_header | proxy_header | The sign-in proxy | The mesh, else the token | The sign-in proxy | A mesh without Istio's token check |
-| mesh | basic | basic | The users file | The mesh, else the token | The users file (`--user`) | A lab in a mesh |
+The allowed sign-in pairs are the same in `app` and `mesh` mode. The proof on the
+UI → webserver link comes from the table above.
 
-Refused: a UI open in front of an API that asks for a sign-in (`none` at the UI with
-`proxy_header` or `basic` at the API), as anyone could act through the UI. Also refused: two
-sources of people (`proxy_header` at one and `basic` at the other), which would show one
-person under two names.
+| `webserver.auth.mode` | `ui.auth.mode` | Browser → UI | CLI → API |
+|---|---|---|---|
+| `none` | `none` | Open; an identity header can name the user | Open; a mesh or proxy may require a bearer token |
+| `none` | `proxy_header` | Sign-in proxy | Open; keep the API internal |
+| `none` | `basic` | Users file | Open; keep the API internal |
+| `proxy_header` | `proxy_header` | Sign-in proxy | Sign-in proxy |
+| `basic` | `basic` | Users file | Users file (`--user`) |
 
-A standalone has no `[tls] mode`. Its pages and its API share `[webserver.auth]`. A
+For a distributed release with its UI, the chart refuses a UI with `none` in front of an
+API using `proxy_header` or `basic`: anyone could act through that UI. It also refuses
+`proxy_header` at one side and `basic` at the other. A separately configured `schedr ui`
+cannot check the remote webserver's settings for you.
+
+A standalone ignores `[tls] mode` for its internal links. Its pages and its API share `[webserver.auth]`. A
 `schedr ui` elsewhere that shows it proves itself with the token:
 
 | `webserver.auth` | Its pages and API | A `schedr ui` elsewhere |
@@ -304,8 +305,8 @@ same port. The stream carries:
 | `workers` | `{}` | A worker registered, changed state, or was seen. A heartbeat counts as seen. |
 | `refresh` | `{}` | Anything may have changed: a change was missed, or the changes can't be followed. |
 
-The [Workers](12-ui.md#workers) page lists them, and a `workers` event makes that page read
-itself again. No other page lists the workers, so no other page redraws for that event. A
+A `workers` event refreshes the [Workers](12-ui.md#workers) and
+[Deployments](12-ui.md#deployments) pages, which both show worker state. A
 comment every 15 s keeps an idle stream from looking dead. The response is
 `Content-Type: text/event-stream`, with `Cache-Control: no-cache` and
 `X-Accel-Buffering: no`. The webserver follows the database once, from the first stream, and
@@ -315,8 +316,8 @@ hands each change to every open stream. When the changes can't be followed, each
 `refresh` instead of the ones it skipped.
 
 The UI opens one of these streams per deployment. If it drops, the UI opens it again after
-1 s, doubling up to 30 s. In `schedr standalone` that stream stays inside the process. Each
-browser holds one stream to the UI, shared by its pages: `GET /events` on the UI's port (the
+1 s, doubling up to 30 s. In `schedr standalone` that stream stays inside the process. Where `SharedWorker` is available, a browser
+shares one stream to the UI across its pages; otherwise each page opens its own: `GET /events` on the UI's port (the
 API's port in standalone). It is server-sent events as well, with the same cache and
 buffering headers and a comment every 15 s. It starts with `hello` (the UI's time), then
 sends each change as `change` (`{"deployment", "kind", "run", "dag", "at"}`, `kind` one of
@@ -328,8 +329,7 @@ with them is [Live updates](12-ui.md#live-updates).
 A proxy in front of the webserver, and a proxy in front of the UI, has to leave these
 responses open and send each byte on as it is written. Buffering holds the updates until the
 buffer fills. `X-Accel-Buffering: no` is nginx's switch for that. A proxy that ignores the
-header can still buffer `text/event-stream`. `Cache-Control: no-cache` tells a cache not to
-store the response. An idle timeout has to allow a stream whose only traffic for a while is
+header can still buffer `text/event-stream`. `Cache-Control: no-cache` requires revalidation before a cached response can be reused. An idle timeout has to allow a stream whose only traffic for a while is
 the comment every 15 s. When a proxy in front of the UI holds the page's stream back, the
 page sees no ping. After 30 s of that it reads its live parts every 5 s instead of waiting
 for the stream.

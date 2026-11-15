@@ -1,6 +1,7 @@
 """The Metrics page (M5.1j; decisions 465, 466) in a browser: a day of samples seeded for a
-worker with tasks and a master beside the standalone's own, then the charts, the table, a
-process's panel and the ranges. `SCHEDR_UI_SCREENSHOTS=<dir>` saves the page in light and dark.
+worker with tasks and a master beside the standalone's own, and an hour of attempts (decision
+494), then the charts, the table, a process's panel and the ranges.
+`SCHEDR_UI_SCREENSHOTS=<dir>` saves the page in light and dark.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ MIB = 1024**2
 
 
 def _at(when: datetime) -> str:
-    return when.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    return when.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 @pytest.fixture(scope="module")
@@ -107,6 +108,26 @@ def seeded(standalone: dict[str, str]) -> dict[str, str]:
             "tasks_avg) VALUES (" + ", ".join("?" * 22) + ")",
             rows,
         )
+        # An hour of attempts, one every two minutes, a tenth failed: their own rows, not
+        # tied to a run (the tests' database leaves foreign keys off).
+        attempts = []
+        for n in range(30):
+            assigned = now - timedelta(minutes=2 * n + 1)
+            attempts.append(
+                (
+                    f"seed-attempt-{n:03}",
+                    f"seed-instance-{n:03}",
+                    "failed" if n % 10 == 0 else "success",
+                    _at(assigned),
+                    _at(assigned + timedelta(milliseconds=100 + 40 * n)),
+                    _at(assigned + timedelta(seconds=30)),
+                )
+            )
+        db.executemany(
+            "INSERT OR IGNORE INTO attempts (id, task_instance_id, try_number, status, "
+            "assigned_at, started_at, ended_at) VALUES (?, ?, 1, ?, ?, ?, ?)",
+            attempts,
+        )
     return standalone
 
 
@@ -122,8 +143,8 @@ def test_the_metrics_page_charts_each_process_with_its_tasks(
     page.emulate_media(color_scheme="light")
     page.goto(seeded["url"] + "/metrics")
     expect(page.get_by_role("heading", name="Metrics", exact=True)).to_be_visible()
-    # Memory, memory by kind and CPU.
-    expect(page.locator("svg.chart")).to_have_count(3)
+    # Memory, memory by kind and CPU; attempts ended and their start latency.
+    expect(page.locator("svg.chart")).to_have_count(5)
     expect(page.locator("svg.chart path.line")).not_to_have_count(0)
     expect(page.locator("svg.chart path.area")).not_to_have_count(0)
     legend = page.locator(".chart-legend").nth(1)
@@ -158,5 +179,28 @@ def test_every_range_renders(page: Page, seeded: dict[str, str], range_: str) ->
     )
     # Every range charts the seeded day: 7 and 30 days from the rollups the sampler makes of it
     # and the minutes not rolled up yet (Codex's review: these ranges passed with no chart).
-    expect(page.locator("svg.chart")).to_have_count(3)
+    expect(page.locator("svg.chart")).to_have_count(5)
     expect(page.locator("#live")).to_have_attribute("hx-trigger", "every 60s")
+
+
+def test_the_attempts_ended_and_their_start_latency_are_charted(
+    page: Page, seeded: dict[str, str]
+) -> None:
+    page.emulate_media(color_scheme="light")
+    page.goto(seeded["url"] + "/metrics?range=1h")
+    flow = page.locator(".metrics-flow")
+    expect(flow.get_by_role("heading", name="Attempts ended")).to_be_visible()
+    expect(flow.get_by_role("heading", name="Start latency")).to_be_visible()
+    # The seeded hour, and whatever the other tests ran beside it.
+    keys = flow.locator(".legend .key")
+    expect(keys).to_have_count(5)
+    succeeded = int(keys.nth(0).inner_text().split()[-1])
+    failed = int(keys.nth(1).inner_text().split()[-1])
+    assert succeeded >= 27, succeeded
+    assert failed >= 3, failed
+    expect(keys.nth(4)).to_contain_text("p95, highest")
+    expect(flow.locator("svg.chart rect.area")).not_to_have_count(0)
+    expect(flow.locator("svg.chart path.line")).not_to_have_count(0)
+    _shot(page, "metrics-attempts-light")
+    page.locator("html").evaluate("e => e.setAttribute('data-theme', 'dark')")
+    _shot(page, "metrics-attempts-dark")

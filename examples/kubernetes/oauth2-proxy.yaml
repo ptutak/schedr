@@ -1,0 +1,161 @@
+# Signing in to schedr's web UI through Keycloak with oauth2-proxy, inside an Istio mesh,
+# with namespace objects only (no mesh-wide configuration): see "Signing in through
+# Keycloak" in docs/03-guide/10-deployment.md.
+#
+#   browser -> ingress gateway -> oauth2-proxy -> schedr ui (its sidecar checks the token)
+#           -> /api/ ----------------------------> schedr webserver (the CLI's own token)
+#
+# oauth2-proxy signs the person in with Keycloak and passes their ID token on as
+# `Authorization: Bearer ...`; schedr's chart (values at the end of this file) checks it at
+# the UI's pod, its group claim deciding who gets in, and records the person's name. Someone
+# reaching the UI's pod around the proxy still needs a valid token with the group.
+#
+# Replace before applying: the namespace `etl`, the release `schedr`, the host
+# `schedr.example.com`, the gateway `istio-ingress/main`, the issuer
+# `https://keycloak.example.com/realms/main`, and the Secret's values. Written from
+# oauth2-proxy's documentation for v7.6: check the flags against the version you run.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: schedr-oauth2-proxy
+  namespace: etl
+type: Opaque
+stringData:
+  # The Keycloak client (confidential, redirect URI https://schedr.example.com/oauth2/callback).
+  client-id: schedr-ui
+  client-secret: "<the client's secret>"
+  # 32 random bytes, base64: python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
+  cookie-secret: "<32 random bytes, base64>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schedr-oauth2-proxy
+  namespace: etl
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: schedr-oauth2-proxy}
+  template:
+    metadata:
+      labels: {app: schedr-oauth2-proxy}
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      containers:
+        - name: oauth2-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+          args:
+            - --http-address=0.0.0.0:4180
+            - --provider=keycloak-oidc
+            - --oidc-issuer-url=https://keycloak.example.com/realms/main
+            - --redirect-url=https://schedr.example.com/oauth2/callback
+            - --code-challenge-method=S256
+            # schedr's UI, the chart's `<release>-ui` Service (service.uiPort).
+            - --upstream=http://schedr-ui.etl.svc.cluster.local:8082/
+            # The person's ID token to schedr as `Authorization: Bearer`: Istio checks it.
+            - --pass-authorization-header=true
+            # A fresh token before the old one expires (Keycloak's default lifespan is 5 min):
+            # schedr's pages keep event streams open and reload every minute, and an expired
+            # token is refused at schedr's pod. Below the realm's access token lifespan.
+            - --cookie-refresh=4m
+            - --cookie-expire=8h
+            - --cookie-secure=true
+            - --cookie-samesite=lax
+            - --email-domain=*
+            - --skip-provider-button=true
+            - --reverse-proxy=true
+            - --scope=openid profile email
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: schedr-oauth2-proxy, key: client-id}}
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: schedr-oauth2-proxy, key: client-secret}}
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: schedr-oauth2-proxy, key: cookie-secret}}
+          ports:
+            - {name: http, containerPort: 4180}
+          readinessProbe:
+            httpGet: {path: /ping, port: http}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schedr-oauth2-proxy
+  namespace: etl
+spec:
+  selector: {app: schedr-oauth2-proxy}
+  ports:
+    - {name: http, port: 4180, targetPort: http}
+---
+# The UI's host: the API to schedr's webserver (the CLI and Swagger UI bring their own token),
+# everything else (the UI and /oauth2/) to the proxy. Replaces the chart's VirtualService:
+# set istio.virtualService.enabled to false.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: schedr
+  namespace: etl
+spec:
+  hosts: [schedr.example.com]
+  gateways: [istio-ingress/main]
+  http:
+    - match: [{uri: {prefix: /api/}}]
+      route: [{destination: {host: schedr.etl.svc.cluster.local, port: {number: 8080}}}]
+    - route: [{destination: {host: schedr-oauth2-proxy.etl.svc.cluster.local, port: {number: 4180}}}]
+---
+# Who may reach the proxy: the ingress gateway. Its login page is for everyone; it lets no one
+# further without Keycloak.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: schedr-oauth2-proxy
+  namespace: etl
+spec:
+  selector:
+    matchLabels: {app: schedr-oauth2-proxy}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            # The gateway's identity: check yours with
+            # `kubectl -n istio-ingress get pod -o jsonpath='{..serviceAccountName}'`.
+            principals: [cluster.local/ns/istio-ingress/sa/istio-ingressgateway]
+      to:
+        - operation: {ports: ["4180"]}
+# Under `outboundTrafficPolicy: REGISTRY_ONLY` the proxy reaches Keycloak only through a
+# ServiceEntry: add one for keycloak.example.com:443 (the chart's istio.serviceEntries can).
+#
+# --- schedr's chart values that go with it -----------------------------------------------
+#
+# istio:
+#   enabled: true
+#   virtualService:
+#     enabled: false            # the VirtualService above replaces it
+#   requestAuthentication:
+#     enabled: true
+#     issuer: https://keycloak.example.com/realms/main
+#     outputClaimToHeaders:
+#       - {header: x-forwarded-user, claim: preferred_username}
+#   authorizationPolicy:
+#     enabled: true
+#     sameNamespace: false      # the proxy's calls carry a token; nothing passes without one
+#     api:
+#       requireJwt: true
+#       claims: {groups: [schedr-users]}   # e.g. an LDAP group, through Keycloak
+# webserver:
+#   auth:
+#     mode: none
+#     identityHeader: x-forwarded-user     # the name schedr records, from the token
+# ui:
+#   auth:
+#     mode: ""                  # the webserver's

@@ -1478,3 +1478,94 @@ accept loop or an events subscription (limits are 1 to 16,777,216); a code retry
 overflowed a timestamp parked its task for good (timings are at most 3650 days, and the
 deadline saturates); `dags test` kept its own client timeouts; the pending reason named the
 constant instead of the configured cap.
+
+### <a id="N16"></a>2026-11-15: M5.1l2 built: the attempt charts on the Metrics page (note 16; on D494)
+
+Built as decision 494 says, read from the attempts: per bucket, the attempts ended by how
+(`success`; `failed`, `timed_out`, `oom_killed` as failed; the rest as stopped), and the
+exact nearest-rank p50 and p95 of `started_at - assigned_at` for those started, below zero
+read as zero. `GET /api/v1/metrics/tasks` keeps a range's final buckets between requests, the
+samples' way (decision 492, the same `METRICS_FINAL_AFTER`), so a refresh reads the last few
+buckets; on SQLite a first read of 30 days of a million attempts took 2 to 3 s for the ends and
+5 to 8 s for the latency (a throwaway bench), an hour 3 to 10 ms.
+
+Found while building: the two indexes on `ended_at` and `started_at`, plain at first, took the
+plan of the rounds' read of unstarted attempts (`started_at IS NULL`) from `attempts_open`;
+they are partial (`IS NOT NULL`), which the range reads imply, and a test checks each read's
+plan. The attempts ended draw as a stacked bar per bucket (`Spec::bars`): as an area, buckets
+with nothing between them drew spikes. And a stacked area's point alone between gaps drew
+nothing (the memory by kind of samples three minutes apart); it is a bar now, as a line's lone
+point is a dot.
+
+Small choices of Claude's: the charts sit below the processes' table and show without samples;
+an attempt read failing leaves the processes' charts with a warning of its own. Not built: a
+"ready → started" line (the wait before a worker takes a task): `ready_at` is overwritten by a
+retry, so it would be exact only for an instance's last attempt; the guide says what the
+latency leaves out, and the line is the user's call.
+
+### <a id="D495"></a>2026-11-15: a stopping worker waits for the master to take its Deregister (decision 495)
+
+B242: a worker test saw a stopped worker `disconnected`, not `offline`. Grok found the path: a
+stopping worker sent `Deregister`, waited `DEREGISTER_WAIT` (5 s; 1 s in that test) for the
+master to end the stream, and returned; dropping the connection sent `RST_STREAM CANCEL`
+over a frame not written yet, and a master frozen past the wait never got it. The user chose
+between fixing it before 1.1.0 (the worker stays until the master takes it, or its grace
+ends) and leaving it open past the release: fix it.
+
+Built: `DEREGISTER_WAIT` defaults to an hour, so the drain's `deregister_by` (B237: a quarter of
+the report period before the grace period ends) alone bounds the wait; the setting stays, to
+shorten it, with the caveat in the timings guide. A master that is gone ends the connection at
+once, so only a stalled one is waited for. The test freezes the master 3 s and expects the
+worker to wait through it and end `offline`.
+
+Not chosen: leaving it open; retiring `DEREGISTER_WAIT` (a deployment setting it would still
+start, but it's a knob to shorten the wait); flushing the frame before returning at the short
+wait (h2 gives no sign that a frame left the socket).
+
+### <a id="D496"></a>2026-11-15: a role starting waits for a database it can't reach yet (decision 496)
+
+B247's test failed because a master started during a 2.4 s I/O stall gave up connecting at
+its 1 s query timeout (the pool's acquire timeout) and exited. The test was fixed; the product
+still exited on a database not reachable at its start, and the webserver too (its schema wait
+came after an eager connect). The user, after a side agent's note that only the test was fixed:
+retry at start, indefinitely, then (a second note: a mistyped host or port is refused like a
+database that's down, so it waits too) a clear warning naming the host only, never the
+credentials.
+
+Built: `DbError::is_transient` (a time limit, a pool timeout or closed, an I/O error, Postgres's
+08 class, 57P01-57P03 and 53300); `roles::once_reached` tries a database step again every
+`SCHEDR_HIDDEN__WEBSERVER__SCHEMA_RETRY` while it fails transiently, until a stop is asked for,
+warning "can't reach the database at <host:port> (<why>)" at once and every minute while it
+waits, and once it answers; the master, webserver and standalone connect through it, and the
+master's `lead` reads the schema through it. `database_place` names a Postgres server's host
+and port (the URL's or `host=`), or a SQLite file, never its user or password. A wrong
+password, TLS setting or URL still exits at once.
+
+Changed after Codex's review, the same day: a stop cuts a try in progress (a schema read can
+hang on a quiet connection); `is_transient` takes the classes a statement's retry already took
+(SQLite busy or locked, a statement timeout; Postgres's 08P01 kept, since PgBouncer refuses with
+it while its pool is full); the reason in the warning is codes only
+(`DbError::waiting_reason`), since the server's text may name the user ("too many connections
+for role ..."); `database_place` reads the URL through sqlx, whose `host=` and `port=` win; the
+webserver's schema wait names the place and repeats an error every minute.
+
+Not chosen: exiting and leaving restarts to a supervisor (Kubernetes' CrashLoopBackOff can
+keep a master down minutes after its database is back; a standalone has none); retrying for a
+bounded time, then exiting (a refusal that won't pass already exits).
+
+### <a id="D497"></a>2026-11-15: an unset cleanup timeout fits in the grace period (decision 497)
+
+B252: run with no configuration (Getting started's examples), every worker and standalone start
+warned that `[worker] cleanup_timeout` (5 min) doesn't fit in `termination_grace_period` (30 s).
+The user: "the config is either wrong or the warning is wrong". The warning is right (a cleanup
+past what a drain leaves of the grace is lost when the pod is killed), so the defaults were
+wrong. Chosen by the user from four: left unset, `cleanup_timeout` is the shorter of 5 minutes
+and what fits (the grace less the drain's terminate and report periods), at least 1 s (a grace
+the drain takes whole, which the loader allows, leaves none); a value set by hand is kept and
+still warned about. A side agent's note, which the user had added to the release notes: it
+limits every cleanup's try, also outside a drain, so a setup outside the chart goes from 5
+minutes to 25 s.
+
+Not chosen: a 25 s default everywhere (the chart's pods lose their 5 minutes); a 330 s default
+grace (a Ctrl-C waits 5.5 minutes for a hung task, and pods outside the chart must match it);
+warning only in Kubernetes (the defaults would still disagree).

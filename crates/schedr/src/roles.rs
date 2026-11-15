@@ -97,11 +97,11 @@ pub async fn served(
 
 /// How long what a worker starts may take, and how it is paced.
 #[must_use]
-pub const fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts {
+pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts {
     schedr_agent::attempt::WorkerTimeouts {
         runner_start: config.worker.runner_start_timeout,
         fork_preload: config.worker.fork_server_preload_timeout,
-        cleanup: config.worker.cleanup_timeout,
+        cleanup: config.cleanup_timeout(),
         resource_cleanup: config.worker.resource_cleanup_timeout,
         sensor_max_wait: config.sensors.default_max_wait,
         watcher_block_limit: config.watchers.block_limit,
@@ -1372,19 +1372,33 @@ pub const SCHEMA_RETRY: Duration = Duration::from_secs(5);
 /// # Errors
 ///
 /// [`AppError::BadArgument`] for an earlier schedr's schema, which no migration makes usable.
-pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) -> Result<(), AppError> {
-    let mut said = String::new();
+pub async fn wait_for_schema(
+    db: &Database,
+    (role, place): (&str, &str),
+    retry: Duration,
+) -> Result<(), AppError> {
+    const AGAIN: Duration = Duration::from_mins(1);
+    let mut said: Option<(String, tokio::time::Instant)> = None;
     loop {
         let (waiting, error) = match db.schema_status().await {
             Ok(status) if status.is_usable() => return Ok(()),
             Ok(status @ SchemaStatus::Modified { .. }) => return Err(modified(&status)),
             Ok(status) => (describe_status(&status), false),
-            Err(error) => (format!("unreadable ({error})"), true),
+            // Codes only: the server's text may name the user (the review of M5.1q).
+            Err(error) if error.is_transient() => {
+                (format!("unreadable ({})", error.waiting_reason()), true)
+            }
+            // A setting that won't work (a password changed meanwhile) exits, as at connecting.
+            Err(error) => return Err(AppError::Db(error)),
         };
-        if waiting != said {
+        let now = tokio::time::Instant::now();
+        // Said again when it changes, and an error every minute while it lasts.
+        if said.as_ref().is_none_or(|(before, at)| {
+            *before != waiting || (error && now.duration_since(*at) >= AGAIN)
+        }) {
             let line = format!(
-                "schedr {role}: the database schema is {waiting}; waiting for it (checked every \
-                 {} s)",
+                "schedr {role}: the database schema at {place} is {waiting}; waiting for it \
+                 (checked every {} s)",
                 retry.as_secs()
             );
             if error {
@@ -1392,9 +1406,73 @@ pub async fn wait_for_schema(db: &Database, role: &str, retry: Duration) -> Resu
             } else {
                 tracing::info!("{line}");
             }
-            said = waiting;
+            said = Some((waiting, now));
         }
         tokio::time::sleep(retry).await;
+    }
+}
+
+/// `attempt`'s output once the database at `url` answers: while it fails because the database
+/// can't be reached for now ([`schedr_db::DbError::is_transient`]: down, starting, busy, a time
+/// limit), tried again every `retry`. A role starting before its database waits for it instead
+/// of exiting (the user, 2026-11-15, after B247); a wrong host or port fails the same way, so the
+/// warning names where it looks (the host and port, or the file: never the user or password)
+/// and why (codes only), at once and again every minute while it waits. `None` once a shutdown
+/// is asked for, before or during a try.
+///
+/// # Errors
+///
+/// `attempt`'s error when it isn't transient (a wrong URL, password or TLS setting).
+pub async fn once_reached<T, F, Fut>(
+    (role, url): (&str, &str),
+    retry: Duration,
+    mut stop: watch::Receiver<u32>,
+    mut attempt: F,
+) -> Result<Option<T>, AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, AppError>>,
+{
+    const AGAIN: Duration = Duration::from_mins(1);
+    let place = schedr_db::database_place(url);
+    let mut said: Option<(String, tokio::time::Instant)> = None;
+    loop {
+        // A shutdown asked for before or during a try ends the wait: a try can stall (a
+        // schema read on a connection that went quiet) as long as the database lets it.
+        if *stop.borrow_and_update() > 0 {
+            return Ok(None);
+        }
+        let tried = tokio::select! {
+            tried = attempt() => tried,
+            () = until(stop.clone()) => return Ok(None),
+        };
+        let error = match tried {
+            Ok(done) => {
+                if said.is_some() {
+                    tracing::info!("schedr {role}: the database at {place} answers");
+                }
+                return Ok(Some(done));
+            }
+            Err(AppError::Db(error)) if error.is_transient() => error,
+            Err(error) => return Err(error),
+        };
+        let why = error.waiting_reason();
+        let now = tokio::time::Instant::now();
+        if said
+            .as_ref()
+            .is_none_or(|(before, at)| *before != why || now.duration_since(*at) >= AGAIN)
+        {
+            tracing::warn!(
+                "schedr {role}: can't reach the database at {place} ({why}); trying again every \
+                 {} s. If the host or port is wrong, correct `[database] url`",
+                retry.as_secs_f64()
+            );
+            said = Some((why, now));
+        }
+        tokio::select! {
+            () = tokio::time::sleep(retry) => {}
+            () = until(stop.clone()) => return Ok(None),
+        }
     }
 }
 
@@ -1572,10 +1650,16 @@ pub async fn lead(
     db: &Database,
     url: &str,
     (period, migrate, change_notifications): (Duration, bool, bool),
-    shutdown: watch::Receiver<u32>,
+    (shutdown, retry): (watch::Receiver<u32>, Duration),
     (role, holder): (&'static str, String),
 ) -> Result<Option<LeaseFuture>, AppError> {
-    let status = db.schema_status().await?;
+    // Read again while the database can't be reached (`retry` apart), as when connecting.
+    let read = once_reached((role, url), retry, shutdown.clone(), || async {
+        Ok(db.schema_status().await?)
+    });
+    let Some(status) = read.await? else {
+        return Ok(None);
+    };
     if status.is_usable() {
         let db = db.clone();
         return Ok(Some(Box::pin(async move {
@@ -1784,8 +1868,14 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     let mut registry = Registry::default();
     metrics.register(registry.sub_registry_with_prefix("schedr"));
     start_ops(config, "master", Ops::new(registry, health.clone()), &stop).await?;
-    let db = connect_database(config, "master").await?;
+    let retry = config.timings.schema_retry;
     let url = config.database.url.as_deref().unwrap_or_default();
+    let connected = once_reached(("master", url), retry, stop.clone(), || {
+        connect_database(config, "master")
+    });
+    let Some(db) = connected.await? else {
+        return Ok(());
+    };
     let period = (
         config.timings.lease_period,
         migrate,
@@ -1802,7 +1892,14 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
     };
     let master_id = identity.master_id.clone();
     tokio::spawn(heartbeat_master(db.clone(), identity, stop.clone()));
-    let Some(leadership) = lead(&db, url, period, stop.clone(), ("master", master_id)).await?
+    let Some(leadership) = lead(
+        &db,
+        url,
+        period,
+        (stop.clone(), retry),
+        ("master", master_id),
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -1942,8 +2039,16 @@ pub async fn webserver(config: &Config) -> Result<(), AppError> {
         &stop,
     )
     .await?;
-    let db = connect_database(config, "webserver").await?;
-    let waiting = wait_for_schema(&db, "webserver", config.timings.schema_retry);
+    let retry = config.timings.schema_retry;
+    let url = config.database.url.as_deref().unwrap_or_default();
+    let connected = once_reached(("webserver", url), retry, stop.clone(), || {
+        connect_database(config, "webserver")
+    });
+    let Some(db) = connected.await? else {
+        return Ok(());
+    };
+    let place = schedr_db::database_place(url);
+    let waiting = wait_for_schema(&db, ("webserver", &place), retry);
     match until_stopped(waiting, stop.clone()).await {
         None => return Ok(()),
         Some(waited) => waited?,

@@ -1793,3 +1793,39 @@ pub struct TaskPeakView {
     /// `p95_bytes` over `limit_bytes`; none without a limit.
     pub of_limit: Option<f64>,
 }
+
+/// The attempts of a range in buckets (decision 494): how many ended, by how, and how long
+/// those started took from their assignment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TaskFlowList {
+    /// The range asked: `1h`, `24h`, `7d` or `30d`.
+    pub range: String,
+    /// Each point's width, in seconds.
+    pub step_s: u32,
+    /// The range's start (the first bucket's).
+    pub from: Timestamp,
+    /// Its end: when it was asked.
+    pub to: Timestamp,
+    /// Every bucket of the range, oldest first, empty ones included.
+    pub buckets: Vec<TaskFlowView>,
+}
+
+/// One bucket's attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TaskFlowView {
+    /// The bucket's start.
+    pub at: Timestamp,
+    /// Attempts that ended in it and succeeded.
+    pub succeeded: u64,
+    /// Those that failed: `failed`, `timed_out`, `oom_killed`.
+    pub failed: u64,
+    /// Those stopped by something else: `cancelled`, `interrupted`, `lost`,
+    /// `assignment_expired`.
+    pub stopped: u64,
+    /// Attempts that started in it.
+    pub started: u64,
+    /// Their median time from assignment to start, in milliseconds (none: none started).
+    pub start_p50_ms: Option<u64>,
+    /// Their 95th percentile, in milliseconds.
+    pub start_p95_ms: Option<u64>,
+}

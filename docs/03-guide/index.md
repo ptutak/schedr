@@ -1,10 +1,11 @@
 # How schedr works
 
-How the running system behaves, as built so far: which process does what, how a run moves
-through them, what the web UI shows, and what happens when one of them fails. [Writing
-DAGs](../02-dags/index.md) is how to define a DAG. The **Design** section has the reasons
-behind each choice and the alternatives that weren't chosen; the **Reference** section has
-every configuration key, command, endpoint and metric, generated from the code.
+This guide explains which process does what, how a run moves through the system, what the
+web UI shows, and what happens when a part fails.
+
+[Writing DAGs](../02-dags/index.md) explains how to define a DAG. The **Design** section
+explains the choices behind the system. The **Reference** section lists configuration keys,
+commands, endpoints and metrics, generated from the code.
 
 Read [Overview](01-overview.md) first; the other pages each go into one part.
 

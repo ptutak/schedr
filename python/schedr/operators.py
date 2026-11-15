@@ -398,7 +398,7 @@ class CommandOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
             same rules as ``command``, the same environment. It reads what the attempt
             registered (``schedr task-ctx cleanup add``) with ``schedr task-ctx cleanup list``.
         cleanup_timeout: How long one try of the cleanup may run (default: the worker's
-            ``cleanup_timeout``, 5 minutes).
+            ``cleanup_timeout``: 5 minutes, or less to fit in its grace period).
         cleanup_retries: How many times a failed cleanup is retried (default 3).
         cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
         cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost

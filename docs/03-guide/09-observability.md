@@ -3,8 +3,8 @@
 ## The ops port
 
 Every role serves a separate plain-HTTP port, `[ops] port` (8090), with three endpoints
-only, and never data or actions. That's why it needs no TLS or credentials: kubelet probes and
-Prometheus can't present a client certificate. The ops port starts **first**, before the
+only: health checks and metrics, with no DAG data or actions. Probes and Prometheus need
+no TLS certificate or credentials to use it. The ops port starts **first**, before the
 database, so probes get an answer while a role starts. `schedr standalone` serves one ops port
 for all its parts.
 
@@ -22,8 +22,14 @@ every 5 s while it waits. A wall clock that steps can't make a loop look stuck. 
 and the web UI have no loop, so each is alive while it answers.
 
 **Readiness** waits for each part to start. The master is ready after its schema check,
-registry restore and gRPC listener; the worker after recovering its journal; the webserver
-and the web UI once each listens. A master that is standby, paused or taken over returns 503 ("starting: master") until it leads again; a control stream reaching it is refused with `UNAVAILABLE` ("not leading"). This directs workers to the leader through the Service. The web UI has no database.
+registry restore and gRPC listener. The worker is marked ready before its agent begins
+journal recovery and connects to the master; readiness does not mean it has registered.
+The webserver waits for a usable schema and its listener; the web UI waits for its listener.
+
+A standby or paused master returns 503 ("starting: master"). A control stream reaching it
+is refused with `UNAVAILABLE` ("not leading"). A master that discovers another has taken
+over exits. These checks direct traffic to the leader through the Service. The web UI has
+no database.
 
 ## Metrics
 
@@ -68,15 +74,14 @@ counts new and repeated events. `schedr_master_trigger_back_pressure_stops_total
 stops at the queued-event limit, and `schedr_master_trigger_idle_restarts_total` counts
 restarts after `restart_if_idle`.
 
-`schedr_master_runs_late_failed_total{dag_id,reason}` counts runs that ended `success`
+`schedr_runs_late_failed_total{dag_id,reason}` counts runs that ended `success`
 and later learned of a failure. The reason is `late_cleanup_failed` for now. Alert on an
-increase, for example `sum by (dag_id, reason) (increase(schedr_master_runs_late_failed_total[5m])) > 0`.
+increase, for example `sum by (dag_id, reason) (increase(schedr_runs_late_failed_total[5m])) > 0`.
 A yellow success asks for attention: the master also logs an error and handles may be left
 behind. See [Life of a run](03-life-of-a-run.md#7-the-next-task-and-the-end).
 
-`schedr_worker_task_start_seconds` is one histogram (10 ms to about 40 s). It is how M2.5
-judges the fork server and which libraries to preload: the same series, split by how the
-process was started, before and after. `method` is `spawn` (a new process) or `fork` (a
+`schedr_worker_task_start_seconds` has buckets from 10 ms to about 40 s. Use it to compare
+spawned and forked tasks, and to measure whether a preload list reduces startup time. `method` is `spawn` (a new process) or `fork` (a
 process from the fork server). A Linux worker with `fork_server = true` on its DAG
 interpreter records `fork` when a fork server forked the task and the runner said hello (see
 [The fork server](05-workers.md#the-fork-server)). `phase` is `runner`
@@ -87,7 +92,7 @@ own clock; the runner only sends the message. A command task is not in the histo
 
 ### Where a start's time goes
 
-A task's start crosses both sides, and each side times its own part (M5.1a). The
+Both the worker and master measure parts of a task's start. The
 [stress guide](11-stress.md) reads them to find where a slow start's time went.
 
 On the worker, `schedr_worker_assign_to_started_seconds` runs from the agent's loop taking an
@@ -144,20 +149,21 @@ threads, memory and restarted wait steps are also measured. See
 
 Counters and histograms are updated where things happen. The gauges that need the database
 (runs, tasks and workers by state) are refreshed by the master's loop every 15 s, with one
-read-only query. **A scrape reads only memory**: never the database, never the master's lock.
+read-only query. **A scrape never queries the database or takes the master's lock.** It reads component
+metrics from memory and process metrics from `/proc` on each scrape.
 Labels include states, kinds, reasons, `dag_id`, code sets, the interpreter's name, and
 `method` / `phase` on the start histogram, never a run, task or attempt ID.
 
-`schedr_retention_deleted{kind}` counts retention deletions by kind: `runs`, `outputs`,
+`schedr_retention_deleted_total{kind}` counts retention deletions by kind: `runs`, `outputs`,
 `events`, `commands`, `dags` or `versions`. For `outputs` it counts runs whose outputs were
 removed. See [Retention](04-master.md#retention).
 
-`schedr_notifications_sent` and `schedr_notifications_failed` count delivered and dropped
+`schedr_notifications_sent_total` and `schedr_notifications_failed_total` count delivered and dropped
 notifications by channel. See [Notifications](16-notifications.md#delivery).
 
 ## schedr's own logs
 
-Each role logs to stdout. `[log] format` is `auto` (JSON when stdout isn't a terminal, as in a
+Each role logs to stderr. `[log] format` is `auto` (JSON when stdout isn't a terminal, as in a
 pod; readable text in a terminal), `json` or `text`. `[log] level` takes `RUST_LOG`-style
 filters. These are separate from **task logs**, which are files on the worker (see
 [Workers](05-workers.md)).

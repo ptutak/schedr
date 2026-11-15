@@ -1,0 +1,18 @@
+title = "A stopping worker waits for the master to take its Deregister"
+date = 2026-11-15
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "workers"
+section = "Drain"
+summary = '''
+A stopping worker, its tasks done, sends `Deregister` and waits for the master to end the
+stream, until the drain's `deregister_by` (a quarter of the report period before the grace
+period ends): `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` defaults to an hour, so that end alone
+bounds it. A master stalled meanwhile takes the `Deregister` once it runs again and shows the
+worker offline (B242: leaving after 5 s dropped the frame unsent with the connection, and the
+worker showed as disconnected, then lost). Not chosen: leaving the bug open past 1.1.0.
+'''
+history = "JOURNAL.md#D495"  # <a id="D495"></a> starts its JOURNAL.md entry
+step = "M5.1q"
+code = ["crates/schedr-agent/src/agent.rs::DEREGISTER_WAIT", "crates/schedr-config/src/config.rs::Timings"]
+checked = 2026-11-15

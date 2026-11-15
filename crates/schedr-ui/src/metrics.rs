@@ -1,8 +1,10 @@
 //! The Metrics page (M5.1j; decisions 465, 466): per deployment, over 1 h, 24 h, 7 d or 30 d,
 //! memory and CPU charts of its processes (the 8 highest memory peaks as lines, the rest as
 //! one band, container limits dashed) over a sortable table of them all; a row opens a panel
-//! with that process's memory by part and its largest tasks. It reads each deployment's
-//! `GET /api/v1/metrics/samples` and refreshes once a minute, as the samples come.
+//! with that process's memory by part and its largest tasks; below, its attempts ended and
+//! their start latency (decision 494). It reads each deployment's
+//! `GET /api/v1/metrics/samples` and `GET /api/v1/metrics/tasks` and refreshes once a minute,
+//! as the samples come.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -16,7 +18,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use jiff::tz::TimeZone;
 use schedr_api::series::Range;
-use schedr_api::views::{ProcessSamplesView, SampleSeriesList};
+use schedr_api::views::{ProcessSamplesView, SampleSeriesList, TaskFlowList};
 use schedr_client::{ClientError, Transport, path_segment};
 
 use crate::Ui;
@@ -24,6 +26,10 @@ use crate::chart::{self, Line, Spec, Unit};
 use crate::deployments::short;
 use crate::page::Page;
 use crate::pages::render;
+
+mod flow;
+
+use flow::FlowCharts;
 
 /// What the page shows.
 #[derive(Debug, Default, serde::Deserialize)]
@@ -144,6 +150,8 @@ pub struct Section {
     pub sorts: Vec<Choice>,
     /// The open panel, if one of its processes'.
     pub panel: Option<ProcessPanel>,
+    /// Its attempts' charts, or why they couldn't be read.
+    pub flow: Result<FlowCharts, String>,
 }
 
 #[derive(Template)]
@@ -243,6 +251,8 @@ fn process_chart(
         #[expect(clippy::cast_precision_loss, reason = "a chart's coordinates")]
         Unit::Bytes => Some(p.memory_avg as f64),
         Unit::Cores => p.cpu_avg,
+        // Not a process's: the attempt charts draw their own.
+        Unit::Count | Unit::Millis => None,
     };
     let mut lines = Vec::new();
     let mut limits = Vec::new();
@@ -303,6 +313,7 @@ fn process_chart(
         stacked: Vec::new(),
         limits,
         zone: zone.clone(),
+        bars: false,
     })
 }
 
@@ -401,6 +412,7 @@ fn kinds_chart(name: &str, list: &SampleSeriesList, zone: &TimeZone) -> (String,
         stacked,
         limits: Vec::new(),
         zone: zone.clone(),
+        bars: false,
     });
     (svg, legend)
 }
@@ -560,6 +572,7 @@ fn parts_chart(
         stacked,
         limits,
         zone: zone.clone(),
+        bars: false,
     });
     (chart, legend)
 }
@@ -628,11 +641,18 @@ fn panel(
 fn section(
     page: &Page,
     name: &str,
-    answer: Result<SampleSeriesList, ClientError>,
+    (answer, flow): (
+        Result<SampleSeriesList, ClientError>,
+        Result<TaskFlowList, ClientError>,
+    ),
     query: &MetricsQuery,
     range: Range,
     sort: &str,
 ) -> Section {
+    let zone = zone_of(page);
+    let flow = flow
+        .map(|list| flow::charts(name, &list, &zone))
+        .map_err(|error| error.to_string());
     let list = match answer {
         Ok(list) => list,
         Err(error) => {
@@ -647,10 +667,10 @@ fn section(
                 rows: Vec::new(),
                 sorts: Vec::new(),
                 panel: None,
+                flow,
             };
         }
     };
-    let zone = zone_of(page);
     let drawn = drawn(&list.processes);
     let filter = query.deployment.as_deref();
     let choose = |process: Option<&str>| {
@@ -724,6 +744,7 @@ fn section(
         legend,
         sorts,
         panel,
+        flow,
     }
 }
 
@@ -764,11 +785,12 @@ pub async fn page<T: Transport + Send + Sync + 'static>(
     for &index in &shown {
         let ui = Arc::clone(&ui);
         asked.spawn(schedr_client::for_same_user(async move {
-            let answer = ui.deployments[index]
-                .client
-                .samples(range.name(), None)
-                .await;
-            (index, answer)
+            let client = &ui.deployments[index].client;
+            let answers = tokio::join!(
+                client.samples(range.name(), None),
+                client.task_flow(range.name())
+            );
+            (index, answers)
         }));
     }
     let mut answers = asked.join_all().await;

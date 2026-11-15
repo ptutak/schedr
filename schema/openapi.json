@@ -2012,6 +2012,106 @@
         ],
         "type": "object"
       },
+      "TaskFlowList": {
+        "description": "The attempts of a range in buckets (decision 494): how many ended, by how, and how long\nthose started took from their assignment.",
+        "properties": {
+          "buckets": {
+            "description": "Every bucket of the range, oldest first, empty ones included.",
+            "items": {
+              "$ref": "#/components/schemas/TaskFlowView"
+            },
+            "type": "array"
+          },
+          "from": {
+            "description": "The range's start (the first bucket's).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "range": {
+            "description": "The range asked: `1h`, `24h`, `7d` or `30d`.",
+            "type": "string"
+          },
+          "step_s": {
+            "description": "Each point's width, in seconds.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "description": "Its end: when it was asked.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range",
+          "step_s",
+          "from",
+          "to",
+          "buckets"
+        ],
+        "type": "object"
+      },
+      "TaskFlowView": {
+        "description": "One bucket's attempts.",
+        "properties": {
+          "at": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "failed": {
+            "description": "Those that failed: `failed`, `timed_out`, `oom_killed`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_p50_ms": {
+            "description": "Their median time from assignment to start, in milliseconds (none: none started).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start_p95_ms": {
+            "description": "Their 95th percentile, in milliseconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started": {
+            "description": "Attempts that started in it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stopped": {
+            "description": "Those stopped by something else: `cancelled`, `interrupted`, `lost`,\n`assignment_expired`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "succeeded": {
+            "description": "Attempts that ended in it and succeeded.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "succeeded",
+          "failed",
+          "stopped",
+          "started"
+        ],
+        "type": "object"
+      },
       "TaskMemoryView": {
         "description": "A running task's memory, named.",
         "properties": {
@@ -4254,6 +4354,47 @@
           }
         },
         "summary": "Each process's memory and CPU over a range, in buckets: averages and peaks, its container's\nlimit, and a worker's parts (decisions 464, 465).",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
+    "/api/v1/metrics/tasks": {
+      "get": {
+        "description": "# Errors\n\n[`ApiError::BadRequest`] for a range not known, [`ApiError`] if the database fails.",
+        "operationId": "task_flow",
+        "parameters": [
+          {
+            "description": "`1h`, `24h` (the default), `7d` or `30d`.",
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskFlowList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The attempts of a range in buckets: how many ended, by how they ended, and the start\nlatency of those started, as p50 and p95 (decision 494).",
         "tags": [
           "workers"
         ]

@@ -360,7 +360,7 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
             "[worker] fork_server_preload_timeout",
             config.worker.fork_server_preload_timeout,
         ),
-        ("[worker] cleanup_timeout", config.worker.cleanup_timeout),
+        ("[worker] cleanup_timeout", config.cleanup_timeout()),
         (
             "[sensors] default_max_wait",
             config.sensors.default_max_wait,

@@ -1,0 +1,11 @@
+title = "A ready-to-started line on the Metrics page"
+asked = 2026-11-15
+topic = "observability"
+status = "open"  # open, decided (with decided_by), dropped
+proposal = '''
+A third series on the Metrics page's start latency: ready → started (`started_at` less the
+instance's `ready_at`), the wait before any worker takes a task. `ready_at` is overwritten by a
+retry, so it is exact only for an instance's latest attempt. Not for 1.1.0 (the user,
+2026-11-15).
+'''
+history = "JOURNAL.md"

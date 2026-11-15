@@ -14,8 +14,8 @@ use schedr_api::views::{
     CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagMemoryList,
     DagView, DeploymentView, EventList, ImportErrorList, LogChunk, MemoryTotals, NamedEventList,
     NamedEventView, OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList,
-    SampleSeriesList, SensorList, TestConnectionRequest, TriggerList, TriggerRequest, TriggerView,
-    WorkerList,
+    SampleSeriesList, SensorList, TaskFlowList, TestConnectionRequest, TriggerList, TriggerRequest,
+    TriggerView, WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -868,6 +868,21 @@ impl<T: Transport> Client<T> {
         self.call(
             Method::Get,
             format!("/api/v1/metrics/samples?range={}{process}", path(range)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/metrics/tasks`: the attempts over `range` in buckets: how many ended, by
+    /// how, and the start latency of those started (decision 494).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn task_flow(&self, range: &str) -> Result<TaskFlowList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/metrics/tasks?range={}", path(range)),
             None,
         )
         .await

@@ -23,7 +23,7 @@ These are the duration keys in the [configuration reference](../_generated/04-re
 | `[worker] log_retention` | 30 days | Deletes task logs older than this. Change it for the retention needed. |
 | `[worker] runner_start_timeout` | 30 s | Time a Python runner has to say hello. Raise it for a slow interpreter start; a failed start is noticed later. |
 | `[worker] fork_server_preload_timeout` | 5 min | Time a fork server has to import preloaded libraries. Raise it for large preload lists or slow storage; tasks are spawned until it is up. |
-| `[worker] cleanup_timeout` | 5 min | Limit for each per-task cleanup try when the task doesn't set its own. Raise it for slow systems, or lower it to free slots sooner. The attempt holds its slot meanwhile. |
+| `[worker] cleanup_timeout` | 5 min, or what fits in `termination_grace_period` (25 s with its default) | Limit for each per-task cleanup try when the task doesn't set its own. Left unset, it fits in the grace period less the drain's terminate and report periods, so a cleanup isn't lost when the pod is killed at the grace period's end (B252). Raise it for slow systems, or lower it to free slots sooner. The attempt holds its slot meanwhile. |
 | `[worker] resource_cleanup_timeout` | 30 min | Limit for each resource cleanup try without its own `timeout=`. Raise it for slow teardowns, or lower it to notice a hang sooner; retries each get the same limit. |
 | `[worker] fork_server_import_retry` | 20 min | How long a failed preload import is retried with backoff. Change it for dependencies slow to become ready; `0s` disables retry. Threads after preloading and version mismatches are never retried. |
 | `[tls] reload_interval` | 30 s | How often TLS files are read for changes. Shorten it for faster rotation, or lengthen it for fewer reads. |
@@ -153,7 +153,7 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_FIRST` | 200 ms | First wait after the master connection drops; it doubles with jitter up to the maximum. |
 | `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_MAX` | 30 s | Longest wait between tries to reach the master; once the worker knows its lease, each wait is also capped at half that lease. |
 | `SCHEDR_HIDDEN__WORKER__ALIVE_INTERVAL` | 5 s | How often the agent's loop turns at least, even when quiet; it must stay shorter than the loop stall timeout, or a quiet agent looks stuck. |
-| `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` | 5 s | How long a stopping worker waits for the master to accept its deregistration. |
+| `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` | 1 h | How long a stopping worker waits, at most, for the master to take its deregistration. Its drain's end bounds it too (a quarter of the report period before the grace period ends), and by default that end alone: a master stalled for a few seconds still takes it, and shows the worker offline. Shorter, a worker may leave before a stalled master reads it, and shows as disconnected, then lost. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_TICK` | 100 ms | How often a drain checks what is left. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT` | 5 s | How long a drained worker waits for the master to acknowledge its last results; never past half the report period before the grace period ends, left to deregister and exit. |
 | `SCHEDR_HIDDEN__WORKER__STOP_POLL` | 100 ms | How often a stopped task's process group is checked until it is gone. |

@@ -757,7 +757,7 @@ fn the_new_timeouts_are_read_from_a_file() {
         config.worker.fork_server_preload_timeout,
         Duration::from_mins(5)
     );
-    assert_eq!(config.worker.cleanup_timeout, Duration::from_mins(6));
+    assert_eq!(config.worker.cleanup_timeout, Some(Duration::from_mins(6)));
     assert_eq!(
         config.worker.resource_cleanup_timeout,
         Duration::from_mins(7)

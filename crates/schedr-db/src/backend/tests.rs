@@ -100,3 +100,42 @@ fn unknown_postgres_parameters_are_named() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn a_databases_place_names_its_host_never_its_credentials() {
+    // The user, 2026-11-15: a role waiting for its database says where, without its password.
+    for (url, place) in [
+        (
+            "postgres://schedr:s3cret@db.prod:6432/schedr",
+            "db.prod:6432",
+        ),
+        (
+            "postgres://schedr:s3cret@db.prod/schedr?sslmode=require",
+            "db.prod:5432",
+        ),
+        ("postgresql://schedr@[::1]:5432/schedr", "[::1]:5432"),
+        (
+            "postgres:///schedr?host=/run/postgresql&password=s3cret",
+            "/run/postgresql (port 5432)",
+        ),
+        // The query's `host=` and `port=` win over the URL's, as sqlx connects (the review).
+        (
+            "postgres://schedr:s3cret@old-db:5432/schedr?host=actual-db&port=6543",
+            "actual-db:6543",
+        ),
+        (
+            "sqlite:///var/lib/schedr/schedr.db?mode=rwc",
+            "/var/lib/schedr/schedr.db",
+        ),
+        ("sqlite::memory:", "memory"),
+        ("not a url", "an unreadable URL"),
+        (
+            "postgres://schedr:s3cret@db.prod:notaport/schedr",
+            "an unreadable URL",
+        ),
+    ] {
+        let named = database_place(url);
+        assert_eq!(named, place, "{url}");
+        assert!(!named.contains("s3cret"), "{url}");
+    }
+}

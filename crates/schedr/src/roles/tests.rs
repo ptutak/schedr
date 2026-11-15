@@ -183,9 +183,15 @@ async fn the_master_and_the_api_serve_until_stopped() {
         },
         stopped,
     );
+    // Until both say they are ready, or 10 s: a fixed 50 ms found the master still starting
+    // under a loaded build (B251).
     let later = async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let ready = health.not_ready();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut ready = health.not_ready();
+        while !ready.is_empty() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            ready = health.not_ready();
+        }
         let _ = stop.send(1);
         ready
     };
@@ -258,7 +264,7 @@ async fn a_webserver_waits_for_its_schema_to_be_migrated() {
     let db = Database::connect(&url).await.unwrap();
     let waiting = tokio::spawn({
         let db = db.clone();
-        async move { wait_for_schema(&db, "webserver", Duration::from_millis(10)).await }
+        async move { wait_for_schema(&db, ("webserver", "memory"), Duration::from_millis(10)).await }
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
@@ -290,7 +296,7 @@ async fn a_webserver_stops_on_an_earlier_schedrs_schema() {
         .unwrap();
     let waited = tokio::time::timeout(
         Duration::from_secs(5),
-        wait_for_schema(&db, "webserver", Duration::from_millis(10)),
+        wait_for_schema(&db, ("webserver", "memory"), Duration::from_millis(10)),
     )
     .await
     .expect("not waited for");
@@ -309,7 +315,7 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
         &db,
         &url,
         (period, false, true),
-        stopped.clone(),
+        (stopped.clone(), SCHEMA_RETRY),
         ("master", new_master_id()),
     )
     .await
@@ -326,7 +332,7 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
         &db,
         &url,
         (period, true, false),
-        stopped.clone(),
+        (stopped.clone(), SCHEMA_RETRY),
         ("master", new_master_id()),
     )
     .await
@@ -341,7 +347,7 @@ async fn a_master_refuses_a_schema_to_migrate_unless_asked_to_migrate_it() {
         &db,
         &url,
         (period, true, true),
-        stopped,
+        (stopped, SCHEMA_RETRY),
         ("master", new_master_id()),
     )
     .await
@@ -958,7 +964,7 @@ async fn migrate_fails_when_the_switch_cant_be_applied_to_an_up_to_date_schema()
         &db,
         &url,
         (period, true, false),
-        stopped,
+        (stopped, SCHEMA_RETRY),
         ("master", new_master_id()),
     )
     .await
@@ -1475,4 +1481,64 @@ fn the_hidden_settings_reach_the_roles() {
         ),
         ([41, 42], [43, 44], [45, 46], [47, 48])
     );
+}
+
+/// The review of M5.1q: a shutdown ends the wait for the database even while a try hangs
+/// (a schema read on a connection gone quiet), and one asked for before starts no try.
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_ends_the_wait_for_the_database_even_mid_try() {
+    let (stop, stopped) = watch::channel(0_u32);
+    let hanging = tokio::spawn(once_reached(
+        ("master", "sqlite::memory:"),
+        Duration::from_secs(5),
+        stopped.clone(),
+        std::future::pending::<Result<(), AppError>>,
+    ));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    stop.send_replace(1);
+    let ended = tokio::time::timeout(Duration::from_secs(1), hanging)
+        .await
+        .expect("the hanging try was cut by the shutdown")
+        .unwrap();
+    assert!(matches!(ended, Ok(None)), "{ended:?}");
+    let tried = std::sync::atomic::AtomicBool::new(false);
+    let ended = once_reached(
+        ("master", "sqlite::memory:"),
+        Duration::from_secs(5),
+        stopped,
+        || {
+            tried.store(true, std::sync::atomic::Ordering::Relaxed);
+            async { Ok::<_, AppError>(()) }
+        },
+    )
+    .await;
+    assert!(matches!(ended, Ok(None)), "{ended:?}");
+    assert!(
+        !tried.load(std::sync::atomic::Ordering::Relaxed),
+        "a try after the shutdown"
+    );
+}
+
+/// The review of M5.1q: a schema read failing for a reason that won't pass (here a migrations
+/// table that isn't schedr's) stops the webserver, as a wrong setting does at connecting.
+#[tokio::test]
+async fn a_webserver_stops_on_a_schema_read_that_wont_work() {
+    let tmp = TempDir::new().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        tmp.path().join("schedr.db").display()
+    );
+    let db = Database::connect(&url).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::raw_sql("CREATE TABLE _sqlx_migrations (other TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let waited = tokio::time::timeout(
+        Duration::from_secs(5),
+        wait_for_schema(&db, ("webserver", "memory"), Duration::from_millis(10)),
+    )
+    .await
+    .expect("stopped, not waiting");
+    assert!(matches!(waited, Err(AppError::Db(_))), "{waited:?}");
 }

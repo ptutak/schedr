@@ -225,7 +225,8 @@ scope = '''
 done_when = '''
 the two charts on the Metrics page for every range, light and dark, their reads bounded (an index used, measured on a large table), API and UI browser tests, the guide's Metrics page updated
 '''
-status = "planned"
+status = "done"
+done = 2026-11-15
 
 [[steps]]
 id = "M5.1m"
@@ -271,6 +272,18 @@ scope = '''
 '''
 done_when = '''
 each variable changes its value (a test per group, the loader's parsing and refusals tested), the defaults' values asserted equal to the constants they replace; a node heartbeat of 60 s keeps the masters on the Deployments page and in the samples
+'''
+status = "done"
+done = 2026-11-15
+
+[[steps]]
+id = "M5.1q"
+title = "A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits"
+scope = '''
+(decisions 495 and 496, the user 2026-11-15, after B242 and B247) a stopping worker waits for the master to take its `Deregister` until the drain's `deregister_by`; the master, webserver and standalone wait for a database they can't reach at their start, naming its host (never its credentials), and exit on a setting that won't work; (decision 497, B252) an unset `cleanup_timeout` fits in the grace period
+'''
+done_when = '''
+B242's test passes with the master frozen past the old wait; a refused port waits and a wrong password exits (unit and Postgres tests); the warning names the host and never the password; the timings guide says the new default and its caveat
 '''
 status = "done"
 done = 2026-11-15

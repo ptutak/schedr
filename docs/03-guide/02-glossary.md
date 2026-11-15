@@ -24,9 +24,10 @@ The names used across the documentation, the API and the logs.
   client, or `Generic` for values of one's own. See [Built-in types](../02-dags/14-connections.md#built-in-types).
 
 **Content hash**
-: A hash of every file in a root (paths and contents), combined for DAG roots with the
-  hashes of other DAG roots and any used script roots. Workers with the same code report the
-  same hash, so the master knows which workers have which code.
+: A hash of a root's scanned files (paths and contents). The scan skips `.git`,
+  `__pycache__`, `*.pyc` and files excluded by `.schedrignore`. For a DAG root, the hash also
+  includes the hashes of other DAG roots and any used script roots. The master uses it to
+  match tasks to workers with the right code.
 
 **Trigger** (event trigger)
 : A watcher belonging to a DAG that finds events and starts runs for new keys. See
@@ -45,19 +46,26 @@ The names used across the documentation, the API and the logs.
 : The last event key a trigger acted on, passed back as `after` when it starts again.
 
 **Parse job**
-: The master's request to one worker to import every DAG file of a root at one content hash
-  and send back the DAGs as data (DAG JSON). The master has no Python, so it never reads DAG
-  files itself. See [Parsing and code versions](06-parsing.md).
+: The master's request to one worker to parse a root at one content hash and return the
+  DAGs as data (DAG JSON). It imports scanned `.py` files that mention `schedr`. The master
+  never imports DAG files itself. See [Parsing and code versions](06-parsing.md).
 
 **Run** (DAG run)
 : One execution of a DAG, for one moment (`planned_for`). Its kind says who created it
   (`scheduled`, `manual`, …). States: `queued` (waiting for `max_active_runs`), `running`,
-  then `success`, `failed` or `cancelled`. A [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end) still has state `success` and asks for attention after a late cleanup failure. A run holds its place until its [resource cleanups](../02-dags/16-resources.md) end; a failed cleanup fails the run. Cancelling a run keeps those cleanups, while cancelling one as a task stops it.
+  then `success`, `failed` or `cancelled`. Scheduled runs start in `running`.
+  A [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end) still has state
+  `success`, but asks for attention after a late cleanup failure. A run holds its place
+  until its [resource cleanups](../02-dags/16-resources.md) end; a failed cleanup fails the
+  run. Cancelling a run keeps those cleanups. Cancelling a cleanup task directly stops it.
 
 **Task instance**
 : One task of one run. States: `scheduled`, `queued`, `unschedulable`, `running`,
-  `cleaning_up` (its process ended and its cleanup runs; it still holds the slot), `up_for_retry`, `success`, `failed`, `cancelled`, `skipped`,
-  `upstream_failed`. An `unschedulable` resource user has not ended and holds its [resource cleanup](../02-dags/16-resources.md) until it ends. On success it has an **outcome**.
+  `cleaning_up` (its process ended and its cleanup runs; it still holds the slot),
+  `up_for_retry`, `success`, `failed`, `cancelled`, `skipped`, `upstream_failed`.
+  An `unschedulable` resource user has not ended, so its
+  [resource cleanup](../02-dags/16-resources.md) must still wait. On success a task has an
+  **outcome**.
 
 **Wait step**
 : A step that waits for a value or times out. A [sensor](../02-dags/18-sensors.md) runs
@@ -81,10 +89,12 @@ The names used across the documentation, the API and the logs.
   [Acting on the first of several](../02-dags/20-first-of.md).
 
 **run_if** (trigger rule)
-: When a task runs, from the states of its incoming edges. `RunIf.NONE_FAILED` (the
-  default): runs when every edge that wasn't skipped succeeded and at least one did;
-  skipped when every edge was skipped; `upstream_failed` as soon as one failed.
-  `RunIf.ALL_SUCCEEDED`: runs only when every edge succeeded; any skip skips it.
+: The rule for deciding whether a task's incoming edges let it run.
+  `RunIf.NONE_FAILED` (the default) runs when every edge that wasn't skipped succeeded and
+  at least one did. It skips the task when all edges were skipped, and marks it
+  `upstream_failed` as soon as one failed. A task with no incoming edges is ready.
+  `RunIf.ALL_SUCCEEDED` requires every edge to succeed; a failure takes precedence over a
+  skip, so a skip is decided only once no edge can still fail.
   [The master](04-master.md#when-a-task-is-ready).
 
 **Attempt** (try)
@@ -170,8 +180,9 @@ The names used across the documentation, the API and the logs.
   period, then stops; `schedr workers drain` keeps it running and idle until resumed.
 
 **Current code**
-: For each root, the content hash the newest code has. Only workers at that hash (or newer)
-  get the root's tasks. See [Parsing and code versions](06-parsing.md).
+: For each root, the content hash of its current parse. Workers with that code, or newer
+  code whose parse is pending, can receive the root's tasks. See
+  [Parsing and code versions](06-parsing.md).
 
 **Deployment**
 : One schedr the web UI shows: a master, workers, a webserver and a database. `schedr ui`
