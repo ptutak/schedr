@@ -364,3 +364,14 @@ done_when = '''
 the guide page; the corpus's rate measured and stated
 '''
 status = "planned"
+
+[[steps]]
+id = "M5.3a"
+title = "Hot standby masters in the chart"
+scope = '''
+(the user, 2026-11-15, after 1.1.0) the chart's master Deployment takes `master.replicas` (1 by default, as now) instead of a fixed 1; with more than one, `RollingUpdate` instead of `Recreate` (an upgrade never stops every master at once) and anti-affinity spreading them over nodes; refused, or warned, on SQLite (its volume lets one pod in). The workers already reach the master Service, which routes only to the ready master (the leader's `/readyz`); a stream reaching a standby is refused (D452). The deployment guide's Failover section says how; `scripts/kind-distributed.sh` or `kind-kill.sh` kills the leading master pod and checks that a standby takes over and a run finishes
+'''
+done_when = '''
+with `master.replicas: 2` on Postgres, the leading master pod killed: the other takes the lease within the lease period, the workers reconnect through the Service, and a run under way finishes with its attempts kept; the chart's default unchanged
+'''
+status = "planned"

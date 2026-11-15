@@ -259,6 +259,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2d | Templates, XCom, sensors, chained runs, email | planned |  |
 | M5.2e | Connections and Variables | planned | D474 |
 | M5.2f | The report and the migration guide | planned |  |
+| M5.3a | Hot standby masters in the chart | planned |  |
 
 ## M6: sign-in against LDAP
 
