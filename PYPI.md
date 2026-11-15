@@ -54,10 +54,11 @@ with Dag(
     )
 ```
 
-Start schedr (the scheduler, the web UI and one worker, in one process, on SQLite):
+Start schedr (the scheduler, the web UI and one worker, in one process, on SQLite), watching
+the `dags` folder:
 
 ```sh
-SCHEDR_DAG_PATH=dags .venv/bin/schedr standalone --migrate
+.venv/bin/schedr standalone --migrate --dag-path dags
 ```
 
 The web UI is at http://127.0.0.1:8080/. In a second terminal:
@@ -77,6 +78,8 @@ Ctrl-C stops it; the next start keeps the DAGs, runs and logs
 - [Getting started](https://ptutak.github.io/schedr/01-start/index.html): these steps, explained
 - [Writing DAGs](https://ptutak.github.io/schedr/02-dags/index.html): tasks, data flow,
   schedules, retries; `schedr dags check` and `schedr dags test` without a server
+- [How schedr works](https://ptutak.github.io/schedr/03-guide/index.html): the life of a run,
+  the master and workers, failures, the web UI and its Metrics page
 - [Deployment](https://ptutak.github.io/schedr/03-guide/10-deployment.html): the images and
-  the Helm chart, Postgres, separate roles
+  the Helm chart, Postgres, separate roles, a standby master
 - [Changelog](https://github.com/ptutak/schedr/blob/main/CHANGELOG.md)

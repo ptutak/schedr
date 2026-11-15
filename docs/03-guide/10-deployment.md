@@ -368,6 +368,14 @@ objects. The chart's `istio` values create them, each optional and off by defaul
 - **With an existing ServiceAccount** shared by other workloads, a policy can tell schedr's
   callers apart only by namespace or token, since Istio identifies a caller by its account.
 
+`scripts/kind-mesh.sh` installs all of this on a local kind cluster with Istio
+(`REGISTRY_ONLY`; `SIDECARS=native` or `classic`) and checks it: Swagger UI opens without a
+token, the API is refused without one, with a forged one and without the required group, the
+CLI through the gateway with
+`--token`, a DAG run on Postgres migrated on start, and a pod stopped while a task runs, whose
+result still reaches the database through the sidecar. Like the other kind scripts, it refuses a
+context whose server isn't loopback, before calling anything on that cluster.
+
 #### Signing in through Keycloak
 
 Istio checks tokens, but a browser can't get one by itself: opening the web UI to everyone, or
@@ -417,13 +425,7 @@ The chart's settings are for **classic sidecars** (older Istio, OpenShift Servic
 harmless otherwise. Which your cluster runs shows in the pod: `istio-proxy` among the init
 containers is native, among the containers classic.
 
-`scripts/kind-mesh.sh` installs all of this on a local kind cluster with Istio
-(`REGISTRY_ONLY`; `SIDECARS=native` or `classic`) and checks it: Swagger UI opens without a
-token, the API is refused without one, with a forged one and without the required group, the
-CLI through the gateway with
-`--token`, a DAG run on Postgres migrated on start, and a pod stopped while a task runs, whose
-result still reaches the database through the sidecar. Like the other kind scripts, it refuses a
-context whose server isn't loopback, before calling anything on that cluster.
+### On a laptop
 
 On a laptop, `schedr standalone --migrate` runs everything on localhost, with SQLite in the
 data directory (`[worker] data_dir`, else `~/.local/share/schedr`), migrating the database at
@@ -448,31 +450,43 @@ Ctrl-C stops it, after cutting the pages' open event streams about 3 seconds aft
 change the code it runs; to delete a worker's `data_dir` by hand, make it writable first
 (`chmod -R u+w <data_dir> && rm -r <data_dir>`).
 
-**`make standalone-separate-ui`** runs a small federation the same way, to see one UI over
-several deployments. Two standalones are started with `--no-ui`: `main` on the DAGs of
-`DAGS`, and `second` on those of `DAGS2` (`examples/docs` by default). A folder's
-subfolders are scanned too, so `main`, on `examples/`, has the DAGs under `examples/docs`
-as well. A `schedr ui` in a process of its own serves both, at `http://<address>:8082/`.
+**`make standalone-separate-ui`** runs a small federation, to see one UI over several
+deployments of both kinds. `main` runs as separate roles on the DAGs of `DAGS`, and `second`
+as a standalone with `--no-ui` on those of `DAGS2` (`examples/docs` by default). A folder's
+subfolders are scanned too, so `main`, on `examples/`, has the DAGs under `examples/docs` as
+well. A `schedr ui` in a process of its own serves both, at `http://<address>:8082/`.
 
-`main` also runs a standby master, `schedr master` in a process of its own on `main`'s
-database, started once `main`'s API answers (after that database is migrated). Its gRPC is
-on 8071 and its ops port on 8091, plain (`[tls] mode = "mesh"`), as the links on this
-machine are.
+`main` is four schedr processes on one SQLite file, the links plain (`[tls] mode = "mesh"`)
+as they are on this machine: a master, a standby master started once the API answers, a
+webserver and a worker. The worker reaches the masters through
+`scripts/master_proxy.py`, a stand-in for the chart's master Service: each new connection
+goes to whichever master's `/readyz` answers. Kill the leading master and the standby takes
+over within the [master lease period](14-timings.md#fixed-timings) (30 s), the worker
+reconnects to it through the proxy, and runs go on. A worker has no database, so `main`'s
+tasks can't read the `db` secret storage: the examples that read a secret fail there and
+run on `second`.
 
 `second` also has a root named `broken`, written to `.schedr/federation/broken/`. It holds
 two DAG files that fail to import on purpose: one imports a module that is not installed,
 and one raises an error that names an address with its password. `second`'s worker shows a
 warning, and the Import errors page lists the two files, with the password masked. The
-Deployments page shows the UI in a process of its own, each standalone as one process
-holding its webserver, master and worker, and `main`'s standby in a process beside that
-one.
+Deployments page shows the UI in a process of its own, `main`'s four processes with its
+leader and standby, and `second` as one process holding its webserver, master and worker.
 
-`main` has its API on 8080, gRPC on 8070, its log endpoint on 8081 and ops on 8090.
-`second` has each of those 100 higher. The UI's ops port is 8092. `PORT_OFFSET` is added
-to every one of these ports, so `PORT_OFFSET=10000` runs this next to a `make standalone`.
-Each standalone keeps its data in `.schedr/federation/<name>/`, and the UI's configuration
-is written to `.schedr/federation/ui.toml`. Ctrl-C stops them all, and so does any one of
-them stopping.
+| `main` | Port | Ops port |
+|---|---|---|
+| the masters' address for the worker (the proxy) | 8070 | |
+| the first master (gRPC) | 8072 | 8090 |
+| the standby (gRPC) | 8071 | 8091 |
+| the webserver (the API) | 8080 | 8093 |
+| the worker (its log endpoint) | 8081 | 8094 |
+
+`second` has its API on 8180, gRPC on 8170, its log endpoint on 8181 and ops on 8190. The
+UI's ops port is 8092. `PORT_OFFSET` is added to every one of these ports, so
+`PORT_OFFSET=10000` runs this next to a `make standalone`. Each deployment keeps its data in
+`.schedr/federation/<name>/`, and the UI's configuration is written to
+`.schedr/federation/ui.toml`. Ctrl-C stops them all; one process ending (a master killed to
+see the takeover) leaves the others running.
 
 ## Running `schedr ui`
 
@@ -530,7 +544,7 @@ What happens when it goes away depends on the mode.
   database takes over the lease when the standalone crashes, but it has no worker and no
   API, so the runs it creates wait. The restarted standalone then waits as a standby, and
   its own master refuses its worker ("not leading"), so nothing runs until the other master
-  stops. `make standalone-separate-ui` runs one only to show it on the Deployments page.
+  stops.
 - **Distributed mode on Postgres fails over without stopping the tasks.** Workers run them
   on, reconnect, and send their results to whichever master leads next. The chart runs one
   master pod (`strategy: Recreate`), so its failover is Kubernetes restarting that pod.
@@ -538,7 +552,10 @@ What happens when it goes away depends on the mode.
   `schedr master` on the same database, and give the workers a `[worker] master_url` that
   reaches only the master whose `/readyz` answers (a Service, or a load balancer with that
   health check). The standby takes over within the lease period after a crash, at once after
-  a clean stop. Stress scenarios 4 and 5 test that takeover ([Stress tests](11-stress.md)).
+  a clean stop. Stress scenarios 4 and 5 test that takeover ([Stress tests](11-stress.md)),
+  and `make standalone-separate-ui` runs one on this machine, a small proxy standing in for
+  the Service ([On a laptop](#on-a-laptop)). The chart's `master.replicas` is planned after
+  1.1.0 (M5.3a).
 
 ## Killing the master or a worker
 

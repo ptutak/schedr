@@ -280,7 +280,7 @@ standalone-clean: ## Remove standalone's data (STANDALONE_DIR, .schedr/), its re
 	@if [ -d "$(STANDALONE_DIR)" ]; then chmod -R u+w "$(STANDALONE_DIR)" && rm -r "$(STANDALONE_DIR)"; fi
 
 standalone-separate-ui: SHELL := /bin/bash
-standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the first with a standby master) and one `schedr ui` over both, on 8082
+standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a standby master, a webserver, a worker; DAGS) and second (a standalone with no UI; DAGS2), and one `schedr ui` over both, on 8082
 	cargo build -p schedr
 	$(STANDALONE_PREPARE); \
 	dir="$(abspath $(STANDALONE_DIR))/federation"; \
@@ -308,16 +308,37 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 	printf '[ui]\nbind = "%s"\nport = %s\ndocs_dir = "%s"\n\n[ops]\nbind = "127.0.0.1"\nport = %s\n\n' \
 		"$(LISTEN)" $$ui "$(if $(wildcard site/index.html),$(abspath site))" $$ui_ops > "$$dir/ui.toml"; \
 	trap 'kill $$(jobs -p) 2>/dev/null; wait' EXIT INT TERM; \
-	run main "$(abspath $(DAGS))" $$((8000 + $(PORT_OFFSET))); \
-	main=$$((8000 + $(PORT_OFFSET))); \
+	: "main: separate roles on one SQLite file, plain links ([tls] mode = mesh), as on this machine"; \
+	main=$$((8000 + $(PORT_OFFSET))); m="$$dir/main"; prepare "$$m" || exit 1; \
+	role() { \
+		SCHEDR_SECRET_KEY="$$(cat "$$m/secret.key")" \
+		SCHEDR_CONFIG__DATABASE__URL="sqlite://$$m/schedr.db" \
+		SCHEDR_CONFIG_FILE="$(STANDALONE_CONFIG)" \
+		SCHEDR_CONFIG__TLS__MODE=mesh \
+		exec env "$$@"; \
+	}; \
+	( role SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((main + 72)) SCHEDR_CONFIG__OPS__PORT=$$((main + 90)) \
+		target/debug/schedr master --migrate ) & \
+	: "the worker's one address, as the chart's master Service: to whichever master is ready"; \
+	python3 scripts/master_proxy.py --listen $$((main + 70)) \
+		--master $$((main + 72)):$$((main + 90)) --master $$((main + 71)):$$((main + 91)) & \
+	( role SCHEDR_CONFIG__WEBSERVER__PORT=$$((main + 80)) SCHEDR_CONFIG__WEBSERVER__BIND=$(LISTEN) \
+		SCHEDR_CONFIG__OPS__PORT=$$((main + 93)) target/debug/schedr webserver ) & \
+	( role SCHEDR_DAG_PATH="$(abspath $(DAGS))" SCHEDR_CONFIG__WORKER__ID=main-worker \
+		SCHEDR_CONFIG__WORKER__MASTER_URL=http://127.0.0.1:$$((main + 70)) \
+		SCHEDR_CONFIG__WORKER__DATA_DIR="$$m/worker" \
+		SCHEDR_CONFIG__WORKER__LOG_BIND=127.0.0.1 SCHEDR_CONFIG__WORKER__LOG_ADDRESS=127.0.0.1 \
+		SCHEDR_CONFIG__WORKER__LOG_PORT=$$((main + 81)) SCHEDR_CONFIG__OPS__PORT=$$((main + 94)) \
+		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
+		SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
+		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
+		uv run --no-sync target/debug/schedr worker ) & \
+	printf '[[ui.deployments]]\nname = "main"\nurl = "http://127.0.0.1:%s"\n\n' $$((main + 80)) >> "$$dir/ui.toml"; \
+	: "the standby once the first master leads (the API answers after the migration);"; \
+	: "\`exec\` in each role: the trap's kill reaches the role itself"; \
 	( until curl -sf -o /dev/null "http://127.0.0.1:$$((main + 80))/api/v1/dags"; do sleep 0.5; done; \
-	  SCHEDR_SECRET_KEY="$$(cat "$$dir/main/secret.key")" \
-	  SCHEDR_CONFIG__DATABASE__URL="sqlite://$$dir/main/schedr.db" \
-	  SCHEDR_CONFIG_FILE="$(STANDALONE_CONFIG)" \
-	  SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((main + 71)) \
-	  SCHEDR_CONFIG__OPS__PORT=$$((main + 91)) \
-	  SCHEDR_CONFIG__TLS__MODE=mesh \
-	  exec target/debug/schedr master ) & \
+	  role SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((main + 71)) SCHEDR_CONFIG__OPS__PORT=$$((main + 91)) \
+		target/debug/schedr master ) & \
 	broken="$$dir/broken"; mkdir -p "$$broken"; \
 	printf '%s\n' '"""Fails to import on purpose: a module not installed."""' '' \
 		'import not_installed_module  # noqa: F401' > "$$broken/missing_module.py"; \
@@ -326,7 +347,8 @@ standalone-separate-ui: ## Run two standalones with no UI (DAGS and DAGS2; the f
 		> "$$broken/bad_connection.py"; \
 	run second "$(abspath $(DAGS2)):$$broken" $$((8100 + $(PORT_OFFSET))); \
 	target/debug/schedr --config "$$dir/ui.toml" ui & \
-	wait -n
+	: "every process, not the first to end: a master killed to see the standby take over"; \
+	wait
 
 # The greenhouse showcase (examples/showcase): its simulator against a standalone running its
 # DAGs, started first in another terminal with `make standalone DAGS=examples/showcase/dags`.

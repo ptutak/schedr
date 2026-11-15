@@ -1,6 +1,8 @@
 # schedr
 
-A job scheduler written in Rust that runs Python scripts, Bash processes and Python DAGs.
+A job scheduler written in Rust that runs Python DAGs, Python scripts and shell commands: a
+native Python API for DAGs, one binary for the scheduler, its web UI and its workers, SQLite on
+a laptop and Postgres in production.
 
 ```python
 from datetime import timedelta
@@ -9,6 +11,7 @@ from schedr import CommandOperator, Cron, Dag, StepDefaults, dag_ctx, task
 
 with Dag(
     "sync_customers",
+    description="Syncs customers daily at 03:00 Warsaw time: extract, load, notify.",
     trigger=Cron("0 3 * * *", tz="Europe/Warsaw", start="2026-01-01"),
     defaults=StepDefaults(retries=2, retry_delay=timedelta(minutes=5)),
 ):
@@ -35,13 +38,14 @@ with Dag(
 
 ## Status
 
-**1.0.0 is the first stable release** (`pip install schedr`; `CHANGELOG.md`), with M1 to M4B of
-`PLAN.md` done: standalone and distributed, the fork server, the web UI and the native API.
-From 1.0.0 on, the database schema changes only through new migrations and the protocol
-between schedr's processes only additively within 1.x; DAG JSON, the REST API and the
+**1.1.0 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
+stable one, brought M1 to M4B of `PLAN.md`: standalone and distributed, the fork server, the
+web UI and the native API. 1.1.0 adds M5.1: a faster master (34-67 % more tasks a second in
+the stress suite than 1.0.0) and metrics in the web UI. Within 1.x the database schema changes
+only through new migrations (`schedr db migrate`), and the protocol between schedr's processes
+(2.x) only additively, so the master is upgraded first; DAG JSON, the REST API and the
 configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a
-fresh database. Work toward 1.1.0 covers M5: performance and metrics in the UI. An Airflow
-DAG translator follows; see `PLAN.md`.
+fresh database. An Airflow DAG translator comes next (M5.2); see `PLAN.md`.
 
 What works:
 
@@ -52,8 +56,8 @@ What works:
   concurrency limits, run parameters (`Dag(params=)`, a form in the UI); `schedr dag-ctx` and
   `schedr task-ctx` (secrets, connections, cleanup handles, resource values) for commands and
   plain scripts, over the agent's socket.
-- **Waiting and starting:** wait steps (`@sensor`, `@sensor.poke`, the `delay` and `until`
-  sensors), triggers (`@trigger`, `@trigger.poke` with `batch=`) and named events through the
+- **Waiting and starting:** wait steps (`@sensor`, `@sensor.poke` with an `async def` or a plain
+  `def`, the `delay` and `until` sensors), triggers (`@trigger`, `@trigger.poke` with `batch=`) and named events through the
   API, `RunOf` to wait for or start on another DAG's run, `TriggerDagOperator`, backfills.
 - **Secrets and connections:** `secrets[...]` in tasks and commands, from Vault (KV v2) or the
   database (`schedr secrets`, encrypted), masked in logs; `@connection` with typed clients
@@ -70,7 +74,8 @@ What works:
 - **Testing DAGs:** `schedr dags check`, `schedr dags test`, and `schedr.testing`
   (`run_dag`, `task_context`) for pytest.
 - **One process or separate roles:** `schedr standalone` (master, webserver and one worker,
-  SQLite or Postgres; for production in one pod too), or `schedr master`, `schedr worker` and
+  SQLite or Postgres; for production in one pod too; its folders as `--dag-path` and
+  `--script-path`), or `schedr master`, `schedr worker` and
   `schedr webserver` as separate processes on Postgres, with mTLS between them.
 - **Surviving failures:** workers keep running tasks while the master restarts; a worker's
   journal survives its restarts; drains on SIGTERM; a standby master takes over through a
@@ -89,7 +94,9 @@ What works:
   git-sync or DAGs from values, Istio, Vault), tested on kind.
 - **Web UI:** `schedr ui` (in standalone too): DAGs, runs and their graphs (groups, mapped
   tasks), logs and outputs live, import errors, resources, cleanups and connections, actions
-  with confirmations, several deployments in one UI.
+  with confirmations, several deployments in one UI; the Metrics page (memory, CPU, throughput
+  and start latency per deployment), a Status block on the Deployments page, and each task's
+  memory over its last attempts.
 
 ## Documentation
 
@@ -103,10 +110,12 @@ http://localhost:8765). Its sections:
 3. **Writing DAGs** (`docs/02-dags/`): the native API, with tested examples.
 4. **How schedr works** (`docs/03-guide/`): the running system, failures, deployment.
 5. **Reference**, generated from the code: configuration, CLI, REST API, metrics.
-6. **Design**: `archive/PROJECT.md`, the decision log, one page per chapter.
+6. **Design** (`design/`): how each part works now, one page per topic, and the decisions'
+   index (`DECISIONS.md`, a file per decision in `decisions/`).
 7. **Plan**: `PLAN.md`.
 8. **API**: Python (from docstrings) and Rust (rustdoc).
-9. **History**: the journal and archived project notes.
+9. **History**: the journal (`JOURNAL.md`, each decision's reasons since 2026-11-08) and the
+   design log before it (`archive/PROJECT.md`, up to decision 366).
 
 PyPI shows `PYPI.md` instead of this file: installing and a first run, for someone using the
 package rather than working on this repository.
@@ -125,14 +134,14 @@ Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each ca
 the package: standalone and workers, the base for your own image), `ghcr.io/ptutak/schedr-slim`
 (the same without the task libraries and connection clients) and
 `ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), on Debian
-(glibc), tagged with the version (`1.0.0`) and its series (`1.0`); the same on Alpine add
-`-alpine` (`1.0.0-alpine`). There is no `latest`: a deployment names the version it runs.
+(glibc), tagged with the version (`1.1.0`) and its series (`1.1`); the same on Alpine add
+`-alpine` (`1.1.0-alpine`). There is no `latest`: a deployment names the version it runs.
 
 ## Trying it
 
 ```sh
 make standalone   # schedr standalone on the DAGs of examples/, SQLite in .schedr/, API on :8080
-make standalone-separate-ui   # two standalones without a UI (the first with a standby master) and one `schedr ui` over both, on :8082
+make standalone-separate-ui   # main as separate roles (two masters, a webserver, a worker) and second as a standalone, one `schedr ui` over both, on :8082
 ```
 
 Then, from another shell: `schedr dags list`, `schedr dags unpause sync_customers`,
@@ -153,7 +162,10 @@ crates/
   schedr-db/        # schema, migrations, queries (SQLite, Postgres)
   schedr-master/    # scheduling loop, DAG validation, commands, the lease
   schedr-agent/     # worker agent: processes, journal, memory watchdog, log endpoint
-  schedr-api/       # webserver: REST API, Swagger UI, log proxy
+  schedr-api/       # webserver: REST API, Swagger UI, log proxy, the Metrics endpoints
+  schedr-client/    # a client of the REST API, for the CLI and the web UI
+  schedr-ui/        # the web UI: server-rendered pages over the webservers' REST APIs
+  schedr-fd/        # the one place schedr touches a raw descriptor: a task's context channel
   schedr-tls/       # mTLS on the internal links: certificates, reloading, handshakes
   schedr/           # the binary: roles, user CLI, in-task CLI
     src/<module>.rs         # code
@@ -168,12 +180,14 @@ examples/           # example DAGs with their tests; examples/docs/ for the docs
 schema/             # generated from schedr-model, committed (make schema)
 docs/               # the hand-written pages (02-dags, 03-guide, 05-design, 08-history indexes); the rest generated
 charts/schedr/      # the Helm chart
-images/             # Dockerfiles: schedr (with Python), schedr-server (without)
-scripts/            # smoke tests; kind-*.sh cluster checks (standalone, mesh, distributed, kill)
+images/             # Dockerfiles: schedr (with Python), schedr-slim (without the task libraries), schedr-server (without Python)
+scripts/            # smoke tests; kind-*.sh cluster checks; the records' and release's tools
+design/ decisions/ questions/ plan/ bugs/   # how it works now, decisions, open questions, the plan, open bugs
 ```
 
-Design decisions: `archive/PROJECT.md`. Implementation plan: `PLAN.md`. Open
-bugs: `BUGS.md`.
+How each part works now: `design/`. Decisions: `DECISIONS.md` (their reasons in `JOURNAL.md`,
+and in `archive/PROJECT.md` before decision 367). Plan: `PLAN.md`. Open bugs: `BUGS.md`.
+Where things stand: `STATUS.md`.
 
 ## Development
 
@@ -185,10 +199,12 @@ installs `cargo-nextest`, `cargo-llvm-cov` and the `llvm-tools-preview` componen
 ```sh
 make setup            # dev tools, uv sync, pre-commit hooks
 make fmt              # format Rust + Python
-make lint             # clippy, ruff, mypy
+make lint             # clippy, ruff, mypy; mypy --strict and basedpyright over DAG code
 make test             # unit tests: Rust (nextest) + pytest, both with an 85 % coverage floor
-make test-integration # real processes, the binary, Postgres in a container
+make test-integration # real processes, the binary; Postgres, Vault, MySQL, MariaDB, Mongo, SSH in containers
+make test-ui          # the web UI's browser tests (Playwright, Chromium)
 make schema           # regenerate schema/ from the Rust model (CI fails if it's stale)
+make records          # regenerate PLAN.md, DECISIONS.md, STATUS.md and design/ from the records
 make docs             # build the documentation site into site/ (fails on any warning)
 make check            # local checks and unit/integration tests; run make docs separately
 make stress           # the stress suite (STRESS_PROFILE=quick|full)
