@@ -6,13 +6,12 @@ updated = 2026-11-15
 in_progress = [
     "M5.1 done 2026-11-15 (M5.1a-M5.1q; M5.1q: B242, D495-D497, B252). Every bug fixed but B38 and B39 (the user: they wait for M6). Stress, 1.0.0 against M5.1, on the guide's Stress tests page (\"After M5.1\"); the three regressions it couldn't explain (command decided p99, forked start p50, soak memory) not logged (the user).",
     "The docs review for 1.1.0 done (Codex Sol, high; rewrites asked for by the user): batches B (guide 01-09), A (README, Getting started, Writing DAGs) and C (guide 10-18) merged, 163 corrections in all, each with its evidence and sampled by Claude.",
-    "The 1.1.0 release notes in CHANGELOG.md, written and uncommitted: they wait for the user's reading.",
-    "Then stop just before R1.1 (the release itself is the user's).",
+    "Everything for 1.1.0 is in main, the release notes included (approved 2026-11-15): next is R1.1, the release itself, which is the user's.",
     "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",
 ]
 
 waiting = [
-  "The 1.1.0 release notes (CHANGELOG.md, uncommitted).",
+  "R1.1: the release of 1.1.0 (the user's).",
   "After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled; the user: after the release).",
 ]
 
