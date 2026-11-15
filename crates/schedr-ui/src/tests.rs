@@ -342,6 +342,73 @@ async fn a_deployment_that_doesnt_answer_is_shown_unavailable_and_the_others_lis
 }
 
 #[tokio::test]
+async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
+    // M5.1l (the user, 2026-11-14): all DAGs in one list, or a tab per deployment with its
+    // DAGs only, remembered per viewer.
+    let mut ml = etl();
+    ml.answers.insert(
+        "/api/v1/dags".to_owned(),
+        (200, json!({"dags": [dag("train", false)]})),
+    );
+    let app = ui(vec![deployment("etl", etl()), deployment("ml", ml)]);
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(texts(&html, "nav.dag-views a"), ["All 3", "etl 2", "ml 1"]);
+    assert_eq!(attrs(&html, "nav.dag-views a.open", "href"), ["/?view=all"]);
+    assert_eq!(
+        texts(&html, "table.dags tbody td:first-child a"),
+        ["archive", "sync", "train"]
+    );
+    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view=all"]);
+
+    // One deployment's: its DAGs only, no Deployment column, kept by its live reload, and
+    // remembered.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/?view=ml")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.headers()["set-cookie"],
+        "schedr_dags_view=ml; Path=/; Max-Age=31536000; SameSite=Lax"
+    );
+    let (_, html) = get(&app, "/?view=ml", &[]).await;
+    assert_eq!(texts(&html, "table.dags tbody td:first-child a"), ["train"]);
+    assert!(!texts(&html, "table.dags th").contains(&"Deployment".to_owned()));
+    assert_eq!(attrs(&html, "nav.dag-views a.open", "href"), ["/?view=ml"]);
+    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view=ml"]);
+    let (_, html) = get(&app, "/", &[("cookie", "schedr_dags_view=ml")]).await;
+    assert_eq!(texts(&html, "table.dags tbody td:first-child a"), ["train"]);
+
+    // A name no deployment has: all, and remembered as all.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/?view=gone")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.headers()["set-cookie"],
+        "schedr_dags_view=all; Path=/; Max-Age=31536000; SameSite=Lax"
+    );
+    let (_, html) = get(&app, "/", &[("cookie", "schedr_dags_view=gone")]).await;
+    assert_eq!(texts(&html, "table.dags tbody tr").len(), 3);
+
+    // One deployment: no tabs.
+    let app = ui(vec![deployment("etl", etl())]);
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(texts(&html, "nav.dag-views a"), Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn a_dag_page_shows_its_facts_and_runs_in_utc_and_local_time() {
     let app = ui(vec![deployment("etl", etl())]);
     let cookie = ("cookie", "schedr_tz=Europe%2FWarsaw");

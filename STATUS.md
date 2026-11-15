@@ -6,21 +6,21 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-14)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1l, Throughput and start latency on the Metrics page. Done when: those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated; and the DAGs page switching between all DAGs in one list (as now) and one tab per deployment with its DAGs only (the user, 2026-11-14), remembered per viewer, with UI tests
+- **Next step:** M5.1l2, Throughput and start latency on the Metrics page. Done when: those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated
 - **Then:** M5.1n, M5.1o, R1.1, M5.2a, M5.2b.
 - **Open questions:** 0 (`DECISIONS.md`).
 - **Open bugs:** 7; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B249 (low/rare), B247 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- N11 (2026-11-15): M5.1l split; the DAGs page by deployment
 - N10 (2026-11-15): M5.1k built: a task's attempts' peaks, the DAG's p95s (decision 467)
 - D492 (2026-11-15): the Metrics endpoints keep their final buckets (decision 492, Claude's)
 - N9 (2026-11-15): Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL (corrects D464)
 - D491 (2026-11-14): a process's memory includes its tasks, split by kind
-- D490 (2026-11-14): started_at is the worker's start
+- M5.1l1 (2026-11-15): The DAGs page by deployment
 - M5.1k (2026-11-15): Task memory charts
 - M5.1m (2026-11-14): The start time from the worker
-- M5.1j (2026-11-14): The Metrics page
 
 ## In progress
 

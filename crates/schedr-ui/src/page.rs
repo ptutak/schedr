@@ -120,6 +120,22 @@ pub fn prefix(headers: &HeaderMap) -> String {
     }
 }
 
+/// The cookie remembering which deployment's DAGs the DAGs page shows (M5.1l): `all` or a
+/// deployment's name.
+pub const DAGS_VIEW_COOKIE: &str = "schedr_dags_view";
+
+/// Cookie `name`'s value, `%XX` escapes decoded; `None` without it or when it doesn't decode.
+#[must_use]
+pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .filter_map(|cookie| cookie.trim().strip_prefix(name)?.strip_prefix('='))
+        .find_map(percent_decoded)
+}
+
 /// The time zone in the `schedr_tz` cookie, when it names one jiff knows.
 #[must_use]
 pub fn zone(headers: &HeaderMap) -> Option<TimeZone> {

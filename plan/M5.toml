@@ -205,13 +205,25 @@ status = "done"
 done = 2026-11-15
 
 [[steps]]
-id = "M5.1l"
-title = "Throughput and start latency on the Metrics page"
+id = "M5.1l1"
+title = "The DAGs page by deployment"
 scope = '''
-tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.1a times them; the DAGs page's view by deployment
+the DAGs page switching between all DAGs in one list (as now) and one tab per deployment with its DAGs only (the user, 2026-11-14); split from M5.1l
 '''
 done_when = '''
-those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated; and the DAGs page switching between all DAGs in one list (as now) and one tab per deployment with its DAGs only (the user, 2026-11-14), remembered per viewer, with UI tests
+the tabs, the choice remembered per viewer, UI tests, the guide's DAG list
+'''
+status = "done"
+done = 2026-11-15
+
+[[steps]]
+id = "M5.1l2"
+title = "Throughput and start latency on the Metrics page"
+scope = '''
+tasks finished a minute, failures, waiting and assigned → started p50/p99, and the start's stages as M5.1a times them; split from M5.1l
+'''
+done_when = '''
+those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated
 '''
 status = "planned"
 

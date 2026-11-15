@@ -1258,3 +1258,17 @@ Built as decision 467 says, with two choices of Claude's:
 - **The limit is the current version's** `memory=`; an older attempt may have run under another
   (the bars show what it used, the line what holds now). A task without one shows "the worker's
   share", which differs by worker. The table and the chart need no new column or index.
+
+### <a id="N11"></a>2026-11-15: M5.1l split; the DAGs page by deployment (note 11)
+
+M5.1l had two parts. The DAGs page's tabs (the user, 2026-11-14) are built as M5.1l1. Throughput
+and start latency are M5.1l2, left for a decision: M5.1a's stage timers are Prometheus histograms
+in each process, so charting them per minute needs the workers to report them (a heartbeat
+field) and a choice of what is stored.
+
+Small choices of Claude's for the tabs: the choice is in the address (`?view=<deployment>` or
+`all`), so it can be shared and the live reload keeps it; it is remembered in a cookie
+(`schedr_dags_view`, a year, as the zone's), read by the server, so `/` opens on it with no
+script and no flash of the other list. A name no deployment has shows all. Not chosen:
+`localStorage` (the server couldn't render the remembered tab; the page would switch after
+loading).

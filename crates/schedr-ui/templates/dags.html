@@ -13,6 +13,11 @@
   {% for sensor in switched_off %}<a href="{{ sensor.dag_href }}" class="mono">{% if several %}{{ sensor.deployment }}: {% endif %}{{ sensor.dag_id }}.{{ sensor.sensor }}</a>{% if !loop.last %}, {% endif %}{% endfor %}
 </div>
 {% endif %}
+{% if !views.is_empty() %}
+<nav class="tabs dag-views" aria-label="Deployments">
+  {% for tab in views %}<a class="tab{% if tab.open %} open{% endif %}" href="{{ tab.href }}"{% if tab.open %} aria-current="page"{% endif %}>{{ tab.label }} <span class="dim">{{ tab.count }}</span></a>{% endfor %}
+</nav>
+{% endif %}
 {% if rows.is_empty() %}
 <p class="empty">No DAGs.</p>
 {% else %}

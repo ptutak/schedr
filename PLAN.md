@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.1l, Throughput and start latency on the Metrics page.
+**Next:** M5.1l2, Throughput and start latency on the Metrics page.
 
 ## M0: Foundations
 
@@ -245,7 +245,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1i | The samples table | done 2026-11-14 | D464 |
 | M5.1j | The Metrics page | done 2026-11-14 | D465, D466, D491, D492 |
 | M5.1k | Task memory charts | done 2026-11-15 | D467 |
-| M5.1l | Throughput and start latency on the Metrics page | **next** |  |
+| M5.1l1 | The DAGs page by deployment | done 2026-11-15 |  |
+| M5.1l2 | Throughput and start latency on the Metrics page | **next** |  |
 | M5.1m | The start time from the worker | done 2026-11-14 | D490 |
 | M5.1n | Standalone takes its DAG and script directories on the command line | planned | D488 |
 | M5.1o | A poke may be a plain def | planned | D489 |

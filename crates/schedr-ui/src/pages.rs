@@ -79,10 +79,32 @@ struct DagsPage {
     rows: Vec<DagRow>,
     /// The deployments that didn't answer, with why.
     unavailable: Vec<String>,
-    /// Whether there is more than one deployment (then a column names it).
+    /// Whether the list shows more than one deployment (then a column names it).
     several: bool,
+    /// With more than one deployment, the tabs choosing all or one of them (M5.1l).
+    views: Vec<ViewTab>,
     /// Its wait steps switched off, of all deployments.
     switched_off: Vec<SwitchedOffRow>,
+}
+
+/// A tab of the DAGs page: all deployments' DAGs, or one's.
+struct ViewTab {
+    /// What it shows: `All`, or the deployment's name.
+    label: String,
+    /// How many DAGs (of the deployments that answered).
+    count: usize,
+    /// Where it goes.
+    href: String,
+    /// Whether it is the one shown.
+    open: bool,
+}
+
+/// The DAGs page's query: which deployment's DAGs (`all` for every one's).
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct DagsQuery {
+    /// `all`, or a deployment's name; none: as the viewer's cookie says, else all.
+    #[serde(default)]
+    view: Option<String>,
 }
 
 /// What a manual run of an event-triggered DAG asks for, in its dialog.
@@ -492,9 +514,21 @@ struct ErrorPage<'a> {
 /// `GET /`: every deployment asked at once (a slow one doesn't hold the others back).
 pub async fn dags<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
+    axum::extract::Query(query): axum::extract::Query<DagsQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let page = Page::new(&headers, ui.docs_dir.is_some()).live("kinds=dag", "/");
+    // One deployment's DAGs only (M5.1l, the user 2026-11-14), as asked, else as this viewer
+    // last chose (a cookie), else all; a name no deployment has is all.
+    let chosen = query.view.clone();
+    let view = chosen
+        .clone()
+        .or_else(|| crate::page::cookie(&headers, crate::page::DAGS_VIEW_COOKIE))
+        .filter(|name| ui.deployments.len() > 1 && ui.deployments.iter().any(|d| &d.name == name));
+    let refresh = view.as_ref().map_or_else(
+        || "/?view=all".to_owned(),
+        |name| format!("/?view={}", path_segment(name)),
+    );
+    let page = Page::new(&headers, ui.docs_dir.is_some()).live("kinds=dag", &refresh);
     let mut asked = tokio::task::JoinSet::new();
     for index in 0..ui.deployments.len() {
         let ui = Arc::clone(&ui);
@@ -529,17 +563,68 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
         }
     }
     rows.sort_by(|a, b| (&a.dag_id, &a.deployment).cmp(&(&b.dag_id, &b.deployment)));
-    let several = ui.deployments.len() > 1;
-    render(
+    let views = view_tabs(&page, &ui.deployments, &rows, view.as_deref());
+    if let Some(name) = &view {
+        rows.retain(|row| &row.deployment == name);
+        switched_off.retain(|sensor| &sensor.deployment == name);
+        unavailable.retain(|why| why.starts_with(&format!("{name}: ")));
+    }
+    let mut response = render(
         &DagsPage {
             page,
             rows,
             unavailable,
-            several,
+            several: ui.deployments.len() > 1 && view.is_none(),
+            views,
             switched_off,
         },
         StatusCode::OK,
-    )
+    );
+    // Remembered for this viewer when chosen (a year, as the zone).
+    if let Some(chosen) = chosen {
+        let value = if view.is_some() {
+            chosen
+        } else {
+            "all".to_owned()
+        };
+        if let Ok(cookie) = axum::http::HeaderValue::from_str(&format!(
+            "{}={}; Path=/; Max-Age=31536000; SameSite=Lax",
+            crate::page::DAGS_VIEW_COOKIE,
+            path_segment(&value)
+        )) {
+            response
+                .headers_mut()
+                .append(axum::http::header::SET_COOKIE, cookie);
+        }
+    }
+    response
+}
+
+/// The DAGs page's tabs: all, then each deployment, with their DAGs counted; none for one
+/// deployment.
+fn view_tabs<T>(
+    page: &Page,
+    deployments: &[Deployment<T>],
+    rows: &[DagRow],
+    view: Option<&str>,
+) -> Vec<ViewTab> {
+    if deployments.len() < 2 {
+        return Vec::new();
+    }
+    let all = ViewTab {
+        label: "All".to_owned(),
+        count: rows.len(),
+        href: format!("{}/?view=all", page.base),
+        open: view.is_none(),
+    };
+    std::iter::once(all)
+        .chain(deployments.iter().map(|d| ViewTab {
+            label: d.name.clone(),
+            count: rows.iter().filter(|r| r.deployment == d.name).count(),
+            href: format!("{}/?view={}", page.base, path_segment(&d.name)),
+            open: view == Some(d.name.as_str()),
+        }))
+        .collect()
 }
 
 /// The wait steps a deployment has switched off, and why they can't be told, if so; a webserver
