@@ -1767,8 +1767,8 @@ pub struct AttemptMemoryView {
 /// the DAG page's table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DagMemoryList {
-    /// Attempts ended since this (30 days before the request), of the DAG's newest 1000 runs
-    /// planned since, are counted.
+    /// Attempts ended since this (30 days before the request), of the DAG's 1000 runs ended
+    /// last since then and those still going, are counted.
     pub since: Timestamp,
     /// The tasks with such attempts: those with a limit closest to it first, then the
     /// others by their p95, highest first.

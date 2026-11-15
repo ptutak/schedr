@@ -175,7 +175,7 @@ pub async fn list_samples(
         range,
         process: query.process.clone(),
     };
-    let mut entry = state.series.entry(key, to).await;
+    let mut entry = state.series.entry(key, (from, to)).await;
     let read_from = entry.read_from(from, to);
     let read = state
         .db
@@ -186,7 +186,7 @@ pub async fn list_samples(
     let read_latest = state.db.latest_of(read_from, to, process).await?;
     let mut latest_of = cache::merged_latest(&entry.latest, read_latest, from);
     entry.latest.clone_from(&latest_of);
-    cache::keep_buckets(&mut entry, &buckets, final_to);
+    cache::keep_buckets(&mut entry, &buckets, (from, final_to));
     drop(entry);
     // A deployment's total in a bucket divides by these (memory by kind), read with the
     // buckets in one statement.
@@ -268,7 +268,7 @@ pub async fn memory_totals(
         range,
         process: None,
     };
-    let mut entry = state.series.entry(key, to).await;
+    let mut entry = state.series.entry(key, (from, to)).await;
     let read_from = entry.read_from(from, to);
     let read = state
         .db

@@ -142,7 +142,7 @@
 {% endif %}
 {% if !memory.is_empty() %}
 <h2>Memory</h2>
-<p class="dim">Each task's peak memory over its attempts of the last 30 days (of its newest 1000 runs): the 95th percentile, the closest to its limit first.</p>
+<p class="dim">Each task's peak memory over its attempts of the last 30 days (of the 1000 runs that ended last, and those still going): the 95th percentile, the closest to its limit first.</p>
 <table class="list task-memory">
   <thead><tr><th>Task</th><th>Attempts</th><th>p95 peak</th><th>Highest</th><th>Limit</th><th>Of the limit</th><th>Killed for memory</th></tr></thead>
   <tbody>

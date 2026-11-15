@@ -20,8 +20,11 @@ use super::{Range, floor};
 mod tests;
 
 /// How long after a bucket's end its rows are all stored: the sampler's grace (2 minutes)
-/// and a minute's write, with room for the clocks of the processes writing them to differ.
-pub const FINAL_AFTER: SignedDuration = SignedDuration::from_mins(5);
+/// and a minute's write, with room for the clocks of the processes writing them to differ
+/// (Codex's review: a webserver stamps its own sample by its clock). A sample stored later than
+/// this misses its rollup too (2 minutes), and a webserver that read past it shows it once it
+/// starts again.
+pub const FINAL_AFTER: SignedDuration = SignedDuration::from_mins(15);
 
 /// The keys kept at most (each range, all processes or one): the least recently used go.
 const KEYS: usize = 64;
@@ -46,6 +49,9 @@ pub struct Key {
 pub struct Entry {
     /// The buckets before this are final and kept; none: nothing kept yet.
     pub final_to: Option<Timestamp>,
+    /// The range's start when they were kept: a request starting before it (the clock went
+    /// back) reads all again.
+    pub kept_from: Option<Timestamp>,
     /// Each process's final buckets, by process and time.
     pub buckets: Vec<Bucket>,
     /// The totals' final buckets, by time.
@@ -66,9 +72,12 @@ impl Entry {
         }
     }
 
-    /// Forgets what is kept (the clock went back past it).
-    fn clear_if_after(&mut self, to: Timestamp) {
-        if self.final_to.is_some_and(|kept| kept > to) {
+    /// Forgets what is kept when a request over `[from, to)` isn't covered by it: the clock
+    /// went back past its end, or before its start (Codex's review of M5.1j).
+    fn clear_unless_covering(&mut self, from: Timestamp, to: Timestamp) {
+        if self.final_to.is_some_and(|kept| kept > to)
+            || self.kept_from.is_some_and(|start| from < start)
+        {
             *self = Self::default();
         }
     }
@@ -92,13 +101,20 @@ pub struct SeriesCache {
 
 impl SeriesCache {
     /// `key`'s entry, locked: a request reading it holds it, the next waits.
-    pub async fn entry(&self, key: Key, to: Timestamp) -> tokio::sync::OwnedMutexGuard<Entry> {
+    pub async fn entry(
+        &self,
+        key: Key,
+        (from, to): (Timestamp, Timestamp),
+    ) -> tokio::sync::OwnedMutexGuard<Entry> {
         let used = self.uses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let entry = {
             let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
             if !entries.contains_key(&key) && entries.len() >= KEYS {
+                // Not one a request holds or waits for: another for its key would make a
+                // second lock beside it (Codex's review of M5.1j). All held: one key more.
                 let oldest = entries
                     .iter()
+                    .filter(|(_, (_, slot))| Arc::strong_count(slot) == 1)
                     .min_by_key(|(_, (used, _))| *used)
                     .map(|(key, _)| key.clone());
                 if let Some(oldest) = oldest {
@@ -110,7 +126,7 @@ impl SeriesCache {
             Arc::clone(&slot.1)
         };
         let mut guard = entry.lock_owned().await;
-        guard.clear_if_after(to);
+        guard.clear_unless_covering(from, to);
         guard
     }
 }
@@ -125,8 +141,13 @@ pub fn merged(kept: &[Bucket], read: Vec<Bucket>, from: Timestamp) -> Vec<Bucket
     all
 }
 
-/// Keeps `buckets`' final ones (before `final_to`) in `entry`, unless too many.
-pub fn keep_buckets(entry: &mut Entry, buckets: &[Bucket], final_to: Timestamp) {
+/// Keeps `buckets`' final ones (before `final_to`) of a range starting `from` in `entry`,
+/// unless too many.
+pub fn keep_buckets(
+    entry: &mut Entry,
+    buckets: &[Bucket],
+    (from, final_to): (Timestamp, Timestamp),
+) {
     if buckets.len() > BUCKETS {
         *entry = Entry::default();
         return;
@@ -137,6 +158,7 @@ pub fn keep_buckets(entry: &mut Entry, buckets: &[Bucket], final_to: Timestamp) 
         .cloned()
         .collect();
     entry.final_to = Some(final_to);
+    entry.kept_from = Some(from);
 }
 
 /// `kept` and `read` totals as one list by time, those before `from` left out; the final
@@ -161,6 +183,7 @@ pub fn merged_totals(
         .copied()
         .collect();
     entry.final_to = Some(final_to);
+    entry.kept_from = Some(from);
     all
 }
 

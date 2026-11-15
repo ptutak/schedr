@@ -341,24 +341,29 @@ async fn a_deployment_that_doesnt_answer_is_shown_unavailable_and_the_others_lis
     assert!(texts(&html, "table.dags th").contains(&"Deployment".to_owned()));
 }
 
-#[tokio::test]
-async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
-    // M5.1l (the user, 2026-11-14): all DAGs in one list, or a tab per deployment with its
-    // DAGs only, remembered per viewer.
+/// A deployment of one DAG, `train`.
+fn ml_like() -> Scripted {
     let mut ml = etl();
     ml.answers.insert(
         "/api/v1/dags".to_owned(),
         (200, json!({"dags": [dag("train", false)]})),
     );
-    let app = ui(vec![deployment("etl", etl()), deployment("ml", ml)]);
+    ml
+}
+
+#[tokio::test]
+async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
+    // M5.1l (the user, 2026-11-14): all DAGs in one list, or a tab per deployment with its
+    // DAGs only, remembered per viewer.
+    let app = ui(vec![deployment("etl", etl()), deployment("ml", ml_like())]);
     let (_, html) = get(&app, "/", &[]).await;
     assert_eq!(texts(&html, "nav.dag-views a"), ["All 3", "etl 2", "ml 1"]);
-    assert_eq!(attrs(&html, "nav.dag-views a.open", "href"), ["/?view=all"]);
+    assert_eq!(attrs(&html, "nav.dag-views a.open", "href"), ["/?view="]);
     assert_eq!(
         texts(&html, "table.dags tbody td:first-child a"),
         ["archive", "sync", "train"]
     );
-    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view=all"]);
+    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view="]);
 
     // One deployment's: its DAGs only, no Deployment column, kept by its live reload, and
     // remembered.
@@ -384,7 +389,7 @@ async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
     let (_, html) = get(&app, "/", &[("cookie", "schedr_dags_view=ml")]).await;
     assert_eq!(texts(&html, "table.dags tbody td:first-child a"), ["train"]);
 
-    // A name no deployment has: all, and remembered as all.
+    // A name no deployment has: all, and remembered as all (empty).
     let response = app
         .clone()
         .oneshot(
@@ -397,10 +402,24 @@ async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
         .unwrap();
     assert_eq!(
         response.headers()["set-cookie"],
-        "schedr_dags_view=all; Path=/; Max-Age=31536000; SameSite=Lax"
+        "schedr_dags_view=; Path=/; Max-Age=31536000; SameSite=Lax"
     );
     let (_, html) = get(&app, "/", &[("cookie", "schedr_dags_view=gone")]).await;
     assert_eq!(texts(&html, "table.dags tbody tr").len(), 3);
+
+    // A deployment named `all` has its own tab beside All (Codex's review of M5.1l1).
+    let app = ui(vec![
+        deployment("all", etl()),
+        deployment("prod", ml_like()),
+    ]);
+    let (_, html) = get(&app, "/?view=", &[]).await;
+    assert_eq!(
+        texts(&html, "nav.dag-views a"),
+        ["All 3", "all 2", "prod 1"]
+    );
+    assert_eq!(texts(&html, "table.dags tbody tr").len(), 3);
+    let (_, html) = get(&app, "/?view=all", &[]).await;
+    assert_eq!(texts(&html, "table.dags tbody tr").len(), 2);
 
     // One deployment: no tabs.
     let app = ui(vec![deployment("etl", etl())]);

@@ -632,3 +632,48 @@ fn rolled_up_for_test(minutes: &[Sample], at: i64) -> Vec<Sample> {
     }
     rows
 }
+
+/// The clock of [`a_sample_stored_late_and_a_clock_gone_back_answer_as_a_fresh_read`].
+static LATE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn late_clock() -> Timestamp {
+    Timestamp::from_second(LATE.load(std::sync::atomic::Ordering::Relaxed)).unwrap()
+}
+
+#[tokio::test]
+async fn a_sample_stored_late_and_a_clock_gone_back_answer_as_a_fresh_read() {
+    // Codex's review of the cache: a webserver's sample stamped 10 minutes back by its clock
+    // (within `FINAL_AFTER`), and the clock going back 2 minutes, across the range's start.
+    let db = seeded(&[
+        minute("p1", "2026-11-14T09:30:00Z", 100, None),
+        minute("p1", "2026-11-14T10:00:00Z", 100, None),
+        minute("p1", "2026-11-14T10:29:00Z", 100, None),
+    ])
+    .await;
+    let mut kept = ApiState::new(db.clone(), None);
+    kept.clock = late_clock;
+    let kept = crate::router(kept);
+    answers_as_fresh(&db, &kept, "2026-11-14T10:30:20Z").await;
+    db.insert_samples(&[minute("web", "2026-11-14T10:20:00Z", 50, None)])
+        .await
+        .unwrap();
+    answers_as_fresh(&db, &kept, "2026-11-14T10:31:20Z").await;
+    // Back 2 minutes: the range starts at 09:29, before what was kept.
+    answers_as_fresh(&db, &kept, "2026-11-14T10:29:20Z").await;
+}
+
+/// At `at`, `kept`'s answers are a fresh state's.
+async fn answers_as_fresh(db: &Database, kept: &axum::Router, at: &str) {
+    LATE.store(ts(at).as_second(), std::sync::atomic::Ordering::Relaxed);
+    let mut fresh = ApiState::new(db.clone(), None);
+    fresh.clock = late_clock;
+    let fresh = crate::router(fresh);
+    for path in [
+        "/api/v1/metrics/samples?range=1h",
+        "/api/v1/metrics/memory?range=1h",
+    ] {
+        let (_, cached) = get(kept, path).await;
+        let (_, read) = get(&fresh, path).await;
+        assert_eq!(cached, read, "{path} at {at}");
+    }
+}

@@ -18,6 +18,6 @@ column (`memory` on `GET /api/v1/workers`). Throughput and start latency by stag
 '''
 history = "JOURNAL.md#D465"
 step = "M5.1j"
-checked = 2026-11-14
+checked = 2026-11-15
 code = ["crates/schedr-ui/src/metrics.rs", "crates/schedr-api/src/series.rs", "crates/schedr-ui/templates/metrics.html"]
 also = ["observability"]

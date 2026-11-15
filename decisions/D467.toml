@@ -5,11 +5,11 @@ status = "active"
 topic = "ui-cli"
 section = "Pages and live updates"
 summary = '''
-The task panel's Memory tab charts the peak memory of a task's last 30 ended attempts (all its
-runs and instances) from the attempts table, one bar per attempt coloured by how it ended
+The task panel's Memory tab charts the peak memory of the last 30 of a task's attempts to end (all
+its runs and instances) from the attempts table, one bar per attempt coloured by how it ended
 (`oom_killed` marked with a cross) and linking to its run, its `memory=` limit dashed. The DAG
-page's Memory table lists each task's p95 peak over its attempts of the last 30 days (the DAG's
-newest 1000 runs of them) against its limit, closest first; from
+page's Memory table lists each task's p95 peak over its attempts ended in the last 30 days (of the
+DAG's 1000 runs ended last and those still going) against its limit, closest first; from
 `GET /api/v1/dags/{dag_id}/tasks/{task_id}/memory` and `GET /api/v1/dags/{dag_id}/memory`.
 '''
 history = "JOURNAL.md#D467"

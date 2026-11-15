@@ -13,11 +13,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- N13 (2026-11-15): Codex's review of the UI steps M5.1g-l1: seven fixed (corrects D492)
 - N12 (2026-11-15): M5.1o built: a poke may be a plain def (note 12; on D489)
 - N11 (2026-11-15): M5.1l split; the DAGs page by deployment
 - N10 (2026-11-15): M5.1k built: a task's attempts' peaks, the DAG's p95s (decision 467)
 - D492 (2026-11-15): the Metrics endpoints keep their final buckets (decision 492, Claude's)
-- N9 (2026-11-15): Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL (corrects D464)
 - M5.1o (2026-11-15): A poke may be a plain def
 - M5.1l1 (2026-11-15): The DAGs page by deployment
 - M5.1k (2026-11-15): Task memory charts

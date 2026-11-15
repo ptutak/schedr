@@ -99,10 +99,11 @@ struct ViewTab {
     open: bool,
 }
 
-/// The DAGs page's query: which deployment's DAGs (`all` for every one's).
+/// The DAGs page's query: which deployment's DAGs (empty for every one's).
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct DagsQuery {
-    /// `all`, or a deployment's name; none: as the viewer's cookie says, else all.
+    /// A deployment's name, or empty for all (no deployment is named so: Codex's review of
+    /// M5.1l1, `all` was a name too); none: as the viewer's cookie says, else all.
     #[serde(default)]
     view: Option<String>,
 }
@@ -525,7 +526,7 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
         .or_else(|| crate::page::cookie(&headers, crate::page::DAGS_VIEW_COOKIE))
         .filter(|name| ui.deployments.len() > 1 && ui.deployments.iter().any(|d| &d.name == name));
     let refresh = view.as_ref().map_or_else(
-        || "/?view=all".to_owned(),
+        || "/?view=".to_owned(),
         |name| format!("/?view={}", path_segment(name)),
     );
     let page = Page::new(&headers, ui.docs_dir.is_some()).live("kinds=dag", &refresh);
@@ -585,7 +586,7 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
         let value = if view.is_some() {
             chosen
         } else {
-            "all".to_owned()
+            String::new()
         };
         if let Ok(cookie) = axum::http::HeaderValue::from_str(&format!(
             "{}={}; Path=/; Max-Age=31536000; SameSite=Lax",
@@ -614,7 +615,7 @@ fn view_tabs<T>(
     let all = ViewTab {
         label: "All".to_owned(),
         count: rows.len(),
-        href: format!("{}/?view=all", page.base),
+        href: format!("{}/?view=", page.base),
         open: view.is_none(),
     };
     std::iter::once(all)

@@ -56,6 +56,8 @@ async fn with_dag() -> (Database, String) {
 /// later plus `try_number`.
 struct Seeded<'a> {
     run: u32,
+    /// Its run planned this many days earlier, its attempt ending all the same (a backfill).
+    shift_days: i64,
     task: &'a str,
     map_index: i32,
     try_number: u32,
@@ -73,8 +75,9 @@ async fn seed(db: &Database, version: &str, attempts: &[Seeded<'_>]) {
 
 async fn seed_rows(db: &Database, version: &str, attempts: &[Seeded<'_>]) -> Result<(), DbError> {
     const RUN: &str = "INSERT INTO runs (id, dag_id, dag_version_id, kind, state, planned_for, \
-        since, triggered_at, triggered_by) VALUES ($1{uuid}, 'sync', $2{uuid}, 'manual', \
-        'success', $3{ts}, $3{ts}, $3{ts}, 'anna') ON CONFLICT (id) DO NOTHING";
+        since, triggered_at, triggered_by, ended_at) VALUES ($1{uuid}, 'sync', $2{uuid}, \
+        'manual', 'success', $3{ts}, $3{ts}, $3{ts}, 'anna', $4{ts}) \
+        ON CONFLICT (id) DO UPDATE SET ended_at = EXCLUDED.ended_at";
     const INSTANCE: &str = "INSERT INTO task_instances (id, run_id, task_id, map_index, state, \
         updated_at) VALUES ($1{uuid}, $2{uuid}, $3, $4, 'success', $5{ts}) \
         ON CONFLICT (id) DO NOTHING";
@@ -82,11 +85,18 @@ async fn seed_rows(db: &Database, version: &str, attempts: &[Seeded<'_>]) -> Res
         peak_memory_bytes, assigned_at, ended_at) \
         VALUES ($1{uuid}, $2{uuid}, $3, $4, $5, $6{ts}, $7{ts})";
     for (n, a) in (0..).zip(attempts) {
-        let planned = ts("2026-11-14T10:00:00Z")
+        let at = ts("2026-11-14T10:00:00Z")
             .checked_add(jiff::SignedDuration::from_mins(i64::from(a.run)))
             .unwrap();
-        let ended = planned
+        let ended = at
             .checked_add(jiff::SignedDuration::from_mins(1 + i64::from(a.try_number)))
+            .unwrap();
+        let planned = at
+            .checked_sub(jiff::SignedDuration::from_hours(24 * a.shift_days))
+            .unwrap();
+        // The run ends a minute after its last attempt.
+        let run_ended = ended
+            .checked_add(jiff::SignedDuration::from_mins(1))
             .unwrap();
         let run_id = uuid(a.run, 1);
         let task_n = u32::from(a.task == "load");
@@ -99,6 +109,7 @@ async fn seed_rows(db: &Database, version: &str, attempts: &[Seeded<'_>]) -> Res
                 .bind(&run_id)
                 .bind(version)
                 .bind(db_time(planned))
+                .bind(db_time(run_ended))
                 .execute(&mut *tx)
                 .await?;
             sqlx::query(sql_text(backend, INSTANCE))
@@ -127,6 +138,7 @@ async fn seed_rows(db: &Database, version: &str, attempts: &[Seeded<'_>]) -> Res
 fn ended(run: u32, task: &str, peak: i64) -> Seeded<'_> {
     Seeded {
         run,
+        shift_days: 0,
         task,
         map_index: -1,
         try_number: 1,
@@ -240,4 +252,57 @@ async fn a_dags_peaks_are_by_task_since_a_time_with_a_peak_and_capped() {
         .unwrap();
     assert_eq!(later.len(), 1);
     assert_eq!(later[0].task_id, "load");
+}
+
+#[tokio::test]
+async fn the_last_attempts_are_the_last_to_end_whatever_their_runs_order() {
+    // Codex's review of M5.1k: an older run's attempt ending last is the newest.
+    let (db, version) = with_dag().await;
+    seed(
+        &db,
+        &version,
+        &[
+            Seeded {
+                try_number: 9,
+                ..ended(0, "extract", 1)
+            },
+            ended(1, "extract", 2),
+            ended(2, "extract", 3),
+        ],
+    )
+    .await;
+    let peaks = db.task_attempt_peaks("sync", "extract", 2).await.unwrap();
+    assert_eq!(
+        peaks
+            .iter()
+            .map(|p| p.peak_memory_bytes)
+            .collect::<Vec<_>>(),
+        [Some(3), Some(1)]
+    );
+}
+
+#[tokio::test]
+async fn a_backfill_of_old_moments_ending_now_counts_in_the_dags_peaks() {
+    // Codex's review of M5.1k: its run planned 40 days ago, its attempt ending in the range.
+    let (db, version) = with_dag().await;
+    seed(
+        &db,
+        &version,
+        &[
+            ended(0, "extract", 100),
+            Seeded {
+                shift_days: 40,
+                status: "oom_killed",
+                ..ended(1, "extract", 900)
+            },
+        ],
+    )
+    .await;
+    let tasks = db
+        .dag_task_peaks("sync", ts("2026-11-14T00:00:00Z"))
+        .await
+        .unwrap();
+    let mut peaks = tasks[0].peaks.clone();
+    peaks.sort_unstable();
+    assert_eq!((peaks, tasks[0].oom_killed), (vec![100, 900], 1));
 }

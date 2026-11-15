@@ -686,7 +686,7 @@
         "description": "Each task's p95 peak memory over its recent attempts against its limit (decision 467):\nthe DAG page's table.",
         "properties": {
           "since": {
-            "description": "Attempts ended since this (30 days before the request), of the DAG's newest 1000 runs\nplanned since, are counted.",
+            "description": "Attempts ended since this (30 days before the request), of the DAG's 1000 runs ended\nlast since then and those still going, are counted.",
             "format": "date-time",
             "type": "string"
           },

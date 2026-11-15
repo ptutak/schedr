@@ -1305,3 +1305,23 @@ Codex's review of M5.1o (`01a1dd76`) found five; four fixed with tests, one a kn
 4. Not fixed: the types accept a generator as a sensor poke (an unconstrained `R`); the
    definition refuses it with "yields". Typing can't exclude it here.
 5. A test's 3 ms call window flaked under load: 50 ms.
+
+### <a id="N13"></a>2026-11-15: Codex's review of the UI steps M5.1g-l1: seven fixed (note 13; corrects D492)
+
+
+Codex's joint review (`01a1dd5d`) of M5.1g, j, k and l1 found seven, all confirmed by tests that
+fail on the old code, all fixed:
+
+1. A backfill of old moments ending now was left out of the DAG's memory p95s (its runs were
+   picked by `planned_for`): the DAG's newest runs are now the last to end, with the ones still
+   going.
+2. A task's last attempts were picked and ordered by run and map index: now by their end.
+3. A sample stored behind the cache's mark (a webserver's clock behind, a paused insert) stayed
+   missing: points are final after 15 minutes, not 5, and the guide says a clock further behind
+   shows late.
+4. A clock going back across the range's start lost its first buckets: a request starting before
+   what was kept clears the entry.
+5. Evicting a key a request held gave that key a second lock: eviction skips held keys.
+6. A deployment named `all` took the All tab's address: All is `/?view=` (an empty value), and
+   such a deployment gets its own tab.
+7. The 7- and 30-day browser cases passed with no chart: each range now needs its three.

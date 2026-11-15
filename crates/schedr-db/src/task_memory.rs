@@ -44,8 +44,8 @@ pub struct TaskPeaks {
 }
 
 impl Database {
-    /// The last `count` ended attempts of `task_id` of DAG `dag_id`, all its instances, the
-    /// oldest first.
+    /// The last `count` attempts of `task_id` of DAG `dag_id` to end, all its instances, the
+    /// oldest first: of its [`PEAKS_PER_TASK`] runs ended last and those still going.
     ///
     /// # Errors
     ///
@@ -56,21 +56,27 @@ impl Database {
         task_id: &str,
         count: u32,
     ) -> Result<Vec<AttemptPeak>, DbError> {
-        // The DAG's runs newest first by `runs_by_dag`, each run's instance of the task by its
-        // unique key, its attempts by theirs: the newest runs are read, not the whole history.
+        // Codex's review of M5.1k: the last to end, whatever their runs' order. An attempt ends
+        // before its run, so it is among the runs ended since or still going: the DAG's
+        // newest-ended runs (`runs_ended`) and its unfinished ones (`runs_unfinished`), each
+        // run's instance of the task by its unique key, its attempts by theirs.
         const LAST: &str = "SELECT a.id{text}, r.id{text}, CAST(i.map_index AS BIGINT), \
             CAST(a.try_number AS BIGINT), a.status, a.peak_memory_bytes, {ts<}a.ended_at{>ts} \
-            FROM runs r JOIN task_instances i ON i.run_id = r.id AND i.task_id = $2 \
+            FROM (SELECT id FROM (SELECT id FROM runs WHERE dag_id = $1 AND ended_at IS NOT NULL \
+                  ORDER BY ended_at DESC LIMIT $4) ended \
+                  UNION ALL SELECT id FROM runs WHERE dag_id = $1 \
+                  AND state IN ('queued', 'running')) r \
+            JOIN task_instances i ON i.run_id = r.id AND i.task_id = $2 \
             JOIN attempts a ON a.task_instance_id = i.id \
-            WHERE r.dag_id = $1 AND a.ended_at IS NOT NULL AND a.status IS NOT NULL \
-            ORDER BY r.planned_for DESC, r.id DESC, i.map_index DESC, a.try_number DESC \
-            LIMIT $3";
+            WHERE a.ended_at IS NOT NULL AND a.status IS NOT NULL \
+            ORDER BY a.ended_at DESC, a.id DESC LIMIT $3";
         type Row = (String, String, i64, i64, String, Option<i64>, String);
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, LAST))
                 .bind(dag_id)
                 .bind(task_id)
                 .bind(i64::from(count))
+                .bind(i64::from(PEAKS_PER_TASK))
                 .fetch_all(pool)
                 .await?
         });
@@ -94,9 +100,9 @@ impl Database {
         Ok(peaks)
     }
 
-    /// Each task of DAG `dag_id` with attempts ended since `since` in its newest
-    /// [`PEAKS_PER_TASK`] runs planned since then: the peaks of its newest [`PEAKS_PER_TASK`]
-    /// that have one, by task.
+    /// Each task of DAG `dag_id` with attempts ended since `since`, of its [`PEAKS_PER_TASK`]
+    /// runs ended last since then and those still going: the peaks of its newest
+    /// [`PEAKS_PER_TASK`] that have one, by task.
     ///
     /// # Errors
     ///
@@ -106,14 +112,18 @@ impl Database {
         dag_id: &str,
         since: Timestamp,
     ) -> Result<Vec<TaskPeaks>, DbError> {
-        // The DAG's newest runs first (`runs_by_dag`), so that a DAG running every minute
-        // reads a thousand runs, not 30 days of them (216,000 attempts of 5 tasks: 850 ms).
+        // The runs ended since, newest first (`runs_ended`), and those still going
+        // (`runs_unfinished`): a DAG running every minute reads a thousand runs, not 30 days of
+        // them (216,000 attempts of 5 tasks: 850 ms), and a backfill of old moments ending now
+        // counts (Codex's review of M5.1k).
         const PEAKS: &str = "SELECT task_id, peak, oom FROM (\
             SELECT i.task_id AS task_id, a.peak_memory_bytes AS peak, \
             CASE WHEN a.status = 'oom_killed' THEN 1 ELSE 0 END AS oom, \
             ROW_NUMBER() OVER (PARTITION BY i.task_id ORDER BY a.ended_at DESC, a.id DESC) AS n \
-            FROM (SELECT id FROM runs WHERE dag_id = $1 AND planned_for >= $2{ts} \
-                  ORDER BY planned_for DESC LIMIT $3) r \
+            FROM (SELECT id FROM (SELECT id FROM runs WHERE dag_id = $1 AND ended_at >= $2{ts} \
+                  ORDER BY ended_at DESC LIMIT $3) ended \
+                  UNION ALL SELECT id FROM runs WHERE dag_id = $1 \
+                  AND state IN ('queued', 'running')) r \
             JOIN task_instances i ON i.run_id = r.id \
             JOIN attempts a ON a.task_instance_id = i.id \
             WHERE a.ended_at >= $2{ts} AND a.peak_memory_bytes IS NOT NULL\

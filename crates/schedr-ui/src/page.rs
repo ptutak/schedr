@@ -120,8 +120,8 @@ pub fn prefix(headers: &HeaderMap) -> String {
     }
 }
 
-/// The cookie remembering which deployment's DAGs the DAGs page shows (M5.1l): `all` or a
-/// deployment's name.
+/// The cookie remembering which deployment's DAGs the DAGs page shows (M5.1l): a deployment's
+/// name, or empty for all.
 pub const DAGS_VIEW_COOKIE: &str = "schedr_dags_view";
 
 /// Cookie `name`'s value, `%XX` escapes decoded; `None` without it or when it doesn't decode.

@@ -156,7 +156,7 @@ def test_every_range_renders(page: Page, seeded: dict[str, str], range_: str) ->
     expect(page.locator(".choices a.current").first).to_have_text(
         range_.replace("h", " h").replace("d", " d")
     )
-    # The 7 and 30 days read the rollups: none seeded, so only the standalone's own may show.
-    if range_ in ("1h", "24h"):
-        expect(page.locator("svg.chart")).to_have_count(3)
+    # Every range charts the seeded day: 7 and 30 days from the rollups the sampler makes of it
+    # and the minutes not rolled up yet (Codex's review: these ranges passed with no chart).
+    expect(page.locator("svg.chart")).to_have_count(3)
     expect(page.locator("#live")).to_have_attribute("hx-trigger", "every 60s")
