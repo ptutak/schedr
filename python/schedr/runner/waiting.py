@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -113,6 +114,25 @@ class CallTimedOutError(Exception):
     """An ``@sensor(wait_for=...)``'s call ran out its ``timeout`` (decision 353)."""
 
 
+class CallStuckError(Exception):
+    """A trigger's poke call past its time left a thread that didn't stop (decision 489)."""
+
+
+async def _all_settled() -> bool:
+    return True
+
+
+_settled: Callable[[], Awaitable[bool]] = _all_settled
+"""Whether what the current step still runs on the host's threads ended, stopped within its
+cancel grace; the host sets its own (outside a host: nothing to wait for)."""
+
+
+def set_settled(settled: Callable[[], Awaitable[bool]]) -> None:
+    """Sets how a trigger's poke waits for a failed call's threads (the host's, at its start)."""
+    global _settled  # noqa: PLW0603  # the host's, set once at its start
+    _settled = settled
+
+
 async def _within(
     call: Coroutine[object, object, object], limit: float | None
 ) -> tuple[bool, object, float]:
@@ -173,6 +193,36 @@ async def _until(moving: asyncio.Event | None, delay: float) -> None:
             await moving.wait()
     if moving.is_set():
         raise WatcherMovedError
+
+
+def awaited_poke(
+    function: Callable[..., object],
+) -> Callable[..., Coroutine[object, object, object]]:
+    """A poke as a coroutine function: an ``async def`` as it is, a plain ``def`` on threads.
+
+    A plain ``def`` is called on the host's threads (decision 489).
+    A plain call runs as ``asyncio.to_thread`` does, so it is its wait step's (its context, log
+    and secrets) and is stopped as such a call is when its time is up (decision 337); what it
+    returns, if a coroutine (a plain wrapper of an ``async def``), is awaited.
+
+    Args:
+        function: The poke's function.
+
+    Returns:
+        A function whose call is a coroutine of what the poke returns.
+    """
+    # The function itself, not what it wraps: a plain wrapper of an `async def` blocks before
+    # returning its coroutine, so it runs on a thread too (Codex's review of M5.1o).
+    if inspect.iscoroutinefunction(function):
+        return cast("Callable[..., Coroutine[object, object, object]]", function)
+
+    async def on_a_thread(*args: object, **kwargs: object) -> object:
+        returned = await asyncio.to_thread(function, *args, **kwargs)
+        if inspect.isawaitable(returned):
+            return await returned
+        return returned
+
+    return on_a_thread
 
 
 async def _poked(
@@ -262,7 +312,8 @@ async def _waited(
     if isinstance(every, int):
         loop = asyncio.get_running_loop()
         deadline = None if seconds is None else loop.time() + seconds
-        return await _poked(lambda: function(**arguments), every / 1000, deadline, moving)
+        poke = awaited_poke(function)
+        return await _poked(lambda: poke(**arguments), every / 1000, deadline, moving)
     wait_for = task.get("wait_for")
     call_ms = (
         cast("dict[str, object]", wait_for).get("timeout_ms")
@@ -299,6 +350,7 @@ async def _poked_trigger(
     """
     loop = asyncio.get_running_loop()
     window = _Window(batch, tell)
+    function = awaited_poke(function)
     while True:
         called = loop.time()
         # What telling raises (the window sent meanwhile) isn't the poke's: it goes up.
@@ -307,6 +359,15 @@ async def _poked_trigger(
             await window.add(event)
             after = event.key
         poked(error)
+        # A call stopped past its time may still hold a thread (blocked in C): the next one
+        # mustn't run beside it (Codex's review of M5.1o). Past the cancel grace, the trigger
+        # ends, and its host with it as for a stuck step.
+        if error is not None and not await _settled():
+            raise CallStuckError(
+                "a call past its time didn't stop within the cancel grace: Python can't end a "
+                "thread blocked in C, so it ends with its host. Give its blocking calls a "
+                "timeout below `every`"
+            )
         await window.meanwhile(asyncio.sleep(max(0.0, called + every - loop.time())))
 
 

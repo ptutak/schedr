@@ -65,6 +65,7 @@ are in the report.
 | 21 | Seeded random cuts, slow links and freezes under load | recovery under a reproducible fault schedule |
 | 22 | Parsing many files (`22_parse_many_files`): `schedr dags check` of files importing a shared helper and a slow library, spawned and forked, one at a time and four at once | seconds and peak memory for each; every file parsed |
 | 23 | Many wait steps (`23_many_sensors`): 500 at once on one worker, its default `[watchers] slots`, 400 plain `@sensor`s awaiting a file and 100 pokes checking for it every 5 s | the worker's memory with its watcher hosts, idle and with all 500 in, per wait step, and what the hosts report; how soon each ends once the file is there; every one succeeds |
+| 23b | Plain pokes (`23b_plain_pokes`): 100 plain `def` pokes on one worker, each call blocking 1 s as a blocking client does, every 5 s (decision 489) | how soon each ends once the file is there, at most 7 s at p99 (its `every` and its call): on Python's default pool of at most 32 threads their calls would queue and overrun; every one succeeds |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything

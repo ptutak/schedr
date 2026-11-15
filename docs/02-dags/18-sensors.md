@@ -2,7 +2,8 @@
 
 A wait step waits for one thing belonging to a run, then ends with its value or the
 `TimedOut` outcome. Declare an `async def` with `@sensor` when you write the waiting
-yourself, or with `@sensor.poke(every=...)` when schedr should call it repeatedly. To wait
+yourself, or a function with `@sensor.poke(every=...)` when schedr should call it repeatedly:
+an `async def`, or a plain `def` (see [A plain def poke](#a-plain-def-poke)). To wait
 for another DAG's run or task, use [`wait_for(RunOf(...))`](21-wait-for.md), which can
 also produce `Failed`. [Wait steps and triggers side by side](19-triggers.md#wait-steps-and-triggers-side-by-side)
 compares every form.
@@ -20,6 +21,44 @@ The poke fails (`PokeTooSlowError`, with the usual retries) after `[watchers] po
 overruns in a row (3 by default), or at once when one call runs three times `every`, when it
 is cancelled. A call that raises is a failure with the usual retries too. A call that
 holds the event loop is another limit: see below.
+
+## A plain def poke
+
+A poke may be a plain `def`, for a blocking client: schedr calls it on the host's threads, as
+`asyncio.to_thread` would, so it doesn't hold up the other wait steps on the host. It is its wait
+step's like an `async` call: its prints go to the step's log, `task_ctx` and the step's secrets
+work in it (`task_ctx.secret(...)`, the plain form), and its call has the same window as an async
+poke's (it may run past `every`, up to three times it). Past that, the call is stopped as an
+`asyncio.to_thread` call is (see below): `StepEndedError` at its next Python line, or, for a call
+blocked in C, its host ending after the cancel grace. A plain `def` opens a plain
+connection (`with name() as client:`). A plain `def` that returns a coroutine (a
+plain wrapper of an `async def`) has it awaited. `@sensor` itself, and `wait_for=`, stay `async
+def`.
+
+```{literalinclude} ../../examples/docs/plain_pokes.py
+:language: python
+:caption: examples/docs/plain_pokes.py
+:lines: 19-47
+```
+
+Which to choose:
+
+- **An async client** where there is one: many pokes wait on one thread, and a call is
+  cancelled where it awaits.
+- **A plain `def`** for a blocking client (a database driver, `requests`, a cloud SDK without
+  async), rather than an `async def` that blocks the event loop, which holds up every wait step
+  on the host and is killed past `[watchers] block_limit`.
+- **Give each blocking call a timeout of its own**, below `every`: a call that ends by itself
+  is always cleaner than one stopped from outside, which may leave a library's state half
+  updated.
+- **Plain pokes run side by side**, each on a thread of its own, so what they share (module
+  globals, a client kept between calls) must be thread-safe.
+- **Keep them light.** A poke busy in Python, not waiting, holds the interpreter's lock and
+  slows every other wait step on the host. Put heavy work in a task.
+
+The host has a thread for each of its wait steps, on top of Python's default number for the
+steps' own `asyncio.to_thread` calls, so a hundred plain pokes on one host each get their call
+on time.
 
 `max_wait=` limits the wait. If omitted, `[sensors] default_max_wait` applies (24 hours by
 default), except for `delay` given a `timedelta` as described below; `max_wait` in `StepDefaults` sets it for a DAG or group, while `timeout` there is for tasks. When the wait expires, schedr
@@ -156,5 +195,6 @@ fails `timed_out`.
 ## Testing
 
 `await wait.fn(...)`, or `asyncio.run(wait.fn(...))`, calls the function itself. For a
-poke this is one call, which may return `NOT_YET`. `run_dag` runs the wait step for real;
+poke this is one call, which may return `NOT_YET`; a plain `def` poke's `.fn` runs it on a
+thread, as its host does, so it is awaited the same way. `run_dag` runs the wait step for real;
 see [Testing a DAG](07-testing.md).

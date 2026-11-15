@@ -32,7 +32,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D492 | 2026-11-15 | claude | built M5.1j | observability | The Metrics endpoints keep their final buckets between requests |
 | D491 | 2026-11-14 | user | built M5.1j | ui-cli | A process's memory includes its tasks; memory is split by kind |
 | D490 | 2026-11-14 | user | built M5.1m | assignment | started_at is the worker's start, in master time |
-| D489 | 2026-11-14 | user | planned (M5.1o) | wait-steps | @sensor.poke and @trigger.poke accept a plain def |
+| D489 | 2026-11-14 | user | built M5.1o | wait-steps | @sensor.poke and @trigger.poke accept a plain def |
 | D488 | 2026-11-14 | user | planned (M5.1n) | code-delivery | Standalone takes --dag-path and --script-path |
 | D487 | 2026-11-14 | user | built M5.1f2 | triggers | A waiting wait_for step stores its deadline and what it waits for |
 | D486 | 2026-11-14 | user | built M5.1f2 | triggers | The trigger loop runs after any write, at a stored moment, or for a posted event |

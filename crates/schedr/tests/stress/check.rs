@@ -619,6 +619,11 @@ impl Report {
         self.metrics.insert(name.to_owned(), value);
     }
 
+    /// A number set before.
+    pub fn get(&self, name: &str) -> Option<f64> {
+        self.metrics.get(name).copied()
+    }
+
     /// `name` must be at most `limit` (a generous floor: a gross regression only).
     pub fn at_most(&mut self, name: &str, value: f64, limit: f64) {
         self.set(name, value);

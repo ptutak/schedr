@@ -353,3 +353,64 @@ with Dag("d"):
     past = datetime.fromisoformat(result.tasks["past"].output)
     assert planned + timedelta(minutes=30) < past <= datetime.now(UTC), "when it ended"
     assert datetime.fromisoformat(result.tasks["took"].output) <= datetime.now(UTC)
+
+
+def test_a_plain_poke_is_called_on_a_thread_until_it_has_its_value(tmp_path: Path) -> None:
+    # Decision 489: a poke may be a plain `def`, blocking as it likes, its log the step's.
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "calls").write_text("")
+    result = run_dag(
+        _write(
+            tmp_path,
+            """
+import threading
+import time
+
+CALLS = STATE / "calls"
+
+@sensor.poke(every=timedelta(milliseconds=100), max_wait=timedelta(seconds=30))
+def ready() -> str | NotYet:
+    time.sleep(0.01)
+    on_main = threading.current_thread() is threading.main_thread()
+    print("on", "the loop" if on_main else "a thread")
+    with CALLS.open("a") as f:
+        f.write("x")
+    return "here" if len(CALLS.read_text()) == 3 else NOT_YET
+
+@task
+def load(value: str) -> str:
+    return value.upper()
+
+with Dag("d"):
+    load(ready().on(str))
+""",
+        ),
+        "d",
+    )
+    assert result.state == "success", result
+    assert result.tasks["load"].output == "HERE"
+    assert (tmp_path / "state" / "calls").read_text() == "xxx"
+    assert "on a thread" in result.tasks["ready"].log, result.tasks["ready"].log
+
+
+def test_a_plain_poke_call_longer_than_every_is_stopped_and_a_failure(tmp_path: Path) -> None:
+    result = run_dag(
+        _write(
+            tmp_path,
+            """
+import time
+
+@sensor.poke(every=timedelta(milliseconds=100), max_wait=timedelta(seconds=30), retries=0)
+def slow() -> str | NotYet:
+    time.sleep(60)
+    return "never"
+
+with Dag("d"):
+    slow()
+""",
+        ),
+        "d",
+    )
+    assert result.state == "failed", result
+    attempt = result.tasks["slow"].attempts[-1]
+    assert "took longer than 3 times `every`" in str(attempt.error), attempt

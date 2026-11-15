@@ -1,13 +1,15 @@
 """Event triggers: what a DAG file says, and what a trigger does when it runs."""
 
 import asyncio
+import threading
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from schedr import Dag, Event, Every, dag_ctx, task, trigger
+from schedr.runner import waiting
 from schedr.runner.task import _tell_event  # pyright: ignore[reportPrivateUsage]
 from schedr.runner.waiting import run_trigger
 from schedr.testing import run_trigger as run_trigger_for_test
@@ -86,6 +88,16 @@ def test_a_function_has_to_be_async_and_take_after_first() -> None:
 
     with pytest.raises(TypeError, match="first parameter is `after"):
         trigger(no_after)
+
+    # Decision 489: a poke may be a plain `def`; one that yields is refused.
+    plain_poke = trigger.poke(every=timedelta(seconds=1))(plain)
+    assert plain_poke().to_model().to_json()["task"]["every_ms"] == 1000
+
+    def lines(after: str | None) -> object:
+        yield Event(str(after), 1)
+
+    with pytest.raises(TypeError, match="yields"):
+        trigger.poke(every=timedelta(seconds=1))(lines)  # type: ignore[arg-type]
 
 
 def test_arguments_are_checked_and_after_is_schedr_s() -> None:
@@ -175,7 +187,9 @@ class _Enough(BaseException):
     """Ends a poke's calls."""
 
 
-def _poking(function: Callable[..., object], calls: int = 3) -> tuple[list[str], list[str | None]]:
+def _poking(
+    function: Callable[..., object], calls: int = 3, every_ms: int = 1
+) -> tuple[list[str], list[str | None]]:
     told: list[str] = []
     poked: list[str | None] = []
 
@@ -188,7 +202,7 @@ def _poking(function: Callable[..., object], calls: int = 3) -> tuple[list[str],
             raise _Enough
 
     with pytest.raises(_Enough):
-        asyncio.run(run_trigger(function, {}, {"every_ms": 1}, None, tell, said))
+        asyncio.run(run_trigger(function, {}, {"every_ms": every_ms}, None, tell, said))
     return told, poked
 
 
@@ -289,3 +303,84 @@ def test_a_trigger_function_not_called_says_to_call_it() -> None:
 
     with pytest.raises(TypeError, match=r"`trigger=arrivals\(\.\.\.\)`"):
         Dag("late", trigger=arrivals)  # type: ignore[arg-type]
+
+
+def test_a_plain_poke_runs_on_a_thread_and_is_limited_as_an_async_one() -> None:
+    # Decision 489.
+    threads: list[bool] = []
+
+    def gives(after: str | None) -> list[Event[int]]:
+        threads.append(threading.current_thread() is threading.main_thread())
+        return [Event(f"{after}x", 0)]
+
+    # A thread's start takes longer than an async call's: 50 ms a call.
+    told, poked = _poking(gives, every_ms=50)
+    assert told == ["Nonex", "Nonexx", "Nonexxx"]
+    assert poked == [None, None, None]
+    assert threads == [False, False, False]
+
+    def blocks(after: str | None) -> list[Event[int]]:
+        time.sleep(0.3)
+        return [Event(str(after), 0)]
+
+    told, poked = _poking(blocks, calls=1, every_ms=50)
+    assert told == []
+    assert "PokeTooSlowError" in str(poked[0])
+
+
+def test_run_trigger_gives_a_plain_pokes_events() -> None:
+    @trigger.poke(every=timedelta(milliseconds=50))  # a thread's start: more than 1 ms
+    def plain(after: str | None) -> list[Event[int]]:
+        return [Event(f"{after}y", 1)]
+
+    assert [e.key for e in run_trigger_for_test(plain, after="a", take=2)] == ["ay", "ayy"]
+
+
+def test_a_failed_calls_threads_are_waited_for_before_the_next_and_a_stuck_one_ends_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Codex's review of M5.1o: a call stopped past `every` may still hold its thread (blocked
+    # in C); the next call ran beside it, and nothing ended the host.
+    settled: list[int] = []
+
+    async def stuck() -> bool:
+        settled.append(1)
+        return False
+
+    monkeypatch.setattr(waiting, "_settled", stuck)
+
+    async def fails(after: str | None) -> list[Event[int]]:
+        raise ValueError("not now")
+
+    told: list[str] = []
+
+    async def tell(event: Event[object]) -> None:
+        told.append(event.key)
+
+    with pytest.raises(waiting.CallStuckError, match="cancel grace"):
+        asyncio.run(run_trigger(fails, {}, {"every_ms": 1}, None, tell, lambda _: None))
+    assert settled == [1]
+
+    # Settled: the next call comes; a call with no error isn't waited for.
+    async def fine() -> bool:
+        settled.append(2)
+        return True
+
+    monkeypatch.setattr(waiting, "_settled", fine)
+    # Its second report ends the loop: the first failed call was waited for.
+    told_keys, _poked = _poking(fails, calls=2)
+    assert (told_keys, settled[1:]) == ([], [2])
+    settled.clear()
+    _poking(lambda after: [Event(f"{after}k", 0)], calls=2, every_ms=50)
+    assert settled == []
+
+
+def test_a_plain_trigger_poke_annotated_as_returning_a_coroutine_is_a_trigger() -> None:
+    async def found(after: str | None) -> list[Event[int]]:
+        return [Event(f"{after}z", 1)]
+
+    @trigger.poke(every=timedelta(milliseconds=50))
+    def wraps_it(after: str | None) -> Coroutine[object, object, list[Event[int]]]:
+        return found(after)
+
+    assert [e.key for e in run_trigger_for_test(wraps_it, after="a")] == ["az"]

@@ -453,9 +453,16 @@ async def poked(name: str) -> str | NotYet:
     return name or NOT_YET
 
 
-@sensor.poke(every=timedelta(minutes=1))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-def plain_poke() -> str | NotYet:
-    return NOT_YET
+# A poke may be a plain `def` (decision 489); `@sensor` itself stays `async def`.
+@sensor.poke(every=timedelta(minutes=1))
+def plain_poke(name: str) -> str | NotYet:
+    return name or NOT_YET
+
+
+# Refused: mypy finds no form taking it, pyright no type for what it makes.
+@sensor  # type: ignore[arg-type]  # pyright: ignore[reportCallIssue,reportArgumentType,reportUntypedFunctionDecorator]
+def plain_sensor() -> int:
+    return 1
 
 
 @task
@@ -484,6 +491,8 @@ with Dag("sensors_typed"):
     waited.on(TimedOut) >> takes_text("late")
     chain(waited.on(int, TimedOut), takes_text("always"))
     takes_text(poked("a").on(str))
+    takes_text(plain_poke("a").on(str))
+    takes_number(plain_poke("a").on(str))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
     # `first_of` is the tasks' value; with its winner, a pair; `at_least` a list.
     earliest = first_of(waited.on(int), poked("b").on(str))
@@ -502,8 +511,9 @@ with Dag("sensors_typed"):
 async def sensors_in_a_test() -> None:
     number: int = await waits_for.fn("a")
     maybe: str | NotYet = await poked.fn("a")
+    plainly: str | NotYet = await plain_poke.fn("a")
     text: str = await poked.fn("a")  # type: ignore[assignment]  # pyright: ignore[reportAssignmentType]
-    del number, maybe, text
+    del number, maybe, text, plainly
 
 
 @task
@@ -546,3 +556,23 @@ async def found_files(after: str | None) -> list[Event[str]]:
 
 # Its events' data is the items' list (`dag_ctx.event.data` itself is typed `Any` for now).
 batched: TriggerFunction[..., list[Event[str]]] = found_files
+
+
+# A trigger's poke may be a plain `def` too (decision 489), batched or not.
+@trigger.poke(every=timedelta(minutes=1))
+def plain_trigger_poke(after: str | None) -> list[Event[int]]:
+    return []
+
+
+@trigger.poke(every=timedelta(minutes=1), batch=timedelta(minutes=10))
+def plain_found_files(after: str | None) -> list[Event[str]]:
+    return []
+
+
+@trigger  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+def plain_trigger(after: str | None) -> list[Event[int]]:
+    return []
+
+
+plainly_poked: TriggerFunction[..., int] = plain_trigger_poke
+plainly_batched: TriggerFunction[..., list[Event[str]]] = plain_found_files

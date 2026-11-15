@@ -31,6 +31,7 @@ from schedr._model.tasks import SensorKind, SensorMode, SensorWaitFor, Task, Tas
 from schedr._model.trigger import EventTrigger as EventTriggerModel
 from schedr._secrets import SecretsArg
 from schedr._serialization import describe
+from schedr._serialization.annotations import type_hints
 from schedr.connections import ConnectionsArg, declared_connections
 from schedr.run_of import RunOf, RunResult, call_limit_ms, run_parameter
 from schedr.triggers import UNSET, Moment, Trigger, _Unset, _window
@@ -289,10 +290,13 @@ class TriggerFunction[**P, R]:
                 f"{where} must be an async generator (`async def` with `yield`): it shares its "
                 "event loop with others, and yields events for as long as its DAG is live"
             )
-        if every is not None and not inspect.iscoroutinefunction(fn):
+        # A poke may be a plain `def`, called on the host's threads (decision 489).
+        if every is not None and (
+            inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn)
+        ):
             raise TypeError(
-                f"@trigger.poke `{self.task_id}` must be `async def`, returning its events: it "
-                "shares its event loop with others"
+                f"@trigger.poke `{self.task_id}` yields: a poke returns the events it found, "
+                "`-> list[Event[T]]`"
             )
         if every is not None and every <= timedelta(0):
             raise TypeError(f"{where}: `every` must be more than zero, got {every}")
@@ -311,7 +315,7 @@ class TriggerFunction[**P, R]:
             )
         self._secrets = _secrets.declared(options.get("secrets") or (), where)
         self._connections = declared_connections(options.get("connections"), where) or ()
-        self._data_hint = event_data_hint(typing.get_type_hints(fn).get("return"), where)
+        self._data_hint = event_data_hint(type_hints(fn, where).get("return"), where)
 
     def _init_waiting(self, fn: Callable[..., object], where: str, options: TriggerOptions) -> None:
         """As ``__init__``, for ``wait_for=``: the run first, ``-> Event[T] | None``."""
@@ -342,7 +346,7 @@ class TriggerFunction[**P, R]:
         self._signature = signature.replace(parameters=list(signature.parameters.values())[1:])
         self._secrets = _secrets.declared(options.get("secrets") or (), where)
         self._connections = declared_connections(options.get("connections"), where) or ()
-        returned = typing.get_type_hints(fn).get("return")
+        returned = type_hints(fn, where).get("return")
         kept = [a for a in get_args(returned) if a is not type(None)]
         event = kept[0] if len(kept) == 1 and type(None) in get_args(returned) else None
         if event is not Event and get_origin(event) is not Event:
@@ -481,18 +485,31 @@ class _WaitForEventDecorator(typing.Protocol):
 
 
 class _BatchDecorator(typing.Protocol):
-    """What ``@trigger.poke(batch=...)`` gives: a run reads the items as ``list[Event[T]]``."""
+    """What ``@trigger.poke(batch=...)`` gives: a run reads the items as ``list[Event[T]]``.
 
+    Its function is an ``async def``, or a plain ``def`` (decision 489).
+    """
+
+    @overload
     def __call__[T, **P](
         self, fn: Callable[P, Coroutine[object, object, Sequence[Event[T]]]], /
+    ) -> TriggerFunction[..., list[Event[T]]]: ...
+    @overload
+    def __call__[T, **P](
+        self, fn: Callable[P, Sequence[Event[T]]], /
     ) -> TriggerFunction[..., list[Event[T]]]: ...
 
 
 class _PokeDecorator(typing.Protocol):
-    """What ``@trigger.poke(...)`` gives."""
+    """What ``@trigger.poke(...)`` gives: an ``async def``, or a plain ``def`` (decision 489)."""
 
+    @overload
     def __call__[T, **P](
         self, fn: Callable[P, Coroutine[object, object, Sequence[Event[T]]]], /
+    ) -> TriggerFunction[..., T]: ...
+    @overload
+    def __call__[T, **P](
+        self, fn: Callable[P, Sequence[Event[T]]], /
     ) -> TriggerFunction[..., T]: ...
 
 
@@ -590,10 +607,14 @@ class _Trigger:
         batch: timedelta | None = None,
         **options: Unpack[TriggerOptions],
     ) -> object:
-        """Makes an ``async def`` function a trigger that schedr calls every ``every``.
+        """Makes a function a trigger that schedr calls every ``every``.
 
         It returns the events it found, oldest first: ``-> list[Event[T]]``. An empty list leaves
         no trace. Each call is limited to ``every``, and calls never overlap.
+
+        It is an ``async def``, or a plain ``def`` (a blocking client), called on the host's
+        threads with the trigger's context, log and secrets; a plain call over ``every`` is
+        stopped as an ``asyncio.to_thread`` call is (decision 489).
 
         With ``batch=``, what the pokes return is gathered from the first item for that long,
         then sent as one event: its key the last item's (so ``after`` keeps its meaning), its

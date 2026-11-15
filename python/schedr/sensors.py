@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import types
 import typing
 from dataclasses import replace
@@ -153,15 +154,38 @@ class SensorFunction[**P, R, A = R](AsyncTaskFunction[P, R, A]):
             # The DAG never gives it: the master does, with the run (see `_kind`).
             rest = list(self._signature.parameters.values())[1:]
             self._signature = self._signature.replace(parameters=rest)
-        if not is_async(fn):
+        if inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn):
+            raise TypeError(f"{where} yields: a wait step returns its value (or `NOT_YET`)")
+        # A poke may be a plain `def`, called on the host's threads (decision 489); the rest
+        # share the host's event loop.
+        if not is_async(fn) and every is None:
             raise TypeError(
                 f"{where} is a plain `def`: a wait step shares its event loop with others, so it "
-                "must be `async def`"
+                "must be `async def` (a `@sensor.poke` may be a plain `def`)"
             )
         self._every = every
         self._every_ms = None if every is None else _milliseconds(every, "every", where)
         if options.max_wait is not None:
             _milliseconds(options.max_wait, "max_wait", where)
+
+    def fn(self, *args: P.args, **kwargs: P.kwargs) -> Coroutine[object, object, A]:
+        """Calls the function, to ``await`` in a test.
+
+        A plain ``def`` poke runs on a thread, as its host calls it (decision 489).
+
+        Args:
+            *args: Its arguments.
+            **kwargs: Its arguments.
+
+        Returns:
+            Its coroutine; what the step declares is in force while it runs.
+        """
+        if inspect.iscoroutinefunction(self._fn):
+            return super().fn(*args, **kwargs)
+        from schedr.runner.waiting import awaited_poke  # noqa: PLC0415 (it imports this module)
+
+        called = cast("Coroutine[object, object, A]", awaited_poke(self._fn)(*args, **kwargs))
+        return self._declaring_while(called)
 
     def _record(
         self,
@@ -354,10 +378,18 @@ class _WaitForEventDecorator(typing.Protocol):
 
 
 class _PokeDecorator(typing.Protocol):
-    """What ``@sensor.poke(...)`` gives: its function's value is what isn't ``NOT_YET``."""
+    """What ``@sensor.poke(...)`` gives: its function's value is what isn't ``NOT_YET``.
 
+    Its function is an ``async def``, or a plain ``def`` (decision 489).
+    """
+
+    @overload
     def __call__[**P, R](
         self, fn: Callable[P, Coroutine[object, object, R | NotYet]], /
+    ) -> SensorFunction[P, _outcomes.Waited[R], R | NotYet]: ...
+    @overload
+    def __call__[**P, R](
+        self, fn: Callable[P, R | NotYet], /
     ) -> SensorFunction[P, _outcomes.Waited[R], R | NotYet]: ...
 
 
@@ -440,12 +472,17 @@ class _Sensor:
         return made if fn is None else made(fn)
 
     def poke(self, *, every: timedelta, **options: Unpack[SensorOptions]) -> _PokeDecorator:
-        """Makes an ``async def`` function a wait step that schedr calls every ``every``.
+        """Makes a function a wait step that schedr calls every ``every``.
 
         It returns its value, or ``NOT_YET`` until it has one: ``-> Path | NotYet``. Calls never
         overlap: one that runs past ``every`` delays the next, and the poke fails after
         ``[watchers] poke_overruns`` of them in a row, or at once when a call reaches three times
         ``every`` (decision 458). A call that raises is a failure with the usual retries.
+
+        It is an ``async def``, or a plain ``def`` (a blocking client), called on the host's
+        threads with the step's context, log and secrets; a plain call over its time is stopped
+        as an ``asyncio.to_thread`` call is (decision 489). Plain pokes run side by side: what
+        they share must be thread-safe.
 
         Args:
             every: How often to call it.

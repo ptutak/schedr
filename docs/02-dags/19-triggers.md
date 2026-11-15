@@ -19,9 +19,11 @@ system can also [post named events](22-events.md) to start a DAG directly:
 run exists yet. Pass the call to `Dag(trigger=...)`. Declare `secrets=` and `connections=`
 on the decorator as on a wait step.
 
-For polling, use `@trigger.poke(every=...)` on an async function returning
-`list[Event[T]]`, oldest first. Return an empty list when there is nothing new. Calls never
-overlap and each must finish within `every`:
+For polling, use `@trigger.poke(every=...)` on a function returning
+`list[Event[T]]`, oldest first: an `async def`, or a plain `def` for a blocking client, called on
+the host's threads as a [plain def poke](18-sensors.md#a-plain-def-poke) is (its call stopped the
+same way past `every`). Return an empty list when there is nothing new. Calls never overlap and
+each must finish within `every`:
 
 ```python
 from datetime import timedelta
@@ -42,10 +44,10 @@ In the plain forms you write the loop yourself; in the `.poke` forms schedr owns
 | Form | Your function is | It returns | Called again |
 |---|---|---|---|
 | `@sensor` | `async def`, its own waiting loop | Its value, once | Never: it is the whole wait, limited to `max_wait` |
-| `@sensor.poke(every=...)` | `async def`, one check | Its value, or `NOT_YET` | After `NOT_YET`, `every` after the last call started, or as it ends when it ran past `every` |
+| `@sensor.poke(every=...)` | `async def` or a plain `def`, one check | Its value, or `NOT_YET` | After `NOT_YET`, `every` after the last call started, or as it ends when it ran past `every` |
 | [`@sensor(wait_for=...)`](21-wait-for.md#reading-the-run-sensorwait_for) | `async def`, one look at a run or event | Its value, or `NOT_YET` (not this item) | With a later match, until `max_wait`; each call limited by `timeout=` if given |
 | `@trigger` | An async generator, its own loop | Never returns: it yields an `Event` each time it finds one | Never: it runs while its DAG is live; returning or raising is an error on its status |
-| `@trigger.poke(every=...)` | `async def`, one check | `list[Event[T]]`, oldest first; `[]` for nothing | Every `every`, counted from when each call started |
+| `@trigger.poke(every=...)` | `async def` or a plain `def`, one check | `list[Event[T]]`, oldest first; `[]` for nothing | Every `every`, counted from when each call started |
 | [`@trigger(wait_for=...)`](21-wait-for.md#deciding-per-run-triggerwait_for) | `async def`, one look at a run or event | An `Event`, or `None` for no run | For each run that ends or named event posted while live; limited to `timeout=` |
 
 A wait step ends with one value, or `TimedOut`, and its run goes on. A trigger never ends:
@@ -123,7 +125,9 @@ version or code, a worker drain or loss also stops and restarts it from the book
 Failures restart after 5 seconds, doubling up to 5 minutes. A generator that returns stops
 with `trigger_returned` until its DAG version or code changes. A poke that raises or exceeds
 `every` keeps its bookmark and gets its next call; a successful call clears its consecutive
-failure count.
+failure count. The next call waits for a failed one's `asyncio.to_thread` calls, or a plain
+`def` poke's call, to stop; one still running after the cancel grace (blocked in C) ends the
+trigger with its host, as a stuck wait step does, and it starts again from its bookmark.
 
 Use `new_files(folder="/tmp/schedr-incoming").override(...)` to set:
 

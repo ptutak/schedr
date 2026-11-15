@@ -7,8 +7,9 @@ section = "What a wait step may start"
 summary = '''
 `asyncio.to_thread` calls run in their wait step’s context and are tracked.
 Calls still running at cancellation or step end are stopped; a stuck thread ends with its host.
+A trigger's next call waits for a failed call's threads to stop, within the cancel grace.
 '''
 history = "archive/PROJECT.md#D337"
 step = "M4.11a2"
 code = ["crates/schedr-model/src/runner.rs", "python/schedr/runner/waiting.py", "python/schedr/runner/watchers.py::_ThreadCall"]
-checked = 2026-11-12
+checked = 2026-11-15

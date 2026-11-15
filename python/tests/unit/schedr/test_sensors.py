@@ -1,8 +1,11 @@
 """``@sensor`` and ``@sensor.poke`` in a DAG body and in a test (M4.11a1)."""
 
 import asyncio
+import functools
+import threading
 import time
 from collections.abc import Callable, Coroutine
+from contextvars import ContextVar
 from datetime import timedelta
 from typing import Annotated, Any, NewType, cast
 
@@ -157,14 +160,21 @@ def test_on_success_works_and_an_enum_or_timed_out_in_the_type_is_refused() -> N
         both()
 
 
-def test_a_plain_def_is_refused() -> None:
+def test_a_plain_def_is_refused_but_for_a_poke() -> None:
     def plain() -> int:
         return 1
 
     with pytest.raises(TypeError, match="must be `async def`"):
         sensor(plain)  # type: ignore[call-overload]
-    with pytest.raises(TypeError, match="must be `async def`"):
-        sensor.poke(every=timedelta(seconds=1))(plain)  # type: ignore[arg-type]
+    # Decision 489: a poke may be a plain `def`, called on the host's threads.
+    poke = sensor.poke(every=timedelta(seconds=1))(plain)  # type: ignore[arg-type]
+    assert asyncio.run(poke.fn()) == 1
+
+    def lines() -> object:
+        yield 1
+
+    with pytest.raises(TypeError, match="yields"):
+        sensor.poke(every=timedelta(seconds=1))(lines)  # type: ignore[arg-type]
 
 
 def test_an_async_generator_is_refused() -> None:
@@ -463,3 +473,84 @@ def test_on_names_a_value_by_what_its_type_stands_for(annotation: object) -> Non
     with Dag("d"):
         chain(sensor(wait)().on(str), EmptyOperator("after"))
     assert _defined()["edges"][0]["on"] == ["SUCCESS"]
+
+
+def test_a_plain_poke_runs_on_a_thread_with_the_steps_context_until_it_has_a_value() -> None:
+    # Decision 489.
+    marker: ContextVar[str] = ContextVar("marker", default="none")
+    seen: list[tuple[bool, str]] = []
+
+    def poke() -> object:
+        seen.append((threading.current_thread() is threading.main_thread(), marker.get()))
+        return "ready" if len(seen) == 3 else NOT_YET
+
+    async def step() -> object:
+        marker.set("the step's")
+        # 50 ms a call: a thread's start under load (Codex's review: 1 ms flaked).
+        return await waited(poke, {}, {"every_ms": 50, "max_wait_ms": 60_000})
+
+    assert asyncio.run(step()) == "ready"
+    assert seen == [(False, "the step's")] * 3
+
+
+def test_a_plain_poke_past_its_limit_is_stopped_and_fails_as_an_async_one() -> None:
+    # A blocking call past three times `every` is stopped (here: an ordinary pool's thread is
+    # left to end; on a host its call is stopped, decision 337) and the poke fails.
+    def slow() -> object:
+        time.sleep(0.2)
+        return "late"
+
+    with pytest.raises(PokeTooSlowError, match="longer than 3 times `every`"):
+        _waited(slow, max_wait_ms=60_000, every_ms=10)  # type: ignore[arg-type]
+    # Past `max_wait`: `TimedOut`, as for an async poke.
+    assert _waited(slow, max_wait_ms=30, every_ms=1000) == TimedOut()  # type: ignore[arg-type]
+
+
+def test_a_plain_poke_returning_a_coroutine_is_awaited() -> None:
+    async def later() -> str:
+        await asyncio.sleep(0)
+        return "ready"
+
+    def wraps() -> object:
+        return later()
+
+    assert _waited(wraps, max_wait_ms=60_000, every_ms=10) == "ready"  # type: ignore[arg-type]
+    poke = sensor.poke(every=timedelta(seconds=1))(wraps)  # type: ignore[arg-type]
+    assert asyncio.run(poke.fn()) == "ready"
+
+
+def test_a_plain_wrapper_of_an_async_def_runs_on_a_thread_too() -> None:
+    # Codex's review of M5.1o: `functools.wraps` made it look async, and it ran on the loop.
+    threads: list[bool] = []
+
+    async def inner() -> str:
+        return "ready"
+
+    @functools.wraps(inner)
+    def wrapper() -> Coroutine[object, object, str | NotYet]:
+        threads.append(threading.current_thread() is threading.main_thread())
+        return inner()
+
+    assert _waited(wrapper, max_wait_ms=60_000, every_ms=50) == "ready"
+    assert threads == [False]
+
+
+def test_a_plain_poke_annotated_as_returning_a_coroutine_is_a_wait_step() -> None:
+    # Codex's review of M5.1o: its coroutine's value is its output, `NOT_YET` in it.
+    async def later() -> str:
+        return "ready"
+
+    @sensor.poke(every=timedelta(seconds=1))
+    def wraps_it() -> Coroutine[object, object, str | NotYet]:
+        return later()
+
+    @sensor.poke(every=timedelta(seconds=1))
+    async def plainly_async() -> str | NotYet:
+        return "ready"
+
+    with Dag("d"):
+        wraps_it()
+        plainly_async()
+    dag = _defined()
+    assert _kind(dag, "wraps_it")["output_type"] == _kind(dag, "plainly_async")["output_type"]
+    assert asyncio.run(wraps_it.fn()) == "ready"

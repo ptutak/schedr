@@ -1819,6 +1819,91 @@ fn stress_23_many_sensors() {
     finish(&stress, report, &["success"]);
 }
 
+/// Scenario 23b: 100 plain `def` pokes on one worker (decision 489, M5.1o), each call blocking
+/// for 1 s as a blocking client does, every 5 s: on Python's default pool (at most 32 threads)
+/// their calls would queue and overrun; on the host's pool, sized from its wait steps, each runs
+/// on time. All succeed, and each sees the file within its `every` and its call's second.
+#[test]
+fn stress_23b_plain_pokes() {
+    const DAGS: usize = 10;
+    const PER_DAG: usize = 10;
+    let mut stress = Stress::new(Some(postgres_database()));
+    let mut report = Report::new("23b_plain_pokes");
+    let gate = stress.cluster.dir.path().join("gate");
+    let dags: Vec<String> = (1..=DAGS)
+        .map(|i| {
+            let id = format!("plain{i:03}");
+            stress.write_dag(&id, &plain_pokes_dag(&id, &gate, PER_DAG));
+            id
+        })
+        .collect();
+    let steps = DAGS * PER_DAG;
+    stress.start_core("master", &[]);
+    stress.start_workers(1, 2, &[]);
+    stress.wait_for_dags(DAGS, 10 * MINUTE);
+    stress.trigger(&dags, 1);
+    let mut opened = 0.0;
+    stress.wait_for_runs(DAGS, 15 * MINUTE, |stress| {
+        if opened > 0.0 {
+            return;
+        }
+        let (_, metrics) = stress.cluster.ops_get("w01", "/metrics");
+        #[expect(clippy::cast_precision_loss, reason = "100 wait steps")]
+        if gauge(&metrics, "schedr_worker_watcher_slots_used") >= steps as f64 {
+            // A few rounds of calls first: the overruns would show by then.
+            std::thread::sleep(Duration::from_secs(20));
+            opened = check::now_s();
+            std::fs::write(&gate, b"go").unwrap();
+        }
+    });
+    #[expect(clippy::cast_precision_loss, reason = "100 wait steps")]
+    report.set("wait_steps", steps as f64);
+    response_times(&stress, &mut report, opened);
+    if let Some(p99) = report.get("poke_response_p99_s") {
+        // Its `every` (5 s) and its call's second, with a second's room.
+        report.at_most("poke_response_p99_s", p99, 7.0);
+    }
+    let ok = stress
+        .db
+        .count("SELECT COUNT(*) FROM task_instances WHERE state = 'success'");
+    if ok != i64::try_from(steps).unwrap() {
+        report.broken(vec![format!("{ok} plain pokes succeeded of {steps}")]);
+    }
+    finish(&stress, report, &["success"]);
+}
+
+/// A DAG of `count` plain `def` pokes waiting for `gate`, each call blocking 1 s.
+fn plain_pokes_dag(id: &str, gate: &std::path::Path, count: usize) -> String {
+    let gate = gate.display();
+    let mut source = format!(
+        r#"import time
+from datetime import timedelta
+from pathlib import Path
+
+from schedr import Dag, sensor
+from schedr.sensors import NOT_YET, NotYet
+
+GATE = Path("{gate}")
+"#
+    );
+    for i in 0..count {
+        let _ = write!(
+            source,
+            r"
+@sensor.poke(every=timedelta(seconds=5), max_wait=timedelta(minutes=30), retries=0)
+def poke{i}() -> int | NotYet:
+    time.sleep(1)
+    return 1 if GATE.exists() else NOT_YET
+"
+        );
+    }
+    let _ = write!(source, "\nwith Dag(\"{id}\"):\n");
+    for i in 0..count {
+        let _ = writeln!(source, "    poke{i}()");
+    }
+    source
+}
+
 /// How soon each of scenario 23's wait steps saw the file opened at `opened` and ended: its own
 /// check (1 s awaiting, 5 s poking), the runner's answer and the master's recording of it.
 fn response_times(stress: &Stress, report: &mut Report, opened: f64) {

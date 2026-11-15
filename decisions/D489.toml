@@ -16,4 +16,5 @@ forms stay `async def`. Not chosen: async only.
 '''
 history = "JOURNAL.md#D489"  # <a id="D489"></a> starts its JOURNAL.md entry
 step = "M5.1o"  # the plan step that builds it; "later"; "n/a" for a rule
-code = []
+code = ["python/schedr/runner/waiting.py::awaited_poke", "python/schedr/runner/watchers.py::_WatcherThreads", "python/schedr/sensors.py::SensorFunction", "python/schedr/event_triggers.py::TriggerFunction"]
+checked = 2026-11-15

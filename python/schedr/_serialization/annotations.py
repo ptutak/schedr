@@ -190,6 +190,12 @@ def type_hints(target: Callable[..., Any] | type, what: str) -> dict[str, Any]:
         TypeModelError: If an annotation can't be resolved (e.g. an undefined name).
     """
     try:
-        return typing.get_type_hints(target, include_extras=True)
+        hints = typing.get_type_hints(target, include_extras=True)
     except Exception as e:  # get_type_hints raises NameError, TypeError, AttributeError, ...
         raise TypeModelError(f"{what}: can't resolve an annotation: {e}") from e
+    # A plain `def` returning a coroutine has it awaited (a poke, decision 489): what it gives
+    # is what the coroutine does (Codex's review of M5.1o).
+    returned = hints.get("return")
+    if typing.get_origin(returned) in (collections.abc.Coroutine, collections.abc.Awaitable):
+        hints["return"] = typing.get_args(returned)[-1] if typing.get_args(returned) else Any
+    return hints

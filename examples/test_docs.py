@@ -52,6 +52,7 @@ EVENTS: dict[str, Event[Any]] = {
         at=FOR,
     ),
     "big_orders": Event("01a1b600-0000-7000-8000-000000000000", 42, at=FOR),
+    "plain_trigger_demo": Event("a.csv", "a.csv", at=FOR),
 }
 
 
@@ -149,12 +150,20 @@ def _check_mapped_process(dag_id: str, result: RunResult) -> None:
     assert result.tasks["run_command"].output == ["hello eu", "hello us"]
 
 
+def _check_plain_pokes(dag_id: str, result: RunResult) -> None:
+    if dag_id == "plain_poke_demo":
+        assert result.tasks["load_orders"].output == "3 orders"
+    else:
+        assert result.tasks["read_report"].output == "a.csv"
+
+
 EXAMPLE_CHECKS: dict[str, Callable[[str, RunResult], None]] = {
     "notifications.py": _check_notifications,
     "chained_runs.py": _check_chained,
     "mapped_chained.py": _check_mapped_chained,
     "mapped_process.py": _check_mapped_process,
     "sensors.py": _check_sensors,
+    "plain_pokes.py": _check_plain_pokes,
 }
 """Each example's own checks, by file, beyond every task ending well."""
 
@@ -165,10 +174,22 @@ def _configure(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SCHEDR_CONFIG_FILE", str(Path(__file__).parent / "standalone.toml"))
 
 
+def _connections(path: Path, api: str, inbox: Path) -> dict[str, dict[str, object]] | None:
+    """The connections an example is given: the stand-in webserver, a folder with a marker."""
+    if path.name == "sensors.py":
+        return {"schedr_api": {"base_url": api}}
+    if path.name == "plain_pokes.py":
+        (inbox / "orders.done").write_text("3")
+        return {"orders_inbox": {"folder": str(inbox), "status_url": api}}
+    return None
+
+
 @pytest.mark.parametrize("path", DOC_EXAMPLES, ids=lambda path: path.name)
-def test_doc_example_runs(path: Path, run_api: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_doc_example_runs(
+    path: Path, run_api: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _configure(path, monkeypatch)
-    connections = {"schedr_api": {"base_url": run_api}} if path.name == "sensors.py" else None
+    connections = _connections(path, run_api, tmp_path)
     for dag in _load(path):
         result = run_dag(
             path,

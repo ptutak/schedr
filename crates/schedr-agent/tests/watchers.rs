@@ -265,6 +265,17 @@ async def polls() -> str | NotYet:
     return CODE
 
 
+@sensor.poke(every=timedelta(milliseconds=200), max_wait=timedelta(seconds=WAIT))
+def plain_polls() -> str | NotYet:
+    # A plain `def` poke (decision 489): on the host's threads, its print the step's, masked.
+    print("plain says hunter22-pw on", threading.current_thread().name.split("_")[0])
+    time.sleep(0.01)
+    if not Path(os.environ["IMPORTS"]).with_name("plain_ready").exists():
+        Path(os.environ["IMPORTS"]).with_name("plain_ready").write_text("yes")
+        return NOT_YET
+    return CODE
+
+
 @sensor.poke(every=timedelta(seconds=7), max_wait=timedelta(seconds=WAIT))
 async def slow_call() -> str | NotYet:
     state = Path(os.environ["IMPORTS"]).parent
@@ -293,6 +304,7 @@ with Dag("sync"):
     starts_a_process()
     slow_reader()
     polls()
+    plain_polls()
     thread_printer()
     alpha()
     beta()
@@ -683,6 +695,24 @@ async fn what_a_thread_prints_goes_to_its_steps_log_masked() {
         Some(RunnerMessage::TaskSucceeded { .. })
     ));
     assert_eq!(worker.log("thread_printer"), "thread says ****\n");
+}
+
+#[tokio::test]
+async fn a_plain_poke_runs_on_the_hosts_threads_its_print_its_steps_masked() {
+    // Decision 489.
+    let worker = Worker::new().await;
+    let ran = worker
+        .run("plain_polls", no_stop(), masking_the_secret())
+        .await;
+    assert!(
+        matches!(ran.runner_result, Some(RunnerMessage::TaskSucceeded { .. })),
+        "{:?}",
+        ran.runner_result
+    );
+    assert_eq!(
+        worker.log("plain_polls"),
+        "plain says **** on schedr-wait-step\nplain says **** on schedr-wait-step\n"
+    );
 }
 
 #[tokio::test]

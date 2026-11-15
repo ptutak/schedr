@@ -38,7 +38,12 @@ from schedr.runner.coroutines import loop_factory
 from schedr.runner.parse import extend_sys_path, import_dag_entries
 from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError
 from schedr.runner.task import execute_trigger, execute_watcher, failure
-from schedr.runner.waiting import StepEndedError, refuse_a_process, set_poke_overruns
+from schedr.runner.waiting import (
+    StepEndedError,
+    refuse_a_process,
+    set_poke_overruns,
+    set_settled,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -189,7 +194,28 @@ class _WatcherThreads(concurrent.futures.ThreadPoolExecutor):
 
     A pool's thread would otherwise keep the context of whoever made it start, and print to that
     watcher's log.
+
+    Sized from the host's wait steps (decision 489): a plain ``def`` poke holds a thread for each
+    of its calls, and calls of one step never overlap, so a thread a step on top of Python's
+    default (``min(32, CPUs + 4)``, for the steps' own ``to_thread`` calls). Threads start only
+    when a call needs one, and an idle one is used first.
     """
+
+    _BASE = min(32, (os.cpu_count() or 1) + 4)
+
+    def __init__(self, max_workers: int | None = None, thread_name_prefix: str = "") -> None:
+        self._base = self._BASE if max_workers is None else max_workers
+        super().__init__(max_workers=self._base, thread_name_prefix=thread_name_prefix)
+
+    def fit(self, steps: int) -> None:
+        """Lets as many threads run as ``steps`` wait steps may need.
+
+        Args:
+            steps: How many wait steps the host runs now.
+        """
+        # `ThreadPoolExecutor` starts a thread for a call while it has fewer than this; a
+        # thread past it, started for more steps before, stays until the pool ends.
+        self._max_workers = self._base + steps
 
     def submit[**P, T](
         self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
@@ -224,6 +250,8 @@ class WatcherChannel:
         self.threads: list[threading.Thread] = []
         self.moving = asyncio.Event()
         self.go: asyncio.Future[int | None] | None = None
+        self.grace = 30.0
+        """How long a call it stops has to end: the host's cancel grace."""
 
     def send(self, message: dict[str, Any]) -> None:
         """Sends one message of this watcher.
@@ -325,6 +353,8 @@ class _Host:
         self._ending: set[asyncio.Task[None]] = set()
         self._entries: dict[tuple[str, str, str], list[registry.DefinedDag]] = {}
         self.importing = 0
+        self.threads: _WatcherThreads | None = None
+        """The loop's default threads, sized from its wait steps."""
         self.loop_lag = 0.0
         """The longest its event loop took to get to a call, since it last said how it is."""
 
@@ -366,6 +396,7 @@ class _Host:
         grace: float = 30.0,
     ) -> None:
         own = WatcherChannel(self, watcher)
+        own.grace = grace
         context = contextvars.copy_context()
         context.run(_WATCHER.set, own)
         loop = asyncio.get_running_loop()
@@ -380,6 +411,8 @@ class _Host:
         )
         step = loop.create_task(running, context=context)
         self._watchers[watcher] = (own, step)
+        if self.threads is not None:
+            self.threads.fit(len(self._watchers))
         # Not what is cancelled: a step cancelled before its first turn never runs a line of its
         # own, and its end has to be told all the same.
         self._ending.add(loop.create_task(self._end(watcher, own, step, grace)))
@@ -412,6 +445,8 @@ class _Host:
                 }
             )
         del self._watchers[watcher]
+        if self.threads is not None:
+            self.threads.fit(len(self._watchers))
         # Before its result: a host left with no wait steps is stopped, and what its threads'
         # ends were wouldn't be heard otherwise.
         self.say_how_it_is()
@@ -483,6 +518,12 @@ async def _stopped_threads(own: WatcherChannel, grace: float) -> bool:
         if waited.done() and not waited.cancelled():
             waited.exception()  # Ended as asked: nobody waits for it now.
     return not late
+
+
+async def _current_settled() -> bool:
+    """Whether the current step's calls on the host's threads ended, stopped within its grace."""
+    own = _WATCHER.get()
+    return own is None or await _stopped_threads(own, own.grace)
 
 
 def _warn_of_threads(own: WatcherChannel) -> None:
@@ -686,7 +727,8 @@ def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
 
     async def main() -> None:
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(_WatcherThreads(thread_name_prefix=_POOL_THREADS))
+        host.threads = _WatcherThreads(thread_name_prefix=_POOL_THREADS)
+        loop.set_default_executor(host.threads)
         _watch_threads()
         loop.set_exception_handler(_warn)
         threading.Thread(
@@ -694,6 +736,7 @@ def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
         ).start()
         limits = (request["block_limit_ms"] / 1000, request["import_limit_ms"] / 1000)
         set_poke_overruns(request["poke_overruns"])
+        set_settled(_current_settled)
         threading.Thread(
             target=_watch_the_loop, args=(host, loop, limits), name="schedr-watchdog", daemon=True
         ).start()

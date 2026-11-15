@@ -259,7 +259,8 @@ scope = '''
 done_when = '''
 a plain poke of each kind runs, returns NOT_YET or events, overruns and is stopped like the async one, on both kinds of host; 100 plain pokes on one host start on time (stress 23 with plain pokes); the types accept both forms and refuse a plain `@sensor` or `@trigger` (typing tests); the guide's wait step and trigger pages say when to choose which
 '''
-status = "planned"
+status = "done"
+done = 2026-11-15
 
 [[steps]]
 id = "R1.1"

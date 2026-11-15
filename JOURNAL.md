@@ -1272,3 +1272,36 @@ Small choices of Claude's for the tabs: the choice is in the address (`?view=<de
 script and no flash of the other list. A name no deployment has shows all. Not chosen:
 `localStorage` (the server couldn't render the remembered tab; the page would switch after
 loading).
+
+### <a id="N12"></a>2026-11-15: M5.1o built: a poke may be a plain def (note 12; on D489)
+
+Built as decision 489 says. A plain `def` poke is wrapped, where the hosts and `schedr.testing`
+call pokes (`awaited_poke`), into an awaited `asyncio.to_thread` call: the host's default
+threads, so it is its step's (context, log, secrets) and stopped as a `to_thread` call is when
+its window ends (decision 337); a coroutine it returns is awaited. A plain sensor poke's `.fn`
+runs it the same way, so a test awaits either form alike. A poke that yields (a generator) is
+refused; `@sensor`, `@trigger` and the `wait_for=` forms stay `async def`.
+
+The host's pool (`_WatcherThreads`) lets a thread run per wait step on top of Python's default
+(`min(32, CPUs + 4)`), its limit set as steps come and go; threads start only when a call needs
+one. Stress 23b (100 plain pokes on one worker, each call blocking 1 s, every 5 s): all succeed,
+p99 5.3 s from the file to their end; with the limit left at the default, 20 of them failed on
+overruns.
+
+Open for the user: decision 489's "to be confirmed", that the `wait_for=` forms are not pokes
+and stay `async def` (built so).
+
+Codex's review of M5.1o (`01a1dd76`) found five; four fixed with tests, one a known limit:
+
+1. A trigger's poke call stopped past `every` could still hold its thread (blocked in C) while
+   the next call ran beside it, and nothing ended the host: after a failed call, the next now
+   waits for the step's calls on the host's threads to stop, within the cancel grace; one that
+   doesn't ends the trigger, its host with it, as a stuck wait step does. (Async pokes awaiting
+   `to_thread` had this too.)
+2. A plain `def` wrapping an `async def` with `functools.wraps` looked async and ran on the event
+   loop: a poke is called on a thread unless the function itself is `async def`.
+3. A plain `def` annotated `-> Coroutine[..., X]` was refused at definition: a returned
+   coroutine is awaited, so its value is `X` wherever annotations are read (`type_hints`).
+4. Not fixed: the types accept a generator as a sensor poke (an unconstrained `R`); the
+   definition refuses it with "yields". Typing can't exclude it here.
+5. A test's 3 ms call window flaked under load: 50 ms.
