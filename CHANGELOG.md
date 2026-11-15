@@ -7,16 +7,81 @@ schema and protocol changed in place (decision 156).
 
 ## 1.1.0
 
-Not released yet: the notes grow with M5.1 (performance, metrics in the UI).
+Faster scheduling and metrics in the web UI. On the same machine as 1.0.0, the stress suite
+runs 34-67 % more tasks a second (26.7 instead of 17.0 on Postgres), a run takes about a third
+less time, and 500 waiting sensors all start in about a second instead of 20 (the numbers are
+on the guide's Stress tests page, "After M5.1"). The web UI gains a Metrics page (memory, CPU,
+throughput and start latency per deployment), a Status block on the Deployments page, and task
+memory charts.
 
 ### Upgrading from 1.0.0
 
+- **Upgrade the master first, then migrate.** The protocol goes from 2.0 to 2.1: a 1.1.0 master
+  takes 1.0.0 workers, a 1.0.0 master refuses 1.1.0 ones. One migration adds stored scheduling
+  moments (each trigger's next fire time, each wait step's next look), the samples table and
+  the processes' usage, with their indexes: run `schedr db migrate` (or start the master with
+  `--migrate`) before the webservers.
+- **An attempt's `started_at` is the worker's start** (M5.1m), turned into master time, not the
+  moment the master handled the worker's message. Start-latency numbers read from the database
+  are lower than 1.0.0's for the same work.
 - **Cleanups get 25 s by default outside the chart, not 5 minutes** (B252). Left unset,
   `[worker] cleanup_timeout` is now the shorter of 5 minutes and what a drain leaves of
   `termination_grace_period` for a cleanup: 25 s with the default 30 s grace, so a cleanup still
   running when the pod is killed at the grace period's end isn't lost. This limits every
   cleanup's try, also when nothing is shutting down. The Helm chart's 600 s grace keeps 5
   minutes. Cleanups that take longer: set `cleanup_timeout` (and a grace period it fits in).
+
+### New
+
+- **The Metrics page** (decisions 465-467, 494): per deployment, the memory and CPU of each
+  process (the master, webservers, workers: the agent, fork servers, watcher hosts and tasks),
+  against their limits, over 1 hour, 24 hours, 7 or 30 days; the tasks ended per bucket
+  (succeeded, failed, stopped) and the p50 and p95 of their start latency. Charts are drawn by
+  the server; the samples are taken each minute and rolled up after 15 minutes.
+- **A Status block on the Deployments page** (decision 462): per deployment, its masters by role
+  (red when none leads), workers by state, slots in use, errors and warnings, mixed versions, and
+  every process's memory with a 24 h sparkline. Each node's panel has its own chart, and the
+  Workers page a Memory column.
+- **Task memory charts** (decision 467): a task's panel shows its last 30 attempts' peak memory,
+  and the DAG page each task's p95 peak against its limit.
+- **The DAGs page by deployment** (M5.1l1): one list of every DAG, or a tab per deployment.
+- **`schedr standalone --dag-path` and `--script-path`** (decision 488): the folders on the
+  command line, each repeatable and taking `.`, over `SCHEDR_DAG_PATH` and
+  `SCHEDR_SCRIPT_PATH`. Getting started shows the project folder itself as the DAG folder
+  (with a `.schedrignore`) and a plain script job.
+- **A poke may be a plain `def`** (decision 489): `@sensor.poke(every=...)` and
+  `@trigger.poke(every=...)` take a synchronous function too, run on the host's threads within
+  the same call window.
+- **Tunable constants as hidden settings** (decision 493): 11 timings and 30 limits a deployment
+  might need to change (per-round caps, the worker's journal groups, event backlogs, the Metrics
+  cache, the client's timeouts) are `SCHEDR_HIDDEN__*` variables, their defaults unchanged; the
+  configuration reference lists them.
+
+### Performance
+
+- **The master's lock per transaction** (M5.1c1, M5.1c3): a round's parts, a worker's turn and
+  each command take the core lock for one transaction each instead of a whole turn; a round's
+  assignments and a command are written set-based, one transaction each.
+- **Start records in groups** (M5.1b): a burst of starts is journaled and recorded as one group.
+- **A worker's turn takes up to 80 messages** (decision 484, from stress runs of 10 to 160).
+- **Fewer statements behind PgBouncer** (M5.1d): claims, tries and sensor starts set-based.
+- **An idle master reads one statement a tick** (decisions 485, 486): a probe answers whether
+  each read of the round would find anything, with each DAG's and trigger's next moment stored;
+  triggers and named events run in a loop of their own, woken when something happens. An idle
+  standalone went from 22.5 statements a second to 1.9, and from 2.0 % of a core to 0.3 %.
+
+### Changed
+
+- **A worker with no DAG directories warns at start** (decision 476): "no DAG directories",
+  naming `SCHEDR_DAG_PATH` and `[dags] path`. Before, a standalone started without them showed
+  only an empty UI.
+- **A role waits for a database it can't reach yet** (decision 496). The master, the webserver
+  and standalone started before their database (refused, timed out, Postgres starting up or out
+  of connections) used to exit; they now try again every 5 s, warning with the database's host
+  and port (never its user or password) at once and every minute. A wrong password, database
+  name or TLS setting still exits at once.
+- **PyPI shows a page of its own** (decision 477): installing and a first run, with links to the
+  new **Getting started** section of the documentation, instead of the repository's README.
 
 ### Fixed
 
@@ -35,19 +100,6 @@ Not released yet: the notes grow with M5.1 (performance, metrics in the UI).
   disconnected, then lost. It now waits for the master until its grace period's end.
 - **Every start warned about the default `cleanup_timeout`** (B252): the default didn't fit in
   the default grace period. It does now (see Upgrading).
-
-### Changed
-
-- **A worker with no DAG directories warns at start** (decision 476): "no DAG directories",
-  naming `SCHEDR_DAG_PATH` and `[dags] path`. Before, a standalone started without them showed
-  only an empty UI.
-- **A role waits for a database it can't reach yet** (decision 496). The master, the webserver
-  and standalone started before their database (refused, timed out, Postgres starting up or out
-  of connections) used to exit; they now try again every 5 s, warning with the database's host
-  and port (never its user or password) at once and every minute. A wrong password, database
-  name or TLS setting still exits at once.
-- **PyPI shows a page of its own** (decision 477): installing and a first run, with links to the
-  new **Getting started** section of the documentation, instead of the repository's README.
 
 ## 1.0.0
 
