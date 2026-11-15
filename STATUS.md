@@ -3,7 +3,7 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-14)
+## Now (2026-11-15)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
 - **Next step:** R1.1, Release 1.1.0. Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
@@ -24,27 +24,29 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- M5.1a-M5.1f2 done 2026-11-14. M5.1c: the core lock per round part, per turn transaction and per command (D469, D480, D483), the round's assignments set-based (D481, D482). M5.1d: statements counted (`make stress STRESS_STATEMENTS=1`). M5.1e: a turn takes up to 80 messages (D484). M5.1f1 (D485): one probe statement a round, `next_fire_at` stored. M5.1f2 (D486, D487): the trigger pass in a loop of its own, woken by writes, stored looks and posted events (paid -> run started 1.53 s -> 47 ms idle); waiting steps parked, cleared by row triggers; the unreleased migrations one file, `0002_next_looks.sql` (edited in place until a release). M5.1g (the Status block) committed, its review joint with j-l. Order: h, i, m, then j, k, l, then M5.1n and M5.1n (`schedr standalone --dag-path/--script-path`, details with the user). M5.2 (the Airflow migration tool, D470-D475) after release 1.1.0 (R1.1).
-- For the user: decision 440 (Claude's) on what retention keeps beyond the three newest runs, with the two side notes' cases; D50's fork-child limit not built (Claude's: a capped Python task is spawned, never forked).
+- M5.1 done 2026-11-15 (M5.1a-M5.1q; M5.1q: B242, D495-D497, B252). Every bug fixed but B38 and B39 (the user: they wait for M6). Stress, 1.0.0 against M5.1, on the guide's Stress tests page ("After M5.1"); the three regressions it couldn't explain (command decided p99, forked start p50, soak memory) not logged (the user).
+- The docs review for 1.1.0 (Codex Sol, high; rewrites asked for by the user): batch B (guide 01-09) and batch A (README, Getting started, Writing DAGs) merged; batch C (guide 10-18) running in `schedr-codex-docs-C` (branch codex/docs-C), to be verified and merged into 1.1.0.
+- The 1.1.0 release notes in CHANGELOG.md, written and uncommitted: they wait for the user's reading.
+- Then stop just before R1.1 (the release itself is the user's).
 - Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
-- Later in M5: Airflow migration tools, probably instead of the Airflow layer (the user, 2026-11-13; the idea 2026-11-12): Airflow DAG files converted into schedr DAGs once, instead of a compatibility layer running them as they are.
 
 ## Waiting for the user
 
-- 2026-11-14: a general docs review by Codex (the whole docs site, not tied to a step); before or after 1.1.0, as it comes
+- The 1.1.0 release notes (CHANGELOG.md, uncommitted).
+- After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled; the user: after the release).
 
 ## Rules in force
 
-- Commits and pushes pre-accepted from M5.1a to the end of M5.1, through M5.1m (the user, 2026-11-13; the release R1.1 not included); no pending label in the UI (the user), after each step's review, `make check` and `make docs`; stop at any decision that is the user's, or where building shows an accepted design doesn't hold.
-- One review per step: Codex (security in its prompt) until it reaches its limit, then Grok (high reviews, medium docs) without asking (the user, 2026-11-10); always at high effort; the UI steps M5.1g, j, k and l share one review after M5.1l, each committed after its checks meanwhile (the user, 2026-11-14).
-- Before a step's commit: `python3 scripts/records.py affected`, re-read those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
-- Stress runs only nightly, or when the user asks; a step changing how the master recovers (a lost worker, streams, take-backs, moved cleanups, the cutoff) runs the cut scenarios 17-21 locally before pushing (the user, 2026-11-12).
+- Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; stop just before R1.1. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
+- One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.
+- Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
+- Stress runs only nightly or when the user asks; a step changing how the master recovers runs the cut scenarios 17-21 locally before pushing.
 - Before stating how something behaves, read the code or run it, and say which.
 - Work from a worktree reaches main through git only; read `git diff --cached --stat` before committing (D371).
 
 ## Colleagues
 
-Codex at 98% of its week (resets Sat 14 Nov 21:47), so Grok reviews. Grok about 33% of its week by its script after M5.1f2's two review sessions (7.0%). Usage logs in the skills' `USAGE.md`.
+Codex at 30% of its week (5 h window 30%) after M5.1q's two reviews and docs batch A; batch C running. Grok unused this week. Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 
