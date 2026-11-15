@@ -509,12 +509,11 @@ def test_a_tasks_memory_tab_and_the_dags_memory_table_show_its_peaks(
     page.goto(f"{standalone['url']}/d/default/runs/{standalone['run']}?task=load&tab=memory")
     panel = page.locator("#task-panel")
     expect(panel.locator(".tabs .tab.open")).to_have_text("Memory")
-    bar = panel.locator("svg.chart.bars a")
+    # The session's other tests run the DAG too: its run's bar among theirs, by its link.
+    link = f"/d/default/runs/{standalone['run']}?task=load&tab=attempts"
+    bar = panel.locator(f'svg.chart.bars a[href="{link}"]')
     expect(bar).to_have_count(1)
-    expect(panel.locator("svg.chart.bars path.bar.ok")).to_have_count(1)
-    assert bar.get_attribute("href") == (
-        f"/d/default/runs/{standalone['run']}?task=load&tab=attempts"
-    )
+    expect(bar.locator("path.bar.ok")).to_have_count(1)
     expect(panel.locator(".chart-key")).to_contain_text("no limit of its own")
     # `SCHEDR_UI_SCREENSHOTS=<dir>`: the tab in light and dark.
     folder = os.environ.get("SCHEDR_UI_SCREENSHOTS")
