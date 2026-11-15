@@ -3,44 +3,37 @@
 This page follows one manual run of a two-task DAG `sync` (`extract` → `load`) from the CLI to
 its result. A scheduled run goes the same way, except that the scheduler creates it in step 3
 with the DAG's default parameters, instead of a command.
-A [`RunOf` trigger](../02-dags/21-wait-for.md#starting-a-dag-after-another) starts a run
-when another DAG's run or task succeeds; the new run carries an event identifying it. An
-[`EventNamed` trigger](../02-dags/22-events.md) starts a run for a posted event key and
-carries that event. An `@trigger(wait_for=...)` can inspect each matching run or posted
-event before returning an event to start a run; the master hands one item per call. A
-[`TriggerDagOperator`](../02-dags/23-chained-runs.md) starts a `chained` run linked to
-its parent run. A [backfill](../02-dags/04-schedules.md#backfill) creates `backfill`
-runs for a range of fire times. The scheduler skips a fire time covered by a successful,
-queued or running run of any kind, including a manual or backfill run; this also applies
-to `catchup`. If the covering run later fails, rerun that period by hand.
+
+Other ways to create a run are:
+
+- A [`RunOf` trigger](../02-dags/21-wait-for.md#starting-a-dag-after-another), after another
+  DAG's run or task succeeds. The new run carries an event identifying that result.
+- An [`EventNamed` trigger](../02-dags/22-events.md), for a posted event key. The run carries
+  that event.
+- An `@trigger(wait_for=...)`, which can inspect a matching run or posted event before
+  returning an event to start a run. The master hands it one item per call.
+- A [`TriggerDagOperator`](../02-dags/23-chained-runs.md), which starts a `chained` run linked
+  to its parent run.
+- A [backfill](../02-dags/04-schedules.md#backfill), which creates `backfill` runs for a range
+  of fire times.
+
+The scheduler skips a fire time covered by a successful, queued or running run of any kind.
+This also applies to `catchup`. A failed covering run no longer covers that time: the
+scheduler can create a scheduled run if the time is still due under the DAG's schedule and
+`catchup` rules.
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant CLI
     participant Web as webserver
     participant DB as database
     participant M as master
-    participant W as worker
     CLI->>Web: POST /api/v1/dags/sync/runs
-    Web->>DB: insert command trigger_run (+ NOTIFY)
+    Web->>DB: store trigger_run command
     Web-->>CLI: 202, the command
-    DB-->>M: notification: wake up
-    Note over M: round: apply the command
+    Note over DB,M: Postgres notifies; SQLite waits for a round
     M->>DB: insert run, mark command applied
-    Note over M: same round: dispatch
-    M->>DB: create task instances, attempt for extract
-    M->>W: AssignTask (extract)
-    W->>W: checks, journal "running"
-    W->>M: Started
-    W->>W: run the task (a subprocess)
-    W->>W: journal "finished"
-    W->>M: Finished (status, output, outcome)
-    M->>DB: store result and outcome, load becomes ready
-    M->>W: FinishedAck
-    Note over M: next round: assign load
-    M->>W: AssignTask (load, with extract's output)
-    CLI->>Web: GET /api/v1/commands/{id} (every 0.5 s)
+    CLI->>Web: poll GET /api/v1/commands/{id}
     Web-->>CLI: applied: run ID
 ```
 
@@ -54,10 +47,10 @@ The CLI sends the request with an `Idempotency-Key` header, a new key for each c
 no answer comes, or the webserver fails, it sends the request again under the same key, up
 to 3 times in all. The webserver stores one command per key and person. A request sent
 again gets the command stored the first time, so a lost answer never starts a second run.
-The same key sent with a different command is refused (`422`). When no answer comes after the third try, the CLI says the
-command **may have arrived** and to look (`schedr runs list`) before running it again: run
-again, it is a new command with a new key. When no try could connect at all (nothing listens
-at the address), it says the command wasn't sent.
+The same key sent with a different command is refused (`422`). If no answer comes after
+the third try, the CLI says the command **may have arrived**. Check `schedr runs list`
+before trying again: a new invocation sends a new key. If no try could connect at all, the
+CLI says the command wasn't sent.
 
 The CLI then reads the command back every 0.5 s, for up to 30 s, until the master has decided.
 
@@ -69,10 +62,11 @@ for the next round.
 
 ## 3. The round applies the command
 
-The round's first step applies every pending command, oldest first. For `trigger_run` the
+The round's first step applies pending commands, oldest first, up to 50 by default. For `trigger_run` the
 scheduler checks that the DAG can run, then inserts a run. The run is `running` if the DAG is
 under `max_active_runs`, otherwise `queued`. The command is then marked `applied`, with the run
-ID as its result. A command that can't apply (an unknown DAG, a time in the future, or a DAG
+ID as its result. A command that can't apply (an unknown DAG, a time beyond the allowed
+future tolerance, or a DAG
 whose file fails to import) is marked `rejected` with the reason, and the CLI prints it and
 exits 1.
 
@@ -98,16 +92,34 @@ Later in the same round the dispatcher:
 1. creates one row per task, at `map_index` -1: `extract` has no upstream task, so it is
    `queued`; `load` is `scheduled`. A mapped task's instances are created when it expands
    ([A mapped task](#a-mapped-task));
-2. picks a worker for `extract`: among `active` workers that serve its queue, run a recent
-   enough schedr and have a free slot, the one with the most free slots. Workers that
-   reported the root's current code come first; one that said it lacks the code is picked
-   only when no other can take the task (it may have synced since, else it rejects again);
+2. picks a connected, `active` worker that serves its queue, runs a recent enough schedr,
+   has an accepted code hash and has a free slot. It prefers workers that have not rejected
+   this task for missing code, then the most free slots. A worker that previously rejected
+   it for missing code is a fallback: it may have synced since, or it rejects again;
 3. stores the attempt in the database **before** sending anything, then builds `AssignTask`:
    attempt ID, what to run, the expected code hash, the inputs, the run's parameters, timeouts
    and memory budget. A `resource_cleanup` flag marks a resource cleanup so its worker can
    supply the default timeout when it has none.
 
-When the round ends, the master sends the round's messages down the workers' streams.
+The master sends messages after each part of the round, once the writes they depend on
+are stored.
+
+```mermaid
+sequenceDiagram
+    participant M as master
+    participant DB as database
+    participant W as worker
+    M->>DB: store extract's attempt
+    M->>W: AssignTask (extract)
+    W->>W: check assignment, journal running
+    W->>M: Started
+    W->>W: run task and any cleanup
+    W->>W: journal finished
+    W->>M: Finished
+    M->>DB: store result, make load ready
+    M->>W: FinishedAck
+    Note over M,W: A later round assigns load with extract's output
+```
 
 ## 5. The worker accepts and runs it
 
@@ -124,8 +136,8 @@ back (`assignment_expired`) and queues the task again, without using a retry. Un
 assignment stays; if the worker is lost first, it may have started there and ends `lost`
 ([Message numbers](17-master-clock.md#message-numbers-and-their-echo-b240)).
 
-For a Python task, the agent starts a runner in a new process group, with stdout and stderr going to the
-attempt's log file. The runner says `hello`. The agent sends the task. Once the DAG file is
+For a Python task, the agent starts a runner in a new process group. Stdout and stderr go to
+the attempt's log file. The runner says `hello`, then the agent sends the task. Once the DAG file is
 imported and the arguments are built, the runner sends `task_imported` (no fields) and calls
 the function; it does not send that message when the import or the arguments fail. The agent
 times both gaps on its own clock (`schedr_worker_task_start_seconds`, see
@@ -138,6 +150,7 @@ process. The runner's start is part of the same timeout: a cancel or the timeout
 before its `hello` stops the runner then (SIGTERM, the grace, SIGKILL). The same holds while
 it waits for a fork server and while it sends the task's request. A runner that doesn't say
 `hello` within 30 s fails the attempt with `start_failed`.
+
 The memory watchdog samples the group's memory every second. With `fork_server = true` on
 the DAG interpreter, a Linux worker starts that Python runner from a fork server (see
 [The fork server](05-workers.md#the-fork-server)), and the attempts API shows `start_method`
@@ -218,7 +231,7 @@ remains `success`: something may already have acted on that result. Its one reas
 from a moved cleanup after the run ended. Handles may be left behind. The UI shows the success
 in yellow with the reason; the CLI shows `success (late_cleanup_failed)` and the API exposes
 `late_failure`. The task instance shows its failed cleanup, the master logs an error, and
-`schedr_master_runs_late_failed_total` counts it for alerts. [Notifications](../02-dags/24-notifications.md) can send this as a `LATE_CLEANUP_FAILED` event. See [cleanup](../02-dags/15-cleanup.md#cleanup-on-another-worker).
+`schedr_runs_late_failed_total` counts it for alerts. [Notifications](../02-dags/24-notifications.md) can send this as a `LATE_CLEANUP_FAILED` event. See [cleanup](../02-dags/15-cleanup.md#cleanup-on-another-worker).
 
 Meanwhile `schedr tasks logs` reads each attempt's log through the webserver, which fetches
 it from the worker that ran the attempt (see [Workers](05-workers.md)). The
@@ -242,11 +255,17 @@ those instances. `?map_index=-1` means the same as leaving the index off
 ([Mapping](../02-dags/10-mapping.md#following-the-instances)).
 
 When the task's edges are ready, the master expands it and stores the instances in the same
-transaction as the `-1` row's new state. One instance per element, numbered from 0. An empty
-list ends the task `success`, with output `[]` and no instances. The task fails, with a
-reason and with nothing run, when what it maps over is not a list, when an
-`.expand_kwargs()` list it waits for as a whole has an element that is not a dict, or when
-it would have more than `[mapping] max_instances` instances (1024). On a lane, an
+transaction as the `-1` row's new state. With one mapped list, there is one instance per
+element, numbered from 0. Multiple `.expand()` lists form a Cartesian product. An empty
+list ends the task `success`, with output `[]` and no instances.
+
+Expansion fails before anything runs if:
+
+- a mapped value is not a list;
+- an `.expand_kwargs()` list used as a whole contains an element that is not a dict;
+- the task would exceed `[mapping] max_instances` (1024 by default).
+
+On a lane, an
 `.expand_kwargs()` element that is not a dict fails that instance when it is assigned, as
 `input_mismatch`, which is not retried. The master doesn't render an element written with
 a t-string or a `dag_ctx` value: it counts it, and sends it to its instance in its stored

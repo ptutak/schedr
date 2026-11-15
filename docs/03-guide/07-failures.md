@@ -16,40 +16,194 @@ back, and workers fill in the rest when they reconnect.
 
 ## When something stops
 
-| What happens | What schedr does |
-|---|---|
-| **The master restarts** | Workers reconnect with backoff; after a lease without word from the master they stop tasks with `cleanup_anywhere` as `lost`. Each `Register` reports the worker's journal, and the master answers per attempt: *continue*, *kill*, *acknowledge* (its result is stored), or *clean rest* for missing handles after a cleanup move. The new master records each worker `disconnected`, and its lease starts again from zero once a deposed master could no longer answer it (`lease_period` less `query_timeout`, 20 s by default, then the 60 s lease), so the downtime never makes a worker `lost`; it is `active` again once it registers. A worker that has heard a master of a newer lease epoch ignores an older one still answering, and connects again; after a whole lease without word from the newer one (a database restored from a backup sets the epoch back) it follows the older. Schedules missed while it was down are created when it comes back (only the latest one when `catchup` is off). Commands sent meanwhile are applied in the first round. A stored parse that still has a file which timed out, or whose runner died, is planned again when a worker reports that code, on another worker than the one stored for the failed file that comes first by path, when one has the code (see [Parsing](06-parsing.md#parsed-again)). |
-| **The webserver restarts** | The CLI's request fails, and a command it had stored is still applied. A page opened while the webserver is down shows that deployment unavailable. A page already open keeps what it was showing; the UI opens the events stream again and the page reads itself once the webserver answers (see [Live updates](12-ui.md#live-updates)). The master and the workers carry on. |
-| **A worker stops while assignments are on their way** (drained by SIGTERM, deregistered) | Tasks it started and didn't finish end `lost`, using a retry; tasks assigned to it that it never started end `assignment_expired` and run again without using one. |
-| **A worker's connection drops** | Its tasks initially keep running; after a lease without word from the master (or once master time may have passed the master's last stamp plus the lease, whichever is first) the worker stops those with `cleanup_anywhere` as `lost`, using a retry. Their cleanup waits for the master's decision, even if the task ends by itself while disconnected. The master marks it `disconnected` and gives it no new task or cleanup meanwhile (one it had sent as the stream went is taken back without a retry), and if it reconnects within the [worker lease](14-timings.md#fixed-timings) (60 s, same incarnation) nothing is lost: a task it still runs counts as started even if its start report was lost with the connection, and a cancel of its run or of the task sent while it was away is sent again. Once it has registered again, only the new connection counts: an old one still open changes nothing, and its end doesn't disconnect the worker. Otherwise a round marks it `lost`; a started attempt without a saved task result is lost and may use a retry after cleanup; those its messages showed it never started (`assignment_expired`) run again without one. An assignment it may have started as its connection dropped, its `Started` held up, counts as started: `lost`, using a retry, its `cleanup_anywhere` cleanup moving after the same wait (the cancel grace and the cleanup move wait: 40 s by default). One a worker restarted as a new incarnation left behind, and may have started, is held like its started ones, a worker lease from the new one's registration (the old process's cutoff), then ends the same way. On return, reconciliation decides what to stop or clean, including missing handles as described below. |
-| **A worker's agent restarts** (crash, out of memory, new pod) | The new incarnation stops orphaned process groups and reports saved results. An attempt with recoverable cleanup holds a slot and waits for `Continue`: a running task becomes `lost`, while a task already in cleanup keeps its result; cleanup starts again with its saved handles. `Kill` discards it. Without recoverable cleanup, the master ends the missing attempt `lost` once the old incarnation's lease is over (60 s from the new one's registration, which the old process no longer hears from), as it would for a lost worker: an old process still running meanwhile is cut off from the master. An ordinary task such an old process still runs past the lease may overlap its retry, as with a lost worker. |
-| **A task uses too much memory** | Only that task is killed (`oom_killed`), before the kernel would kill the whole pod (see [Workers](05-workers.md)). |
-| **A worker is drained** (SIGTERM) | Running tasks get the grace period; what still runs then is `interrupted` (SIGTERM, then SIGKILL `[worker] drain_terminate_period` later, still before the pod's deadline) and runs again elsewhere without using a retry. |
-| **An assignment gets no `Started`** | The master takes it back (`assignment_expired`) and queues the task again, without using a retry, once a later message from the worker names the assignment as handled with no `Started` or `Rejected` before it: both sides number their messages and name the latest they had from the other, and the worker sends what an assignment needs before anything that names it, so the task never started there and never will. A `Started` that waits behind a busy master counts as arrived. There is no start deadline: however late an assignment arrives, the worker may start it. Until a message names it, it stays, and ends with its worker: the same process registering again takes back what its journal lacks; a new incarnation holds it as a started one; a lost worker ends it `lost`, using a retry ([Message numbers](17-master-clock.md#message-numbers-and-their-echo-b240)). |
-| **A system clock jumps** (stepped by NTP or by hand, on the master or a worker) | Nothing that decides liveness reads a wall clock: when a worker is counted lost, a parse or connection job given up on, or a moved cleanup started is decided on the master's monotonic clock, and workers read it from the clock on the master's messages. The wall clock is only for schedules and the times shown. A worker that was paused without its clock counting it (a frozen VM) sees its own wall clock ahead of it: it rejects what it was about to start, and reads master time afresh from the next master message. A master's monotonic clock that jumps (some VM migrations) is not caught. |
-| **The database returns errors or is down** | Each round fails at its first error and is logged; the next one tries again. A command is never rejected for an outage; it stays pending, and one cut off partway is applied again safely (see [The master](04-master.md#a-round-is-never-cut-short)). Messages the failed round had built are still sent. A worker's message the master fails to handle because of the database's own trouble ends that worker's stream: the worker registers again and reports its code and journal afresh, so nothing it said is lost. A message the database refuses for its data (a constraint, data that won't read) would be refused again after every reconnect: a task's result is stored instead as the attempt's failure, `result_not_stored` (not retried), and any other such message is logged and dropped, the stream going on. A database out for longer than the master's lease lets it renew pauses the master (no rounds; worker messages wait) until a renewal succeeds. The ops port still answers, and `/healthz` stays ok: an outage elsewhere mustn't restart the master in a loop. |
-| **A second master starts on the same database** (a rollout overlap, `replicas: 2`) | It waits as a standby (not ready) while the first holds the lease, and takes over when the first stops, at once on a clean stop, or within the [master lease period](14-timings.md#fixed-timings) (30 s) after a crash. The database refuses every write of a master whose lease was taken over, however late it arrives, so two never both change it (see [The master](04-master.md#one-master-per-database-the-lease)). |
-| **A master was taken over while still running** (paused too long behind a slow database, then another took the lease) | Its next write is refused; its next renewal finds the lease gone, and it exits (in standalone, the whole process: the API and the worker too, the worker's tasks interrupted). Restarted, it waits as a standby. |
-| **The database goes silent mid-query** (a network partition) | schedr cuts the query off at the [query time limit](14-timings.md#fixed-timings) (10 s; a write's transaction, a few of these), so the round fails rather than waits; on Postgres a write's statements are cut off in Postgres too, so nothing of it runs on holding locks. Renewals of the lease are limited the same way: the master pauses if it can't renew, and resumes when the database answers. |
-| **`schedr db migrate` while a master runs** (by hand, or two migrations at once) | Refused: migrating takes the master's lease, and a master or another migration holds it. `--wait` waits for it instead (the chart's init container does, so it waits out the lease of a master that died). |
-| **A DAG's file fails to import** (anything but a timeout or a runner that died) | Every DAG of that file is held. No new run is created, a fire time during the hold is missed as while the DAG is paused, a manual trigger is rejected with the reason, and a queued run is not started. A run that has already started is not cancelled. When the file imports, the fire times the hold missed follow the DAG's `catchup`. See [A held DAG](06-parsing.md#a-held-dag). |
-| **A file's import times out, or its runner dies** | Nothing is held, and the file's DAGs keep their last version that imported. The parse is tried again, first after 30 seconds, then after twice as long each time, up to 10 minutes, with no limit on the tries. It goes to another worker that has the code, and to the worker that failed only when that worker is the only one. The master replaces only the files that failed this way and whose new result differs. See [Parsed again](06-parsing.md#parsed-again). |
+### The master restarts
 
-When a worker is lost, the master keeps a result reported in `TaskEnded`; without one the task is `lost`. By default cleanup ends `worker_lost`. With `cleanup_anywhere`, the master can move it to another worker, after the cancel grace plus 10 s. A frozen worker may still be running its task, and a cleanup already running during a cut can overlap the moved cleanup. If the worker that first moved the cleanup away reconnects with its finished result before the move, the master stores it and drops the move; its journaled `Finished` gets `Continue` so it is sent again. A report from a later worker running only cleanup keeps the task result already stored. Handles delivered to the master accompany the moved cleanup. If the original worker returns with more handles, a move still waiting is given back to it; if assigned elsewhere or ended, `CLEAN_REST` tells it to clean the remaining handles. A cleanup that exhausts its retries fails an open run, even when the task succeeded. A rest cleanup failing after a successful run ended makes it a [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end). See [Cleaning up after a task](../02-dags/15-cleanup.md).
+Workers reconnect with backoff; after a lease without word from the master they stop tasks with
+`cleanup_anywhere` as `lost`. Each `Register` reports the worker's journal, and the master
+answers per attempt: *continue*, *kill*, *acknowledge* (its result is stored), or *clean rest*
+for missing handles after a cleanup move. The new master records each worker `disconnected`, and
+its lease starts again from zero once a deposed master could no longer answer it (`lease_period`
+less `query_timeout`, 20 s by default, then the 60 s lease), so the downtime never makes a
+worker `lost`; it is `active` again once it registers. A worker that has heard a master of a
+newer lease epoch ignores an older one still answering, and connects again; after a whole lease
+without word from the newer one (a database restored from a backup sets the epoch back) it
+follows the older. Schedules missed while it was down are created when it comes back (only the
+latest one when `catchup` is off). Pending commands are applied oldest first, up to 50 per round
+by default. A stored parse that still has a file which timed out, or whose runner died, is
+planned again when a worker reports that code, on another worker than the one stored for the
+failed file that comes first by path, when one has the code (see
+[Parsing](06-parsing.md#parsed-again)).
+
+### The webserver restarts
+
+A CLI request may fail; command submissions retry under the same key up to three times. A
+command already stored is still applied. A page opened while the webserver is down shows that
+deployment unavailable. A page already open keeps what it was showing; the UI opens the events
+stream again and the page reads itself once the webserver answers (see [Live
+updates](12-ui.md#live-updates)). The master and the workers carry on.
+
+### A worker stops while assignments are on their way
+
+(drained by SIGTERM, deregistered)  Tasks it started and didn't finish end `lost`, using a
+retry; assignments known never started end `assignment_expired` and run again without using one.
+An uncertain start counts as `lost` and uses a retry.
+
+### A worker's connection drops
+
+Its tasks initially keep running; after a lease without word from the master (or once master
+time may have passed the master's last stamp plus the lease, whichever is first) the worker
+stops those with `cleanup_anywhere` as `lost`, using a retry. Their cleanup waits for the
+master's decision, even if the task ends by itself while disconnected. The master marks it
+`disconnected` and gives it no new task or cleanup meanwhile (an assignment already sent is
+settled by message numbers or the journal on reconnection), and if it reconnects within the
+[worker lease](14-timings.md#fixed-timings) (60 s, same incarnation) nothing is lost: a task it
+still runs counts as started even if its start report was lost with the connection, and a cancel
+of its run or of the task sent while it was away is sent again. Once it has registered again,
+only the new connection counts: an old one still open changes nothing, and its end doesn't
+disconnect the worker. Otherwise a round marks it `lost`; a started attempt without a saved task
+result is lost and may use a retry after cleanup; those its messages showed it never started
+(`assignment_expired`) run again without one. An assignment it may have started as its
+connection dropped, its `Started` held up, counts as started: `lost`, using a retry, its
+`cleanup_anywhere` cleanup moving after the same wait (the cancel grace and the cleanup move
+wait: 40 s by default). One a worker restarted as a new incarnation left behind, and may have
+started, is held like its started ones, a worker lease from the new one's registration (the old
+process's cutoff), then ends the same way. On return, reconciliation decides what to stop or
+clean, including missing handles as described below.
+
+### A worker's agent restarts
+
+(crash, out of memory, new pod)  The new incarnation stops orphaned process groups and reports
+saved results. An attempt with recoverable cleanup holds a slot and waits for `Continue`: a
+running task becomes `lost`, while a task already in cleanup keeps its result; cleanup starts
+again with its saved handles. `Kill` discards it. Without recoverable cleanup, the master ends
+the missing attempt `lost` once the old incarnation's lease is over (60 s from the new one's
+registration, which the old process no longer hears from), as it would for a lost worker: an old
+process still running meanwhile is cut off from the master. An ordinary task such an old process
+still runs past the lease may overlap its retry, as with a lost worker.
+
+### A task uses too much memory
+
+When the watchdog samples a task over its budget, it kills that process group at once
+(`oom_killed`). A fast spike or total use across tasks can still reach the pod limit before the
+watchdog acts; see [Workers](05-workers.md).
+
+### A worker is drained
+
+(SIGTERM)  Running tasks get the grace period; what still runs then is `interrupted` (SIGTERM,
+then SIGKILL `[worker] drain_terminate_period` later, still before the pod's deadline) and runs
+again elsewhere without using a retry.
+
+### An assignment gets no `Started`
+
+The master takes it back (`assignment_expired`) and queues the task again, without using a
+retry, once a later message from the worker names the assignment as handled with no `Started` or
+`Rejected` before it: both sides number their messages and name the latest they had from the
+other, and the worker sends what an assignment needs before anything that names it, so the task
+never started there and never will. A `Started` that waits behind a busy master counts as
+arrived. There is no start deadline: however late an assignment arrives, the worker may start
+it. Until a message names it, it stays, and ends with its worker: the same process registering
+again takes back what its journal lacks; a new incarnation holds it as a started one; a lost
+worker ends it `lost`, using a retry ([Message
+numbers](17-master-clock.md#message-numbers-and-their-echo-b240)).
+
+### A system clock jumps
+
+(stepped by NTP or by hand, on the master or a worker)  Nothing that decides liveness reads a
+wall clock: when a worker is counted lost, a parse or connection job given up on, or a moved
+cleanup started is decided on the master's monotonic clock, and workers read it from the clock
+on the master's messages. Schedules, retention ages and displayed times still use wall clocks. A
+worker that was paused without its clock counting it (a frozen VM) sees its own wall clock ahead
+of it: it rejects what it was about to start, and reads master time afresh from the next master
+message. A master's monotonic clock that jumps (some VM migrations) is not caught.
+
+### The database returns errors or is down
+
+Each round fails at its first error and is logged; the next one tries again. A command is never
+rejected for an outage; it stays pending, and one cut off partway is applied again safely (see
+[The master](04-master.md#a-round-is-never-cut-short)). Messages the failed round had built are
+still sent. A worker's message the master fails to handle because of the database's own trouble
+ends that worker's stream: the worker registers again and reports its code and journal afresh,
+so nothing it said is lost. A message the database refuses for its data (a constraint, data that
+won't read) would be refused again after every reconnect: a task's result is stored instead as
+the attempt's failure, `result_not_stored` (not retried), and any other such message is logged
+and dropped, the stream going on. A database out for longer than the master's lease lets it
+renew pauses the master (no rounds; worker messages wait) until a renewal succeeds. The ops port
+still answers, and `/healthz` stays ok: an outage elsewhere mustn't restart the master in a
+loop.
+
+### A second master starts on the same database
+
+(a rollout overlap, `replicas: 2`)  It waits as a standby (not ready) while the first holds the
+lease, and takes over when the first stops, at once on a clean stop, or after the [master lease
+period](14-timings.md#fixed-timings) expires following a crash. A standby tries every third of
+that period (10 s by default), so takeover can wait until the next try. The database refuses
+scheduling writes from a master whose lease was taken over, however late they arrive, so only
+one writes scheduling state (see [The master](04-master.md#one-master-per-database-the-lease)).
+
+### A master was taken over while still running
+
+(paused too long behind a slow database, then another took the lease)  Its next write is
+refused; its next renewal finds the lease gone, and it exits (in standalone, the whole process:
+the API and the worker too, the worker's tasks interrupted). Restarted, it waits as a standby.
+
+### The database goes silent mid-query
+
+(a network partition)  schedr cuts the query off at the [query time
+limit](14-timings.md#fixed-timings) (10 s; a write's transaction, a few of these), so the round
+fails rather than waits; on Postgres a write's statements are cut off in Postgres too, so
+nothing of it runs on holding locks. Renewals of the lease are limited the same way: the master
+pauses if it can't renew, and resumes when the database answers.
+
+### `schedr db migrate` while a master runs
+
+(by hand, or two migrations at once)  Refused: migrating takes the master's lease, and a master
+or another migration holds it. `--wait` waits for it instead (the chart's init container does,
+so it waits out the lease of a master that died).
+
+### A DAG's file fails to import
+
+(anything but a timeout or a runner that died)  Every DAG of that file is held. No new run is
+created, a fire time during the hold is missed as while the DAG is paused, a manual trigger is
+rejected with the reason, and a queued run is not started. A run that has already started is not
+cancelled. When the file imports, the fire times the hold missed follow the DAG's `catchup`. See
+[A held DAG](06-parsing.md#a-held-dag).
+
+### A file's import times out, or its runner dies
+
+Nothing is held, and the file's DAGs keep their last version that imported. The parse is tried
+again, first after 30 seconds, then after twice as long each time, up to 10 minutes, with no
+limit on the tries. It goes to another worker that has the code, and to the worker that failed
+only when that worker is the only one. The master replaces only the files that failed this way
+and whose new result differs. See [Parsed again](06-parsing.md#parsed-again).
+
+When a worker is lost, the master keeps a result reported in `TaskEnded`; without one the task
+is `lost`. By default cleanup ends `worker_lost`. With `cleanup_anywhere`, the master can move
+it to another worker after the cancel grace plus 10 s. A frozen worker may still be running its
+task, and a cleanup already running during a cut can overlap the moved cleanup. If the worker
+that first moved the cleanup away reconnects with its finished result before the move, the
+master stores it and drops the move; its journaled `Finished` gets `Continue` so it is sent
+again. A report from a later worker running only cleanup keeps the task result already stored.
+
+Handles delivered to the master accompany the moved cleanup. If the original worker returns with
+more handles, a move still waiting is given back to it; if assigned elsewhere or ended,
+`CLEAN_REST` tells it to clean the remaining handles. A cleanup that exhausts its retries fails
+an open run, even when the task succeeded. A rest cleanup failing after a successful run ended
+makes it a [yellow success](03-life-of-a-run.md#7-the-next-task-and-the-end). See [Cleaning up
+after a task](../02-dags/15-cleanup.md).
 
 ## Connection jobs
 
-The master marks a connection check or test job `lost` if its worker is lost or restarted,
-if the master restarts before the answer is stored, or if no answer comes within the job's
-time plus 30 s. A worker keeps up to 16 answers made while no master listens (discarding the
-oldest if full) and sends them after it registers again; the master drops an answer if the job
-is already `lost`.
+The master marks a connection check or test job `lost` if its worker is lost or restarted, if
+the master restarts before the answer is stored, or if no answer comes within the job's time
+plus 30 s. A worker keeps up to 16 answers made while no master listens (discarding the oldest
+if full) and sends them after it registers again; the master drops an answer if the job is
+already `lost`.
 
-The CLI prints each connection as `ok` or `failed`, with failure details, or the worker's
-job as `lost` with its reason. `--json` prints the result instead. If it stops waiting before
-every job finishes, it reports a timeout. It exits 1 if a connection failed, a job was lost
-or a worker did not answer; otherwise it exits 0.
-See [Checking them on a worker](../02-dags/14-connections.md#checking-them-on-a-worker).
+The CLI prints each connection as `ok` or `failed`, with failure details, or the worker's job as
+`lost` with its reason. `--json` prints the result instead. If it stops waiting before every job
+finishes, it reports a timeout. It exits 1 if a connection failed, a job was lost or a worker
+did not answer; otherwise it exits 0. See [Checking them on a
+worker](../02-dags/14-connections.md#checking-them-on-a-worker).
 
 ## Retries
 
@@ -65,19 +219,19 @@ The master decides retries. What uses a retry, and what doesn't:
 
 A missing or refused declared connection fails as `connection_not_found`, retried while the
 task's `retries` last. A secret it names can fail with the secret's own kind and retry rule.
-Both happen before the task's code runs; the attempt's error summary is `TaskNotStarted`.
-A task that opens a connection it didn't declare is refused: in Python it gets
-`ConnectionDeniedError`, and an attempt failing of it ends as `connection_denied`, which is not
-retried. See [Connections](../02-dags/14-connections.md).
+Both happen before the task's code runs; the attempt's error summary is `TaskNotStarted`. A task
+that opens a connection it didn't declare is refused: in Python it gets `ConnectionDeniedError`,
+and an attempt failing of it ends as `connection_denied`, which is not retried. See
+[Connections](../02-dags/14-connections.md).
 
-An error from opening or using a built-in connection, such as a refused TLS certificate or
-SSH host key, is the task's error if it is not caught. It has no schedr error kind and is
-retried as any other task failure is.
+An error from opening or using a built-in connection, such as a refused TLS certificate or SSH
+host key, is the task's error if it is not caught. It has no schedr error kind and is retried as
+any other task failure is.
 
 ## Delivery
 
-Every message between master and worker may arrive more than once. The attempt ID makes
-repeats harmless: a second `Finished` is acknowledged and ignored, and an assignment the agent
-already has is ignored. The master stores each assignment before sending it, and the agent
-journals before it reports. So after any crash the side that restarts can find out what the
-other already knows.
+Every message between master and worker may arrive more than once. The attempt ID makes repeats
+harmless: a second `Finished` is acknowledged and ignored, and an assignment the agent already
+has is ignored. The master stores each assignment before sending it, and the agent journals
+before it reports. So after any crash the side that restarts can find out what the other already
+knows.
