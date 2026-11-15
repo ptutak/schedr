@@ -203,6 +203,7 @@ make lint             # clippy, ruff, mypy; mypy --strict and basedpyright over 
 make test             # unit tests: Rust (nextest) + pytest, both with an 85 % coverage floor
 make test-integration # real processes, the binary; Postgres, Vault, MySQL, MariaDB, Mongo, SSH in containers
 make test-ui          # the web UI's browser tests (Playwright, Chromium)
+make upgrade-check    # the previous release's database, every table filled, migrated and read back
 make schema           # regenerate schema/ from the Rust model (CI fails if it's stale)
 make records          # regenerate PLAN.md, DECISIONS.md, STATUS.md and design/ from the records
 make docs             # build the documentation site into site/ (fails on any warning)

@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui stress standalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui upgrade-check stressstandalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -192,6 +192,25 @@ test-integration: ## Run integration tests (real processes, the binary; Postgres
 	cargo nextest run --workspace -E 'kind(test) & not binary(stress)'; \
 	: "several processes; the tests sharing the containers' names stay on one (xdist_group)"; \
 	uv run pytest python/tests/integration examples -n $(PYTEST_WORKERS) --dist loadgroup
+
+# The upgrade check (decision 498, scripts/upgrade_check.py): the newest release at or below
+# the tree's version, from PyPI, fills a database (every table) with its own docs examples; this
+# tree migrates it (no table may lose a row) and reads it back. On SQLite, then on a Postgres
+# in a container. Needs the release's tag (`git fetch --tags`) and the network (PyPI).
+upgrade-check:   ## Migrate a database the previous release filled, on SQLite and Postgres (PyPI, the tags)
+	@set -e; \
+	cargo build -p schedr; \
+	uv run --no-sync python scripts/upgrade_check.py --binary target/debug/schedr; \
+	name=schedr-upgrade-pg-$$$$; \
+	trap '$(CONTAINER) rm -f '$$name' >/dev/null 2>&1' EXIT; \
+	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
+		$(POSTGRES_IMAGE) >/dev/null; \
+	port=$$($(CONTAINER) port $$name 5432/tcp | head -1 | sed 's/.*://'); \
+	until $(CONTAINER) exec $$name psql -h 127.0.0.1 -U postgres -c 'select 1' >/dev/null 2>&1; do \
+		sleep 0.5; done; \
+	$(CONTAINER) exec $$name psql -h 127.0.0.1 -U postgres -qc 'CREATE DATABASE upgrade'; \
+	uv run --no-sync python scripts/upgrade_check.py --binary target/debug/schedr \
+		--database postgres://postgres:schedr@127.0.0.1:$$port/upgrade
 
 # The web UI's browser tests (decision 27A): a standalone with the example DAG and a finished
 # run, driven by Playwright's Chromium (downloaded once, into ~/.cache/ms-playwright). Kept out

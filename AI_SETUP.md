@@ -233,8 +233,10 @@ Separate jobs. The ones that run on this machine each have a make target:
   it, pushes the images to ghcr.io and creates the GitHub Release. `scripts/release.py`
   checks the tag against the tree, finds the wheels and reads the notes (its tests in
   `python/tests/unit/test_release.py`). To release `X.Y.Z`:
-  1. Write `CHANGELOG.md`'s `## X.Y.Z` section.
-  2. A rehearsal: set `version = "X.Y.Z-rc1"` in `Cargo.toml`'s `[workspace.package]`
+  1. Write `CHANGELOG.md`'s `## X.Y.Z` section. `make upgrade-check` (also a CI job,
+     `upgrade`): the previous release fills a database, every table, and this tree migrates
+     it without losing a row and reads it back (decision 498).
+  2. A rehearsal, required when the release adds a migration file (decision 498): set `version = "X.Y.Z-rc1"` in `Cargo.toml`'s `[workspace.package]`
      (no dot after `rc`: `SchedrVersion` reads `X.Y.Z-rc1`; the wheel is `X.Y.Zrc1`) and
      `appVersion: "X.Y.Zrc1"` in `charts/schedr/Chart.yaml` (the chart's images default to
      that tag; `release.py check` refuses another), run

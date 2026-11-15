@@ -207,6 +207,48 @@ jobs:
       - if: failure()
         run: docker logs sshd 2>&1 | tail -100
 
+  # The upgrade check (decision 498, `make upgrade-check`): the newest release at or below the
+  # tree's version, from PyPI, fills a database (every table) with its own docs examples, and
+  # this tree's binary migrates it (no table may lose a row) and reads it back; on SQLite and on
+  # Postgres. The tags give the release's examples.
+  upgrade:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_PASSWORD: schedr
+          POSTGRES_DB: upgrade
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.5"
+          # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz: the tarball checked whatever
+          # versions the action itself knows.
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+      # This tree's package and psycopg, for the tasks and the Postgres row counts.
+      - run: uv sync --python 3.14
+      - run: cargo build -p schedr
+      - run: uv run python scripts/upgrade_check.py --binary target/debug/schedr
+      - run: >-
+          uv run python scripts/upgrade_check.py --binary target/debug/schedr
+          --database postgres://postgres:schedr@127.0.0.1:5432/upgrade
+
   # The web UI in a browser (decision 27A, `make test-ui`): a standalone with the example DAG
   # and a run, driven by Playwright's Chromium; a job of its own for the browser download.
   ui:
