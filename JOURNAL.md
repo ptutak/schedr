@@ -1569,3 +1569,17 @@ minutes to 25 s.
 Not chosen: a 25 s default everywhere (the chart's pods lose their 5 minutes); a 330 s default
 grace (a Ctrl-C waits 5.5 minutes for a hung task, and pods outside the chart must match it);
 warning only in Kubernetes (the defaults would still disagree).
+
+### <a id="D498"></a>2026-11-15: a release with a new migration goes through an rc first (decision 498)
+
+Preparing 1.1.0, the user asked whether it needs a release candidate. Claude said no, as the user
+had decided on 2026-11-14 (R1.1's scope: the release workflow and the builds are 1.0.0's,
+unchanged since `v1.0.0`, and R1.1's local checks cover the new migration and protocol 2.1).
+The user then had the migrations put in CI (`scripts/upgrade_check.py`: a database the previous
+release filled, migrated by the tree's binary) and decided: "after that we need an rc for every
+new migrations file, that includes 1.1.0 rc as well". A release whose code adds a migration
+file is published as `vX.Y.Zrc1` first (TestPyPI, a GitHub pre-release, `X.Y.Zrc1` images) and
+checked from there before `vX.Y.Z`.
+
+Not chosen: 1.1.0 without an rc (the 2026-11-14 call): the workflow being unchanged says nothing
+about a migration on the databases users have.

@@ -6,18 +6,18 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-15)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** R1.1, Release 1.1.0. Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
+- **Next step:** R1.1, Release 1.1.0 (decisions D498). Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
 - **Then:** M5.2a, M5.2b, M5.2c, M5.2d, M5.2e.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D498 (2026-11-15): a release with a new migration goes through an rc first
 - D497 (2026-11-15): an unset cleanup timeout fits in the grace period
 - D496 (2026-11-15): a role starting waits for a database it can't reach yet
 - D495 (2026-11-15): a stopping worker waits for the master to take its Deregister
 - N16 (2026-11-15): M5.1l2 built: the attempt charts on the Metrics page (note 16; on D494)
-- N15 (2026-11-15): M5.1p built: 41 hidden settings and the masters' window (note 15; on D493)
 - M5.1q (2026-11-15): A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits
 - M5.1p (2026-11-15): Tunable constants as hidden settings
 - M5.1o (2026-11-15): A poke may be a plain def

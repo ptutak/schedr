@@ -31,6 +31,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D498 | 2026-11-15 | user | planned (R1.1) | development | A release with a new migration goes through an rc first |
 | D497 | 2026-11-15 | user | built M5.1q | workers | An unset cleanup timeout fits in the grace period |
 | D496 | 2026-11-15 | user | built M5.1q | state | A role starting waits for a database it can't reach yet |
 | D495 | 2026-11-15 | user | built M5.1q | workers | A stopping worker waits for the master to take its Deregister |
@@ -734,6 +735,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### development
 
+- D498: A release with a new migration goes through an rc first
 - D479: The Python integration tests run on several processes (pytest-xdist)
 - D477: PyPI shows a page of its own: installing and a first run
 - D456: From 1.0.0 the schema and the protocol change only additively
