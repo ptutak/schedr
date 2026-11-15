@@ -1,7 +1,8 @@
 # Master–worker protocol
 
 Workers open the `Control` stream; their stable worker ID and per-process incarnation ID
-distinguish a reconnect from a restart. Times and their settings are in
+distinguish a reconnect from a restart. `Control` is a gRPC stream that carries messages
+in both directions. Times and their settings are in
 [Timings](14-timings.md).
 
 ## Registering and heartbeats
@@ -10,19 +11,23 @@ distinguish a reconnect from a restart. Times and their settings are in
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    W->>M: Control: Register (identity, roots, journal, slots, running_triggers)
+    W->>M: Control: Register
     alt Compatible version and no live stream for this ID
-        M-->>W: Registered (timings, journal decisions, size limit)
+        M-->>W: Registered
         W->>M: Warnings (current complete list)
         loop Heartbeat interval: 10 s default
-            W->>M: Heartbeat (free slots, running attempts, running_triggers)
+            W->>M: Heartbeat
             M-->>W: HeartbeatAck (while leading)
         end
-        Note over W,M: Worker lease: 60 s default without any message, master marks worker lost
+        Note over W,M: No worker message for 60 s: worker lost
     else Incompatible version or duplicate live stream
         M-->>W: Registration refused
     end
 ```
+
+`Register` carries the worker's identity, roots, journal, slots and running trigger IDs.
+`Registered` returns the timings, journal decisions, message size limit and script uses.
+A `Heartbeat` reports free slots, running attempts, triggers and usage.
 
 Each `JournalEntry.handles` in `Register` counts the handles in that attempt's worker journal.
 `running_triggers` in `Register` and `Heartbeat` lists trigger instance IDs so the master
@@ -82,13 +87,20 @@ sequenceDiagram
         W->>M: Started (fork, first start time retained)
     end
     P-->>W: Result
-    W->>W: Journal finished result
+    W->>W: Journal result and free slot
     W->>M: Finished
     M->>M: Store result and advance run
     M-->>W: FinishedAck
-    W->>W: Remove journal entry and free slot
-    Note over W,M: No ack: resend after one heartbeat interval (10 s default), then back off, reconnect after 8 resends
+    W->>W: Remove journal entry
+    Note over W,M: No ack: resend with backoff, then reconnect
 ```
+
+The worker writes the finished result to its journal, then frees its slot before
+`FinishedAck`. If the journal write fails, it warns and sends the result anyway; an
+agent restart before acknowledgement can then lose that result.
+The first resend is on the second heartbeat that sees the unacknowledged result. Gaps
+then double, up to 32 heartbeats. After 8 resends, the worker reconnects when another
+resend is due; registration reconciles the journal.
 
 A command or script resource setup reports its value to the agent with `resource_set` over the
 [context channel](05-workers.md#a-commands-context-channel), and on success that value is
@@ -139,8 +151,8 @@ registers again without it in its journal, held as a started one for a new incar
 A task's inputs travel inside `AssignTask` up to 4 MiB, and only while the whole assignment
 (the task, its run's parameters and connections, the master's clock) stays within what a
 worker takes (`[grpc] max_message_size`). Otherwise the assignment says its inputs are
-external and the worker fetches them. An assignment still too big without them fails the task
-`inputs_too_large`.
+external and the worker fetches them. Inputs over 64 MiB fail the task with
+`inputs_too_large`. An assignment still too big without its inputs fails the same way.
 
 ```{mermaid}
 sequenceDiagram
@@ -194,7 +206,7 @@ sequenceDiagram
     M->>M: Keep result, instance cleaning_up
     loop Cleanup tries and retry delays, slot remains held
         W->>W: Run cleanup with handles and secrets
-        Note over W: cleanup_timeout: at most 5 min by default, per try, stop a timed-out try
+        Note over W: Cleanup try: at most 5 min by default
     end
     W->>M: Finished (task and cleanup results)
     M-->>W: FinishedAck
@@ -240,7 +252,7 @@ sequenceDiagram
             W->>M: TaskEnded (saved task result)
         end
         W->>W: Restart cleanup with saved handles, all tries and freshly read secrets
-        Note over W: cleanup_timeout: at most 5 min by default, per try, stop a timed-out try
+        Note over W: Cleanup try: at most 5 min by default
         W->>M: Finished (task and cleanup results)
         M-->>W: FinishedAck
     else Attempt already ended: Kill
@@ -257,29 +269,20 @@ cleanup, an orphaned running entry is omitted and reconciled as missing.
 
 ## Lost worker
 
-```{mermaid}
-sequenceDiagram
-    participant W as Worker
-    participant M as Master
-    opt Task ends before worker is lost
-        W->>M: TaskEnded (task result)
-    end
-    Note over M: Worker lease expires, worker is lost
-    alt Started task without cleanup_anywhere
-        M->>M: Keep reported task result or mark task lost
-        opt Task has cleanup
-            M->>M: End cleanup worker_lost
-        end
-    else Assignment shown never started
-        M->>M: End assignment_expired, retry without using a task retry
-    else Unstarted assignment not shown never started
-        M->>M: As a started task: it may run there
-    else Started task with cleanup_anywhere and moves remaining
-        M->>M: Keep task result or mark task lost, queue cleanup to move
-    else Cleanup has exhausted its moves
-        M->>M: End cleanup worker_lost
-    end
+```mermaid
+flowchart TD
+    Lost[Worker lease expires] --> Never{Shown never started?}
+    Never -->|Yes| Expired[assignment_expired: queue again]
+    Never -->|No or unknown| Result[Keep reported result, else mark lost]
+    Result --> Cleanup{Has per-task cleanup?}
+    Cleanup -->|No| End[End attempt]
+    Cleanup -->|Yes| Move{cleanup_anywhere and moves left?}
+    Move -->|Yes| Queue[Queue cleanup to move]
+    Move -->|No| Failed[End cleanup worker_lost]
 ```
+
+An assignment shown never started uses no task retry. Otherwise the task may still run
+on the lost worker. A lost result uses the task's retry policy.
 
 A restart that omits an attempt is reconciled similarly, once the old incarnation's lease is
 over (60 s from the new one's registration, the master's last word to the old one; stored, so
@@ -296,7 +299,7 @@ sequenceDiagram
     O->>M: HandlesAdded (journaled handles)
     Note over M: Worker lease expires, original worker is lost
     M->>M: Keep task result or mark task lost, queue cleanup to move
-    Note over M: Wait cancel_grace + cleanup_move_wait (30 s + 10 s default) after worker lost
+    Note over M: Wait cancel grace + move wait (40 s default)
     alt No eligible worker
         M->>M: Remain cleaning_up, no worker for the cleanup
     else Worker available
@@ -305,7 +308,7 @@ sequenceDiagram
             W-->>M: Rejected
             M->>M: Take back, prefer another worker next time
         else Shown never started, or W lost or restarted first
-            Note over M: Take back without another move, or move it on as a started one if it may have started
+            Note over M: Take back if never started; otherwise move again
         else Started
             W->>M: Started
             W->>M: TaskEnded
@@ -372,9 +375,9 @@ sequenceDiagram
     participant P as Task process
     W->>M: Draining
     M->>M: Stop assigning work
-    Note over W,P: termination_grace_period: 30 s default, reserve 3 s termination and 2 s reporting
+    Note over W,P: Grace: 30 s, including 3 s to stop and 2 s to report
     alt Task has cleanup
-        Note over W,P: Stop early enough to leave one cleanup try before the stop deadline, when possible
+        Note over W,P: Stop early to leave room for one cleanup try
         W->>P: SIGTERM, then SIGKILL if needed
         P-->>W: Interrupted
         W->>M: TaskEnded (interrupted)
@@ -401,14 +404,18 @@ sequenceDiagram
     participant DB as Database
     participant B as Standby master
     Note over A: Master crashes, worker tasks continue
-    Note over DB,B: Master lease: 30 s default, standby can take over after expiry (clean stop releases it)
+    Note over DB,B: Take over after lease expiry (30 s default)
     B->>DB: Take lease and read state
     B->>B: Mark workers disconnected, leases restart after the old master's lead time
     Note over W: Reconnect backoff: 200 ms first, up to 30 s default and half known lease
     W->>B: Register (journal and roots)
     B-->>W: Registered (Continue, Kill, Ack or CLEAN_REST per entry)
-    Note over B: 20 s default (lease period less query timeout), then the 60 s worker lease, absent worker becomes lost
+    Note over B: After lead time + worker lease, absent workers are lost
 ```
+
+With the defaults, restored workers get 20 s of old-master lead time plus their 60 s
+worker lease before they are lost. A clean stop releases the master lease, so the standby
+can take it without waiting for expiry.
 
 ## Parse job
 
@@ -418,7 +425,7 @@ sequenceDiagram
     participant W as Worker
     M->>W: AssignParse (root and job ID)
     W->>W: Parse files
-    Note over W: parse_file_timeout: 60 s default per file, timed-out file becomes an import error
+    Note over W: Per file: 60 s default; timeout is an import error
     W->>M: UploadParseResult (header, then one file per part)
     M-->>W: ParseResultAck
     Note over M: parse_job_timeout: 10 min default, unfinished job is reassigned
@@ -455,7 +462,7 @@ sequenceDiagram
 sequenceDiagram
     participant W as Worker
     participant M as Master
-    Note over W: poll_interval 30 s and settle_time 5 s defaults, wait for stable code before reporting
+    Note over W: Scan every 30 s; wait 5 s for stable code (defaults)
     W->>M: CodeVersionChanged (root hash)
     M->>M: Record hash, possibly create parse job
     W->>M: Warnings (replacement list when changed)
@@ -471,7 +478,7 @@ identical effects.
 ### Worker to master on `Control`
 
 Every worker message carries the worker's clock (`WorkerClock`): its number on this stream
-(`sequence`, the `Register` being 0) and the latest master message it had handled
+(`sequence`, with `Register` at 0) and the latest master message it had handled
 (`heard_sequence`). A message sent while handling a master message is numbered before any
 that names it.
 
@@ -483,10 +490,10 @@ that names it.
 | `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | — |
 | `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | — |
 | `TaskEnded` | Worker as cleanup begins | Keep task result, mark cleaning up | Yes, for open attempt | [`[worker] cleanup_timeout`](14-timings.md#public-timing-keys) |
-| `HandlesAdded` | Worker as each handle is journaled; all again on `Continue` | Store handles from the assigned worker for a moved cleanup; first at each position stands, up to 1 MiB per attempt | Yes | — |
+| `HandlesAdded` | Worker as each handle is journaled; all again on `Continue` | Store handles from the assigned worker for a possible moved cleanup; first at each position stands, up to 1 MiB per attempt | Yes | — |
 | `Finished` | Worker after attempt and cleanup | Store result and reply with `FinishedAck` | Yes, stored result is acknowledged again | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) governs resend |
 | `Draining` | Worker on shutdown | Stop assignments, mark draining | Yes | [`[worker] termination_grace_period`](14-timings.md#public-timing-keys) |
-| `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT`](14-timings.md#fixed-timings) |
+| `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT`](14-timings.md#fixed-timings) |
 | `Warnings` | Worker after registration and on change | Replace warnings | Yes | — |
 | `TriggerEvent` | Worker as a trigger finds an event; all unacknowledged again on a new stream | Store the event and queue its run, once per key | Yes | — |
 | `TriggerPoked` | Worker when poke status changes, otherwise with a heartbeat | Keep the call time, last error and consecutive failures | Yes | — |

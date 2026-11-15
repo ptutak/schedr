@@ -1,7 +1,7 @@
 # Guarantees
 
-What the master–worker protocol guarantees, and how master time sets every deadline a worker
-shares with the master. The message flows are in
+The master–worker protocol keeps assignments, results and cleanup in order across
+reconnects and restarts. This page states its guarantees and limits. The message flows are in
 [Master–worker protocol](15-protocol.md). How a worker reads master time, and the races that
 reading closes, are in [The master clock](17-master-clock.md). What a stop does to a run is
 in [State and failures](07-failures.md#when-something-stops). The numbers below are the
@@ -14,12 +14,15 @@ change has to keep are in
 One master leads, the one that holds the database lease. Standbys wait. Workers keep a
 journal on their own disk and open the streams.
 
-```{mermaid}
+```mermaid
 flowchart LR
-    standby["Standby: refuses streams"] -->|"takes the lease when it is released or expired"| db[("Lease row: holder and epoch")]
-    leader["Leading master"] -->|"renews every 10 s, each write checks holder and epoch"| db
-    worker["Worker, with its journal"] <-->|"Control, UploadParseResult, FetchInputs"| leader
+    Worker[Worker and journal] <-->|Control stream| Leader[Leading master]
+    Leader -->|Renew and check writes| DB[(Lease: holder and epoch)]
+    Standby[Standby master] -->|Take released or expired lease| DB
 ```
+
+The worker also calls `UploadParseResult` and `FetchInputs` on the leader. The standby
+refuses worker streams until it leads. The leader renews its lease every 10 s by default.
 
 On `Control` the worker sends `Register`, heartbeats and results; the master sends
 assignments, acks and cancels. Every message the master sends carries a `MasterClock`:
@@ -34,7 +37,8 @@ Each deadline counts on one of these:
 | That same monotonic clock, as a duration from the last renewal | The leader | How long a deposed master still answers |
 | The boot clock: its bound of a stamped master time | The worker | The master-time half of the `cleanup_anywhere` cutoff |
 | Its own timer | The worker | A stream silent for a lease, the epoch fence, the receipt half of the cutoff |
-| The wall clock | The leader | Schedules, set-aside, a sensor's `max_wait`, the script-root grace, the skew warning |
+| The wall clock | The leader | Schedules, set-aside, a sensor's `max_wait`, a resource's `unschedulable_timeout`, the script-root grace |
+| Wall clocks compared over a round trip | The worker | The skew warning, for people; it sets no liveness deadline |
 | The database clock | The database | When a standby may take the lease |
 
 Each side numbers its messages on a stream, the worker's `Register` being 0. A master
@@ -83,14 +87,16 @@ it has handled. The worker has three limits of its own, and the earliest wins fo
 | The master-time cutoff | its bound | the last stamp's `master_ms` plus 60 s |
 | The heard-message cutoff | its bound | 60 s less 0.1 % after it sent the last message the stamp says the master received |
 
-A `cleanup_anywhere` task stops at the earliest of the three, and its cleanup waits. The
+At the earliest of the three limits, the worker begins stopping a `cleanup_anywhere`
+task. It sends SIGTERM, then SIGKILL after the cancel grace if needed. Its cleanup waits. The
 master holds the worker until 60 s of master time after its last message, and a round past
-that marks it lost. It heard that heartbeat no earlier than it was sent, so the stop falls
-before the loss.
+that marks it lost. It heard that heartbeat no earlier than it was sent, so stopping begins
+before the loss. The move wait leaves time for the process group to stop.
 
-The receipt half is what stops a message held on its way from pushing the cutoff later. A
-reconnect keeps the cutoff the last session computed until the new session has a stamp. A
-worker with no `cleanup_anywhere` task does not arm this cutoff. An ordinary task keeps
+The master-time bound keeps a message held on its way from moving the cutoff later
+just because it arrived late. A reconnect keeps the previous cutoff until the new
+session has a usable stamped sample. A worker with no `cleanup_anywhere` task does
+not arm this cutoff. An ordinary task keeps
 running after the stream ends.
 
 ### A moved cleanup's wait
@@ -100,7 +106,7 @@ move wait, 30 s + 10 s.
 
 | When, on master time | Master | Worker |
 |---|---|---|
-| The round that marks the worker lost | Marks it lost. | Its `cleanup_anywhere` tasks have already stopped, whatever the master sent since. |
+| The round that marks the worker lost | Marks it lost. | It has begun stopping its `cleanup_anywhere` tasks, whatever the master sent since. |
 | For the next 40 s | Leaves the cleanup where it is. | |
 | A round past those 40 s | May assign the cleanup to another worker. | |
 | After a restart | Waits a whole 40 s from when this master first sees the cleanup. | |
@@ -111,18 +117,20 @@ third limit: each master message names the last heartbeat it heard
 
 ### A replaced incarnation's hold
 
-A new incarnation registers at once. The old stream gets no further heartbeat answers, so
-its heartbeats do not push the hold out.
+A new incarnation can register once the old stream is no longer live; a duplicate live
+stream for the same worker ID is refused. Registration then need not wait for the old
+lease to expire. The old stream gets no further heartbeat answers, so its heartbeats do
+not extend the hold.
 
 | When | Master | Old process | New incarnation |
 |---|---|---|---|
 | 0 s of master time | Marks the started attempts the new journal does not report. | | Sends `Register`. |
-| By its bound of its last stamp plus 60 s | | Its `cleanup_anywhere` tasks stop. That stamp is at or before the mark. | |
+| By its bound of its last stamp plus 60 s | | It begins stopping its `cleanup_anywhere` tasks. That stamp is at or before the mark. | |
 | 60 s of master time after the mark | Ends those attempts lost. | An ordinary task can still be running. | |
 | After a restart | Keeps the mark, and counts the 60 s from when this master first sees the attempt. | | |
 
-A journal that reports the attempt clears the mark, so a continue is not ended when the hold
-runs out.
+When the assigned worker reports the attempt in its journal, the master clears the mark.
+An attempt allowed to continue is therefore not ended when the hold runs out.
 
 ### A new leader's wait, and the lease epoch
 
@@ -173,8 +181,8 @@ the epoch fence are in the table
 
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
-| A result is delivered at least once | The worker journals the result before it sends `Finished`, and sends it again until `FinishedAck`. After eight resends it reconnects, and the journal is reconciled. | A result not yet acknowledged stays in the journal across an agent restart. Losing that disk loses it. |
-| A result is stored once | The end is recorded only while the attempt has no status yet. A second `Finished` is acknowledged, and the stored end stands. | A `Finished` from a worker that does not own the attempt is acknowledged and not stored. A result the database refuses is stored as the failure `result_not_stored`, and is not retried. |
+| A result is delivered at least once | The worker journals the result before it sends `Finished`, and sends it again until `FinishedAck`. After eight resends it reconnects, and the journal is reconciled. | A result not yet acknowledged stays in the journal across an agent restart. Losing that disk loses it. If a journal write fails, the worker logs a warning and keeps the result in memory; a restart before acknowledgement can then lose it. |
+| A result is stored once | The end is recorded only while the attempt has no status yet. A second `Finished` is acknowledged, and the stored end stands. | A `Finished` from a worker that does not own the attempt is acknowledged and ignored, except for a cleanup result the master still expects from that worker (a moved cleanup or `CLEAN_REST`). A result the database refuses is stored as the failure `result_not_stored`, and is not retried. |
 
 Repeats are in [Delivery](07-failures.md#delivery). The refused result is in
 [When something stops](07-failures.md#when-something-stops).
@@ -183,10 +191,10 @@ Repeats are in [Delivery](07-failures.md#delivery). The refused result is in
 
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
-| A stream silent for a lease ends | 60 s after the master's last message, on the worker's timer, the worker ends the stream and ignores what arrives later. A `Registered` at least that old on the first stream is ignored, and the worker registers again. | An ordinary task keeps running. A `cleanup_anywhere` task stops here, or sooner, at the cutoff below. |
-| A `cleanup_anywhere` task stops before its cleanup moves | The task stops at the earliest of 60 s after the last message received, the bound of the last stamp plus 60 s, and 60 s less 0.1 % after it sent the last message the master says it received. The master loses the worker only once master time is past 60 s after the worker's last message it received, then waits 40 s before the cleanup can move. The stop falls first, a cut one way included. | A cleanup already running when the cut starts keeps running. A frozen VM does not stop. |
+| A stream silent for a lease ends | 60 s after the master's last message, on the worker's timer, the worker ends the stream and ignores what arrives later. A `Registered` at least that old on the first stream is ignored, and the worker registers again. | An ordinary task keeps running. A `cleanup_anywhere` task begins stopping here, or sooner, at the cutoff below. |
+| A `cleanup_anywhere` task stops before its cleanup moves | The worker begins stopping the task at the earliest of 60 s after the last message received, the bound of the last stamp plus 60 s, and 60 s less 0.1 % after it sent the last message the master says it received. The master loses the worker only once master time is past 60 s after the worker's last message it received, then waits 40 s before the cleanup can move. That covers the 30 s cancel grace and 10 s move wait, including a one-way cut. | A cleanup already running when the cut starts keeps running. A frozen VM does not stop. |
 
-The two limits are in the tables under
+The cutoff and move wait are in the tables under
 [The worker lease, and the cutoff](#the-worker-lease-and-the-cutoff) and
 [A moved cleanup's wait](#a-moved-cleanups-wait). A cleanup already running, and a frozen VM,
 are in [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker).
@@ -195,9 +203,9 @@ are in [Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-w
 
 | Guarantee | What it rests on | Where it stops |
 |---|---|---|
-| A wall-clock jump moves no liveness deadline | Worker loss, a parse job, a connection job and a moved cleanup's wait count on master time. The worker reads that time from `MasterClock`. | A jump of the master's monotonic clock is not caught. Four decisions still read the wall clock: schedules, set-aside, a sensor's `max_wait`, and the script-root grace. A jump can fire one of those early, or hold it. |
+| A wall-clock jump moves no liveness deadline | Worker loss, a parse job, a connection job and a moved cleanup's wait count on master time. The worker reads that time from `MasterClock`. | A jump of the master's monotonic clock is not caught. Five decisions still read the wall clock: schedules, set-aside, a sensor's `max_wait`, a resource's `unschedulable_timeout`, and the script-root grace. A jump can fire one of those early, or hold it. |
 
-Which four, and why they stay on the wall clock, is in
+Why these decisions stay on the wall clock is in
 [One clock, and what still uses the wall clock](17-master-clock.md#one-clock-and-what-still-uses-the-wall-clock).
 
 ## What is not guaranteed
@@ -206,10 +214,10 @@ Each line is a limit that is kept on purpose, or open for now.
 
 - An assignment its worker may have started, never reported before the worker was lost, ends `lost` using a retry, though it may never have run ([Known limits](17-master-clock.md#known-limits)).
 - A cleanup already running at the cut, and a task on a frozen VM, can overlap the moved cleanup ([Cleanup on another worker](../02-dags/15-cleanup.md#cleanup-on-another-worker)).
-- After a suspend, the cutoff is read again on the alive tick, every 5 s, so a `cleanup_anywhere` task can stop up to 5 s late ([Known limits](17-master-clock.md#known-limits)).
+- After a suspend, the cutoff is read again on the alive tick, every 5 s, so stopping a `cleanup_anywhere` task can begin up to 5 s late, followed by its cancel grace ([Known limits](17-master-clock.md#known-limits)).
 - A stall under 1 s, plus 0.2 % of the time since the sample, leaves the worker's bound late by that much ([Known limits](17-master-clock.md#known-limits)).
-- The cutoff the last session computed stands over a reconnect, until the new session's first stamp ([Known limits](17-master-clock.md#known-limits)).
+- The cutoff the last session computed stands over a reconnect, until the new session has a usable stamped sample ([Known limits](17-master-clock.md#known-limits)).
 - An ordinary task keeps running after the stream ends, and can overlap its retry once the worker is lost or a replaced incarnation's 60 s hold ends ([When something stops](07-failures.md#when-something-stops)).
 - A jump of the master's monotonic clock is not caught ([Known limits](17-master-clock.md#known-limits)).
-- Schedules, set-aside, a sensor's `max_wait` and the script-root grace move with the wall clock ([One clock](17-master-clock.md#one-clock-and-what-still-uses-the-wall-clock)).
+- Schedules, set-aside, a sensor's `max_wait`, a resource's `unschedulable_timeout` and the script-root grace move with the wall clock ([One clock](17-master-clock.md#one-clock-and-what-still-uses-the-wall-clock)).
 - The lease row expires on the database's clock ([One master per database](04-master.md#one-master-per-database-the-lease)).

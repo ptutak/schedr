@@ -17,7 +17,7 @@ own: another master's times are a different timeline and are never compared with
 
 | When | Wall clock | Master time |
 |---|---|---|
-| The process starts | Read once: the origin of this timeline | The origin |
+| Master time is first read | Read once: the origin of this timeline | The origin |
 | 30 s of monotonic time later | | The origin plus 30 s |
 | The wall clock jumps forward an hour | An hour ahead | Still the origin plus the monotonic time since: the jump moves no deadline |
 | A restarted process, or the other master | | A new timeline |
@@ -41,8 +41,9 @@ sequenceDiagram
 The worker does not trust its own guess of when the master sent the message. The worker
 message the stamp names was sent first, so master time `master_ms` is already past that send.
 Master time `X` is no earlier than the send plus `X - master_ms`, less 0.1 % (one part in a
-thousand: each clock slews by at most 500 ppm, so the two by at most 1000 ppm). That is
-Cristian's bound, from the worker's boot clock, which keeps counting through a suspend. The
+thousand: each clock slews by at most 500 ppm, so the two by at most 1000 ppm). The code also allows for the stamp being rounded down to a millisecond. This gives an
+earliest possible deadline on the worker's boot clock, which keeps counting through a
+suspend. The
 worker keeps the tightest sample of the last 10 minutes (decision 447,
 `SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW`): an older one, however tight, has drifted its
 0.1 % from further back. An equally tight later sample replaces an old one, so the 0.1 % is
@@ -54,15 +55,24 @@ A pause the boot clock did not count (a frozen VM: the wall clock ran ahead of t
 clock, past a second of slack and 0.2 % of the span) makes every deadline passed. The next
 sample replaces the old one.
 
-```{mermaid}
-flowchart LR
-    newSample[A stamped message naming a worker message] --> tighter{At least as tight as the newest kept?}
-    tighter -->|yes| dropLoose[Drop the looser ones before it] --> keep[Keep it last]
-    tighter -->|no| keep
-    keep --> old{Oldest kept sent more than 10 min ago?}
-    old -->|yes| dropOld[Drop it] --> old
-    old -->|no| best[The first kept is the tightest of the window]
+```mermaid
+flowchart TD
+    Sample[Receive stamped message] --> Match{Names a recorded send?}
+    Match -->|No| Ignore[No new sample]
+    Match -->|Yes| Invalid{Timeline changed or pause detected?}
+    Invalid -->|Yes| Clear[Discard old bounds]
+    Invalid -->|No| Tight
+    Clear --> Tight[Drop equally tight or looser samples]
+    Tight --> Keep[Append new sample]
+    Keep --> Age[Drop samples older than 10 min]
+    Age --> Best[First sample is tightest]
 ```
+
+The worker also estimates when a task started in master time, using the midpoint of
+the sample with the narrowest round trip, with an allowance for its age. This estimate
+is for recorded start times; cutoff decisions use the conservative bound above. The
+master converts a reported start to wall time, capped at its receipt time. If the worker
+has no estimate or names another timeline, the master uses its own receipt time.
 
 Master time decides the worker's cutoff, the worker lease, the hold of a replaced
 incarnation and the wait before a cleanup moves. Whether a worker started an assignment it
@@ -230,17 +240,17 @@ A failure is reported with its smallest scenario.
 
 | Metric | What it shows |
 |---|---|
-| `worker_master_sample_age_seconds` | The age of the message master time is read from; growing past a few heartbeats, the master isn't answering. |
-| `worker_master_round_trip_seconds` | That message's round trip: what the cutoff loses to the link. |
-| `worker_older_epoch_refusals` | Streams ended for a lower lease epoch: a deposed master still answering. |
-| `master_replaced_attempts_held` | Attempts of replaced incarnations held for a lease (decision 443). |
+| `schedr_worker_master_sample_age_seconds` | The age of the message master time is read from; growing past a few heartbeats, the master isn't answering. |
+| `schedr_worker_master_round_trip_seconds` | That message's round trip: what the cutoff loses to the link. |
+| `schedr_worker_older_epoch_refusals_total` | Streams ended for a lower lease epoch: a deposed master still answering. |
+| `schedr_master_replaced_attempts_held` | Attempts of replaced incarnations held for a lease (decision 443). |
 
 A worker compares the master's wall clock on each stamped answer with its own over the round
 trip. More than 2 s outside it (`SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING`), it logs a
 warning once a session and reports a `clock_skew` warning, shown with the worker on the
 Deployments page. A heartbeat sent at the worker's wall time A, its answer arriving at B: a
 master wall time between A and B is no skew, one 30 s past B is 30 s of it. Wall clocks only touch what people read (cron times, logs, shown times);
-no deadline uses them.
+no liveness deadline compares the two machines' wall clocks.
 
 ## One clock, and what still uses the wall clock
 
@@ -290,7 +300,9 @@ wait early, a step back makes it longer (decision 478).
 
 ### A replaced incarnation (decision 443)
 
-A new incarnation registers at once. The attempts the old process had started, and that the
+A new incarnation can register once the old stream is no longer live. A duplicate live
+stream for the same worker ID is refused; after the old stream closes, registration need
+not wait for its lease to expire. The attempts the old process had started, and that the
 new journal does not report, end `lost` only after a worker lease of master time from that
 registration. The old stream is answered no more, so its heartbeats do not keep it alive.
 The hold is stored on each attempt. A master that restarts keeps the hold and counts the
@@ -298,8 +310,8 @@ lease afresh from when it first sees the attempt.
 
 | When | Master | Old process | New incarnation |
 |---|---|---|---|
-| The registration | Accepts it at once, and stops answering the old stream's heartbeats. Marks the started attempts the new journal does not report, the mark stored with each. | | Sends `Register`. |
-| Its own lease | | Its `cleanup_anywhere` tasks stop. An ordinary task may still be running. | |
+| The registration, after the old stream closes | Accepts it; the old stream gets no more heartbeat answers. Marks the started attempts the new journal does not report, the mark stored with each. | | Sends `Register`. |
+| Its own lease | | It begins stopping its `cleanup_anywhere` tasks. An ordinary task may still be running. | |
 | 60 s of master time after the registration | Ends the marked attempts `lost`. | | |
 | After a restart | Keeps the mark, and counts the 60 s afresh. | | |
 
@@ -362,19 +374,21 @@ Wall-clock steps are.
 
 The worker's timers run on a clock that a suspend stops; the cutoff is read again from the
 boot clock at least every 5 s (the worker's alive tick), so a worker resumed after a suspend
-stops its `cleanup_anywhere` tasks up to 5 s late.
+begins stopping its `cleanup_anywhere` tasks up to 5 s late. The cancel grace still
+bounds how long they take to stop.
 
-A cutoff the last session's stamps set stands over a reconnect, until the new session's first
-stamped message: a new stream doesn't move it later.
+A cutoff set by the last session's stamps stays in force over a reconnect until the new
+session has a usable stamped sample: a new stream doesn't move it later.
 
 A stall that even the worker's boot clock missed shows only once its wall clock has run 1 s
 (plus 0.2 % of the time since the sample) ahead, so that a wall-clock step isn't taken for
 one. A shorter stall goes unseen and leaves the worker's reading that much late; the
 simulator allows exactly that.
 
-At the end of a replaced incarnation's lease, the old process stops its `cleanup_anywhere`
-tasks and its triggers. An ordinary task still running there can overlap the retry, as it can
+At the end of a replaced incarnation's lease, the old process begins stopping its
+`cleanup_anywhere` tasks and triggers. An ordinary task still running there can overlap the retry, as it can
 for a worker the master has lost (decision 443).
 
-Every worker numbers its messages: a worker of protocol 1.0 (1.0.0rc1) or of the 0.1
-preview, which didn't, is refused by a 2.0 master (another protocol major).
+This build speaks protocol 2.1. A worker of protocol 1.0 (1.0.0rc1) or the 0.1
+preview is refused because its major version differs. A 2.1 master accepts workers
+with major 2 and minor 1 or lower; upgrade the master before the workers.

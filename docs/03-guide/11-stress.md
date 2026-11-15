@@ -1,22 +1,23 @@
 # Stress tests
 
-Besides the unit and integration tests run on every change, a **stress suite** puts the real
-system under load and trouble: the `schedr` binary as separate processes on a real Postgres,
+The **stress suite** tests the real system under load and during failures, alongside the
+unit and integration tests run on every change: the `schedr` binary as separate processes on a real Postgres,
 many workers, killed processes, a frozen master, a stalled database, a connection pooler.
-It is too slow for every push, so it runs **nightly in CI** (the whole suite when `main` changed since its last
-passing run; scenario 21 alone with a fresh seed when it did not) and **locally with `make stress`**, at the end of each milestone and after a
-change to scheduling, the database layer or the worker.
+It runs **nightly in CI** and **locally with `make stress`**. CI runs the whole suite
+when `main` has changed since its last passing run. Otherwise, it runs scenario 21 alone
+with a fresh seed. Run it locally at the end of each milestone and after changes to
+scheduling, the database layer or the worker.
 
 ## What every scenario checks
 
-Each scenario ends with the same **invariants**, and any of them broken fails it:
+Each scenario checks these **rules** at the end. Breaking one fails the scenario:
 
 - nothing is still running, and no command is left undecided;
 - no task succeeded twice, and every task of a successful run succeeded;
 - every run ended in a state the scenario expects (`success`, or `cancelled` / `failed` where
   it cancels or overloads on purpose);
 - **No unexpected overlap of tries**, checked twice: by the times the
-  database recorded, and by the tasks themselves. Every stress task appends a `start` and an
+  database recorded, and by the tasks themselves. The marked command tasks append a `start` and an
   `end` line (its run, task, try, process and the time) to one shared file. A try the suite
   killed ends when it was killed; a try schedr stopped ends when the database recorded it.
   Two tries of one task running at once show as overlapping lines. In the chaos scenarios,
@@ -57,7 +58,7 @@ are in the report.
 | 15 | Change signals, on Postgres: scenario 1's load four times, the triggers that announce changes off, on, on, off | how the rounds and the tasks a second compare |
 | 15b | The same, on SQLite through standalone (scenario 9's load) | the same comparison |
 | 15c | The same with scenario 13's load (Python tasks, spawned): bound by the CPU, where the triggers' work at commit competes with the tasks' starts instead of hiding behind the disk | the same comparison |
-| 16 | Concurrency limits: DAGs of two mapped Python tasks, two runs each at once, on many more slots than the limits allow | never more open at once than `max_active_per_run`, `max_active` or `max_active_tasks`; the DAG's limit reached; every run succeeds. Written in M4.4, its first result comes with the next run of the suite |
+| 16 | Concurrency limits: DAGs of two mapped Python tasks, two runs each at once, on many more slots than the limits allow | never more open at once than `max_active_per_run`, `max_active` or `max_active_tasks`; the DAG's limit reached; every run succeeds. Written in M4.4; results are recorded below |
 | 17 | Silent two-way cut, shorter and then longer than the worker lease and cleanup move wait | reconnection and moved cleanups |
 | 18 | One-way cuts past the lease, first toward the master, then toward the worker | each direction's recovery |
 | 19 | Slow links: 200 ms per chunk on every worker, then 1.5 s on one | no failures |
@@ -88,8 +89,7 @@ time. `13_python_tasks_forked` is the same load with the workers' fork servers o
 preload list (`json` and `decimal`). A `total` other than 120 is broken. The forked test's
 floor is the share of attempts that were forked, at least 99 %. The spawned test has the same
 floor for attempts that were spawned. Each reads the start to the runner's hello on the first
-worker (`schedr_worker_task_start_seconds`, phase `runner`). A scrape that fails, or that has
-no such times, is broken.
+worker (`schedr_worker_task_start_seconds`, phase `runner`). A failed scrape, or one with no such times, fails the scenario.
 
 **Scenario 14** measures quiet DAGs (M2.5.2): how much the master's rounds grow when many
 quiet DAGs sit beside a few busy ones. Two workers of four slots run a few busy DAGs, each
@@ -248,7 +248,7 @@ laptop under WSL): every scenario passed.
 | 15 | change signals, Postgres | — | — | — | mean 1.00×, p99 0.83×, tasks/s 0.99× |
 | 15b | change signals, SQLite | — | — | — | mean 1.11×, p99 1.17×, tasks/s 0.98× |
 
-**Only runs of one session compare.** Scenario 13 came out well below the 2026-10-27
+**Compare runs from the same session.** Scenario 13 came out well below the 2026-10-27
 baseline (spawned 8.6 tasks a second against 12.4), so it was run again at each change since
 then, in the same afternoon, alternating:
 
@@ -280,8 +280,8 @@ The runs are shorter with it (scenario 1's chains by 7-21 %), and no cost held i
 orders: the first pair's slower starts and lower tasks a second on scenario 1 turned over in
 the second.
 
-Scenario 15c (the triggers on and off under the Python load) is new; its first result comes
-from the nightly run.
+Scenario 15c compares the triggers on and off under the Python load. Its later result is
+recorded below.
 
 ## After M4B (2026-11-11)
 
