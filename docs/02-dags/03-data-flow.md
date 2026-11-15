@@ -1,23 +1,23 @@
 # Data flow
 
 A task receives another task's output by being called with it. `>>` only decides the
-order. This DAG does both: `load` and `show` use `fetch`'s data, and `left` and `right`
-run after `fetch` and before `finish` without reading it.
+order. In this DAG, `load` reads `fetch`'s data and `show` prints `load`'s output.
+`left` and `right` run after `fetch` and before `finish`, without reading `fetch`'s output.
 
 ```{literalinclude} ../../examples/docs/data_flow.py
 :language: python
 :caption: examples/docs/data_flow.py
 ```
 
-`fetch()` returns an `Output`. `batch.rows` and `batch["source"]` and `batch[0]` are
-outputs too, each naming a part. The master extracts that part when it builds the
-downstream task's inputs. A key is a `str` or an `int`; a negative index is a
-`ValueError`.
+`fetch()` returns an `Output`. `batch.rows` and `batch["source"]` reference fields of this
+example's `Batch`. For a list output, `items[0]` references its first element. The master
+extracts that part when it builds the downstream task's inputs. A key is a `str` or an
+`int`; a negative index is a `ValueError`.
 
 | Where a reference is written | What it does |
 |---|---|
 | An argument of a `@task` call | A data edge. The downstream task waits for that output. Lists, tuples and dict values are searched, at any depth. |
-| A command string, a list element or an `env` value | A data edge, the same way. |
+| A command argument in a list, or an `env` value | A data edge, the same way. A shell command string cannot contain placeholders. |
 | `x.on(Kind)` | A data or order edge taken only on that outcome. [Routing by outcome](08-outcomes.md). |
 | `a >> b`, `b << a`, or `chain(a, b)` | An order-only edge. `b` waits for `a` and receives nothing from it. |
 | `a >> [b, c]`, `[a, b] >> c` | An edge from every task on the left to every task on the right. |
@@ -60,9 +60,10 @@ except `int` for `float`. When the upstream return type is an outcome union, nam
 member first: `batch.on(Rows).rows`.
 
 When a task returns, its value is checked against the return type and stored as JSON. These
-fail the attempt, with a message naming where in the value: a type schedr doesn't store
+fail the attempt, with a message naming where in the value: a type `schedr` doesn't store
 (`Decimal`, `set`), a dict key that isn't a `str`, `NaN` or infinity, an integer outside the
-64-bit range (store it as a `str`; a `timedelta` beyond about 213,503,982 days, or -106,751,991, is one), a
+stored range (`-2**63` through `2**64 - 1`; store larger integers as a `str`), a
+`timedelta` whose total microseconds fall outside that range, a
 string, key or outcome name containing NUL (`\0`), lists and dicts
 nested more than 100 deep, and any other error while writing it (a model's serializer
 failing, a list containing itself). Every other
@@ -74,6 +75,9 @@ A t-string becomes a template. References in it are filled in when the task runs
 value is formatted while the file is imported: a string as itself, a number or a bool with
 `str`, a `datetime` or `date` in ISO 8601, a `timedelta` as seconds (`3600`, `1.5`).
 
+For a **reference**, these formats are allowed. A plain value uses Python's `format`
+when a spec is supplied.
+
 | Format | Where |
 |---|---|
 | none | The text above. |
@@ -84,19 +88,18 @@ t-string nested in another, or used as a dict key, is a `TypeError`.
 
 ## When a task does not run
 
-A task runs when its incoming edges and `run_if` allow it
-([Routing by outcome](08-outcomes.md)). If an upstream task fails, this task ends
-`upstream_failed` and does not run. An edge that wasn't taken (`.on(...)` whose outcome
-didn't happen, or a `@branch` that didn't choose this task) counts as skipped. Tasks with
-no dependency on the failure keep running.
-[Defaults and retries](05-defaults.md) is what a failure does to the task that failed.
-[Task groups](11-groups.md) organise tasks while the DAG is written.
-[Mapping](10-mapping.md) runs a task once per element.
+A task runs when its incoming edges and `run_if` allow it ([Routing by
+outcome](08-outcomes.md)). With the default `run_if=RunIf.NONE_FAILED`, an upstream failure
+makes this task end `upstream_failed` without running. An edge that wasn't taken (`.on(...)`
+whose outcome didn't happen, or a `@branch` that didn't choose this task) counts as skipped.
+Tasks with no dependency on the failure keep running. [Defaults and retries](05-defaults.md)
+explains what happens to the task that failed. [Task groups](11-groups.md) organise tasks
+while the DAG is written. [Mapping](10-mapping.md) runs a task once per element.
 
 ## Pydantic models
 
 A task can return and take Pydantic models, with `pip install schedr[pydantic]`
-(Pydantic 2.11 or newer, before 3). schedr never imports Pydantic itself; it uses the
+(Pydantic 2.11 or newer, before 3). `schedr` never imports Pydantic itself; it uses the
 model's own methods. A model is stored as `model_dump(mode="json")` writes it, keyed by
 field names, and read back as JSON with `model_validate_json`, so Pydantic's rules and
 validators apply when the downstream task receives it, a strict model's included: dates
@@ -129,8 +132,8 @@ Parts that can't be compared (`allOf`, `not`, `if`, custom schemas) fit only whe
 sides are identical. The error names the field and both sides' constraints.
 
 A model's text, number and boolean fields render into commands and t-strings like any
-value (`t"curl {found.url}"`). A model's date renders as the text Pydantic wrote: a format
+value (`command=["curl", found.url]`). A model's date renders as the text Pydantic wrote: a format
 spec such as `:%Y` doesn't apply to it. A date a model holds without a time zone reaches a
-`datetime` parameter without one, and schedr refuses to store such a value again: declare
+`datetime` parameter without one, and `schedr` refuses to store such a value again: declare
 the field `AwareDatetime`, or add a zone in the task. `NaN`, infinity and integers
 outside the 64-bit range in a model are refused, as in any output.

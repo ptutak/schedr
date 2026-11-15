@@ -13,12 +13,12 @@ forms also accept [`EventNamed`](22-events.md#reading-an-event-in-a-sensor).
 
 ## Which run
 
-`RunOf("orders", task="load", lag=timedelta(hours=6))` names the DAG, and of it the task; without
-`task`, the whole run counts. `lag` says how long before this run's `planned_for` that run was
+`RunOf("orders", task="load", lag=timedelta(hours=6))` names the DAG and its task.
+Without `task`, the whole run counts. `lag` says how long before this run's `planned_for` that run was
 planned for: `timedelta(0)` is the run for the same moment, so a rerun or a backfill of `report` for
 2026-11-01 waits for the `orders` of 2026-11-01. Without `lag`, the step waits for the next run of
 `orders` to end after it started.
-`lag` cannot exceed 10 years, in either direction.
+`lag` must be whole milliseconds and cannot exceed 3,650 days in either direction.
 
 ## How it ends
 
@@ -28,9 +28,9 @@ planned for: `timedelta(0)` is the run for the same moment, so a rerun or a back
 | ended `failed`, `upstream_failed`, `skipped` or `cancelled` | `Failed`, with `.state` and `.run_id`, when the DAG takes `.on(Failed)`; otherwise the step fails and the run with it |
 | nothing matching ended within `max_wait` | `TimedOut`, as any [wait step](18-sensors.md); `max_wait` defaults to the master's `[sensors] default_max_wait` |
 
-When several runs are planned for the same moment, only the newest counts: schedr has no clear,
-so redoing `orders` for 2026-11-01 (`schedr runs trigger orders --for ...`, or a backfill) starts
-a new run for that moment, and a `report` run waiting or rerun afterwards waits for that one,
+When several runs are planned for the same moment, only the newest counts. Redoing `orders`
+for 2026-11-01 with `schedr runs trigger orders --for ...` or a backfill starts a new run
+for that moment. A `report` run waiting or rerun afterwards waits for that one,
 queued or running, and takes its result. An older run that succeeded no longer counts. A `report`
 run that already ended is not run again by it: rerun it by hand, or start `report` with
 `trigger=RunOf(...)`, which starts a run for each run of `orders` that succeeds.
@@ -63,11 +63,13 @@ secret fields and passwords in URLs come as `****`. The DAG gives the other para
 `loaded_orders(least=1)`. A run that ended within `max_wait` is handed though little of it is left:
 the call then gets at least a minute.
 
-A call gets what is left of `max_wait`, which can be hours. `timeout=` limits each call by itself:
-`@sensor(wait_for=RunOf("orders"), timeout=timedelta(minutes=5))`. A call still awaiting then, as on
-a network read that never answers, is cancelled and fails the attempt, whose retries get the same
-run; reaching `max_wait` first still ends the step with `TimedOut`. Without `wait_for=`, a
-`@sensor` has no `timeout=`: its one call is its wait, which `max_wait` limits.
+A call gets what is left of `max_wait`, with at least a minute allowed for a run handed to
+it in time. That can extend the call past the original wait deadline. `timeout=` limits each
+call by itself: `@sensor(wait_for=RunOf("orders"), timeout=timedelta(minutes=5))`. A call
+still awaiting then, as on a network read that never answers, is cancelled and fails the
+attempt, whose retries get the same run. If its allowed wait time runs out first, the step
+ends with `TimedOut`. Without `wait_for=`, a `@sensor` has no `timeout=`: its one call is
+its wait, which `max_wait` limits.
 
 What it returns is its value. `NOT_YET` says "not this run": the step waits for a later matching
 one, until `max_wait`. With `lag` that is a newer run for the same moment, as when `orders` is run
@@ -109,15 +111,18 @@ with Dag("big_orders", trigger=on_big_orders(least=40)):
 ```
 
 It sees every run that ends: succeeded, failed or cancelled. An `Event` starts a run, `None`
-starts none. The event's key is the run's ID unless it gives one, so a run starts one run however
-often it is looked at; its `at` is the run's `planned_for` plus `lag` unless it gives one. Each
-call runs on a watcher slot like any trigger, with its secrets and connections, and ends with
-the run: a long-lived connection belongs in a generator `@trigger` instead.
+starts none. The event's key is the run's ID unless it gives one, so a run starts one run
+however often it is looked at; its `at` is the run's `planned_for` plus `lag` unless it
+gives one. Without `lag` or an explicit `at`, the new run is planned for when the event is
+received. Each call runs on a watcher slot like any trigger, with its secrets and
+connections, and ends with the run: a long-lived connection belongs in a generator
+`@trigger` instead.
 
-A call may take `timeout=` (10 minutes unless it says): one still awaiting then, as on a network
-read that never answers, is cancelled and fails as a raise does. A call that blocks the event
-loop instead (`time.sleep`, a blocking client) can't be cancelled; it falls under the host's
-[30-second rule](../03-guide/05-workers.md#the-watcher-host) and stops the trigger with `blocked_event_loop`.
+A call may set `timeout=` (10 minutes by default): one still awaiting then, as on a network
+read that never answers, is cancelled and fails as a raise does. A call that blocks the
+event loop instead (`time.sleep`, a blocking client) can't be cancelled; it falls under the
+host's [30-second rule](../03-guide/05-workers.md#the-watcher-host) and stops the trigger
+with `blocked_event_loop`.
 
 When the function raises, the trigger fails as any does: it waits (doubling) and the next call
 gets the same run again. With `run_retries=N`, a run it raised on is tried N more times, then

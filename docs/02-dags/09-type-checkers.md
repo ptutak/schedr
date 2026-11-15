@@ -1,8 +1,8 @@
 # Type checkers
 
-schedr types its API so that mypy (`--strict`), pyright and basedpyright check a DAG body as
+`schedr` types its API so that mypy (`--strict`), pyright and basedpyright check a DAG body as
 you write it: a wrong argument is reported in your editor, before the file is loaded. They
-check less than schedr does when it loads the file (below), so a clean editor is no proof
+check less than `schedr` does when it loads the file (below), so a clean editor is no proof
 that the file loads.
 
 ```{literalinclude} ../../examples/docs/type_checkers.py
@@ -102,11 +102,12 @@ and finds what they can't:
   allow `None`, or the task takes `run_if=RunIf.ALL_SUCCEEDED` (as `report` above). Type
   checkers don't know which edges may be skipped.
 - **Outcomes and graphs:** `.on(...)` with a class that isn't one of the task's outcomes,
-  a branch returning a task that isn't right after it, cycles, duplicate task IDs.
+  cycles and duplicate task IDs. A branch returning a task that is not directly downstream
+  is checked when the branch runs, rather than when the file loads.
 
 ## Settings
 
-mypy needs nothing beyond `--strict`. For basedpyright (and pyright), DAG code makes
+mypy needs nothing beyond `--strict`. For basedpyright, DAG code makes
 statements of expressions on purpose: `a >> b` records a dependency, and
 `CommandOperator(...)` alone on a line records a task. Turn off the two rules that report
 them, in `pyproject.toml`:
@@ -117,5 +118,7 @@ reportUnusedExpression = false
 reportUnusedCallResult = false
 ```
 
-schedr's own `make lint` checks the example DAGs this way, with mypy `--strict` and
+For pyright, put the same options under `[tool.pyright]`.
+
+`schedr`'s own `make lint` checks the example DAGs this way, with mypy `--strict` and
 basedpyright, so these pages stay type-clean.

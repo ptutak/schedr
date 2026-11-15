@@ -2,8 +2,8 @@
 
 A group organises tasks while the DAG is written. It does not run, and it has no state of
 its own. Its tasks become ordinary tasks with a prefixed ID, and a dependency on the group
-becomes ordinary edges. The master schedules those tasks and edges. It only checks the
-groups.
+becomes ordinary edges. The master validates the group structure, then schedules the
+tasks and edges.
 
 ```{literalinclude} ../../examples/docs/groups.py
 :language: python
@@ -11,7 +11,7 @@ groups.
 ```
 
 `extract`, `load` and `report` are each defined once. The loop builds one group per source,
-so the same functions run twice and their IDs don't collide: `eu.extract`, `eu.load`,
+so each source gets its own tasks without ID clashes: `eu.extract`, `eu.load`,
 `us.extract`, `us.load`. No `.override()` is needed. `start` and `report` are outside the
 groups, so their IDs have no prefix. `defaults` on the group gives `extract` and `load` two
 retries, 30 seconds apart; `start` and `report` keep the built-in defaults.
@@ -46,7 +46,7 @@ group is never waited on or skipped: its tasks are.
 
 `with group(...)` belongs inside `with Dag(...)`. A group's block that raises is still
 closed when the DAG file catches the error: tasks created after the block are not in the
-group, and a dependency on the group still sees the tasks created before the error.
+group, and a dependency on the group still includes the tasks created before the error.
 
 ## A dependency on a group
 
@@ -111,4 +111,4 @@ The run page draws a box around each group's tasks, labelled with the group's ow
 nested group's box sits inside its parent's, and the gap between layers grows with the
 nesting. Hovering the box shows the full group id. The tasks and the edges are the ordinary
 ones: the box is how the graph is drawn, and the group still has nothing of its own to run.
-[The web UI](../03-guide/12-ui.md#the-graph) is the rest of the graph.
+[The web UI](../03-guide/12-ui.md#the-graph) explains the rest of the graph.

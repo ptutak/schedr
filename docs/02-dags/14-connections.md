@@ -2,7 +2,7 @@
 
 A connection is what a task connects to: a database, an API, a host. It is written once, as
 a generator function, and the tasks that use it name it. Its values come from where the DAG
-runs: the same DAG reads a development database in development and production's in
+runs: the same DAG reads a development database in development and the production database in
 production, because each deployment has its own [secret storage](../03-guide/13-secrets.md).
 
 ```{literalinclude} ../../examples/docs/connections.py
@@ -14,8 +14,9 @@ production, because each deployment has its own [secret storage](../03-guide/13-
 
 `@connection(...)` goes on a generator function, as `contextlib.contextmanager` does. The
 function's parameters are the connection's shape, and the decorator's keyword arguments are
-their values. The code up to `yield` opens it; what it yields is what the task gets; the code
-after `yield` runs when the task's `with` block ends, on errors too. An `async def`
+their values. The code up to `yield` opens it; what it yields is what the task gets; put
+cleanup in a `finally` block around `yield` so it runs when the task's `with` block ends, on
+errors too. Code simply placed after `yield` is skipped if the block raises. An `async def`
 generator defines an async connection: open it only with `async with`. A connection made
 from a sync generator cannot be opened with `async with`.
 
@@ -122,9 +123,10 @@ What each type gives (the prefix `DB`; `?` when the value is given):
 
 Every connection also gets `DB_JSON`, a file with all its values as one object of JSON, for
 `jq` or a program of your own. A parameter whose name can't be a variable's (`région`), or
-two that would be one (`host` and `HOST`), fails the attempt: read such a connection with
-`schedr task-ctx connection NAME --json` instead. A value curl's config or `.pgpass` can't
-hold (a line break in a header, a token or a Postgres password) fails it too.
+two that would be one (`host` and `HOST`), or the reserved name `json`, fails the attempt:
+read such a connection with `schedr task-ctx connection NAME --json` instead. A value curl's
+config or `.pgpass` can't hold (a line break in a header, a token or a Postgres password)
+fails it too.
 
 SSH's config has one host, `target`, with the connection's host, port, user, key and
 `known_hosts`, `StrictHostKeyChecking yes`, and `BatchMode yes` unless a password is given
@@ -320,8 +322,7 @@ that can't be read, or a marker (`@cert-authority`, `@revoked`), fails the attem
 than being skipped.
 
 A connection's check (`name.run_check()` in a task; `schedr connections test NAME` on a
-worker, below)
-opens it and raises when it doesn't work. A `@connection` of your own gets one with
+worker, below) opens it and raises when it doesn't work. A `@connection` of your own gets one with
 `@name.check`:
 
 ```python
@@ -358,11 +359,12 @@ warehouse: OperationalError: password authentication failed for user "etl"
 - **`test NAME`** opens one connection on a worker and runs its check (a type's own, or
   `@name.check`); one without a check is opened and closed, and a `Generic` only rendered.
   It runs as a one-off attempt of the connection's file beside the tasks, taking no slot,
-  stopped after 60 s (`--timeout 2m`). A failure says why, with its secrets masked.
+  stopped after 60 s by default (`--timeout 2m` changes it). A failure says why, with its secrets masked.
 
-A worker runs one of these at a time; the time a job waits for its turn is part of its own
-(a check has 30 s). It runs on the code the root's DAGs were last parsed from, so a worker
-still on older code, or on newer code not parsed yet, isn't picked.
+By default, a worker runs one of these jobs at a time. Waiting for its turn counts against
+the job's time limit (30 s for a check by default). It runs on the code the root's DAGs were
+last parsed from, so a worker still on older code, or on newer code not parsed yet, isn't
+picked.
 
 Either goes to a worker having the root's current code (the connected one with the fewest
 attempts), or the one `--worker NAME` names. `--json` prints the command's result as it is.
@@ -411,4 +413,4 @@ def test_fetch_orders() -> None:
 `run_dag(..., connections={"orders_api": {"token": "t", "base_url": "http://localhost:8000"}})`
 runs the real function with those values instead of its own, which are never rendered (`schedr
 dags test --connection 'orders_api={"token": "t", ...}'`). To call the function yourself,
-`orders_api.fn(token=..., base_url=...)` is it as a context manager.
+`with orders_api.fn(token=..., base_url=...) as client:` opens it as a context manager.

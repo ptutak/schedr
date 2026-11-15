@@ -1,7 +1,7 @@
 # Testing a DAG
 
-Three ways, from the narrowest: call the function, call it with a run's context, or run
-the DAG. `schedr dags test` needs no server. `schedr dags check` needs one only with
+Test a DAG at three levels: call a task function, call it with a run's context, or run
+the whole DAG. `schedr dags test` needs no server. `schedr dags check` needs one only with
 `--against`. The commands are in
 the [CLI reference](../_generated/04-reference/02-cli.md).
 
@@ -90,7 +90,7 @@ error: no active worker at http://sched.example to compare with this schedr (0.3
 
 A server that cannot be reached, or that rejects the call, exits 1 with that error after
 the file report. The call is the same client as the other commands: the same credentials,
-a 5 second connect timeout and a 30 second request timeout, so a server that never
+a 5 second connect timeout and a 30 second request timeout by default, so a server that never
 answers stops with the usual connection error. A different major version is the API's
 usual refusal, which names what to install. `--token` and `--user` are sent, as for
 every server command (`SCHEDR_TOKEN`, `SCHEDR_USER`, `SCHEDR_PASSWORD`). `--server` is
@@ -116,8 +116,8 @@ that root, whose connections its tasks can use, as a worker does. Without `--pat
 configured DAG roots, or the current directory.
 
 The run is manual. `--for` is its `planned_for`; omitted, it is now. The window follows
-[Schedules](04-schedules.md#run-window). A `--for` in the future is rejected, and one
-without an offset is read as UTC with a warning.
+[Schedules](04-schedules.md#run-window). By default, a `--for` more than one minute in the
+future is rejected. One without an offset is read as UTC with a warning.
 
 While the run goes, each task's state is printed as it changes, except `scheduled` and
 `queued`. Then the report:
@@ -135,11 +135,11 @@ A test run notifies no one. The configured channels are known by name, so a DAG 
 is read, and nothing is posted or mailed. The run listens on this machine only, with no
 sign-in, whatever `[webserver]` says.
 
-Exit 0 means the run succeeded. Exit 1 means it did not, or the DAG is unknown (the
-error names the files that failed to import, when there are some), or a root can't be
-scanned and copied as a worker would (``can't scan DAG root `etl`: reading …/rows.csv:
-Permission denied``): every file of a root is copied, not only the `.py` files. The command waits up
-to an hour; a task's own `timeout` stops that task sooner.
+Exit 0 means the run succeeded. Exit 1 means it did not, or the DAG is unknown (the error
+names the files that failed to import, when there are some), or a root can't be scanned and
+copied as a worker would (``can't scan DAG root `etl`: reading …/rows.csv: Permission
+denied``): every file of a root is copied, not only the `.py` files. By default, the command
+waits up to an hour; a task's own `timeout` stops that task sooner.
 
 `--json` prints the run, the file that defined the DAG (`location`), each task's
 `state`, `outcome`, `try_number`, `output`, `attempts` and `log`, and the `notifications`
@@ -148,7 +148,7 @@ to an hour; a task's own `timeout` stops that task sooner.
 skipped or failed task's is `null`; the table prints `-` for those. Datetimes, dates,
 durations and tuples in `output` use the tags in
 [What a task may return](02-tasks.md#what-a-task-may-return).
-[Routing by outcome](08-outcomes.md) is what the `OUTCOME` column shows.
+[Routing by outcome](08-outcomes.md) explains the names in the `OUTCOME` column.
 
 `-p` / `--param` and `--params` give the run's parameters, over the DAG's defaults, and are
 checked the same way as `schedr runs trigger`
@@ -219,7 +219,7 @@ routes return 403. The fake does not need a master.
 `run_dag(path, dag_id, *, for_=None, params=None)` runs `schedr dags test --json` and
 returns a `RunResult` whether the run succeeded or failed. `for_` is `--for` and must be aware.
 
-| `RunResult` | |
+| `RunResult` field | Value |
 |---|---|
 | `run_id`, `dag_id`, `kind` | The run. `kind` is `manual`. |
 | `state` | `success`, `failed` or `cancelled`. |
@@ -227,7 +227,7 @@ returns a `RunResult` whether the run succeeded or failed. `for_` is `--for` and
 | `resources` | A `ResourceResult` per resource name (its setup task ID). |
 | `tasks` | A `TaskResult` per task ID. A mapped task's is the task as a whole; `tasks["fetch"][1]` (or `.instances`) is one instance's. |
 
-| `TaskResult` | |
+| `TaskResult` field | Value |
 |---|---|
 | `state` | Where the task ended, such as `success`, `failed`, `skipped`, `upstream_failed`. |
 | `outcome` | The outcome name when it succeeded (`SUCCESS` when the task has no outcomes of its own). |
@@ -273,9 +273,9 @@ The JSON for each attempt also has `start_method` (`spawn`, or `fork`), the same
 `GET /api/v1/runs/<run id>/tasks/<task id>/attempts`. It is `null` until the worker's
 `Started` is stored. The `Attempt` class doesn't carry it.
 
-`RunDagError` means the run never started: no `schedr` binary, an unknown DAG, or a file
-that does not import. The binary is `$SCHEDR_BIN`, or else the `schedr` installed with
-this Python, or else `schedr` on `PATH`. Unless
+`RunDagError` means no run report could be read, for example: no `schedr` binary, an unknown
+DAG, or a file that does not import. The binary is `$SCHEDR_BIN`, or else the `schedr`
+installed with this Python, or else `schedr` on `PATH`. Unless
 `SCHEDR_CONFIG__INTERPRETERS__PYTHON` is already set, the tasks run with this Python.
 
 `params` is an instance of the DAG's params class, or a mapping of field names to JSON

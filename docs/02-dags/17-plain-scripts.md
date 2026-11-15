@@ -57,7 +57,8 @@ containing `schedr.toml`. Durations use strings such as `"1h30m"` and sizes use 
 (a TOML date or datetime). The default timezone is UTC, `catchup` is false and
 `max_active_runs` is 1. With `once`, `start`, `end` and `catchup` are errors.
 
-Unknown keys are errors. A job’s `notify` is refused: notifications belong to the DAG; use `Dag(notify=...)` as in [Notifications](24-notifications.md).
+Unknown keys are errors. A job's `notify` is refused. To send notifications, use a native DAG with
+`Dag(notify=...)`, as in [Notifications](24-notifications.md).
 
 ### Parameters, outcomes and cleanup
 
@@ -87,10 +88,11 @@ anywhere = false
 Parameter types come from their defaults: strings, integers, floats, booleans, dates,
 datetimes, lists of one type and nested tables are accepted. A datetime without an offset
 uses the job's timezone. Empty or mixed lists, empty tables and times without a date are
-refused; parameter names use letters, digits and `_`. A trigger replaces a nested table as a
-whole. Parameters belong only to a standalone job; a script used in a DAG reads that DAG's
-parameters instead. A Python script reads them with `from schedr.script import dag_ctx` and
-`dag_ctx.params.region`; a script can also call `schedr dag-ctx params get --field region`.
+refused. Parameter names use ASCII letters, digits and `_`, and cannot start with a digit. A
+trigger replaces a nested table as a whole. Parameters belong only to a standalone job; a
+script used in a DAG reads that DAG's parameters instead. A Python script reads them with
+`from schedr.script import dag_ctx` and `dag_ctx.params.region`; a script can also call
+`schedr dag-ctx params get --field region`.
 
 `outcomes` maps names to distinct exit codes from 0 to 255. The declared codes count as
 successful outcomes. Names use letters, digits and `_` and cannot start with a digit.
@@ -117,7 +119,7 @@ manually. In an API URL, percent-encode the ID as a path component, for example
 
 Without `schedule`, `every` or `once`, a declaration is a script for DAGs only: it creates
 no DAG and is not listed among DAGs. The DAG-level keys `timezone`, `start`, `end`,
-`initial_since`, `catchup` and `max_active_runs` are errors in that case.
+`initial_since`, `catchup`, `max_active_runs` and `params` are errors in that case.
 
 ## Checking declarations
 
@@ -179,5 +181,4 @@ outcomes. Without an enum, only `DefaultOutcome.SUCCESS` can be routed on if dec
 `cleanup_timeout`, `cleanup_retries`, `cleanup_retry_delay` and `cleanup_anywhere` override
 the declared cleanup's settings, which override DAG defaults. They require a declared
 cleanup; the operator cannot replace its script. The output is a `ProcessResult`; use
-`report.output`, or
-`report.stdout` and `report.stderr` for its streams.
+`report.output`, or `report.stdout` and `report.stderr` for its streams.

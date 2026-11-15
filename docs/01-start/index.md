@@ -1,11 +1,10 @@
 # Getting started
 
-From nothing to a running scheduler on your machine: install schedr, start it with one DAG,
-run that DAG, and see it in the web UI.
+Install `schedr`, start it with one DAG, run that DAG, and see it in the web UI.
 
 ## Install
 
-schedr needs **Python 3.14** or newer. Install it into a virtual environment in a project
+`schedr` needs **Python 3.14** or newer. Install it into a virtual environment in a project
 directory of its own; schedr finds that environment by itself later.
 
 ```sh
@@ -68,14 +67,14 @@ in it, `dags/sync.py`:
   run.
 - **`--migrate`** creates the database on the first start, and updates it after an upgrade.
 - **Python:** tasks and DAG files run with the project's `.venv`, found by itself (an active
-  virtualenv, then `.venv` or `venv` in this directory or a parent, then `python3`). The first
-  lines of the log say which one it took.
+  virtualenv, then `.venv` or `venv` in this directory or a parent, then `python3` beside
+  the `schedr` binary or on `PATH`). The first lines of the log say which one it took.
 - **Where things go:** the database, the task logs and the journal are in
   `~/.local/share/schedr` (`$XDG_DATA_HOME/schedr` if that is set).
 - **Addresses:** the API and the web UI on `http://127.0.0.1:8080`, from this machine only.
 
-Leave it running and use a second terminal for the rest. A new DAG file is picked up within
-30 s, the default scan interval.
+Leave it running and use a second terminal for the rest. A new DAG file shows up within about
+35 s: schedr looks for changes every 30 s, and waits for a file to stay unchanged for 5 s.
 
 ```{note}
 After a crash (not a Ctrl-C), schedr waits up to about 30 s before it schedules anything: the
@@ -97,7 +96,8 @@ DAG             STATE   HELD  TRIGGER                                   DEFINED 
 sync_customers  paused  no    0 3 * * * (Europe/Warsaw), 2025-12-31 ..  dags:sync.py
 ```
 
-A new DAG starts **paused**: the scheduler creates no runs of it until you unpause it.
+A new DAG starts **paused**: its trigger creates no runs until you unpause it. Manual runs
+are still allowed.
 
 ### Run it
 
@@ -109,6 +109,8 @@ Trigger a manual run (a paused DAG can still be run by hand), then look at it:
 .venv/bin/schedr runs show <run-id>
 .venv/bin/schedr tasks logs <run-id> notify
 ```
+
+After the run finishes, the task table in `runs show` looks like this:
 
 ```text
 TASK     STATE    OUTCOME  TRIES  INSTANCES  REASON
@@ -128,8 +130,9 @@ off unless the trigger asks for it ([Schedules](../02-dags/04-schedules.md)).
 
 ### Stop it
 
-Ctrl-C stops it: the worker drains (no new tasks; running ones get up to 30 s), then the
-process gives up its lease on the database and exits, so the next start takes over at once.
+Ctrl-C stops it: the worker takes no new tasks and gives running ones about 25 s to finish
+(the details: [Workers](../03-guide/05-workers.md#draining)), then the process gives up its
+lease on the database and exits, so the next start takes over at once.
 Starting it again keeps everything: the DAGs, the runs, the logs.
 
 The web UI signs no one in here. That is fine on `127.0.0.1`; before you open it to a network,
@@ -139,10 +142,9 @@ read [Network and security: Sign-in](../03-guide/08-network.md#sign-in).
 
 ### DAG files in the project folder
 
-Instead of a `dags` folder, the project folder itself can hold the DAG files. Give
-`--dag-path .`, and keep the virtual environment out with a `.schedrignore` file (gitignore
-syntax): schedr reads every file under a DAG folder, and would otherwise copy `.venv` and try
-the `.py` files in it as DAG files.
+DAG files can live directly in the project folder. Use `--dag-path .` and exclude the
+virtual environment with `.schedrignore` (gitignore syntax). Otherwise, `schedr` copies
+`.venv` with the DAG root and imports Python files in it whose bytes contain `schedr`.
 
 ```text
 my-schedr/
@@ -160,14 +162,15 @@ my-schedr/
 .venv/bin/schedr standalone --migrate --dag-path .
 ```
 
-The folder is named after itself: `schedr dags list` shows the DAG defined in
-`my-schedr:sync.py`. Anything else you keep in the folder that isn't code (notes, data, test
-outputs) goes in `.schedrignore` too: a change to any file there counts as new code.
+The root takes the folder's name: `schedr dags list` shows the definition at
+`my-schedr:sync.py`. Exclude notes, data and test outputs with `.schedrignore` too. Files
+that remain in the scan count toward the code hash, so changing them creates a new code
+version.
 
 ### A plain script
 
-A script that isn't a DAG runs too: a `schedr.toml` next to it declares it as a job. In a
-folder of its own, say `scripts`:
+To run a script without writing a DAG, declare a job in `schedr.toml`. Put both files in
+a script folder, such as `scripts`:
 
 ```text
 my-schedr/
@@ -194,9 +197,10 @@ schedule = "0 6 * * *"
 .venv/bin/schedr standalone --migrate --script-path scripts
 ```
 
-`interpreter = "python"` is the project's `.venv`, as for DAG files. A job needs a schedule to
-become a DAG of its own, but like every new DAG it starts paused: until you unpause it, it runs
-only when triggered by hand. Its ID is the folder, the file and the job:
+`interpreter = "python"` selects the built-in Python interpreter, which finds the project
+virtual environment as described above. A scheduled job becomes a one-task DAG and starts
+paused. You can run it by hand while paused. Its ID combines the root, declaration file and
+job name:
 
 ```sh
 .venv/bin/schedr runs trigger 'scripts:schedr.toml#hello'
@@ -204,8 +208,9 @@ only when triggered by hand. Its ID is the folder, the file and the job:
 .venv/bin/schedr tasks logs <run-id> hello
 ```
 
-Both flags can be given together, and each can be repeated. [Plain scripts](../02-dags/17-plain-scripts.md)
-lists every key of a job: arguments, environment, secrets, retries, parameters.
+Use `--dag-path` and `--script-path` together to load both kinds of root; repeat either
+flag for more folders. [Plain scripts](../02-dags/17-plain-scripts.md) lists the job settings,
+including arguments, environment variables, secrets, retries and parameters.
 
 ## Next steps
 

@@ -2,6 +2,10 @@
 
 A job scheduler written in Rust that runs Python scripts, Bash processes and Python DAGs.
 
+Start with [Getting started](01-start/index.md) to install `schedr` and run a DAG.
+[Writing DAGs](02-dags/index.md) covers the Python API; [How schedr works](03-guide/index.md)
+explains the running system.
+
 ```{toctree}
 :maxdepth: 1
 :caption: Overview

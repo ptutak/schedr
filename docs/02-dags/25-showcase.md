@@ -6,7 +6,8 @@ alarm and waits for an operator. An acknowledgement starts maintenance; an unans
 pages the operator. A fourth DAG rolls up the readings by zone.
 
 The shared models, SQLite connection and pager are in `examples/showcase/dags/greenhouse.py`.
-The files and database live under `/tmp/schedr-greenhouse`.
+The files and database live under `/tmp/schedr-greenhouse`. The example uses local
+files and SQLite, so run its tasks on the same machine, as the standalone below does.
 
 ## Run it
 
@@ -23,12 +24,16 @@ make standalone DAGS=examples/showcase/dags
 make showcase
 ```
 
-This unpauses the four DAGs and starts the simulator and a pager receiver. Open the UI at
-http://localhost:8080 and watch the runs and their graphs. The simulator writes three rounds
-of readings, including a corrupt file and two hot devices. It acknowledges `dev-a1` and
-leaves `dev-b2` unanswered. Watch the maintenance run for the first and the timeout for the
-second. The receiver prints pager requests in the second terminal. The rollup runs every five
-minutes. Ctrl-C stops the simulator; stop the standalone separately with Ctrl-C.
+Once all four DAGs appear in the UI, this command unpauses them and starts the simulator and
+a pager receiver. Open the UI at http://localhost:8080 and watch the runs and their graphs.
+The simulator writes three rounds of readings, including a corrupt file and two hot devices.
+It posts an acknowledgement for `dev-a1` one minute after the last round and leaves `dev-b2`
+unanswered. It does not check that the alarm run has started first; if ingestion is delayed,
+post another `ack` after that run starts. Watch the maintenance run for the first and the
+timeout for the second. To acknowledge by hand, run `schedr events post ack --key dev-a1
+--data '{"by":"ana","action":"recalibrate"}'`. The receiver prints pager requests in the
+second terminal. The rollup runs every five minutes. Ctrl-C stops the simulator; stop the
+standalone separately with Ctrl-C.
 
 ## Ingest readings
 
@@ -81,7 +86,7 @@ and uses its exit code to route to a remote-fix report or a visit ticket. Both p
 
 Every five minutes, a [scheduled run](04-schedules.md) covers its run window. A
 [sensor](18-sensors.md) waits for readings; if it times out, `quiet` records the empty window.
-Otherwise, a [group](11-groups.md) summarizes each zone, and a
+Otherwise, one [group](11-groups.md) per zone summarizes its readings, and a
 [branch](08-outcomes.md#branch) chooses whether to open vents for warm zones or report that
 all are normal. Past windows can be [backfilled](04-schedules.md#backfill).
 

@@ -1,7 +1,7 @@
 # Cleaning up after a task
 
 A task can start work outside its own process, such as a warehouse job, or make a temporary
-file. A cleanup removes what the attempt leaves behind, even when schedr stops the task for a
+file. A cleanup removes what the attempt leaves behind, even when `schedr` stops the task for a
 timeout or cancellation and its own `finally` block cannot run.
 
 For something shared by several tasks, see [Resources](16-resources.md).
@@ -13,8 +13,8 @@ For something shared by several tasks, see [Resources](16-resources.md).
 
 ## A Python task
 
-Give `@task(cleanup=undo_export)` a function; it may be `async def`. After each attempt whose process
-started, the worker runs it on the same worker, after the task process ends. It runs after
+Give `@task(cleanup=undo_export)` a function; it may be `async def`. After each attempt whose
+process started, the worker runs the cleanup in a separate process on that worker. It runs after
 success as well as failure; if the process never started, there is no cleanup.
 
 The function may name any of the task's inputs, with matching types. It receives their values,
@@ -38,7 +38,8 @@ Do not register something that must outlive the attempt.
 
 Handles are masked like task output, so a secret value in a handle may be replaced by its
 mask. Declare a secret separately if the cleanup needs it. All handles together are limited
-to about 1 MiB per attempt; exceeding the limit fails the registration and the attempt.
+to about 1 MiB per attempt. Exceeding the limit refuses the registration; an unhandled
+registration error fails the attempt.
 Handles are journaled on the worker before registration returns and sent to the master,
 which stores them. Nothing secret belongs in a handle. Registration does not wait for the
 master to acknowledge it. A handle not delivered before a worker is lost cannot accompany a
@@ -48,28 +49,26 @@ the master's `Continue`.
 
 ## Cleanup on another worker
 
-Set `cleanup_anywhere=True` on `@task`, `CommandOperator`, `ScriptOperator`, `.override()`, or
-in
+Set `cleanup_anywhere=True` on `@task`, `CommandOperator`, `ScriptOperator`, `.override()`, or in
 `StepDefaults` to let the master move a started attempt's cleanup when its worker is lost.
 Use it when the cleanup can work with the registered handles and the other worker's code and
 resources. Do not use it for worker-local files or processes that another pod cannot access:
 idempotence alone does not make a cleanup safe on another pod.
 
 A worker that hears nothing from the master for the [worker
-lease](../03-guide/14-timings.md#fixed-timings)
-(60 s by default) stops its running tasks with `cleanup_anywhere`, or sooner once the
-master's own count of that lease may have run out (its last message held on the way). They
-end `lost` and use a retry. A master outage longer than the lease therefore stops these tasks. When the connection
-is lost, their cleanup waits for the master's answer, including when a task ends by itself
-while disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles
-than the returning
-original worker, a move still waiting is given back to that worker. If the move was assigned
-elsewhere or ended, the original worker cleans the remaining handles (`CLEAN_REST`). The run
-may already have ended; if this late cleanup fails after a success, the run stays successful
-but becomes a [yellow success](../03-guide/03-life-of-a-run.md#7-the-next-task-and-the-end).
-The cleanup normally runs once,
-here or on another worker. After the master marks the worker lost, it waits the cancel grace
-(30 s by default) plus 10 s before moving cleanup.
+lease](../03-guide/14-timings.md#fixed-timings) (60 s by default) stops its running tasks
+with `cleanup_anywhere`, or sooner once the master's own count of that lease may have run
+out (its last message held on the way). They end `lost` and use a retry. A master outage
+longer than the lease therefore stops these tasks. When the connection is lost, their
+cleanup waits for the master's answer, including when a task ends by itself while
+disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles than
+the returning original worker, a move still waiting is given back to that worker. If the
+move was assigned elsewhere or ended, the original worker cleans the remaining handles
+(`CLEAN_REST`). The run may already have ended; if this late cleanup fails after a success,
+the run stays successful but becomes a [yellow
+success](../03-guide/03-life-of-a-run.md#7-the-next-task-and-the-end). The cleanup normally
+runs here or on another worker. After the master marks the worker lost, it waits 40 s by
+default before moving cleanup.
 
 A cleanup already running when the connection is lost continues and can overlap one moved to
 another worker. A frozen VM cannot stop its task at all. The cleanup must therefore still be
@@ -101,21 +100,32 @@ schedr task-ctx cleanup add Publication id="$id"
 schedr task-ctx cleanup list Publication --field id
 ```
 
-`add` accepts `KEY=VALUE` text fields, `KEY:=JSON` fields, or `--json` with an object. `list`
-runs in the cleanup and
-prints one JSON object per handle, in registration order; `--field id` prints that field's
-value on each line. `cleanup_handles=["Publication"]` limits the accepted types; without it,
-a command or script accepts any handle type. The task's declared secrets and connections are
-available
-to the cleanup too. Don't put secrets directly in the cleanup command.
+`add` accepts `KEY=VALUE` text fields, `KEY:=JSON` fields, or `--json` with an object.
+`list` runs in the cleanup and prints one JSON object per handle, in registration order;
+`--field id` prints that field's value on each line. `cleanup_handles=["Publication"]`
+limits the accepted types; without it, a command or script accepts any handle type. The
+task's declared secrets and connections are available to the cleanup too. Don't put secrets
+directly in the cleanup command.
 
 ## Time and retries
 
-`cleanup_timeout` limits each cleanup try; when omitted, `[worker] cleanup_timeout` supplies it
-(five minutes by default; see [Timings](../03-guide/14-timings.md)). `cleanup_retries` is the
-number of retries after a failure (default three), and `cleanup_retry_delay` is the delay
-before each retry (default 30 seconds). Set them on the task or in `StepDefaults`. A cancel
-does not stop a cleanup already running; its timeout still applies.
+`cleanup_timeout` limits each cleanup try. A task or `StepDefaults` can set it; otherwise
+`[worker] cleanup_timeout` applies. When that setting is unset, the worker uses the shorter
+of five minutes and the time its drain leaves for cleanup, with a minimum of one second.
+With the defaults, that is 25 seconds: the 30-second `termination_grace_period` minus
+3 seconds for termination and 2 seconds for reporting and departure. An explicit worker
+setting is kept, even if it exceeds that time. See [Timings](../03-guide/14-timings.md).
+
+`cleanup_retries` is the number of retries after a failure (default three).
+`cleanup_retry_delay` is the delay before each retry (default 30 seconds). Set them on the
+task or in `StepDefaults`. A cancel does not stop a cleanup already running; its timeout
+still applies.
+
+During a drain, the worker stops a task early enough to leave time for one cleanup try.
+With the default 25-second cleanup timeout and 30-second drain, a task with cleanup is
+interrupted as shutdown begins. A cleanup already running continues. Retries and their
+delays can exceed the drain's time; a pod or service manager may then kill the worker before
+cleanup finishes.
 
 The attempt holds its worker slot through cleanup, retries and their delays. Its instance is
 `cleaning_up` while it waits; downstream tasks and a task retry wait for cleanup to finish.
