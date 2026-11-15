@@ -523,6 +523,9 @@ def test_a_tasks_memory_tab_and_the_dags_memory_table_show_its_peaks(
             page.reload()
             panel.screenshot(path=str(Path(folder) / f"task-memory-{scheme}.png"))
     page.goto(f"{standalone['url']}/d/default/dags/{standalone['dag']}")
+    # A task is listed once an attempt of it has a peak: `notify` (an `echo`) only when the
+    # watchdog sampled it before it ended, so it may be there or not.
     rows = page.locator("table.task-memory tbody tr")
-    expect(rows).to_have_count(2)
-    assert sorted(rows.locator("td.mono").all_text_contents()) == ["extract", "load"]
+    for task_id in ("extract", "load"):
+        expect(rows.locator("td.mono", has_text=re.compile(f"^{task_id}$"))).to_have_count(1)
+    assert set(rows.locator("td.mono").all_text_contents()) <= {"extract", "load", "notify"}
