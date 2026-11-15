@@ -17,7 +17,7 @@ the folder it starts in, so `--dag-path .` is that folder, a root named after it
 
 | Role | Replicas | Needs |
 |---|---|---|
-| `schedr master` | **exactly one** | `[database] url`, a migrated schema (or `--migrate`); its gRPC port behind a Service the workers reach |
+| `schedr master` | **one leads**; a second waits as a standby ([Failover](#failover)) | `[database] url`, a migrated schema (or `--migrate`); its gRPC port behind a Service the workers reach |
 | `schedr webserver` | one or more | `[database] url` (it waits for the schema to be migrated, and stops on an earlier schedr's database, which needs a fresh one); its REST port behind a Service |
 | `schedr worker` | as many as the load needs | `[worker] master_url`, the DAG code (e.g. a git-sync sidecar), a disk for its journal and logs; a StatefulSet with a headless Service, each pod's `log_address` set to its DNS name |
 | `schedr ui` | one | `[ui] deployments` (each webserver's URL); no database. Listens on `[ui] port` (8082). The chart's distributed mode deploys it (`ui.enabled`); elsewhere, [run it yourself](#running-schedr-ui) |
@@ -366,6 +366,49 @@ objects. The chart's `istio` values create them, each optional and off by defaul
 - **With an existing ServiceAccount** shared by other workloads, a policy can tell schedr's
   callers apart only by namespace or token, since Istio identifies a caller by its account.
 
+#### Signing in through Keycloak
+
+Istio checks tokens, but a browser can't get one by itself: opening the web UI to everyone, or
+adding `basic` sign-in beside Keycloak, would let people around the stronger sign-in. A login
+proxy closes that gap with namespace objects only, no mesh-wide configuration:
+`examples/kubernetes/oauth2-proxy.yaml` holds an [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/)
+Deployment, its Service, a VirtualService and an AuthorizationPolicy, and the chart's values
+that go with them.
+
+```text
+browser ─► ingress gateway ─► oauth2-proxy ─► schedr ui      (its sidecar checks the token)
+                  └─ /api/ ─────────────────► schedr webserver (the CLI's own token)
+```
+
+- **One sign-in for the API and the UI.** oauth2-proxy signs the person in with Keycloak and
+  passes their ID token on as `Authorization: Bearer`. The chart's `requestAuthentication`
+  checks it at the UI's pod as it does at the API's, `authorizationPolicy.api.claims` (e.g.
+  `groups: [schedr-users]`) decides who gets in, and `outputClaimToHeaders` copies
+  `preferred_username` into `x-forwarded-user`, the name schedr records (`webserver.auth`
+  mode `none` with that `identityHeader`).
+- **The pod doesn't trust the proxy.** Someone who reaches the UI's pod around it still needs a
+  valid token with the group: set `authorizationPolicy.sameNamespace: false`, so nothing in the
+  namespace passes without one.
+- **LDAP comes through Keycloak**: its user federation signs LDAP users in, and a group mapper
+  puts their groups in the token (with "Add to ID token" on: the proxy passes the ID token).
+  schedr itself reads no LDAP.
+- **Refresh the token before it expires.** schedr's pages keep an event stream open and
+  reload every minute, and an expired token is refused at the pod: the page stops updating.
+  The proxy's `--cookie-refresh` must be shorter than the realm's access token lifespan
+  (Keycloak's default, 5 minutes: `4m`).
+- **Who can do what:** schedr has no roles (see
+  [Sign-in](08-network.md#sign-in)), so the group claim decides who reaches a deployment, and
+  everyone who does can do everything there. For finer control, separate deployments behind one
+  UI (`ui.deployments`), each with its own policy.
+- **From Keycloak** you need one confidential client, its redirect URI
+  `https://<host>/oauth2/callback`, and the group mapper. Under `outboundTrafficPolicy:
+  REGISTRY_ONLY`, the proxy reaches Keycloak through a ServiceEntry (`istio.serviceEntries`).
+
+The same works with another proxy that passes a Keycloak token on, gogatekeeper for one. A proxy
+that only names the person in a header (OpenShift's oauth-proxy) needs `proxy_header` mode
+with `allowRemote`, and a policy that lets only the proxy reach the UI's pod: anyone else
+reaching it could name any user.
+
 Recent Istio (1.31, for one) injects **native sidecars**: the proxy starts before init
 containers and stops after schedr, so neither the migration nor a drain needs anything there.
 The chart's settings are for **classic sidecars** (older Istio, OpenShift Service Mesh 2), and
@@ -463,6 +506,29 @@ credentials to the webservers, so run it where those webservers allow a caller w
 token (in the chart, the same namespace). Probes go to the ops port, as for the webserver:
 it is ready once it listens. `/docs` is the image's documentation when `[ui] docs_dir` is
 that directory. What the pages show, the themes and the times are [The web UI](12-ui.md).
+
+## Failover
+
+Only one master leads at a time (see [The master](04-master.md#one-master-per-database-the-lease)).
+What happens when it goes away depends on the mode.
+
+- **Standalone fails over by restarting.** Its worker reaches only its own process's master,
+  on localhost. Restarted after a clean stop, it leads again at once; after a crash it waits
+  up to the [master lease period](14-timings.md#fixed-timings) (30 s). In Kubernetes, the
+  pod's restart is the failover.
+- **A standby master beside a standalone doesn't help.** A `schedr master` on the same
+  database takes over the lease when the standalone crashes, but it has no worker and no
+  API, so the runs it creates wait. The restarted standalone then waits as a standby, and
+  its own master refuses its worker ("not leading"), so nothing runs until the other master
+  stops. `make standalone-separate-ui` runs one only to show it on the Deployments page.
+- **Distributed mode on Postgres fails over without stopping the tasks.** Workers run them
+  on, reconnect, and send their results to whichever master leads next. The chart runs one
+  master pod (`strategy: Recreate`), so its failover is Kubernetes restarting that pod.
+- **A hot standby** (two masters running at once) works outside the chart: start a second
+  `schedr master` on the same database, and give the workers a `[worker] master_url` that
+  reaches only the master whose `/readyz` answers (a Service, or a load balancer with that
+  health check). The standby takes over within the lease period after a crash, at once after
+  a clean stop. Stress scenarios 4 and 5 test that takeover ([Stress tests](11-stress.md)).
 
 ## Killing the master or a worker
 
