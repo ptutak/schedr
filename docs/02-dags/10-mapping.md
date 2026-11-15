@@ -61,7 +61,7 @@ without waiting for the slowest file.
 - **`.on(...)` works per element** inside `.expand()`: an instance whose upstream instance
   ended with another outcome is **skipped**, and its place in the list is `None`.
 - **To wait for all of them first,** add an order edge from the whole task:
-  `results >> counts` (the two mapped outputs) next to the expansion. Then nothing of `count`
+  `chain(results, counts)` (the two mapped outputs) next to the expansion. Then nothing of `count`
   starts before every `fetch` has finished, and nothing of it runs if one failed.
 - Using the upstream task anywhere else in the same task (`.partial(all=results)`,
   `results[0]`) also makes it wait for the whole task. `.on(...)` still goes per element
@@ -111,9 +111,10 @@ A gather sees every instance only if none of them is skipped, and none of them f
 
 ## How many at once
 
-All of a mapped task's instances are ready together, and they take every free slot of the
-workers serving its queue. `@task(max_active_per_run=10)` runs at most 10 of them at once in
-a run, and `max_active` at most so many across runs ([Concurrency
+Instances become ready when their inputs and upstream edges allow it. A lane can become
+ready before the other lanes. Ready instances take free slots on workers serving the queue,
+subject to the DAG's and task's concurrency limits. `@task(max_active_per_run=10)` runs at
+most 10 of them at once in a run, and `max_active` at most so many across runs ([Concurrency
 limits](05-defaults.md#concurrency-limits)).
 
 ## Following the instances
@@ -128,7 +129,7 @@ limits](05-defaults.md#concurrency-limits)).
   and how many are done and how many failed. Its panel opens on the Instances tab; each
   instance's own panel has that instance's attempts, log and output. The whole task's
   output is the gathered list.
-  [The web UI](../03-guide/12-ui.md#a-mapped-task) is those panels.
+  [The web UI](../03-guide/12-ui.md#a-mapped-task) explains those panels.
 - **In the API,** a run's tasks list each mapped task as a whole (`map_index: -1`,
   `instances: 3`) and then its instances. `?map_index=-1` means the same as leaving the
   index off: the task as a whole. A task's `output` without `?map_index` (or with `-1`) is
@@ -167,8 +168,8 @@ subprocess cannot use `ScriptOperator`'s `schedr.toml` jobs or `schedr.script`'s
 pass the process what it needs as arguments.
 
 Alternatively, map a `TriggerDagOperator` to a target DAG with `trigger=Chained(by=[...])`
-and a dataclass for `params`. The target runs a `CommandOperator` or `ScriptOperator` on
-`dag_ctx.params`:
+and a dataclass for `params`. Unpause the target DAG before starting the source run. The
+target runs a `CommandOperator` or `ScriptOperator` on `dag_ctx.params`:
 
 ```{literalinclude} ../../examples/docs/mapped_chained.py
 :language: python

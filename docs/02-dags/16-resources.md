@@ -1,6 +1,6 @@
 # Resources
 
-A resource is one thing with two parts: a setup and a cleanup. Both always exist. Use it
+A resource has a setup task and a cleanup task. Both always exist in the DAG. Use it
 for something created once and shared by tasks, such as a cluster for a run.
 
 ```{literalinclude} ../../examples/docs/resources.py
@@ -77,8 +77,7 @@ case, use `schedr task-ctx resource set --json null`; it still needs a report.
 
 Any resource can use `<resource>.cleanup_command([...])` instead of a Python cleanup:
 an `@resource` function, a `CommandResource`, a `ScriptResource`, or a `Resource` without setup
-code. The
-method takes a shell string or argument list, `env=`, and the same cleanup options as
+code. The method takes a shell string or argument list, `env=`, and the same cleanup options as
 `@cluster.cleanup(...)`, including `blocking=`. A resource still has only one cleanup.
 
 While that cleanup runs, `schedr task-ctx resource get` reads the setup's value as JSON;
@@ -87,7 +86,8 @@ field prints as text, other fields as JSON, each followed by a newline. Dates an
 are ISO 8601 text, durations are ISO 8601 durations, and tuples are lists. `resource get`
 works in a resource's command or script cleanup; a resource without a value returns `null`.
 
-The command line and `env` can also take t-strings, filled before the cleanup starts.
+Command arguments in a list and `env` values can take t-strings, filled before cleanup
+starts. A shell command string cannot contain placeholders.
 For a `CommandResource`, `t"{cluster.cluster_id}"` and `t"{cluster.value.cluster_id}"`
 refer to the same field. For an `@resource` setup, use `t"{cluster.value.cluster_id}"`:
 the reference is resolved when that resource is set up in the DAG. The example uses
@@ -154,12 +154,11 @@ resources.
 ## Groups and cleanup
 
 For a resource set up in a group, `g >> after` also makes `after` wait for its cleanup. The
-exception is when
-`after`, or a task downstream of it, still uses that resource: waiting for cleanup would form
-a cycle. If that cleanup fails, `after` becomes `upstream_failed`. Set
+exception is when `after`, or a task downstream of it, still uses that resource: waiting for
+cleanup would form a cycle. If that cleanup fails, `after` becomes `upstream_failed`. Set
 `@cluster.cleanup(blocking=False)` to let what follows the group proceed without waiting for
-that cleanup; if it fails, the run still fails, but `after` isn't stopped. A resource outside
-any group holds nothing back this way.
+that cleanup; if it fails, the run still fails, but `after` isn't stopped. A resource
+outside any group holds nothing back this way.
 
 A resource cleanup is shared by all its users. A [per-task cleanup](15-cleanup.md) instead
 cleans up after each started task attempt; a resource setup can have one of those too, for
@@ -198,7 +197,8 @@ with lines to their users; the task panel's Cleanup tab links the two parts.
 
 This workspace is created once, shared by tasks that download and count files, and removed
 after its users end. The report waits for the group's cleanup. Its test is
-`examples/test_workspace.py`.
+`examples/test_workspace.py`. Run this example on one worker: its temporary directory is
+local to that worker. For tasks on several workers, use storage they can all access.
 
 ```{literalinclude} ../../examples/workspace.py
 :language: python

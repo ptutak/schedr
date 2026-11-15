@@ -1,10 +1,9 @@
 # The DAG context
 
-`dag_ctx` is the current run. In the DAG body each field is a reference, filled in when
-the task runs. Inside a running task the same expression is the value.
-`examples/daily_report.py`
-reads the value inside its tasks and fills a command from the reference.
-`examples/docs/context.py` also passes the window into a task.
+`dag_ctx` gives information about the current run. In the DAG body each field is a
+reference, filled in when the task runs. Inside a running task the same expression is the
+value. `examples/daily_report.py` reads the value inside its tasks and fills a command from
+the reference. `examples/docs/context.py` also passes the window into a task.
 
 ```{literalinclude} ../../examples/daily_report.py
 :language: python
@@ -16,7 +15,7 @@ reads the value inside its tasks and fills a command from the reference.
 :caption: examples/docs/context.py
 ```
 
-| | In the DAG body | Inside a running task |
+| Expression | In the DAG body | Inside a running task |
 |---|---|---|
 | `dag_ctx.run.planned_for` | A reference. Pass it to a task, or write it in a t-string. | An aware UTC `datetime`. |
 | Calling a method on it (`.date()`, `.isoformat()`) | `AttributeError`. Do that inside the task, as `label` does. | The datetime's method. |
@@ -32,8 +31,9 @@ reads the value inside its tasks and fills a command from the reference.
 | `dag_ctx.run.since` | The start of the window `(since, planned_for]`. |
 | `dag_ctx.params` | The run's parameters. A field is a reference in the DAG body and the value inside a task. [Run parameters](12-params.md). |
 
-`{dag_ctx.run.planned_for:%Y-%m-%d}` in a command formats that moment when the command
-runs. The window itself, and when `initial_since` is required, is
+`t"{dag_ctx.run.planned_for:%Y-%m-%d}"` in a command argument or an `env` value
+formats that moment when the command runs. A shell command string cannot contain
+placeholders. The window itself, and when `initial_since` is required, is
 [Schedules](04-schedules.md#run-window). `bounds` records a use of `since` in its
 arguments, so a `Once` or a DAG with no trigger must set `initial_since` or the import
 fails. `label` reads `dag_ctx` only while it runs, which the import does not see. A `Once`
@@ -62,10 +62,9 @@ A test gives `dag_ctx` its values with `task_context`
 ## Reading the run from a command
 
 `schedr dag-ctx` and `from schedr.script import dag_ctx` read the run while a **command or
-script**
-task runs. Both talk to the worker over that attempt's context channel
+script** task runs. Both talk to the worker over that attempt's context channel
 ([A command's context channel](../03-guide/05-workers.md#a-commands-context-channel)).
-It talks only to the task's agent. Those options are also in the
+The calls go only to the task's agent. The commands are also in the
 [CLI reference](../_generated/04-reference/02-cli.md).
 
 A shell script's children inherit the channel, so they can call `schedr dag-ctx`. The
@@ -186,8 +185,7 @@ error: the task has 64 context connections open, the most the agent serves at on
 ### A Python script
 
 Import `dag_ctx` from `schedr.script` in a declared script or a script a command task runs
-(`python
-report.py`, or any process the command starts). That import is what connects `dag_ctx` to
+(`python report.py`, or any process the command starts). That import is what connects `dag_ctx` to
 the channel. `from schedr import dag_ctx` alone leaves the name the DAG file uses, and
 outside a task it still tells you to call `schedr.testing.task_context`.
 
@@ -213,8 +211,8 @@ print(params.region, params.day.isoformat())
 print(dag_ctx.run.planned_for.isoformat(), dag_ctx.dag_id)
 ```
 
-The first read loads the run on one connection (the parameters, then the run
-information) and keeps it. A read that fails raises, and the next read tries again.
+The first read loads and caches the parameters and run information over one connection.
+It then closes that connection. A read that fails raises, and the next read tries again.
 `dag_ctx.dag_id`, `dag_ctx.run.id`, `dag_ctx.run.kind`, `dag_ctx.run.planned_for` and
 `dag_ctx.run.since` are the fields `run get` prints, as values. The datetimes are aware
 and UTC.
@@ -269,8 +267,9 @@ already has the descriptor.
 ### `schedr task-ctx`
 
 `schedr task-ctx` uses the same channel for [secrets](13-secrets.md),
-[connections](14-connections.md), [cleanup handles](15-cleanup.md), and
-[resource values](16-resources.md#a-command-setup), and [API calls and events](22-events.md#posting-from-a-task):
+[connections](14-connections.md), [cleanup handles](15-cleanup.md), [resource
+values](16-resources.md#a-command-setup), and [API calls and
+events](22-events.md#posting-from-a-task):
 
 | Command | What it does |
 |---|---|
@@ -282,7 +281,7 @@ already has the descriptor.
 
 `task_ctx` is the running task's own context, read inside its function while it runs:
 
-| | |
+| Field | Value |
 |---|---|
 | `task_ctx.task_id` | The task's ID. |
 | `task_ctx.try_number` | The attempt's try number, from 1 (retries count). |

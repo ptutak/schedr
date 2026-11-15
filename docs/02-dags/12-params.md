@@ -1,6 +1,6 @@
 # Run parameters
 
-A DAG can declare a class of values a run is given. Every task of that run sees the same
+A DAG can declare the parameters each run takes. Every task of that run sees the same
 values, and they are known before any task starts. A scheduled run uses the defaults. A
 manual run, `schedr dags test`, or `POST /api/v1/dags/{dag_id}/runs` can give other values.
 Those are checked before the run exists. A refusal says why, and there is no run.
@@ -79,7 +79,7 @@ model's validators.
 
 ## Reading them
 
-| | In the DAG body | Inside a running task |
+| Expression | In the DAG body | Inside a running task |
 |---|---|---|
 | `dag_ctx.params.region` | A reference. Pass it to a task, or put it in a t-string. The path is checked against the class when the file loads. | The value. `dag_ctx.params["region"]` is the same. |
 | `dag_ctx.params.limits[0]` | A reference to that element. A tuple index past its length fails the import. A list index is the element's type; the length is the run's. | Ordinary indexing of the value. `dag_ctx.params[0]` raises `TypeError` (`dag_ctx.params is indexed by field name`): index a field, not the parameters. |
@@ -96,17 +96,18 @@ For type checkers a field is `Any`. `dag_ctx.params(ReportParams)` is that class
 ([Type checkers](09-type-checkers.md#how-a-dag-body-reads)). The example annotates the
 locals it passes on.
 
-A command reads a field with a t-string: `t"{dag_ctx.params.region}"`, when the field is
-`str`, `bool`, `int`, `float`, `date`, `datetime`, `timedelta` or `Any`, or a `Literal` of
-text, whole numbers or booleans (`Literal["eu", "us"]` renders as `eu`). A dataclass date or
-datetime takes a format spec (`t"{dag_ctx.params.start:%Y-%m-%d}"`). A dataclass duration renders as seconds
-(`3600` for one hour), and a format spec does not apply to it. `None`, a list and an
-object can't be rendered. A date a Pydantic model holds is text, so a format spec does not
-apply to it ([Pydantic models](03-data-flow.md#pydantic-models)). A t-string fills the
-command before it starts. While the command runs, `schedr dag-ctx params get` prints
-these values in the JSON form `--params` takes, and `from schedr.script import dag_ctx`
-decodes them in a Python script the command starts
-([Reading the run from a command](06-context.md#reading-the-run-from-a-command)).
+A command argument or an `env` value can use a field in a t-string:
+`t"{dag_ctx.params.region}"`, when the field is `str`, `bool`, `int`, `float`, `date`,
+`datetime`, `timedelta` or `Any`, or a `Literal` of text, whole numbers or booleans
+(`Literal["eu", "us"]` renders as `eu`). A dataclass date or datetime takes a format spec
+(`t"{dag_ctx.params.start:%Y-%m-%d}"`). A dataclass duration renders as seconds (`3600` for
+one hour), and a format spec does not apply to it. `None`, a list and an object can't be
+rendered. A date a Pydantic model holds is text, so a format spec does not apply to it
+([Pydantic models](03-data-flow.md#pydantic-models)). The template is filled before the
+command starts. A shell command string cannot contain placeholders. While the command runs,
+`schedr dag-ctx params get` prints these values in the JSON form `--params` takes, and `from
+schedr.script import dag_ctx` decodes them in a Python script the command starts ([Reading
+the run from a command](06-context.md#reading-the-run-from-a-command)).
 
 The list `.expand()` maps over cannot be a parameter. The number of instances would depend
 on the run:
@@ -121,13 +122,13 @@ One element of a list written in the file may be a parameter:
 
 ## Giving values to a run
 
-A scheduled run is stored with the defaults. It has no command.
+A scheduled run uses the defaults; there is no trigger request to supply other values.
 
 A manual run overlays what you give onto the defaults:
 
 ```
-schedr runs trigger report -p region=us -p full:=true -p 'limits:=[1,2]' -p day=2026-10-01 -p window=PT1H
-schedr runs trigger report --params '{"region": "us", "full": true}'
+schedr runs trigger report_params -p region=us -p full:=true -p 'limits:=[1,2]' -p day=2026-10-01 -p window=PT1H
+schedr runs trigger report_params --params '{"region": "us", "full": true}'
 ```
 
 | Form | What it is |
@@ -312,10 +313,11 @@ every `dag_ctx.params` path a task uses, and a task mapped over the parameters.
 ## How a run shows them
 
 `schedr runs show` prints a line when the run has parameters. A string is `name=text`.
-Any other JSON value is `name:=json`:
+Any other JSON value is `name:=json`. For the example DAG, a run with the defaults
+and `region=us`, `full:=true`, `limits:=[1,2]` prints:
 
-```
-params: full:=true limits:=[1,2] region=us
+```text
+params: day:=null full:=true limits:=[1,2] region=us start=2026-01-01 window=P0DT3600.000000S
 ```
 
 An empty object is left out. `GET /api/v1/runs/{run_id}` returns `params` as the JSON a

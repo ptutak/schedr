@@ -1,7 +1,8 @@
 # Notifications
 
-A DAG can tell channels about runs, tasks and triggers. A string names a server channel;
-the operator configures it: a webhook's URL and body, or an email channel's recipients. A list
+A DAG can send notifications about runs, tasks and triggers. A string names a server
+channel, configured by the person running the deployment: a webhook's URL and body, or an
+email channel's recipients. A list
 uses the server's default events (`RUN_FAILED` unless changed):
 
 ```python
@@ -83,11 +84,15 @@ or seeing task secrets.
 | `notify.zone` | DAG's time zone. |
 | `notify.data` | Task send's JSON data, or null for events. |
 
-Without a body, schedr posts an object with all these fields by name, except `data` is
+Without a body, `schedr` posts an object with all these fields by name, except `data` is
 omitted when null. Its top-level `text` works with Slack and Mattermost incoming webhooks.
 A Microsoft Teams workflow webhook accepting a simple text body can use
 `body={"text": notify.text}`. Configure its secret URL on the server. Check the workflow's
 own schema if it expects a different body.
+
+To load this example on a server, configure `ops-slack` and allow
+`https://relay.example.com/` under `[notifications] dag_urls`. Replace the example URLs
+with your service's addresses.
 
 The example's email service bodies show a plain send and a stored-template send with a
 template ID and variables. Adapt their field names and URLs to your service; these are
@@ -119,7 +124,7 @@ schedr task-ctx notify oncall --text 'Loaded rows' --data '{"rows":42}'
 For an email channel, the task's `text` becomes the subject: its first line is trimmed and
 shortened after 200 characters. The full text and `data` appear in the body.
 
-A return means queued, not delivered. Each attempt may send at most
+A successful call means the message is queued. Delivery happens later. Each attempt may send at most
 `[notifications] max_per_attempt` messages (100 by default); beyond it Python raises and the
 CLI exits non-zero. See [Notifications for operators](../03-guide/16-notifications.md) for
 delivery and retries.

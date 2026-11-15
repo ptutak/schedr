@@ -1,10 +1,11 @@
 # Routing by outcome
 
-Every task reports **which kind of success** it had: its **outcome**. Downstream tasks
-route on it with `.on(...)`. An expected problem is a success path (a caught connection
-error returned as `Unavailable`; a command's declared exit code). An uncaught exception,
-or an exit code the task did not declare, is a failure: schedr retries, notifies, and
-fails the run.
+Every task reports **which kind of success** it had: its **outcome**. Downstream tasks route
+on it with `.on(...)`. An expected problem is a success path (a caught connection error
+returned as `Unavailable`; a command's declared exit code). An uncaught exception, or an
+exit code the task did not declare, is a failure. `schedr` retries it if configured, then
+fails the run if it still fails. Notifications depend on the DAG's and server's notification
+settings.
 
 This DAG fetches from two sources, loads whichever returned `Rows`, reports a mirror
 outage, routes a command's exit code, and a `@branch` chooses a subset of its downstream
@@ -23,8 +24,9 @@ returns `s3`, so `to_s3` runs and `to_gcs` is skipped; `done` still runs
 
 ## Declaring outcomes
 
-Every task has an outcome enum. The backend stores a **name**; the classes and enums
-exist only in Python.
+Every task declares outcome names, either implicitly from its return type or explicitly
+with an `Outcome` enum. The backend stores the **name**; the classes and enums exist only
+in Python.
 
 | How it is declared | Outcome names | Stored `(output, outcome)` |
 |---|---|---|
@@ -114,7 +116,7 @@ Trigger rules count **edges**. An edge not taken (an `.on(...)` whose outcome di
 happen, a `@branch` that did not choose that target, or a skipped upstream task) counts
 as skipped.
 
-| | `RunIf.NONE_FAILED` (default) | `RunIf.ALL_SUCCEEDED` |
+| Incoming edges | `RunIf.NONE_FAILED` (default) | `RunIf.ALL_SUCCEEDED` |
 |---|---|---|
 | Every edge succeeded | runs | runs |
 | Some skipped, the rest succeeded | **runs** | **skipped** |
@@ -181,4 +183,4 @@ chosen >> [s3, gcs]
 The report's `OUTCOME` column is the outcome name on success (`Rows`, `CHANGED`,
 `SUCCESS`) and `-` when the task did not succeed (skipped, failed, `upstream_failed`).
 `--json` stores the same name on a successful task and `null` otherwise.
-[Testing a DAG](07-testing.md) is the rest of the command.
+[Testing a DAG](07-testing.md) explains the rest of the command.

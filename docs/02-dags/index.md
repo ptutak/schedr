@@ -1,17 +1,20 @@
 # Writing DAGs
 
-How to define a DAG in Python with the `schedr` package: the tasks, the data between them,
-how tasks are grouped, how they route by outcome, how a task runs once per element, when
-runs start, the parameters a run is given, the secrets a task reads, how it cleans up, how to test the file, and how type checkers
-read it. These pages describe the API as it runs.
-[How schedr works](../03-guide/index.md) is what the system does with a DAG once it is stored.
-[Python API structure](../_generated/08-history/project/07-python-api-structure.md) is why the API is
-shaped this way, including features that are not built yet. Signatures are on the
-[Python API](../_generated/07-api/01-python.md) page. Commands and configuration keys are in
-the [Reference](../_generated/04-reference/02-cli.md).
+Write DAGs with the `schedr` Python API: define tasks, pass data between them, set schedules
+and run parameters, and test the result. Later pages cover outcomes, mapping, groups,
+secrets, connections, cleanup, resources and events. Start with [A first DAG](01-first-dag.md),
+or use the list below to find a topic.
 
-A DAG file is ordinary Python. Importing it records the DAGs; it runs no task. The examples
-are files under `examples/` and `examples/docs/`, quoted below, and each one is tested.
+These pages describe the API as it runs. [How schedr works](../03-guide/index.md) explains
+what happens after a DAG is stored. The [Python API](../_generated/07-api/01-python.md)
+lists signatures; the [CLI reference](../_generated/04-reference/02-cli.md) lists commands,
+and the [configuration reference](../_generated/04-reference/01-configuration.md) lists settings.
+[Python API structure](../_generated/08-history/project/07-python-api-structure.md) records
+the design, including features that are not built yet.
+
+A DAG file is ordinary Python. Importing it records the DAGs; tasks called inside a
+`with Dag(...)` block are recorded for later execution. The examples are tested files under
+`examples/`, `examples/docs/` and `examples/showcase/`, included in the pages below.
 
 ```{toctree}
 :maxdepth: 1

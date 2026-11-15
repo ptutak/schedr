@@ -3,7 +3,7 @@
 A DAG file names its secrets; it never holds their values. `secrets['etl/db']['password']`
 is a placeholder: the worker that runs the task fetches the value from secret storage and
 fills it in. The master never sees a value, and the DAG JSON holds only the name. Where
-the values live (schedr's own database or Vault) is the deployment's choice
+the values live (`schedr`'s own database or Vault) is the deployment's choice
 ([Secret storage](../03-guide/13-secrets.md)). The same DAG runs against either.
 
 ```{literalinclude} ../../examples/docs/secrets_demo.py
@@ -115,7 +115,7 @@ task while it runs. A plain string ending in `/` is refused: widening a task's a
 
 ## Masking
 
-The agent replaces every secret value the task was given or read with `****`:
+By default, the agent replaces secret values the task was given or read with `****`:
 
 - in the **task's log**, as it is written;
 - in its **output** and its error summary, before they leave the worker. A downstream task
@@ -132,6 +132,9 @@ that contains it. Whenever a value is masked, the log ends with a note naming th
 (never its value) and how often: ``schedr: `secrets['etl/db']['password']` was masked once
 in this task's log and output (`****`)``. A fallback is never masked
 ([Fallbacks are not secret](#fallbacks-are-not-secret)). Keep secret values long and unique.
+
+A storage can also exclude non-secret configuration paths from masking with
+`unmasked_prefixes` ([Secret storage](../03-guide/13-secrets.md)).
 
 A value shorter than `[secret_storage] min_mask_length` (5 by default) is not masked:
 masking `1` or `true` would mangle the log. The log has a warning naming that secret: at the
@@ -164,5 +167,6 @@ storage name, so a DAG naming `secrets.vault[...]` runs without configuring one:
 - `with task_context(secrets={...}):` for one task called as a function. A `@task` function
   called in the block reads only what its `secrets=` declares, as on a worker.
 
-A secret the test doesn't give is `secret_not_found`. Values given this way are masked as
-on a worker ([Testing a DAG](07-testing.md)).
+A secret the test doesn't give is `secret_not_found`. `dags test` and `run_dag` mask values
+as a worker does. `task_context` calls run in the test process: they do not install the
+worker's log or output masking ([Testing a DAG](07-testing.md)).

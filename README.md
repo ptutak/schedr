@@ -1,6 +1,6 @@
 # schedr
 
-An open-source job orchestrator written in Rust for running Python scripts, Bash processes, and Python DAGs.
+A job scheduler written in Rust that runs Python scripts, Bash processes and Python DAGs.
 
 ```python
 from datetime import timedelta
@@ -40,8 +40,8 @@ with Dag(
 From 1.0.0 on, the database schema changes only through new migrations and the protocol
 between schedr's processes only additively within 1.x; DAG JSON, the REST API and the
 configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a
-fresh database. Next: M5, performance and metrics in the UI (released as 1.1.0), then a
-tool that translates Airflow DAGs into schedr's API; see `PLAN.md`.
+fresh database. Work toward 1.1.0 covers M5: performance and metrics in the UI. An Airflow
+DAG translator follows; see `PLAN.md`.
 
 What works:
 
@@ -106,6 +106,7 @@ http://localhost:8765). Its sections:
 6. **Design**: `archive/PROJECT.md`, the decision log, one page per chapter.
 7. **Plan**: `PLAN.md`.
 8. **API**: Python (from docstrings) and Rust (rustdoc).
+9. **History**: the journal and archived project notes.
 
 PyPI shows `PYPI.md` instead of this file: installing and a first run, for someone using the
 package rather than working on this repository.
@@ -116,7 +117,7 @@ For a first run with the published package, see
 [Getting started](https://ptutak.github.io/schedr/01-start/index.html).
 
 ```sh
-pip install schedr            # Python 3.14; add [pydantic] for Pydantic models
+pip install schedr            # Python 3.14 or newer; add [pydantic] for Pydantic models
 ```
 
 Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each carries the
@@ -176,10 +177,10 @@ bugs: `BUGS.md`.
 
 ## Development
 
-Requirements: Rust (stable, via rustup), [uv](https://docs.astral.sh/uv/), make; Podman or
-Docker for the integration tests (Postgres) and the images; kind, kubectl and Helm for the
-cluster scripts. `make setup` also installs `cargo-nextest`, `cargo-llvm-cov` and the
-`llvm-tools-preview` component.
+Requirements: Rust (the version in `rust-toolchain.toml`, via rustup),
+[uv](https://docs.astral.sh/uv/), make; Podman or Docker for the integration tests
+(Postgres) and the images; kind, kubectl and Helm for the cluster scripts. `make setup` also
+installs `cargo-nextest`, `cargo-llvm-cov` and the `llvm-tools-preview` component.
 
 ```sh
 make setup            # dev tools, uv sync, pre-commit hooks
@@ -189,7 +190,7 @@ make test             # unit tests: Rust (nextest) + pytest, both with an 85 % c
 make test-integration # real processes, the binary, Postgres in a container
 make schema           # regenerate schema/ from the Rust model (CI fails if it's stale)
 make docs             # build the documentation site into site/ (fails on any warning)
-make check            # everything CI runs
+make check            # local checks and unit/integration tests; run make docs separately
 make stress           # the stress suite (STRESS_PROFILE=quick|full)
 make smoke            # build the release wheel and smoke-test it
 make image            # the schedr image (make server-image: schedr-server), smoke-tested

@@ -14,6 +14,7 @@ Post as a signed-in user or with a token, as for triggering a run. For example:
 
 ```sh
 curl -X POST "$SCHEDR_URL/api/v1/events" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $SCHEDR_TOKEN" \
   -H 'Idempotency-Key: payment-request-123' \
   -d '{"name":"paid","key":"order-123","data":{"amount":42},"at":"2026-11-08T10:00:00Z"}'
 schedr events post packed --key order-123 --data '{"box":"A"}'
@@ -22,9 +23,9 @@ schedr events post packed --key order-123 --data '{"box":"A"}'
 The name is written as a DAG ID. The key is 1 to 1024 UTF-8 bytes, with no control
 characters, line separators or bidirectional marks. Data is JSON, `null` if omitted, and is
 limited by `[events] max_size` (1 MiB by default). `at` is when the event happened; it
-defaults to the posting time, and may be at most a minute ahead of it. An event for a moment
-before the previous run's gets an empty window (`since` is its own `at`). The CLI's
-`--at` supplies it and `--data` also accepts `@file.json`.
+defaults to the posting time. By default, it may be at most a minute ahead of that time. An
+event for a moment before the previous run's gets an empty window (`since` is its own `at`).
+The CLI's `--at` supplies it and `--data` also accepts `@file.json`.
 
 Each post creates an event, even if its name and key have been posted before. To retry a
 request without creating another event, send the same `Idempotency-Key`: the API returns the
@@ -64,13 +65,15 @@ with Dag("audit", trigger=audit()):
 The event records `task:<dag>/<run>/<task>` as `posted_by` (a mapped task includes its
 index), or `trigger:<dag>` for a trigger. Use an `idempotency_key=` stable across attempts
 when a task may be retried. The agent's own resend after a reconnect is one event anyway.
-Secrets the task has read are masked in what it posts, as in its output, and its log
-says so (once per process; `schedr task-ctx` says it on stderr each time). Keep secrets out
-of event keys: two keys differing only in a secret become one. `api.ApiError` has a `.status`:
-403 means the route is not on the task's allow-list, 503 that the master was not reached
-within a minute: the call may still have been made, so send it again with the key it was
-made with, `error.body["idempotency_key"]` (yours, or one the agent gave a call without). Only `GET` and `POST` on
-`/api/v1/events` are open to tasks.
+Secrets the task has read are masked in what it posts, as in its output, and its log says so
+(once per process; `schedr task-ctx` says it on stderr each time). Keep secrets out of event
+keys: a DAG deduplicates two keys differing only in a secret as one key. `api.ApiError` has
+a `.status`: 403 means the route is not open to tasks. A 503 means no answer arrived from
+the master within a minute, or the agent stopped before an answer: the call may still have
+been made, so send it again with the key it was made with, `error.body["idempotency_key"]`
+(yours, or one the agent gave a call without). Tasks can use `GET` and `POST` on
+`/api/v1/events`, and `POST /api/v1/notifications` for
+[notifications](24-notifications.md#sending-from-a-task).
 
 A command task can use the same API:
 
@@ -80,11 +83,12 @@ schedr task-ctx events list --name paid
 schedr task-ctx api GET '/api/v1/events?name=paid'
 ```
 
-A Python script run by a command uses `schedr.api` as above. Outside schedr, use
+A Python script run by a command uses `schedr.api` as above. Outside `schedr`, use
 `api.Client("https://schedr.example", token="...")`, or set `SCHEDR_SERVER` and
 `SCHEDR_TOKEN` and use `api.Client()`. HTTP needs the `schedr[http]` extra. Under `schedr
 dags test` (and `run_dag`) a task posts to the test's own local schedr, whose database goes
-with it; the folder's other DAGs start paused there, so an event starts none of them. For a
+with it; event triggers stay paused there, so an event starts no other DAG. `Chained` DAGs are
+unpaused for operator calls. For a
 unit test of one task use [`task_context()`](07-testing.md#one-task-and-its-context).
 
 ## Starting a run

@@ -1,6 +1,6 @@
 # A first DAG
 
-`examples/sync.py` is a complete DAG: two Python tasks and a shell command, scheduled for
+`examples/sync.py` is a complete DAG: two Python tasks and a command, scheduled for
 03:00 in Warsaw. Python 3.14 or newer is required (a command can use a t-string, `t"..."`);
 `pip install schedr` installs the package and the `schedr` binary.
 
@@ -21,8 +21,8 @@ flowchart LR
     extract --> load --> notify
 ```
 
-`trigger` is the schedule. `defaults` apply to every task in the block; `load` replaces the
-timeout for itself. The other pages cover [tasks](02-tasks.md), [data flow](03-data-flow.md),
+`trigger` is the schedule. `defaults` apply to every task in the block; `load` also sets
+its own timeout. The other pages cover [tasks](02-tasks.md), [data flow](03-data-flow.md),
 [groups](11-groups.md), [schedules](04-schedules.md), [defaults](05-defaults.md), the
 [DAG context](06-context.md), [run parameters](12-params.md),
 [routing by outcome](08-outcomes.md) and [mapping](10-mapping.md).
@@ -37,8 +37,8 @@ schedr dags test sync_customers --path examples/sync.py --for 2026-10-15T01:00Z
 `dags check` imports each file in its own process and prints one line per file. It uses
 the configured fork server when usable, as a worker's parse does. `dags test` runs one real
 run, each task in this example in its own process, and prints the logs and a table.
-[Testing a DAG](07-testing.md) is both commands, and how a pytest does the same thing.
-[Life of a run](../03-guide/03-life-of-a-run.md) is what that run does inside schedr.
+[Testing a DAG](07-testing.md) explains both commands and how to run a DAG from pytest.
+[Life of a run](../03-guide/03-life-of-a-run.md) follows a run inside `schedr`.
 
 ## A file and its DAGs
 
@@ -49,9 +49,10 @@ run, each task in this example in its own process, and prints the logs and a tab
 | No `with Dag(...)` | Records nothing. Its `@task` functions can be called in another DAG. |
 | `with Dag(...)` inside another `with Dag(...)` | `RuntimeError`: `` `with Dag('inner')` inside `with Dag('outer')`: DAGs can't be nested `` |
 
-A DAG ID is explicit. It is up to 250 bytes: ASCII letters, digits and `_ . - : / #`. The
-same ID in two files of the newest code is a conflict, and schedr creates no runs until
-that is resolved ([Parsing and code versions](../03-guide/06-parsing.md)).
+A DAG ID is explicit and nonempty. It is up to 250 bytes: ASCII letters, digits and `_ . - :
+/ #`; `.` and `..` alone are not allowed. The same ID in two files of the newest code is a
+conflict. `schedr` creates no new runs of that DAG until the conflict is resolved ([Parsing
+and code versions](../03-guide/06-parsing.md)).
 
 A new DAG's trigger is stored paused. `schedr dags unpause <id>` lets it create runs
 ([Schedules](04-schedules.md#pausing)). A run started by hand starts either way.

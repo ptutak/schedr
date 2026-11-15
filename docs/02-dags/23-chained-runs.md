@@ -9,6 +9,13 @@
 :caption: examples/docs/chained_runs.py
 ```
 
+Unpause `chained_load` before running `chained_report` on a server:
+
+```sh
+schedr dags unpause chained_load
+schedr runs trigger chained_report
+```
+
 The master runs the operator without a worker or slot. It creates a `chained` run linked to
 its parent run. The new run's `planned_for` is the parent's unless the operator gives an
 aware `datetime` or a reference as `planned_for=`. Its `params=` can contain literals,
@@ -18,7 +25,8 @@ the operator or a manual run must supply required fields.
 
 ## How the task ends
 
-With `wait=True` (the default), the task waits for the target run:
+With `wait=True` (the default), the task waits for the target run. Time spent queued
+counts toward `max_wait`:
 
 | Target run | Operator task |
 |---|---|
@@ -37,9 +45,8 @@ waiting for; a run started with `wait=False` continues.
 
 ## Refusals
 
-A missing target, a target in an ID conflict, or a paused target fails the task and its
-retries apply. A target may be missing while its root has not been parsed yet. These failures
-are not retried:
+A missing, conflicting, held or paused target fails the task and its retries apply. A target
+may be missing while its root has not been parsed yet. These failures are not retried:
 
 - The target is not `Chained`, or its `by` does not name the parent DAG.
 - The target refuses the parameters or `planned_for`.
@@ -68,7 +75,7 @@ Map a `TriggerDagOperator` to start one chained run per element. Fix the task ID
 The list may be literal or an upstream output. `.expand(params=..., planned_for=...)`
 takes the cartesian product of the lists, the first argument written varying slowest.
 To pair values instead, use `.expand_kwargs([{"params": {...}, "planned_for": ...}, ...])`,
-also with a literal list or an upstream output. Only `params` and `planned_for` can be
+with either a literal list or an upstream output. Only `params` and `planned_for` can be
 mapped; each argument is fixed in `.partial()` or mapped, never both.
 
 Each instance ends as a single operator does. The mapped task's `.output` is its values in

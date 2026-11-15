@@ -1,6 +1,6 @@
 # Acting on the first of several
 
-A task starts after all its upstream tasks end. To go on as soon as one of several has
+A task normally waits for all its upstream edges to be decided. To go on as soon as one of several has
 succeeded, use `first_of`, a node of its own that the master ends, like `EmptyOperator`: no
 process, no slot and no polling.
 
@@ -39,11 +39,15 @@ order the tasks ended; `with_winner=True` also gives the list of their IDs. The 
 
 ## Limits
 
-- At least two different tasks, each given whole: `a.rows` is a part of an output and is refused. Another
+`at_least(n, ...)` requires `1 <= n <=` the number of candidates. A value outside that
+range raises `ValueError`.
+
+- Give at least two different tasks, each whole: `a.rows` is a part of an output and is refused. Another
   node's value counts as whole; its winner doesn't.
-- No mapped task: it has no one value.
-- What it keeps is at most what its options may give together, the sum of their `max_output_size`, so values
-  each allowed always fit. Its own `max_output_size` doesn't apply.
+- A mapped task is refused: choose from individual, unmapped tasks.
+- Its output limit is the sum of the candidate tasks' `max_output_size` values. The stored
+  result includes the values and winner IDs; if that whole result exceeds the sum, the
+  node fails. Its own `max_output_size` does not apply.
 - Nothing can be ordered before the node: `x >> first`, or `x >> g` for a group `g` that starts with it, is
   refused when the file loads. Order the tasks it was given instead.
 - `at_least` reads a list as it is stored: two classes with the same fields, as outcomes of a task, can't be

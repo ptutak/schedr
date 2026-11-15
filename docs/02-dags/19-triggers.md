@@ -15,7 +15,7 @@ system can also [post named events](22-events.md) to start a DAG directly:
 ```
 
 `@trigger` makes an async generator that yields events. Its first argument is
-`after: str | None`, supplied by schedr; the other arguments must be literals because no
+`after: str | None`, supplied by `schedr`; the other arguments must be literals because no
 run exists yet. Pass the call to `Dag(trigger=...)`. Declare `secrets=` and `connections=`
 on the decorator as on a wait step.
 
@@ -37,7 +37,7 @@ async def new_numbers(after: str | None) -> list[Event[int]]:
 
 ## Wait steps and triggers side by side
 
-In the plain forms you write the loop yourself; in the `.poke` forms schedr owns it; with
+In the plain forms you write the loop yourself; in the `.poke` forms `schedr` owns it; with
 `wait_for=` the master waits and calls your function for a run of another DAG or a
 [named event](22-events.md).
 
@@ -55,9 +55,10 @@ each new event it sends starts a run; a batched poke sends one event for a group
 `NOT_YET` is a wait step's only: a plain `@sensor` waits by
 awaiting, and a trigger with nothing to report yields nothing, returns `[]` or `None`. The
 generator and the poke take `after: str | None` first, the last key acted on.
-Every form's function must reach an `await` within 30 seconds: one that blocks the event loop
-stops every wait step and trigger on its worker's [watcher host](../03-guide/05-workers.md#the-watcher-host),
-which is restarted without it.
+Async code must yield control within `[watchers] block_limit` (30 seconds by default).
+Blocking the event loop holds up every wait step and trigger on the same
+[watcher host](../03-guide/05-workers.md#the-watcher-host) and can get that host killed.
+Plain `def` pokes run on threads and are held to their call limits instead.
 
 ## Batching pokes
 
@@ -83,8 +84,8 @@ Each item is kept as an event of its own, so keys are deduplicated item by item:
 gets the window's new items, as a `list[Event[T]]`, and a window of only keys seen before
 starts none. A run reads that list as `dag_ctx.event.data`; a task receiving it takes
 `list[Event[T]]`. The run's event is keyed by its last new item and has no `at` of its own;
-the bookmark is the window's last key. Running an item again by its key (`schedr dags
-trigger --event KEY`, or "Run again") gives a list of that item alone.
+the bookmark is the window's last key. Running an item again by its key (`schedr runs
+trigger <dag> --event KEY`, or "Run again") gives a list of that item alone.
 
 A window goes early when adding an item would put its data over `max_output_size`; that
 item starts the next window. One item too big on its own fails as it would unbatched. On
@@ -102,10 +103,10 @@ so, once). Use a stable, unique identifier for the same external event across re
 restarts; do not generate a fresh random key on each observation. Data is limited by the
 trigger's `max_output_size` (1 MiB by default); secrets are masked as in task output.
 
-The bookmark is the last key schedr acted on. On each start it passes that key as `after`,
+The bookmark is the last key `schedr` acted on. On each start it passes that key as `after`,
 or `None` initially. Resume after it when the source supports that. This requires an order
 in which later events follow the bookmark, as in the example; if the source cannot provide
-one, inspect all events and let schedr deduplicate their keys. Delivery is **at least once**:
+one, inspect all events and let `schedr` deduplicate their keys. Delivery is **at least once**:
 an event may be sent again after a reconnect. Make downstream effects safe to repeat too,
 including when someone runs an event again by hand.
 
@@ -113,7 +114,9 @@ including when someone runs an event again by hand.
 
 A new event creates a run of kind `event`. Tasks read `dag_ctx.event.key`, `.data` and
 `.at`; the example passes the key and data to `load`. `planned_for` is the event's `at`,
-or the time schedr received it if absent; `since` is the previous event's `planned_for`.
+or the time `schedr` received it if absent. `since` is the previous event's `planned_for`,
+or `planned_for` for the first event. An event
+older than that boundary gets an empty window rather than an inverted one.
 Event runs queue like manual runs when the DAG is full. The trigger itself is not in the
 run graph and has no attempt or row in the run.
 
@@ -122,7 +125,7 @@ run graph and has no attempt or row in the run.
 A trigger runs while its DAG is unpaused, not held and within its activity window. Pausing
 or holding the DAG stops it; it starts from its bookmark when eligible again. A new DAG
 version or code, a worker drain or loss also stops and restarts it from the bookmark.
-Failures restart after 5 seconds, doubling up to 5 minutes. A generator that returns stops
+By default, failures restart after 5 seconds, doubling up to 5 minutes. A generator that returns stops
 with `trigger_returned` until its DAG version or code changes. A poke that raises or exceeds
 `every` keeps its bookmark and gets its next call; a successful call clears its consecutive
 failure count. The next call waits for a failed one's `asyncio.to_thread` calls, or a plain

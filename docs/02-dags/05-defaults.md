@@ -1,8 +1,9 @@
 # Defaults and retries
 
-`defaults` on the DAG applies to its steps, that is its tasks and [wait steps](18-sensors.md). A
-step's own arguments replace the fields they set; a field left unset keeps the DAG's value, then the
-built-in one. `timeout` applies to tasks and `max_wait` to wait steps; the others apply to both.
+`Dag(defaults=StepDefaults(...))` sets options for its tasks and [wait steps](18-sensors.md).
+A step's own arguments win, followed by [group defaults](11-groups.md), DAG defaults and
+built-in values. `timeout` limits a task attempt; `max_wait` limits a wait step. Cleanup
+options apply only to steps with a cleanup.
 
 ```{literalinclude} ../../examples/docs/defaults.py
 :language: python
@@ -20,7 +21,7 @@ timeout and no retries, and keeps the DAG's `retry_delay` and `max_output_size`.
 | `queue` | `"default"` | Which workers may run the task. A worker with no `[worker] queues` serves `default`. |
 | `max_output_size` | 1 MiB | How large the stored output may be. `KiB` and `MiB` are the sizes in bytes (`8 * MiB`). For a command the limit is per stream. |
 | `preload` | `True` | A Python task forks from the preloaded fork server. `False` forks only from the bare one, for code that misbehaves next to the preloaded libraries. |
-| `fresh_process` | `False` | A Python task is always a new process, never forked, for code that misbehaves after a fork. `True` wins when `preload` is also set. |
+| `fresh_process` | `False` | When `True`, a Python task always starts a new process, never forked, for code that misbehaves after a fork. `True` wins when `preload` is also set. |
 | `run_if` | `RunIf.NONE_FAILED` | When the task runs, from its upstream edges. `RunIf.ALL_SUCCEEDED` runs only if every edge succeeded. [Routing by outcome](08-outcomes.md). |
 | `max_active` | none | At most this many of the task's instances run at once, across all the DAG's runs. [Concurrency limits](#concurrency-limits). |
 | `max_active_per_run` | none | At most this many of the task's instances run at once within one run: mainly a mapped task's fan-out. [Concurrency limits](#concurrency-limits). |
@@ -40,8 +41,8 @@ involved.
 A task runs on a worker that serves its queue
 ([Configuration](../_generated/04-reference/01-configuration.md), `[worker] queues`). With
 no queues configured, that is `default`. `schedr dags test` starts one worker from that
-configuration, and a task whose queue it does not serve waits until the command's hour
-limit.
+configuration, and a task whose queue it does not serve waits until the command's run
+time limit (one hour by default).
 
 ## Concurrency limits
 
@@ -60,9 +61,10 @@ the slots:
 with Dag("sync", max_active_tasks=20):
 
     @task(max_active_per_run=10)
-    def fetch(url: str) -> bytes: ...
+    def fetch(url: str) -> str:
+        return url
 
-    fetch.expand(url=urls)
+    fetch.expand(url=["https://example.com/a", "https://example.com/b"])
 ```
 
 `max_active` and `max_active_per_run` exist on `@task`, `.override(...)`, `StepDefaults` and
@@ -99,12 +101,12 @@ kinds fails the task.
 | An error certain to repeat: inputs or an output that is too large, a template that cannot be rendered, a return value that cannot be stored, inputs that do not match the task | Not retried. |
 
 A task downstream of a failure ends `upstream_failed` and does not run. An edge that
-wasn't taken counts as skipped; [Routing by outcome](08-outcomes.md) is when that skips
-the downstream task or still runs it. Tasks that do not depend on the failure keep
+wasn't taken counts as skipped; [Routing by outcome](08-outcomes.md) explains when that skips
+the downstream task or lets it run. Tasks that do not depend on the failure keep
 running. The run ends `failed`.
 
 A task that succeeds has an outcome in the report (`schedr dags test` prints it in the
 `OUTCOME` column): `SUCCESS` when the task has no outcomes of its own, otherwise the
-name it declared. [Routing by outcome](08-outcomes.md) is how a DAG routes on that name.
-[State and failures](../03-guide/07-failures.md#retries) is the full list of what each
-stopped process becomes.
+name it declared. [Routing by outcome](08-outcomes.md) explains how a DAG routes on that name.
+[State and failures](../03-guide/07-failures.md#retries) lists the results of each kind of
+process exit.

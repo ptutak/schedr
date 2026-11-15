@@ -2,38 +2,39 @@
 
 A wait step waits for one thing belonging to a run, then ends with its value or the
 `TimedOut` outcome. Declare an `async def` with `@sensor` when you write the waiting
-yourself, or a function with `@sensor.poke(every=...)` when schedr should call it repeatedly:
-an `async def`, or a plain `def` (see [A plain def poke](#a-plain-def-poke)). To wait
-for another DAG's run or task, use [`wait_for(RunOf(...))`](21-wait-for.md), which can
-also produce `Failed`. [Wait steps and triggers side by side](19-triggers.md#wait-steps-and-triggers-side-by-side)
-compares every form.
+yourself, or a function with `@sensor.poke(every=...)` when `schedr` should call it
+repeatedly: an `async def`, or a plain `def` (see [A plain def poke](#a-plain-def-poke)). To
+wait for another DAG's run or task, use [`wait_for(RunOf(...))`](21-wait-for.md), which can
+also produce `Failed`. [Wait steps and triggers side by
+side](19-triggers.md#wait-steps-and-triggers-side-by-side) compares every form.
 
 ```{literalinclude} ../../examples/docs/sensors.py
 :language: python
 :caption: examples/docs/sensors.py
 ```
 
-A poke returns its value when ready, or `NOT_YET` while waiting: annotate it
-`-> str | NotYet`. `None` is a value, not a signal to wait. Calls never overlap. A call
-that runs past `every` is an overrun (its own time counts, not a stall of the event loop
-after it): it may finish, and the next call comes right after it.
-The poke fails (`PokeTooSlowError`, with the usual retries) after `[watchers] poke_overruns`
-overruns in a row (3 by default), or at once when one call runs three times `every`, when it
-is cancelled. A call that raises is a failure with the usual retries too. A call that
-holds the event loop is another limit: see below.
+A poke returns its value when ready, or `NOT_YET` while waiting: annotate it `-> str |
+NotYet`. `None` is a value, not a signal to wait. Calls never overlap. A call that runs past
+`every` is an overrun (its own time counts, not a stall of the event loop after it): it may
+finish, and the next call comes right after it. The poke fails (`PokeTooSlowError`, with the
+usual retries) after `[watchers] poke_overruns` overruns in a row while returning `NOT_YET`
+(3 by default), or at once when one call runs three times `every`, when it is cancelled. A
+call that returns its value within that hard limit ends the wait successfully. A call that
+raises is a failure with the usual retries too. A call that holds the event loop is another
+limit: see below.
 
 ## A plain def poke
 
-A poke may be a plain `def`, for a blocking client: schedr calls it on the host's threads, as
-`asyncio.to_thread` would, so it doesn't hold up the other wait steps on the host. It is its wait
-step's like an `async` call: its prints go to the step's log, `task_ctx` and the step's secrets
-work in it (`task_ctx.secret(...)`, the plain form), and its call has the same window as an async
-poke's (it may run past `every`, up to three times it). Past that, the call is stopped as an
-`asyncio.to_thread` call is (see below): `StepEndedError` at its next Python line, or, for a call
-blocked in C, its host ending after the cancel grace. A plain `def` opens a plain
-connection (`with name() as client:`). A plain `def` that returns a coroutine (a
-plain wrapper of an `async def`) has it awaited. `@sensor` itself, and `wait_for=`, stay `async
-def`.
+A poke may be a plain `def`, for a blocking client: `schedr` calls it on the host's threads,
+as `asyncio.to_thread` would, so it doesn't hold up the other wait steps on the host. The
+call belongs to its wait step, as an `async` call does: its prints go to the step's log,
+`task_ctx` and the step's secrets work in it (`task_ctx.secret(...)`, the plain form), and
+its call has the same window as an async poke's (it may run past `every`, up to three times
+it). Past that, the call is stopped as an `asyncio.to_thread` call is (see below):
+`StepEndedError` at its next Python line, or, for a call blocked in C, its host ending after
+the cancel grace. A plain `def` opens a plain connection (`with name() as client:`). A plain
+`def` that returns a coroutine (a plain wrapper of an `async def`) has it awaited. `@sensor`
+itself, and `wait_for=`, stay `async def`.
 
 ```{literalinclude} ../../examples/docs/plain_pokes.py
 :language: python
@@ -56,13 +57,14 @@ Which to choose:
 - **Keep them light.** A poke busy in Python, not waiting, holds the interpreter's lock and
   slows every other wait step on the host. Put heavy work in a task.
 
-The host has a thread for each of its wait steps, on top of Python's default number for the
-steps' own `asyncio.to_thread` calls, so a hundred plain pokes on one host each get their call
-on time.
+The host sizes its thread pool for one call per wait step, plus Python's default pool
+size for the steps' own `asyncio.to_thread` calls. Threads start as needed. This gives
+plain pokes room to run alongside one another; it does not guarantee call timing.
 
 `max_wait=` limits the wait. If omitted, `[sensors] default_max_wait` applies (24 hours by
-default), except for `delay` given a `timedelta` as described below; `max_wait` in `StepDefaults` sets it for a DAG or group, while `timeout` there is for tasks. When the wait expires, schedr
-produces `TimedOut`: do not put it in the function's return type.
+default), except for `delay` given a `timedelta`, as described below. Set `max_wait` in
+`StepDefaults` for a DAG or group; `timeout` there applies to task attempts. When the wait
+expires, `schedr` produces `TimedOut`: leave it out of the function's return type.
 
 ## Waiting for a time
 
@@ -119,7 +121,7 @@ values from `dag_ctx` and `task_ctx`, never `SCHEDR_*` environment variables.
 Use asynchronous clients and yield while waiting: a blocking call holds up the other wait
 steps on the host. If one holds the loop past `[watchers] block_limit` (30 seconds by
 default), its host is killed and it fails `blocked_event_loop` without a retry. The other
-wait steps start again on a new host in the same attempt, with their `max_wait` and `timeout`
+wait steps start again on a new host in the same attempt, with their `max_wait`
 still running and no retry used. Put heavy work in a task. Read declared secrets with
 `await task_ctx.asecret(...)` or
 `await task_ctx.asecret_value(...)`; the plain forms hold the loop when a secret under a
@@ -156,11 +158,11 @@ as a connection pool or a cache. `with` and `finally` run, but code with no clea
 half done, and the other wait steps of the same code share that library in their process. So a call
 that has a timeout of its own, and ends by itself, is always the safer way to stop.
 
-When a step ends, asyncio tasks it left running are cancelled and awaited. `print` and Python logging from the step go to its
-attempt log, as does a thread it started; output from C code, or from a thread still running after
-its step ended, goes to the host's log, masked for secrets. Nothing can stop a running thread from
-outside: end the ones you start, or they live until the host stops. The step's log warns if a
-library leaves a thread running.
+When a step ends, asyncio tasks it left running are cancelled and awaited. `print` and
+Python logging from the step go to its attempt log, as does a thread it started; output from
+C code, or from a thread still running after its step ended, goes to the host's log, masked
+for secrets. Unmanaged library threads may live until the host stops; make sure the library
+closes them when the step ends. The step's log warns if a library leaves a thread running.
 
 When new code arrives, a `@sensor.poke` moves between calls if it can start on that code.
 It keeps its deadline and uses no retry; its log says it moved and the attempt reports the

@@ -1,6 +1,6 @@
 # Schedules
 
-`trigger` decides which moments get a scheduled run. This file defines the same task on a
+`trigger` decides which moments get a scheduled run. This example defines the same task on a
 cron, a preset, an interval, a single fire time and no trigger. `bounds` is defined once
 and called inside each block.
 
@@ -18,13 +18,13 @@ and called inside each block.
 | `Chained()` | Runs started by other DAGs' operators; see [Starting another DAG](23-chained-runs.md). |
 | `None` | Manual runs only. |
 
-Event triggers are [Sensors and triggers](../_generated/08-history/project/07-python-api-structure.md#sensors-and-triggers).
+For runs started by events, see [Triggers](19-triggers.md) and [Named events](22-events.md).
 
 ## Cron
 
 Five fields: minute, hour, day of month, month, day of week. Six fields put seconds first.
-A year field is rejected. Names and ranges and steps are the expression's, for example
-`MON-FRI` and `*/15`.
+A year field is rejected. Fields accept names, ranges and steps, such as `MON-FRI` and
+`*/15`.
 
 When both the day of month and the day of week are restricted, a time matches if either
 one matches (`0 0 1 * MON` is the 1st, and also every Monday). A `+` before the day of
@@ -58,12 +58,14 @@ last run is for the last fire time at or before `end`. `end` need not be a fire 
 | `catchup` | What the scheduler creates |
 |---|---|
 | `False` (the default) | Only the most recent fire time after the last scheduled run, from `start` up to now and not after `end`. A fire time that finds the DAG already at `max_active_runs` is missed. When a place frees, the fire time that is the most recent one then is created. |
-| `True` | Every such fire time, earliest first. One round creates at most 10 for a DAG; the rest wait for later rounds. `max_active_runs` still caps how many run at once, and the ones that do not fit wait. |
+| `True` | Every such fire time, earliest first. By default, one round creates at most 10 for a DAG; the rest wait for later rounds. `max_active_runs` still caps how many run at once, and the ones that do not fit wait. |
 
-The scheduler skips a fire time that already has a successful, queued or running run of
-any kind. With `catchup`, it continues to later fire times. If a covering run fails later,
-rerun that period by hand. [Backfill](#backfill) fills a past range on demand; `catchup`
-is the scheduler creating its own missed runs.
+The scheduler skips a fire time that already has a successful, queued or running run of any
+kind. With `catchup`, it continues to later fire times. If a covering run fails, its fire
+time becomes eligible again only while it is still due after the last scheduled run. Use a
+manual run or backfill to rerun a period the scheduler has already passed.
+[Backfill](#backfill) fills a past range on demand; `catchup` is the scheduler creating its
+own missed runs.
 
 `schedr dags test` is a manual run, so `start`, `end` and a `Once` in the future do not
 stop it. The rules for the run's window are below.
@@ -88,9 +90,9 @@ A `Cron` or an `Every` is not refused. Reading `dag_ctx.run.since` inside the fu
 body is not seen at import; at run time the window can still be empty. `initial_since` is
 read the same way as `start`.
 
-`--for` more than a minute ahead of the master's clock is rejected. Without an offset it
+By default, `--for` more than a minute ahead of the master's clock is rejected. Without an offset it
 is UTC, and the command warns `warning: no offset given: interpreted as ... (UTC)`. A date
-is midnight UTC. `2026-10-15T03:00+02:00` keeps the offset.
+is midnight UTC. `2026-10-15T03:00+02:00` names the same moment as `2026-10-15T01:00Z`.
 
 ## How many runs at once
 

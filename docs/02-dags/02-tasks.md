@@ -1,8 +1,8 @@
 # Tasks and operators
 
 A task is one step of a DAG. `@task` makes a Python function a task. `CommandOperator` runs
-a command. `EmptyOperator` is a step with no work, used to join other tasks. This file uses
-each of them, and uses `load` twice:
+a command. `EmptyOperator` is a step with no work, used to join other tasks. This example uses
+each of them and calls `load` twice:
 
 ```{literalinclude} ../../examples/docs/tasks.py
 :language: python
@@ -21,7 +21,7 @@ An operator is constructed inside the block. Outside it, `CommandOperator` and
 
 ## `@task`
 
-| | |
+| Part | Rule |
 |---|---|
 | Return annotation | Required. `-> None` means no output. `-> Any` skips the parse-time check of the return type; the value still has to be storable when the task runs. |
 | Parameters | Each one is declared. `*args`, `**kwargs` and positional-only parameters (before `/`) are a `TypeError`: arguments are stored and passed by name. |
@@ -30,10 +30,10 @@ An operator is constructed inside the block. Outside it, `CommandOperator` and
 | `async def` | Supported; see [Async tasks](#async-tasks). Async generators are refused. |
 
 `@task(timeout=..., retries=..., run_if=...)` sets that task's options. `.override(...)`
-returns a new task function and leaves the original unchanged. The options are
-[Defaults and retries](05-defaults.md) and [Routing by outcome](08-outcomes.md). Each
-Python task runs in its own process. Leave the
-start as it is for a task that can share the worker's preloaded libraries. Set
+returns a new task function and leaves the original unchanged. See
+[Defaults and retries](05-defaults.md) and [Routing by outcome](08-outcomes.md) for the options.
+Each Python task runs in its own process. Use the default start settings when the task can
+share the worker's preloaded libraries. Set
 `preload=False` when the task misbehaves next to those libraries: it still forks, but only
 from the bare fork server. Set `fresh_process=True` when the task misbehaves after a fork:
 it is always a new process, and never forked. The same two arguments are on `.override(...)`
@@ -92,9 +92,9 @@ period. A blocked loop may instead be killed when the grace expires
 
 ### The event loop
 
-schedr uses `uvloop` whenever the attempt's interpreter can import it, however it was
+`schedr` uses `uvloop` whenever the attempt's interpreter can import it, however it was
 installed; it looks for the module, not the extra. `pip install schedr[uvloop]` is one way
-to install it. Otherwise schedr uses asyncio's own loop. There is no configuration key:
+to install it. Otherwise `schedr` uses asyncio's own loop. There is no configuration key:
 installing the module selects it. Each async attempt's log says `event loop: uvloop` or
 `event loop: asyncio`.
 
@@ -117,7 +117,7 @@ starts reads them with `from schedr.script import dag_ctx`
 
 Without `outcomes=`, exit code 0 is success (`DefaultOutcome.SUCCESS`). With
 `outcomes=`, a declared exit code is success with that outcome; any other code, or a
-signal, fails the attempt. [Routing by outcome](08-outcomes.md) is the enum and
+signal, fails the attempt. [Routing by outcome](08-outcomes.md) explains the enum and
 `.on(...)`. The output is a `ProcessResult`: `stdout`, `stderr`, `exit_code`,
 `stdout_truncated`, `stderr_truncated`. `announce.stdout` and `announce.stderr` are
 references to those strings. The size limit applies to each stream. They are text: invalid
@@ -144,6 +144,7 @@ import error naming the part. The same types are what one task may pass to anoth
 | `dict[str, T]` | String keys only. |
 | `Literal[...]` | `str`, `int`, `bool` or `None`. |
 | A dataclass or a `TypedDict` | Its fields. A dataclass matches by its class name and fields; the stored JSON is the fields. `InitVar` and `field(init=False)` are refused. A class that refers to itself is refused. |
+| A Pydantic model | Its JSON representation. Install `schedr[pydantic]`; see [Data flow](03-data-flow.md#pydantic-models). |
 | `ProcessResult` | `stdout`, `stderr`, `exit_code`, `stdout_truncated`, `stderr_truncated`. |
 | `A \| B` | Either type. Two or more dataclasses (or `None`) is an outcome union; `int \| str` is ordinary data with outcome `SUCCESS`. |
 | A subclass of `Outcome` | No output (`None`); the member is the outcome. |
@@ -164,7 +165,7 @@ stay under the root is excluded with `.schedrignore`.
 
 ## IDs
 
-A task ID is up to 250 bytes: ASCII letters, digits and `_ . -`. A `.` is allowed
+A task ID is nonempty and up to 250 bytes: ASCII letters, digits and `_ . -`. A `.` is allowed
 (`extract.load`); an empty part (`extract.` or `.load`) is an `IdError`. A task written
 inside a [group](11-groups.md) gets the group's name as that prefix (`load.extract`).
 
@@ -172,7 +173,5 @@ inside a [group](11-groups.md) gets the group's name as that prefix (`load.extra
 
 Subclassing `CommandOperator`, `EmptyOperator` or `Trigger` outside `schedr` is a
 `TypeError`. Share a function that creates tasks, or share a `@task` function.
-`ScriptOperator` is
-[Native API](../_generated/08-history/project/07-python-api-structure.md#native-api).
-`TriggerDagOperator` is
-[Starting another DAG](23-chained-runs.md).
+Use `ScriptOperator` for [plain scripts](17-plain-scripts.md), or
+`TriggerDagOperator` for [starting another DAG](23-chained-runs.md).

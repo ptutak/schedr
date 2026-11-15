@@ -1,11 +1,10 @@
 # Getting started
 
-From nothing to a running scheduler on your machine: install schedr, start it with one DAG,
-run that DAG, and see it in the web UI.
+Install `schedr`, start it with one DAG, run that DAG, and see it in the web UI.
 
 ## Install
 
-schedr needs **Python 3.14** or newer. Install it into a virtual environment in a project
+`schedr` needs **Python 3.14** or newer. Install it into a virtual environment in a project
 directory of its own; schedr finds that environment by itself later.
 
 ```sh
@@ -62,20 +61,23 @@ in it, `dags/sync.py`:
 .venv/bin/schedr standalone --migrate --dag-path dags
 ```
 
-- **`--dag-path dags`** is the folder schedr watches for DAG files, named after it (`dags`);
+- **`--dag-path dags`** adds a DAG folder with the root name `dags`;
   repeat it for more. Without it (or `SCHEDR_DAG_PATH`, the same list from the environment),
   standalone watches none: it starts with the warning "no DAG directories", and has nothing to
   run.
 - **`--migrate`** creates the database on the first start, and updates it after an upgrade.
 - **Python:** tasks and DAG files run with the project's `.venv`, found by itself (an active
-  virtualenv, then `.venv` or `venv` in this directory or a parent, then `python3`). The first
+  virtualenv, then `.venv` or `venv` in this directory or a parent, then `python3` beside
+  the `schedr` binary, then `python3` on `PATH`). A pyenv shim on `PATH` is resolved with
+  `pyenv which python3`. An explicit interpreter setting overrides discovery. The first
   lines of the log say which one it took.
 - **Where things go:** the database, the task logs and the journal are in
   `~/.local/share/schedr` (`$XDG_DATA_HOME/schedr` if that is set).
 - **Addresses:** the API and the web UI on `http://127.0.0.1:8080`, from this machine only.
 
-Leave it running and use a second terminal for the rest. A new DAG file is picked up within
-30 s, the default scan interval.
+Leave it running and use a second terminal for the rest. By default, `schedr` scans for
+changes every 30 s and waits for files to stay unchanged for 5 s before copying and parsing
+them. Allow time for that wait and the import after a scan finds your file.
 
 ```{note}
 After a crash (not a Ctrl-C), schedr waits up to about 30 s before it schedules anything: the
@@ -97,7 +99,8 @@ DAG             STATE   HELD  TRIGGER                                   DEFINED 
 sync_customers  paused  no    0 3 * * * (Europe/Warsaw), 2025-12-31 ..  dags:sync.py
 ```
 
-A new DAG starts **paused**: the scheduler creates no runs of it until you unpause it.
+A new DAG starts **paused**: its trigger creates no runs until you unpause it. Manual runs
+are still allowed.
 
 ### Run it
 
@@ -109,6 +112,8 @@ Trigger a manual run (a paused DAG can still be run by hand), then look at it:
 .venv/bin/schedr runs show <run-id>
 .venv/bin/schedr tasks logs <run-id> notify
 ```
+
+After the run finishes, the task table in `runs show` looks like this:
 
 ```text
 TASK     STATE    OUTCOME  TRIES  INSTANCES  REASON
@@ -128,8 +133,9 @@ off unless the trigger asks for it ([Schedules](../02-dags/04-schedules.md)).
 
 ### Stop it
 
-Ctrl-C stops it: the worker drains (no new tasks; running ones get up to 30 s), then the
-process gives up its lease on the database and exits, so the next start takes over at once.
+Ctrl-C starts shutdown. The worker stops taking new tasks. With the defaults, running tasks
+get 25 s to finish, followed by 3 s between SIGTERM and SIGKILL and 2 s to report results.
+The process then gives up its lease on the database and exits, so the next start can take over.
 Starting it again keeps everything: the DAGs, the runs, the logs.
 
 The web UI signs no one in here. That is fine on `127.0.0.1`; before you open it to a network,
