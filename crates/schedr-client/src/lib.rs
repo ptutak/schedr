@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptList, BackfillList, BackfillRequest, BackfillView,
-    CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagView,
-    DeploymentView, EventList, ImportErrorList, LogChunk, MemoryTotals, NamedEventList,
+    AllRunsQuery, AttemptList, AttemptMemoryList, BackfillList, BackfillRequest, BackfillView,
+    CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagMemoryList,
+    DagView, DeploymentView, EventList, ImportErrorList, LogChunk, MemoryTotals, NamedEventList,
     NamedEventView, OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList,
     SampleSeriesList, SensorList, TestConnectionRequest, TriggerList, TriggerRequest, TriggerView,
     WorkerList,
@@ -840,6 +840,38 @@ impl<T: Transport> Client<T> {
         self.call(
             Method::Get,
             format!("/api/v1/metrics/memory?range={}", path(range)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/tasks/{task}/memory`: the task's last attempts' peak memory.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn task_memory(
+        &self,
+        dag: &str,
+        task: &str,
+    ) -> Result<AttemptMemoryList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/tasks/{}/memory", path(dag), path(task)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/memory`: each task's p95 peak memory against its limit.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn dag_memory(&self, dag: &str) -> Result<DagMemoryList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/memory", path(dag)),
             None,
         )
         .await

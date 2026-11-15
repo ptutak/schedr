@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page, Route, expect
 
@@ -497,3 +499,31 @@ def test_a_shown_connection_result_stays_when_its_dags_page_is_read_again(
     expect(page.locator("table.runs tbody tr")).to_have_count(1, timeout=30_000)
     expect(cell).to_contain_text("check: ok")
     assert page.evaluate("window.notReloaded") is True
+
+
+def test_a_tasks_memory_tab_and_the_dags_memory_table_show_its_peaks(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    # M5.1k (decision 467): the run's attempt of `load` as a bar linking to its run, and the
+    # DAG page's p95 of each task.
+    page.goto(f"{standalone['url']}/d/default/runs/{standalone['run']}?task=load&tab=memory")
+    panel = page.locator("#task-panel")
+    expect(panel.locator(".tabs .tab.open")).to_have_text("Memory")
+    bar = panel.locator("svg.chart.bars a")
+    expect(bar).to_have_count(1)
+    expect(panel.locator("svg.chart.bars path.bar.ok")).to_have_count(1)
+    assert bar.get_attribute("href") == (
+        f"/d/default/runs/{standalone['run']}?task=load&tab=attempts"
+    )
+    expect(panel.locator(".chart-key")).to_contain_text("no limit of its own")
+    # `SCHEDR_UI_SCREENSHOTS=<dir>`: the tab in light and dark.
+    folder = os.environ.get("SCHEDR_UI_SCREENSHOTS")
+    if folder:
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            page.reload()
+            panel.screenshot(path=str(Path(folder) / f"task-memory-{scheme}.png"))
+    page.goto(f"{standalone['url']}/d/default/dags/{standalone['dag']}")
+    rows = page.locator("table.task-memory tbody tr")
+    expect(rows).to_have_count(2)
+    assert sorted(rows.locator("td.mono").all_text_contents()) == ["extract", "load"]

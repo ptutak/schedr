@@ -73,15 +73,21 @@ pub(crate) fn log_end(text: &str) -> (&str, bool) {
 const RUN_STATES: [&str; 5] = ["queued", "running", "success", "failed", "cancelled"];
 
 /// The panel's tabs, in order.
-const TABS: [(&str, &str); 4] = [
+const TABS: [(&str, &str); 5] = [
     ("attempts", "Attempts"),
     ("output", "Output"),
     ("logs", "Logs"),
     ("cleanup", "Cleanup"),
+    ("memory", "Memory"),
 ];
 
-/// A mapped task's panel's tabs (decision 83): its instances, and its whole output.
-const MAPPED_TABS: [(&str, &str); 2] = [("instances", "Instances"), ("output", "Output")];
+/// A mapped task's panel's tabs (decision 83): its instances, its whole output, and its
+/// instances' memory (decision 467).
+const MAPPED_TABS: [(&str, &str); 3] = [
+    ("instances", "Instances"),
+    ("output", "Output"),
+    ("memory", "Memory"),
+];
 
 /// The runs list's query: filters and the page's cursor.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1973,6 +1979,8 @@ pub enum TabBody {
         /// The resource the task belongs to: what it is, and the other part's task.
         resource: Option<(String, ResourcePart)>,
     },
+    /// The peak memory of its last attempts, all runs and instances (decision 467).
+    Memory(crate::task_memory::MemoryChart),
 }
 
 /// An attempt's cleanup in the panel.
@@ -2209,17 +2217,9 @@ async fn task_panel<T: Transport>(
     let body = match tab {
         "instances" => TabBody::Instances(instance_rows(&detail.tasks, &at)),
         "output" => output_tab(deployment, run_id, &at).await?,
+        "memory" => memory_tab(page, deployment, &detail.run.dag_id, task_id).await?,
         "logs" => log_tab(deployment, run_id, &at, query, tail_interval).await?,
-        "cleanup" => {
-            let attempts = client
-                .instance_attempts(run_id, task_id, map_index)
-                .await
-                .map_err(|error| Failure::unavailable(&deployment.name, &error))?;
-            TabBody::Cleanup {
-                rows: attempts.attempts.iter().filter_map(cleanup_row).collect(),
-                resource: resource_of(&detail.resources, &detail.tasks, task_id, run_href),
-            }
-        }
+        "cleanup" => cleanup_tab(deployment, &detail, &at).await?,
         _ => {
             let attempts = client
                 .instance_attempts(run_id, task_id, map_index)
@@ -2339,6 +2339,43 @@ impl Instance<'_> {
         self.map_index
             .map_or_else(String::new, |i| format!("&map_index={i}"))
     }
+}
+
+/// The Cleanup tab: its attempts' cleanups, and the resource it belongs to.
+async fn cleanup_tab<T: Transport>(
+    deployment: &Deployment<T>,
+    detail: &schedr_api::views::RunDetail,
+    at: &Instance<'_>,
+) -> Result<TabBody, Failure> {
+    let attempts = deployment
+        .client
+        .instance_attempts(&detail.run.run_id, at.task_id, at.map_index)
+        .await
+        .map_err(|error| Failure::unavailable(&deployment.name, &error))?;
+    Ok(TabBody::Cleanup {
+        rows: attempts.attempts.iter().filter_map(cleanup_row).collect(),
+        resource: resource_of(&detail.resources, &detail.tasks, at.task_id, at.run_href),
+    })
+}
+
+/// The Memory tab: the task's last attempts' peaks (decision 467).
+async fn memory_tab<T: Transport>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    dag_id: &str,
+    task_id: &str,
+) -> Result<TabBody, Failure> {
+    let list = deployment
+        .client
+        .task_memory(dag_id, task_id)
+        .await
+        .map_err(|error| Failure::unavailable(&deployment.name, &error))?;
+    let runs = format!("{}/d/{}/runs", page.base, path_segment(&deployment.name));
+    Ok(TabBody::Memory(crate::task_memory::memory_chart(
+        &list,
+        &page.zone.clone().unwrap_or(jiff::tz::TimeZone::UTC),
+        |run| format!("{runs}/{}", path_segment(run)),
+    )))
 }
 
 async fn output_tab<T: Transport>(

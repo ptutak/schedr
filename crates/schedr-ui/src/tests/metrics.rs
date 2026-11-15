@@ -175,3 +175,61 @@ async fn a_worker_replaced_within_a_bucket_counts_once_in_memory_by_kind() {
         "{legend:?}"
     );
 }
+
+#[tokio::test]
+async fn a_dags_page_lists_its_tasks_p95_peaks_closest_to_their_limits_first() {
+    // M5.1k (decision 467).
+    let mut etl = etl();
+    let task = |id: &str, p95: u64, limit: Option<u64>, of: Option<f64>, oom: u32| {
+        json!({
+            "task_id": id, "attempts": 20, "p95_bytes": p95, "max_bytes": p95 + (1 << 20),
+            "oom_killed": oom, "limit_bytes": limit, "of_limit": of
+        })
+    };
+    etl.answers.insert(
+        "/api/v1/dags/sync/memory".to_owned(),
+        (
+            200,
+            json!({
+                "since": "2026-10-15T10:00:00Z",
+                "tasks": [
+                    task("load", 95 << 20, Some(100 << 20), Some(0.95), 2),
+                    task("extract", 10 << 20, Some(100 << 20), Some(0.1), 0),
+                    task("report", 300 << 20, None, None, 0),
+                ]
+            }),
+        ),
+    );
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(
+        texts(&html, "table.task-memory tbody tr:first-child td"),
+        [
+            "load",
+            "20",
+            "95.0 MiB",
+            "96.0 MiB",
+            "100.0 MiB",
+            "95 %",
+            "2"
+        ]
+    );
+    assert_eq!(texts(&html, "table.task-memory td.near"), ["95 %"]);
+    assert_eq!(
+        texts(&html, "table.task-memory tbody tr:last-child td"),
+        [
+            "report",
+            "20",
+            "300.0 MiB",
+            "301.0 MiB",
+            "worker's share",
+            "",
+            "0"
+        ]
+    );
+    // A webserver without it (404): no table, no warning.
+    let app = ui(vec![deployment("etl", super::etl())]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(texts(&html, "table.task-memory"), Vec::<String>::new());
+    assert!(!html.contains("<h2>Memory</h2>"));
+}

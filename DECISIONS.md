@@ -54,7 +54,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D470 | 2026-11-13 | user | planned (M5.2b) | airflow | The Airflow migration tool rewrites the source, checked against the original's structure |
 | D469 | 2026-11-13 | user | built M5.1c1 | assignment | A round releases the core lock between its batches of assignments |
 | D468 | 2026-11-13 | user | superseded by D480 | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
-| D467 | 2026-11-13 | user | planned (M5.1k) | ui-cli | A task's peak memory over its attempts is charted |
+| D467 | 2026-11-13 | user | built M5.1k | ui-cli | A task's peak memory over its attempts is charted |
 | D466 | 2026-11-13 | user | built M5.1j | ui-cli | UI charts are SVG drawn by the server |
 | D465 | 2026-11-13 | user | built M5.1j | ui-cli | A Metrics page with memory and CPU over time |
 | D464 | 2026-11-13 | user | built M5.1i | observability | The master keeps a sample of each process a minute |

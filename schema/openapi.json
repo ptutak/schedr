@@ -17,6 +17,90 @@
         ],
         "type": "object"
       },
+      "AttemptMemoryList": {
+        "description": "A task's last ended attempts' peak memory (decision 467): the task panel's chart.",
+        "properties": {
+          "attempts": {
+            "description": "Its last ended attempts, all its runs and instances, the oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/AttemptMemoryView"
+            },
+            "type": "array"
+          },
+          "limit_bytes": {
+            "description": "Its memory budget in the DAG's current version (`memory=`), in bytes; none: the\nworker's share, which differs by worker.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_id": {
+            "description": "The task.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "AttemptMemoryView": {
+        "description": "An ended attempt's peak memory.",
+        "properties": {
+          "attempt_id": {
+            "description": "The attempt.",
+            "type": "string"
+          },
+          "ended_at": {
+            "description": "When it ended.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "map_index": {
+            "description": "Its instance of a mapped task; none for a task that isn't mapped.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "peak_memory_bytes": {
+            "description": "Its peak memory (the watchdog's PSS), in bytes; none when it wasn't read.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "Its run.",
+            "type": "string"
+          },
+          "status": {
+            "description": "How it ended (`success`, `oom_killed`, ...).",
+            "type": "string"
+          },
+          "try_number": {
+            "description": "Its try.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "run_id",
+          "try_number",
+          "status",
+          "ended_at"
+        ],
+        "type": "object"
+      },
       "AttemptView": {
         "description": "An attempt of a task.",
         "properties": {
@@ -595,6 +679,28 @@
         },
         "required": [
           "dags"
+        ],
+        "type": "object"
+      },
+      "DagMemoryList": {
+        "description": "Each task's p95 peak memory over its recent attempts against its limit (decision 467):\nthe DAG page's table.",
+        "properties": {
+          "since": {
+            "description": "Attempts ended since this (30 days before the request), of the DAG's newest 1000 runs\nplanned since, are counted.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tasks": {
+            "description": "The tasks with such attempts: those with a limit closest to it first, then the\nothers by their p95, highest first.",
+            "items": {
+              "$ref": "#/components/schemas/TaskPeakView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "since",
+          "tasks"
         ],
         "type": "object"
       },
@@ -1950,6 +2056,64 @@
         ],
         "type": "object"
       },
+      "TaskPeakView": {
+        "description": "A task's peaks.",
+        "properties": {
+          "attempts": {
+            "description": "The attempts counted: those with a peak, the newest 1000 at most.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit_bytes": {
+            "description": "Its memory budget in the DAG's current version, in bytes; none: the worker's share.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_bytes": {
+            "description": "The highest, in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "of_limit": {
+            "description": "`p95_bytes` over `limit_bytes`; none without a limit.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "oom_killed": {
+            "description": "Of them, how many were killed for their memory.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95_bytes": {
+            "description": "The 95th percentile of their peaks (nearest rank), in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "task_id": {
+            "description": "The task.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempts",
+          "p95_bytes",
+          "max_bytes",
+          "oom_killed"
+        ],
+        "type": "object"
+      },
       "TaskView": {
         "description": "A task of a run.",
         "properties": {
@@ -3174,6 +3338,46 @@
         ]
       }
     },
+    "/api/v1/dags/{dag_id}/memory": {
+      "get": {
+        "operationId": "dag_memory",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DagMemoryList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each task's p95 peak memory over its attempts of the last 30 days, against its limit:\nclosest to it first (decision 467).",
+        "tags": [
+          "dags"
+        ]
+      }
+    },
     "/api/v1/dags/{dag_id}/pause": {
       "post": {
         "operationId": "pause_dag",
@@ -3417,6 +3621,55 @@
         "summary": "Switch a wait step back on, forgetting its strikes. Applied by the master; poll the command\nfor the decision.",
         "tags": [
           "sensors"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/tasks/{task_id}/memory": {
+      "get": {
+        "operationId": "task_memory",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptMemoryList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A task's last ended attempts' peak memory, all its runs and instances (decision 467).",
+        "tags": [
+          "dags"
         ]
       }
     },

@@ -1647,7 +1647,7 @@ impl RequestKey {
     }
 }
 
-async fn known_dag(
+pub(crate) async fn known_dag(
     state: &ApiState,
     dag_id: &DagId,
 ) -> Result<schedr_db::dags::StoredDag, ApiError> {
@@ -1671,7 +1671,7 @@ async fn known_run(
         .ok_or_else(|| ApiError::NotFound(format!("no run `{run_id}`")))
 }
 
-fn parse_dag_id(text: &str) -> Result<DagId, ApiError> {
+pub(crate) fn parse_dag_id(text: &str) -> Result<DagId, ApiError> {
     DagId::new(text).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
 

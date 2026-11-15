@@ -140,6 +140,29 @@
 <h2>Backfills</h2>
 <div class="banner warning">Unavailable: {{ backfills_unavailable }}</div>
 {% endif %}
+{% if !memory.is_empty() %}
+<h2>Memory</h2>
+<p class="dim">Each task's peak memory over its attempts of the last 30 days (of its newest 1000 runs): the 95th percentile, the closest to its limit first.</p>
+<table class="list task-memory">
+  <thead><tr><th>Task</th><th>Attempts</th><th>p95 peak</th><th>Highest</th><th>Limit</th><th>Of the limit</th><th>Killed for memory</th></tr></thead>
+  <tbody>
+  {% for task in memory %}
+    <tr>
+      <td class="mono">{{ task.task_id }}</td>
+      <td>{{ task.attempts }}</td>
+      <td>{{ task.p95 }}</td>
+      <td>{{ task.max }}</td>
+      <td{% if task.limit == "worker's share" %} class="dim"{% endif %}>{{ task.limit }}</td>
+      <td{% if task.near %} class="near"{% endif %}>{{ task.share }}</td>
+      <td{% if task.oom_killed > 0 %} class="error"{% endif %}>{{ task.oom_killed }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else if !memory_unavailable.is_empty() %}
+<h2>Memory</h2>
+<div class="banner warning">Unavailable: {{ memory_unavailable }}</div>
+{% endif %}
 <h2>Runs <a class="more" href="{{ runs_href }}">all runs of this DAG</a></h2>
 {% if runs.is_empty() %}
 <p class="empty">No runs yet.</p>

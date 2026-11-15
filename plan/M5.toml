@@ -201,7 +201,8 @@ scope = '''
 done_when = '''
 both shown from the attempts table with an `oom_killed` attempt marked; UI tests
 '''
-status = "planned"
+status = "done"
+done = 2026-11-15
 
 [[steps]]
 id = "M5.1l"

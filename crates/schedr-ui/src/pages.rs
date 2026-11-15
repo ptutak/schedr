@@ -315,6 +315,10 @@ struct DagPage {
     backfills: Vec<BackfillRow>,
     /// Why they can't be shown now (empty: they can).
     backfills_unavailable: String,
+    /// Its tasks' p95 peak memory against their limits, closest first (decision 467).
+    memory: Vec<crate::task_memory::MemoryRow>,
+    /// Why they can't be shown now (empty: they can).
+    memory_unavailable: String,
 }
 
 /// The trigger dialog's run parameters (with an event's fields, for a DAG a trigger starts)
@@ -345,6 +349,38 @@ async fn backfill_rows<T: Transport>(
             String::new(),
         ),
         // A webserver without backfills (404) has none to show.
+        Err(ClientError::Server { status: 404, .. }) => (Vec::new(), String::new()),
+        Err(error) => (Vec::new(), error.to_string()),
+    }
+}
+
+/// The connections the DAG's tasks declare, as its root's group, or why they can't be shown.
+async fn connections_of<T: Transport>(
+    page: &Page,
+    deployment: &Deployment<T>,
+    dag: &DagView,
+) -> (Option<crate::connections::Group>, String) {
+    // A webserver without the list (404) has none to show.
+    match deployment.client.connections().await {
+        Ok(list) => (
+            crate::connections::groups(page, deployment, &list, Some(&dag.dag_id), false)
+                .into_iter()
+                .next(),
+            String::new(),
+        ),
+        Err(ClientError::Server { status: 404, .. }) => (None, String::new()),
+        Err(error) => (None, error.to_string()),
+    }
+}
+
+/// The DAG page's Memory table (decision 467), or why it can't be shown.
+async fn memory_rows<T: Transport>(
+    deployment: &Deployment<T>,
+    dag_id: &str,
+) -> (Vec<crate::task_memory::MemoryRow>, String) {
+    match deployment.client.dag_memory(dag_id).await {
+        Ok(list) => (crate::task_memory::memory_rows(&list), String::new()),
+        // A webserver before M5.1k (404) has none to show.
         Err(ClientError::Server { status: 404, .. }) => (Vec::new(), String::new()),
         Err(error) => (Vec::new(), error.to_string()),
     }
@@ -569,23 +605,13 @@ pub async fn dag<T: Transport>(
         Err(error) => return unavailable_page(&page, &deployment.name, &error),
     };
     let conflicts = dag.conflict.iter().flatten().map(location).collect();
-    // Asked only for a DAG whose tasks declare connections (the warnings name them, or none);
-    // a webserver without the list (404) has none to show.
-    let (connections, connections_unavailable) = match deployment.client.connections().await {
-        Ok(list) => (
-            crate::connections::groups(&page, deployment, &list, Some(&dag.dag_id), false)
-                .into_iter()
-                .next(),
-            String::new(),
-        ),
-        Err(ClientError::Server { status: 404, .. }) => (None, String::new()),
-        Err(error) => (None, error.to_string()),
-    };
+    let (connections, connections_unavailable) = connections_of(&page, deployment, &dag).await;
     let (switched_off, switched_off_unavailable) =
         switched_off_in(&page, deployment, &dag.dag_id).await;
     let trigger = dag_trigger_panel(&page, deployment, &dag).await;
     let row = dag_row(&page, deployment, &dag);
     let (backfills, backfills_unavailable) = backfill_rows(&page, deployment, &row).await;
+    let (memory, memory_unavailable) = memory_rows(deployment, &dag_id).await;
     let (params_html, backfill_params_html) = match dialog_params(&dag) {
         Ok(html) => html,
         Err(error) => {
@@ -602,6 +628,8 @@ pub async fn dag<T: Transport>(
             backfill_params_html,
             backfills,
             backfills_unavailable,
+            memory,
+            memory_unavailable,
             params_html,
             limits: dag.limits.iter().map(LimitRow::of).collect(),
             warnings: dag.warnings.clone(),

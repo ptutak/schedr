@@ -1,4 +1,4 @@
-//! Charts drawn by the server as SVG (decision 466): lines over time, an "others" band, dashed
+//! Charts drawn by the server as SVG (decision 466): bars (a task's attempts, decision 467), lines over time, an "others" band, dashed
 //! limits, axes, and a hover strip per point whose `<title>` gives every value there. No
 //! JavaScript; the colours are the stylesheet's series tokens (`--series-1` to `--series-8`),
 //! light and dark.
@@ -286,6 +286,181 @@ pub fn draw(spec: &Spec) -> String {
     svg
 }
 
+/// One bar: its value (none: not read, drawn as a gap with its label), its class (how it
+/// ended: `ok`, `failed`, `other`), whether it is marked (killed for its memory), where it
+/// links, and its hover text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bar {
+    /// Its value; none when there is none (a gap).
+    pub value: Option<f64>,
+    /// Its colour class.
+    pub class: &'static str,
+    /// Marked with a cross above it.
+    pub marked: bool,
+    /// Where it links.
+    pub href: String,
+    /// Its hover text.
+    pub title: String,
+}
+
+/// A bar chart's content: bars side by side, oldest first, a dashed limit, a label under
+/// the first and the last.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bars {
+    /// What it shows, for screen readers.
+    pub title: String,
+    /// What the values are.
+    pub unit: Unit,
+    /// Its drawing width.
+    pub width: f64,
+    /// The bars.
+    pub bars: Vec<Bar>,
+    /// A dashed limit: its label and value.
+    pub limit: Option<(String, f64)>,
+    /// The labels under the first bar and the last.
+    pub ends: (String, String),
+}
+
+/// A bar chart drawn: its SVG.
+#[must_use]
+pub fn draw_bars(spec: &Bars) -> String {
+    let plot_w = spec.width - LEFT - RIGHT;
+    let plot_h = HEIGHT - TOP - BOTTOM;
+    let data_max = spec
+        .bars
+        .iter()
+        .filter_map(|b| b.value)
+        .fold(0.0_f64, f64::max);
+    let limit = spec
+        .limit
+        .as_ref()
+        .filter(|(_, value)| data_max == 0.0 || *value <= data_max * 4.0);
+    let max = limit.map_or(data_max, |l| l.1.max(data_max));
+    let (top, y_ticks) = y_axis(max, spec.unit);
+    let y = |v: f64| TOP + plot_h * (1.0 - v / top);
+    #[expect(clippy::cast_precision_loss, reason = "a few dozen bars")]
+    let slot = plot_w / spec.bars.len().max(1) as f64;
+    // Thin bars, a gap between: at most 14 wide.
+    let bar_w = (slot * 0.6).clamp(2.0, 14.0);
+    #[expect(clippy::cast_precision_loss, reason = "a few dozen bars")]
+    let center = |i: usize| LEFT + slot * (i as f64 + 0.5);
+
+    let mut svg = String::new();
+    let _ = write!(
+        svg,
+        r#"<svg class="chart bars" viewBox="0 0 {} {HEIGHT}" role="img" aria-label="{}">"#,
+        spec.width,
+        escape(&spec.title)
+    );
+    y_grid(&mut svg, spec.width, &y_ticks, spec.unit, &y);
+    if let Some(last) = spec.bars.len().checked_sub(1) {
+        let first = center(0) - bar_w / 2.0;
+        end_labels(
+            &mut svg,
+            &spec.ends,
+            first,
+            (last > 0).then(|| center(last) + bar_w / 2.0),
+        );
+    }
+    let base = y(0.0);
+    for (i, bar) in spec.bars.iter().enumerate() {
+        let left = center(i) - bar_w / 2.0;
+        let _ = write!(
+            svg,
+            r#"<a href="{}"><title>{}</title>"#,
+            escape(&bar.href),
+            escape(&bar.title)
+        );
+        // The whole slot's height takes the hover and the click, wider than the bar.
+        let _ = write!(
+            svg,
+            r#"<rect class="hover" x="{:.1}" y="{TOP}" width="{slot:.1}" height="{plot_h:.1}"></rect>"#,
+            center(i) - slot / 2.0
+        );
+        if let Some(value) = bar.value {
+            let top_y = y(value);
+            let _ = write!(
+                svg,
+                r#"<path class="bar {}" d="{}"></path>"#,
+                bar.class,
+                bar_outline(left, bar_w, base, top_y)
+            );
+            if bar.marked {
+                let _ = write!(
+                    svg,
+                    r#"<text class="mark" x="{:.1}" y="{:.1}" text-anchor="middle">✕</text>"#,
+                    center(i),
+                    (top_y - 4.0).max(TOP + 8.0)
+                );
+            }
+        }
+        svg.push_str("</a>");
+    }
+    if let Some((label, value)) = limit {
+        let _ = write!(
+            svg,
+            r#"<line class="limit" x1="{LEFT}" x2="{}" y1="{y:.1}" y2="{y:.1}"><title>{}: {}</title></line>"#,
+            spec.width - RIGHT,
+            escape(label),
+            escape(&spec.unit.show(*value)),
+            y = y(*value),
+        );
+    }
+    let _ = write!(
+        svg,
+        r#"<line class="baseline" x1="{LEFT}" x2="{}" y1="{base:.1}" y2="{base:.1}"></line>"#,
+        spec.width - RIGHT,
+    );
+    svg.push_str("</svg>");
+    svg
+}
+
+/// The labels under a bar chart's first bar (from `first`) and its last (to `last`; none for
+/// one bar).
+fn end_labels(svg: &mut String, (start, end): &(String, String), first: f64, last: Option<f64>) {
+    let mut label = |x: f64, anchor: &str, text: &str| {
+        let _ = write!(
+            svg,
+            r#"<text class="axis" x="{x:.1}" y="{}" text-anchor="{anchor}">{}</text>"#,
+            HEIGHT - 6.0,
+            escape(text)
+        );
+    };
+    label(first, "start", start);
+    if let Some(last) = last {
+        label(last, "end", end);
+    }
+}
+
+/// The y grid lines and their labels, across a chart `width` wide.
+fn y_grid(svg: &mut String, width: f64, y_ticks: &[f64], unit: Unit, y: &impl Fn(f64) -> f64) {
+    for tick in y_ticks {
+        let _ = write!(
+            svg,
+            r#"<line class="grid" x1="{LEFT}" x2="{}" y1="{y:.1}" y2="{y:.1}"></line><text class="axis" x="{}" y="{:.1}" text-anchor="end">{}</text>"#,
+            width - RIGHT,
+            LEFT - 6.0,
+            y(*tick) + 4.0,
+            escape(&axis_value(*tick, unit)),
+            y = y(*tick),
+        );
+    }
+}
+
+/// A bar's outline from `left`, `width` wide, from the baseline `base` up to `top`: rounded at
+/// the top only, flat on the baseline.
+fn bar_outline(left: f64, width: f64, base: f64, top: f64) -> String {
+    let r = (width / 2.0).min(4.0).min((base - top).max(0.0));
+    let right = left + width;
+    format!(
+        "M{left:.1},{base:.1}V{:.1}Q{left:.1},{top:.1} {:.1},{top:.1}H{:.1}Q{right:.1},{top:.1} {right:.1},{:.1}V{base:.1}Z",
+        top + r,
+        left + r,
+        right - r,
+        top + r,
+    )
+}
+
 /// The grid, the y labels, the time labels and the baseline.
 fn axes(
     svg: &mut String,
@@ -294,17 +469,7 @@ fn axes(
     x: &impl Fn(i64) -> f64,
     y: &impl Fn(f64) -> f64,
 ) {
-    for tick in y_ticks {
-        let _ = write!(
-            svg,
-            r#"<line class="grid" x1="{LEFT}" x2="{}" y1="{y:.1}" y2="{y:.1}"></line><text class="axis" x="{}" y="{:.1}" text-anchor="end">{}</text>"#,
-            spec.width - RIGHT,
-            LEFT - 6.0,
-            y(*tick) + 4.0,
-            escape(&axis_value(*tick, spec.unit)),
-            y = y(*tick),
-        );
-    }
+    y_grid(svg, spec.width, y_ticks, spec.unit, y);
     let (every, format) = x_ticks(spec.from, spec.to);
     let mut tick = (spec.from + every - 1).div_euclid(every) * every;
     while tick <= spec.to {
@@ -598,5 +763,60 @@ mod tests {
     fn a_sparkline_is_a_small_line() {
         let svg = sparkline(&[(0, 1.0), (60, 2.0)], 0, 120, 60, "Memory");
         assert!(svg.contains(r#"class="line s1""#) && svg.contains("<title>Memory</title>"));
+    }
+
+    fn bar(value: Option<f64>, marked: bool) -> Bar {
+        Bar {
+            value,
+            class: "ok",
+            marked,
+            href: "/r?a=1&b=2".to_owned(),
+            title: "try <1>".to_owned(),
+        }
+    }
+
+    #[test]
+    fn bars_stand_on_the_baseline_rounded_at_the_top_and_link_to_their_attempts() {
+        let spec = Bars {
+            title: "Peaks".to_owned(),
+            unit: Unit::Bytes,
+            width: NARROW,
+            bars: vec![
+                bar(Some(512.0), false),
+                bar(None, false),
+                bar(Some(1024.0), true),
+            ],
+            limit: Some(("its memory limit".to_owned(), 2048.0)),
+            ends: ("Nov 13 10:00".to_owned(), "Nov 14 10:00".to_owned()),
+        };
+        let svg = draw_bars(&spec);
+        // A bar for each value; the one without stays an empty link with its title.
+        assert_eq!(svg.matches(r#"<path class="bar ok""#).count(), 2);
+        assert_eq!(svg.matches("<a href=").count(), 3);
+        assert!(svg.contains(r#"<a href="/r?a=1&amp;b=2"><title>try &lt;1&gt;</title>"#));
+        assert_eq!(svg.matches(r#"<text class="mark""#).count(), 1);
+        assert!(svg.contains("<title>its memory limit: 2.0 KiB</title>"));
+        assert!(svg.contains(">Nov 13 10:00</text>") && svg.contains(">Nov 14 10:00</text>"));
+        // A limit far above the bars would flatten them: left out.
+        let far = Bars {
+            limit: Some(("its memory limit".to_owned(), 1e12)),
+            ..spec.clone()
+        };
+        assert!(!draw_bars(&far).contains("class=\"limit\""));
+        // One bar: one label.
+        let one = Bars {
+            bars: vec![bar(Some(1.0), false)],
+            ..spec
+        };
+        let svg = draw_bars(&one);
+        assert!(svg.contains(">Nov 13 10:00</text>") && !svg.contains(">Nov 14 10:00</text>"));
+    }
+
+    #[test]
+    fn a_bars_outline_is_flat_on_the_baseline() {
+        assert_eq!(
+            bar_outline(10.0, 8.0, 100.0, 50.0),
+            "M10.0,100.0V54.0Q10.0,50.0 14.0,50.0H14.0Q18.0,50.0 18.0,54.0V100.0Z"
+        );
     }
 }

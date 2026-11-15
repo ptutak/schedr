@@ -1731,3 +1731,65 @@ pub struct WorkerList {
     /// Every worker the master has seen, in ID order.
     pub workers: Vec<WorkerView>,
 }
+
+/// A task's last ended attempts' peak memory (decision 467): the task panel's chart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AttemptMemoryList {
+    /// The task.
+    pub task_id: String,
+    /// Its memory budget in the DAG's current version (`memory=`), in bytes; none: the
+    /// worker's share, which differs by worker.
+    pub limit_bytes: Option<u64>,
+    /// Its last ended attempts, all its runs and instances, the oldest first.
+    pub attempts: Vec<AttemptMemoryView>,
+}
+
+/// An ended attempt's peak memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AttemptMemoryView {
+    /// The attempt.
+    pub attempt_id: String,
+    /// Its run.
+    pub run_id: String,
+    /// Its instance of a mapped task; none for a task that isn't mapped.
+    pub map_index: Option<u32>,
+    /// Its try.
+    pub try_number: u32,
+    /// How it ended (`success`, `oom_killed`, ...).
+    pub status: String,
+    /// Its peak memory (the watchdog's PSS), in bytes; none when it wasn't read.
+    pub peak_memory_bytes: Option<u64>,
+    /// When it ended.
+    pub ended_at: Timestamp,
+}
+
+/// Each task's p95 peak memory over its recent attempts against its limit (decision 467):
+/// the DAG page's table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DagMemoryList {
+    /// Attempts ended since this (30 days before the request), of the DAG's newest 1000 runs
+    /// planned since, are counted.
+    pub since: Timestamp,
+    /// The tasks with such attempts: those with a limit closest to it first, then the
+    /// others by their p95, highest first.
+    pub tasks: Vec<TaskPeakView>,
+}
+
+/// A task's peaks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct TaskPeakView {
+    /// The task.
+    pub task_id: String,
+    /// The attempts counted: those with a peak, the newest 1000 at most.
+    pub attempts: u32,
+    /// The 95th percentile of their peaks (nearest rank), in bytes.
+    pub p95_bytes: u64,
+    /// The highest, in bytes.
+    pub max_bytes: u64,
+    /// Of them, how many were killed for their memory.
+    pub oom_killed: u32,
+    /// Its memory budget in the DAG's current version, in bytes; none: the worker's share.
+    pub limit_bytes: Option<u64>,
+    /// `p95_bytes` over `limit_bytes`; none without a limit.
+    pub of_limit: Option<f64>,
+}

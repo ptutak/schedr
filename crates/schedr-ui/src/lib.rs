@@ -30,6 +30,7 @@ pub mod page;
 mod pages;
 mod params_form;
 mod runs;
+mod task_memory;
 mod workers;
 
 #[cfg(test)]

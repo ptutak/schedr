@@ -3020,3 +3020,53 @@ async fn the_lease_holder_and_its_expiry_are_read_on_postgres() {
     assert_eq!(holder, "m1:1");
     assert!(until.parse::<Timestamp>().is_ok(), "{until}");
 }
+
+#[tokio::test]
+async fn a_tasks_attempt_peaks_and_a_dags_are_read_on_postgres() {
+    // M5.1k (decision 467): the window function and the casts on Postgres.
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let end = AttemptEnd {
+        peak_memory_bytes: Some(5_000_000),
+        ..AttemptEnd::by_master(AttemptStatus::OomKilled)
+    };
+    assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let peaks = db.task_attempt_peaks("sync", "extract", 30).await.unwrap();
+    assert_eq!(peaks.len(), 1);
+    assert_eq!(
+        (
+            peaks[0].attempt_id.as_str(),
+            peaks[0].run_id.as_str(),
+            peaks[0].map_index,
+            peaks[0].try_number,
+            peaks[0].status.as_str(),
+            peaks[0].peak_memory_bytes,
+        ),
+        (
+            attempt_id.as_str(),
+            run_id.as_str(),
+            None,
+            1,
+            "oom_killed",
+            Some(5_000_000)
+        )
+    );
+    let tasks = db
+        .dag_task_peaks("sync", ts("2026-10-01T00:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(
+        (
+            tasks[0].task_id.as_str(),
+            tasks[0].peaks.as_slice(),
+            tasks[0].oom_killed
+        ),
+        ("extract", [5_000_000_u64].as_slice(), 1)
+    );
+}

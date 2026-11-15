@@ -2336,3 +2336,55 @@ fn a_poke_trigger_is_stuck_once_no_call_has_ended_for_three_everies_and_a_heartb
     }
     assert!(!poke_stuck(&listening, &record, heartbeat, at(3_600)));
 }
+
+#[tokio::test]
+async fn a_tasks_attempt_peaks_and_the_dags_p95s_are_read_with_the_limit() {
+    // M5.1k (decision 467).
+    let extract = json!({
+        "id": "extract", "kind": "python",
+        "settings": {
+            "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576, "memory_bytes": 100_000_000
+        },
+        "output_type": {"type": "none"}
+    });
+    let (app, db, run_id) = api_with(extract, &[("extract", -1, TaskInstanceState::Queued)]).await;
+    let (status, none) = get(&app, "/api/v1/dags/sync/tasks/extract/memory").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(none["attempts"], json!([]));
+    assert_eq!(none["limit_bytes"], 100_000_000);
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let end = schedr_db::attempts::AttemptEnd {
+        peak_memory_bytes: Some(90_000_000),
+        ..schedr_db::attempts::AttemptEnd::by_master(schedr_model::AttemptStatus::OomKilled)
+    };
+    assert!(db.end_attempt(&attempt_id, &end, ts(NOW)).await.unwrap());
+    let (_, task) = get(&app, "/api/v1/dags/sync/tasks/extract/memory").await;
+    assert_eq!(
+        task["attempts"],
+        json!([{
+            "attempt_id": attempt_id, "run_id": run_id, "map_index": null, "try_number": 1,
+            "status": "oom_killed", "peak_memory_bytes": 90_000_000, "ended_at": NOW
+        }])
+    );
+    let (status, dag) = get(&app, "/api/v1/dags/sync/memory").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(dag["since"], "2026-09-21T08:00:00Z");
+    assert_eq!(
+        dag["tasks"],
+        json!([{
+            "task_id": "extract", "attempts": 1, "p95_bytes": 90_000_000,
+            "max_bytes": 90_000_000, "oom_killed": 1, "limit_bytes": 100_000_000,
+            "of_limit": 0.9
+        }])
+    );
+    let (status, _) = get(&app, "/api/v1/dags/sync/tasks/ghost/memory").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = get(&app, "/api/v1/dags/ghost/memory").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

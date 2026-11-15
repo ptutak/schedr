@@ -1245,3 +1245,16 @@ tab. Three changes:
 Not chosen: a coarser rollup tier for 30 days (first reads stay 1-4 s on SQLite, once per range
 per process until evicted); a cache by time only (each refresh past it would read everything
 again).
+
+### <a id="N10"></a>2026-11-15: M5.1k built: a task's attempts' peaks, the DAG's p95s (decision 467) (note 10)
+
+Built as decision 467 says, with two choices of Claude's:
+
+- **Bounded reads.** The DAG page reloads on each live change, so its table must be cheap:
+  over 30 days of a DAG running 5 tasks a minute (216,000 attempts, SQLite), ranking every
+  attempt took 850 ms; the DAG's newest 1000 runs of the 30 days (by `runs_by_dag`) take 31 ms.
+  A task's last 30 attempts walk the DAG's runs newest first: 1 ms. Each task's p95 is over its
+  newest 1000 attempts at most (a mapped task's instances).
+- **The limit is the current version's** `memory=`; an older attempt may have run under another
+  (the bars show what it used, the line what holds now). A task without one shows "the worker's
+  share", which differs by worker. The table and the chart need no new column or index.

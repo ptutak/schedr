@@ -424,7 +424,7 @@ async fn a_tasks_panel_shows_its_attempts_with_their_errors() {
         ["live:change[!schedrDialogOpen()]"]
     );
     let tab_syncs = attrs(&html, ".tabs a.tab", "hx-sync");
-    assert_eq!(tab_syncs, ["#task-panel:replace"; 4]);
+    assert_eq!(tab_syncs, ["#task-panel:replace"; 5]);
     assert_eq!(attrs(&html, ".tabs .tab.open", "data-tab"), ["attempts"]);
     assert_eq!(
         texts(&html, "table.attempts tbody td:first-child"),
@@ -1648,4 +1648,86 @@ async fn a_chained_run_and_the_attempt_that_started_it_link_each_other() {
         attrs(&html, "table.attempts td a", "href"),
         ["/d/etl/runs/c1"]
     );
+}
+
+#[tokio::test]
+async fn a_tasks_memory_tab_charts_its_last_attempts_peaks_against_its_limit() {
+    // M5.1k (decision 467): a bar an attempt, coloured by how it ended, the OOM kill marked,
+    // each linking to its run; the limit dashed.
+    let mut answers = failed_run();
+    let attempt = |id: &str, run: &str, index: Option<u32>, status: &str, peak: Option<u64>| {
+        json!({
+            "attempt_id": id, "run_id": run, "map_index": index, "try_number": 1,
+            "status": status, "peak_memory_bytes": peak, "ended_at": "2026-11-14T10:00:00Z"
+        })
+    };
+    answers.push((
+        "/api/v1/dags/sync/tasks/load/memory",
+        200,
+        json!({
+            "task_id": "load", "limit_bytes": 100 << 20,
+            "attempts": [
+                attempt("a1", "r1", None, "success", Some(40 << 20)),
+                attempt("a2", "r2", None, "oom_killed", Some(99 << 20)),
+                attempt("a3", "r/3", Some(2), "lost", None),
+            ]
+        }),
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (status, html) = get(
+        &app,
+        "/d/etl/runs/r2/tasks/load?tab=memory",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(attrs(&html, ".tabs .tab.open", "data-tab"), ["memory"]);
+    assert_eq!(
+        attrs(&html, "svg.chart.bars path.bar", "class"),
+        ["bar ok", "bar failed"],
+        "the lost attempt has no peak: no bar"
+    );
+    assert_eq!(texts(&html, "svg.chart.bars text.mark"), ["✕"]);
+    assert_eq!(
+        attrs(&html, "svg.chart.bars a", "href"),
+        [
+            "/d/etl/runs/r1?task=load&tab=attempts",
+            "/d/etl/runs/r2?task=load&tab=attempts",
+            "/d/etl/runs/r%2F3?task=load&tab=attempts&map_index=2",
+        ]
+    );
+    let titles = texts(&html, "svg.chart.bars a > title");
+    assert_eq!(titles.len(), 3);
+    assert!(
+        titles[1].ends_with("try 1, oom killed, 99.0 MiB"),
+        "{titles:?}"
+    );
+    assert!(
+        titles[2].contains("try 1 of instance 2, lost, no peak read"),
+        "{titles:?}"
+    );
+    assert_eq!(
+        texts(&html, "svg.chart.bars line.limit title"),
+        ["its memory limit: 100.0 MiB"]
+    );
+    let key = texts(&html, ".chart-key");
+    assert!(key[0].contains("killed for its memory"), "{key:?}");
+    assert!(key[0].contains("its limit, 100.0 MiB"), "{key:?}");
+
+    // None ended yet, and no limit of its own.
+    let mut answers = failed_run();
+    answers.push((
+        "/api/v1/dags/sync/tasks/load/memory",
+        200,
+        json!({"task_id": "load", "limit_bytes": null, "attempts": []}),
+    ));
+    let app = ui(vec![deployment("etl", scripted(&answers))]);
+    let (_, html) = get(
+        &app,
+        "/d/etl/runs/r2/tasks/load?tab=memory",
+        &[("hx-request", "true")],
+    )
+    .await;
+    assert_eq!(texts(&html, "p.empty"), ["No attempt of it has ended yet."]);
+    assert_eq!(attrs(&html, "svg.chart", "class").len(), 0);
 }

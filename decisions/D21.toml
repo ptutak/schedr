@@ -13,4 +13,4 @@ history = "archive/PROJECT.md#D21"
 step = "M3.6"
 also = ["ui-cli", "deployment"]
 code = ["crates/schedr-ui/src/lib.rs::router"]
-checked = 2026-11-14
+checked = 2026-11-15

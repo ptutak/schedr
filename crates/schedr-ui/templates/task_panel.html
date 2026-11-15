@@ -78,6 +78,14 @@
     </tbody>
   </table>
   {% endif %}
+{% when TabBody::Memory(chart) %}
+  {% if chart.svg.is_empty() %}
+  <p class="empty">No attempt of it has ended yet.</p>
+  {% else %}
+  <p class="dim">The peak memory of {% if chart.attempts == 1 %}its one ended attempt{% else %}its last {{ chart.attempts }} ended attempts across its runs (and instances), the oldest first{% endif %}. Each bar opens its run.</p>
+  <div class="memory-chart">{{ chart.svg|safe }}</div>
+  <p class="chart-key"><span class="item"><span class="key ok"></span> succeeded</span> <span class="item"><span class="key failed"></span> failed</span>{% if chart.killed %} <span class="item"><span class="mark">✕</span> killed for its memory</span>{% endif %} <span class="item"><span class="key other"></span> other</span> <span class="item">{% if !chart.limit.is_empty() %}<span class="key limit"></span> its limit, {{ chart.limit }}{% else %}no limit of its own (the worker's share){% endif %}</span></p>
+  {% endif %}
 {% when TabBody::Cleanup with { rows, resource } %}
   {% if let Some((what, other)) = resource %}
   <p class="resource-note">{{ what }} <a class="mono" href="{{ other.href }}" hx-get="{{ other.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ other.href }}">{{ other.task_id }}</a> <span class="state {{ other.state }}">{{ other.state }}</span>.</p>

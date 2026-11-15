@@ -460,3 +460,16 @@ ul.handles { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
 .metrics-main { min-width: 0; }
 .metrics-table { grid-column: 1 / -1; }
 .worker-memory { white-space: nowrap; }
+/* A task's attempts' peaks (decision 467): coloured by how each ended, its limit dashed. */
+.chart.bars .bar.ok, .chart-key .key.ok { fill: var(--ok); background: var(--ok); }
+.chart.bars .bar.failed, .chart-key .key.failed { fill: var(--failed); background: var(--failed); }
+.chart.bars .bar.other, .chart-key .key.other { fill: var(--dim); background: var(--dim); }
+.chart.bars .limit { stroke: var(--text); }
+.chart.bars .mark, .chart-key .mark { fill: var(--failed); color: var(--failed); font-size: 11px; font-weight: 700; }
+.chart.bars a:hover .bar { opacity: 0.8; }
+.chart-key { color: var(--dim); font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.chart-key .item { white-space: nowrap; }
+.chart-key .key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.chart-key .key.limit { width: 16px; height: 0; border-top: 2px dashed var(--text); border-radius: 0; background: none; }
+.memory-chart { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 4px; margin: 8px 0; }
+table.task-memory td.near { color: var(--failed); font-weight: 600; }

@@ -10,6 +10,7 @@ use axum::routing::{get, post};
 use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityRequirement, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
+pub mod attempt_memory;
 pub mod auth;
 pub mod docs;
 pub mod error;
@@ -69,6 +70,8 @@ pub use state::ApiState;
         routes::get_deployment,
         series::list_samples,
         series::memory_totals,
+        attempt_memory::task_memory,
+        attempt_memory::dag_memory,
         routes::list_import_errors,
         events::events,
         named_events::post_event,
@@ -164,6 +167,14 @@ fn metrics_routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/metrics/samples", get(series::list_samples))
         .route("/api/v1/metrics/memory", get(series::memory_totals))
+        .route(
+            "/api/v1/dags/{dag_id}/memory",
+            get(attempt_memory::dag_memory),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/tasks/{task_id}/memory",
+            get(attempt_memory::task_memory),
+        )
 }
 
 /// The routes of `schedr triggers`.
