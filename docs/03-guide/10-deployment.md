@@ -8,7 +8,10 @@ it, e.g. `SCHEDR_CONFIG__MASTER__GRPC_PORT` for `[master] grpc_port`. Flags win 
 environment, which wins over the file. Unknown keys are an error. Each role uses only its own
 sections. The [configuration reference](../_generated/04-reference/01-configuration.md) lists
 every key. Workers find DAG roots through `SCHEDR_DAG_PATH` and script roots through
-`SCHEDR_SCRIPT_PATH`; see [Plain scripts](../02-dags/17-plain-scripts.md).
+`SCHEDR_SCRIPT_PATH`; see [Plain scripts](../02-dags/17-plain-scripts.md). `schedr standalone`
+also takes them as options, `--dag-path PATH` and `--script-path PATH`, each repeated for more:
+given, an option's list replaces the variable's and the file's. A relative path is taken from
+the folder it starts in, so `--dag-path .` is that folder, a root named after it.
 
 ## The roles in a cluster
 

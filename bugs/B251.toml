@@ -1,0 +1,13 @@
+title = "a readiness test saw the master still ready 50 ms after its stop, under a review's build load"
+severity = "low"
+probability = "rare"
+kind = "tests"
+summary = "crates/schedr/src/roles/tests.rs:196 failed once with readiness `[\"master\"]` where `[]` was expected after 50 ms, during Codex's M5.1n review; not retried"
+found = 2026-11-15
+suspected = true
+details = '''
+Reported by Codex in its M5.1n review (session `01a1de10`): the broader unit run stopped at 213
+passed and this one failure, while it was building and running other tests in its worktree.
+Passed in Claude's runs the same night. First step: read what the test waits on after the stop,
+and whether 50 ms is a fixed sleep where it should wait for the state to change.
+'''

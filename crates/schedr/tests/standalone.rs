@@ -67,6 +67,21 @@ impl Standalone {
         more_config: &str,
         more_env: &[(&str, &str)],
     ) -> Self {
+        Self::launch(files, database_url, (extra, more_config, more_env), false)
+    }
+
+    /// Starts standalone in its DAG root with `--dag-path .`, `SCHEDR_DAG_PATH` naming another
+    /// folder (`dags/elsewhere`, with a DAG of its own) that the option replaces (decision 488).
+    fn start_in_root(files: &[(&str, &str)]) -> Self {
+        Self::launch(files, None, (&["--dag-path", "."], "", &[]), true)
+    }
+
+    fn launch(
+        files: &[(&str, &str)],
+        database_url: Option<&str>,
+        (extra, more_config, more_env): (&[&str], &str, &[(&str, &str)]),
+        in_root: bool,
+    ) -> Self {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("dags/etl");
         std::fs::create_dir_all(&root).unwrap();
@@ -101,6 +116,20 @@ impl Standalone {
         let log = std::fs::File::create(dir.path().join("standalone.log")).unwrap();
         let mut command = Command::new(BINARY);
         command.env_clear();
+        let dag_path = if in_root {
+            let elsewhere = dir.path().join("dags/elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::fs::write(
+                elsewhere.join("decoy.py"),
+                "from schedr import Dag, task\n\n\n@task\ndef decoy() -> None:\n    pass\n\n\n\
+                 with Dag(\"decoy\"):\n    decoy()\n",
+            )
+            .unwrap();
+            command.current_dir(&root);
+            elsewhere.display().to_string()
+        } else {
+            dag_path
+        };
         if let Some(url) = database_url {
             // A URL with a password is a secret: from the environment, never the file.
             command.env("SCHEDR_CONFIG__DATABASE__URL", url);
@@ -3368,4 +3397,45 @@ with Dag("capped"):
     let failed = attempt(&capped, "capped");
     assert_eq!(failed["status"], "failed", "{failed}");
     assert!(failed.to_string().contains("MemoryError"), "{failed}");
+}
+
+/// `schedr standalone --dag-path .` in a folder of DAG files (decision 488): the folder is the
+/// one DAG root, named after it, instead of `SCHEDR_DAG_PATH`'s; a module beside the DAG file
+/// imports with no script root.
+#[test]
+fn standalone_in_a_folder_of_dags_takes_it_as_its_root() {
+    let helpers = "def greeting(name: str) -> str:\n    return f\"hello {name}\"\n";
+    let pipeline = "\
+from helpers import greeting
+from schedr import Dag, task
+
+
+@task
+def greet() -> str:
+    print(greeting(\"folder\"))
+    return greeting(\"folder\")
+
+
+with Dag(\"pipeline\"):
+    greet()
+";
+    let standalone =
+        Standalone::start_in_root(&[("helpers.py", helpers), ("pipeline.py", pipeline)]);
+    standalone.wait("DAG `pipeline`", || standalone.dag_ids() == ["pipeline"]);
+    let (_, dag) = &standalone.dags()[0];
+    assert_eq!(
+        dag["location"]["root"], "etl",
+        "named after the folder `.` is"
+    );
+    assert_eq!(dag["location"]["path"], "pipeline.py");
+    let run_id = standalone.trigger("pipeline");
+    let run = standalone.wait_for_state(&run_id, "success");
+    assert_eq!(task_states(&run), pairs(&[("greet", "success")]));
+    let (code, out, err) = standalone.cli(&["tasks", "logs", &run_id, "greet", "--try", "1"]);
+    assert_eq!((code, out.as_str()), (0, "hello folder\n"), "{err}");
+    assert_eq!(
+        standalone.dag_ids(),
+        ["pipeline"],
+        "SCHEDR_DAG_PATH's DAG isn't there"
+    );
 }

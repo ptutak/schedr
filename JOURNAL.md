@@ -1325,3 +1325,23 @@ fail on the old code, all fixed:
 6. A deployment named `all` took the All tab's address: All is `/?view=` (an empty value), and
    such a deployment gets its own tab.
 7. The 7- and 30-day browser cases passed with no chart: each range now needs its three.
+
+### <a id="N14"></a>2026-11-15: M5.1n built: standalone's --dag-path and --script-path (note 14; on D488)
+
+
+Built as decision 488 says. The options are command-line overrides of `dags.path` and
+`scripts.path` (a list each, a `:` kept inside its path), so the loader names and checks the
+roots as it does the variables', its messages naming the flag (`--dag-path: ...`). A path is
+kept as given, as the variable's entries are (so a relative rename in `[dags.roots]` still
+names it); only one with no name of its own is resolved: `.` is the working folder, so it is
+named after it, and one ending in `..` its real path (`canonicalize`). A path that isn't UTF-8
+is refused. Checked, as the step asked: a module beside the DAG
+file imports with no script root (the DAG root is on the import path). Standalone's warning for
+no DAG folders names `--dag-path .`.
+
+The Getting started page using it stays local until the user has read it.
+
+Codex's review (`01a1de10`) found three, all confirmed and fixed with tests: `..` resolved
+lexically picked the wrong folder past a symbolic link (`live/../dags`); a path not in UTF-8
+was copied lossily, so another folder could be picked; and paths made absolute no longer
+matched a relative rename the variable's accept. Hence the rule above.

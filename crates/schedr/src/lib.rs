@@ -92,7 +92,13 @@ where
             Err(message) => report(err, &format!("error: {message}\n"), 1),
         };
     }
-    let config = match app::load_config(cli.config.as_deref(), env, read_file) {
+    // The working folder, for `--dag-path .`; none (removed) leaves `.` unnamed, refused.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let overrides = match cli.command.overrides(&cwd) {
+        Ok(overrides) => overrides,
+        Err(message) => return report(err, &format!("error: {message}\n"), EXIT_USAGE),
+    };
+    let config = match app::load_config_with(cli.config.as_deref(), env, read_file, &overrides) {
         Ok(config) => config,
         Err(e) => return report(err, &format!("error: {e}\n"), e.exit_code()),
     };

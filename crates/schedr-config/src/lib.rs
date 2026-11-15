@@ -19,7 +19,7 @@ pub use config::{
 };
 pub use loader::{ConfigError, load};
 pub use roots::{PathList, Root, RootError};
-pub use sources::{ConfigFile, FileSource, Override, SourceError, config_file};
+pub use sources::{ConfigFile, FileSource, Override, OverrideValue, SourceError, config_file};
 pub use units::{
     MemoryReserve, UnitError, format_duration, format_reserve, format_size, parse_duration,
     parse_reserve, parse_size,

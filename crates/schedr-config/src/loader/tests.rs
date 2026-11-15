@@ -8,6 +8,7 @@ use rstest::rstest;
 use super::*;
 use crate::config::{ChannelKind, SmtpTls};
 use crate::roots::Root;
+use crate::sources::OverrideValue;
 
 const FILE: &str = "/etc/schedr/config.toml";
 
@@ -1165,4 +1166,72 @@ fn a_file_that_doesnt_parse_isnt_quoted_in_its_error() {
     .to_string();
     assert!(!error.contains("TOML_s3cret"), "{error}");
     assert!(error.contains("line 2"), "{error}");
+}
+
+fn paths(key: &str, flag: &str, items: &[&str]) -> Override {
+    Override {
+        key: key.into(),
+        value: OverrideValue::List(items.iter().map(|&item| item.to_owned()).collect()),
+        flag: flag.into(),
+    }
+}
+
+#[test]
+fn a_path_list_flag_replaces_the_environments_and_the_files() {
+    let config = load(
+        Some(file("[dags]\npath = [\"/from/file\"]\n")),
+        &env(&[("SCHEDR_DAG_PATH", "/from/env")]),
+        &[paths("dags.path", "--dag-path", &["/work/etl", "/srv/a:b"])],
+    )
+    .unwrap();
+    let roots: Vec<(&str, &Path)> = config
+        .dag_roots
+        .iter()
+        .map(|root| (root.name.as_str(), root.path.as_path()))
+        .collect();
+    assert_eq!(
+        roots,
+        [
+            ("etl", Path::new("/work/etl")),
+            ("a:b", Path::new("/srv/a:b"))
+        ],
+        "a `:` stays in its path"
+    );
+}
+
+#[test]
+fn a_path_list_flags_mistakes_name_the_flag() {
+    let err = load(None, &env(&[]), &[paths("dags.path", "--dag-path", &["/"])]).unwrap_err();
+    assert!(
+        err.to_string().starts_with("--dag-path: `/` has no name"),
+        "{err}"
+    );
+    let err = load(
+        None,
+        &env(&[]),
+        &[
+            paths("dags.path", "--dag-path", &["/work"]),
+            paths("scripts.path", "--script-path", &["/work"]),
+        ],
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .starts_with("--script-path: `/work` is named `work`, as the DAG root"),
+        "{err}"
+    );
+    let err = load(None, &env(&[("SCHEDR_DAG_PATH", "/")]), &[]).unwrap_err();
+    assert!(err.to_string().starts_with("SCHEDR_DAG_PATH: "), "{err}");
+}
+
+#[test]
+fn a_rename_names_a_flags_relative_path_as_it_names_the_variables() {
+    let renamed = "[dags]\npath = [\"code/etl\"]\n\n[dags.roots]\nrenamed = \"code/etl\"\n";
+    let config = load(
+        Some(file(renamed)),
+        &env(&[]),
+        &[paths("dags.path", "--dag-path", &["code/etl"])],
+    )
+    .unwrap();
+    assert_eq!(config.dag_roots[0].name, "renamed");
 }

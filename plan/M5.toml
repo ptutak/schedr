@@ -248,7 +248,8 @@ scope = '''
 done_when = '''
 `schedr standalone --migrate --dag-path .` in a folder of DAG files runs them, its helpers importing; the guide's getting started uses it; tests for the options and their errors
 '''
-status = "planned"
+status = "done"
+done = 2026-11-15
 
 [[steps]]
 id = "M5.1o"

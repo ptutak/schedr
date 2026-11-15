@@ -7,20 +7,20 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
 - **Next step:** M5.1l2, Throughput and start latency on the Metrics page. Done when: those figures recorded each minute with M5.1i's samples (the same rollups and retention), charts of them on the Metrics page per deployment for every range, light and dark, UI browser tests, the guide's Metrics page updated
-- **Then:** M5.1n, R1.1, M5.2a, M5.2b, M5.2c.
+- **Then:** R1.1, M5.2a, M5.2b, M5.2c, M5.2d.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 7; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B249 (low/rare), B247 (low/rare) (`BUGS.md`).
+- **Open bugs:** 9; first: B250 (medium/likely), B245 (low/possible), B39 (low/possible), B38 (low/possible), B251 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- N14 (2026-11-15): M5.1n built: standalone's --dag-path and --script-path (note 14; on D488)
 - N13 (2026-11-15): Codex's review of the UI steps M5.1g-l1: seven fixed (corrects D492)
 - N12 (2026-11-15): M5.1o built: a poke may be a plain def (note 12; on D489)
 - N11 (2026-11-15): M5.1l split; the DAGs page by deployment
 - N10 (2026-11-15): M5.1k built: a task's attempts' peaks, the DAG's p95s (decision 467)
-- D492 (2026-11-15): the Metrics endpoints keep their final buckets (decision 492, Claude's)
 - M5.1o (2026-11-15): A poke may be a plain def
+- M5.1n (2026-11-15): Standalone takes its DAG and script directories on the command line
 - M5.1l1 (2026-11-15): The DAGs page by deployment
-- M5.1k (2026-11-15): Task memory charts
 
 ## In progress
 

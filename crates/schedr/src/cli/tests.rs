@@ -305,3 +305,92 @@ fn a_connection_test_without_a_timeout_leaves_it_to_the_webserver() {
         Some(std::time::Duration::from_mins(2))
     );
 }
+
+#[rstest]
+#[case(".", "/home/me/project")]
+#[case("./", "/home/me/project")]
+#[case("./dags/", "dags")]
+#[case("code/etl", "code/etl")]
+#[case("../shared", "../shared")]
+#[case("/srv/dags", "/srv/dags")]
+fn a_root_path_is_kept_as_given_unless_it_has_no_name(#[case] given: &str, #[case] root: &str) {
+    assert_eq!(
+        root_path(Path::new("/home/me/project"), Path::new(given)),
+        PathBuf::from(root)
+    );
+}
+
+#[test]
+fn a_root_path_ending_in_dot_dot_is_the_folder_on_the_filesystem() {
+    // `live` links to `releases/v1`: `live/..` is `releases`, not the folder holding `live`.
+    let dir = tempfile::TempDir::new().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir_all(base.join("releases/v1")).unwrap();
+    std::fs::create_dir(base.join("caller")).unwrap();
+    std::os::unix::fs::symlink(base.join("releases/v1"), base.join("caller/live")).unwrap();
+    assert_eq!(
+        root_path(&base, Path::new("caller/live/..")),
+        base.join("releases")
+    );
+    // One in the middle is the filesystem's to resolve: kept.
+    assert_eq!(
+        root_path(&base, Path::new("caller/live/../dags")),
+        PathBuf::from("caller/live/../dags")
+    );
+    assert_eq!(
+        root_path(&base, Path::new("missing/..")),
+        base.join("missing/.."),
+        "left as it is, refused for having no name"
+    );
+}
+
+#[test]
+fn a_root_path_that_isnt_utf8_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
+    let folder = std::ffi::OsStr::from_bytes(b"root-\xff");
+    let cli = Cli::try_parse_from([
+        std::ffi::OsStr::new("schedr"),
+        std::ffi::OsStr::new("standalone"),
+        std::ffi::OsStr::new("--script-path"),
+        folder,
+    ])
+    .unwrap();
+    let err = cli.command.overrides(Path::new("/work")).unwrap_err();
+    assert!(err.starts_with("--script-path: `root-"), "{err}");
+    assert!(err.ends_with("isn't UTF-8; rename the folder"), "{err}");
+}
+
+#[test]
+fn standalones_dag_and_script_paths_are_lists_over_the_configuration() {
+    let cli = parse(&[
+        "standalone",
+        "--dag-path",
+        ".",
+        "--dag-path",
+        "/srv/a:b,c",
+        "--script-path",
+        "scripts",
+    ])
+    .unwrap();
+    assert_eq!(
+        cli.command.overrides(Path::new("/work")).unwrap(),
+        [
+            Override {
+                key: "dags.path".into(),
+                value: OverrideValue::List(vec!["/work".into(), "/srv/a:b,c".into()]),
+                flag: "--dag-path".into(),
+            },
+            Override {
+                key: "scripts.path".into(),
+                value: OverrideValue::List(vec!["scripts".into()]),
+                flag: "--script-path".into(),
+            },
+        ]
+    );
+    let none = parse(&["standalone", "--migrate"]).unwrap();
+    assert_eq!(none.command.overrides(Path::new("/work")).unwrap(), []);
+    assert!(
+        parse(&["worker", "--dag-path", "."]).is_err(),
+        "standalone only"
+    );
+}

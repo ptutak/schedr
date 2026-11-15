@@ -248,7 +248,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1l1 | The DAGs page by deployment | done 2026-11-15 |  |
 | M5.1l2 | Throughput and start latency on the Metrics page | **next** |  |
 | M5.1m | The start time from the worker | done 2026-11-14 | D490 |
-| M5.1n | Standalone takes its DAG and script directories on the command line | planned | D488 |
+| M5.1n | Standalone takes its DAG and script directories on the command line | done 2026-11-15 | D488 |
 | M5.1o | A poke may be a plain def | done 2026-11-15 | D489 |
 | R1.1 | Release 1.1.0 | planned |  |
 | M5.2a | The recording stub and the comparison | planned | D475 |

@@ -79,10 +79,25 @@ pub struct FileSource<'a> {
 pub struct Override {
     /// The configuration key, dotted (`ops.port`).
     pub key: String,
-    /// The value, parsed like an environment variable's.
-    pub value: String,
+    /// The value.
+    pub value: OverrideValue,
     /// The flag it came from, for messages (`--ops-port`).
     pub flag: String,
+}
+
+/// What a command-line flag gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverrideValue {
+    /// Text parsed like an environment variable's (`9100` a number).
+    Text(String),
+    /// A list of strings taken as they are, e.g. a repeated `--dag-path` (paths may hold `:`).
+    List(Vec<String>),
+}
+
+impl From<&str> for OverrideValue {
+    fn from(text: &str) -> Self {
+        Self::Text(text.to_owned())
+    }
 }
 
 /// Why an environment variable can't be used as configuration.
@@ -124,7 +139,7 @@ pub fn env_key(var: &str) -> Result<Option<String>, SourceError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     key: String,
-    value: String,
+    value: OverrideValue,
     origin: String,
 }
 
@@ -155,13 +170,12 @@ impl Provider for Entries {
             // 123 (B201).
             let last = entry.key.rsplit('.').next().unwrap_or_default();
             let secret = last == "password" || last == "token";
-            let value: Value = if secret {
-                Value::from(entry.value.clone())
-            } else {
-                entry
-                    .value
-                    .parse()
-                    .expect("parsing a figment value never fails")
+            let value: Value = match &entry.value {
+                OverrideValue::List(items) => Value::from(items.clone()),
+                OverrideValue::Text(text) if secret => Value::from(text.clone()),
+                OverrideValue::Text(text) => {
+                    text.parse().expect("parsing a figment value never fails")
+                }
             };
             if let Some(nested) = figment::util::nest(&entry.key, value).into_dict() {
                 dict = merge(dict, nested);
@@ -195,7 +209,7 @@ pub(crate) fn env_provider(env: &BTreeMap<String, String>) -> Result<Entries, So
         if let Some(key) = env_key(var)? {
             entries.push(Entry {
                 key,
-                value: value.clone(),
+                value: OverrideValue::Text(value.clone()),
                 origin: var.clone(),
             });
         }
@@ -211,7 +225,7 @@ pub(crate) fn env_provider(env: &BTreeMap<String, String>) -> Result<Entries, So
             }
             entries.push(Entry {
                 key: key.to_owned(),
-                value: value.clone(),
+                value: OverrideValue::Text(value.clone()),
                 origin: alias.to_owned(),
             });
         }

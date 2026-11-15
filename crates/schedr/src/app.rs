@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 
-use schedr_config::{Config, ConfigError, FileSource, config_file, load};
+use schedr_config::{Config, ConfigError, FileSource, Override, config_file, load};
 use schedr_db::{Database, DbError, SchemaStatus, redact_password};
 
 use crate::cli::{ClientArgs, Command, DagsCommand, DbCommand};
@@ -80,6 +80,20 @@ pub fn load_config(
     env: &BTreeMap<String, String>,
     read: impl Fn(&Path) -> io::Result<String>,
 ) -> Result<Config, AppError> {
+    load_config_with(flag, env, read, &[])
+}
+
+/// As [`load_config`], with the command's options over the file and the environment.
+///
+/// # Errors
+///
+/// As [`load_config`].
+pub fn load_config_with(
+    flag: Option<&Path>,
+    env: &BTreeMap<String, String>,
+    read: impl Fn(&Path) -> io::Result<String>,
+    overrides: &[Override],
+) -> Result<Config, AppError> {
     let file = config_file(flag, env);
     let contents = match read(file.path()) {
         Ok(contents) => Some(contents),
@@ -95,7 +109,7 @@ pub fn load_config(
         path: file.path(),
         contents,
     });
-    Ok(load(source, env, &[])?)
+    Ok(load(source, env, overrides)?)
 }
 
 /// A human-readable description of a schema status.
@@ -183,6 +197,7 @@ pub async fn execute(
                 listen,
                 migrate,
                 no_ui,
+                ..
             },
             None,
         ) => {

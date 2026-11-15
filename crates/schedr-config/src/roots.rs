@@ -77,12 +77,14 @@ pub enum RootError {
     },
     /// A script root and a DAG root have the same name (decision 299).
     #[error(
-        "SCHEDR_SCRIPT_PATH: `{}` is named `{name}`, as the DAG root `{}`; rename one in \
+        "{list}: `{}` is named `{name}`, as the DAG root `{}`; rename one in \
          [scripts.roots] or [dags.roots]",
         script.display(),
         dag.display()
     )]
     ScriptNamedAsDag {
+        /// The script path list's name, `SCHEDR_SCRIPT_PATH` or `--script-path`.
+        list: &'static str,
         /// The shared name.
         name: String,
         /// The script root.
@@ -267,10 +269,11 @@ pub fn resolve_roots(
 /// # Errors
 ///
 /// [`RootError::ScriptNamedAsDag`] for the first script root named as a DAG root.
-pub fn check_apart(dags: &[Root], scripts: &[Root]) -> Result<(), RootError> {
+pub fn check_apart(list: &'static str, dags: &[Root], scripts: &[Root]) -> Result<(), RootError> {
     for script in scripts {
         if let Some(dag) = dags.iter().find(|dag| dag.name == script.name) {
             return Err(RootError::ScriptNamedAsDag {
+                list,
                 name: script.name.clone(),
                 script: script.path.clone(),
                 dag: dag.path.clone(),

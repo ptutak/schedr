@@ -275,19 +275,26 @@ pub fn load(
             defined: defined.join(", "),
         });
     }
-    config.dag_roots = resolve_roots(
-        "SCHEDR_DAG_PATH",
-        "dags",
-        &config.dags.path,
-        &config.dags.roots,
-    )?;
+    // A list given on the command line is named after its flag in messages.
+    let list = |key: &str, alias: &'static str, flag: &'static str| {
+        if overrides.iter().any(|o| o.key == key) {
+            flag
+        } else {
+            alias
+        }
+    };
+    let (dag_list, script_list) = (
+        list("dags.path", "SCHEDR_DAG_PATH", "--dag-path"),
+        list("scripts.path", "SCHEDR_SCRIPT_PATH", "--script-path"),
+    );
+    config.dag_roots = resolve_roots(dag_list, "dags", &config.dags.path, &config.dags.roots)?;
     config.script_roots = resolve_roots(
-        "SCHEDR_SCRIPT_PATH",
+        script_list,
         "scripts",
         &config.scripts.path,
         &config.scripts.roots,
     )?;
-    crate::roots::check_apart(&config.dag_roots, &config.script_roots)?;
+    crate::roots::check_apart(script_list, &config.dag_roots, &config.script_roots)?;
     Ok(config)
 }
 

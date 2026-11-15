@@ -319,12 +319,18 @@ fn checked_memory(config: &Config, default_reserve: Reserve) -> Result<MemoryWat
 /// and serves, but nothing is there to run, which a first start otherwise only shows as an empty
 /// UI. Only the roles that run a worker call it: `dags check` and `dags test` build agent
 /// settings too (a fork server's), for a path that isn't among the roots.
-pub(crate) fn warn_without_dag_roots(config: &Config) -> bool {
+/// A standalone's says `--dag-path` too (decision 488).
+pub(crate) fn warn_without_dag_roots(config: &Config, standalone: bool) -> bool {
     let none = config.dag_roots.is_empty() && config.script_roots.is_empty();
     if none {
+        let option = if standalone {
+            ", or start it with `--dag-path .` in their folder"
+        } else {
+            ""
+        };
         tracing::warn!(
             "no DAG directories: this worker watches none, so it has nothing to parse or run; \
-             set SCHEDR_DAG_PATH (or [dags] path) to the directories of your DAG files"
+             set SCHEDR_DAG_PATH (or [dags] path) to the directories of your DAG files{option}"
         );
     }
     none
@@ -1954,7 +1960,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     tokio::fs::create_dir_all(&data_dir)
         .await
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
-    warn_without_dag_roots(&config);
+    warn_without_dag_roots(&config, false);
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
     secure_logs(log_mode(&config), &agent.setup.log_dir)?;
     // Secrets go there as files: a folder another user made first is refused (decision 201).

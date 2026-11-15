@@ -1,0 +1,21 @@
+title = "a DAG root holding a virtualenv scans it: `--dag-path .` in a project folder parses its .venv"
+severity = "medium"
+probability = "likely"
+kind = "usability"
+summary = "the scan skips only `.git` and `__pycache__` (hidden folders included, `standard_filters(false)`): a `.venv` in a root is hashed whole and its `.py` files mentioning `schedr` parsed"
+found = 2026-11-15
+suspected = false
+details = '''
+Found building M5.1n (decision 488): its point is `schedr standalone --dag-path .` in the folder
+of one's DAG files, and the project folder of Getting started holds the `.venv` too. Shown with
+`schedr dags check <folder>` on a folder with `mine.py` and `.venv/lib/site-packages/lib_dag.py`
+(both define a DAG): `2 file(s), 1 DAG(s), 1 error(s)`, the second an import error ("a dot in a
+file or folder name has no import name"). A real `.venv` holds the schedr package, whose files
+mention `schedr`, and the whole of site-packages counts for the root's content hash, so a
+change anywhere in it is a new code version. Configured roots (git checkouts) rarely hold one.
+
+The fix is for the user to choose (it changes what every root scans): skip hidden folders as
+`.git` is; skip a folder holding `pyvenv.cfg` (any virtualenv, named as it may be); or leave the
+scan and have Getting started keep the DAGs in a folder of their own (`--dag-path dags`) or
+write a `.schedrignore`. Until then, Getting started uses `--dag-path dags`.
+'''

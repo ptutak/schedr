@@ -1249,13 +1249,22 @@ fn only_a_worker_without_dag_directories_warns() {
         agent_settings(&config, &env(&[]), Path::new("/d"), WORKER_RESERVE).unwrap();
     });
     assert_eq!(settings, "");
-    let warned = warnings_of(|| assert!(warn_without_dag_roots(&config)));
+    let warned = warnings_of(|| assert!(warn_without_dag_roots(&config, false)));
     assert!(warned.contains("no DAG directories"), "{warned}");
+    assert!(
+        !warned.contains("--dag-path"),
+        "a worker has no such option: {warned}"
+    );
+    let standalone = warnings_of(|| assert!(warn_without_dag_roots(&config, true)));
+    assert!(
+        standalone.contains("`--dag-path .` in their folder"),
+        "{standalone}"
+    );
     config.script_roots = vec![schedr_config::roots::Root {
         name: "jobs".to_owned(),
         path: PathBuf::from("/jobs"),
         only: None,
     }];
-    let silent = warnings_of(|| assert!(!warn_without_dag_roots(&config)));
+    let silent = warnings_of(|| assert!(!warn_without_dag_roots(&config, true)));
     assert_eq!(silent, "");
 }

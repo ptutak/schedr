@@ -1,9 +1,10 @@
 //! The command-line interface: the server roles, `db`, the user CLI and the in-task CLI
 //! (see archive/PROJECT.md, Web UI and CLI; In-task CLI).
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use schedr_config::{Override, OverrideValue};
 
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,15 @@ pub enum Command {
         /// elsewhere (a federation of standalones).
         #[arg(long)]
         no_ui: bool,
+        /// A folder of DAG files, repeated for more; `.` is the working folder. Given, these
+        /// are the DAG roots instead of `SCHEDR_DAG_PATH` and `[dags] path`, each named after
+        /// its folder.
+        #[arg(long = "dag-path", value_name = "PATH")]
+        dag_path: Vec<PathBuf>,
+        /// A folder of scripts, repeated for more; `.` is the working folder. Given, these are
+        /// the script roots instead of `SCHEDR_SCRIPT_PATH` and `[scripts] path`.
+        #[arg(long = "script-path", value_name = "PATH")]
+        script_path: Vec<PathBuf>,
     },
     /// Manage the database schema.
     Db {
@@ -781,6 +791,50 @@ pub enum GetCommand {
 }
 
 impl Command {
+    /// The configuration its options give, over the file and the environment: `standalone`'s
+    /// `--dag-path` and `--script-path` (decision 488), each path as [`root_path`] makes it.
+    ///
+    /// # Errors
+    ///
+    /// A path that isn't UTF-8, naming the flag: the configuration's paths are text, and a
+    /// lossy copy could name another folder (Codex's review of M5.1n).
+    pub fn overrides(&self, cwd: &Path) -> Result<Vec<Override>, String> {
+        let Self::Standalone {
+            dag_path,
+            script_path,
+            ..
+        } = self
+        else {
+            return Ok(Vec::new());
+        };
+        let mut overrides = Vec::new();
+        for (key, flag, paths) in [
+            ("dags.path", "--dag-path", dag_path),
+            ("scripts.path", "--script-path", script_path),
+        ] {
+            if paths.is_empty() {
+                continue;
+            }
+            let mut list = Vec::new();
+            for path in paths {
+                let root = root_path(cwd, path);
+                let text = root.to_str().ok_or_else(|| {
+                    format!(
+                        "{flag}: `{}` isn't UTF-8; rename the folder",
+                        root.display()
+                    )
+                })?;
+                list.push(text.to_owned());
+            }
+            overrides.push(Override {
+                key: key.to_owned(),
+                value: OverrideValue::List(list),
+                flag: flag.to_owned(),
+            });
+        }
+        Ok(overrides)
+    }
+
     /// The milestone in which this command starts working (see archive/PROJECT.md, Roadmap), or
     /// `None` if it works already.
     #[must_use]
@@ -832,5 +886,25 @@ impl Command {
             Self::DagCtx { .. } => "dag-ctx",
             Self::TaskExec { .. } => "task-exec",
         }
+    }
+}
+
+/// The root a `--dag-path` names: the path as given (its `.` components dropped), as the
+/// variable's entries are, so a rename in `[dags.roots]` matches it; only a path with no name of
+/// its own is resolved: `.` is `cwd`, and one ending in `..` its real path on the filesystem (a
+/// lexical `..` would be wrong past a symbolic link; a missing one is left, and refused unnamed).
+#[must_use]
+pub fn root_path(cwd: &Path, path: &Path) -> PathBuf {
+    let kept: PathBuf = path
+        .components()
+        .filter(|c| !matches!(c, Component::CurDir))
+        .collect();
+    match kept.components().next_back() {
+        None => cwd.to_path_buf(),
+        Some(Component::ParentDir) => {
+            let joined = cwd.join(&kept);
+            std::fs::canonicalize(&joined).unwrap_or(joined)
+        }
+        Some(_) => kept,
     }
 }
