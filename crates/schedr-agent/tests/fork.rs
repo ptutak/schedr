@@ -620,10 +620,13 @@ async fn the_fork_that_finds_a_late_thread_disables_the_server() {
         &["schedr_late_thread"],
         Duration::ZERO,
     );
-    until("the preloaded server is up", || {
-        state(&metrics, "preloaded", "up") == 1
+    // Both up: the bare one forks the task the preloaded one refuses (B241: under load the bare
+    // one could still be starting, and the fork failed with both unable).
+    until("both servers are up", || {
+        state(&metrics, "preloaded", "up") == 1 && state(&metrics, "bare", "up") == 1
     })
     .await;
+    // The thread starts 0.3 s after the preloaded server's import.
     tokio::time::sleep(Duration::from_secs(1)).await;
     let task = spec(
         python(),

@@ -51,7 +51,9 @@ from schedr import Dag, task
 
 with Dag("d"):
 
-    @task(timeout=timedelta(seconds=1))
+    # 10 s from the process's start, so the stop finds the coroutine at its `await`: under the
+    # suite's load 1 s could end the task while its interpreter was still starting (B249).
+    @task(timeout=timedelta(seconds=10))
     async def slow() -> None:
         try:
             await asyncio.sleep(60)

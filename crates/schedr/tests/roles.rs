@@ -1284,11 +1284,10 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
     let (code, err) = cluster.schedr(&["db", "migrate"]);
     assert_eq!(code, 0, "{err}");
-    let lease = [
-        ("SCHEDR_HIDDEN__MASTER__LEASE_PERIOD", "3s"),
-        ("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "1s"),
-    ];
-    cluster.start_with("master", &lease);
+    // The harness's lease (6 s) and query timeout (2 s, the pool's acquire timeout too): 1 s
+    // gave up at the master's start under the suite's I/O stall (B247), and a longer one would
+    // make the master's lead outlast the harness's 5 s worker lease.
+    cluster.start("master");
     cluster.start("webserver");
     cluster.wait("the first master to lead", || {
         cluster.ops_get("master", "/readyz") == (200, "ok\n".to_owned())
@@ -1303,11 +1302,7 @@ fn a_second_master_waits_as_a_standby_and_takes_over_when_the_first_dies() {
     cluster.start_as(
         "master-2",
         "master",
-        &[
-            lease[0],
-            lease[1],
-            ("SCHEDR_CONFIG__MASTER__GRPC_PORT", "0"),
-        ],
+        &[("SCHEDR_CONFIG__MASTER__GRPC_PORT", "0")],
     );
     let standby_log = cluster.dir.path().join("master-2.log");
     cluster.wait("the second master to wait as a standby", || {
@@ -1956,11 +1951,13 @@ with Dag("{dag}"):
     async def ends_spawned() -> str:
         return await ends("{dag}.ends_spawned")
 
-    @task(timeout=timedelta(seconds=5))
+    # 20 s from the process's start: a spawn under the suite's load includes a new interpreter
+    # importing its loop (B245: 5 s ran out before the task's first line).
+    @task(timeout=timedelta(seconds=20))
     async def stopped_forked() -> None:
         await stopped("{dag}.stopped_forked")
 
-    @task(timeout=timedelta(seconds=5), fresh_process=True)
+    @task(timeout=timedelta(seconds=20), fresh_process=True)
     async def stopped_spawned() -> None:
         await stopped("{dag}.stopped_spawned")
 

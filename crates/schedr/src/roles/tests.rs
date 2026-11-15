@@ -183,9 +183,15 @@ async fn the_master_and_the_api_serve_until_stopped() {
         },
         stopped,
     );
+    // Until both say they are ready, or 10 s: a fixed 50 ms found the master still starting
+    // under a loaded build (B251).
     let later = async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let ready = health.not_ready();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut ready = health.not_ready();
+        while !ready.is_empty() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            ready = health.not_ready();
+        }
         let _ = stop.send(1);
         ready
     };
