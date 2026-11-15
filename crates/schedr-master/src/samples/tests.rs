@@ -61,6 +61,15 @@ fn a_standalone_is_one_sample_with_its_three_roles() {
     );
     assert_eq!(taken[1].roles.len(), 1);
     assert_eq!(taken[0].cpu_avg, None, "its first: nothing to compare with");
+    // Decision 491: its whole memory, the worker's parts with it (100 + 1 + 2 + 3).
+    assert_eq!(
+        (
+            taken[0].resident_avg,
+            taken[0].memory_avg,
+            taken[0].memory_peak
+        ),
+        (100, 106, 106)
+    );
 }
 
 #[test]
@@ -103,6 +112,12 @@ fn a_rollup_takes_every_role_its_window_saw_and_rounds_its_averages() {
             .collect(),
         resident_avg: resident,
         resident_peak: resident,
+        memory_avg: resident,
+        memory_peak: resident,
+        minutes: 1,
+        cpu_minutes: u32::from(cpu.is_some()),
+        container_minutes: 0,
+        covered: 1,
         cpu_seconds: Some(1.0),
         cpu_avg: cpu,
         cpu_peak: cpu,
@@ -114,14 +129,46 @@ fn a_rollup_takes_every_role_its_window_saw_and_rounds_its_averages() {
     let rolled = rolled_up(
         &[
             minute(&[("master", "m-a")], 100, None),
-            minute(
-                &[("master", "m-a"), ("worker", "standalone")],
-                201,
-                Some(0.5),
-            ),
+            Sample {
+                // Decision 491: the whole memory, a worker's parts with it.
+                memory_avg: 201 + 1000,
+                memory_peak: 201 + 1000,
+                parts: Some(WorkerParts {
+                    fork_servers_bytes: 0,
+                    watcher_hosts_bytes: 0,
+                    tasks_bytes: 1000,
+                    largest_tasks: vec![schedr_model::usage::TaskMemory {
+                        attempt_id: "a1".to_owned(),
+                        dag_id: "etl".to_owned(),
+                        run_id: "r1".to_owned(),
+                        task_id: "load".to_owned(),
+                        map_index: None,
+                        bytes: 1000,
+                    }],
+                }),
+                ..minute(
+                    &[("master", "m-a"), ("worker", "standalone")],
+                    201,
+                    Some(0.5),
+                )
+            },
         ],
         at,
     );
+    // The whole memory averaged and its peak; the parts averaged over every minute, 0 where it
+    // ran no worker, so they and the process add up to its whole memory (Codex's review of
+    // M5.1j); the largest tasks left out; the minutes it covers.
+    assert_eq!((rolled[0].memory_avg, rolled[0].memory_peak), (651, 1201));
+    assert_eq!(
+        rolled[0].parts,
+        Some(WorkerParts {
+            fork_servers_bytes: 0,
+            watcher_hosts_bytes: 0,
+            tasks_bytes: 500,
+            largest_tasks: Vec::new(),
+        })
+    );
+    assert_eq!(rolled[0].minutes, 2);
     assert_eq!(rolled.len(), 1);
     assert_eq!(
         rolled[0]
@@ -184,9 +231,17 @@ async fn a_pass_makes_three_statements_and_seven_when_a_window_closed() {
         .await
         .unwrap();
     assert_eq!((next.written, next.statements), (1, 3));
+    // The window closed at 10:15 waits out the grace (a sample stored late is in it): this
+    // pass rolls only the one before, empty (its read, no insert, and the deletes).
     heartbeat("2026-11-14T10:15:05Z").await;
-    let closing = sampler
+    let early = sampler
         .pass(&db, &settings, ts("2026-11-14T10:15:10Z"), None)
+        .await
+        .unwrap();
+    assert_eq!((early.statements, early.rolled), (6, 0));
+    heartbeat("2026-11-14T10:17:05Z").await;
+    let closing = sampler
+        .pass(&db, &settings, ts("2026-11-14T10:17:10Z"), None)
         .await
         .unwrap();
     assert_eq!((closing.statements, closing.rolled), (7, 1));
@@ -203,13 +258,14 @@ async fn a_pass_makes_three_statements_and_seven_when_a_window_closed() {
         [
             ts("2026-11-14T10:00:00Z"),
             ts("2026-11-14T10:01:00Z"),
-            ts("2026-11-14T10:15:00Z")
+            ts("2026-11-14T10:15:00Z"),
+            ts("2026-11-14T10:17:00Z")
         ],
         "at whole minutes"
     );
     // Nobody heard from lately: two reads, nothing written.
     let idle = sampler
-        .pass(&db, &settings, ts("2026-11-14T10:20:00Z"), None)
+        .pass(&db, &settings, ts("2026-11-14T10:20:30Z"), None)
         .await
         .unwrap();
     assert_eq!((idle.written, idle.statements), (0, 2));
@@ -228,6 +284,12 @@ async fn a_new_leader_rolls_every_window_the_last_one_missed_before_deleting() {
         roles: BTreeMap::from([("webserver".to_owned(), "p1".to_owned())]),
         resident_avg: 10,
         resident_peak: 10,
+        memory_avg: 10,
+        memory_peak: 10,
+        minutes: 1,
+        cpu_minutes: 1,
+        container_minutes: 1,
+        covered: 1,
         cpu_seconds: None,
         cpu_avg: None,
         cpu_peak: None,
@@ -250,7 +312,7 @@ async fn a_new_leader_rolls_every_window_the_last_one_missed_before_deleting() {
     };
     let mut sampler = Sampler::default();
     sampler
-        .pass(&db, &settings, ts("2026-11-14T10:31:00Z"), None)
+        .pass(&db, &settings, ts("2026-11-14T10:32:00Z"), None)
         .await
         .unwrap();
     let rolled = db
@@ -283,9 +345,9 @@ async fn a_new_leader_rolls_every_window_the_last_one_missed_before_deleting() {
         ],
         "10:00 past the 20 minutes kept, after its window was rolled"
     );
-    // The next pass, a window later: only the new one.
+    // The next pass, a window and its grace later: only the new one.
     let next = sampler
-        .pass(&db, &settings, ts("2026-11-14T10:46:00Z"), None)
+        .pass(&db, &settings, ts("2026-11-14T10:47:00Z"), None)
         .await
         .unwrap();
     assert_eq!(
@@ -307,6 +369,12 @@ async fn a_failed_delete_is_done_at_the_next_pass() {
         roles: BTreeMap::new(),
         resident_avg: 1,
         resident_peak: 1,
+        memory_avg: 1,
+        memory_peak: 1,
+        minutes: 1,
+        cpu_minutes: 1,
+        container_minutes: 1,
+        covered: 1,
         cpu_seconds: None,
         cpu_avg: None,
         cpu_peak: None,

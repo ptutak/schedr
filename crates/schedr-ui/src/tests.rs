@@ -15,6 +15,7 @@ use super::*;
 mod actions;
 mod connections;
 mod deployments;
+mod metrics;
 mod runs;
 
 /// A webserver's API answering from a script: path -> (status, body); anything else 404.
@@ -450,6 +451,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
             "/",
             "/runs",
             "/deployments",
+            "/metrics",
             "/workers",
             "/connections",
             "/import-errors",
@@ -464,6 +466,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
             "/",
             "/runs",
             "/deployments",
+            "/metrics",
             "/workers",
             "/connections",
             "/import-errors"

@@ -18,12 +18,14 @@ use schedr_client::{Client, Transport};
 mod actions;
 mod ansi;
 mod assets;
+pub mod chart;
 mod connections;
 pub mod deployments;
 mod docs;
 pub mod graph;
 mod imports;
 pub mod live;
+mod metrics;
 pub mod page;
 mod pages;
 mod params_form;
@@ -121,7 +123,7 @@ fn action_routes<T: Transport + Send + Sync + 'static>() -> Router<Arc<Ui<T>>> {
 
 /// The UI's routes: `/` (the DAGs), `/d/<deployment>/dags/<dag>`, `/runs`,
 /// `/d/<deployment>/runs/<run>` (and its tasks' panels and log tails), `/deployments`,
-/// `/workers`, `/connections` (and its checks and tests), the
+/// `/metrics`, `/workers`, `/connections` (and its checks and tests), the
 /// actions (POSTs, see `actions`), `/events`, `/time`, `/assets/...`, `/docs/...`.
 /// Every answer varies with `X-Forwarded-Prefix` (its links do), so a cache keeps them apart.
 pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
@@ -141,6 +143,8 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             get(runs::output_download::<T>),
         )
         .route("/deployments", get(deployments::list::<T>))
+        .route("/metrics", get(metrics::page::<T>))
+        .route("/metrics/chart", get(metrics::node_chart::<T>))
         .route("/workers", get(workers::list::<T>))
         .route("/connections", get(connections::list::<T>))
         .route(

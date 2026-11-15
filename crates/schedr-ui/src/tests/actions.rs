@@ -569,12 +569,16 @@ pub(super) fn worker(id: &str, state: &str, drained: bool, warnings: &Value) -> 
 #[tokio::test]
 async fn the_workers_page_shows_each_with_its_warnings_and_drain_or_resume() {
     let mut etl = etl();
+    // M5.1j: w2's memory, its tasks with it, a container at 75 % of its limit.
+    let mut w2 = worker("w2", "active", true, &json!([]));
+    w2["memory"] = json!({"whole_bytes": 3_221_225_472_u64, "tasks_bytes": 2_147_483_648_u64,
+        "container_bytes": 3_221_225_472_u64, "container_limit_bytes": 4_294_967_296_u64});
     etl.answers.insert(
         "/api/v1/workers".to_owned(),
         (
             200,
             json!({"workers": [
-                worker("w2", "active", true, &json!([])),
+                w2,
                 worker("w1", "active", false, &json!([{"kind": "fork_server_disabled",
                     "interpreter": "python", "message": "Python tasks start slowly"}])),
                 worker("w3", "lost", false, &json!([])),
@@ -603,8 +607,16 @@ async fn the_workers_page_shows_each_with_its_warnings_and_drain_or_resume() {
     );
     assert_eq!(events_followed(&html), "/events?kinds=workers");
     // A warning row spans the table (one deployment: no Deployment column).
-    assert_eq!(texts(&html, "table.workers thead th").len(), 9);
-    assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["8"]);
+    assert_eq!(texts(&html, "table.workers thead th").len(), 10);
+    assert_eq!(attrs(&html, "tr.error-row td[colspan]", "colspan"), ["9"]);
+    assert_eq!(
+        texts(&html, "table.workers td.worker-memory"),
+        ["-", "3.0 GiB  75 %", "-"]
+    );
+    assert_eq!(
+        attrs(&html, "table.workers td.worker-memory[title]", "title"),
+        ["tasks 2.0 GiB · container 3.0 GiB of 4.0 GiB"]
+    );
     // The dialogs wait out the live reloads.
     assert_eq!(
         attrs(&html, "#live", "hx-trigger"),

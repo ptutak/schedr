@@ -28,6 +28,10 @@
   --ansi-4: #1f5fbf; --ansi-5: #8e3aa8; --ansi-6: #0f7a85; --ansi-7: #5f6773;
   --ansi-8: #6b7280; --ansi-9: #d93a2b; --ansi-10: #2f9e52; --ansi-11: #a87400;
   --ansi-12: #3b7de0; --ansi-13: #b45ad1; --ansi-14: #179aa6; --ansi-15: #1d2127;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+  --chart-grid: #e8eaee; --chart-axis: #c3c7ce; --chart-band: rgba(95, 103, 115, 0.22);
+  --chart-hover: rgba(31, 95, 191, 0.08);
   color-scheme: light;
 }
 
@@ -55,6 +59,10 @@
   --ansi-4: #7fb0ff; --ansi-5: #d79bf0; --ansi-6: #62d3dc; --ansi-7: #c9ced6;
   --ansi-8: #7d8592; --ansi-9: #ffaba3; --ansi-10: #95e3ad; --ansi-11: #f7d78f;
   --ansi-12: #a6c8ff; --ansi-13: #e5bdf6; --ansi-14: #92e4ea; --ansi-15: #ffffff;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9; --series-8: #e66767;
+  --chart-grid: #2a2f37; --chart-axis: #4a515c; --chart-band: rgba(154, 163, 174, 0.22);
+  --chart-hover: rgba(127, 176, 255, 0.10);
   color-scheme: dark;
 }
 
@@ -402,3 +410,53 @@ td.connection-result .warning-text, td.connection-result .dim { font-size: 0.9em
 .cleanup.failed, .cleanup.worker_lost { color: var(--failed); }
 .cleanup.pending, .cleanup.not_needed { color: var(--dim); }
 ul.handles { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+
+/* Charts (decision 466): drawn by the server; the series colours are validated for colour
+   blindness in this order, light and dark (the dataviz palette's eight). */
+.chart { width: 100%; height: auto; display: block; }
+.chart-box { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 4px; margin-bottom: 12px; }
+.chart .grid { stroke: var(--chart-grid); stroke-width: 1; }
+.chart .baseline { stroke: var(--chart-axis); stroke-width: 1; }
+.chart .axis { fill: var(--dim); font-size: 11px; }
+.chart .line, .sparkline .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .band { fill: var(--chart-band); stroke: none; }
+.chart .limit { stroke-width: 1.5; stroke-dasharray: 6 4; }
+.chart .hover { fill: transparent; }
+.chart .hover:hover { fill: var(--chart-hover); }
+.line.s1, .limit.s1 { stroke: var(--series-1); } .dot.s1, .swatch.s1 { fill: var(--series-1); background: var(--series-1); }
+.line.s2, .limit.s2 { stroke: var(--series-2); } .dot.s2, .swatch.s2 { fill: var(--series-2); background: var(--series-2); }
+.line.s3, .limit.s3 { stroke: var(--series-3); } .dot.s3, .swatch.s3 { fill: var(--series-3); background: var(--series-3); }
+.line.s4, .limit.s4 { stroke: var(--series-4); } .dot.s4, .swatch.s4 { fill: var(--series-4); background: var(--series-4); }
+.line.s5, .limit.s5 { stroke: var(--series-5); } .dot.s5, .swatch.s5 { fill: var(--series-5); background: var(--series-5); }
+.line.s6, .limit.s6 { stroke: var(--series-6); } .dot.s6, .swatch.s6 { fill: var(--series-6); background: var(--series-6); }
+.line.s7, .limit.s7 { stroke: var(--series-7); } .dot.s7, .swatch.s7 { fill: var(--series-7); background: var(--series-7); }
+.line.s8, .limit.s8 { stroke: var(--series-8); } .dot.s8, .swatch.s8 { fill: var(--series-8); background: var(--series-8); }
+.swatch.s1, .swatch.s2, .swatch.s3, .swatch.s4, .swatch.s5, .swatch.s6, .swatch.s7, .swatch.s8, .swatch.band, .swatch.limit {
+  display: inline-block; width: 12px; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: middle; border: 0; }
+.swatch.band { background: var(--chart-band); height: 10px; }
+.swatch.limit { background: none; border-top: 2px dashed var(--dim); height: 0; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.metrics-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-bottom: 16px; }
+.choices a { padding: 3px 10px; border: 1px solid var(--border); margin-right: -1px; text-decoration: none; }
+.choices a:first-child { border-radius: 6px 0 0 6px; }
+.choices a:last-child { border-radius: 0 6px 6px 0; }
+.choices a.current { background: var(--running-bg); color: var(--text); font-weight: 600; }
+.metrics-deployment { margin-bottom: 28px; }
+.metrics-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.metrics-view.with-panel { grid-template-columns: minmax(0, 1fr) minmax(320px, 440px); }
+.process-panel { position: sticky; top: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--surface); }
+.metrics-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.metrics-table tr.open td { background: var(--running-bg); }
+.share { display: inline-block; width: 60px; height: 8px; border-radius: 4px; background: var(--neutral-bg); vertical-align: middle; overflow: hidden; }
+.share-bar { display: block; height: 100%; background: var(--series-1); }
+.share-bar.high { background: var(--failed); }
+.largest-tasks { margin: 0; padding-left: 18px; }
+.sparkline { vertical-align: middle; }
+.chart .area { stroke: var(--bg); stroke-width: 1; }
+.area.s1 { fill: var(--series-1); } .area.s2 { fill: var(--series-2); } .area.s3 { fill: var(--series-3); }
+.area.s4 { fill: var(--series-4); } .area.s5 { fill: var(--series-5); } .area.s6 { fill: var(--series-6); }
+.area.s7 { fill: var(--series-7); } .area.s8 { fill: var(--series-8); }
+.metrics-table td, .metrics-table th { white-space: nowrap; }
+.metrics-main { min-width: 0; }
+.metrics-table { grid-column: 1 / -1; }
+.worker-memory { white-space: nowrap; }

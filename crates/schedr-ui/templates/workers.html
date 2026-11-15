@@ -13,7 +13,7 @@
 {% else %}
 <table class="list workers">
   <thead>
-    <tr><th>Worker</th>{% if several %}<th>Deployment</th>{% endif %}<th>State</th><th>Master</th><th>Queues</th><th>Running</th><th>Wait steps</th><th>Version</th><th>Last seen</th><th></th></tr>
+    <tr><th>Worker</th>{% if several %}<th>Deployment</th>{% endif %}<th>State</th><th>Master</th><th>Queues</th><th>Running</th><th>Wait steps</th><th>Memory</th><th>Version</th><th>Last seen</th><th></th></tr>
   </thead>
   <tbody>
   {% for worker in rows %}
@@ -25,6 +25,7 @@
       <td>{{ worker.queues }}</td>
       <td>{{ worker.load }}</td>
       <td>{{ worker.wait_steps }}</td>
+      <td class="worker-memory{% if worker.state == "offline" || worker.state == "lost" %} dim{% endif %}"{% if !worker.memory_title.is_empty() %} title="{{ worker.memory_title }}"{% endif %}>{% if worker.memory.is_empty() %}<span class="dim">-</span>{% else %}{{ worker.memory }}{% if let Some(share) = worker.memory_share %} <span class="share"><span class="share-bar{% if *share >= 90 %} high{% endif %}" style="width: {% if *share > 100 %}100{% else %}{{ share }}{% endif %}%"></span></span> {{ share }} %{% endif %}{% endif %}</td>
       <td class="mono">{{ worker.version }}</td>
       <td class="time">{{ worker.last_seen }}</td>
       <td>{% if worker.actionable %}
@@ -36,10 +37,10 @@
       {% endif %}</td>
     </tr>
     {% if !worker.warnings.is_empty() %}
-    <tr class="error-row"><td></td><td colspan="{% if several %}9{% else %}8{% endif %}">{% for warning in worker.warnings %}<div class="warning-text">{{ warning }}</div>{% endfor %}</td></tr>
+    <tr class="error-row"><td></td><td colspan="{% if several %}10{% else %}9{% endif %}">{% for warning in worker.warnings %}<div class="warning-text">{{ warning }}</div>{% endfor %}</td></tr>
     {% endif %}
     {% for host in worker.hosts %}
-    <tr class="host-row"><td></td><td colspan="{% if several %}9{% else %}8{% endif %}" class="dim">
+    <tr class="host-row"><td></td><td colspan="{% if several %}10{% else %}9{% endif %}" class="dim">
       Code <span class="mono" title="{{ host.code_full }}">{{ host.code }}</span>:
       {% if host.running %}{{ host.wait_steps }} wait steps,
       threads {{ host.tied }} tied and {{ host.untied }} untied, {{ host.memory }}{% else %}no host now{% endif %}{% if host.lost > 0 %},

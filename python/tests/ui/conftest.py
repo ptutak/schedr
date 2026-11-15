@@ -113,7 +113,7 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
             return state == "success"  # type: ignore[no-any-return]
 
         _wait("the run finished", finished, log)
-        yield {"url": server, "run": run, "dag": DAG_ID}
+        yield {"url": server, "run": run, "dag": DAG_ID, "db": str(work / "schedr.db")}
     finally:
         process.terminate()
         process.wait(timeout=30)

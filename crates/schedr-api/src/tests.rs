@@ -95,6 +95,8 @@ async fn the_openapi_description_is_served_and_lists_every_endpoint() {
             "/api/v1/deployment",
             "/api/v1/events",
             "/api/v1/import-errors",
+            "/api/v1/metrics/memory",
+            "/api/v1/metrics/samples",
             "/api/v1/runs",
             "/api/v1/runs/{run_id}",
             "/api/v1/runs/{run_id}/cancel",

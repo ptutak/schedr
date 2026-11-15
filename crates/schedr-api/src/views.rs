@@ -4,7 +4,7 @@
 //! changes only on purpose (within `/api/v1`, additively). Times are UTC, RFC 3339; kinds and
 //! states are their model names (clients treat them as open: new values may appear).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use jiff::Timestamp;
 use schedr_config::masked::mask_text;
@@ -1069,6 +1069,42 @@ pub struct WorkerView {
     /// code sets whose hosts were lost.
     #[serde(default)]
     pub watcher_hosts: Vec<WatcherHostView>,
+    /// Its memory as it last said (M5.1j, the Workers page's Memory column); none from an
+    /// older worker, or one that hasn't said yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<WorkerMemoryView>,
+}
+
+/// A worker's memory, as it last said (at most a minute old while it heartbeats).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerMemoryView {
+    /// Its whole memory, in bytes: the agent, its fork servers, wait step hosts and running
+    /// tasks.
+    pub whole_bytes: u64,
+    /// Its running tasks' together.
+    pub tasks_bytes: u64,
+    /// Its container's memory; none outside a cgroup v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_bytes: Option<u64>,
+    /// Its container's limit; none when unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_limit_bytes: Option<u64>,
+}
+
+impl From<&schedr_model::usage::WorkerUsage> for WorkerMemoryView {
+    fn from(usage: &schedr_model::usage::WorkerUsage) -> Self {
+        Self {
+            whole_bytes: usage
+                .process
+                .resident_bytes
+                .saturating_add(usage.fork_servers_bytes)
+                .saturating_add(usage.watcher_hosts_bytes)
+                .saturating_add(usage.tasks_bytes),
+            tasks_bytes: usage.tasks_bytes,
+            container_bytes: usage.process.container_bytes,
+            container_limit_bytes: usage.process.container_limit_bytes,
+        }
+    }
 }
 
 /// A process running a worker's wait steps, or a code set whose hosts were lost.
@@ -1126,6 +1162,7 @@ impl From<&WorkerRecord> for WorkerView {
                 })
                 .collect(),
             master_id: None,
+            memory: None,
             watcher_slots: worker.watcher_slots,
             watcher_hosts: worker
                 .watcher_hosts
@@ -1247,17 +1284,160 @@ impl From<schedr_model::usage::WorkerUsage> for WorkerUsageView {
             largest_tasks: usage
                 .largest_tasks
                 .into_iter()
-                .map(|t| TaskMemoryView {
-                    attempt_id: t.attempt_id,
-                    dag_id: t.dag_id,
-                    run_id: t.run_id,
-                    task_id: t.task_id,
-                    map_index: t.map_index,
-                    bytes: t.bytes,
-                })
+                .map(TaskMemoryView::from)
                 .collect(),
         }
     }
+}
+
+impl From<schedr_model::usage::TaskMemory> for TaskMemoryView {
+    fn from(t: schedr_model::usage::TaskMemory) -> Self {
+        Self {
+            attempt_id: t.attempt_id,
+            dag_id: t.dag_id,
+            run_id: t.run_id,
+            task_id: t.task_id,
+            map_index: t.map_index,
+            bytes: t.bytes,
+        }
+    }
+}
+
+/// Samples of each process over a range (decisions 464, 465), in buckets: the Metrics page's
+/// charts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SampleSeriesList {
+    /// The range asked: `1h`, `24h`, `7d` or `30d`.
+    pub range: String,
+    /// Each point's width, in seconds.
+    pub step_s: u32,
+    /// The range's start (the first bucket's).
+    pub from: Timestamp,
+    /// Its end: when it was asked.
+    pub to: Timestamp,
+    /// Each process sampled in it, by ID.
+    pub processes: Vec<ProcessSamplesView>,
+    /// The minutes the deployment was sampled in each bucket (asked for every process): a
+    /// deployment's total in a bucket is its processes' averages weighted by their minutes over
+    /// these, so a process replaced within a bucket isn't counted twice.
+    #[serde(default)]
+    pub coverage: Vec<CoverageView>,
+}
+
+/// The minutes the deployment was sampled in a bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CoverageView {
+    /// The bucket's start.
+    pub at: Timestamp,
+    /// Its minutes in which any process was sampled.
+    pub minutes: u32,
+}
+
+/// A process's points over a range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ProcessSamplesView {
+    /// The process.
+    pub process_id: String,
+    /// What it runs (`master`, `worker`, `webserver`), each with its node's ID, as sampled
+    /// last.
+    pub roles: BTreeMap<String, String>,
+    /// Its buckets with samples, oldest first.
+    pub points: Vec<SamplePointView>,
+    /// Its container's memory limit as its latest sample says; none when unlimited (or not
+    /// in a container).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_limit: Option<u64>,
+    /// A worker's memory by part and its largest tasks, as sampled last (within a few
+    /// minutes); none for another process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<WorkerPartsView>,
+}
+
+/// A bucket of a process's samples: averages and peaks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SamplePointView {
+    /// The bucket's start.
+    pub at: Timestamp,
+    /// Resident memory, in bytes, on average: the process itself.
+    pub resident_avg: u64,
+    /// The highest.
+    pub resident_peak: u64,
+    /// Its whole memory, in bytes, on average: itself and, for a worker, its fork servers,
+    /// wait step hosts and running tasks.
+    pub memory_avg: u64,
+    /// The highest.
+    pub memory_peak: u64,
+    /// The minutes this process was sampled in the bucket: its averages' weight in a
+    /// deployment's total (see [`SampleSeriesList::coverage`]).
+    pub minutes: u32,
+    /// Cores used, on average; none before a second sample.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_avg: Option<f64>,
+    /// The highest minute's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_peak: Option<f64>,
+    /// Its container's memory, on average; none outside a cgroup v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_avg: Option<u64>,
+    /// The highest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_peak: Option<u64>,
+    /// Its container's highest limit in the bucket; none when unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_limit: Option<u64>,
+    /// A worker's parts on average over the bucket's minutes (0 where it ran no worker).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<PartsPointView>,
+}
+
+/// A worker's memory by part in a bucket, on average.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PartsPointView {
+    /// Its fork servers'.
+    pub fork_servers_bytes: u64,
+    /// Its wait step hosts'.
+    pub watcher_hosts_bytes: u64,
+    /// Its running tasks'.
+    pub tasks_bytes: u64,
+}
+
+/// A worker's memory by part and its largest tasks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct WorkerPartsView {
+    /// When sampled.
+    pub at: Timestamp,
+    /// Its fork servers', together.
+    pub fork_servers_bytes: u64,
+    /// Its wait step hosts', together.
+    pub watcher_hosts_bytes: u64,
+    /// Its running tasks', together.
+    pub tasks_bytes: u64,
+    /// The largest of them, largest first.
+    #[serde(default)]
+    pub largest_tasks: Vec<TaskMemoryView>,
+}
+
+/// Every process's memory together over a range (decision 462's sparkline).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MemoryTotals {
+    /// Each point's width, in seconds.
+    pub step_s: u32,
+    /// The range's start.
+    pub from: Timestamp,
+    /// Its end: when it was asked.
+    pub to: Timestamp,
+    /// The whole memory, in bytes, of each bucket with samples, oldest first: the
+    /// average of its minutes'.
+    pub points: Vec<MemoryPointView>,
+}
+
+/// A bucket's total memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MemoryPointView {
+    /// The bucket's start.
+    pub at: Timestamp,
+    /// Every process's whole memory together, in bytes.
+    pub resident: u64,
 }
 
 /// A problem a node has now (decision 129): shown on its node, yellow for a warning, red for

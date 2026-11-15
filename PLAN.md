@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.1j, The Metrics page.
+**Next:** M5.1k, Task memory charts.
 
 ## M0: Foundations
 
@@ -243,8 +243,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1g | The Status block | done 2026-11-14 | D462 |
 | M5.1h | Memory and CPU reported | done 2026-11-14 | D463 |
 | M5.1i | The samples table | done 2026-11-14 | D464 |
-| M5.1j | The Metrics page | **next** | D465, D466 |
-| M5.1k | Task memory charts | planned | D467 |
+| M5.1j | The Metrics page | done 2026-11-14 | D465, D466, D491, D492 |
+| M5.1k | Task memory charts | **next** | D467 |
 | M5.1l | Throughput and start latency on the Metrics page | planned |  |
 | M5.1m | The start time from the worker | done 2026-11-14 | D490 |
 | M5.1n | Standalone takes its DAG and script directories on the command line | planned | D488 |

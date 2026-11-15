@@ -561,6 +561,27 @@
         ],
         "type": "object"
       },
+      "CoverageView": {
+        "description": "The minutes the deployment was sampled in a bucket.",
+        "properties": {
+          "at": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "minutes": {
+            "description": "Its minutes in which any process was sampled.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "minutes"
+        ],
+        "type": "object"
+      },
       "DagList": {
         "description": "The DAGs.",
         "properties": {
@@ -1028,6 +1049,62 @@
         ],
         "description": "A master, leading or standing by."
       },
+      "MemoryPointView": {
+        "description": "A bucket's total memory.",
+        "properties": {
+          "at": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "resident": {
+            "description": "Every process's whole memory together, in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "resident"
+        ],
+        "type": "object"
+      },
+      "MemoryTotals": {
+        "description": "Every process's memory together over a range (decision 462's sparkline).",
+        "properties": {
+          "from": {
+            "description": "The range's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "points": {
+            "description": "The whole memory, in bytes, of each bucket with samples, oldest first: the\naverage of its minutes'.",
+            "items": {
+              "$ref": "#/components/schemas/MemoryPointView"
+            },
+            "type": "array"
+          },
+          "step_s": {
+            "description": "Each point's width, in seconds.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "description": "Its end: when it was asked.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_s",
+          "from",
+          "to",
+          "points"
+        ],
+        "type": "object"
+      },
       "NamedEventList": {
         "description": "Posted events.",
         "properties": {
@@ -1245,6 +1322,35 @@
         ],
         "type": "string"
       },
+      "PartsPointView": {
+        "description": "A worker's memory by part in a bucket, on average.",
+        "properties": {
+          "fork_servers_bytes": {
+            "description": "Its fork servers'.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tasks_bytes": {
+            "description": "Its running tasks'.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watcher_hosts_bytes": {
+            "description": "Its wait step hosts'.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fork_servers_bytes",
+          "watcher_hosts_bytes",
+          "tasks_bytes"
+        ],
+        "type": "object"
+      },
       "PauseRequest": {
         "additionalProperties": false,
         "description": "Pausing a DAG.",
@@ -1301,6 +1407,58 @@
         "required": [
           "error",
           "message"
+        ],
+        "type": "object"
+      },
+      "ProcessSamplesView": {
+        "description": "A process's points over a range.",
+        "properties": {
+          "container_limit": {
+            "description": "Its container's memory limit as its latest sample says; none when unlimited (or not\nin a container).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "parts": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkerPartsView",
+                "description": "A worker's memory by part and its largest tasks, as sampled last (within a few\nminutes); none for another process."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "description": "Its buckets with samples, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/SamplePointView"
+            },
+            "type": "array"
+          },
+          "process_id": {
+            "description": "The process.",
+            "type": "string"
+          },
+          "roles": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "What it runs (`master`, `worker`, `webserver`), each with its node's ID, as sampled\nlast.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "process_id",
+          "roles",
+          "points"
         ],
         "type": "object"
       },
@@ -1549,6 +1707,156 @@
           "since",
           "triggered_at",
           "triggered_by"
+        ],
+        "type": "object"
+      },
+      "SamplePointView": {
+        "description": "A bucket of a process's samples: averages and peaks.",
+        "properties": {
+          "at": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "container_avg": {
+            "description": "Its container's memory, on average; none outside a cgroup v2.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "container_limit": {
+            "description": "Its container's highest limit in the bucket; none when unlimited.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "container_peak": {
+            "description": "The highest.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cpu_avg": {
+            "description": "Cores used, on average; none before a second sample.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_peak": {
+            "description": "The highest minute's.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "memory_avg": {
+            "description": "Its whole memory, in bytes, on average: itself and, for a worker, its fork servers,\nwait step hosts and running tasks.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_peak": {
+            "description": "The highest.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minutes": {
+            "description": "The minutes this process was sampled in the bucket: its averages' weight in a\ndeployment's total (see [`SampleSeriesList::coverage`]).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parts": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PartsPointView",
+                "description": "A worker's parts on average over the bucket's minutes (0 where it ran no worker)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resident_avg": {
+            "description": "Resident memory, in bytes, on average: the process itself.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resident_peak": {
+            "description": "The highest.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "resident_avg",
+          "resident_peak",
+          "memory_avg",
+          "memory_peak",
+          "minutes"
+        ],
+        "type": "object"
+      },
+      "SampleSeriesList": {
+        "description": "Samples of each process over a range (decisions 464, 465), in buckets: the Metrics page's\ncharts.",
+        "properties": {
+          "coverage": {
+            "description": "The minutes the deployment was sampled in each bucket (asked for every process): a\ndeployment's total in a bucket is its processes' averages weighted by their minutes over\nthese, so a process replaced within a bucket isn't counted twice.",
+            "items": {
+              "$ref": "#/components/schemas/CoverageView"
+            },
+            "type": "array"
+          },
+          "from": {
+            "description": "The range's start (the first bucket's).",
+            "format": "date-time",
+            "type": "string"
+          },
+          "processes": {
+            "description": "Each process sampled in it, by ID.",
+            "items": {
+              "$ref": "#/components/schemas/ProcessSamplesView"
+            },
+            "type": "array"
+          },
+          "range": {
+            "description": "The range asked: `1h`, `24h`, `7d` or `30d`.",
+            "type": "string"
+          },
+          "step_s": {
+            "description": "Each point's width, in seconds.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "description": "Its end: when it was asked.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range",
+          "step_s",
+          "from",
+          "to",
+          "processes"
         ],
         "type": "object"
       },
@@ -2060,6 +2368,46 @@
         ],
         "type": "object"
       },
+      "WorkerMemoryView": {
+        "description": "A worker's memory, as it last said (at most a minute old while it heartbeats).",
+        "properties": {
+          "container_bytes": {
+            "description": "Its container's memory; none outside a cgroup v2.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "container_limit_bytes": {
+            "description": "Its container's limit; none when unlimited.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tasks_bytes": {
+            "description": "Its running tasks' together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "whole_bytes": {
+            "description": "Its whole memory, in bytes: the agent, its fork servers, wait step hosts and running\ntasks.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "whole_bytes",
+          "tasks_bytes"
+        ],
+        "type": "object"
+      },
       "WorkerNodeView": {
         "description": "A worker as a node of the deployment.",
         "properties": {
@@ -2141,6 +2489,48 @@
         ],
         "type": "object"
       },
+      "WorkerPartsView": {
+        "description": "A worker's memory by part and its largest tasks.",
+        "properties": {
+          "at": {
+            "description": "When sampled.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "fork_servers_bytes": {
+            "description": "Its fork servers', together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "largest_tasks": {
+            "description": "The largest of them, largest first.",
+            "items": {
+              "$ref": "#/components/schemas/TaskMemoryView"
+            },
+            "type": "array"
+          },
+          "tasks_bytes": {
+            "description": "Its running tasks', together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watcher_hosts_bytes": {
+            "description": "Its wait step hosts', together.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "fork_servers_bytes",
+          "watcher_hosts_bytes",
+          "tasks_bytes"
+        ],
+        "type": "object"
+      },
       "WorkerUsageView": {
         "description": "A worker's memory by part (decision 463), as it last said (written at most once a minute).",
         "properties": {
@@ -2207,6 +2597,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "memory": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkerMemoryView",
+                "description": "Its memory as it last said (M5.1j, the Workers page's Memory column); none from an\nolder worker, or one that hasn't said yet."
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "offline_at": {
@@ -3504,6 +3905,104 @@
         "summary": "The files of each DAG root's current code that failed to import (decision 66). A DAG\ndefined in such a file keeps its last good version (still listed) but is held: no run is\ncreated and manual triggers are refused until the file is fixed (decision 72). A timeout or\na runner that died holds nothing: the file is parsed again (72.2). Fixing the file and\nsyncing the root makes the entry go.",
         "tags": [
           "dags"
+        ]
+      }
+    },
+    "/api/v1/metrics/memory": {
+      "get": {
+        "operationId": "memory_totals",
+        "parameters": [
+          {
+            "description": "`1h`, `24h` (the default), `7d` or `30d`.",
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One process's only (its ID).",
+            "in": "query",
+            "name": "process",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTotals"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every process's memory together over a range, in buckets (decision 462's sparkline).",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
+    "/api/v1/metrics/samples": {
+      "get": {
+        "operationId": "list_samples",
+        "parameters": [
+          {
+            "description": "`1h`, `24h` (the default), `7d` or `30d`.",
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One process's only (its ID).",
+            "in": "query",
+            "name": "process",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleSeriesList"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Each process's memory and CPU over a range, in buckets: averages and peaks, its container's\nlimit, and a worker's parts (decisions 464, 465).",
+        "tags": [
+          "workers"
         ]
       }
     },

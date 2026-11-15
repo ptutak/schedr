@@ -6,21 +6,21 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-14)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** M5.1j, The Metrics page (decisions D465, D466). Done when: the page renders every range on both databases and in light and dark; live refresh once a minute; UI browser tests; a guide page on it
-- **Then:** M5.1k, M5.1l, M5.1n, M5.1o, R1.1.
+- **Next step:** M5.1k, Task memory charts (decisions D467). Done when: both shown from the attempts table with an `oom_killed` attempt marked; UI tests
+- **Then:** M5.1l, M5.1n, M5.1o, R1.1, M5.2a.
 - **Open questions:** 0 (`DECISIONS.md`).
-- **Open bugs:** 6; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B247 (low/rare), B242 (low/rare) (`BUGS.md`).
+- **Open bugs:** 7; first: B245 (low/possible), B39 (low/possible), B38 (low/possible), B249 (low/rare), B247 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D492 (2026-11-15): the Metrics endpoints keep their final buckets (decision 492, Claude's)
+- N9 (2026-11-15): Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL (corrects D464)
+- D491 (2026-11-14): a process's memory includes its tasks, split by kind
 - D490 (2026-11-14): started_at is the worker's start
 - N8 (2026-11-14): samples by process, the webserver's its own (note 8; on D464)
-- D489 (2026-11-14): a poke may be a plain def
-- N7 (2026-11-14): The UI isn't built or tested for phones (corrects D466)
-- D488 (2026-11-14): standalone takes its DAG and script folders on the command line
 - M5.1m (2026-11-14): The start time from the worker
+- M5.1j (2026-11-14): The Metrics page
 - M5.1i (2026-11-14): The samples table
-- M5.1h (2026-11-14): Memory and CPU reported
 
 ## In progress
 

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Metrics · schedr{% endblock %}
+{% block content %}
+<h1>Metrics</h1>
+<div id="live" hx-get="{{ page.refresh }}" hx-trigger="every 60s" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML">
+<div class="metrics-choices">
+  <nav class="choices" aria-label="Range">{% for choice in ranges %}<a href="{{ choice.href }}"{% if choice.current %} class="current" aria-current="true"{% endif %}>{{ choice.label }}</a>{% endfor %}</nav>
+  {% if !deployments.is_empty() %}<nav class="choices" aria-label="Deployment">{% for choice in deployments %}<a href="{{ choice.href }}"{% if choice.current %} class="current" aria-current="true"{% endif %}>{{ choice.label }}</a>{% endfor %}</nav>{% endif %}
+  <span class="dim">Each process's memory and CPU, sampled once a minute by the leading master; times in {{ zone }}. Hover a chart for its values.</span>
+</div>
+{% for section in sections %}
+<section class="metrics-deployment">
+  <h2>{{ section.name }}</h2>
+  {% if let Some(error) = section.error %}
+  <div class="banner warning">Unavailable: {{ error }}</div>
+  {% else if section.rows.is_empty() %}
+  <p class="empty">No samples in this range yet: the leading master writes one a minute.</p>
+  {% else %}
+  <div class="metrics-view{% if section.panel.is_some() %} with-panel{% endif %}">
+  <div class="metrics-main">
+    <p class="legend chart-legend">{% for item in section.legend %}<span class="key"><span class="swatch {% if item.slot == 0 %}band{% else %}s{{ item.slot }}{% endif %}"></span>{{ item.label }}</span>{% endfor %}<span class="key"><span class="swatch limit"></span>container limits</span></p>
+    <h3>Memory</h3>
+    <div class="chart-box">{{ section.memory|safe }}</div>
+    <h3>Memory by kind</h3>
+    <p class="legend chart-legend">{% for item in section.kinds_legend %}<span class="key"><span class="swatch s{{ item.slot }}"></span>{{ item.label }}</span>{% endfor %}</p>
+    <div class="chart-box">{{ section.kinds|safe }}</div>
+    <h3>CPU</h3>
+    <div class="chart-box">{{ section.cpu|safe }}</div>
+  </div>
+  {% if let Some(panel) = section.panel %}
+  <aside class="process-panel" id="process-panel">
+    <div class="panel-head"><h2>{{ panel.title }}</h2><a class="close" href="{{ panel.close }}" aria-label="Close">×</a></div>
+    <p class="legend chart-legend">{% for item in panel.legend %}<span class="key"><span class="swatch s{{ item.slot }}"></span>{{ item.label }}</span>{% endfor %}</p>
+    <div class="chart-box">{{ panel.chart|safe }}</div>
+    <dl class="facts">{% for (term, value) in panel.facts %}<dt>{{ term }}</dt><dd class="mono">{{ value }}</dd>{% endfor %}</dl>
+    {% if !panel.tasks.is_empty() %}
+    <h3>Largest tasks now</h3>
+    <ul class="largest-tasks">{% for (task, size, run) in panel.tasks %}<li><a class="mono" href="{{ run }}">{{ task }}</a> {{ size }}</li>{% endfor %}</ul>
+    {% endif %}
+  </aside>
+  {% endif %}
+    <table class="list metrics-table" aria-label="{{ section.name }}'s processes">
+      <thead>
+        <tr>{% for sort in section.sorts %}<th>{% if sort.current %}{{ sort.label }} ▾{% else %}<a href="{{ sort.href }}">{{ sort.label }}</a>{% endif %}</th>{% if loop.first %}<th>Kind</th>{% endif %}{% if sort.label == "Now" %}<th>Itself</th><th>Tasks</th>{% endif %}{% if sort.label == "Container" %}<th>Limit</th>{% endif %}{% endfor %}<th>CPU (cores)</th></tr>
+      </thead>
+      <tbody>
+      {% for row in section.rows %}
+        <tr{% if row.open %} class="open"{% endif %}>
+          <td><a href="{{ row.href }}">{% if let Some(slot) = row.slot %}<span class="swatch s{{ slot }}"></span>{% else %}<span class="swatch band"></span>{% endif %}{{ row.label }}</a></td>
+          <td>{{ row.kind }}</td>
+          <td class="num" title="{{ row.split }}">{{ row.now }}</td>
+          <td class="num">{{ row.itself }}</td>
+          <td class="num">{% if row.tasks.is_empty() %}<span class="dim">-</span>{% else %}{{ row.tasks }}{% endif %}</td>
+          <td class="num">{{ row.peak }}</td>
+          <td class="num">{% if row.container.is_empty() %}<span class="dim">-</span>{% else %}{{ row.container }}{% endif %}</td>
+          <td class="num">{% if row.limit.is_empty() %}<span class="dim">none</span>{% else %}{{ row.limit }}{% endif %}</td>
+          <td>{% if let Some(share) = row.share %}<span class="share"><span class="share-bar{% if *share >= 90 %} high{% endif %}" style="width: {% if *share > 100 %}100{% else %}{{ share }}{% endif %}%"></span></span> {{ share }} %{% else %}<span class="dim">-</span>{% endif %}</td>
+          <td class="num">{% if row.cpu.is_empty() %}<span class="dim">-</span>{% else %}{{ row.cpu }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endfor %}
+</div>
+{% endblock %}

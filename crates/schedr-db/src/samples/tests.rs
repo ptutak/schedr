@@ -24,6 +24,12 @@ fn minute(process: &str, at: &str, resident: u64, cpu: Option<f64>) -> Sample {
         roles: BTreeMap::from([("master".to_owned(), "m-a".to_owned())]),
         resident_avg: resident,
         resident_peak: resident,
+        memory_avg: resident,
+        memory_peak: resident,
+        minutes: 1,
+        cpu_minutes: u32::from(cpu.is_some()),
+        container_minutes: 1,
+        covered: 1,
         cpu_seconds: Some(10.0),
         cpu_avg: cpu,
         cpu_peak: cpu,
@@ -179,4 +185,29 @@ async fn the_sources_are_the_masters_heard_and_the_live_workers_with_their_usage
         ],
         "the master heard long ago, the one without usage and the lost worker left out"
     );
+}
+
+#[tokio::test]
+async fn a_rollup_of_many_processes_is_written_in_one_transaction() {
+    // Codex's review of M5.1j: past 500 rows the insert was one transaction a chunk, so a
+    // chunk failing after another committed left a rollup partly written. One write now: the
+    // second write set to fail is never reached.
+    let db = migrated().await;
+    let samples: Vec<Sample> = (0..1100)
+        .map(|i| Sample {
+            process_id: format!("p{i:04}"),
+            ..minute("p", "2026-11-14T10:00:00Z", 100, None)
+        })
+        .collect();
+    db.fail_write(2);
+    db.insert_samples(&samples).await.unwrap();
+    let all = db
+        .samples(
+            MINUTE,
+            ts("2026-11-14T00:00:00Z"),
+            ts("2026-11-15T00:00:00Z"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 1100);
 }

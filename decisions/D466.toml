@@ -6,11 +6,15 @@ topic = "ui-cli"
 section = "Pages and live updates"
 summary = '''
 Charts are SVG rendered on the server like the DAG graphs (decision 22), with no JavaScript chart
-library: a point's value shows on hover from its `<title>`, and an open chart refreshes once a
-minute on the page's live stream (decision 175). Light and dark from the UI's colour tokens; no
+library: a point's values show on hover from a strip's `<title>`, and the Metrics page reads
+itself again once a minute, as the samples come (not on the live stream: no change event marks a
+sample). Eight series colours (`--series-1` to `--series-8`), checked for colour blindness in light
+and dark on the UI's backgrounds; lines, a band, stacked areas and dashed limits. No
 layout or tests for a phone (the user, 2026-11-14: nobody uses it there). Not chosen: a vendored library such as
 uPlot (hover and zoom); Grafana dashboards in the Helm chart, for now.
 '''
 history = "JOURNAL.md#D466"
 step = "M5.1j"
+checked = 2026-11-14
+code = ["crates/schedr-ui/src/chart.rs"]
 also = []

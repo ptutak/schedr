@@ -6,12 +6,18 @@ topic = "ui-cli"
 section = "Pages and live updates"
 summary = '''
 `Metrics` follows Deployments in the navigation (the UI's `/metrics`; the processes' Prometheus
-`/metrics` stays on their ops port). Per deployment, over 1 h, 24 h, 7 d or 30 d: memory and CPU
-charts of its processes (the 8 highest peaks, the rest as one band, container limits dashed) over
-a sortable table (now, peak, limit, share); a row opens a panel beside the chart with that
-process's breakdown and its largest tasks. A node's panel on Deployments gets a 24 h chart and a
-link; the Workers page a Memory column. Throughput and start latency by stage join after M5.1a-f.
+`/metrics` stays on their ops port). Per deployment, over 1 h, 24 h, 7 d or 30 d (each from
+`GET /api/v1/metrics/samples`, at most 60 to 240 points, bucketed in the database; 7 and 30 days
+from the rollups and the minutes since the last): memory and CPU charts of its processes (the 8
+highest memory peaks as lines, each process keeping its colour while the eight stay, the rest
+one band from their lowest to highest, container limits dashed) and memory by kind (decision
+491), over a table sortable by name, now, peak, container and use; a row opens a panel beside
+the charts with that process's parts stacked and its largest tasks. A node's panel on
+Deployments loads a 24 h chart (`/metrics/chart`) with a link; the Workers page has a Memory
+column (`memory` on `GET /api/v1/workers`). Throughput and start latency by stage come in M5.1l.
 '''
 history = "JOURNAL.md#D465"
 step = "M5.1j"
+checked = 2026-11-14
+code = ["crates/schedr-ui/src/metrics.rs", "crates/schedr-api/src/series.rs", "crates/schedr-ui/templates/metrics.html"]
 also = ["observability"]

@@ -18,6 +18,7 @@ pub mod logs;
 pub mod metrics;
 pub mod named_events;
 pub mod routes;
+pub mod series;
 pub mod state;
 pub mod version;
 pub mod views;
@@ -66,6 +67,8 @@ pub use state::ApiState;
         routes::get_command,
         routes::list_workers,
         routes::get_deployment,
+        series::list_samples,
+        series::memory_totals,
         routes::list_import_errors,
         events::events,
         named_events::post_event,
@@ -145,6 +148,24 @@ fn run_control_routes() -> Router<ApiState> {
         )
 }
 
+/// The routes of `schedr connections`.
+fn connection_routes() -> Router<ApiState> {
+    Router::new()
+        .route("/api/v1/connections", get(routes::list_connections))
+        .route("/api/v1/connections/check", post(routes::check_connections))
+        .route(
+            "/api/v1/connections/{name}/test",
+            post(routes::test_connection),
+        )
+}
+
+/// The Metrics page's (decisions 464, 465).
+fn metrics_routes() -> Router<ApiState> {
+    Router::new()
+        .route("/api/v1/metrics/samples", get(series::list_samples))
+        .route("/api/v1/metrics/memory", get(series::memory_totals))
+}
+
 /// The routes of `schedr triggers`.
 fn trigger_routes() -> Router<ApiState> {
     Router::new()
@@ -211,6 +232,7 @@ pub fn router(state: ApiState) -> Router {
             get(routes::get_run_resource),
         )
         .merge(trigger_routes())
+        .merge(metrics_routes())
         .merge(run_control_routes())
         .route(
             "/api/v1/sensors/switched-off",
@@ -248,12 +270,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/workers/{worker_id}/resume",
             post(routes::resume_worker),
         )
-        .route("/api/v1/connections", get(routes::list_connections))
-        .route("/api/v1/connections/check", post(routes::check_connections))
-        .route(
-            "/api/v1/connections/{name}/test",
-            post(routes::test_connection),
-        )
+        .merge(connection_routes())
         .route(OPENAPI_PATH, get(docs::description))
         .route(DOCS_PATH, get(docs::redirect))
         .route("/api/v1/docs/", get(docs::file))

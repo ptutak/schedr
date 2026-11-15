@@ -12,9 +12,10 @@ use jiff::Timestamp;
 use schedr_api::views::{
     AllRunsQuery, AttemptList, BackfillList, BackfillRequest, BackfillView,
     CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagView,
-    DeploymentView, EventList, ImportErrorList, LogChunk, NamedEventList, NamedEventView,
-    OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList, SensorList,
-    TestConnectionRequest, TriggerList, TriggerRequest, TriggerView, WorkerList,
+    DeploymentView, EventList, ImportErrorList, LogChunk, MemoryTotals, NamedEventList,
+    NamedEventView, OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList,
+    SampleSeriesList, SensorList, TestConnectionRequest, TriggerList, TriggerRequest, TriggerView,
+    WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -808,6 +809,40 @@ impl<T: Transport> Client<T> {
     pub async fn deployment(&self) -> Result<DeploymentView, ClientError> {
         self.call(Method::Get, "/api/v1/deployment".to_owned(), None)
             .await
+    }
+
+    /// `GET /api/v1/metrics/samples`: each process's samples over `range` (`1h`, `24h`, `7d`,
+    /// `30d`), or one process's.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn samples(
+        &self,
+        range: &str,
+        process: Option<&str>,
+    ) -> Result<SampleSeriesList, ClientError> {
+        let process = process.map_or_else(String::new, |p| format!("&process={}", path(p)));
+        self.call(
+            Method::Get,
+            format!("/api/v1/metrics/samples?range={}{process}", path(range)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/metrics/memory`: every process's memory together over `range`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn memory_totals(&self, range: &str) -> Result<MemoryTotals, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/metrics/memory?range={}", path(range)),
+            None,
+        )
+        .await
     }
 
     /// `GET /api/v1/import-errors`.

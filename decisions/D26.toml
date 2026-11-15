@@ -11,4 +11,4 @@ Assets are embedded in the binary and require no JavaScript build.
 history = "archive/PROJECT.md#D26"
 step = "M3.1"
 code = ["crates/schedr-ui/src/lib.rs::router"]
-checked = 2026-11-09
+checked = 2026-11-14

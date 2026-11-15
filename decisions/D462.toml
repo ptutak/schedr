@@ -8,9 +8,10 @@ summary = '''
 One row per deployment above the graph: masters by role (red when none leads), workers by state,
 slots in use over active workers, errors and warnings counted with the list unfolding (each line
 opening its node's panel), mixed versions warned, an unreachable deployment's error and how long
-it took. `GET /api/v1/deployment` gains each worker's `slots` and `running` (additive). Memory now,
-with a 24 h sparkline, joins it with the memory samples (decision 464). Not chosen: runs and tasks
-by state in the block (left to the Metrics page).
+it took. `GET /api/v1/deployment` gains each worker's `slots` and `running` (additive). A Memory
+column gives every process's memory now, tasks included, with a 24 h sparkline
+(`GET /api/v1/metrics/memory`), linking to the Metrics page. Not chosen: runs and tasks by state
+in the block (left to the Metrics page).
 '''
 history = "JOURNAL.md#D462"
 step = "M5.1g"

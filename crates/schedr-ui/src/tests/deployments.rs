@@ -54,6 +54,7 @@ fn asked(name: &str, view: Value) -> Asked {
         proof: "token",
         answer: Ok(serde_json::from_value(view).unwrap()),
         took: Duration::from_millis(3),
+        memory: None,
     }
 }
 
@@ -170,6 +171,7 @@ fn an_unreachable_deployment_is_a_red_webserver_and_the_ui_says_so() {
         proof: "mTLS",
         answer: Err("connection refused".to_owned()),
         took: Duration::from_millis(5),
+        memory: None,
     };
     let mut newer = distributed();
     newer["webserver"]["schedr_version"] = json!("9.9.9");
@@ -236,8 +238,25 @@ fn two_deployments() -> axum::Router {
     view["workers"][1]["problems"] = json!([{"error": false, "message": "disconnected: lost unless it comes back within its lease"}]);
     view["masters"][1]["problems"] =
         json!([{"error": true, "message": "a round failed: the database is gone"}]);
+    let mut etl = with_deployment(view);
+    // Every process's memory together over 24 h: 1 GiB, then 3 GiB now.
+    etl.answers.insert(
+        "/api/v1/metrics/memory?range=24h".to_owned(),
+        (
+            200,
+            json!({
+                "step_s": 360,
+                "from": "2026-11-13T10:00:00Z",
+                "to": "2026-11-14T10:00:00Z",
+                "points": [
+                    {"at": "2026-11-14T09:48:00Z", "resident": 1_073_741_824_u64},
+                    {"at": "2026-11-14T09:54:00Z", "resident": 3_221_225_472_u64}
+                ]
+            }),
+        ),
+    );
     ui(vec![
-        deployment("etl", with_deployment(view)),
+        deployment("etl", etl),
         deployment(
             "ml",
             Scripted {
@@ -368,11 +387,12 @@ async fn the_ui_and_webserver_panels_say_how_the_ui_reaches_each_deployment() {
     assert!(!html.contains("location.replace"));
     // In the navigation, in its place; the Config page and each deployment's page are gone.
     assert_eq!(
-        texts(&html, "header nav a")[..6],
+        texts(&html, "header nav a")[..7],
         [
             "DAGs",
             "Runs",
             "Deployments",
+            "Metrics",
             "Workers",
             "Connections",
             "Import errors"
@@ -570,6 +590,7 @@ fn the_status_block_warns_of_no_leader_mixed_versions_and_an_unreachable_deploym
         proof: "mTLS",
         answer: Err("connection refused".to_owned()),
         took: Duration::from_millis(1500),
+        memory: None,
     };
     let rows = status(&[asked("etl", etl), down]);
     assert!(rows[0].leaderless());
@@ -598,7 +619,14 @@ async fn the_deployments_page_shows_the_status_block_above_the_graph() {
     assert_eq!(cells[1], "1 leading · 1 standing by");
     assert_eq!(cells[2], "1 active · 1 disconnected");
     assert_eq!(cells[3], "0 / 0");
-    assert!(cells[4].starts_with("1 error · 1 warning"), "{}", cells[4]);
+    // Memory now, tasks included, with its sparkline, linking to the Metrics page.
+    assert!(cells[4].starts_with("3.0 GiB"), "{}", cells[4]);
+    assert_eq!(
+        attrs(&html, "table.status-block td.status-memory a", "href"),
+        ["/metrics?deployment=etl"]
+    );
+    assert!(html.contains(r#"<svg class="sparkline""#));
+    assert!(cells[5].starts_with("1 error · 1 warning"), "{}", cells[5]);
     assert_eq!(
         attrs(&html, "table.status-block .status-problems a", "href"),
         [
@@ -606,7 +634,7 @@ async fn the_deployments_page_shows_the_status_block_above_the_graph() {
             "#node.etl.worker.w2".to_owned()
         ]
     );
-    assert_eq!(cells[5], "1.0.0");
+    assert_eq!(cells[6], "1.0.0");
     let down = texts(&html, "table.status-block tbody tr:nth-child(2) td");
     assert_eq!(down[0], "ml");
     assert!(down[1].starts_with("Unreachable: "), "{}", down[1]);

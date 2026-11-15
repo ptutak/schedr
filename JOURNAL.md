@@ -1134,3 +1134,114 @@ sample, which can be a reply stamped at once and delivered late (now the sample 
 narrowest round trip, its error growing with the drift allowance as it ages); and the master
 compared a wall time read before the lock and transaction with master time read later (now
 both read together in `start_time`, as `HeartbeatAcks::steady_now` does).
+
+### <a id="D491"></a>2026-11-14: a process's memory includes its tasks, split by kind (decision 491)
+
+Building M5.1j, Claude drew each process's resident memory on the Metrics page, the breakdown
+only in the row's panel. A side note pointed out what that hides: a worker's fork servers, wait
+step hosts and tasks are processes of their own, so a worker running a 5 GiB task showed about
+50 MB, and outside a container nothing on the chart showed its tasks (the accepted layout had
+"worker-a 5.1 GiB"). The user: "I want to see tasks memory as well", then "can you also show the
+split of memory? how much for worker/master how much for tasks?"
+
+Built: each sample stores the process's whole memory (`memory_avg`, `memory_peak`: resident plus
+a worker's parts, in the open `0002` migration), rolled up like the rest, and the lines draw it;
+the rollups keep the parts' averages (largest tasks left out), so 7 and 30 days split too. Each
+deployment gets a stacked "Memory by kind" chart (masters and webservers, workers, fork servers,
+wait step hosts, tasks), its legend giving each kind's memory now; the table has Now (the whole),
+Itself and Tasks; a row's panel stacks its parts. Not chosen: adding the parts at read time from
+the minute rows only (7 and 30 days would have lost the tasks); the container's memory as the line
+(absent outside a cgroup, and on a desktop a cgroup is the whole session). CPU stays each
+process's own: a task's CPU isn't sampled.
+
+### <a id="N9"></a>2026-11-15: Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL (note 9; corrects D464)
+
+Codex's high review of M5.1j's storage and API (session `01a1dc3c`) found six problems, all
+reproduced on both databases and fixed with tests that failed before:
+
+1. A deployment's total over 7 or 30 days counted a process replaced within a 15-minute window
+   twice: each rollup averaged only its own minutes, and the totals summed those averages. Each
+   row now stores the `minutes` it covers; a bucket's total is its processes' memory weighted by
+   their minutes over the most minutes any of them has (the "Memory by kind" chart likewise).
+2. A rollup averaged a worker's parts only over the minutes that had them, but its whole memory
+   over all, so they didn't add up: the parts are now averaged over every minute, 0 where it ran
+   no worker.
+3. A container that became unlimited kept its old limit: a rollup and a process now take the
+   latest sample's limit, none meaning unlimited.
+4. One process's request read every process's rows, and 30 days with 100 processes took about
+   10 s: the buckets are now computed in the database (`sample_buckets`, three statements a
+   request, the process filter in SQL), from numeric part columns (`forks_avg`, `hosts_avg`,
+   `tasks_avg`) beside the JSON.
+5. A process sampled since the last rollup was missing from 7 and 30 days: those ranges read the
+   rollups before the window that last closed and the minutes after it.
+6. A range returned 241 points: it now starts so that it holds 240 at most, `now`'s bucket the
+   last.
+
+Codex's check of those fixes (a fresh session, `01a1dc5f`) confirmed the zero-filled parts, the
+filter in SQL, the point caps and the rounding, and found five more problems, all reproduced on
+both databases and fixed with tests that failed before:
+
+1. Dividing a bucket's weighted memory by the most minutes any process had still overcounted when
+   no process spanned the bucket (a standalone's restart: up to 1.9 times). Each row now stores
+   `covered`, the minutes of its window in which any process was sampled (1 for a minute), and a
+   total divides by the bucket's coverage; the API gives it (`coverage`) for memory by kind.
+2. A rollup's CPU and container averages are over the minutes that have them, but were weighted
+   by all its minutes (a process's first minute has no CPU): rows store `cpu_minutes` and
+   `container_minutes`, those averages' weights.
+3. The latest limit fell back to a bucket's highest when no minute sample was recent: it now
+   comes from each process's latest row, with its roles (`latest_of`).
+4. Where the rollups end was taken from the clock, so a window the leader hadn't rolled up (no
+   leader) went missing from 7 and 30 days: it is now the end of the newest rollup stored.
+5. Absurd byte counts overflowed the weighted sums: the sums are taken in floating point and
+   byte counts are capped at 4 PiB when stored. Postgres rounds through `NUMERIC`, half away
+   from zero as SQLite does.
+
+A third check (`01a1dc90`) found three more, each reproduced on both databases and fixed with a
+test that failed before:
+
+1. A bucket's memory and its coverage were read in two statements, so a minute stored between
+   them halved the total: coverage is now joined into the buckets' statement.
+2. A webserver's minute stored late (captured before a window closed, inserted after its rollup)
+   stayed out of that rollup forever: a window is rolled up 2 minutes after it closes
+   (`ROLL_GRACE`).
+3. Past 500 rows an insert was one transaction a chunk, so a chunk failing after another
+   committed left a window partly rolled up and moved where the rollups end past the processes
+   missing: all chunks are now one transaction.
+
+### <a id="D492"></a>2026-11-15: the Metrics endpoints keep their final buckets (decision 492, Claude's)
+
+Codex's second check timed 30 days of 100 processes: 4.5 s on SQLite. The user asked that
+metrics not weigh on schedr and to profile before committing. Measured on a file database
+(100 processes, 30 days of rollups, 24 h of minutes, 432,100 rows), release build:
+
+| | SQLite before | SQLite after, first | SQLite after, again | Postgres before | Postgres after, again |
+|---|---:|---:|---:|---:|---:|
+| samples 24 h, all | 2.10 s | 1.47 s | 44 ms | 1.37 s | 51 ms |
+| samples 30 d, all | 2.59 s | 3.1-4.4 s | 50-61 ms | 2.10 s | 57 ms |
+| samples 24 h, one | 1.18 s | 0.59 s | 5 ms | 0.47 s | 14 ms |
+| memory 24 h (the sparkline) | 1.31 s | 1.27 s | 8 ms | 0.38 s | 8 ms |
+
+(First reads vary by the run on a file growing between runs.) The sampler's writes were already
+light: a minute's insert of 100 rows 13-29 ms, a window's read 21-27 ms, its rollup's insert
+13-29 ms, the deletes 2-44 ms, on either database; nothing to change there.
+
+The reads cost by volume (24 h: 143,000 minute rows, each with 15 aggregates), and the
+Deployments page asked for its 24 h sparkline every 15 seconds and at each live change, in each
+tab. Three changes:
+
+- **Final buckets kept** (decision 492): a bucket's rows are all stored a grace after it ends
+  (minutes within the sampler's 2-minute grace, rollups once), and buckets are aligned to the
+  epoch, so a later request's are the same; each request reads the buckets since the last final
+  one. `FINAL_AFTER` is 5 minutes, a constant derived from `ROLL_GRACE` with a margin for the
+  clocks of the processes writing (not a setting: nothing to tune). A test asks one state each
+  minute over 70 minutes of samples (a webserver's stored a minute late, windows rolled up) and
+  compares each answer with a fresh state's; with no margin it fails.
+- **`latest_of`** read every row of each process (the join on `at` without the step couldn't use
+  the primary key): 150 ms for a few minutes. The steps named and a `CROSS JOIN` (SQLite's
+  documented join order): 9 ms (Postgres 118 -> 5 ms).
+- **The range's two sides bounded each**: with the cut a day before the start, SQLite read a day
+  of minutes for a few (73 ms for 200 rows).
+
+Not chosen: a coarser rollup tier for 30 days (first reads stay 1-4 s on SQLite, once per range
+per process until evicted); a cache by time only (each refresh past it would read everything
+again).

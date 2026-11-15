@@ -50,6 +50,12 @@ pub struct WorkerRow {
     pub wait_steps: String,
     /// The processes running its wait steps (none for a worker that is gone).
     pub hosts: Vec<HostRow>,
+    /// Its whole memory as it last said, tasks included (empty: not known).
+    pub memory: String,
+    /// That by part, for its title: its tasks', its container's and its limit.
+    pub memory_title: String,
+    /// Its container's memory as a share of its limit, in percent; none without both.
+    pub memory_share: Option<u64>,
 }
 
 /// A process running a worker's wait steps, or a code whose hosts were lost.
@@ -224,6 +230,26 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, worker: &WorkerView) -> Worke
         ),
         wait_steps: format!("{wait_steps} / {}", worker.watcher_slots),
         hosts: hosts.iter().map(HostRow::of).collect(),
+        memory: worker
+            .memory
+            .map(|m| show_size(m.whole_bytes))
+            .unwrap_or_default(),
+        memory_title: worker.memory.map_or_else(String::new, |m| {
+            let mut title = format!("tasks {}", show_size(m.tasks_bytes));
+            if let Some(container) = m.container_bytes {
+                let _ = write!(title, " · container {}", show_size(container));
+            }
+            if let Some(limit) = m.container_limit_bytes {
+                let _ = write!(title, " of {}", show_size(limit));
+            }
+            title
+        }),
+        memory_share: worker.memory.and_then(|m| {
+            m.container_bytes
+                .zip(m.container_limit_bytes)
+                .filter(|(_, limit)| *limit > 0)
+                .map(|(used, limit)| used.saturating_mul(100) / limit)
+        }),
         version: worker.schedr_version.clone(),
         last_seen: page.time(&worker.last_heartbeat_at),
         warnings: worker

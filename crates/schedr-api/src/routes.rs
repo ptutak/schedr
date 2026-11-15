@@ -80,19 +80,26 @@ pub async fn list_import_errors(State(state): State<ApiState>) -> ApiResult<Impo
     responses((status = 200, body = WorkerList)))]
 pub async fn list_workers(State(state): State<ApiState>) -> ApiResult<WorkerList> {
     let workers = state.db.workers().await?;
-    let mut masters: HashMap<String, Option<String>> = state
+    let mut nodes: HashMap<String, schedr_db::nodes::WorkerNode> = state
         .db
         .worker_nodes()
         .await?
         .into_iter()
-        .map(|node| (node.worker_id, node.master_id))
+        .map(|node| (node.worker_id.clone(), node))
         .collect();
     Ok(Json(WorkerList {
         workers: workers
             .iter()
-            .map(|worker| WorkerView {
-                master_id: masters.remove(&worker.id).flatten(),
-                ..WorkerView::from(worker)
+            .map(|worker| {
+                let node = nodes.remove(&worker.id);
+                WorkerView {
+                    master_id: node.as_ref().and_then(|n| n.master_id.clone()),
+                    memory: node
+                        .as_ref()
+                        .and_then(|n| n.usage.as_ref())
+                        .map(crate::views::WorkerMemoryView::from),
+                    ..WorkerView::from(worker)
+                }
             })
             .collect(),
     }))

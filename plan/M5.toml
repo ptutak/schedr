@@ -189,7 +189,8 @@ scope = '''
 done_when = '''
 the page renders every range on both databases and in light and dark; live refresh once a minute; UI browser tests; a guide page on it
 '''
-status = "planned"
+status = "done"
+done = 2026-11-14
 
 [[steps]]
 id = "M5.1k"

@@ -56,9 +56,22 @@ step touches their code or the user schedules them.
 | 1 | B245: the async start-method roles test's 5 s timeout can run out before a spawned task starts, under the suite's load | 2 | low | possible | tests |
 | 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
 | 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
-| 4 | B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected) | 1 | low | rare | tests |
-| 5 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
-| 6 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+| 4 | B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected) | 1 | low | rare | tests |
+| 5 | B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected) | 1 | low | rare | tests |
+| 6 | B242: the new B239 roles test once saw `disconnected`, not `offline`, under the suite's load (Suspected) | 1 | low | rare | tests |
+| 7 | B241: the fork test with a late thread failed once in the integration suite: the fork wasn't `Ok` (Suspected) | 1 | low | rare | tests |
+
+## B249: the async stop-signal test's 1 s timeout can end the task before its coroutine starts, under load (Suspected)
+
+- **Rating:** severity **low**, probability **rare**, tests (score 1): test_the_stop_signal_cancels_the_coroutine_and_its_finally_runs: no marker file at all (not even `cancelled`) in a loaded `make check`; passes alone 5 of 5.
+In `make check` on 2026-11-15 (M5.1j's code, beside a Codex review building and testing the
+workspace and a browser test) the run failed as expected, but the marker file didn't exist: the
+`except CancelledError` branch never ran, so the coroutine wasn't cancelled at its `await` — most
+likely the stop came at the 1 s timeout while the task's interpreter was still starting, and the
+grace ran out before any task code. Alone it passed 5 times out of 5. Not known: whether a stop
+before the coroutine's first await is handled as designed (then the test's 1 s needs a margin,
+or it should wait for the task to have started), or a stop during start-up skips the task's
+cleanup wrongly. First step: the agent's log of that attempt's stop under load, in a loop.
 
 ## B247: the standby-takeover roles test's master once couldn't start under the suite's I/O stall (Suspected)
 

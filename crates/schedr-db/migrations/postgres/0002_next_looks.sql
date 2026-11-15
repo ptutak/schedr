@@ -84,10 +84,24 @@ CREATE TABLE samples (
     step_s          INTEGER NOT NULL,
     at              TIMESTAMPTZ NOT NULL,
     -- What the process runs, as JSON text: each role ("master", "worker", "webserver") with its
-    -- node's ID (text on both databases, so a rollup takes it with MAX).
+    -- node's ID (text on both databases).
     roles           TEXT NOT NULL,
     resident_avg    BIGINT NOT NULL,
     resident_peak   BIGINT NOT NULL,
+    -- Its whole memory: itself and, for a worker, its fork servers, wait step hosts and running
+    -- tasks (separate processes), so a worker's line shows its tasks (the user, 2026-11-14).
+    memory_avg      BIGINT NOT NULL,
+    memory_peak     BIGINT NOT NULL,
+    -- The minutes it covers: 1, or a rollup's minute samples; averages over several rows are
+    -- weighted by it. `cpu_minutes` and `container_minutes`: of those, the ones with a CPU or a
+    -- container figure, their averages' weights. `covered`: the minutes of its window in which
+    -- any process was sampled (1 for a minute), so that a deployment's total in a bucket is its
+    -- processes' weighted memory over the minutes sampled (Codex's reviews of M5.1j: a process
+    -- replaced within a window counted twice).
+    minutes           INTEGER NOT NULL,
+    cpu_minutes       INTEGER NOT NULL,
+    container_minutes INTEGER NOT NULL,
+    covered           INTEGER NOT NULL,
     -- CPU time used since the process started, in seconds (minute rows only).
     cpu_seconds     DOUBLE PRECISION,
     -- Cores used since the sample before (none for a process's first).
@@ -96,8 +110,12 @@ CREATE TABLE samples (
     container_avg   BIGINT,
     container_peak  BIGINT,
     container_limit BIGINT,
-    -- A worker's memory by part and its largest tasks (minute rows only).
+    -- A worker's memory by part and its largest tasks (a rollup: the parts' averages only).
     parts           JSONB,
+    -- A worker's parts on average (NULL: not running a worker), for the averages in SQL.
+    forks_avg       BIGINT,
+    hosts_avg       BIGINT,
+    tasks_avg       BIGINT,
     PRIMARY KEY (process_id, step_s, at)
 );
 CREATE INDEX samples_by_time ON samples (step_s, at);

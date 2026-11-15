@@ -510,15 +510,20 @@ from one DAG per transaction. `schedr_retention_deleted{kind}` counts what it de
 
 ## Samples of each process
 
-Once a minute the leading master stores a sample of each schedr process for the Metrics page:
-its memory, its CPU (cores used between two measures), its container's memory and limit,
-and a worker's memory by part with its largest tasks. Each process has one row, whatever roles
+Once a minute the leading master stores a sample of each schedr process for the
+[Metrics page](12-ui.md#metrics): its memory, its CPU (cores used between two measures), its
+container's memory and limit, and a worker's memory by part with its largest tasks. Its memory
+is stored twice: the process alone, and its whole memory with a worker's fork servers, wait step
+hosts and running tasks, which are processes of their own. Each process has one row, whatever roles
 it runs: a standalone is one process, sampled once, its row naming the master, the worker and
 the webserver. The figures are what each master's row and each worker's heartbeat last said; a
 worker's are written at most once a minute. A webserver in a process of its own stores its own
 sample.
 
-Every 15 minutes the minute samples are rolled up into each process's averages and peaks. Minute
+Every 15 minutes the minute samples are rolled up into each process's averages and peaks, a
+worker's parts averaged (its largest tasks are kept in the minute samples only), with the number
+of minutes it covers. A deployment's memory in a chart's bucket weighs each process by the minutes
+it was sampled there, so a process replaced within a bucket isn't counted twice. Minute
 samples are kept for a day and rollups for 30 days; these ages are fixed timings
 (`SCHEDR_HIDDEN__MASTER__SAMPLES_KEPT`, `SCHEDR_HIDDEN__MASTER__ROLLUPS_KEPT`, see
 [Fixed timings](14-timings.md#fixed-timings)), not `[retention]` keys. The leader makes three

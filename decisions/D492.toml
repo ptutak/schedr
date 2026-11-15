@@ -1,0 +1,18 @@
+title = "The Metrics endpoints keep their final buckets between requests"
+date = 2026-11-15
+by = "claude"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "observability"  # a topic of design/README.md
+section = "Metrics in the UI"  # the subheading of the topic's page it goes under
+summary = '''
+`GET /api/v1/metrics/samples` and `/memory` keep, per range and process (or all), the buckets
+that ended `FINAL_AFTER` (5 minutes: the sampler's grace, a minute's write, clocks apart) ago,
+whose rows are all stored, with each process's latest sample; a request reads only the buckets
+since, and one for a key waits for one already reading it. At most 64 keys (the least recently
+used go) of 100,000 buckets each. So the Deployments page's sparkline and the Metrics page cost a
+few milliseconds a refresh after their first read.
+'''
+history = "JOURNAL.md#D492"  # <a id="D492"></a> starts its JOURNAL.md entry
+step = "M5.1j"  # the plan step that builds it; "later"; "n/a" for a rule
+also = ["ui-cli"]
+code = ["crates/schedr-api/src/series/cache.rs", "crates/schedr-api/src/series.rs::list_samples"]

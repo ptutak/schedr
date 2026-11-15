@@ -9,11 +9,14 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use schedr_db::database::{Database, DbError};
 use schedr_db::samples::{MINUTE, ROLLUP, Sample, Source};
-use schedr_model::usage::NodeUsage;
+use schedr_model::usage::{NodeUsage, WorkerParts};
 
 #[cfg(test)]
 mod tests;
 
+/// How long after its end a window waits to be rolled up: a sample stored late (a webserver's
+/// timer, a slow insert) is in it by then.
+const ROLL_GRACE: SignedDuration = SignedDuration::from_mins(2);
 /// How the samples are taken and kept (hidden timings, decision 464).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SampleSettings {
@@ -145,10 +148,18 @@ impl Sampler {
         &mut self,
         (process, roles): (String, BTreeMap<String, String>),
         usage: &NodeUsage,
-        parts: Option<schedr_model::usage::WorkerParts>,
+        parts: Option<WorkerParts>,
         (at, measured): (Timestamp, Timestamp),
     ) -> Sample {
         let cpu = self.cores(&process, measured, usage.cpu_seconds);
+        // Its whole memory: a worker's parts are processes of their own.
+        let memory = usage
+            .resident_bytes
+            .saturating_add(parts.as_ref().map_or(0, |p| {
+                p.fork_servers_bytes
+                    .saturating_add(p.watcher_hosts_bytes)
+                    .saturating_add(p.tasks_bytes)
+            }));
         Sample {
             process_id: process,
             step_s: MINUTE,
@@ -156,6 +167,12 @@ impl Sampler {
             roles,
             resident_avg: usage.resident_bytes,
             resident_peak: usage.resident_bytes,
+            memory_avg: memory,
+            memory_peak: memory,
+            minutes: 1,
+            cpu_minutes: u32::from(cpu.is_some()),
+            container_minutes: u32::from(usage.container_bytes.is_some()),
+            covered: 1,
             cpu_seconds: Some(usage.cpu_seconds),
             cpu_avg: cpu,
             cpu_peak: cpu,
@@ -200,7 +217,9 @@ impl Sampler {
         // Every window closed since the last one rolled (a new sampler: since the oldest
         // minute kept), each once (again after a restart: kept), before any minute is deleted
         // (Grok's review of M5.1i: a leader down across a boundary lost the windows it missed).
-        let closed = floor(minute, ROLLUP)
+        // A window closes for rolling up a grace after its end, so that a webserver's sample
+        // stored late is in it: a rollup isn't written again (Codex's review of M5.1j).
+        let closed = floor(minute.checked_sub(ROLL_GRACE).unwrap_or(minute), ROLLUP)
             .checked_sub(SignedDuration::from_secs(i64::from(ROLLUP)))
             .unwrap_or(minute);
         let window = SignedDuration::from_secs(i64::from(ROLLUP));
@@ -262,9 +281,20 @@ async fn roll_up(db: &Database, from: Timestamp) -> Result<(u64, u32), DbError> 
 
 /// `minutes` (by process, then time) as one rollup per process at `at`: memory's averages
 /// rounded and peaks, CPU's average and peak over the minutes that have one, the container's
-/// highest limit, every role the window saw.
+/// latest limit, every role the window saw, the minutes it covers, and a worker's parts on
+/// average over every minute (its largest tasks left out), so the 7 and 30 days show memory by
+/// kind too.
 #[must_use]
 pub fn rolled_up(minutes: &[Sample], at: Timestamp) -> Vec<Sample> {
+    // The window's minutes in which any process was sampled: a total's denominator.
+    let covered = u32::try_from(
+        minutes
+            .iter()
+            .map(|s| s.at)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+    )
+    .unwrap_or(u32::MAX);
     let mut by_process: BTreeMap<&str, Vec<&Sample>> = BTreeMap::new();
     for sample in minutes {
         by_process
@@ -289,6 +319,7 @@ pub fn rolled_up(minutes: &[Sample], at: Timestamp) -> Vec<Sample> {
                 })
             };
             let resident: Vec<u64> = samples.iter().map(|s| s.resident_avg).collect();
+            let memory: Vec<u64> = samples.iter().map(|s| s.memory_avg).collect();
             let container: Vec<u64> = samples.iter().filter_map(|s| s.container_avg).collect();
             let cpu: Vec<f64> = samples.iter().filter_map(|s| s.cpu_avg).collect();
             #[expect(clippy::cast_precision_loss, reason = "a count of minutes")]
@@ -303,13 +334,39 @@ pub fn rolled_up(minutes: &[Sample], at: Timestamp) -> Vec<Sample> {
                     .collect(),
                 resident_avg: average(&resident).unwrap_or(0),
                 resident_peak: samples.iter().map(|s| s.resident_peak).max().unwrap_or(0),
+                memory_avg: average(&memory).unwrap_or(0),
+                memory_peak: samples.iter().map(|s| s.memory_peak).max().unwrap_or(0),
+                minutes: samples.iter().map(|s| s.minutes).sum(),
+                cpu_minutes: samples.iter().map(|s| s.cpu_minutes).sum(),
+                container_minutes: samples.iter().map(|s| s.container_minutes).sum(),
+                covered,
                 cpu_seconds: None,
                 cpu_avg,
                 cpu_peak: samples.iter().filter_map(|s| s.cpu_peak).reduce(f64::max),
                 container_avg: average(&container),
                 container_peak: samples.iter().filter_map(|s| s.container_peak).max(),
-                container_limit: samples.iter().filter_map(|s| s.container_limit).max(),
-                parts: None,
+                // The latest minute's: none there is unlimited (Codex's review of M5.1j).
+                container_limit: samples.last().and_then(|s| s.container_limit),
+                // Each part over every minute, 0 where it ran no worker, so the parts and the
+                // process itself add up to its whole memory (Codex's review of M5.1j).
+                parts: {
+                    let ran = samples.iter().any(|s| s.parts.is_some());
+                    let part = |of: fn(&WorkerParts) -> u64| {
+                        average(
+                            &samples
+                                .iter()
+                                .map(|s| s.parts.as_ref().map_or(0, of))
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap_or(0)
+                    };
+                    ran.then(|| WorkerParts {
+                        fork_servers_bytes: part(|p| p.fork_servers_bytes),
+                        watcher_hosts_bytes: part(|p| p.watcher_hosts_bytes),
+                        tasks_bytes: part(|p| p.tasks_bytes),
+                        largest_tasks: Vec::new(),
+                    })
+                },
             }
         })
         .collect()

@@ -1,0 +1,20 @@
+title = "A process's memory includes its tasks; memory is split by kind"
+date = 2026-11-14
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "ui-cli"  # a topic of design/README.md
+section = "Pages and live updates"  # the subheading of the topic's page it goes under
+summary = '''
+A process's memory on the Metrics page is its whole memory (`memory_avg`, `memory_peak` in
+`samples`): itself and, for a worker, its fork servers, wait step hosts and running tasks, so a
+worker's line shows its tasks. Each deployment also has a stacked chart of its memory by kind
+(masters and webservers, workers, fork servers, wait step hosts, tasks), its legend giving each
+kind's memory now; the table splits a process into Now, Itself and Tasks, and a row's panel
+stacks its parts. Rollups keep the parts' averages, so every range splits. CPU stays the
+processes' own (a task's CPU isn't sampled).
+'''
+history = "JOURNAL.md#D491"  # <a id="D491"></a> starts its JOURNAL.md entry
+step = "M5.1j"  # the plan step that builds it; "later"; "n/a" for a rule
+also = ["observability"]
+checked = 2026-11-14
+code = ["crates/schedr-ui/src/metrics.rs::kinds_chart", "crates/schedr-ui/src/metrics.rs::parts_chart", "crates/schedr-master/src/samples.rs::rolled_up"]

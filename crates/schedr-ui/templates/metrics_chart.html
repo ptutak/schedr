@@ -1,0 +1,2 @@
+{% if let Some(error) = error %}<p class="dim">{{ error }}</p>{% else %}<p class="legend chart-legend">{% for item in legend %}<span class="key"><span class="swatch s{{ item.slot }}"></span>{{ item.label }}</span>{% endfor %}</p>
+<div class="chart-box">{{ chart|safe }}</div>{% endif %}

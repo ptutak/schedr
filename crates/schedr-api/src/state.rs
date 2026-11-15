@@ -47,6 +47,8 @@ pub struct ApiState {
     pub node: Arc<crate::views::NodeView>,
     /// What this process uses now (decision 463); none by default (the binary reads `/proc`).
     pub usage: fn() -> Option<schedr_model::usage::NodeUsage>,
+    /// The Metrics endpoints' final buckets, kept between requests.
+    pub series: Arc<crate::series::cache::SeriesCache>,
 }
 
 impl ApiState {
@@ -76,6 +78,7 @@ impl ApiState {
                 usage: None,
             }),
             usage: || None,
+            series: Arc::default(),
         }
     }
 

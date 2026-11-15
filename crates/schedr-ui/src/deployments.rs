@@ -16,7 +16,9 @@ use askama::Template;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use schedr_api::views::{DeploymentView, MasterView, NodeView, ProblemView, WorkerNodeView};
+use schedr_api::views::{
+    DeploymentView, MasterView, MemoryTotals, NodeView, ProblemView, WorkerNodeView,
+};
 use schedr_client::{ClientError, Transport};
 
 use crate::Ui;
@@ -189,6 +191,21 @@ pub struct NodePanel {
     pub no_config: &'static str,
     /// The UI's connections (the UI's panel only).
     pub connections: Vec<ConnectionRow>,
+    /// Its process on the Metrics page, as a query (`deployment=…&process=…`); empty when not
+    /// known (M5.1j: the panel loads its 24 h chart from it).
+    pub metrics: String,
+}
+
+/// The Metrics page's query for `process` of `deployment`; empty without a process.
+fn metrics_query(deployment: &str, process: &str) -> String {
+    if process.is_empty() {
+        return String::new();
+    }
+    format!(
+        "deployment={}&process={}",
+        schedr_client::path_segment(deployment),
+        schedr_client::path_segment(process)
+    )
 }
 
 /// One of the UI's connections, in its panel.
@@ -238,6 +255,9 @@ pub struct Asked {
     pub answer: Result<DeploymentView, String>,
     /// How long that took.
     pub took: Duration,
+    /// Every process's memory together over 24 h (decision 462's sparkline); none when it
+    /// couldn't be read (an older webserver).
+    pub memory: Option<MemoryTotals>,
 }
 
 /// Said in a panel of a node that sent no configuration.
@@ -528,6 +548,7 @@ impl Gathered {
             }],
             config: String::new(),
             no_config: "",
+            metrics: String::new(),
             connections: Vec::new(),
         });
         self.links.push(Link {
@@ -662,6 +683,7 @@ pub fn graph(ui: &UiSide, deployments: &[Asked]) -> (Graph, Vec<NodePanel>) {
             config: pretty(&ui.config),
             no_config: NO_CONFIG,
             connections,
+            metrics: String::new(),
         },
     );
     let ui_group = ui_node.map(|ui_node| Group {
@@ -780,6 +802,7 @@ fn deployment_nodes(
         config: pretty(&ws.config),
         no_config: NO_CONFIG,
         connections: Vec::new(),
+        metrics: metrics_query(name, &ws.process_id),
     });
     for master in &view.masters {
         let anchor = master_anchor(name, &master.master_id);
@@ -911,6 +934,7 @@ fn master_panel(deployment: &str, master: &MasterView) -> NodePanel {
         config: pretty(&master.node.config),
         no_config: NO_CONFIG,
         connections: Vec::new(),
+        metrics: metrics_query(deployment, &master.node.process_id),
     }
 }
 
@@ -942,6 +966,7 @@ fn worker_panel(deployment: &str, view: &DeploymentView, worker: &WorkerNodeView
         config: worker.config.as_ref().map(pretty).unwrap_or_default(),
         no_config: NO_CONFIG,
         connections: Vec::new(),
+        metrics: metrics_query(deployment, worker.process_id.as_deref().unwrap_or_default()),
     }
 }
 
@@ -989,6 +1014,12 @@ pub struct StatusRow {
     /// Its schedr versions, each with how many processes run it (webserver, masters and the
     /// workers not gone): more than one is warned.
     pub versions: Vec<(String, usize)>,
+    /// Every process's memory now, tasks included (empty: not known).
+    pub memory: String,
+    /// A sparkline of it over 24 h (SVG; empty: none).
+    pub sparkline: String,
+    /// Its Metrics page.
+    pub metrics_href: String,
 }
 
 impl StatusRow {
@@ -1024,6 +1055,27 @@ pub fn status(deployments: &[Asked]) -> Vec<StatusRow> {
 }
 
 /// One deployment's line.
+/// A deployment's memory now and its 24 h sparkline; none without a point.
+fn memory_now(name: &str, totals: &MemoryTotals) -> Option<(String, String)> {
+    let last = totals.points.last()?;
+    #[expect(clippy::cast_precision_loss, reason = "a chart's coordinates")]
+    let points: Vec<(i64, f64)> = totals
+        .points
+        .iter()
+        .map(|p| (p.at.as_second(), p.resident as f64))
+        .collect();
+    #[expect(clippy::cast_precision_loss, reason = "a size shown")]
+    let now = crate::chart::bytes(last.resident as f64);
+    let sparkline = crate::chart::sparkline(
+        &points,
+        totals.from.as_second(),
+        totals.to.as_second(),
+        i64::from(totals.step_s),
+        &format!("{name}'s memory over 24 h, now {now}"),
+    );
+    Some((now, sparkline))
+}
+
 fn status_row(asked: &Asked) -> StatusRow {
     let name = &asked.name;
     let mut row = StatusRow {
@@ -1038,7 +1090,14 @@ fn status_row(asked: &Asked) -> StatusRow {
         slots: 0,
         problems: Vec::new(),
         versions: Vec::new(),
+        memory: String::new(),
+        sparkline: String::new(),
+        metrics_href: format!("metrics?deployment={}", schedr_client::path_segment(name)),
     };
+    if let Some((memory, sparkline)) = asked.memory.as_ref().and_then(|t| memory_now(name, t)) {
+        row.memory = memory;
+        row.sparkline = sparkline;
+    }
     let view = match &asked.answer {
         Err(error) => {
             row.unreachable = Some(error.clone());
@@ -1110,21 +1169,26 @@ fn status_row(asked: &Asked) -> StatusRow {
 /// took.
 async fn ask_all<T: Transport + Send + Sync + 'static>(
     ui: &Arc<Ui<T>>,
-) -> Vec<(Result<DeploymentView, ClientError>, Duration)> {
+) -> Vec<(
+    Result<DeploymentView, ClientError>,
+    Duration,
+    Option<MemoryTotals>,
+)> {
     let mut asked = tokio::task::JoinSet::new();
     for index in 0..ui.deployments.len() {
         let ui = Arc::clone(ui);
         asked.spawn(schedr_client::for_same_user(async move {
             let started = Instant::now();
-            let answer = ui.deployments[index].client.deployment().await;
-            (index, answer, started.elapsed())
+            let client = &ui.deployments[index].client;
+            let (answer, memory) = tokio::join!(client.deployment(), client.memory_totals("24h"));
+            (index, answer, started.elapsed(), memory.ok())
         }));
     }
     let mut answers = asked.join_all().await;
-    answers.sort_by_key(|(index, _, _)| *index);
+    answers.sort_by_key(|(index, _, _, _)| *index);
     answers
         .into_iter()
-        .map(|(_, answer, took)| (answer, took))
+        .map(|(_, answer, took, memory)| (answer, took, memory))
         .collect()
 }
 
@@ -1148,11 +1212,12 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
         .deployments
         .iter()
         .zip(ask_all(&ui).await)
-        .map(|(deployment, (answer, took))| Asked {
+        .map(|(deployment, (answer, took, memory))| Asked {
             name: deployment.name.clone(),
             proof: deployment.proof,
             answer: answer.map_err(|e| e.to_string()),
             took,
+            memory,
         })
         .collect();
     let side = UiSide {

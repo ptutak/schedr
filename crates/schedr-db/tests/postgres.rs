@@ -2178,6 +2178,12 @@ async fn samples_are_stored_read_and_deleted_on_postgres() {
         roles: BTreeMap::from([("worker".to_owned(), "w1".to_owned())]),
         resident_avg: resident,
         resident_peak: resident,
+        memory_avg: resident,
+        memory_peak: resident,
+        minutes: 1,
+        cpu_minutes: u32::from(cpu.is_some()),
+        container_minutes: 0,
+        covered: 1,
         cpu_seconds: Some(3.5),
         cpu_avg: cpu,
         cpu_peak: cpu,
@@ -2202,6 +2208,63 @@ async fn samples_are_stored_read_and_deleted_on_postgres() {
     assert_eq!(
         db.oldest_minute_sample().await.unwrap(),
         Some(ts("2026-11-14T10:00:00Z"))
+    );
+    // M5.1j: buckets in SQL, weighted by minutes, rounded as on SQLite (150.5 up), the parts
+    // as numbers; one process's only.
+    let range = (
+        ts("2026-11-14T00:00:00Z"),
+        ts("2026-11-14T00:00:00Z"),
+        ts("2026-11-15T00:00:00Z"),
+    );
+    let buckets = db.sample_buckets(range, 360, Some("p1")).await.unwrap();
+    assert_eq!(buckets.len(), 1);
+    let bucket = &buckets[0];
+    assert_eq!(bucket.at, ts("2026-11-14T10:00:00Z"));
+    assert_eq!(
+        (bucket.minutes, bucket.resident_avg, bucket.resident_peak),
+        (2, 151, 201)
+    );
+    assert_eq!(
+        (bucket.cpu_avg, bucket.parts),
+        (Some(0.25), Some((1, 2, 3)))
+    );
+    assert_eq!(
+        db.sample_buckets(range, 360, Some("nope")).await.unwrap(),
+        []
+    );
+    assert_eq!(
+        db.latest_of(range.0, range.2, None).await.unwrap()["p1"].roles["worker"],
+        "w1"
+    );
+    // A process replaced within a rollup's window isn't counted twice (Codex's review): A 7
+    // minutes and B 8, 100 bytes each, beside p1's 15 minutes of 300.
+    let rollup = |process: &str, minutes, resident| Sample {
+        process_id: process.to_owned(),
+        step_s: schedr_db::samples::ROLLUP,
+        at: ts("2026-11-13T09:45:00Z"),
+        minutes,
+        covered: 15,
+        parts: None,
+        ..sample("2026-11-13T09:45:00Z", resident, None)
+    };
+    db.insert_samples(&[
+        rollup("pa", 7, 100),
+        rollup("pb", 8, 100),
+        rollup("p1", 15, 300),
+    ])
+    .await
+    .unwrap();
+    let week = (
+        ts("2026-11-13T00:00:00Z"),
+        ts("2026-11-14T00:00:00Z"),
+        ts("2026-11-15T00:00:00Z"),
+    );
+    assert_eq!(
+        db.memory_totals(week, 2700).await.unwrap(),
+        [
+            (ts("2026-11-13T09:45:00Z"), 400),
+            (ts("2026-11-14T09:45:00Z"), 151)
+        ]
     );
     assert_eq!(
         db.delete_old_samples(MINUTE, ts("2026-11-14T11:00:00Z"))
