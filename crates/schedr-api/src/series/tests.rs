@@ -298,6 +298,36 @@ async fn a_process_replaced_within_a_window_isnt_counted_twice() {
 }
 
 #[tokio::test]
+async fn a_process_unsampled_for_three_intervals_has_ended() {
+    // The user, 2026-11-16: a restart's old processes crowded the Metrics page. `now()` is
+    // 10:30:20; three intervals of a minute before is 10:27:20.
+    let db = seeded(&[
+        minute("old", "2026-11-14T10:20:00Z", 100, None),
+        minute("old", "2026-11-14T10:27:00Z", 100, None),
+        minute("new", "2026-11-14T10:28:00Z", 100, None),
+        rollup(minute("gone", "2026-11-14T09:00:00Z", 100, None), 15),
+    ])
+    .await;
+    let app = app(&db);
+    for range in ["1h", "7d"] {
+        let (_, answer) = get(&app, &format!("/api/v1/metrics/samples?range={range}")).await;
+        let list: SampleSeriesList = serde_json::from_value(answer).unwrap();
+        let mut ended: Vec<_> = list
+            .processes
+            .iter()
+            .map(|p| (p.process_id.as_str(), p.ended))
+            .collect();
+        ended.sort_unstable();
+        let expected: &[(&str, bool)] = if range == "1h" {
+            &[("new", false), ("old", true)]
+        } else {
+            &[("gone", true), ("new", false), ("old", true)]
+        };
+        assert_eq!(ended, expected, "{range}");
+    }
+}
+
+#[tokio::test]
 async fn an_unlimited_container_now_has_no_limit() {
     // Codex's finding 3.
     let db = seeded(&[
@@ -676,4 +706,52 @@ async fn answers_as_fresh(db: &Database, kept: &axum::Router, at: &str) {
         let (_, read) = get(&fresh, path).await;
         assert_eq!(cached, read, "{path} at {at}");
     }
+}
+
+/// The clock of [`a_clock_gone_back_within_a_bucket_decides_ended_as_a_fresh_read`].
+static BACK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn back_clock() -> Timestamp {
+    Timestamp::from_second(BACK.load(std::sync::atomic::Ordering::Relaxed)).unwrap()
+}
+
+#[tokio::test]
+async fn a_clock_gone_back_within_a_bucket_decides_ended_as_a_fresh_read() {
+    // Codex's review of D499: the kept latest samples held one past the new `to`, so a process
+    // whose newest sample before it is older than three intervals showed as running.
+    let db = seeded(&[
+        minute("p1", "2026-11-14T10:30:00Z", 100, None),
+        minute("p1", "2026-11-14T10:39:00Z", 100, None),
+    ])
+    .await;
+    let mut kept = ApiState::new(db.clone(), None);
+    kept.clock = back_clock;
+    let kept = crate::router(kept);
+    let ended = |list: serde_json::Value| -> bool {
+        serde_json::from_value::<SampleSeriesList>(list)
+            .unwrap()
+            .processes[0]
+            .ended
+    };
+    let path = "/api/v1/metrics/samples?range=24h";
+    BACK.store(
+        ts("2026-11-14T10:40:20Z").as_second(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    assert!(!ended(get(&kept, path).await.1));
+    BACK.store(
+        ts("2026-11-14T10:38:20Z").as_second(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let mut fresh = ApiState::new(db.clone(), None);
+    fresh.clock = back_clock;
+    let fresh = crate::router(fresh);
+    assert!(
+        ended(get(&fresh, path).await.1),
+        "10:30 is over three minutes before 10:38:20"
+    );
+    assert!(
+        ended(get(&kept, path).await.1),
+        "the kept answer as the fresh one"
+    );
 }

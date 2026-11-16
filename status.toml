@@ -1,18 +1,18 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-15
+updated = 2026-11-16
 
 in_progress = [
-    "M5.1 done 2026-11-15 (M5.1a-M5.1q; M5.1q: B242, D495-D497, B252). Every bug fixed but B38 and B39 (the user: they wait for M6). Stress, 1.0.0 against M5.1, on the guide's Stress tests page (\"After M5.1\"); the three regressions it couldn't explain (command decided p99, forked start p50, soak memory) not logged (the user).",
-    "The docs review for 1.1.0 done (Codex Sol, high; rewrites asked for by the user): batches B (guide 01-09), A (README, Getting started, Writing DAGs) and C (guide 10-18) merged, 163 corrections in all, each with its evidence and sampled by Claude.",
-    "Everything for 1.1.0 is in main, the release notes included (approved 2026-11-15): next is R1.1, the release itself, which is the user's.",
-    "Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).",
+    "M5.1 done 2026-11-15 (M5.1a-M5.1q). Every bug fixed but B38 and B39 (they wait for M6) and B254 (low: a worker's RUNNING count includes its wait steps).",
+    "R1.1: 1.1.0rc1 published 2026-11-16 (TestPyPI, ghcr) and checked: the upgrade check (also CI's `upgrade` job) from 1.0.0 with the published binary, protocol 2.0/2.1 both ways (a 1.0.0 worker under this master; a 1.0.0 master refusing this worker), `twine check`, every image's version.",
+    "1.1.0 paused by the user (2026-11-16) to fix what the metrics load showed: D499 (the Metrics page folds the processes that ended), B253 (a retired wait step host warned), `examples/metrics_load.py` with `WORKER_SLOTS`; then the 1.1.0 version commit with the docs' tags (prepared, uncommitted).",
 ]
 
 waiting = [
-  "R1.1: the release of 1.1.0 (the user's).",
-  "After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled; the user: after the release).",
+  "Whether these fixes need a 1.1.0rc2 before 1.1.0 (D498 asks an rc for a new migration: rc1 had it; these add an API field, no migration).",
+  "The go for 1.1.0 itself (the user paused it).",
+  "After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled).",
 ]
 
 rules = [
@@ -25,6 +25,6 @@ rules = [
 ]
 
 colleagues = """
-Codex at 35% of its week (5 h window 58%) after M5.1q's two reviews and the docs review. Grok unused this week. Usage logs in the skills' `USAGE.md`."""
+Codex at 35% of its week after the upgrade check's review (2026-11-15); D499/B253 under review. Grok unused this week. Usage logs in the skills' `USAGE.md`."""
 
 resume = "claude --resume 0f288ee8-d79c-4c85-9781-7c4774e2f509"

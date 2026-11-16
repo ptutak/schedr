@@ -16,5 +16,5 @@ processes' own (a task's CPU isn't sampled).
 history = "JOURNAL.md#D491"  # <a id="D491"></a> starts its JOURNAL.md entry
 step = "M5.1j"  # the plan step that builds it; "later"; "n/a" for a rule
 also = ["observability"]
-checked = 2026-11-15
+checked = 2026-11-16
 code = ["crates/schedr-ui/src/metrics.rs::kinds_chart", "crates/schedr-ui/src/metrics.rs::parts_chart", "crates/schedr-master/src/samples.rs::rolled_up"]

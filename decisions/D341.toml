@@ -10,5 +10,5 @@ Other watchers restart in the same attempt; unidentifiable host loss uses retrie
 '''
 history = "archive/PROJECT.md#D341"
 step = "M4.11a3"
-checked = 2026-11-15
+checked = 2026-11-16
 code = ["crates/schedr-agent/src/watchers.rs::blame"]

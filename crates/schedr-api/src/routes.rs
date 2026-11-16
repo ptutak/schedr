@@ -210,6 +210,14 @@ fn worker_problems(
 /// heartbeats of 10 s (the webserver passes its own, from `node_heartbeat`).
 pub const MASTERS_HEARD_WITHIN: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
 
+/// A process with no sample this long before the samples are asked for has ended: three of the
+/// master's sample intervals of a minute (the webserver passes its own, from
+/// `sample_interval`).
+pub const SAMPLED_WITHIN: jiff::SignedDuration = jiff::SignedDuration::from_mins(3);
+
+/// How many sample intervals a running process may go unsampled.
+pub const SAMPLED_INTERVALS: u32 = 3;
+
 /// Drain a worker for maintenance (`schedr workers drain`): no new tasks, its running ones
 /// finish; kept across restarts until resumed. Applied by the master; poll the command for
 /// the decision.

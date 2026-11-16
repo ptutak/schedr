@@ -1583,3 +1583,18 @@ checked from there before `vX.Y.Z`.
 
 Not chosen: 1.1.0 without an rc (the 2026-11-14 call): the workflow being unchanged says nothing
 about a migration on the databases users have.
+
+### <a id="D499"></a>2026-11-16: the Metrics page folds the processes that ended into one line (decision 499)
+
+Watching `examples/metrics_load.py` on `make standalone-separate-ui`, the user saw the Metrics
+page's list of processes grow. It grew with restarts, not the load: each start gives every
+process a new ID, and the page drew one line and one row per process over the range (12 for
+three starts of four processes, the rest folded into "4 other processes"). Chosen by the user
+from three: running processes as lines, each by name as before, and those that ended (no sample
+within three of the master's sample intervals, decided by the API as `ended`) one line
+together, their values added up, left out of the table with a note counting them; a crashed or
+OOM-killed process's memory stays on the chart.
+
+Not chosen: masters and webservers keyed by a stable name, as workers are (they have none: a new
+`name` key, or host and port, with two masters on one host merging); keeping a line per process
+start.

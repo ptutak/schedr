@@ -16,4 +16,4 @@ history = "JOURNAL.md#D492"  # <a id="D492"></a> starts its JOURNAL.md entry
 step = "M5.1j"  # the plan step that builds it; "later"; "n/a" for a rule
 also = ["ui-cli"]
 code = ["crates/schedr-api/src/series/cache.rs", "crates/schedr-api/src/series.rs::list_samples"]
-checked = 2026-11-15
+checked = 2026-11-16

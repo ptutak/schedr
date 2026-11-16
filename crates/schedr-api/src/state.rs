@@ -191,6 +191,9 @@ pub struct ApiLimits {
     /// A master heard from within this long is on the Deployments page: three of its node
     /// heartbeats (`SCHEDR_HIDDEN__MASTER__NODE_HEARTBEAT`).
     pub masters_heard_within: jiff::SignedDuration,
+    /// A process with no sample within this long has ended (the Metrics page folds it): three
+    /// of the master's sample intervals (`SCHEDR_HIDDEN__MASTER__SAMPLE_INTERVAL`).
+    pub sampled_within: jiff::SignedDuration,
 }
 
 impl Default for ApiLimits {
@@ -200,6 +203,7 @@ impl Default for ApiLimits {
             memory_peaks_runs: schedr_db::task_memory::PEAKS_PER_TASK,
             event_future_tolerance: crate::named_events::AT_TOLERANCE,
             masters_heard_within: crate::routes::MASTERS_HEARD_WITHIN,
+            sampled_within: crate::routes::SAMPLED_WITHIN,
         }
     }
 }

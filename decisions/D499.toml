@@ -1,0 +1,20 @@
+title = "The Metrics page folds the processes that ended into one line"
+date = 2026-11-16
+by = "user"
+status = "active"
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+`GET /api/v1/metrics/samples` marks each process `ended` when it has no sample within three of
+the master's sample intervals (`ApiLimits::sampled_within`, from `sample_interval`), read fresh
+each request (never from the kept buckets, so a clock gone back is seen). The Metrics
+page draws only running processes as lines and in the band; those that ended are one line
+together in the last colour slot, their values added up per bucket, and are left out of the
+table, a note under it counting them; an ended process opens no panel (its values aren't "now").
+A restart's old processes so no longer crowd out the running ones.
+'''
+history = "JOURNAL.md#D499"
+step = "R1.1"
+code = ["crates/schedr-api/src/series.rs", "crates/schedr-ui/src/metrics.rs", "crates/schedr-api/src/views.rs"]
+also = ["observability"]
+checked = 2026-11-16

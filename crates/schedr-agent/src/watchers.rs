@@ -156,6 +156,8 @@ struct Going {
     why: Option<String>,
     /// Its process has ended: nothing done now can be why.
     dead: bool,
+    /// Its last wait step left and the agent stopped it: its channel's end is expected (B253).
+    retired: bool,
     /// The wait steps on it, by watcher: a lost attempt's error names them (decision 342).
     names: BTreeMap<u64, String>,
 }
@@ -378,7 +380,13 @@ async fn read_host(
                 tracing::warn!(?other, "a watcher host sent something unexpected");
             }
             Err(error) => {
-                tracing::warn!(%error, pid, "a watcher host's channel ended");
+                let retired = going.lock().unwrap_or_else(PoisonError::into_inner).retired;
+                if retired {
+                    // Stopped by `leave`, its last wait step gone (B253): not a failure.
+                    tracing::debug!(%error, pid, "a watcher host with no wait step left ended");
+                } else {
+                    tracing::warn!(%error, pid, "a watcher host's channel ended");
+                }
                 stop.notify_one();
                 return;
             }
@@ -391,6 +399,14 @@ fn is_on_it(routes: &Routes, watcher: u64) -> bool {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .contains_key(&watcher)
+}
+
+/// Marks a host stopped for having no wait step left, so its channel's end is no warning
+/// (B253); only one nothing went wrong with: a blamed, failed or dead one's end stays a warning
+/// (Codex's review of B253).
+fn retire(going: &StdMutex<Going>) {
+    let mut going = going.lock().unwrap_or_else(PoisonError::into_inner);
+    going.retired = going.blamed.is_none() && going.why.is_none() && !going.dead;
 }
 
 /// The first to blame stays: what comes after is a result of it.
@@ -719,6 +735,7 @@ impl WatcherHosts {
             routes.is_empty()
         };
         if empty {
+            retire(&host.going);
             host.stop.notify_one();
             let mut gone = None;
             hosts.retain(|key, known| {

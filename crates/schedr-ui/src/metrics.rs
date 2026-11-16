@@ -1,6 +1,7 @@
 //! The Metrics page (M5.1j; decisions 465, 466): per deployment, over 1 h, 24 h, 7 d or 30 d,
-//! memory and CPU charts of its processes (the 8 highest memory peaks as lines, the rest as
-//! one band, container limits dashed) over a sortable table of them all; a row opens a panel
+//! memory and CPU charts of its processes (the 8 highest memory peaks of those running as
+//! lines, the rest as one band, those that ended as one line, container limits dashed) over a
+//! sortable table of those running; a row opens a panel
 //! with that process's memory by part and its largest tasks; below, its attempts ended and
 //! their start latency (decision 494). It reads each deployment's
 //! `GET /api/v1/metrics/samples` and `GET /api/v1/metrics/tasks` and refreshes once a minute,
@@ -144,8 +145,13 @@ pub struct Section {
     pub cpu: String,
     /// Both charts' legend.
     pub legend: Vec<LegendItem>,
-    /// Each process, in the table's order.
+    /// Each running process, in the table's order.
     pub rows: Vec<ProcessRow>,
+    /// Whether it had no process sampled in the range.
+    pub empty: bool,
+    /// The processes that ended in the range (drawn as one line), as a note under the table;
+    /// empty when none did.
+    pub ended: String,
     /// The table's headings: sort links.
     pub sorts: Vec<Choice>,
     /// The open panel, if one of its processes'.
@@ -214,19 +220,35 @@ fn zone_of(page: &Page) -> TimeZone {
     page.zone.clone().unwrap_or(TimeZone::UTC)
 }
 
-/// The processes drawn as lines (the [`chart::SERIES`] highest memory peaks), each with its
-/// colour slot, given in name order so a colour stays with its process while the set holds.
+/// The colour slot of the one line of the processes that ended: the last, the running ones
+/// taking the others.
+const ENDED_SLOT: usize = chart::SERIES;
+
+/// How many of `processes` have ended.
+fn ended_count(processes: &[ProcessSamplesView]) -> usize {
+    processes.iter().filter(|p| p.ended).count()
+}
+
+/// `n processes`, `1 process`.
+fn processes_word(n: usize) -> String {
+    format!("{n} process{}", if n == 1 { "" } else { "es" })
+}
+
+/// The running processes drawn as lines (the [`chart::SERIES`] highest memory peaks, one
+/// fewer when some ended: their line takes [`ENDED_SLOT`]), each with its colour slot, given
+/// in name order so a colour stays with its process while the set holds. A process that ended
+/// (a restart's old one: the user, 2026-11-16) is never one: they are one line together, so
+/// restarts don't crowd the running ones out.
 fn drawn(processes: &[ProcessSamplesView]) -> BTreeMap<String, usize> {
     let mut by_peak: Vec<(&ProcessSamplesView, u64)> = processes
         .iter()
+        .filter(|p| !p.ended)
         .map(|p| (p, p.points.iter().map(|x| x.memory_peak).max().unwrap_or(0)))
         .collect();
     by_peak.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| label(a.0).cmp(&label(b.0))));
-    let mut top: Vec<&ProcessSamplesView> = by_peak
-        .into_iter()
-        .take(chart::SERIES)
-        .map(|(p, _)| p)
-        .collect();
+    let room = chart::SERIES - usize::from(ended_count(processes) > 0);
+    let mut top: Vec<&ProcessSamplesView> =
+        by_peak.into_iter().take(room).map(|(p, _)| p).collect();
     top.sort_by_key(|p| label(p));
     top.into_iter()
         .enumerate()
@@ -239,7 +261,9 @@ fn secs(at: jiff::Timestamp) -> i64 {
     at.as_second()
 }
 
-/// A memory or CPU chart of `list`'s processes: the drawn ones as lines, the rest as a band.
+/// A memory or CPU chart of `list`'s processes: the drawn ones as lines, the other running ones
+/// as a band, and those that ended as one line, their values added up (each bucket's: they
+/// seldom overlap, one replacing another).
 fn process_chart(
     title: String,
     list: &SampleSeriesList,
@@ -258,6 +282,7 @@ fn process_chart(
     let mut limits = Vec::new();
     let mut rest: BTreeMap<i64, (f64, f64)> = BTreeMap::new();
     let mut others = 0;
+    let mut ended: BTreeMap<i64, f64> = BTreeMap::new();
     for process in &list.processes {
         let points: Vec<(i64, f64)> = process
             .points
@@ -280,6 +305,10 @@ fn process_chart(
                 slot,
                 points,
             });
+        } else if process.ended {
+            for (at, v) in points {
+                *ended.entry(at).or_default() += v;
+            }
         } else {
             others += 1;
             for (at, v) in points {
@@ -289,13 +318,18 @@ fn process_chart(
             }
         }
     }
+    let ended_n = ended_count(&list.processes);
+    if ended_n > 0 {
+        lines.push(Line {
+            label: format!("{} that ended", processes_word(ended_n)),
+            slot: ENDED_SLOT,
+            points: ended.into_iter().collect(),
+        });
+    }
     lines.sort_by_key(|l| l.slot);
     let band = (others > 0).then(|| {
         (
-            format!(
-                "{others} other process{}",
-                if others == 1 { "" } else { "es" }
-            ),
+            format!("{} other running", processes_word(others)),
             rest.into_iter()
                 .map(|(at, (lo, hi))| (at, lo, hi))
                 .collect(),
@@ -428,6 +462,7 @@ fn rows(
     let mut rows: Vec<ProcessRow> = list
         .processes
         .iter()
+        .filter(|process| !process.ended)
         .map(|process| {
             let latest = process.points.last();
             let now = latest.map_or(0, |p| p.memory_avg);
@@ -637,6 +672,52 @@ fn panel(
     }
 }
 
+/// Both process charts' legend (the drawn processes, the band of the other running ones, the
+/// line of those that ended) and the note of those that ended under the table.
+fn legend_of(
+    list: &SampleSeriesList,
+    drawn: &BTreeMap<String, usize>,
+) -> (Vec<LegendItem>, String) {
+    let mut legend: Vec<LegendItem> = list
+        .processes
+        .iter()
+        .filter_map(|p| {
+            drawn.get(&p.process_id).map(|&slot| LegendItem {
+                slot,
+                label: label(p),
+            })
+        })
+        .collect();
+    legend.sort_by_key(|item| item.slot);
+    let ended_n = ended_count(&list.processes);
+    let others = list.processes.len().saturating_sub(drawn.len() + ended_n);
+    if others > 0 {
+        legend.push(LegendItem {
+            slot: 0,
+            label: format!(
+                "{} other running, lowest to highest",
+                processes_word(others)
+            ),
+        });
+    }
+    if ended_n > 0 {
+        legend.push(LegendItem {
+            slot: ENDED_SLOT,
+            label: format!("{} that ended, added up", processes_word(ended_n)),
+        });
+    }
+    let ended = if ended_n > 0 {
+        format!(
+            "{} ended in this range (stopped, or restarted as a new process): one line in the \
+             charts, not in the table.",
+            processes_word(ended_n)
+        )
+    } else {
+        String::new()
+    };
+    (legend, ended)
+}
+
 /// One deployment's section from its answer.
 fn section(
     page: &Page,
@@ -665,6 +746,8 @@ fn section(
                 cpu: String::new(),
                 legend: Vec::new(),
                 rows: Vec::new(),
+                empty: false,
+                ended: String::new(),
                 sorts: Vec::new(),
                 panel: None,
                 flow,
@@ -680,27 +763,7 @@ fn section(
     let open = (query.deployment.as_deref() == Some(name))
         .then_some(query.process.as_deref())
         .flatten();
-    let mut legend: Vec<LegendItem> = list
-        .processes
-        .iter()
-        .filter_map(|p| {
-            drawn.get(&p.process_id).map(|&slot| LegendItem {
-                slot,
-                label: label(p),
-            })
-        })
-        .collect();
-    legend.sort_by_key(|item| item.slot);
-    let others = list.processes.len().saturating_sub(drawn.len());
-    if others > 0 {
-        legend.push(LegendItem {
-            slot: 0,
-            label: format!(
-                "{others} other process{}, lowest to highest",
-                if others == 1 { "" } else { "es" }
-            ),
-        });
-    }
+    let (legend, ended) = legend_of(&list, &drawn);
     let sorts = SORTS
         .iter()
         .map(|(key, heading)| Choice {
@@ -710,15 +773,20 @@ fn section(
         })
         .collect();
     let panel = open.and_then(|id| {
-        list.processes.iter().find(|p| p.process_id == id).map(|p| {
-            let runs = format!("{}/d/{}/runs/", page.base, path_segment(name));
-            panel(
-                p,
-                &list,
-                &zone,
-                (runs, href(&page.base, range, filter, sort, None)),
-            )
-        })
+        // An ended process has no panel: what it says is "now" (Codex's review of D499: one
+        // restarted while its panel was open).
+        list.processes
+            .iter()
+            .find(|p| p.process_id == id && !p.ended)
+            .map(|p| {
+                let runs = format!("{}/d/{}/runs/", page.base, path_segment(name));
+                panel(
+                    p,
+                    &list,
+                    &zone,
+                    (runs, href(&page.base, range, filter, sort, None)),
+                )
+            })
     });
     let (kinds, kinds_legend) = kinds_chart(name, &list, &zone);
     Section {
@@ -741,6 +809,8 @@ fn section(
             &zone,
         ),
         rows: rows(&list, &drawn, open, &choose, sort),
+        empty: list.processes.is_empty(),
+        ended,
         legend,
         sorts,
         panel,

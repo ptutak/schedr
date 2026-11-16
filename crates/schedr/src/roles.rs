@@ -1109,6 +1109,12 @@ impl ApiTimings {
                         .node_heartbeat
                         .saturating_mul(schedr_master::samples::MASTERS_HEARD_BEATS),
                 ),
+                sampled_within: signed(
+                    config
+                        .timings
+                        .sample_interval
+                        .saturating_mul(schedr_api::routes::SAMPLED_INTERVALS),
+                ),
             },
             cache: schedr_api::series::cache::CacheLimits {
                 final_after: signed(config.timings.metrics_final_after),

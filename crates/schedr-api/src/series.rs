@@ -198,18 +198,28 @@ pub async fn list_samples(
         .into_iter()
         .map(|(at, minutes)| CoverageView { at, minutes })
         .collect();
-    let since = to.checked_sub(PARTS_WITHIN).unwrap_or(to);
-    let latest = state.db.samples_of(MINUTE, since, to, process).await?;
+    // The last minutes read fresh (never from the cache, so a clock gone back is seen): a
+    // worker's parts now, and whether each process has ended (decision 499).
+    let parts_since = to.checked_sub(PARTS_WITHIN).unwrap_or(to);
+    let sampled_since = to.checked_sub(state.limits.sampled_within).unwrap_or(to);
+    let latest = state
+        .db
+        .samples_of(MINUTE, parts_since.min(sampled_since), to, process)
+        .await?;
     let mut processes: Vec<ProcessSamplesView> = Vec::new();
     for bucket in buckets {
         if processes
             .last()
             .is_none_or(|p| p.process_id != bucket.process_id)
         {
+            let sampled = latest
+                .iter()
+                .any(|s| s.process_id == bucket.process_id && s.at >= sampled_since);
             processes.push(ProcessSamplesView {
                 container_limit: latest_of
                     .get(&bucket.process_id)
                     .and_then(|l| l.container_limit),
+                ended: !sampled,
                 roles: latest_of
                     .remove(&bucket.process_id)
                     .map(|l| l.roles)
@@ -227,7 +237,7 @@ pub async fn list_samples(
         let last = latest
             .iter()
             .rev()
-            .find(|s| s.process_id == process.process_id);
+            .find(|s| s.process_id == process.process_id && s.at >= parts_since);
         process.parts = last.and_then(|s| {
             s.parts.clone().map(|parts| WorkerPartsView {
                 at: s.at,

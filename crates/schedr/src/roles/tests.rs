@@ -1391,6 +1391,7 @@ fn the_hidden_settings_reach_the_roles() {
         ("SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS", "46"),
         ("SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN", "47"),
         ("SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG", "48"),
+        ("SCHEDR_HIDDEN__MASTER__SAMPLE_INTERVAL", "49s"),
     ];
     let env: BTreeMap<String, String> = vars
         .iter()
@@ -1454,6 +1455,7 @@ fn the_hidden_settings_reach_the_roles() {
             memory_peaks_runs: 32,
             event_future_tolerance: signed(33),
             masters_heard_within: signed(3 * 27),
+            sampled_within: signed(3 * 49),
         }
     );
     assert_eq!((api.events.backlog, api.events.changes_rows), (34, 36));

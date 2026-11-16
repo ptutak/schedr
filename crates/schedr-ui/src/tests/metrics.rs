@@ -319,3 +319,64 @@ async fn a_dags_page_lists_its_tasks_p95_peaks_closest_to_their_limits_first() {
     assert_eq!(texts(&html, "table.task-memory"), Vec::<String>::new());
     assert!(!html.contains("<h2>Memory</h2>"));
 }
+
+#[tokio::test]
+async fn processes_that_ended_are_one_line_and_left_out_of_the_table() {
+    // The user, 2026-11-16: each restart's old processes crowded the page. Two masters of an
+    // earlier start have ended: one line in the charts together, not rows.
+    let mut etl = with_samples();
+    let mut day = samples("24h");
+    let old_master = |id: &str, memory: u64| {
+        json!({
+            "process_id": id, "roles": {"master": format!("0190a0a0-0000-7000-8000-0000000{id}")},
+            "ended": true,
+            "points": [{
+                "at": "2026-11-14T09:00:00Z", "resident_avg": memory, "resident_peak": memory,
+                "memory_avg": memory, "memory_peak": memory, "minutes": 6
+            }]
+        })
+    };
+    let processes = day["processes"].as_array_mut().unwrap();
+    processes.push(old_master("old1", 5 * GIB));
+    processes.push(old_master("old2", 2 * GIB));
+    etl.answers
+        .insert("/api/v1/metrics/samples?range=24h".to_owned(), (200, day));
+    let app = ui(vec![deployment("etl", etl)]);
+    let (status, html) = get(&app, "/metrics", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let names = texts(&html, "table.metrics-table tbody tr td:first-child");
+    assert_eq!(
+        names.len(),
+        2,
+        "the running worker and master only: {names:?}"
+    );
+    assert!(names.iter().all(|n| !n.contains("old")), "{names:?}");
+    assert!(
+        texts(&html, "p.metrics-ended")[0].starts_with("2 processes ended in this range"),
+        "the note under the table"
+    );
+    let legend = texts(&html, "p.chart-legend")[0].clone();
+    assert!(
+        legend.contains("2 processes that ended, added up"),
+        "{legend}"
+    );
+    // Their line: both added up (5 + 2 GiB at 09:00), in the last slot; the running ones keep
+    // theirs.
+    assert!(
+        html.contains("2 processes that ended: 7.0 GiB"),
+        "the line's value"
+    );
+    // One point: a dot.
+    assert!(html.contains(r#"class="dot s8""#), "the ended line's slot");
+    // An ended process's panel isn't opened (its values aren't "now"); a running one's is.
+    let (status, html) = get(&app, "/metrics?deployment=etl&process=old1", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !html.contains(r#"id="process-panel""#),
+        "no panel for an ended process"
+    );
+    // Nothing ended: no note, no such line.
+    let (_, html) = get(&app, "/metrics?range=1h", &[]).await;
+    assert_eq!(texts(&html, "p.metrics-ended"), Vec::<String>::new());
+    assert!(!html.contains("processes that ended") && !html.contains("process that ended"));
+}

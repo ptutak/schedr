@@ -3001,6 +3001,39 @@ fn a_sensor_waiting_for_another_dags_run_is_given_it_and_builds_on_its_output() 
     );
 }
 
+/// A run of one short wait step: its host is stopped once it has none left.
+const ONE_DELAY: &str = r#"
+from datetime import timedelta
+from schedr import Dag
+from schedr.sensors import delay
+
+with Dag("one_delay"):
+    delay(timedelta(seconds=1))
+"#;
+
+/// B253: a wait step host the agent stops, its last wait step gone, ends without the warning
+/// of a channel that ended (it said so once per host, every wait step on a quiet worker).
+#[test]
+fn a_host_stopped_after_its_last_wait_step_ends_without_a_warning() {
+    let standalone = Standalone::start_configured(
+        &[("one_delay.py", ONE_DELAY)],
+        None,
+        &[],
+        "\n[log]\nlevel = \"info,schedr_agent::watchers=debug\"\n",
+        &[],
+    );
+    standalone.wait("DAG `one_delay`", || standalone.dag_ids() == ["one_delay"]);
+    let run_id = standalone.trigger("one_delay");
+    standalone.wait_for_state(&run_id, "success");
+    standalone.wait("the host's end", || {
+        standalone
+            .log()
+            .contains("a watcher host with no wait step left ended")
+    });
+    let log = standalone.log();
+    assert!(!log.contains("a watcher host's channel ended"), "{log}");
+}
+
 /// `load` is started by an `@trigger.poke(batch=...)`: what its pokes find within a window is one
 /// run, its data the list of them (decision 352).
 const BATCHED: &str = r#"

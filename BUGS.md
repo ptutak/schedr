@@ -53,8 +53,23 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 1 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+
+## B254: a worker's RUNNING count includes its wait steps, against its task slots
+
+- **Rating:** severity **low**, probability **likely**, usability (score 3): `workers list` shows `9/8` running: 8 tasks and a wait step, over 8 task slots.
+- **Found:** 2026-11-16, by Claude, running `examples/metrics_load.py` on `make
+  standalone-separate-ui` (`WORKER_SLOTS=8`): `schedr workers list` showed `9/8` while 8 tasks
+  and the run's `delay` wait step ran.
+- **Why:** the count is every open attempt of the worker (`Database::workers`,
+  `crates/schedr-db/src/workers.rs`: `attempts ... a.status IS NULL`), wait steps' included,
+  while the slots shown are its task slots only; wait steps have their own
+  (`[watchers] slots`, `watcher_slots`). Nothing is over capacity.
+- **Fix:** count the two apart (the attempts don't record whether a step is a wait step: from
+  the DAG version's steps, or a column), and show wait steps against `watcher_slots` beside
+  the tasks, in the CLI, the API's `running` and the Workers page.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
 

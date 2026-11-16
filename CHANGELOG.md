@@ -37,7 +37,8 @@ memory charts.
   process (the master, webservers, workers: the agent, fork servers, watcher hosts and tasks),
   against their limits, over 1 hour, 24 hours, 7 or 30 days; the tasks ended per bucket
   (succeeded, failed, stopped) and the p50 and p95 of their start latency. Charts are drawn by
-  the server; the samples are taken each minute and rolled up after 15 minutes.
+  the server; the samples are taken each minute and rolled up after 15 minutes. Processes that
+  ended in the range (a restart's old ones) are one line together, not one each (decision 499).
 - **A Status block on the Deployments page** (decision 462): per deployment, its masters by role
   (red when none leads), workers by state, slots in use, errors and warnings, mixed versions, and
   every process's memory with a 24 h sparkline. Each node's panel has its own chart, and the
@@ -100,6 +101,10 @@ memory charts.
   disconnected, then lost. It now waits for the master until its grace period's end.
 - **Every start warned about the default `cleanup_timeout`** (B252): the default didn't fit in
   the default grace period. It does now (see Upgrading).
+- **A warning for every wait step host that ended** (B253): when a host's last wait step ended,
+  the worker stopped it and then warned that its channel had ended, once per host (every few
+  seconds on a busy worker). A host stopped that way is now logged at debug; one ending unasked
+  is still a warning.
 
 ## 1.0.0
 

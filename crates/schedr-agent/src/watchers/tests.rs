@@ -218,3 +218,30 @@ fn an_event_whose_key_holds_a_secret_is_noticed() {
         false
     ));
 }
+
+#[test]
+fn only_a_host_nothing_went_wrong_with_is_retired_quietly() {
+    // B253 and Codex's review of it: a host whose last wait step left is retired (its end at
+    // debug), unless it was blamed, failed or dead first (its end stays a warning).
+    let retired_after = |going: Going| {
+        let going = StdMutex::new(going);
+        retire(&going);
+        going.into_inner().unwrap().retired
+    };
+    assert!(retired_after(Going::default()));
+    assert!(!retired_after(Going {
+        blamed: Some(Blamed {
+            watcher: 1,
+            stack: None,
+        }),
+        ..Going::default()
+    }));
+    assert!(!retired_after(Going {
+        why: Some("its host didn't answer".to_owned()),
+        ..Going::default()
+    }));
+    assert!(!retired_after(Going {
+        dead: true,
+        ..Going::default()
+    }));
+}

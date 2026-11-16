@@ -1351,6 +1351,10 @@ pub struct ProcessSamplesView {
     /// minutes); none for another process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parts: Option<WorkerPartsView>,
+    /// Whether it has ended: no sample within three of the master's sample intervals before
+    /// the samples were asked for (stopped, restarted as a new process, or lost).
+    #[serde(default)]
+    pub ended: bool,
 }
 
 /// A bucket of a process's samples: averages and peaks.

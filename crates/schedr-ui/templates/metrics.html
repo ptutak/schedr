@@ -13,7 +13,7 @@
   <h2>{{ section.name }}</h2>
   {% if let Some(error) = section.error %}
   <div class="banner warning">Unavailable: {{ error }}</div>
-  {% else if section.rows.is_empty() %}
+  {% else if section.empty %}
   <p class="empty">No samples in this range yet: the leading master writes one a minute.</p>
   {% else %}
   <div class="metrics-view{% if section.panel.is_some() %} with-panel{% endif %}">
@@ -60,6 +60,7 @@
       {% endfor %}
       </tbody>
     </table>
+    {% if !section.ended.is_empty() %}<p class="dim metrics-ended">{{ section.ended }}</p>{% endif %}
   </div>
   {% endif %}
   {% match section.flow %}

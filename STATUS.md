@@ -3,36 +3,36 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-15)
+## Now (2026-11-16)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** R1.1, Release 1.1.0 (decisions D498). Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
+- **Next step:** R1.1, Release 1.1.0 (decisions D498, D499). Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
 - **Then:** M5.2a, M5.2b, M5.2c, M5.2d, M5.2e.
 - **Open questions:** 1 (`DECISIONS.md`).
-- **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 3; first: B254 (low/likely), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D499 (2026-11-16): the Metrics page folds the processes that ended into one line
 - D498 (2026-11-15): a release with a new migration goes through an rc first
 - D497 (2026-11-15): an unset cleanup timeout fits in the grace period
 - D496 (2026-11-15): a role starting waits for a database it can't reach yet
 - D495 (2026-11-15): a stopping worker waits for the master to take its Deregister
-- N16 (2026-11-15): M5.1l2 built: the attempt charts on the Metrics page (note 16; on D494)
 - M5.1q (2026-11-15): A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits
 - M5.1p (2026-11-15): Tunable constants as hidden settings
 - M5.1o (2026-11-15): A poke may be a plain def
 
 ## In progress
 
-- M5.1 done 2026-11-15 (M5.1a-M5.1q; M5.1q: B242, D495-D497, B252). Every bug fixed but B38 and B39 (the user: they wait for M6). Stress, 1.0.0 against M5.1, on the guide's Stress tests page ("After M5.1"); the three regressions it couldn't explain (command decided p99, forked start p50, soak memory) not logged (the user).
-- The docs review for 1.1.0 done (Codex Sol, high; rewrites asked for by the user): batches B (guide 01-09), A (README, Getting started, Writing DAGs) and C (guide 10-18) merged, 163 corrections in all, each with its evidence and sampled by Claude.
-- Everything for 1.1.0 is in main, the release notes included (approved 2026-11-15): next is R1.1, the release itself, which is the user's.
-- Known limits: a sensor handed a run after its outputs were deleted gets null outputs (M4.14); `schedr.toml` jobs take no `memory` (M4.15a).
+- M5.1 done 2026-11-15 (M5.1a-M5.1q). Every bug fixed but B38 and B39 (they wait for M6) and B254 (low: a worker's RUNNING count includes its wait steps).
+- R1.1: 1.1.0rc1 published 2026-11-16 (TestPyPI, ghcr) and checked: the upgrade check (also CI's `upgrade` job) from 1.0.0 with the published binary, protocol 2.0/2.1 both ways (a 1.0.0 worker under this master; a 1.0.0 master refusing this worker), `twine check`, every image's version.
+- 1.1.0 paused by the user (2026-11-16) to fix what the metrics load showed: D499 (the Metrics page folds the processes that ended), B253 (a retired wait step host warned), `examples/metrics_load.py` with `WORKER_SLOTS`; then the 1.1.0 version commit with the docs' tags (prepared, uncommitted).
 
 ## Waiting for the user
 
-- R1.1: the release of 1.1.0 (the user's).
-- After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled; the user: after the release).
+- Whether these fixes need a 1.1.0rc2 before 1.1.0 (D498 asks an rc for a new migration: rc1 had it; these add an API field, no migration).
+- The go for 1.1.0 itself (the user paused it).
+- After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled).
 
 ## Rules in force
 
@@ -45,7 +45,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Colleagues
 
-Codex at 35% of its week (5 h window 58%) after M5.1q's two reviews and the docs review. Grok unused this week. Usage logs in the skills' `USAGE.md`.
+Codex at 35% of its week after the upgrade check's review (2026-11-15); D499/B253 under review. Grok unused this week. Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 
