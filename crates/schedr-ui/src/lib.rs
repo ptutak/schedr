@@ -20,6 +20,7 @@ mod ansi;
 mod assets;
 pub mod chart;
 mod connections;
+mod dag_filters;
 pub mod deployments;
 mod docs;
 pub mod graph;

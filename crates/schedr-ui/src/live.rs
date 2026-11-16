@@ -47,6 +47,10 @@ pub struct UiTimings {
     pub tail_interval: Duration,
     /// How long it tries a log out of reach (`tail_give_up`).
     pub tail_give_up: Duration,
+    /// A Runs page read longer than this is slow (`slow_read`).
+    pub slow_read: Duration,
+    /// How often a page whose read was slow reads again at most (`slow_read_wait`).
+    pub slow_read_wait: Duration,
     /// The first wait before a relay opens its stream again (`relay_retry_first`).
     pub retry_first: Duration,
     /// The longest one (`relay_retry_max`).
@@ -64,6 +68,8 @@ impl Default for UiTimings {
             coalesce: COALESCE,
             tail_interval: TAIL_INTERVAL,
             tail_give_up: TAIL_GIVE_UP,
+            slow_read: SLOW_READ,
+            slow_read_wait: SLOW_READ_WAIT,
             retry_first: RETRY_FIRST,
             retry_max: RETRY_MAX,
             backlog: BACKLOG,
@@ -73,6 +79,14 @@ impl Default for UiTimings {
 
 /// How often a page's stream gets a `ping` (and the log tail a comment).
 pub const KEEP_ALIVE: Duration = Duration::from_secs(15);
+
+/// A Runs page read longer than this is slow: the page then reads again at most every
+/// [`SLOW_READ_WAIT`] (a name filter matching DAGs with long histories: 114 ms over 500,000 runs,
+/// against 0.3 ms unfiltered; the user, 2026-11-16).
+pub const SLOW_READ: Duration = Duration::from_millis(50);
+
+/// How often a page whose last read was slow reads again at most.
+pub const SLOW_READ_WAIT: Duration = Duration::from_secs(5);
 
 /// A page's stream sends at most one `change` this often (per deployment).
 pub const COALESCE: Duration = Duration::from_secs(1);

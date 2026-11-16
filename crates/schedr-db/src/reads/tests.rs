@@ -183,6 +183,7 @@ async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
     let ids = |runs: Vec<RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
     let filter = |dag: Option<&str>, state, before: Option<&str>, limit| RunFilter {
         dag_id: dag.map(|d| DagId::new(d).unwrap()),
+        dag_contains: None,
         state,
         before: before.map(ts),
         before_run: None,
@@ -210,6 +211,31 @@ async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
     assert_eq!(ids(both.unwrap()), [second.as_str()]);
     let capped = db.runs(&filter(None, None, None, u32::MAX)).await;
     assert_eq!(capped.unwrap().len(), 3);
+
+    // A part of the DAG's ID, any case (the Runs page's field, the user 2026-11-16); `%` and
+    // `_` are themselves, not a pattern's: `_` would match any letter.
+    let part = |part: &str, state| RunFilter {
+        dag_contains: Some(part.to_owned()),
+        state,
+        limit: 10,
+        ..RunFilter::default()
+    };
+    let found = |runs: Result<Vec<RunRecord>, DbError>| ids(runs.unwrap());
+    assert_eq!(
+        found(db.runs(&part("YN", None)).await),
+        [second.as_str(), first.as_str()]
+    );
+    assert_eq!(found(db.runs(&part("th", None)).await), [other.as_str()]);
+    assert_eq!(
+        found(db.runs(&part("s", Some(RunState::Failed))).await),
+        [second.as_str()]
+    );
+    assert_eq!(found(db.runs(&part("_", None)).await), Vec::<&str>::new());
+    assert_eq!(found(db.runs(&part("%", None)).await), Vec::<&str>::new());
+    assert_eq!(
+        found(db.runs(&part("nothing", None)).await),
+        Vec::<&str>::new()
+    );
 }
 
 #[tokio::test]

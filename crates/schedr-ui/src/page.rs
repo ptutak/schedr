@@ -4,7 +4,7 @@
 use axum::http::HeaderMap;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use schedr_client::times::show;
+use schedr_client::times::{show, show_seconds};
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +82,12 @@ impl Page {
         show(*at, self.zone.as_ref().unwrap_or(&TimeZone::UTC))
     }
 
+    /// As [`Self::time`], always with seconds: for a column of moments, so they line up.
+    #[must_use]
+    pub fn column_time(&self, at: &Timestamp) -> String {
+        show_seconds(*at, self.zone.as_ref().unwrap_or(&TimeZone::UTC))
+    }
+
     /// As [`Self::time`], for a narrow column, in lines: the date, the UTC time, the local
     /// time in brackets (shown by a cell with `white-space: pre-line`; non-breaking spaces
     /// keep each line whole).
@@ -124,6 +130,10 @@ pub fn prefix(headers: &HeaderMap) -> String {
 /// name, or empty for all.
 pub const DAGS_VIEW_COOKIE: &str = "schedr_dags_view";
 
+/// The cookie remembering which DAGs by their trigger the DAGs page shows: `active`, `paused`,
+/// or empty for all.
+pub const DAGS_TRIGGER_COOKIE: &str = "schedr_dags_trigger";
+
 /// Cookie `name`'s value, `%XX` escapes decoded; `None` without it or when it doesn't decode.
 #[must_use]
 pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -150,7 +160,7 @@ pub fn zone(headers: &HeaderMap) -> Option<TimeZone> {
 
 /// `text` with its `%XX` escapes decoded (as `encodeURIComponent` writes them); `None` for a
 /// malformed escape or bytes that aren't UTF-8.
-fn percent_decoded(text: &str) -> Option<String> {
+pub(crate) fn percent_decoded(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

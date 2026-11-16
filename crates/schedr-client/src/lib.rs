@@ -1005,6 +1005,9 @@ impl<T: Transport> Client<T> {
         if let Some(dag) = &query.dag {
             params.push(format!("dag={}", path(dag.as_str())));
         }
+        if let Some(part) = &query.dag_contains {
+            params.push(format!("dag_contains={}", path(part)));
+        }
         if let Some(state) = query.state {
             params.push(format!("state={state}"));
         }

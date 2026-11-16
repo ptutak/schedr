@@ -11,7 +11,9 @@ use schedr_model::{
 };
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, from_json, from_name, on_pool, optional_time, parse_time, sql};
+use crate::query::{
+    db_time, from_json, from_name, on_pool, optional_time, parse_time, sql, to_json,
+};
 
 #[cfg(test)]
 mod tests;
@@ -239,21 +241,69 @@ const RUN_COLUMNS_OF_DAG: &str = "SELECT id{text}, dag_id, kind, state, {ts<}pla
     (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id) FROM runs WHERE dag_id = $1 AND ($2{ts} IS NULL OR planned_for = $2{ts}) \
     ORDER BY planned_for DESC, triggered_at DESC, id DESC LIMIT $3";
 
-const RUNS_FILTERED: &str = "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
+/// The runs listed newest triggered first, filtered by `$dag` (an SQL condition on `dag_id`),
+/// the state and the page's cursor. The page's runs are chosen first, then each one's place in
+/// its backfill counted: counted before the `LIMIT`, every matching run of a large backfill was
+/// counted (quadratic; Codex's review of D500: 4.3 s over 4,000 runs of one backfill).
+macro_rules! runs_listed {
+    ($dag:literal) => {
+        concat!(
+            "SELECT id{text}, dag_id, kind, state, {ts<}planned_for{>ts}, \
     {ts<}since{>ts}, {ts<}triggered_at{>ts}, triggered_by, {ts<}started_at{>ts}, \
     {ts<}ended_at{>ts}, late_failure, parent_run_id{text}, backfill_id{text}, \
     (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id \
      AND (b.planned_for < runs.planned_for OR (b.planned_for = runs.planned_for AND b.id <= runs.id))), \
-    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id) FROM runs WHERE ($1 IS NULL OR dag_id = $1) \
-    AND ($2 IS NULL OR state = $2) AND ($3{ts} IS NULL OR triggered_at < $3{ts} \
+    (SELECT COUNT(*) FROM runs b WHERE b.backfill_id = runs.backfill_id) FROM runs \
+    WHERE runs.id IN (SELECT id FROM runs WHERE ",
+            $dag,
+            " AND ($2 IS NULL OR state = $2) AND ($3{ts} IS NULL OR triggered_at < $3{ts} \
     OR ($5{uuid} IS NOT NULL AND triggered_at = $3{ts} AND id < $5{uuid})) \
-    ORDER BY triggered_at DESC, runs.id DESC LIMIT $4";
+    ORDER BY triggered_at DESC, id DESC LIMIT $4) \
+    ORDER BY triggered_at DESC, runs.id DESC"
+        )
+    };
+}
+
+const RUNS_FILTERED: &str = runs_listed!("($1 IS NULL OR dag_id = $1)");
+
+/// The DAG IDs holding a part (`$1`, a [`contains_pattern`]), from `dags`: every DAG ID a run
+/// has, removed ones too.
+const DAGS_HOLDING: &str = "SELECT dag_id FROM dags WHERE LOWER(dag_id) LIKE $1 ESCAPE '\\'";
+
+/// The runs of the DAGs in `$6` ([`DAGS_HOLDING`]'s answer), by `runs_by_dag_trigger`; on
+/// SQLite a JSON list. The DAGs are read first: in one statement Postgres planned the subquery
+/// as a join and walked every run by trigger time even when no DAG matched (Codex's review of
+/// D500: 96 ms over 250,000 runs; none matched now asks nothing).
+const RUNS_OF_DAGS_SQLITE: &str =
+    runs_listed!("($1 IS NULL OR dag_id = $1) AND dag_id IN (SELECT value FROM json_each($6))");
+
+/// As [`RUNS_OF_DAGS_SQLITE`], `$6` the IDs joined by commas (no DAG ID holds one): an array
+/// the planner sees, not a JSON list it can't count (measured with `runs_by_dag_trigger`, 250,000
+/// runs: no match 0.16 ms against 144 ms, a rare DAG 0.4 ms against 57 ms).
+const RUNS_OF_DAGS_POSTGRES: &str =
+    runs_listed!("($1 IS NULL OR dag_id = $1) AND dag_id = ANY(string_to_array($6{text}, ','))");
+
+/// A `LIKE` pattern matching any text holding `part`, in any case: lower-cased, its `%`, `_`
+/// and `\` escaped (with `ESCAPE '\'`).
+fn contains_pattern(part: &str) -> String {
+    let mut pattern = String::from("%");
+    for c in part.to_lowercase().chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
 
 /// Which runs [`Database::runs`] lists.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunFilter {
     /// Only this DAG's.
     pub dag_id: Option<DagId>,
+    /// Only the DAGs whose ID holds this, in any case (the Runs page's DAG field).
+    pub dag_contains: Option<String>,
     /// Only runs in this state.
     pub state: Option<RunState>,
     /// Only runs listed after this point: triggered before this moment, or at it with a
@@ -273,15 +323,47 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, DbError> {
+        let dags = match filter.dag_contains.as_deref() {
+            Some(part) => {
+                let dags: Vec<String> = on_pool!(self, |pool, backend| {
+                    sqlx::query_scalar(sql(backend, DAGS_HOLDING))
+                        .bind(contains_pattern(part))
+                        .fetch_all(pool)
+                        .await?
+                });
+                if dags.is_empty() {
+                    return Ok(Vec::new());
+                }
+                Some(dags)
+            }
+            None => None,
+        };
         let rows: Vec<RunRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, RUNS_FILTERED))
-                .bind(filter.dag_id.as_ref().map(DagId::as_str))
-                .bind(filter.state.map(|s| s.to_string()))
-                .bind(filter.before.map(db_time))
-                .bind(i64::from(filter.limit.min(MAX_RUNS)))
-                .bind(filter.before_run.as_deref())
-                .fetch_all(pool)
-                .await?
+            let postgres = matches!(backend, crate::backend::Backend::Postgres);
+            let query = sqlx::query_as(sql(
+                backend,
+                match (&dags, postgres) {
+                    (None, _) => RUNS_FILTERED,
+                    (Some(_), false) => RUNS_OF_DAGS_SQLITE,
+                    (Some(_), true) => RUNS_OF_DAGS_POSTGRES,
+                },
+            ))
+            .bind(filter.dag_id.as_ref().map(DagId::as_str))
+            .bind(filter.state.map(|s| s.to_string()))
+            .bind(filter.before.map(db_time))
+            .bind(i64::from(filter.limit.min(MAX_RUNS)))
+            .bind(filter.before_run.as_deref());
+            match &dags {
+                Some(dags) => {
+                    let list = if postgres {
+                        dags.join(",")
+                    } else {
+                        to_json(dags)
+                    };
+                    query.bind(list).fetch_all(pool).await?
+                }
+                None => query.fetch_all(pool).await?,
+            }
         });
         rows.into_iter().map(run_record).collect()
     }
@@ -339,7 +421,7 @@ impl Database {
         if run_ids.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let list = crate::query::to_json(&run_ids);
+        let list = to_json(&run_ids);
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
             sqlx::query_as(sql(backend, DAGS))
                 .bind(&list)

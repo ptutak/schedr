@@ -441,6 +441,52 @@ ul.handles { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
 .choices a:first-child { border-radius: 6px 0 0 6px; }
 .choices a:last-child { border-radius: 0 6px 6px 0; }
 .choices a.current { background: var(--running-bg); color: var(--text); font-weight: 600; }
+/* The DAGs table's header holds its filters (D500): an open dropdown runs over the rows and
+   past the table, so the table doesn't clip, and its header rounds its own corners. */
+table.list.dags, table.list.runs { overflow: visible; }
+th a.sort { color: inherit; text-decoration: none; }
+th a.sort:hover .sort-mark, th a.sort:focus-visible .sort-mark { color: var(--text); }
+th a.sort .sort-mark { color: var(--dim); font-size: 0.8em; }
+table.list.runs thead th:first-child { border-top-left-radius: 8px; }
+table.list.runs thead th:last-child { border-top-right-radius: 8px; }
+.th-filters input#run-dag { flex: 0 1 11em; min-width: 6em; }
+table.list.runs td.mono { white-space: nowrap; }
+/* A chained run's `run …1a2b3c4d`: one line, as the rest of the row. */
+table.runs td.by { white-space: nowrap; }
+/* The columns keep their widths with no runs listed: a column's width is its least. */
+table.list.runs col.w-run { width: 36ch; }
+table.list.runs col.w-run-dag { width: 22ch; }
+table.list.runs col.w-run-state { width: 18ch; }
+table.list.runs col.w-time { width: 22ch; }
+table.list.dags thead th:first-child { border-top-left-radius: 8px; }
+table.list.dags thead th:last-child { border-top-right-radius: 8px; }
+/* Fixed widths: filtering doesn't move the columns, nor the header's height. */
+table.list.dags { table-layout: fixed; }
+table.list.dags col.w-dag { width: 34%; }
+table.list.dags col.w-dag-several { width: 28%; }
+table.list.dags col.w-deployment { width: 12%; }
+table.list.dags col.w-trigger { width: 28%; }
+table.list.dags col.w-tags { width: 16%; }
+table.list.dags td { overflow-wrap: anywhere; }
+.th-filters { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.th-filters > span { white-space: nowrap; }
+.th-filters input[type=search] { flex: 1; min-width: 9em; max-width: 22em; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-weight: normal; }
+.th-filters fieldset { border: 0; padding: 0; margin: 0; }
+.th-filters legend.hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+/* A dropdown: a button like the switch's, opening a list of boxes downwards, one a line,
+   scrolling past about 12. */
+.dropdown { position: relative; display: inline-block; font-weight: normal; }
+.dropdown > summary { cursor: pointer; list-style: none; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); white-space: nowrap; }
+.dropdown > summary::-webkit-details-marker { display: none; }
+.dropdown > summary::after { content: " ▾"; color: var(--dim); }
+.dropdown[open] > summary::after { content: " ▴"; }
+.dropdown-menu { position: absolute; z-index: 20; top: calc(100% + 2px); left: 0; width: max-content; min-width: 100%; max-width: 20em; max-height: 18em; overflow-y: auto; display: flex; flex-direction: column; padding: 4px 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgb(0 0 0 / 18%); }
+.dropdown-menu label { display: flex; align-items: baseline; gap: 6px; padding: 3px 10px; cursor: pointer; }
+.dropdown-menu label:hover { background: var(--surface); }
+.dropdown-menu .option { overflow-wrap: anywhere; }
+.dropdown-menu .dim { margin-left: auto; padding-left: 8px; }
+.dropdown-menu input { margin: 0; }
+.dropdown-switch > summary { min-width: 4.5em; }
 .metrics-deployment { margin-bottom: 28px; }
 .metrics-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .metrics-view.with-panel { grid-template-columns: minmax(0, 1fr) minmax(320px, 440px); }

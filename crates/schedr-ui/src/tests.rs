@@ -230,7 +230,7 @@ async fn the_list_names_each_dags_kind_of_trigger() {
         texts(&html, "table.dags td.trigger .badge"),
         ["active", "active", "active", "active", "active", "active"]
     );
-    assert!(texts(&html, "table.dags th").contains(&"Trigger".to_owned()));
+    assert!(texts(&html, "table.dags th .th-filters > span").contains(&"Trigger".to_owned()));
 }
 
 /// A DAG's description shows under its ID in the list, a long one cut to a line with the
@@ -341,6 +341,153 @@ async fn a_deployment_that_doesnt_answer_is_shown_unavailable_and_the_others_lis
     assert!(texts(&html, "table.dags th").contains(&"Deployment".to_owned()));
 }
 
+/// Two deployments' DAGs with triggers and tags: `nightly` (a schedule, active, tag `etl`),
+/// `hourly` (a schedule, paused, tags `etl` and `ml`), `train` (manual, tag `ml`), `orders`
+/// (an event, active).
+fn filtered() -> Scripted {
+    let mut etl = etl();
+    let with = |id: &str, trigger: Value, paused: Option<bool>, tags: &[&str]| {
+        let mut dag = dag(id, false);
+        dag["trigger"] = trigger;
+        dag["trigger_state"] = match paused {
+            Some(true) => json!("paused"),
+            Some(false) => json!("active"),
+            None => Value::Null,
+        };
+        dag["tags"] = json!(tags);
+        dag
+    };
+    let cron = json!({"kind": "cron", "expression": "0 3 * * *"});
+    etl.answers.insert(
+        "/api/v1/dags".to_owned(),
+        (
+            200,
+            json!({"dags": [
+                with("nightly", cron.clone(), Some(false), &["etl"]),
+                with("hourly", cron, Some(true), &["etl", "ml"]),
+                with("train", Value::Null, None, &["ml"]),
+                with("orders", json!({"kind": "event", "name": "paid"}), Some(false), &[]),
+            ]}),
+        ),
+    );
+    etl
+}
+
+#[tokio::test]
+async fn the_dags_page_filters_by_name_switch_kind_and_tag() {
+    // The user, 2026-11-16: a toggle for paused, active or all; a name filter; boxes for tags
+    // and trigger kinds. Within a group any box; the groups together.
+    let app = ui(vec![deployment("etl", filtered())]);
+    let shown = |html: &str| texts(html, "table.dags tbody td:first-child a");
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(shown(&html), ["hourly", "nightly", "orders", "train"]);
+    // The DAG title sorts the other way, keeping the filters (the user, 2026-11-16).
+    assert_eq!(
+        attrs(&html, "table.dags th[aria-sort]", "aria-sort"),
+        ["ascending"]
+    );
+    assert_eq!(
+        attrs(&html, "table.dags th a.sort", "href"),
+        ["/?view=&trigger=&order=desc"]
+    );
+    let (_, sorted) = get(&app, "/?trigger=&name=r&order=desc", &[]).await;
+    assert_eq!(shown(&sorted), ["train", "orders", "hourly"]);
+    assert_eq!(
+        attrs(&sorted, "table.dags th[aria-sort]", "aria-sort"),
+        ["descending"]
+    );
+    assert_eq!(
+        attrs(&sorted, "table.dags th a.sort", "href"),
+        ["/?view=&trigger=&name=r"]
+    );
+    assert_eq!(attrs(&sorted, "input[name=order]", "value"), ["desc"]);
+    assert_eq!(
+        texts(&html, "#dag-switch-menu label"),
+        ["All 4", "Active 2", "Paused 1"],
+        "a manual DAG is only under All"
+    );
+    assert_eq!(
+        texts(&html, "#dag-kind-menu label, #dag-tag-menu label"),
+        ["Event 1", "Manual 1", "Schedule 2", "etl 2", "ml 2"]
+    );
+
+    let (_, html) = get(&app, "/?trigger=paused", &[]).await;
+    assert_eq!(shown(&html), ["hourly"]);
+    let (_, html) = get(&app, "/?trigger=active", &[]).await;
+    assert_eq!(shown(&html), ["nightly", "orders"]);
+    // Counted within the other filters: the active ones' kinds and tags.
+    assert_eq!(
+        texts(&html, "#dag-kind-menu label, #dag-tag-menu label"),
+        ["Event 1", "Manual 0", "Schedule 1", "etl 1", "ml 0"]
+    );
+
+    // A name, any case; spaces as forms send them.
+    let (_, html) = get(&app, "/?name=HOUR", &[]).await;
+    assert_eq!(shown(&html), ["hourly"]);
+    assert_eq!(attrs(&html, "#dag-name", "value"), ["HOUR"]);
+    let (_, html) = get(&app, "/?name=no+such", &[]).await;
+    assert_eq!(
+        texts(&html, "table.dags td.empty"),
+        ["No DAGs match these filters."]
+    );
+
+    // Tags: any of those ticked; with a kind: both.
+    let (_, html) = get(&app, "/?tag=ml", &[]).await;
+    assert_eq!(shown(&html), ["hourly", "train"]);
+    let (_, html) = get(&app, "/?tag=ml&tag=etl", &[]).await;
+    assert_eq!(shown(&html), ["hourly", "nightly", "train"]);
+    assert_eq!(
+        attrs(
+            &html,
+            "#dag-kind-menu input[checked], #dag-tag-menu input[checked]",
+            "value"
+        ),
+        ["etl", "ml"]
+    );
+    let (_, html) = get(&app, "/?tag=ml&kind=Schedule", &[]).await;
+    assert_eq!(shown(&html), ["hourly"]);
+    let (_, html) = get(&app, "/?kind=Run%20of", &[]).await;
+    assert!(shown(&html).is_empty(), "a kind no DAG has still filters");
+    assert_eq!(
+        attrs(
+            &html,
+            "#dag-kind-menu input[checked], #dag-tag-menu input[checked]",
+            "value"
+        ),
+        ["Run of"],
+        "and can be unticked"
+    );
+
+    // The live reload keeps every filter; the switch is remembered, the rest isn't.
+    let (_, html) = get(&app, "/?trigger=active&name=ord&tag=x&kind=Event", &[]).await;
+    assert_eq!(
+        attrs(&html, "#live", "hx-get"),
+        ["/?view=&trigger=active&name=ord&tag=x&kind=Event"]
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/?trigger=paused&name=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookies: Vec<_> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        cookies,
+        ["schedr_dags_trigger=paused; Path=/; Max-Age=31536000; SameSite=Lax"]
+    );
+    let (_, html) = get(&app, "/", &[("cookie", "schedr_dags_trigger=paused")]).await;
+    assert_eq!(shown(&html), ["hourly"]);
+}
+
 /// A deployment of one DAG, `train`.
 fn ml_like() -> Scripted {
     let mut ml = etl();
@@ -358,12 +505,15 @@ async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
     let app = ui(vec![deployment("etl", etl()), deployment("ml", ml_like())]);
     let (_, html) = get(&app, "/", &[]).await;
     assert_eq!(texts(&html, "nav.dag-views a"), ["All 3", "etl 2", "ml 1"]);
-    assert_eq!(attrs(&html, "nav.dag-views a.open", "href"), ["/?view="]);
+    assert_eq!(
+        attrs(&html, "nav.dag-views a.open", "href"),
+        ["/?view=&trigger="]
+    );
     assert_eq!(
         texts(&html, "table.dags tbody td:first-child a"),
         ["archive", "sync", "train"]
     );
-    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view="]);
+    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view=&trigger="]);
 
     // One deployment's: its DAGs only, no Deployment column, kept by its live reload, and
     // remembered.
@@ -384,8 +534,11 @@ async fn the_dags_page_shows_all_deployments_or_one_and_remembers_the_choice() {
     let (_, html) = get(&app, "/?view=ml", &[]).await;
     assert_eq!(texts(&html, "table.dags tbody td:first-child a"), ["train"]);
     assert!(!texts(&html, "table.dags th").contains(&"Deployment".to_owned()));
-    assert_eq!(attrs(&html, "nav.dag-views a.open", "href"), ["/?view=ml"]);
-    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view=ml"]);
+    assert_eq!(
+        attrs(&html, "nav.dag-views a.open", "href"),
+        ["/?view=ml&trigger="]
+    );
+    assert_eq!(attrs(&html, "#live", "hx-get"), ["/?view=ml&trigger="]);
     let (_, html) = get(&app, "/", &[("cookie", "schedr_dags_view=ml")]).await;
     assert_eq!(texts(&html, "table.dags tbody td:first-child a"), ["train"]);
 
@@ -444,8 +597,8 @@ async fn a_dag_page_shows_its_facts_and_runs_in_utc_and_local_time() {
     assert_eq!(
         texts(&html, "table.runs tbody td:nth-child(3)"),
         [
-            "2026-10-15 01:00 UTC (03:00 CEST)",
-            "2026-10-15 01:00 UTC (03:00 CEST)"
+            "2026-10-15 01:00:00 UTC (03:00:00 CEST)",
+            "2026-10-15 01:00:00 UTC (03:00:00 CEST)"
         ]
     );
     // The zone is known: no reload, no "UTC only" note.
@@ -459,7 +612,7 @@ async fn without_the_zone_times_are_utc_and_the_page_says_so() {
     let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
     assert_eq!(
         texts(&html, "table.runs tbody td:nth-child(3)")[0],
-        "2026-10-15 01:00 UTC"
+        "2026-10-15 01:00:00 UTC"
     );
     assert!(html.contains("schedr-tz-reloaded"));
     assert_eq!(

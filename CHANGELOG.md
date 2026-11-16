@@ -19,8 +19,10 @@ memory charts.
 - **Upgrade the master first, then migrate.** The protocol goes from 2.0 to 2.1: a 1.1.0 master
   takes 1.0.0 workers, a 1.0.0 master refuses 1.1.0 ones. One migration adds stored scheduling
   moments (each trigger's next fire time, each wait step's next look), the samples table and
-  the processes' usage, with their indexes: run `schedr db migrate` (or start the master with
-  `--migrate`) before the webservers.
+  the processes' usage, with their indexes, and an index of each DAG's runs by trigger time: run
+  `schedr db migrate` (or start the master with `--migrate`) before the webservers. A database
+  migrated by 1.1.0rc1 isn't taken by 1.1.0rc2 or later (that migration changed after rc1):
+  start from a copy of the 1.0.0 database instead.
 - **An attempt's `started_at` is the worker's start** (M5.1m), turned into master time, not the
   moment the master handled the worker's message. Start-latency numbers read from the database
   are lower than 1.0.0's for the same work.
@@ -39,6 +41,13 @@ memory charts.
   (succeeded, failed, stopped) and the p50 and p95 of their start latency. Charts are drawn by
   the server; the samples are taken each minute and rolled up after 15 minutes. Processes that
   ended in the range (a restart's old ones) are one line together, not one each (decision 499).
+- **Filters on the DAGs page** (decision 500), beside the column titles: by name as you type,
+  by the trigger's switch (All, Active, Paused, remembered), and by trigger kind and tag in
+  dropdowns; in the address, so a filtered list can be linked. The Runs page's filters moved
+  beside its column titles in the same style, its DAG field matching a part of the name as you
+  type (`dag_contains` on `GET /api/v1/runs`). The DAGs page's DAG title sorts the list A to Z or
+  Z to A. In the run lists, times show seconds and a chained run's "By" is a short link to the run
+  that started it.
 - **A Status block on the Deployments page** (decision 462): per deployment, its masters by role
   (red when none leads), workers by state, slots in use, errors and warnings, mixed versions, and
   every process's memory with a 24 h sparkline. Each node's panel has its own chart, and the

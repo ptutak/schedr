@@ -69,6 +69,15 @@ fn times_are_shown_in_utc_and_local() {
         show(ts("2026-10-15T03:00:00Z"), &TimeZone::UTC),
         "2026-10-15 03:00 UTC"
     );
+    // For a column: always seconds, so whole minutes line up with the rest.
+    assert_eq!(
+        show_seconds(ts("2026-10-15T01:00:00Z"), &new_york),
+        "2026-10-15 01:00:00 UTC (2026-10-14 21:00:00 EDT)"
+    );
+    assert_eq!(
+        show_seconds(ts("2026-10-15T03:00:00Z"), &TimeZone::UTC),
+        "2026-10-15 03:00:00 UTC"
+    );
 }
 
 #[test]

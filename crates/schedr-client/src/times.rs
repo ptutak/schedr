@@ -69,6 +69,17 @@ pub fn parse_time_flag(flag: &str, text: &str) -> Result<ForTime, String> {
 /// shown only when it differs, and the local part is left out when `local` is UTC.
 #[must_use]
 pub fn show(at: Timestamp, local: &TimeZone) -> String {
+    shown(at, local, clock)
+}
+
+/// As [`show`], always with seconds (`03:00:00`): moments in a column line up (the UI's run
+/// lists, where whole-minute planned times were shorter than the rest).
+#[must_use]
+pub fn show_seconds(at: Timestamp, local: &TimeZone) -> String {
+    shown(at, local, |zoned| zoned.strftime("%H:%M:%S").to_string())
+}
+
+fn shown(at: Timestamp, local: &TimeZone, clock: impl Fn(&Zoned) -> String) -> String {
     let utc = at.to_zoned(TimeZone::UTC);
     let text = format!("{} {} UTC", utc.strftime("%Y-%m-%d"), clock(&utc));
     let here = at.to_zoned(local.clone());

@@ -1012,6 +1012,8 @@ pub const fn ui_timings(timings: &Timings, limits: &HiddenLimits) -> schedr_ui::
         coalesce: timings.ui_coalesce,
         tail_interval: timings.ui_tail_interval,
         tail_give_up: timings.ui_tail_give_up,
+        slow_read: timings.ui_slow_read,
+        slow_read_wait: timings.ui_slow_read_wait,
         retry_first: timings.ui_relay_retry_first,
         retry_max: timings.ui_relay_retry_max,
         backlog: limits.ui_events_backlog,

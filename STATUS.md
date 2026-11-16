@@ -6,18 +6,18 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-16)
 
 - **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** R1.1, Release 1.1.0 (decisions D498, D499). Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
+- **Next step:** R1.1, Release 1.1.0 (decisions D498, D499, D500). Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
 - **Then:** M5.2a, M5.2b, M5.2c, M5.2d, M5.2e.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **Open bugs:** 3; first: B254 (low/likely), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D500 (2026-11-16): the DAGs page filters by name, trigger switch, kind and tag
 - D499 (2026-11-16): the Metrics page folds the processes that ended into one line
 - D498 (2026-11-15): a release with a new migration goes through an rc first
 - D497 (2026-11-15): an unset cleanup timeout fits in the grace period
 - D496 (2026-11-15): a role starting waits for a database it can't reach yet
-- D495 (2026-11-15): a stopping worker waits for the master to take its Deregister
 - M5.1q (2026-11-15): A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits
 - M5.1p (2026-11-15): Tunable constants as hidden settings
 - M5.1o (2026-11-15): A poke may be a plain def
@@ -25,13 +25,12 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## In progress
 
 - M5.1 done 2026-11-15 (M5.1a-M5.1q). Every bug fixed but B38 and B39 (they wait for M6) and B254 (low: a worker's RUNNING count includes its wait steps).
-- R1.1: 1.1.0rc1 published 2026-11-16 (TestPyPI, ghcr) and checked: the upgrade check (also CI's `upgrade` job) from 1.0.0 with the published binary, protocol 2.0/2.1 both ways (a 1.0.0 worker under this master; a 1.0.0 master refusing this worker), `twine check`, every image's version.
-- 1.1.0 paused by the user (2026-11-16) to fix what the metrics load showed: D499 (the Metrics page folds the processes that ended), B253 (a retired wait step host warned), `examples/metrics_load.py` with `WORKER_SLOTS`; then the 1.1.0 version commit with the docs' tags (prepared, uncommitted).
+- R1.1: 1.1.0rc1 published 2026-11-16 and checked. Since: D499, B253, then D500 (DAGs and Runs header filters, `dag_contains`, slow-read pacing, the DAGs sort, run lists' By and seconds), reviewed by Codex (8 findings, all fixed). Its new index `runs_by_dag_trigger` went into migration 0002 (the user: an rc isn't a real release), so the user asked for 1.1.0rc2 next.
+- The 1.1.0 tags for docs/ and examples/ are kept as a patch in the session's scratchpad (`tags-1.1.0.patch`), to apply for the final 1.1.0.
 
 ## Waiting for the user
 
-- Whether these fixes need a 1.1.0rc2 before 1.1.0 (D498 asks an rc for a new migration: rc1 had it; these add an API field, no migration).
-- The go for 1.1.0 itself (the user paused it).
+- Approving the `pypi` environment in the v1.1.0rc2 release run; after rc2, the go for 1.1.0.
 - After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled).
 
 ## Rules in force
@@ -45,7 +44,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Colleagues
 
-Codex at 35% of its week after the upgrade check's review (2026-11-15); D499/B253 under review. Grok unused this week. Usage logs in the skills' `USAGE.md`.
+Codex at 39% of its week after D500's review (2026-11-16). Grok unused this week. Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

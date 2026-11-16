@@ -394,6 +394,7 @@ async fn every_dags_runs_are_listed_filtered_and_paged() {
         .unwrap();
     let filter = |state, before: Option<&str>| RunFilter {
         dag_id: Some(sync()),
+        dag_contains: None,
         state,
         before: before.map(ts),
         before_run: None,
@@ -418,6 +419,19 @@ async fn every_dags_runs_are_listed_filtered_and_paged() {
         ..RunFilter::default()
     };
     assert_eq!(db.runs(&other).await.unwrap(), []);
+    // A part of the DAG's ID, any case; `_` and `%` are themselves (the user, 2026-11-16).
+    let part = |part: &str| RunFilter {
+        dag_contains: Some(part.to_owned()),
+        limit: 10,
+        ..RunFilter::default()
+    };
+    assert_eq!(
+        ids(db.runs(&part("YN")).await.unwrap()),
+        [run_id.as_str(), older.as_str()]
+    );
+    assert_eq!(db.runs(&part("_")).await.unwrap(), []);
+    assert_eq!(db.runs(&part("%")).await.unwrap(), []);
+    assert_eq!(db.runs(&part("nothing")).await.unwrap(), []);
     // Runs triggered at the same moment page by ID, none skipped.
     let mut together = Vec::new();
     for planned_for in ["2026-10-19T01:00:00Z", "2026-10-20T01:00:00Z"] {

@@ -829,8 +829,9 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .split('`')
         .filter(|part| part.starts_with(HIDDEN_PREFIX) && !part.ends_with('*'))
         .collect();
-    // 119 since the docs review of 1.1.0 named `MASTER__EVENT_LOOKBACK` there too.
-    assert_eq!(names.len(), 119, "{names:?}");
+    // 119 since the docs review of 1.1.0 named `MASTER__EVENT_LOOKBACK` there too; 121 with
+    // the Runs page's `UI__SLOW_READ` and `UI__SLOW_READ_WAIT` (decision 500).
+    assert_eq!(names.len(), 121, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         // The lease at least four heartbeats (B226); the Metrics buckets final and the minute

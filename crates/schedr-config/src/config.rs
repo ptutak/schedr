@@ -210,6 +210,10 @@ pub struct Timings {
     pub ui_tail_interval: Duration,
     /// How long the log tail keeps trying a log out of reach before it says so and stops.
     pub ui_tail_give_up: Duration,
+    /// A Runs page read that took longer than this is slow (its deployments' answers).
+    pub ui_slow_read: Duration,
+    /// After a slow read, the page reads again on a change at most this often.
+    pub ui_slow_read_wait: Duration,
     /// The first wait before a relay opens its stream again; it doubles up to `relay_retry_max`.
     pub ui_relay_retry_first: Duration,
     /// The longest wait between a relay's tries.
@@ -324,6 +328,8 @@ impl Default for Timings {
             ui_coalesce: Duration::from_secs(1),
             ui_tail_interval: Duration::from_secs(1),
             ui_tail_give_up: Duration::from_secs(30),
+            ui_slow_read: Duration::from_millis(50),
+            ui_slow_read_wait: Duration::from_secs(5),
             ui_relay_retry_first: Duration::from_secs(1),
             ui_relay_retry_max: Duration::from_secs(30),
             worker_stop_after_failure: Duration::from_secs(10),

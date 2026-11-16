@@ -2,35 +2,25 @@
 {% block title %}Runs · schedr{% endblock %}
 {% block content %}
 <h1>Runs</h1>
-<form class="filters" method="get" action="{{ page.base }}/runs">
-  {% if several %}
-  <label>Deployment
-    <select name="deployment" onchange="this.form.submit()">
-      <option value="">any</option>
-      {% for name in deployments %}<option value="{{ name }}"{% if query.deployment.as_deref() == Some(name.as_str()) %} selected{% endif %}>{{ name }}</option>{% endfor %}
-    </select>
-  </label>
-  {% endif %}
-  <label>DAG <input name="dag" value="{{ query.dag.as_deref().unwrap_or_default() }}" placeholder="any" size="28"></label>
-  <label>State
-    <select name="state" onchange="this.form.submit()">
-      <option value="">any</option>
-      {% for state in states %}<option value="{{ state }}"{% if query.state.as_deref() == Some(*state) %} selected{% endif %}>{{ state }}</option>{% endfor %}
-    </select>
-  </label>
-  <button type="submit">Filter</button>
-  {% if query.deployment.is_some() || query.dag.is_some() || query.state.is_some() || query.before.is_some() %}<a href="{{ page.base }}/runs">clear</a>{% endif %}
-</form>
-<div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+<form id="run-filters" method="get" action="{{ page.base }}/runs" role="search" hx-get="{{ page.base }}/runs" hx-trigger="submit" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace" hx-history="false"></form>
+<div id="live"{% if let Some(every) = every %} data-live-every="{{ every }}"{% endif %}{% if page.is_live() %} data-events="{{ page.events }}" hx-get="{{ page.refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
+{% if !whole_ids.is_empty() %}
+<div class="banner">Older webserver ({{ whole_ids.join(", ") }}): there the DAG field matches only a whole DAG ID, in its case.</div>
+{% endif %}
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}. Its runs are missing from this page and from the older ones reached from it; load this page again once it answers.</div>
 {% endfor %}
-{% if rows.is_empty() %}
-<p class="empty">No runs{% if query.before.is_some() %} before these{% endif %}.</p>
-{% else %}
 <table class="list runs">
+  <colgroup><col class="w-run"><col class="w-run-dag">{% if several %}<col>{% endif %}<col class="w-run-state"><col class="w-time"><col><col class="w-time"><col><col class="w-time"></colgroup>
   <thead>
-    <tr><th>Run</th><th>DAG</th>{% if several %}<th>Deployment</th>{% endif %}<th>State</th><th>For</th><th>Kind</th><th>Triggered</th><th>By</th><th>Ended</th></tr>
+    <tr hx-disinherit="*" hx-get="{{ page.base }}/runs" hx-trigger="change[target.type == 'radio']" hx-include="#run-filters" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace">
+      <th>Run</th>
+      <th><div class="th-filters"><span>DAG</span><input type="search" form="run-filters" id="run-dag" name="dag" value="{{ query.dag.as_deref().unwrap_or_default() }}" placeholder="Filter by name" aria-label="Filter runs by their DAG's name" autocomplete="off" hx-preserve="true" hx-get="{{ page.base }}/runs" hx-trigger="input changed delay:300ms, search" hx-include="#run-filters" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace"></div></th>
+      {% if several %}<th><div class="th-filters"><span>Deployment</span><details class="dropdown dropdown-switch" id="run-deployment-menu"><summary aria-label="Deployment: filter">{{ query.deployment.as_deref().unwrap_or("any") }}</summary><div class="dropdown-menu" role="radiogroup" aria-label="Deployment"><label><input type="radio" form="run-filters" id="run-deployment-any" name="deployment" value=""{% if query.deployment.is_none() %} checked{% endif %}><span class="option">any</span></label>{% for item in deployments %}<label><input type="radio" form="run-filters" id="run-deployment-{{ item }}" name="deployment" value="{{ item }}"{% if query.deployment.as_deref() == Some(item.as_str()) %} checked{% endif %}><span class="option">{{ item }}</span></label>{% endfor %}</div></details></div></th>{% endif %}
+      <th><div class="th-filters"><span>State</span><details class="dropdown dropdown-switch" id="run-state-menu"><summary aria-label="State: filter">{{ query.state.as_deref().unwrap_or("any") }}</summary><div class="dropdown-menu" role="radiogroup" aria-label="State"><label><input type="radio" form="run-filters" id="run-state-any" name="state" value=""{% if query.state.is_none() %} checked{% endif %}><span class="option">any</span></label>{% for item in states %}<label><input type="radio" form="run-filters" id="run-state-{{ item }}" name="state" value="{{ item }}"{% if query.state.as_deref() == Some(*item) %} checked{% endif %}><span class="option">{{ item }}</span></label>{% endfor %}</div></details></div></th>
+      <th>For</th><th>Kind</th><th>Triggered</th><th>By</th>
+      <th>Ended{% if !several %}<input type="hidden" form="run-filters" name="deployment" value="{{ query.deployment.as_deref().unwrap_or_default() }}">{% endif %}<noscript> <button type="submit" form="run-filters">Apply</button></noscript></th>
+    </tr>
   </thead>
   <tbody>
   {% for run in rows %}
@@ -42,13 +32,14 @@
       <td class="time">{{ run.planned_for }}</td>
       <td>{{ run.kind }}</td>
       <td class="time">{{ run.triggered_at }}</td>
-      <td>{{ run.triggered_by }}</td>
+      <td class="by">{% if let Some((href, id)) = run.parent %}<a class="mono" href="{{ href }}" title="Started by run {{ id }}">{{ run.triggered_by }}</a>{% else %}{{ run.triggered_by }}{% endif %}</td>
       <td class="time">{{ run.ended_at }}</td>
     </tr>
+  {% else %}
+    <tr><td class="empty" colspan="{% if several %}9{% else %}8{% endif %}">No runs{% if query.dag.is_some() || query.state.is_some() || query.deployment.is_some() %} match these filters{% endif %}{% if query.before.is_some() %} before these{% endif %}.</td></tr>
   {% endfor %}
   </tbody>
 </table>
-{% endif %}
 {% if let Some(next) = next %}<p class="pager"><a class="button" href="{{ next }}">Older runs</a></p>{% endif %}
 </div>
 {% endblock %}

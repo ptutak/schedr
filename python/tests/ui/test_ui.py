@@ -166,7 +166,7 @@ def test_a_new_run_appears_on_its_dags_page_without_a_reload(
         "data-events", re.compile(rf"^/events\?deployment=default&dag={dag}&since=\d+$")
     )
     trigger("2026-10-16T01:00:00Z")
-    new_row = page.locator("table.runs tbody td", has_text="2026-10-16 01:00 UTC").first
+    new_row = page.locator("table.runs tbody td", has_text="2026-10-16 01:00:00 UTC").first
     expect(new_row).to_be_visible(timeout=15_000)
     assert rows.count() > before
     assert page.evaluate("window.notReloaded") is True
@@ -252,7 +252,7 @@ def test_an_open_dialog_survives_a_live_update(
     # ...and reads itself again once it is closed.
     dialog.get_by_role("button", name="Cancel").click()
     expect(
-        page.locator("table.runs tbody td", has_text="2026-10-18 01:00 UTC").first
+        page.locator("table.runs tbody td", has_text="2026-10-18 01:00:00 UTC").first
     ).to_be_visible(timeout=15_000)
 
 
@@ -303,7 +303,7 @@ def test_a_browsers_live_pages_share_one_stream_and_leave_its_connections_free(
     trigger("2026-10-19T01:00:00Z")
     for tab in tabs:
         expect(
-            tab.locator("table.runs tbody td", has_text="2026-10-19 01:00 UTC").first
+            tab.locator("table.runs tbody td", has_text="2026-10-19 01:00:00 UTC").first
         ).to_be_visible(timeout=5_000)
     # The last page of the UI closed, the next opens the stream again.
     for tab in [*tabs, another]:
@@ -313,7 +313,7 @@ def test_a_browsers_live_pages_share_one_stream_and_leave_its_connections_free(
     expect(page.locator("table.runs tbody tr").first).to_be_visible()
     trigger("2026-10-20T01:00:00Z")
     expect(
-        page.locator("table.runs tbody td", has_text="2026-10-20 01:00 UTC").first
+        page.locator("table.runs tbody td", has_text="2026-10-20 01:00:00 UTC").first
     ).to_be_visible(timeout=15_000)
 
 
@@ -529,3 +529,137 @@ def test_a_tasks_memory_tab_and_the_dags_memory_table_show_its_peaks(
     for task_id in ("extract", "load"):
         expect(rows.locator("td.mono", has_text=re.compile(f"^{task_id}$"))).to_have_count(1)
     assert set(rows.locator("td.mono").all_text_contents()) <= {"extract", "load", "notify"}
+
+
+def test_the_dags_list_filters_as_one_types_and_ticks(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    # The user, 2026-11-16: by name, by the trigger's switch, by kind and tag in dropdowns,
+    # in the table's header, swapped in by htmx while the name field keeps its focus.
+    page.goto(f"{standalone['url']}/?trigger=")
+    rows = page.locator("table.dags tbody td:first-child a")
+    expect(rows).to_have_count(3)
+    page.evaluate("window.notReloaded = true")
+    search = page.get_by_label("Filter DAGs by name")
+    search.fill("CONN")
+    expect(rows).to_have_text(["with_connections"])
+    expect(search).to_be_focused()
+    expect(page).to_have_url(re.compile(r"name=CONN"))
+    search.press_sequentially("ECTIONS", delay=30)
+    expect(rows).to_have_text(["with_connections"])
+    expect(search).to_have_value("CONNECTIONS")
+    search.fill("")
+    expect(rows).to_have_count(3)
+    # Boxes in a dropdown: ticked, then applied when it closes (a click outside).
+    kind = page.locator("details#dag-kind-menu")
+    kind.locator("summary").click()
+    kind.get_by_label("Manual", exact=False).check()
+    expect(rows).to_have_count(3)
+    page.locator("h1").click()
+    expect(rows).to_have_text(["form_params", "with_connections"])
+    expect(kind.locator("summary")).to_have_text("Kind (1)")
+    # The DAG title sorts Z to A, keeping the filters; again, A to Z.
+    page.locator("table.dags th a.sort").click()
+    expect(rows).to_have_text(["with_connections", "form_params"])
+    expect(page).to_have_url(re.compile(r"order=desc"))
+    expect(kind.locator("summary")).to_have_text("Kind (1)")
+    page.locator("table.dags th a.sort").click()
+    expect(rows).to_have_text(["form_params", "with_connections"])
+    # `SCHEDR_UI_SCREENSHOTS=<dir>`: the list with the dropdown open, in light and dark.
+    folder = os.environ.get("SCHEDR_UI_SCREENSHOTS")
+    if folder:
+        for scheme in ("light", "dark"):
+            page.evaluate(f"document.documentElement.dataset.theme = '{scheme}'")
+            kind.locator("summary").click()
+            page.locator("table.dags").screenshot(path=str(Path(folder) / f"dags-{scheme}.png"))
+            page.locator("h1").click()
+            expect(rows).to_have_text(["form_params", "with_connections"])
+            page.locator("details#dag-switch-menu summary").click()
+            page.locator("table.dags").screenshot(
+                path=str(Path(folder) / f"dags-switch-{scheme}.png")
+            )
+            page.locator("h1").click()
+    search.fill("form")
+    expect(rows).to_have_text(["form_params"])
+    # The switch: a manual DAG is neither active nor paused.
+    switch = page.locator("details#dag-switch-menu")
+    switch.locator("summary").click()
+    switch.get_by_label("Active", exact=False).check()
+    expect(page.locator("table.dags td.empty")).to_have_text("No DAGs match these filters.")
+    expect(switch.locator("summary")).to_have_text("Active")
+    switch.locator("summary").click()
+    switch.get_by_label("All", exact=False).check()
+    expect(rows).to_have_text(["form_params"])
+    assert page.evaluate("window.notReloaded") is True
+
+
+def test_the_runs_list_filters_from_its_header(page: Page, standalone: dict[str, str]) -> None:
+    # The user, 2026-11-16: the Runs page's filters as the DAGs page's, in the header.
+    page.goto(f"{standalone['url']}/runs")
+    page.evaluate("window.notReloaded = true")
+    states = page.locator("table.runs tbody .state")
+    state = page.locator("details#run-state-menu")
+    state.locator("summary").click()
+    state.get_by_label("success", exact=True).check()
+    expect(page).to_have_url(re.compile(r"state=success"))
+    expect(state.locator("summary")).to_have_text("success")
+    expect(states.first).to_have_text("success")
+    assert set(states.all_text_contents()) == {"success"}
+    # The DAG field as the DAGs page's: a part of the name, any case, as one types.
+    dag = page.get_by_label("Filter runs by their DAG's name")
+    dag.fill("nope")
+    expect(page.locator("table.runs td.empty")).to_have_text("No runs match these filters.")
+    dag.fill(standalone["dag"][:6].upper())
+    expect(dag).to_be_focused()
+    dags = page.locator("table.runs tbody td:nth-child(2) a")
+    expect(dags.first).to_have_text(standalone["dag"])
+    assert set(dags.all_text_contents()) == {standalone["dag"]}
+    assert page.evaluate("window.notReloaded") is True
+    # `SCHEDR_UI_SCREENSHOTS=<dir>`: the header with the State dropdown open, light and dark.
+    folder = os.environ.get("SCHEDR_UI_SCREENSHOTS")
+    if folder:
+        for scheme in ("light", "dark"):
+            page.evaluate(f"document.documentElement.dataset.theme = '{scheme}'")
+            state.locator("summary").click()
+            page.locator("table.runs").screenshot(path=str(Path(folder) / f"runs-{scheme}.png"))
+            page.locator("h1").click()
+
+
+def test_a_change_held_by_an_open_dropdown_is_read_when_it_closes(
+    page: Page, standalone: dict[str, str], trigger: Callable[[str], None]
+) -> None:
+    # Codex's review of D500: a run change while the State dropdown is open isn't read (it
+    # would close the dropdown); closing it without a choice reads it then.
+    page.goto(f"{standalone['url']}/runs")
+    expect(page.locator("table.runs tbody tr").first).to_be_visible()
+    page.evaluate("window.notReloaded = true")
+    state = page.locator("details#run-state-menu")
+    state.locator("summary").click()
+    trigger("2026-10-22T01:00:00Z")
+    new_row = page.locator("table.runs tbody td", has_text="2026-10-22 01:00:00 UTC")
+    page.wait_for_timeout(3_000)
+    expect(new_row).to_have_count(0)
+    expect(state).to_have_attribute("open", "")
+    page.locator("h1").click()
+    expect(new_row.first).to_be_visible(timeout=15_000)
+    assert page.evaluate("window.notReloaded") is True
+
+
+def test_back_gives_the_name_field_the_addresss_value(
+    page: Page, standalone: dict[str, str]
+) -> None:
+    # Codex's review of D500: the field kept through swaps showed the newer name over the
+    # older list after Back.
+    page.goto(f"{standalone['url']}/?trigger=")
+    rows = page.locator("table.dags tbody td:first-child a")
+    search = page.get_by_label("Filter DAGs by name")
+    search.fill("form")
+    expect(rows).to_have_text(["form_params"])
+    expect(page).to_have_url(re.compile(r"name=form"))
+    search.fill("conn")
+    expect(rows).to_have_text(["with_connections"])
+    expect(page).to_have_url(re.compile(r"name=conn"))
+    page.go_back()
+    expect(page).to_have_url(re.compile(r"name=form"))
+    expect(rows).to_have_text(["form_params"])
+    expect(search).to_have_value("form")

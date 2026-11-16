@@ -902,6 +902,7 @@ pub async fn list_all_runs(
         .db
         .runs(&RunFilter {
             dag_id: query.dag,
+            dag_contains: query.dag_contains.filter(|part| !part.is_empty()),
             state: query.state,
             before: query.before,
             before_run,

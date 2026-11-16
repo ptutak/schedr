@@ -31,6 +31,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D500 | 2026-11-16 | user | planned (R1.1) | ui-cli | The DAGs page filters by name, trigger switch, kind and tag |
 | D499 | 2026-11-16 | user | planned (R1.1) | ui-cli | The Metrics page folds the processes that ended into one line |
 | D498 | 2026-11-15 | user | planned (R1.1) | development | A release with a new migration goes through an rc first |
 | D497 | 2026-11-15 | user | built M5.1q | workers | An unset cleanup timeout fits in the grace period |
@@ -981,6 +982,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### ui-cli
 
+- D500: The DAGs page filters by name, trigger switch, kind and tag
 - D499: The Metrics page folds the processes that ended into one line
 - D491: A process's memory includes its tasks; memory is split by kind
 - D467: A task's peak memory over its attempts is charted

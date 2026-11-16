@@ -15,7 +15,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptView, CleanupView, CommandView, ResourceView, RunView, TaskView,
+    AllRunsQuery, AttemptView, CleanupView, CommandView, ResourceView, RunList, RunView, TaskView,
 };
 use schedr_client::{Client, ClientError, Transport, path_segment};
 use serde::Deserialize;
@@ -95,7 +95,7 @@ pub struct ListQuery {
     /// Only this deployment's runs.
     #[serde(default)]
     pub deployment: Option<String>,
-    /// Only this DAG's runs.
+    /// Only the runs of DAGs whose ID holds this, in any case.
     #[serde(default)]
     pub dag: Option<String>,
     /// Only runs in this state.
@@ -163,8 +163,11 @@ pub struct RunRow {
     pub planned_for: String,
     /// When it was triggered, as people read it.
     pub triggered_at: String,
-    /// Who or what triggered it.
+    /// Who or what triggered it; for a run started by another (chained), `run …` and the
+    /// last 8 characters of that run's ID.
     pub triggered_by: String,
+    /// The run that started it (chained): its page and its whole ID.
+    pub parent: Option<(String, String)>,
     /// When it ended, as people read it; empty while it runs.
     pub ended_at: String,
     /// Why a `success` is yellow (decision 309), as people read it; empty if it isn't.
@@ -190,6 +193,37 @@ struct RunsPage {
     states: [&'static str; 5],
     query: ListQuery,
     next: Option<String>,
+    /// The page's read was slow: it reads again on a change at most this often (ms).
+    every: Option<u128>,
+    /// The deployments whose webserver matches only a whole DAG ID (older than 1.1).
+    whole_ids: Vec<String>,
+}
+
+/// One deployment's page of runs, and whether it matched the DAG field as a whole ID: a
+/// webserver older than `dag_contains` (1.1) refuses it as an unknown parameter, so it is asked
+/// for the whole DAG ID instead, rather than shown as unavailable (Codex's review of D500).
+async fn runs_of<T: Transport + Send + Sync>(
+    client: &Client<T>,
+    query: &AllRunsQuery,
+) -> (Result<RunList, ClientError>, bool) {
+    let answer = client.all_runs(query).await;
+    let Some(part) = &query.dag_contains else {
+        return (answer, false);
+    };
+    if !matches!(&answer, Err(ClientError::Server { status: 400, message })
+        if message.contains("dag_contains"))
+    {
+        return (answer, false);
+    }
+    let Ok(dag) = schedr_model::DagId::new(part.as_str()) else {
+        return (Ok(RunList { runs: Vec::new() }), true);
+    };
+    let whole = AllRunsQuery {
+        dag: Some(dag),
+        dag_contains: None,
+        ..query.clone()
+    };
+    (client.all_runs(&whole).await, true)
 }
 
 /// `GET /runs`: the newest runs of every deployment (or one), merged by when they were
@@ -206,10 +240,10 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
         Err(rejection) => return bad_request_page(&page, &rejection.body_text()),
     };
     let mut follow = "kinds=run".to_owned();
-    for (key, value) in [("deployment", &query.deployment), ("dag", &query.dag)] {
-        if let Some(value) = value {
-            let _ = write!(follow, "&{key}={}", path_segment(value));
-        }
+    // A part of a DAG's ID can't pick the changes of one DAG: every run's change reads the
+    // page again.
+    if let Some(deployment) = &query.deployment {
+        let _ = write!(follow, "&deployment={}", path_segment(deployment));
     }
     let here = uri
         .query()
@@ -219,6 +253,7 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
         Ok(q) => q,
         Err(message) => return bad_request_page(&page, &message),
     };
+    let started = std::time::Instant::now();
     let mut asked = tokio::task::JoinSet::new();
     for index in 0..ui.deployments.len() {
         if query
@@ -230,16 +265,23 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
         }
         let (ui, api_query) = (Arc::clone(&ui), api_query.clone());
         asked.spawn(schedr_client::for_same_user(async move {
-            let answer = ui.deployments[index].client.all_runs(&api_query).await;
-            (index, answer)
+            let (answer, whole) = runs_of(&ui.deployments[index].client, &api_query).await;
+            (index, answer, whole)
         }));
     }
     let mut answers = asked.join_all().await;
-    answers.sort_by_key(|(index, _)| *index);
+    let whole_ids: Vec<String> = answers
+        .iter()
+        .filter(|(_, _, whole)| *whole)
+        .map(|(index, _, _)| ui.deployments[*index].name.clone())
+        .collect();
+    let every =
+        (started.elapsed() > ui.timings.slow_read).then(|| ui.timings.slow_read_wait.as_millis());
+    answers.sort_by_key(|(index, _, _)| *index);
     let mut listed = Vec::new();
     let mut unavailable = Vec::new();
     let mut more = false;
-    for (index, answer) in answers {
+    for (index, answer, _) in answers {
         match answer {
             Ok(list) => {
                 more |= list.runs.len() >= usize::try_from(PAGE_SIZE).unwrap_or(usize::MAX);
@@ -277,6 +319,8 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
             states: RUN_STATES,
             query,
             next,
+            every,
+            whole_ids,
         },
         StatusCode::OK,
     )
@@ -285,12 +329,6 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
 /// The API's query for a page of the list: its filters checked here, so a wrong one is the
 /// page's 400 rather than every deployment's.
 fn api_query(query: &ListQuery) -> Result<AllRunsQuery, String> {
-    let dag = query
-        .dag
-        .as_deref()
-        .map(schedr_model::DagId::new)
-        .transpose()
-        .map_err(|e| format!("That isn't a DAG ID: {e}"))?;
     let state = query
         .state
         .as_deref()
@@ -301,7 +339,8 @@ fn api_query(query: &ListQuery) -> Result<AllRunsQuery, String> {
         return Err("A page's cursor needs its moment (`before`).".to_owned());
     }
     Ok(AllRunsQuery {
-        dag,
+        dag: None,
+        dag_contains: query.dag.clone(),
         state,
         before: query.before,
         before_run: query.before_run.clone(),
@@ -320,10 +359,22 @@ pub fn run_row<T>(page: &Page, deployment: &Deployment<T>, run: &RunView) -> Run
         dag_id: run.dag_id.clone(),
         kind: run.kind_label(),
         state: run.state.clone(),
-        planned_for: page.time(&run.planned_for),
-        triggered_at: page.time(&run.triggered_at),
-        triggered_by: run.triggered_by.clone(),
-        ended_at: run.ended_at.map(|t| page.time(&t)).unwrap_or_default(),
+        planned_for: page.column_time(&run.planned_for),
+        triggered_at: page.column_time(&run.triggered_at),
+        triggered_by: run.parent_run_id.as_deref().map_or_else(
+            || run.triggered_by.clone(),
+            |parent| format!("run …{}", crate::deployments::short(parent)),
+        ),
+        parent: run.parent_run_id.as_ref().map(|parent| {
+            (
+                format!("{at}/runs/{}", path_segment(parent)),
+                parent.clone(),
+            )
+        }),
+        ended_at: run
+            .ended_at
+            .map(|t| page.column_time(&t))
+            .unwrap_or_default(),
         late: run
             .late_failure
             .as_deref()

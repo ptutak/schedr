@@ -179,7 +179,7 @@
       <td class="time">{{ run.planned_for }}</td>
       <td>{{ run.kind }}</td>
       <td class="time">{{ run.triggered_at }}</td>
-      <td>{{ run.triggered_by }}</td>
+      <td class="by">{% if let Some((href, id)) = run.parent %}<a class="mono" href="{{ href }}" title="Started by run {{ id }}">{{ run.triggered_by }}</a>{% else %}{{ run.triggered_by }}{% endif %}</td>
       <td class="time">{{ run.ended_at }}</td>
     </tr>
   {% endfor %}

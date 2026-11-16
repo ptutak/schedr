@@ -1598,3 +1598,96 @@ OOM-killed process's memory stays on the chart.
 Not chosen: masters and webservers keyed by a stable name, as workers are (they have none: a new
 `name` key, or host and port, with two masters on one host merging); keeping a line per process
 start.
+
+### <a id="D500"></a>2026-11-16: the DAGs page filters by name, trigger switch, kind and tag (decision 500)
+
+Watching the metrics load, the user asked for "a toggle in the UI to show paused/unpaused dags
+or all", then "a name-filter field", then "the same goes for checkbox for tags and trigger
+type". Built as: the switch as All, Active and Paused (named as the list's badges are; a DAG
+without a trigger is neither, so only under All, as `dags list` calls it `manual`), a name
+field outside the part that updates itself (so typing keeps its focus), and boxes for each
+trigger kind and tag the deployment's DAGs have, any within a group, the groups together, each
+count among what the other filters show. All in the address, so a filtered list can be linked
+and its live updates keep it; only the switch is remembered per viewer, as the deployment is.
+
+Not chosen (Claude's, small): manual DAGs under Active (they are never switched); remembering
+the name and the boxes (a filter one forgets about hides DAGs on the next visit).
+
+Then, the same day, the user: the filters "should be on the title bar with DAG Trigger Tags
+Defined in", and "those checkboxes should be on the dropdown". So they are a second header row,
+each under its column, and kinds and tags are dropdowns applied when they close (applying each
+tick would swap the header and close the dropdown after every box). Codex's review of the first
+version found five problems, fixed in this one: a live read could overwrite a filter's answer
+(now synced on `#live`), Back showed a stale name (the page keeps no htmx history snapshot), the
+two forms didn't combine without JavaScript (one form, its fields joined by `form=`), focus was
+lost after a swap (stable ids), and percent-encoded keys were ignored.
+
+Then: "those additional switches would be better if they were next to the title: DAG
+|Filter by name| ... so that this bar is not so big", the switch next to the Kind dropdown, and
+a dropdown "a list of checkboxes which has a scroll bar ... and it should stretch down". So one
+header row, each column's filters beside its title, the dropdowns a column of boxes opening
+downwards and scrolling past about 12; the DAG table no longer clips its content, so a dropdown
+can run past a short list.
+
+Then: the switch "could be a little smaller", the header "changes its height when switching
+... because of changes to column width", "Tags dropdown switches from beneath to the side",
+"maybe all/active/paused should also be a dropdown ... as a radiobutton". So the switch is a
+dropdown of radio buttons (applied on choosing), the table's columns have fixed widths, and a
+title cell never wraps.
+
+Then: "looks good, apply similar field styles to Runs". Its filters (a DAG id, a state, a
+deployment) moved from the form above the list into its header, the DAG field beside DAG and
+State and Deployment as dropdowns of radio buttons; no counts there (the list is a page of 50,
+filtered by the API), and the DAG field applies on Enter or leaving it (the API matches an
+exact id, so applying as one types would show nothing until the id is whole).
+
+Then: "can DAG filter behave in the same way as on DAGs page?" The Runs page lists 50 runs a
+page, filtered by the API, so a part of a name needs the database: `GET /api/v1/runs` gains
+`dag_contains` (additive; an older webserver refuses the unknown parameter, 400, rather than
+listing everything). A side note warned that `LIKE '%part%'` over the runs reads every run.
+Measured on SQLite with 500,000 runs over 200 DAGs: over the runs, 1 ms for a common part, 44 ms
+for a rare one, 444 ms when nothing matches; matching in `dags` first and then `dag_id IN (...)`
+by `runs_by_dag`, 114 ms, 3.7 ms and 0.2 ms: the cost of the exact filter per matched DAG,
+never the whole history. In one statement with `$6 IS NULL OR ...` the planner kept the trigger-
+time scan (306 ms for no match), so a part has a statement of its own.
+
+Not chosen: matching only the start of the name (an index range, but `sync` wouldn't find
+`daily_sync`, unlike the DAGs page); a DAG picker (a list per deployment to load first).
+
+Then, a side note: a page filtered by name follows every run change. Pages already re-read at
+most once a second on a poke, so the cost is per read: 0.3 ms unfiltered, up to 114 ms for a
+name matching busy DAGs (500,000 runs). Options: A keep; B slower re-reads when filtered; C
+follow only the matched DAGs (an API field, a set per deployment, a gap for DAGs deployed
+later; it saves only the cheap reads). The user: "B - but when the dag/run number exceeds some
+limit". Restated: what makes a read slow is the matched DAGs' runs in total, and counting them
+costs as much as the read; the user chose the read's own time. A Runs page whose deployments
+took over 50 ms re-reads at most every 5 s (hidden `UI__SLOW_READ`, `UI__SLOW_READ_WAIT`).
+Not chosen: the matched DAGs' count (an API field; a poor stand-in), the matched runs' count
+(as costly as the read).
+
+Then: "We could also add ordering to each DAG name field on both pages". Restated as a sort by
+the DAG title (A to Z, Z to A). The DAGs page sorts in the UI: small. The Runs page pages newest
+first by its cursor; sorting by DAG would need an API parameter, another cursor, and an index
+on `(dag_id, triggered_at, id)` in both migrations. The user: "DAGs page only". `order=desc` in
+the address, kept by the other filters, not remembered. Also in this round: run lists' times
+always with seconds (`show_seconds`; whole minutes were shorter), and a chained run's "By" as
+`run …<last 8>` linking to it (the whole ID made the row tall).
+
+Then Codex's review of the whole of D500 (session 01a1e3e3, Sol high): eight findings, all
+confirmed, all fixed. (1) The backfill counts ran before the `LIMIT` on a DAG part, quadratic on
+a large backfill: the page's runs are now chosen first, their places counted after. (2) Postgres
+planned the part's subquery as a join and walked every run by trigger time, 96 ms over 250,000
+runs with no DAG matched; the exact `dag` filter had the same cost (54 ms for a DAG of five
+runs). Measured on Postgres: with a new index `runs_by_dag_trigger (dag_id, triggered_at, id)`
+and the matched DAG IDs read first (none: nothing asked), bound as an array Postgres can count
+(`string_to_array`, not a JSON list: 0.16 ms against 144 ms with no match). The user: "no, change
+now", then "don't treat RC as real release": the index goes into migration 0002, which rc1
+shipped (an rc1 database isn't taken; the changelog says so), and "because of the schema change
+we have to go with another RC release": 1.1.0rc2. (3) A webserver older than 1.1 refuses
+`dag_contains` (unknown field): the UI asks it for the whole DAG ID and says so. (4) Choosing a
+deployment in the Runs header swapped only `#live`, the page still following the first one:
+`#live` names what it follows, read again after a swap. (5) Back left the newer name in the kept
+field over the older list: kept fields take the address's value on a history restore. (6) A
+change held while a radio dropdown was open was dropped on closing it: read then. (7) A read
+owed after a slow one didn't count for the pacing: it does. (8) The hidden timings' count in a
+test (121).

@@ -4418,6 +4418,15 @@
             }
           },
           {
+            "description": "Only the runs of DAGs whose ID holds this, in any case (`sync` matches `sync_orders`\nand `Daily_Sync`).",
+            "in": "query",
+            "name": "dag_contains",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Only runs in this state: `queued`, `running`, `success`, `failed` or `cancelled`.",
             "in": "query",
             "name": "state",

@@ -124,3 +124,8 @@ CREATE INDEX samples_by_time ON samples (step_s, at);
 -- ended and when they started.
 CREATE INDEX attempts_ended ON attempts (ended_at) WHERE ended_at IS NOT NULL;
 CREATE INDEX attempts_started ON attempts (started_at) WHERE started_at IS NOT NULL;
+
+-- Decision 500: the runs of some DAGs, newest triggered first (the Runs page's DAG filter: one
+-- DAG's ID or a part of it). Without it Postgres walks every run by `runs_by_trigger` and keeps
+-- the DAG's: 54 ms over 250,000 runs for a DAG of five (Codex's review of D500).
+CREATE INDEX runs_by_dag_trigger ON runs (dag_id, triggered_at, id);

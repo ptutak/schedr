@@ -3,6 +3,7 @@
 {% block content %}
 <h1>DAGs</h1>
 <div hx-get="{{ page.base }}/import-errors/notice" hx-trigger="load" hx-swap="outerHTML"></div>
+<form id="dag-search" method="get" action="{{ page.base }}/" role="search" hx-get="{{ page.base }}/" hx-trigger="submit" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace" hx-history="false"></form>
 <div id="live"{% if page.is_live() %} hx-get="{{ page.refresh }}" hx-trigger="live:change[!schedrDialogOpen()]" hx-disinherit="*" hx-sync="this:queue last" hx-select="#live" hx-swap="outerHTML"{% endif %}>
 {% for failure in unavailable %}
 <div class="banner warning">Unavailable: {{ failure }}</div>
@@ -18,17 +19,15 @@
   {% for tab in views %}<a class="tab{% if tab.open %} open{% endif %}" href="{{ tab.href }}"{% if tab.open %} aria-current="page"{% endif %}>{{ tab.label }} <span class="dim">{{ tab.count }}</span></a>{% endfor %}
 </nav>
 {% endif %}
-{% if rows.is_empty() %}
-<p class="empty">No DAGs.</p>
-{% else %}
 <table class="list dags">
+  <colgroup>{% if several %}<col class="w-dag-several"><col class="w-deployment">{% else %}<col class="w-dag">{% endif %}<col class="w-trigger"><col class="w-tags"><col></colgroup>
   <thead>
-    <tr>
-      <th>DAG</th>
+    <tr class="dag-head" hx-disinherit="*" hx-get="{{ page.base }}/" hx-trigger="change[target.name == 'trigger']" hx-include="#dag-search" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace">
+      <th aria-sort="{% if filters.descending %}descending{% else %}ascending{% endif %}"><div class="th-filters"><span><a class="sort" href="{{ page.base }}/?{{ filters.reversed() }}" hx-get="{{ page.base }}/?{{ filters.reversed() }}" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace" title="{% if filters.descending %}Sort A to Z{% else %}Sort Z to A{% endif %}">DAG <span class="sort-mark" aria-hidden="true">{% if filters.descending %}▼{% else %}▲{% endif %}</span></a></span><input type="search" form="dag-search" id="dag-name" name="name" value="{{ filters.name }}" placeholder="Filter by name" aria-label="Filter DAGs by name" autocomplete="off" hx-preserve="true" hx-get="{{ page.base }}/" hx-trigger="input changed delay:250ms, search" hx-include="#dag-search" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace"></div></th>
       {% if several %}<th>Deployment</th>{% endif %}
-      <th>Trigger</th>
-      <th>Tags</th>
-      <th>Defined in</th>
+      <th><div class="th-filters"><span>Trigger</span><details class="dropdown dropdown-switch" id="dag-switch-menu"><summary aria-label="Trigger switch: filter">{% for choice in switch %}{% if choice.checked %}{{ choice.label }}{% endif %}{% endfor %}</summary><div class="dropdown-menu" role="radiogroup" aria-label="Trigger switch">{% for choice in switch %}<label><input type="radio" form="dag-search" id="{{ choice.id }}" name="trigger" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}><span class="option">{{ choice.label }}</span> <span class="dim">{{ choice.count }}</span></label>{% endfor %}</div></details>{% if !kinds.is_empty() %}<details class="dropdown" id="dag-kind-menu" hx-get="{{ page.base }}/" hx-trigger="toggle[!this.open]" hx-include="#dag-search" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace"><summary aria-label="Kind: filter">Kind{% if filters.kinds.len() > 0 %} ({{ filters.kinds.len() }}){% endif %}</summary><div class="dropdown-menu" role="group" aria-label="Kind">{% for choice in kinds %}<label><input type="checkbox" form="dag-search" id="{{ choice.id }}" name="kind" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}><span class="option">{{ choice.label }}</span> <span class="dim">{{ choice.count }}</span></label>{% endfor %}</div></details>{% endif %}</div></th>
+      <th><div class="th-filters"><span>Tags</span>{% if !tags.is_empty() %}<details class="dropdown" id="dag-tag-menu" hx-get="{{ page.base }}/" hx-trigger="toggle[!this.open]" hx-include="#dag-search" hx-target="#live" hx-select="#live" hx-swap="outerHTML" hx-push-url="true" hx-sync="#live:replace"><summary aria-label="Tags: filter">Tags{% if filters.tags.len() > 0 %} ({{ filters.tags.len() }}){% endif %}</summary><div class="dropdown-menu" role="group" aria-label="Tags">{% for choice in tags %}<label><input type="checkbox" form="dag-search" id="{{ choice.id }}" name="tag" value="{{ choice.value }}"{% if choice.checked %} checked{% endif %}><span class="option">{{ choice.label }}</span> <span class="dim">{{ choice.count }}</span></label>{% endfor %}</div></details>{% endif %}</div></th>
+      <th>Defined in<input type="hidden" form="dag-search" name="view" value="{% if let Some(view) = filters.view %}{{ view }}{% endif %}">{% if filters.descending %}<input type="hidden" form="dag-search" name="order" value="desc">{% endif %}<noscript> <button type="submit" form="dag-search">Apply</button></noscript></th>
     </tr>
   </thead>
   <tbody>
@@ -40,9 +39,10 @@
       <td>{% for tag in row.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</td>
       <td class="mono dim">{{ row.location }}</td>
     </tr>
+  {% else %}
+    <tr><td class="empty" colspan="{% if several %}5{% else %}4{% endif %}">No DAGs{% if filters.is_filtered() %} match these filters{% endif %}.</td></tr>
   {% endfor %}
   </tbody>
 </table>
-{% endif %}
 </div>
 {% endblock %}

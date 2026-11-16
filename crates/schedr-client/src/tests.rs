@@ -135,6 +135,7 @@ async fn the_run_pages_reads_go_to_their_paths() {
     ]);
     api.all_runs(&AllRunsQuery::default()).await.unwrap();
     api.all_runs(&AllRunsQuery {
+        dag_contains: None,
         dag: Some(schedr_model::DagId::new("etl:a/b.py#c").unwrap()),
         state: Some(schedr_model::RunState::Failed),
         before: Some("2026-10-15T03:00:00.5+00:00".parse().unwrap()),

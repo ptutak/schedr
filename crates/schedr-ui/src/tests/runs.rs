@@ -48,7 +48,7 @@ async fn the_runs_of_every_deployment_are_merged_newest_first() {
         attrs(&html, "table.runs tbody td:first-child a", "href"),
         ["/d/etl/runs/e2", "/d/ml/runs/m1", "/d/etl/runs/e1"]
     );
-    assert!(texts(&html, "table.runs th").contains(&"Deployment".to_owned()));
+    assert!(texts(&html, "table.runs th .th-filters > span").contains(&"Deployment".to_owned()));
     assert_eq!(
         texts(&html, "table.runs .state"),
         ["running", "failed", "success"]
@@ -62,10 +62,11 @@ async fn a_full_page_links_the_next_with_the_last_runs_moment_and_id() {
     let runs: Vec<Value> = (0..50)
         .map(|i| run_at(&format!("r{:02}", 99 - i), "sync", "success", 3000 - i))
         .collect();
-    let next = "/api/v1/runs?dag=sync&before=2026-10-15T01%3A49%3A11Z&before_run=r50&limit=50";
+    let next =
+        "/api/v1/runs?dag_contains=sync&before=2026-10-15T01%3A49%3A11Z&before_run=r50&limit=50";
     let etl = scripted(&[
         (
-            "/api/v1/runs?dag=sync&limit=50",
+            "/api/v1/runs?dag_contains=sync&limit=50",
             200,
             json!({ "runs": runs }),
         ),
@@ -94,7 +95,7 @@ async fn a_full_page_links_the_next_with_the_last_runs_moment_and_id() {
 async fn filters_go_to_the_api_and_a_deployment_filter_asks_only_that_one() {
     let etl = scripted(&[
         (
-            "/api/v1/runs?dag=etl%3Aa%2Fb.py%23sync&state=failed&limit=50",
+            "/api/v1/runs?dag_contains=etl%3Aa%2Fb.py%23sync&state=failed&limit=50",
             200,
             json!({"runs": [run_at("e1", "etl:a/b.py#sync", "failed", 1)]}),
         ),
@@ -118,9 +119,28 @@ async fn filters_go_to_the_api_and_a_deployment_filter_asks_only_that_one() {
     assert_eq!(status, StatusCode::OK);
     assert!(texts(&html, ".banner").is_empty(), "ml wasn't asked");
     assert_eq!(texts(&html, "table.runs tbody td:first-child a"), ["e1"]);
+    // The filters in the table's header (the user, 2026-11-16): the radio chosen in each
+    // dropdown, its name on the dropdown's button, the DAG in its field.
     assert_eq!(
-        attrs(&html, "select[name=state] option[selected]", "value"),
+        attrs(&html, "#run-state-menu input[checked]", "value"),
         ["failed"]
+    );
+    assert_eq!(texts(&html, "#run-state-menu summary"), ["failed"]);
+    assert_eq!(
+        attrs(&html, "#run-deployment-menu input[checked]", "value"),
+        ["etl"]
+    );
+    assert_eq!(attrs(&html, "#run-dag", "value"), ["etl:a/b.py#sync"]);
+    // What the page follows, on the part a swap replaces too: choosing another deployment in
+    // the header swaps only that part (Codex's review of D500).
+    let events = attrs(&html, "#live", "data-events");
+    assert!(
+        events[0].starts_with("/events?kinds=run&deployment=etl&"),
+        "{events:?}"
+    );
+    assert_eq!(
+        texts(&html, "#run-state-menu label"),
+        ["any", "queued", "running", "success", "failed", "cancelled"]
     );
     // Every deployment asked: the one down is named, the others listed.
     let (status, html) = get(&app, "/runs?state=failed", &[]).await;
@@ -131,7 +151,6 @@ async fn filters_go_to_the_api_and_a_deployment_filter_asks_only_that_one() {
     assert!(banners[0].contains("Its runs are missing"), "{banners:?}");
     for bad in [
         "/runs?state=done",
-        "/runs?dag=bad%20id",
         "/runs?before_run=r1",
         "/runs?before=soon",
     ] {
@@ -1730,4 +1749,112 @@ async fn a_tasks_memory_tab_charts_its_last_attempts_peaks_against_its_limit() {
     .await;
     assert_eq!(texts(&html, "p.empty"), ["No attempt of it has ended yet."]);
     assert_eq!(attrs(&html, "svg.chart", "class").len(), 0);
+}
+
+#[tokio::test]
+async fn a_chained_runs_by_is_a_short_link_to_the_run_that_started_it() {
+    // The user, 2026-11-16: the parent's whole ID made the row tall.
+    let parent = "01a1e3b8-d854-72ad-b257-f540d3600f89";
+    let mut chained = run_at("c1", "report", "success", 20);
+    chained["kind"] = json!("chained");
+    chained["triggered_by"] = json!(parent);
+    chained["parent_run_id"] = json!(parent);
+    let etl = scripted(&[(
+        "/api/v1/runs?limit=50",
+        200,
+        json!({"runs": [chained, run_at("e1", "sync", "success", 10)]}),
+    )]);
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/runs", &[]).await;
+    assert_eq!(
+        texts(&html, "table.runs tbody td:nth-child(7)"),
+        ["run …d3600f89", "scheduler"]
+    );
+    assert_eq!(
+        attrs(&html, "table.runs tbody td:nth-child(7) a", "href"),
+        [format!("/d/etl/runs/{parent}")]
+    );
+    assert_eq!(
+        attrs(&html, "table.runs tbody td:nth-child(7) a", "title"),
+        [format!("Started by run {parent}")]
+    );
+}
+
+#[tokio::test]
+async fn a_slow_read_makes_the_page_read_again_less_often() {
+    // The user, 2026-11-16: a name filter over long histories reads slowly; such a page reads
+    // again on a change every 5 s, not every second.
+    let answers = || {
+        scripted(&[(
+            "/api/v1/runs?limit=50",
+            200,
+            json!({"runs": [run_at("e1", "sync", "success", 10)]}),
+        )])
+    };
+    let live = |html: &str| attrs(html, "#live", "data-live-every");
+    let (_, html) = get(&ui(vec![deployment("etl", answers())]), "/runs", &[]).await;
+    assert_eq!(
+        live(&html),
+        Vec::<String>::new(),
+        "a quick read: every second"
+    );
+    let slow = router(Ui {
+        deployments: vec![deployment("etl", answers())],
+        docs_dir: None,
+        timings: crate::live::UiTimings {
+            slow_read: Duration::ZERO,
+            ..crate::live::UiTimings::default()
+        },
+        auth: schedr_api::auth::Auth::default(),
+        config: json!({}),
+        process_id: String::new(),
+        host: String::new(),
+    });
+    let (_, html) = get(&slow, "/runs", &[]).await;
+    assert_eq!(live(&html), ["5000"]);
+}
+
+#[tokio::test]
+async fn an_older_webserver_is_asked_for_the_whole_dag_id_and_the_page_says_so() {
+    // Codex's review of D500: a webserver older than `dag_contains` refuses it; its runs are
+    // asked by the whole ID rather than the deployment shown as unavailable.
+    let refused = json!({"error": "Failed to deserialize query string: unknown field `dag_contains`, expected one of `dag`, `state`, `before`, `before_run`, `limit`"});
+    let old = scripted(&[
+        (
+            "/api/v1/runs?dag_contains=sync&limit=50",
+            400,
+            refused.clone(),
+        ),
+        (
+            "/api/v1/runs?dag=sync&limit=50",
+            200,
+            json!({"runs": [run_at("o1", "sync", "success", 10)]}),
+        ),
+        ("/api/v1/runs?dag_contains=no%20id&limit=50", 400, refused),
+    ]);
+    let new = scripted(&[(
+        "/api/v1/runs?dag_contains=sync&limit=50",
+        200,
+        json!({"runs": [run_at("n1", "daily_sync", "success", 20)]}),
+    )]);
+    let app = ui(vec![deployment("new", new), deployment("old", old)]);
+    let (status, html) = get(&app, "/runs?dag=sync", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        texts(&html, "table.runs tbody td:first-child a"),
+        ["n1", "o1"]
+    );
+    assert_eq!(texts(&html, ".banner.warning"), Vec::<String>::new());
+    let notes = texts(&html, ".banner");
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].starts_with("Older webserver (old)"), "{notes:?}");
+    // Not a DAG ID at all: nothing of that deployment matches it.
+    let (_, html) = get(&app, "/runs?deployment=old&dag=no+id", &[]).await;
+    assert_eq!(
+        texts(&html, "table.runs td.empty"),
+        ["No runs match these filters."]
+    );
+    // Another refusal stays the deployment's error.
+    let (_, html) = get(&app, "/runs?state=failed", &[]).await;
+    assert_eq!(texts(&html, ".banner.warning").len(), 2);
 }

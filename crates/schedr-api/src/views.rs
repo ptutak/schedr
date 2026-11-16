@@ -948,6 +948,10 @@ pub struct AllRunsQuery {
     #[serde(default)]
     #[param(value_type = Option<String>)]
     pub dag: Option<DagId>,
+    /// Only the runs of DAGs whose ID holds this, in any case (`sync` matches `sync_orders`
+    /// and `Daily_Sync`).
+    #[serde(default)]
+    pub dag_contains: Option<String>,
     /// Only runs in this state: `queued`, `running`, `success`, `failed` or `cancelled`.
     #[serde(default)]
     #[param(value_type = Option<String>)]

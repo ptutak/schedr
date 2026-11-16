@@ -10,5 +10,5 @@ deadline from now stays a time); a zero or longer one is refused.
 '''
 history = "archive/PROJECT.md#D234"
 step = "M4.8t"
-checked = 2026-11-15
+checked = 2026-11-16
 code = ["crates/schedr-config/src/loader.rs::hidden_timings"]

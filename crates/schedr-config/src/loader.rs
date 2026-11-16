@@ -561,6 +561,8 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "UI__COALESCE" => &mut timings.ui_coalesce,
         "UI__TAIL_INTERVAL" => &mut timings.ui_tail_interval,
         "UI__TAIL_GIVE_UP" => &mut timings.ui_tail_give_up,
+        "UI__SLOW_READ" => &mut timings.ui_slow_read,
+        "UI__SLOW_READ_WAIT" => &mut timings.ui_slow_read_wait,
         "UI__RELAY_RETRY_FIRST" => &mut timings.ui_relay_retry_first,
         "UI__RELAY_RETRY_MAX" => &mut timings.ui_relay_retry_max,
         "STANDALONE__WORKER_STOP_AFTER_FAILURE" => &mut timings.worker_stop_after_failure,

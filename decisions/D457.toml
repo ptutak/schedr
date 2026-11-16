@@ -15,5 +15,5 @@ which pausing doesn't stop (its switch, decision 459). Not chosen: the API's kin
 '''
 history = "JOURNAL.md#D457"  # <a id="D457"></a> starts its JOURNAL.md entry
 step = "1.0.0"
-checked = 2026-11-15
+checked = 2026-11-16
 code = ["crates/schedr-ui/src/pages.rs::DagRow", "crates/schedr-ui/templates/dags.html", "crates/schedr-ui/templates/dag.html"]

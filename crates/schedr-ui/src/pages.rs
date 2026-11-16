@@ -85,6 +85,14 @@ struct DagsPage {
     views: Vec<ViewTab>,
     /// Its wait steps switched off, of all deployments.
     switched_off: Vec<SwitchedOffRow>,
+    /// The filters in force (the user, 2026-11-16).
+    filters: crate::dag_filters::Filters,
+    /// The switch's choices: all, active, paused.
+    switch: Vec<crate::dag_filters::Choice>,
+    /// A box per trigger kind.
+    kinds: Vec<crate::dag_filters::Choice>,
+    /// A box per tag.
+    tags: Vec<crate::dag_filters::Choice>,
 }
 
 /// A tab of the DAGs page: all deployments' DAGs, or one's.
@@ -97,15 +105,6 @@ struct ViewTab {
     href: String,
     /// Whether it is the one shown.
     open: bool,
-}
-
-/// The DAGs page's query: which deployment's DAGs (empty for every one's).
-#[derive(Debug, Default, serde::Deserialize)]
-pub struct DagsQuery {
-    /// A deployment's name, or empty for all (no deployment is named so: Codex's review of
-    /// M5.1l1, `all` was a name too); none: as the viewer's cookie says, else all.
-    #[serde(default)]
-    view: Option<String>,
 }
 
 /// What a manual run of an event-triggered DAG asks for, in its dialog.
@@ -515,20 +514,22 @@ struct ErrorPage<'a> {
 /// `GET /`: every deployment asked at once (a slow one doesn't hold the others back).
 pub async fn dags<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
-    axum::extract::Query(query): axum::extract::Query<DagsQuery>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
     headers: HeaderMap,
 ) -> Response {
+    use crate::dag_filters::{Asked, Filters, choices};
+    let asked = Asked::parse(query.as_deref());
     // One deployment's DAGs only (M5.1l, the user 2026-11-14), as asked, else as this viewer
     // last chose (a cookie), else all; a name no deployment has is all.
-    let chosen = query.view.clone();
+    let chosen = asked.view.clone();
     let view = chosen
         .clone()
         .or_else(|| crate::page::cookie(&headers, crate::page::DAGS_VIEW_COOKIE))
         .filter(|name| ui.deployments.len() > 1 && ui.deployments.iter().any(|d| &d.name == name));
-    let refresh = view.as_ref().map_or_else(
-        || "/?view=".to_owned(),
-        |name| format!("/?view={}", path_segment(name)),
-    );
+    let chosen_trigger = asked.trigger.clone();
+    let remembered = crate::page::cookie(&headers, crate::page::DAGS_TRIGGER_COOKIE);
+    let filters = Filters::of(asked, view.clone(), remembered);
+    let refresh = format!("/?{}", filters.current());
     let page = Page::new(&headers, ui.docs_dir.is_some()).live("kinds=dag", &refresh);
     let mut asked = tokio::task::JoinSet::new();
     for index in 0..ui.deployments.len() {
@@ -564,7 +565,19 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
         }
     }
     rows.sort_by(|a, b| (&a.dag_id, &a.deployment).cmp(&(&b.dag_id, &b.deployment)));
-    let views = view_tabs(&page, &ui.deployments, &rows, view.as_deref());
+    if filters.descending {
+        rows.reverse();
+    }
+    // Each group's choices counted among the deployment's DAGs the other filters show.
+    let (switch, kinds, tags) = choices(
+        &rows
+            .iter()
+            .filter(|row| view.as_ref().is_none_or(|name| &row.deployment == name))
+            .collect::<Vec<_>>(),
+        &filters,
+    );
+    rows.retain(|row| filters.matches(row) && filters.trigger.shows(row));
+    let views = view_tabs(&page, &ui.deployments, &rows, &filters);
     if let Some(name) = &view {
         rows.retain(|row| &row.deployment == name);
         switched_off.retain(|sensor| &sensor.deployment == name);
@@ -578,27 +591,41 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
             several: ui.deployments.len() > 1 && view.is_none(),
             views,
             switched_off,
+            switch,
+            kinds,
+            tags,
+            filters: filters.clone(),
         },
         StatusCode::OK,
     );
     // Remembered for this viewer when chosen (a year, as the zone).
-    if let Some(chosen) = chosen {
-        let value = if view.is_some() {
-            chosen
-        } else {
-            String::new()
-        };
-        if let Ok(cookie) = axum::http::HeaderValue::from_str(&format!(
-            "{}={}; Path=/; Max-Age=31536000; SameSite=Lax",
+    if chosen.is_some() {
+        remember(
+            &mut response,
             crate::page::DAGS_VIEW_COOKIE,
-            path_segment(&value)
-        )) {
-            response
-                .headers_mut()
-                .append(axum::http::header::SET_COOKIE, cookie);
-        }
+            view.as_deref().unwrap_or_default(),
+        );
+    }
+    if chosen_trigger.is_some() {
+        remember(
+            &mut response,
+            crate::page::DAGS_TRIGGER_COOKIE,
+            filters.trigger.name(),
+        );
     }
     response
+}
+
+/// Sets cookie `name` to `value` on `response` for a year, as the zone's.
+fn remember(response: &mut Response, name: &str, value: &str) {
+    if let Ok(cookie) = axum::http::HeaderValue::from_str(&format!(
+        "{name}={}; Path=/; Max-Age=31536000; SameSite=Lax",
+        path_segment(value)
+    )) {
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, cookie);
+    }
 }
 
 /// The DAGs page's tabs: all, then each deployment, with their DAGs counted; none for one
@@ -607,7 +634,7 @@ fn view_tabs<T>(
     page: &Page,
     deployments: &[Deployment<T>],
     rows: &[DagRow],
-    view: Option<&str>,
+    filters: &crate::dag_filters::Filters,
 ) -> Vec<ViewTab> {
     if deployments.len() < 2 {
         return Vec::new();
@@ -615,15 +642,19 @@ fn view_tabs<T>(
     let all = ViewTab {
         label: "All".to_owned(),
         count: rows.len(),
-        href: format!("{}/?view=", page.base),
-        open: view.is_none(),
+        href: format!("{}/?{}", page.base, filters.query(None, filters.trigger)),
+        open: filters.view.is_none(),
     };
     std::iter::once(all)
         .chain(deployments.iter().map(|d| ViewTab {
             label: d.name.clone(),
             count: rows.iter().filter(|r| r.deployment == d.name).count(),
-            href: format!("{}/?view={}", page.base, path_segment(&d.name)),
-            open: view == Some(d.name.as_str()),
+            href: format!(
+                "{}/?{}",
+                page.base,
+                filters.query(Some(&d.name), filters.trigger)
+            ),
+            open: filters.view.as_deref() == Some(d.name.as_str()),
         }))
         .collect()
 }

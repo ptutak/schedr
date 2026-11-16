@@ -99,12 +99,48 @@ var schedrHiddenClose = 10000;
       default: return false;
     }
   }
+  var held = false;
   function read() {
+    // Held while a dialog or dropdown is open (the parts' trigger filter drops it): read once
+    // a dropdown closes (below; a dialog's close reads every part already).
+    if (schedrDialogOpen()) held = true;
     document.querySelectorAll(LIVE).forEach(function (part) { htmx.trigger(part, "live:change"); });
   }
-  // At most once a second; a change in between read when that second is up.
+  // A read owed after a slow one (below) counts for the pacing: the next waits its time from
+  // then (Codex's review of D500: two reads 1.2 s apart on a 5 s page).
+  window.schedrLiveRead = function (part) {
+    last = Date.now();
+    htmx.trigger(part, "live:change");
+  };
+  document.addEventListener("toggle", function (event) {
+    var menu = event.target;
+    if (!menu.matches || !menu.matches("details.dropdown") || menu.open) return;
+    // Kind and Tags read the list as they close; the radio dropdowns don't (Codex's review).
+    if (!held || menu.hasAttribute("hx-get") || schedrDialogOpen()) return;
+    held = false;
+    changed();
+  }, true);
+  // A swap may change what the page follows (the Runs page's deployment, chosen in its
+  // header): its live part names it, as the body did when the page was loaded (Codex's
+  // review of D500: the page followed the first deployment still).
+  document.addEventListener("htmx:afterSettle", function () {
+    var live = document.getElementById("live");
+    var events = live && live.dataset.events;
+    if (!page || !events) return;
+    var fresh = {};
+    new URL(events, location.href).searchParams.forEach(function (value, name) { fresh[name] = value; });
+    fresh.since = page.since;
+    page = fresh;
+  });
+  // At most once a second, or as often as the page says (`data-live-every`: its last read was
+  // slow); a change in between read when that time is up.
+  function every() {
+    var live = document.getElementById("live");
+    var ms = live ? Number(live.dataset.liveEvery) : 0;
+    return ms > 0 ? ms : 1000;
+  }
   function changed() {
-    var wait = last + 1000 - Date.now();
+    var wait = last + every() - Date.now();
     if (wait <= 0) {
       last = Date.now();
       read();
@@ -198,11 +234,38 @@ document.addEventListener("htmx:beforeSwap", function (event) {
   event.detail.shouldSwap = false;
   htmx.trigger(elt, "retry");
 });
+// Back and Forward restore the list for the address; the fields kept through the live swaps
+// (`hx-preserve`) would keep what was typed last, so they take the address's value (Codex's
+// review of D500).
+function schedrFieldsFromAddress() {
+  var asked = new URLSearchParams(location.search);
+  document.querySelectorAll("input[hx-preserve][name]").forEach(function (field) {
+    field.value = asked.get(field.name) || "";
+  });
+}
+document.addEventListener("htmx:historyRestore", schedrFieldsFromAddress);
+document.addEventListener("htmx:historyCacheMissLoad", schedrFieldsFromAddress);
 // While an action's dialog is open the live parts aren't read again (it would be swapped away
 // under the user); once it closes they are, for what changed meanwhile.
 function schedrDialogOpen() {
-  return document.querySelector("dialog[open]") !== null;
+  // An open dropdown holds its unapplied boxes: a live read would close it and lose them.
+  return document.querySelector("dialog[open], details.dropdown[open]") !== null;
 }
+// A dropdown closes on a click outside it or on Escape; closing applies its boxes (its
+// `toggle` trigger), and other dropdowns close when one opens.
+document.addEventListener("click", function (event) {
+  document.querySelectorAll("details.dropdown[open]").forEach(function (menu) {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+});
+document.addEventListener("keydown", function (event) {
+  if (event.key !== "Escape") return;
+  document.querySelectorAll("details.dropdown[open]").forEach(function (menu) {
+    menu.open = false;
+    var summary = menu.querySelector("summary");
+    if (summary) summary.focus();
+  });
+});
 // A live read already under way when a dialog opened isn't applied either: the part is read
 // once the dialog closes (below).
 document.addEventListener("htmx:beforeSwap", function (event) {
@@ -281,7 +344,7 @@ document.addEventListener("close", function (event) {
     var now = part(read.name);
     if (now === read.elt) {
       // Not replaced (the read failed): read again at once.
-      setTimeout(function () { htmx.trigger(now, "live:change"); }, 0);
+      setTimeout(function () { schedrLiveRead(now); }, 0);
     } else {
       // Replaced: once the new part is set up (htmx does that as it settles).
       settling[read.name] = true;
@@ -292,7 +355,7 @@ document.addEventListener("close", function (event) {
     Object.keys(settling).forEach(function (name) {
       var again = part(name);
       delete settling[name];
-      if (again) setTimeout(function () { htmx.trigger(again, "live:change"); }, 0);
+      if (again) setTimeout(function () { schedrLiveRead(again); }, 0);
     });
   });
 })();

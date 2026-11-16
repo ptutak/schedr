@@ -138,6 +138,8 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__UI__COALESCE` | 1 s | Minimum interval between change messages on a page stream, per deployment. |
 | `SCHEDR_HIDDEN__UI__TAIL_INTERVAL` | 1 s | How often the log tail reads the log. |
 | `SCHEDR_HIDDEN__UI__TAIL_GIVE_UP` | 30 s | How long the log tail retries an unreachable log before reporting it and stopping. |
+| `SCHEDR_HIDDEN__UI__SLOW_READ` | 50 ms | A Runs page whose deployments took longer than this to answer is slow. |
+| `SCHEDR_HIDDEN__UI__SLOW_READ_WAIT` | 5 s | How often a slow Runs page reads again at most when runs change (otherwise once a second). |
 | `SCHEDR_HIDDEN__UI__RELAY_RETRY_FIRST` | 1 s | First wait before a relay reopens its stream; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__UI__RELAY_RETRY_MAX` | 30 s | Longest wait between a relay's retries. |
 

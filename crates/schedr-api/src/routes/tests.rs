@@ -600,6 +600,11 @@ async fn all_runs_are_listed_filtered_and_paged() {
     let filtered = runs("dag=sync&state=running&limit=1").await;
     assert_eq!(filtered[0]["run_id"], json!(run_id));
     assert_eq!(runs("dag=ghost").await, json!([]));
+    // A part of the DAG's ID, any case; empty is no filter (the user, 2026-11-16).
+    assert_eq!(runs("dag_contains=YN").await[0]["run_id"], json!(run_id));
+    assert_eq!(runs("dag_contains=ghost").await, json!([]));
+    assert_eq!(runs("dag_contains=").await[0]["run_id"], json!(run_id));
+    assert_eq!(runs("dag_contains=bad%20id%25").await, json!([]));
     assert_eq!(runs("state=failed").await, json!([]));
     // Triggered at NOW: not before it.
     assert_eq!(runs(&format!("before={NOW}")).await, json!([]));
