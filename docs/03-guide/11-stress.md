@@ -152,7 +152,11 @@ make stress STRESS_STATEMENTS=1      # also count Postgres's statements
 **quick** profile is sized for GitHub's smallest standard machine (2 CPUs, 7 GB) and grows with
 the machine, at most four times; **full** is fixed and larger. Each scenario writes its numbers
 to `target/stress/<scenario>.json` (in CI, an artifact of the run): the profile, the metrics,
-and what failed, if anything. A scenario that fails also prints the logs of every process.
+and what failed, if anything. In CI the run's summary page shows them as one table, a row per
+scenario (its result, tasks, tasks a second, run and start times, the longest rounds, its
+wall time), then each scenario's every number folded under its name;
+`python3 scripts/stress_summary.py` prints the same after a local run. A scenario that fails
+also prints the logs of every process.
 With `STRESS_STATEMENTS=1`, Postgres loads `pg_stat_statements` and the run ends by writing
 `target/stress/statements.txt`: for each scenario's database its transactions and statements,
 then the statements run most often and those that took longest. Run one scenario at a time
