@@ -292,6 +292,8 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 # stops them all.
 DAGS2 ?= examples/docs
 PORT_OFFSET ?= 0
+# main's worker's task slots: 8, so examples/metrics_load.py's bursts run side by side.
+WORKER_SLOTS ?= 8
 
 # The code store's copies are read-only (decision 101): writable again first, or `rm` can't
 # delete their files (B152).
@@ -344,6 +346,7 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 	( role SCHEDR_CONFIG__WEBSERVER__PORT=$$((main + 80)) SCHEDR_CONFIG__WEBSERVER__BIND=$(LISTEN) \
 		SCHEDR_CONFIG__OPS__PORT=$$((main + 93)) target/debug/schedr webserver ) & \
 	( role SCHEDR_DAG_PATH="$(abspath $(DAGS))" SCHEDR_CONFIG__WORKER__ID=main-worker \
+		SCHEDR_CONFIG__WORKER__SLOTS=$(WORKER_SLOTS) \
 		SCHEDR_CONFIG__WORKER__MASTER_URL=http://127.0.0.1:$$((main + 70)) \
 		SCHEDR_CONFIG__WORKER__DATA_DIR="$$m/worker" \
 		SCHEDR_CONFIG__WORKER__LOG_BIND=127.0.0.1 SCHEDR_CONFIG__WORKER__LOG_ADDRESS=127.0.0.1 \

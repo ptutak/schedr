@@ -149,7 +149,9 @@ Then, from another shell: `schedr dags list`, `schedr dags unpause sync_customer
 `http://localhost:8080` unless `--server` or `SCHEDR_SERVER` says otherwise). After
 `make standalone-separate-ui` the pages are on port 8082; the CLI still uses `main`'s API
 on 8080. `DAGS=<directory>` runs other DAGs;
-`LISTEN=127.0.0.1` keeps the API off the network (`make standalone` signs no one in; see
+`schedr dags unpause metrics_load` there starts a load every minute (`examples/metrics_load.py`:
+short tasks, CPU, memory) to watch on the Metrics page; `WORKER_SLOTS` sets `main`'s worker's
+slots (8). `LISTEN=127.0.0.1` keeps the API off the network (`make standalone` signs no one in; see
 [Sign-in](https://ptutak.github.io/schedr/03-guide/08-network.html#sign-in)).
 
 ## Layout
