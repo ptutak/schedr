@@ -169,7 +169,7 @@ separate roles only if the load needs them (a full switch: the history stays in 
 
 **The images.** Each release pushes three, for x86_64, each in two kinds (decision 454): on
 glibc (Debian, `python:3.14.8-slim`) from its manylinux wheel, the plain tag, and on Alpine
-from its musllinux wheel, the tag with `-alpine` (`1.0.0-alpine`):
+from its musllinux wheel, the tag with `-alpine` (`1.1.0-alpine`):
 `ghcr.io/ptutak/schedr` (this section's base image, for standalone and workers),
 `ghcr.io/ptutak/schedr-slim` (Python and the package only, without the base image's task
 libraries and connection clients: for tasks that need none of them, or an image of your own
@@ -177,8 +177,8 @@ with just what they use; `make image-slim`) and `ghcr.io/ptutak/schedr-server` (
 alone, for the master, the webserver and `schedr ui`; below). `make image`, `make image-slim`
 and `make server-image` build the glibc ones; `make image-alpine`, `make image-slim-alpine`
 and `make server-image-alpine` the Alpine ones. In 0.1.0 the plain tag was Alpine's.
-Their tags are the version (`1.0.0`) and its series (`1.0`), and the same with `-alpine`
-(`1.0.0-alpine`, `1.0-alpine`); a release candidate has only its own (`1.0.0rc1`). There is
+Their tags are the version (`1.1.0`) and its series (`1.1`), and the same with `-alpine`
+(`1.1.0-alpine`, `1.1-alpine`); a release candidate has only its own (`1.1.0rc1`). There is
 no `latest`: a new version migrates the database (`schedr db migrate`), which a moving tag
 would start unasked. The chart uses them by
 default, tagged with its `appVersion` (`image`, and `master.image`, `webserver.image` and

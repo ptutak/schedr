@@ -25,12 +25,12 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## In progress
 
 - M5.1 done 2026-11-15 (M5.1a-M5.1q). Every bug fixed but B38 and B39 (they wait for M6) and B254 (low: a worker's RUNNING count includes its wait steps).
-- R1.1: 1.1.0rc1 published 2026-11-16 and checked. Since: D499, B253, then D500 (DAGs and Runs header filters, `dag_contains`, slow-read pacing, the DAGs sort, run lists' By and seconds), reviewed by Codex (8 findings, all fixed). Its new index `runs_by_dag_trigger` went into migration 0002 (the user: an rc isn't a real release), so the user asked for 1.1.0rc2 next.
-- The 1.1.0 tags for docs/ and examples/ are kept as a patch in the session's scratchpad (`tags-1.1.0.patch`), to apply for the final 1.1.0.
+- R1.1: 1.1.0rc2 published 2026-11-16 and checked (TestPyPI install; the upgrade check from 1.0.0 with its binary and Python on SQLite and Postgres; all six images). 1.1.0's version commit next, then the tag `v1.1.0` (annotated, as 1.0.0's).
+- The Stress workflow writes a results table to its run's summary (`scripts/stress_summary.py`).
 
 ## Waiting for the user
 
-- Approving the `pypi` environment in the v1.1.0rc2 release run; after rc2, the go for 1.1.0.
+- Approving the `pypi` environment in the v1.1.0 release run.
 - After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled).
 
 ## Rules in force
