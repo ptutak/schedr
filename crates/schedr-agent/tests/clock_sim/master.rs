@@ -42,7 +42,7 @@ use proptest::prelude::*;
 use schedr_agent::master_time::{MasterTime, lock};
 use schedr_db::Database;
 use schedr_db::reads::RunFilter;
-use schedr_master::core::{MasterCore, Settings};
+use schedr_master::core::{Group, MasterCore, Settings};
 use schedr_master::dispatch::{Outgoing, Weakened};
 use schedr_model::RunState;
 use schedr_model::runner::ParsedFile;
@@ -470,6 +470,9 @@ struct Sim {
     current: BTreeMap<usize, (u64, usize)>,
     /// The latest worker message heard on each stream.
     heard: BTreeMap<u64, u64>,
+    /// What the master's turns queued for its next round (M5.2cB, decision 505): each with its
+    /// worker and stream; none, a stream's end waiting behind them.
+    queued: Vec<(usize, u64, Option<worker_message::Message>)>,
     /// The last number the master used on each stream (B240).
     numbers: BTreeMap<u64, u64>,
     /// Each stream's ID in the master's `Arrivals`.
@@ -721,10 +724,147 @@ impl Sim {
         }
         self.current.remove(&worker);
         self.heard.remove(&sid);
+        // As the service: the end waits behind what the worker queued for the round.
+        if self.queued.iter().any(|q| q.0 == worker) {
+            self.queued.push((worker, sid, None));
+            return;
+        }
         if let Some(core) = &mut self.core
             && let Err(error) = core.disconnected(WORKERS[worker], ts(self.now)).await
         {
             self.fail(&format!("disconnect: {error}"));
+        }
+    }
+
+    /// The round's results part, as the service's `round_results`: what the turns queued, in
+    /// order; each worker's `Started`s and `Finished`s together in one transaction, each other
+    /// message alone; one of a replaced stream, or of a worker taken for lost, dropped; after a
+    /// message that ends its stream, that worker's later ones dropped.
+    async fn round_results(&mut self) {
+        let queued = std::mem::take(&mut self.queued);
+        let mut ended = std::collections::BTreeSet::new();
+        let mut batch: Vec<(String, Group)> = Vec::new();
+        for (worker, sid, message) in queued {
+            let id = WORKERS[worker];
+            let current = self.current.get(&worker).copied();
+            if ended.contains(&worker) || current.is_some_and(|(s, _)| s != sid) {
+                continue;
+            }
+            let Some(core) = &mut self.core else {
+                return;
+            };
+            if !core.is_live(id) {
+                // Taken for lost while it waited: its stream let go.
+                if let Some((s, inst)) = current {
+                    self.current.remove(&worker);
+                    self.heard.remove(&s);
+                    let at = self.now + self.rng.delay();
+                    self.at(at, Event::WorkerSeesEnd(inst, s));
+                }
+                continue;
+            }
+            match message {
+                Some(worker_message::Message::Started(started)) => {
+                    group_of(&mut batch, id).started.push(started);
+                }
+                Some(worker_message::Message::Finished(finished)) => {
+                    group_of(&mut batch, id).finished.push(finished);
+                }
+                other => {
+                    self.results_batch(std::mem::take(&mut batch), &mut ended)
+                        .await;
+                    if ended.contains(&worker) {
+                        continue;
+                    }
+                    self.result_alone(worker, sid, other, &mut ended).await;
+                }
+            }
+        }
+        self.results_batch(batch, &mut ended).await;
+    }
+
+    /// A batch of the round's, falling back to each worker's group, then message by message.
+    async fn results_batch(
+        &mut self,
+        batch: Vec<(String, Group)>,
+        ended: &mut std::collections::BTreeSet<usize>,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+        let now = ts(self.now);
+        let Some(core) = &mut self.core else {
+            return;
+        };
+        let failed = match core.handle_results(batch, now).await {
+            Ok(out) => {
+                self.deliver(out);
+                return;
+            }
+            Err(failed) => failed,
+        };
+        for (id, group) in failed {
+            let worker = WORKERS.iter().position(|w| *w == id).unwrap();
+            if ended.contains(&worker) {
+                continue;
+            }
+            let Some(core) = &mut self.core else {
+                return;
+            };
+            match core.handle_group(&id, group, now).await {
+                Ok(out) => self.deliver(out),
+                Err(group) => {
+                    let sid = self.current.get(&worker).map_or(0, |c| c.0);
+                    for message in group.into_messages() {
+                        if ended.contains(&worker) {
+                            break;
+                        }
+                        self.result_alone(worker, sid, Some(message), ended).await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// One queued message alone; one that can't be handled ends its stream (the worker
+    /// disconnected, its later ones dropped); none, its stream's end: disconnected.
+    async fn result_alone(
+        &mut self,
+        worker: usize,
+        sid: u64,
+        message: Option<worker_message::Message>,
+        ended: &mut std::collections::BTreeSet<usize>,
+    ) {
+        let id = WORKERS[worker];
+        let now = ts(self.now);
+        let Some(core) = &mut self.core else {
+            return;
+        };
+        let Some(message) = message else {
+            if let Err(error) = core.disconnected(id, now).await {
+                self.fail(&format!("disconnect: {error}"));
+            }
+            return;
+        };
+        match core.handle_in_round(id, message, now).await {
+            Ok(out) => self.deliver(out),
+            Err(error) if error.is_data_fault() => self.fail(&format!("refused: {error}")),
+            Err(_) => {
+                ended.insert(worker);
+                if let Some((s, inst)) = self.current.get(&worker).copied()
+                    && s == sid
+                {
+                    self.current.remove(&worker);
+                    self.heard.remove(&s);
+                    let at = self.now + self.rng.delay();
+                    self.at(at, Event::WorkerSeesEnd(inst, s));
+                }
+                if let Some(core) = &mut self.core
+                    && let Err(error) = core.disconnected(id, now).await
+                {
+                    self.fail(&format!("disconnect: {error}"));
+                }
+            }
         }
     }
 
@@ -845,6 +985,8 @@ impl Sim {
     async fn handle(&mut self, event: Event) {
         match event {
             Event::Tick => {
+                // The round's results part first, as the service's round (M5.2cB).
+                self.round_results().await;
                 if let Some(core) = &mut self.core {
                     match core.tick(ts(self.now)).await {
                         Ok(out) => self.deliver(out),
@@ -1000,6 +1142,8 @@ impl Sim {
                     return;
                 }
                 self.core = None;
+                // What waited for its round goes with it: the workers send it again.
+                self.queued.clear();
                 let streams: BTreeMap<u64, usize> = self
                     .current
                     .values()
@@ -1202,6 +1346,26 @@ impl Sim {
                 arrivals.answered(id, attempt_id);
             }
             _ => {}
+        }
+        // As the service's turn (M5.2cB): what moves runs forward, and anything after what the
+        // worker still has queued (but heartbeats and warnings), waits for the round.
+        let waits = self.queued.iter().any(|q| q.0 == worker)
+            && !matches!(
+                message,
+                worker_message::Message::Heartbeat(_) | worker_message::Message::Warnings(_)
+            );
+        if waits
+            || matches!(
+                message,
+                worker_message::Message::Started(_)
+                    | worker_message::Message::Finished(_)
+                    | worker_message::Message::TaskEnded(_)
+                    | worker_message::Message::Rejected(_)
+                    | worker_message::Message::Deregister(_)
+            )
+        {
+            self.queued.push((worker, sid, Some(message)));
+            return;
         }
         let core = self.core.as_mut().unwrap();
         match core.handle(id, message, ts(self.now)).await {
@@ -1497,6 +1661,7 @@ pub fn simulate(scenario: &Scenario, weakened: Option<Weakened>) -> Result<(), S
                 epoch: 1,
                 current: BTreeMap::new(),
                 heard: BTreeMap::new(),
+                queued: Vec::new(),
                 numbers: BTreeMap::new(),
                 stream_ids: BTreeMap::new(),
                 deposed: None,
@@ -1516,4 +1681,13 @@ pub fn simulate(scenario: &Scenario, weakened: Option<Weakened>) -> Result<(), S
             }
             sim.failure.map_or(Ok(()), Err)
         })
+}
+
+/// `id`'s group in a round's batch: one per worker, each worker's messages in their order.
+fn group_of<'a>(batch: &'a mut Vec<(String, Group)>, id: &str) -> &'a mut Group {
+    let at = batch.iter().position(|(w, _)| w == id).unwrap_or_else(|| {
+        batch.push((id.to_owned(), Group::default()));
+        batch.len() - 1
+    });
+    &mut batch[at].1
 }

@@ -21,6 +21,7 @@ use schedr_proto::pb;
 use schedr_proto::pb::master_message;
 use serde_json::json;
 
+use crate::core::round::InRound;
 use crate::dispatch::{DispatchError, Dispatcher, Outgoing, ReadBack};
 use crate::execution::{ExecutionError, TaskCancel, TaskRetry};
 use crate::metrics::{CommandLabels, MasterMetrics};
@@ -154,12 +155,13 @@ impl Commander {
     /// ones decided before it stay decided.
     pub async fn apply_pending(
         &self,
+        in_round: &InRound,
         scheduler: &Scheduler,
         dispatcher: &mut Dispatcher,
         now: Timestamp,
     ) -> Result<Applied, CommandError> {
         let mut applied = Applied::default();
-        self.apply_into(scheduler, dispatcher, &mut applied, now)
+        self.apply_into(in_round, scheduler, dispatcher, &mut applied, now)
             .await?;
         Ok(applied)
     }
@@ -172,13 +174,14 @@ impl Commander {
     /// As [`Self::apply_pending`].
     pub async fn apply_into(
         &self,
+        in_round: &InRound,
         scheduler: &Scheduler,
         dispatcher: &mut Dispatcher,
         applied: &mut Applied,
         now: Timestamp,
     ) -> Result<(), CommandError> {
         for pending in self.pending().await? {
-            self.apply_one(pending, scheduler, dispatcher, applied, now)
+            self.apply_one(in_round, pending, scheduler, dispatcher, applied, now)
                 .await?;
         }
         Ok(())
@@ -206,6 +209,7 @@ impl Commander {
     /// [`CommandError`] if the database fails: the command stays pending.
     pub async fn apply_one(
         &self,
+        in_round: &InRound,
         pending: PendingCommand,
         scheduler: &Scheduler,
         dispatcher: &mut Dispatcher,
@@ -232,9 +236,9 @@ impl Commander {
         let db = self.db.clone();
         // The runs it finishes are counted once it is stored.
         self.metrics.stage();
-        let stored = Box::pin(
-            db.atomically(self.apply_stored(&pending, scheduler, dispatcher, applied, now)),
-        )
+        let stored = Box::pin(db.atomically(
+            self.apply_stored(in_round, &pending, scheduler, dispatcher, applied, now),
+        ))
         .await;
         let decided = match stored {
             Ok(decided) => Ok(decided),
@@ -296,6 +300,7 @@ impl Commander {
     /// One command marked applying, applied and decided, in the caller's transaction.
     async fn apply_stored(
         &self,
+        in_round: &InRound,
         pending: &PendingCommand,
         scheduler: &Scheduler,
         dispatcher: &mut Dispatcher,
@@ -308,7 +313,7 @@ impl Commander {
             self.db.mark_applying(&pending.id, now).await?;
         }
         let outcome = self
-            .apply(pending, scheduler, dispatcher, applied, now)
+            .apply(in_round, pending, scheduler, dispatcher, applied, now)
             .await?;
         let (status, reason, result) = match outcome {
             Outcome::Applied(result) => (CommandStatus::Applied, None, Some(result)),
@@ -507,8 +512,31 @@ impl Commander {
         Ok(Outcome::Applied(json!({})))
     }
 
+    /// Pauses `dag_id`, cancelling its runs in progress if asked.
+    async fn pause(
+        &self,
+        in_round: &InRound,
+        dag_id: &DagId,
+        cancel_runs: bool,
+        (dispatcher, outgoing): (&mut Dispatcher, &mut Vec<Outgoing>),
+        now: Timestamp,
+    ) -> Result<Outcome, CommandError> {
+        if let Some(refused) = self.switch(dag_id, true, now).await? {
+            return Ok(refused);
+        }
+        let mut cancelled = Vec::new();
+        if cancel_runs {
+            for run_id in self.db.runs_in_progress(dag_id).await? {
+                cancel(in_round, dispatcher, &run_id, outgoing, now).await?;
+                cancelled.push(run_id);
+            }
+        }
+        Ok(Outcome::Applied(json!({"cancelled_runs": cancelled})))
+    }
+
     async fn apply(
         &self,
+        in_round: &InRound,
         pending: &PendingCommand,
         scheduler: &Scheduler,
         dispatcher: &mut Dispatcher,
@@ -540,30 +568,21 @@ impl Commander {
             }
             Command::Backfill(request) => self.backfill(pending, scheduler, request, now).await,
             Command::CancelBackfill { backfill_id } => {
-                self.cancel_backfill(pending, backfill_id, (dispatcher, outgoing), now)
+                self.cancel_backfill(in_round, pending, backfill_id, (dispatcher, outgoing), now)
                     .await
             }
             Command::RestartTrigger { dag_id } => self.restart_trigger(dag_id).await,
             Command::SkipTriggerRun { dag_id } => self.skip_trigger_run(dag_id, pending).await,
             Command::CancelRun { run_id } => {
-                self.cancel_run(pending, run_id, (dispatcher, outgoing), now)
+                self.cancel_run(in_round, pending, run_id, (dispatcher, outgoing), now)
                     .await
             }
             Command::PauseDag {
                 dag_id,
                 cancel_runs,
             } => {
-                if let Some(refused) = self.switch(dag_id, true, now).await? {
-                    return Ok(refused);
-                }
-                let mut cancelled = Vec::new();
-                if *cancel_runs {
-                    for run_id in self.db.runs_in_progress(dag_id).await? {
-                        cancel(dispatcher, &run_id, outgoing, now).await?;
-                        cancelled.push(run_id);
-                    }
-                }
-                Ok(Outcome::Applied(json!({"cancelled_runs": cancelled})))
+                self.pause(in_round, dag_id, *cancel_runs, (dispatcher, outgoing), now)
+                    .await
             }
             Command::UnpauseDag { dag_id } => {
                 if let Some(refused) = self.switch(dag_id, false, now).await? {
@@ -578,13 +597,26 @@ impl Commander {
                 map_index,
             } => {
                 let instance = (task_id, *map_index);
-                cancel_task(dispatcher, pending, run_id, instance, outgoing, now).await
+                cancel_task(
+                    in_round, dispatcher, pending, run_id, instance, outgoing, now,
+                )
+                .await
             }
             Command::RetryTask {
                 run_id,
                 task_id,
                 map_index,
-            } => retry_task(dispatcher, pending, run_id, (task_id, *map_index), now).await,
+            } => {
+                retry_task(
+                    in_round,
+                    dispatcher,
+                    pending,
+                    run_id,
+                    (task_id, *map_index),
+                    now,
+                )
+                .await
+            }
             Command::DrainWorker { worker_id } => {
                 if !self.db.set_worker_drained(worker_id, true).await? {
                     return Ok(no_worker(worker_id));
@@ -899,6 +931,7 @@ impl Commander {
     /// is its own work.
     async fn cancel_run(
         &self,
+        in_round: &InRound,
         pending: &PendingCommand,
         run_id: &str,
         (dispatcher, outgoing): (&mut Dispatcher, &mut Vec<Outgoing>),
@@ -917,7 +950,7 @@ impl Commander {
                 run.state
             )));
         }
-        let stopping = cancel(dispatcher, run_id, outgoing, now).await?;
+        let stopping = cancel(in_round, dispatcher, run_id, outgoing, now).await?;
         Ok(Outcome::Applied(json!({"stopping_attempts": stopping})))
     }
 
@@ -925,6 +958,7 @@ impl Commander {
     /// cancels one; applied again, those cancelled then are finished now.
     async fn cancel_backfill(
         &self,
+        in_round: &InRound,
         pending: &PendingCommand,
         backfill_id: &str,
         (dispatcher, outgoing): (&mut Dispatcher, &mut Vec<Outgoing>),
@@ -941,7 +975,7 @@ impl Commander {
         }
         let mut stopping = 0;
         for run_id in &runs {
-            stopping += cancel(dispatcher, run_id, outgoing, now).await?;
+            stopping += cancel(in_round, dispatcher, run_id, outgoing, now).await?;
         }
         Ok(Outcome::Applied(
             json!({"cancelled_runs": runs, "stopping_attempts": stopping}),
@@ -977,6 +1011,7 @@ impl Commander {
 /// round failed (`pending.applying`), a task or run found already `cancelled` is its own
 /// work: applied, not rejected.
 async fn cancel_task(
+    in_round: &InRound,
     dispatcher: &mut Dispatcher,
     pending: &PendingCommand,
     run_id: &str,
@@ -985,7 +1020,7 @@ async fn cancel_task(
     now: Timestamp,
 ) -> Result<Outcome, CommandError> {
     let cancelled = dispatcher
-        .cancel_task(run_id, (task_id, map_index), now)
+        .cancel_task(in_round, run_id, (task_id, map_index), now)
         .await;
     let (cancelled, messages) = match cancelled {
         Ok(done) => done,
@@ -1026,6 +1061,7 @@ async fn cancel_task(
 /// Applied again after its round failed, a task found `queued` is its own work (no round
 /// assigned it in between: commands come first).
 async fn retry_task(
+    in_round: &InRound,
     dispatcher: &mut Dispatcher,
     pending: &PendingCommand,
     run_id: &str,
@@ -1033,7 +1069,7 @@ async fn retry_task(
     now: Timestamp,
 ) -> Result<Outcome, CommandError> {
     let retried = match dispatcher
-        .retry_task(run_id, (task_id, map_index), now)
+        .retry_task(in_round, run_id, (task_id, map_index), now)
         .await
     {
         Ok(retried) => retried,
@@ -1064,12 +1100,13 @@ async fn retry_task(
 
 /// Cancels a run through the dispatcher; returns how many attempts are being stopped.
 async fn cancel(
+    in_round: &InRound,
     dispatcher: &mut Dispatcher,
     run_id: &str,
     outgoing: &mut Vec<Outgoing>,
     now: Timestamp,
 ) -> Result<usize, CommandError> {
-    match dispatcher.cancel_run(run_id, now).await {
+    match dispatcher.cancel_run(in_round, run_id, now).await {
         Ok(messages) => {
             let count = messages.len();
             outgoing.extend(messages);

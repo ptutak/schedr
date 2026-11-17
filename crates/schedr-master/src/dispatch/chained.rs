@@ -13,6 +13,7 @@ use schedr_model::{AttemptStatus, DagId, RunEvent, RunState};
 use serde_json::{Value as Json, json};
 
 use super::{DispatchError, Dispatcher, Outgoing};
+use crate::core::round::InRound;
 use crate::execution::AttemptResult;
 use crate::execution::{FAILED, SUCCESS, TIMED_OUT};
 use crate::mapping;
@@ -50,6 +51,7 @@ impl Dispatcher {
     /// `outgoing`.
     pub(super) async fn chained_into(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         queued: &[ReadyInstance],
         outgoing: &mut Vec<Outgoing>,
@@ -67,7 +69,7 @@ impl Dispatcher {
             if failed_runs.contains(&attempt.run_id) {
                 continue;
             }
-            if self.chained_step(&attempt, now, outgoing).await? {
+            if self.chained_step(in_round, &attempt, now, outgoing).await? {
                 failed_runs.insert(attempt.run_id.clone());
             }
         }
@@ -77,6 +79,7 @@ impl Dispatcher {
     /// Moves one open attempt on; whether it failed it (its run may cancel its siblings).
     async fn chained_step(
         &mut self,
+        in_round: &InRound,
         attempt: &ChainedAttempt,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
@@ -93,6 +96,7 @@ impl Dispatcher {
             let why = "its task is no longer a TriggerDagOperator";
             return self
                 .end_chained(
+                    in_round,
                     attempt,
                     failed(TARGET_REFUSED, "NotChained", why),
                     None,
@@ -114,9 +118,9 @@ impl Dispatcher {
             let mut stops = Vec::new();
             self.whole(async |me| {
                 let end = AttemptEnd::by_master(AttemptStatus::Cancelled);
-                me.end_chained(attempt, end, None, now).await?;
+                me.end_chained(in_round, attempt, end, None, now).await?;
                 if waited {
-                    stops = me.cancel_run(child, now).await?;
+                    stops = me.cancel_run(in_round, child, now).await?;
                 }
                 Ok(())
             })
@@ -130,7 +134,7 @@ impl Dispatcher {
                 Ok(()) => RunState::Queued,
                 Err((kind, exception, why)) => {
                     let end = failed(kind, exception, &why);
-                    return self.end_chained(attempt, end, None, now).await;
+                    return self.end_chained(in_round, attempt, end, None, now).await;
                 }
             },
         };
@@ -150,7 +154,7 @@ impl Dispatcher {
             None
         };
         if let Some((end, output)) = ended {
-            return self.end_chained(attempt, end, output, now).await;
+            return self.end_chained(in_round, attempt, end, output, now).await;
         }
         Ok(false)
     }
@@ -375,6 +379,7 @@ impl Dispatcher {
     /// it failed it.
     async fn end_chained(
         &mut self,
+        in_round: &InRound,
         attempt: &ChainedAttempt,
         end: AttemptEnd,
         output: Option<Ended>,
@@ -395,6 +400,7 @@ impl Dispatcher {
                 let recorded = me
                     .execution
                     .attempt_finished(
+                        in_round,
                         &attempt.run_id,
                         &attempt.task_id,
                         attempt.map_index,

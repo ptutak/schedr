@@ -5,6 +5,7 @@ use schedr_model::commands::BackfillRequest;
 use schedr_model::{RunKind, RunState};
 
 use super::*;
+use crate::core::round::InRound;
 use crate::faults::{Scenario, fail_each_write};
 
 fn backfill(from: &str, to: Option<&str>) -> BackfillRequest {
@@ -358,7 +359,12 @@ impl Scenario for Backfilling {
         let world = &mut self.world;
         let _ = world
             .commander
-            .apply_pending(&world.scheduler, &mut world.dispatcher, ts(NOW))
+            .apply_pending(
+                &InRound::for_tests(),
+                &world.scheduler,
+                &mut world.dispatcher,
+                ts(NOW),
+            )
             .await;
     }
     fn db(&self) -> &Database {
@@ -374,7 +380,12 @@ impl Scenario for Backfilling {
         let world = &mut self.world;
         let _ = world
             .commander
-            .apply_pending(&world.scheduler, &mut world.dispatcher, ts(NOW))
+            .apply_pending(
+                &InRound::for_tests(),
+                &world.scheduler,
+                &mut world.dispatcher,
+                ts(NOW),
+            )
             .await;
         let _ = world.scheduler.pass(ts(NOW)).await;
         let mut runs = world.db.dag_runs(&sync(), None, 10).await.unwrap();

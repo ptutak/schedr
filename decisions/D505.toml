@@ -1,0 +1,33 @@
+title = "Only the round moves runs forward: turns queue a worker's starts and results for it"
+date = 2026-11-17
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+A worker's turn no longer handles what moves an instance, and so its run, forward: its
+`Started`, `Finished`, `TaskEnded`, `Rejected` and `Deregister` go, with the stream they came on,
+into a queue the next round handles in its results part (before `Prepare`), woken as a
+`Finished` woke it. The round checks each as a turn did (a replaced stream's, or a worker taken
+for lost meanwhile, changes nothing: the worker sends it again), puts each worker's `Started`s and
+`Finished`s of the whole queue together in one transaction (`Started`s first), handles any other
+alone, and acknowledges only after its commit; a failed batch is redone worker by worker, then
+message by message, at most `MASTER__FAILED_GROUP_MESSAGES_PER_TURN` alone a round, the rest
+first in the next. A worker's later messages wait behind its queued ones (a `Deregister` never
+overtakes its `Finished`); closing the streams empties the queue (it holds their senders). A
+registration only finds what its worker never started; the next round's `Prepare` takes it back,
+read afresh. Every function that changes an instance's or a run's state takes an `InRound`, made
+only in `core/round.rs`: a writer outside the round doesn't compile. So what the round reads
+stays true until its writes, whether read under the core lock or before it. Measured in
+scenario 1 (release): 55.7 -> 60.2 tasks a second, the lock held 41.2 -> 30.5 s. Not chosen:
+reads before the lock guarded by conditions on every write (option A then), a per-run change
+counter (B), checking every write (C), a registration's results kept in `task_result` (i).
+'''
+history = "JOURNAL.md#D505"
+step = "M5.2cB"
+code = [
+    "crates/schedr-master/src/service.rs::round_results",
+    "crates/schedr-master/src/core/round.rs::InRound",
+    "crates/schedr-master/src/core.rs::handle_results_in",
+    "crates/schedr-master/src/dispatch.rs::take_back_found",
+]

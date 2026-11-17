@@ -49,6 +49,7 @@ use schedr_proto::convert::{
 use schedr_proto::pb;
 
 use crate::core::Arrivals;
+use crate::core::round::InRound;
 use crate::execution::{AttemptResult, Execution, ExecutionError, TaskCancel, TaskRetry, WaitEnd};
 use crate::limits::Active;
 use crate::mapping::{self, InputsError};
@@ -456,6 +457,10 @@ pub struct Dispatcher {
     /// (decision 443): it ends `lost` a lease after; after a restart, from when it is first
     /// seen.
     replaced_since: BTreeMap<String, Timestamp>,
+    /// Attempts a registration found its worker never started (B240), with that worker: taken
+    /// back by the next round's `Prepare` part, not by the registration (M5.2cB, decision 505:
+    /// only the round moves runs).
+    take_backs: Vec<(String, String)>,
     /// No hold for a replaced incarnation's attempts ([`Weakened::Hold`]).
     no_hold: bool,
     /// How far behind its cursor an event sensor reads back, for an event committed late
@@ -594,6 +599,7 @@ impl Dispatcher {
             wall: None,
             move_not_before: BTreeMap::new(),
             replaced_since: BTreeMap::new(),
+            take_backs: Vec::new(),
             no_hold: false,
             event_lookback: SignedDuration::from_mins(1),
             set_aside_for: SignedDuration::try_from(DEFAULT_SET_ASIDE)
@@ -1109,9 +1115,13 @@ impl Dispatcher {
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
-    pub async fn step(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, DispatchError> {
+    pub async fn step(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
         let mut outgoing = Vec::new();
-        self.step_into(now, &mut outgoing).await?;
+        self.step_into(in_round, now, &mut outgoing).await?;
         Ok(outgoing)
     }
 
@@ -1123,12 +1133,13 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn step_into(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
-        self.prepare(now, outgoing).await?;
-        self.expire_round(now).await?;
-        self.assign_round(now, outgoing).await
+        self.prepare(in_round, now, outgoing).await?;
+        self.expire_round(in_round, now).await?;
+        self.assign_round(in_round, now, outgoing).await
     }
 
     /// A round's first part of the dispatcher's: runs prepared, due retries queued.
@@ -1138,14 +1149,16 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn prepare(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         outgoing.append(&mut self.stops);
         // Only a group's own writes are read back by (M4B.3); a round's aren't kept.
         self.witnesses.clear();
-        self.execution.prepare_runs(now).await?;
-        self.execution.queue_due_retries(now).await?;
+        self.take_back_found(in_round, now).await?;
+        self.execution.prepare_runs(in_round, now).await?;
+        self.execution.queue_due_retries(in_round, now).await?;
         Ok(())
     }
 
@@ -1155,9 +1168,13 @@ impl Dispatcher {
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
-    pub async fn expire_round(&mut self, now: Timestamp) -> Result<(), DispatchError> {
-        self.expire(now).await?;
-        self.end_replaced(now).await?;
+    pub async fn expire_round(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        self.expire(in_round, now).await?;
+        self.end_replaced(in_round, now).await?;
         Ok(())
     }
 
@@ -1169,11 +1186,12 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn assign_round(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         self.resolved.clear();
-        self.assign_into(now, outgoing).await
+        self.assign_into(in_round, now, outgoing).await
     }
 
     /// Assigns ready tasks to workers with free slots.
@@ -1181,9 +1199,13 @@ impl Dispatcher {
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
-    pub async fn assign(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, DispatchError> {
+    pub async fn assign(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
         let mut outgoing = Vec::new();
-        self.assign_into(now, &mut outgoing).await?;
+        self.assign_into(in_round, now, &mut outgoing).await?;
         Ok(outgoing)
     }
 
@@ -1195,11 +1217,12 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn assign_into(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         let read = self.assign_reads.take();
-        let assigned = self.assign_reading(now, read, outgoing).await;
+        let assigned = self.assign_reading(in_round, now, read, outgoing).await;
         // Read for these assignments only: a later round, or a turn, reads afresh.
         self.round_reads = None;
         self.read_upstream = None;
@@ -1209,16 +1232,17 @@ impl Dispatcher {
     /// [`Self::assign_into`], [`RoundReads`] read once its ready tasks are known.
     async fn assign_reading(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         read: Option<AssignReads>,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         self.set_aside.retain(|_, until| *until > now);
-        self.fail_waiting_users(now).await?;
+        self.fail_waiting_users(in_round, now).await?;
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
-        self.wind_down_removed(now, outgoing).await?;
+        self.wind_down_removed(in_round, now, outgoing).await?;
         // Read before the core lock, or now (M5.2cA).
         let read = match read {
             Some(read) => read,
@@ -1239,10 +1263,10 @@ impl Dispatcher {
         let (chained, mut ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
             .partition(|r| r.dag.task(&r.task_id).is_some_and(starts_a_run));
-        self.chained_into(now, &chained, outgoing).await?;
+        self.chained_into(in_round, now, &chained, outgoing).await?;
         self.handing.clear();
         // The `@sensor(wait_for=...)`s whose run has come are assigned with the others.
-        ready.extend(self.wait_for_runs(now, &waits).await?);
+        ready.extend(self.wait_for_runs(in_round, now, &waits).await?);
         // Nothing ready (an idle round): no transaction, nothing to keep.
         if ready.is_empty() {
             self.metrics.set_waiting(&[]);
@@ -1256,7 +1280,8 @@ impl Dispatcher {
         // messages built for them go with a rollback.
         let (workers, active, built) = (self.workers.clone(), self.active.clone(), outgoing.len());
         let db = self.db.clone();
-        let together = Box::pin(db.atomically(self.assign_each(now, &ready, outgoing))).await;
+        let together =
+            Box::pin(db.atomically(self.assign_each(in_round, now, &ready, outgoing))).await;
         let Err(error) = together else {
             // Counted once stored (a step redone one at a time would count them twice).
             self.count_assignments(outgoing.len() - built);
@@ -1289,7 +1314,8 @@ impl Dispatcher {
         } else {
             tracing::warn!(%error, "a round's assignments failed together: assigning one at a time");
         }
-        self.assign_one_by_one(now, &ready, outgoing).await
+        self.assign_one_by_one(in_round, now, &ready, outgoing)
+            .await
     }
 
     /// Cancels what the runs of removed DAGs haven't started (B192): each run whole or not at
@@ -1297,6 +1323,7 @@ impl Dispatcher {
     /// ended and itself running (Codex's review).
     async fn wind_down_removed(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
@@ -1307,9 +1334,13 @@ impl Dispatcher {
         let open = self.db.open_attempts(None).await?;
         for run_id in runs {
             // One run that can't be wound down holds no other assignment up.
-            let wound = Box::pin(self.db.atomically(self.execution.wind_down(&run_id, now))).await;
+            let wound = Box::pin(
+                self.db
+                    .atomically(self.execution.wind_down(in_round, &run_id, now)),
+            )
+            .await;
             let stopped = match wound {
-                Ok(_) => self.cancel_unstarted(&run_id, &open, now).await,
+                Ok(_) => self.cancel_unstarted(in_round, &run_id, &open, now).await,
                 Err(error) => Err(error.into()),
             };
             match stopped {
@@ -1327,6 +1358,7 @@ impl Dispatcher {
     /// not to start them. Resources' cleanups and moved cleanups go on.
     async fn cancel_unstarted(
         &mut self,
+        in_round: &InRound,
         run_id: &str,
         open: &[schedr_db::attempts::StoredAttempt],
         now: Timestamp,
@@ -1349,7 +1381,7 @@ impl Dispatcher {
             });
             if unstarted && running {
                 let key = (&attempt.task_id, Some(attempt.map_index));
-                stops.extend(self.cancel_task(run_id, key, now).await?.1);
+                stops.extend(self.cancel_task(in_round, run_id, key, now).await?.1);
             }
         }
         Ok(stops)
@@ -1393,7 +1425,11 @@ impl Dispatcher {
     /// Fails each resource's user `unschedulable` for longer than the resource's
     /// `unschedulable_timeout` (the shortest, when it uses several), so the cleanup can run
     /// (decision 273).
-    async fn fail_waiting_users(&mut self, now: Timestamp) -> Result<(), DispatchError> {
+    async fn fail_waiting_users(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
         for waiting in self.db.unschedulable_instances().await? {
             let Some(limit) = waiting
                 .dag
@@ -1418,6 +1454,7 @@ impl Dispatcher {
                 let (_, stops) = me
                     .execution
                     .fail_unschedulable(
+                        in_round,
                         &waiting.run_id,
                         (&waiting.task_id, waiting.map_index),
                         reason,
@@ -1436,6 +1473,7 @@ impl Dispatcher {
     /// otherwise says what it waits for.
     async fn wait_for_runs(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         waits: &[ReadyInstance],
     ) -> Result<Vec<ReadyInstance>, DispatchError> {
@@ -1448,7 +1486,7 @@ impl Dispatcher {
                     max_wait_ms,
                 }) => (run_of, max_wait_ms),
                 Some(TaskKind::WaitForEvent { event, max_wait_ms }) => {
-                    self.wait_for_event(waiting, event, *max_wait_ms, now, &mut reasons)
+                    self.wait_for_event(in_round, waiting, event, *max_wait_ms, now, &mut reasons)
                         .await?;
                     continue;
                 }
@@ -1458,7 +1496,7 @@ impl Dispatcher {
                     ..
                 }) => {
                     if self
-                        .sensor_run(waiting, wait_for, *max_wait_ms, now, &mut reasons)
+                        .sensor_run(in_round, waiting, wait_for, *max_wait_ms, now, &mut reasons)
                         .await?
                     {
                         handed.push(waiting.clone());
@@ -1497,7 +1535,7 @@ impl Dispatcher {
             self.whole(async |me| {
                 let (_, stops) = me
                     .execution
-                    .wait_ended(&waiting.run_id, &waiting.task_id, ended, now)
+                    .wait_ended(in_round, &waiting.run_id, &waiting.task_id, ended, now)
                     .await?;
                 me.stop(&waiting.run_id, &stops).await
             })
@@ -1515,6 +1553,7 @@ impl Dispatcher {
     /// whether it is to be assigned.
     async fn sensor_run(
         &mut self,
+        in_round: &InRound,
         waiting: &ReadyInstance,
         wait_for: &SensorWaitFor,
         max_wait_ms: Option<u64>,
@@ -1529,7 +1568,7 @@ impl Dispatcher {
             Some(WaitSource::RunOf(run_of)) => run_of,
             Some(WaitSource::Event(event)) => {
                 return self
-                    .sensor_event(waiting, event, &wait, (deadline, now), reasons)
+                    .sensor_event(in_round, waiting, event, &wait, (deadline, now), reasons)
                     .await;
             }
             None => return Ok(false),
@@ -1578,7 +1617,7 @@ impl Dispatcher {
         }
         if now >= deadline {
             // One transaction: the attempt's end and the step's, or neither.
-            self.whole(async |me| me.time_out(waiting, now).await)
+            self.whole(async |me| me.time_out(in_round, waiting, now).await)
                 .await?;
             return Ok(false);
         }
@@ -1762,6 +1801,7 @@ impl Dispatcher {
     /// task's (the database gone, the lease lost), or every task failing, is the step's.
     async fn assign_one_by_one(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         ready: &[ReadyInstance],
         outgoing: &mut Vec<Outgoing>,
@@ -1772,7 +1812,12 @@ impl Dispatcher {
             // The round's cap holds here too (Grok's review of M5.1c1): the rest as in a batch.
             if tally.assigned >= self.rounds.assignments {
                 let db = self.db.clone();
-                let rest = Box::pin(db.atomically(self.past_the_cap(now, &ready[n..], &mut tally)));
+                let rest = Box::pin(db.atomically(self.past_the_cap(
+                    in_round,
+                    now,
+                    &ready[n..],
+                    &mut tally,
+                )));
                 if let Err(error) = rest.await {
                     tracing::warn!(%error, "the tasks past the round's cap not gone through");
                 }
@@ -1783,7 +1828,8 @@ impl Dispatcher {
             let counted = tally.assigned;
             let db = self.db.clone();
             let assigned =
-                Box::pin(db.atomically(self.assign_one(now, one, outgoing, &mut tally))).await;
+                Box::pin(db.atomically(self.assign_one(in_round, now, one, outgoing, &mut tally)))
+                    .await;
             let Err(error) = assigned else {
                 made += outgoing.len() - built;
                 self.count_assignments(outgoing.len() - built);
@@ -1835,6 +1881,7 @@ impl Dispatcher {
     /// `outgoing` once it is stored (in [`Self::assign_into`]'s transaction).
     async fn assign_each(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         ready: &[ReadyInstance],
         outgoing: &mut Vec<Outgoing>,
@@ -1845,10 +1892,11 @@ impl Dispatcher {
         let mut picks = Vec::new();
         for (n, one) in ready.iter().enumerate() {
             if tally.assigned >= self.rounds.assignments {
-                self.past_the_cap(now, &ready[n..], &mut tally).await?;
+                self.past_the_cap(in_round, now, &ready[n..], &mut tally)
+                    .await?;
                 break;
             }
-            if let Some(pick) = self.pick_one(now, one, &mut tally).await? {
+            if let Some(pick) = self.pick_one(in_round, now, one, &mut tally).await? {
                 picks.push((one, pick));
             }
         }
@@ -1888,7 +1936,7 @@ impl Dispatcher {
             let try_number = tries.get(&one.instance_id).copied();
             let built = (pick, try_number);
             self.build_one(
-                now,
+                (in_round, now),
                 one,
                 built,
                 (in_batch, Some(&read)),
@@ -1910,6 +1958,7 @@ impl Dispatcher {
     /// ([`RoundReads`]), that check costs a statement only for one that ends.
     async fn past_the_cap(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         rest: &[ReadyInstance],
         tally: &mut Tally,
@@ -1923,7 +1972,10 @@ impl Dispatcher {
             let Some(task) = tally.task_in(&ready.version_id, &dag, &ready.task_id) else {
                 continue;
             };
-            if self.ended_before_its_call(ready, task, now).await? {
+            if self
+                .ended_before_its_call(in_round, ready, task, now)
+                .await?
+            {
                 continue;
             }
             *tally.waiting.entry("next_round").or_default() += 1;
@@ -1957,12 +2009,13 @@ impl Dispatcher {
 
     async fn assign_one(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         ready: &ReadyInstance,
         outgoing: &mut Vec<Outgoing>,
         tally: &mut Tally,
     ) -> Result<(), DispatchError> {
-        let Some(pick) = self.pick_one(now, ready, tally).await? else {
+        let Some(pick) = self.pick_one(in_round, now, ready, tally).await? else {
             return Ok(());
         };
         let claim = [(
@@ -1973,7 +2026,7 @@ impl Dispatcher {
         let tries = self.db.claim_attempts(&claim, now).await?;
         let try_number = tries.get(&ready.instance_id).copied();
         self.build_one(
-            now,
+            (in_round, now),
             ready,
             (pick, try_number),
             (false, None),
@@ -1988,6 +2041,7 @@ impl Dispatcher {
     /// next task picked sees them), under a new attempt ID; or why it waits.
     async fn pick_one(
         &mut self,
+        in_round: &InRound,
         now: Timestamp,
         ready: &ReadyInstance,
         tally: &mut Tally,
@@ -1996,7 +2050,10 @@ impl Dispatcher {
         let Some(task) = tally.task_in(&ready.version_id, &dag, &ready.task_id) else {
             return Ok(None);
         };
-        if self.ended_before_its_call(ready, task, now).await? {
+        if self
+            .ended_before_its_call(in_round, ready, task, now)
+            .await?
+        {
             return Ok(None);
         }
         // Its concurrency limits first: a task over one waits for it, whatever the workers.
@@ -2046,7 +2103,7 @@ impl Dispatcher {
     /// given back when it doesn't go.
     async fn build_one(
         &mut self,
-        now: Timestamp,
+        (in_round, now): (&InRound, Timestamp),
         ready: &ReadyInstance,
         (pick, try_number): (Pick, Option<u32>),
         (in_batch, read): (bool, Option<&mapping::Upstream>),
@@ -2082,7 +2139,8 @@ impl Dispatcher {
             Err(InputsError::NotArguments(why)) => {
                 self.unpick(&attempt_id, tally);
                 let end = failed_by_master(INPUT_MISMATCH, "InputMismatch", &why);
-                self.end_ready(ready, &attempt_id, end, now).await?;
+                self.end_ready(in_round, ready, &attempt_id, end, now)
+                    .await?;
                 return Ok(());
             }
         };
@@ -2096,6 +2154,7 @@ impl Dispatcher {
             }
             self.unpick(&attempt_id, tally);
             self.end(
+                in_round,
                 &attempt_id,
                 &ready.run_id,
                 (&ready.task_id, ready.map_index),
@@ -2115,7 +2174,7 @@ impl Dispatcher {
         self.add_event(ready, &mut message).await?;
         self.keep_deadline(ready, task, &mut message, now).await?;
         let fits = self
-            .if_it_fits(ready, &attempt_id, (message, in_batch), now)
+            .if_it_fits(in_round, ready, &attempt_id, (message, in_batch), now)
             .await?;
         let Some(message) = fits else {
             self.unpick(&attempt_id, tally);
@@ -2273,6 +2332,7 @@ impl Dispatcher {
     /// [`DispatchError::BadMessage`] for an unknown reason, or [`DispatchError::Db`].
     pub async fn rejected(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         rejected: &pb::Rejected,
         now: Timestamp,
@@ -2315,7 +2375,9 @@ impl Dispatcher {
             self.db
                 .undo_assignment(&attempt.id, TaskInstanceState::Cancelled, None, None, now)
                 .await?;
-            self.execution.settle(&attempt.run_id, now).await?;
+            self.execution
+                .settle(in_round, &attempt.run_id, now)
+                .await?;
             return Ok(());
         }
         // The workers that could run it: once each has rejected it, it is unschedulable.
@@ -2348,6 +2410,7 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn task_ended(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         result: &pb::Finished,
         now: Timestamp,
@@ -2360,7 +2423,13 @@ impl Dispatcher {
                 .set_task_result(&attempt.id, &result.encode_to_vec())
                 .await?;
             self.execution
-                .cleaning_up(&attempt.run_id, &attempt.task_id, attempt.map_index, now)
+                .cleaning_up(
+                    in_round,
+                    &attempt.run_id,
+                    &attempt.task_id,
+                    attempt.map_index,
+                    now,
+                )
                 .await?;
         }
         Ok(())
@@ -2374,6 +2443,7 @@ impl Dispatcher {
     /// [`DispatchError::BadMessage`] for an unknown status, or a database failure.
     pub async fn finished(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         finished: &pb::Finished,
         now: Timestamp,
@@ -2402,7 +2472,7 @@ impl Dispatcher {
             {
                 let rest = cleanup_end(rest, worker_id)?;
                 if self.db.add_rest_cleanup(&attempt.id, &rest).await? {
-                    self.rest_cleaned(&attempt, &rest, now).await?;
+                    self.rest_cleaned(in_round, &attempt, &rest, now).await?;
                 }
                 return Ok(finished_ack(worker_id, &finished.attempt_id));
             }
@@ -2453,7 +2523,7 @@ impl Dispatcher {
             } else {
                 ended(finished, status, error_summary, cleanup)
             };
-            self.record(&attempt, &end, &result, now).await?;
+            self.record(in_round, &attempt, &end, &result, now).await?;
         }
         Ok(finished_ack(worker_id, &finished.attempt_id))
     }
@@ -2461,6 +2531,7 @@ impl Dispatcher {
     /// Common `Finished`s, as one batch (see [`Self::finished_group`]).
     async fn finish_common(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         common: &[(&StoredAttempt, &pb::Finished)],
         now: Timestamp,
@@ -2522,7 +2593,7 @@ impl Dispatcher {
         for (run_id, results) in by_run {
             let done = self
                 .execution
-                .attempts_finished(run_id, &results, now)
+                .attempts_finished(in_round, run_id, &results, now)
                 .await?;
             self.stop(run_id, &done.stops).await?;
         }
@@ -2541,6 +2612,7 @@ impl Dispatcher {
     /// transaction rolls back, and the messages are handled one by one.
     pub async fn finished_group(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         group: &[pb::Finished],
         now: Timestamp,
@@ -2568,13 +2640,14 @@ impl Dispatcher {
                 // In its place (Grok's review): what came before it stored first, so a mapped
                 // sibling's success before an uncommon failure stays a success, as one by one.
                 Some(_) => {
-                    self.finish_common(worker_id, &std::mem::take(&mut common), now)
+                    self.finish_common(in_round, worker_id, &std::mem::take(&mut common), now)
                         .await?;
-                    self.finished(worker_id, finished, now).await?;
+                    self.finished(in_round, worker_id, finished, now).await?;
                 }
             }
         }
-        self.finish_common(worker_id, &common, now).await?;
+        self.finish_common(in_round, worker_id, &common, now)
+            .await?;
         Ok(group
             .iter()
             .map(|f| finished_ack(worker_id, &f.attempt_id))
@@ -2586,6 +2659,7 @@ impl Dispatcher {
     /// (Grok's review of M4.11d2): the wait was answered in time.
     async fn ended_before_its_call(
         &mut self,
+        in_round: &InRound,
         ready: &ReadyInstance,
         task: &schedr_model::Task,
         now: Timestamp,
@@ -2594,14 +2668,15 @@ impl Dispatcher {
             return Ok(false);
         }
         let handed = self.handing.contains_key(&ready.instance_id);
-        Ok(self.failed_as_switched_off(ready, now).await?
-            || (!handed && self.timed_out_waiting(ready, task, now).await?))
+        Ok(self.failed_as_switched_off(in_round, ready, now).await?
+            || (!handed && self.timed_out_waiting(in_round, ready, task, now).await?))
     }
 
     /// Fails a wait step switched off, whatever the workers: a run isn't kept open by what won't
     /// run. Returns whether it was.
     async fn failed_as_switched_off(
         &mut self,
+        in_round: &InRound,
         ready: &ReadyInstance,
         now: Timestamp,
     ) -> Result<bool, DispatchError> {
@@ -2610,7 +2685,8 @@ impl Dispatcher {
         };
         if let Some((attempt_id, _)) = self.db.assign_attempt(&ready.instance_id, "", now).await? {
             let end = failed_by_master(schedr_model::runner::SWITCHED_OFF, "SwitchedOff", &why);
-            self.end_ready(ready, &attempt_id, end, now).await?;
+            self.end_ready(in_round, ready, &attempt_id, end, now)
+                .await?;
         }
         Ok(true)
     }
@@ -2672,6 +2748,7 @@ impl Dispatcher {
     /// whether it did.
     async fn timed_out_waiting(
         &mut self,
+        in_round: &InRound,
         ready: &ReadyInstance,
         task: &schedr_model::Task,
         now: Timestamp,
@@ -2684,13 +2761,14 @@ impl Dispatcher {
         {
             return Ok(false);
         }
-        self.time_out(ready, now).await?;
+        self.time_out(in_round, ready, now).await?;
         Ok(true)
     }
 
     /// Ends a wait step `TimedOut` by the master, no worker hearing of it.
     async fn time_out(
         &mut self,
+        in_round: &InRound,
         ready: &ReadyInstance,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
@@ -2705,7 +2783,7 @@ impl Dispatcher {
                 outcome: Some(TIMED_OUT_OUTCOME.to_owned()),
                 ..by_master(AttemptStatus::Success)
             };
-            self.record(&attempt, &end, &result, now).await?;
+            self.record(in_round, &attempt, &end, &result, now).await?;
         }
         Ok(())
     }
@@ -2715,6 +2793,7 @@ impl Dispatcher {
     /// rides in it).
     async fn if_it_fits(
         &mut self,
+        in_round: &InRound,
         ready: &ReadyInstance,
         attempt_id: &str,
         (assign, in_batch): (pb::AssignTask, bool),
@@ -2742,7 +2821,8 @@ impl Dispatcher {
         }
         self.handing.remove(&ready.instance_id);
         let end = failed_by_master(INPUTS_TOO_LARGE, "InputsTooLarge", &why);
-        self.end_ready(ready, attempt_id, end, now).await?;
+        self.end_ready(in_round, ready, attempt_id, end, now)
+            .await?;
         Ok(None)
     }
 
@@ -2810,13 +2890,14 @@ impl Dispatcher {
     /// Ends an attempt just assigned, without its worker having heard of it.
     async fn end_ready(
         &mut self,
+        in_round: &InRound,
         ready: &ReadyInstance,
         attempt_id: &str,
         end: AttemptEnd,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         let instance = (&ready.task_id, ready.map_index);
-        self.end(attempt_id, &ready.run_id, instance, end, now)
+        self.end(in_round, attempt_id, &ready.run_id, instance, end, now)
             .await?;
         Ok(())
     }
@@ -2937,6 +3018,7 @@ impl Dispatcher {
     /// and counted.
     async fn rest_cleaned(
         &self,
+        in_round: &InRound,
         attempt: &StoredAttempt,
         rest: &CleanupEnd,
         now: Timestamp,
@@ -2970,7 +3052,13 @@ impl Dispatcher {
                 .as_deref()
                 .map(schedr_db::notifications::readable);
             self.execution
-                .late_cleanup_failed(&attempt.run_id, attempt.task_id.as_str(), error, now)
+                .late_cleanup_failed(
+                    in_round,
+                    &attempt.run_id,
+                    attempt.task_id.as_str(),
+                    error,
+                    now,
+                )
                 .await?;
         }
         Ok(())
@@ -2987,7 +3075,11 @@ impl Dispatcher {
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
-    pub async fn expire(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
+    pub async fn expire(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<usize, DispatchError> {
         // Adopted attempts whose start wasn't recorded are kept while a worker holds them.
         let workers = &self.workers;
         self.adopted_unrecorded
@@ -3028,8 +3120,12 @@ impl Dispatcher {
             let result = by_master(AttemptStatus::AssignmentExpired);
             // Whole or not at all, memory with it (B49): ending the attempt and moving its
             // task are separate writes, and the slot is freed in memory before them.
-            self.whole(async |dispatcher| dispatcher.record(attempt, &end, &result, now).await)
-                .await?;
+            self.whole(async |dispatcher| {
+                dispatcher
+                    .record(in_round, attempt, &end, &result, now)
+                    .await
+            })
+            .await?;
         }
         Ok(expired.len())
     }
@@ -3075,10 +3171,35 @@ impl Dispatcher {
                 .entry(attempt_id.clone())
                 .or_insert(since);
         }
-        for attempt in &never {
-            self.take_back_unstarted(attempt, now).await?;
-        }
+        self.take_backs
+            .extend(never.into_iter().map(|a| (worker_id.to_owned(), a.id)));
         Ok(left.len())
+    }
+
+    /// What registrations found never started (`take_backs`), taken back: each that is still
+    /// open, still its worker's and still not started (or a moved cleanup's), read afresh.
+    /// One the database fails on stays for the next round.
+    async fn take_back_found(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<(), DispatchError> {
+        while let Some((worker_id, attempt_id)) = self.take_backs.first().cloned() {
+            let attempt = self.db.attempt(&attempt_id).await?;
+            if let Some(attempt) = attempt.filter(|a| {
+                a.status.is_none() && a.worker_id == worker_id && (!a.started || a.moving)
+            }) {
+                self.take_back_unstarted(in_round, &attempt, now).await?;
+            }
+            self.take_backs.remove(0);
+        }
+        Ok(())
+    }
+
+    /// Whether a registration left attempts for the round to take back.
+    #[must_use]
+    pub fn takes_back(&self) -> bool {
+        !self.take_backs.is_empty()
     }
 
     /// Takes back `attempt`, which its worker never started (B240): a moved cleanup waits for
@@ -3086,6 +3207,7 @@ impl Dispatcher {
     /// without using a retry (B17).
     async fn take_back_unstarted(
         &mut self,
+        in_round: &InRound,
         attempt: &StoredAttempt,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
@@ -3100,7 +3222,7 @@ impl Dispatcher {
         // Whole or not at all, memory with it (B49).
         self.whole(async |dispatcher| {
             dispatcher
-                .record(attempt, &end, &by_master(status), now)
+                .record(in_round, attempt, &end, &by_master(status), now)
                 .await
         })
         .await
@@ -3108,8 +3230,8 @@ impl Dispatcher {
 
     /// The same process registered again (a stream broken, the worker running on): its
     /// journal holds every assignment it accepted, so one not started and not in it never
-    /// started there, and is taken back now (B240; what its old stream still carries, it
-    /// drops). Returns how many.
+    /// started there, and is taken back by the next round (B240, decision 505; what its old
+    /// stream still carries, it drops). Returns how many.
     ///
     /// # Errors
     ///
@@ -3118,7 +3240,6 @@ impl Dispatcher {
         &mut self,
         worker_id: &str,
         reported: &BTreeSet<&str>,
-        now: Timestamp,
     ) -> Result<usize, DispatchError> {
         let unstarted: Vec<StoredAttempt> = self
             .db
@@ -3127,10 +3248,10 @@ impl Dispatcher {
             .into_iter()
             .filter(|a| (!a.started || a.moving) && !reported.contains(a.id.as_str()))
             .collect();
-        for attempt in &unstarted {
-            self.take_back_unstarted(attempt, now).await?;
-        }
-        Ok(unstarted.len())
+        let found = unstarted.len();
+        self.take_backs
+            .extend(unstarted.into_iter().map(|a| (worker_id.to_owned(), a.id)));
+        Ok(found)
     }
 
     /// The attempts `worker_id`'s journal reports at its registration: alive there, none of
@@ -3172,7 +3293,11 @@ impl Dispatcher {
     /// # Errors
     ///
     /// [`DispatchError`] if the database fails.
-    pub async fn end_replaced(&mut self, now: Timestamp) -> Result<usize, DispatchError> {
+    pub async fn end_replaced(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<usize, DispatchError> {
         let left = self.db.replaced_attempts().await?;
         let steady = (self.steady)(now);
         self.replaced_since.retain(|id, _| left.contains(id));
@@ -3206,7 +3331,7 @@ impl Dispatcher {
             let done = self
                 .whole(async |dispatcher| {
                     dispatcher
-                        .end_lost(&attempt, summary.clone(), KeptResults::Used, now)
+                        .end_lost(in_round, &attempt, summary.clone(), KeptResults::Used, now)
                         .await
                 })
                 .await;
@@ -3215,7 +3340,13 @@ impl Dispatcher {
                     tracing::error!(attempt_id, %error, "a kept result the database refuses");
                     self.whole(async |dispatcher| {
                         dispatcher
-                            .end_lost(&attempt, summary.clone(), KeptResults::Refused, now)
+                            .end_lost(
+                                in_round,
+                                &attempt,
+                                summary.clone(),
+                                KeptResults::Refused,
+                                now,
+                            )
                             .await
                     })
                     .await?;
@@ -3240,17 +3371,23 @@ impl Dispatcher {
     /// [`DispatchError`] if the database fails.
     pub async fn worker_lost(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         results: KeptResults,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         // Whole or not at all, memory with it (B49): the worker is forgotten in memory first.
-        self.whole(async |dispatcher| dispatcher.forget_worker(worker_id, results, now).await)
-            .await
+        self.whole(async |dispatcher| {
+            dispatcher
+                .forget_worker(in_round, worker_id, results, now)
+                .await
+        })
+        .await
     }
 
     async fn forget_worker(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         results: KeptResults,
         now: Timestamp,
@@ -3259,7 +3396,7 @@ impl Dispatcher {
         self.away.remove(worker_id);
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
             if attempt.started && !attempt.moving {
-                self.end_lost(&attempt, lost_summary(worker_id), results, now)
+                self.end_lost(in_round, &attempt, lost_summary(worker_id), results, now)
                     .await?;
                 continue;
             }
@@ -3269,8 +3406,14 @@ impl Dispatcher {
             // retry, its cleanup moving if it may (B234), the worker running on with an
             // ordinary task (decision 252).
             if !self.never_started(worker_id, &attempt.id) {
-                self.end_lost(&attempt, maybe_started_summary(worker_id), results, now)
-                    .await?;
+                self.end_lost(
+                    in_round,
+                    &attempt,
+                    maybe_started_summary(worker_id),
+                    results,
+                    now,
+                )
+                .await?;
                 continue;
             }
             // A moved cleanup never started there waits for another worker.
@@ -3284,7 +3427,8 @@ impl Dispatcher {
                 error_summary: Some(not_started_summary(worker_id)),
                 ..AttemptEnd::by_master(status)
             };
-            self.record(&attempt, &end, &by_master(status), now).await?;
+            self.record(in_round, &attempt, &end, &by_master(status), now)
+                .await?;
         }
         Ok(())
     }
@@ -3294,6 +3438,7 @@ impl Dispatcher {
     /// `summary`. Its cleanup, if the task has one, didn't run (decision 220).
     async fn end_lost(
         &mut self,
+        in_round: &InRound,
         attempt: &StoredAttempt,
         summary: String,
         results: KeptResults,
@@ -3306,7 +3451,7 @@ impl Dispatcher {
             .await?;
         self.replaced_since.remove(&attempt.id);
         if results == KeptResults::Refused && attempt.result_kept {
-            return self.end_refused(attempt, now).await;
+            return self.end_refused(in_round, attempt, now).await;
         }
         let task_cleanup = self.task_cleanup(attempt).await?;
         let kept = self.kept_result(attempt).await?;
@@ -3314,7 +3459,7 @@ impl Dispatcher {
             && wanted.anywhere
             && attempt.cleanup_moves <= wanted.retries
         {
-            return self.move_cleanup(attempt, &summary, now).await;
+            return self.move_cleanup(in_round, attempt, &summary, now).await;
         }
         let cleanup = task_cleanup
             .as_ref()
@@ -3333,13 +3478,14 @@ impl Dispatcher {
             };
             (end, result)
         };
-        self.record(attempt, &end, &result, now).await
+        self.record(in_round, attempt, &end, &result, now).await
     }
 
     /// Ends an attempt whose kept result the database refuses, as a refused `Finished` is
     /// (B106): failed, not retried, the same data would be refused again.
     async fn end_refused(
         &mut self,
+        in_round: &InRound,
         attempt: &StoredAttempt,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
@@ -3360,7 +3506,7 @@ impl Dispatcher {
             cleanup: Some(cleanup),
             ..AttemptEnd::by_master(AttemptStatus::Failed)
         };
-        self.record(attempt, &end, &result, now).await
+        self.record(in_round, attempt, &end, &result, now).await
     }
 
     /// The cleanup of the attempt's task.
@@ -3393,6 +3539,7 @@ impl Dispatcher {
     /// end, and a later round gives it to another worker.
     async fn move_cleanup(
         &mut self,
+        in_round: &InRound,
         attempt: &StoredAttempt,
         summary: &str,
         now: Timestamp,
@@ -3417,7 +3564,13 @@ impl Dispatcher {
             .move_cleanup(&attempt.id, &lost.encode_to_vec(), not_before)
             .await?;
         self.execution
-            .cleaning_up(&attempt.run_id, &attempt.task_id, attempt.map_index, now)
+            .cleaning_up(
+                in_round,
+                &attempt.run_id,
+                &attempt.task_id,
+                attempt.map_index,
+                now,
+            )
             .await?;
         Ok(())
     }
@@ -3622,6 +3775,7 @@ impl Dispatcher {
     /// [`DispatchError`] for an unknown run or task, or a database failure.
     pub async fn cancel_task(
         &mut self,
+        in_round: &InRound,
         run_id: &str,
         (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
@@ -3630,7 +3784,7 @@ impl Dispatcher {
         let map_index = map_index.filter(|i| *i >= 0);
         let cancelled = self
             .execution
-            .cancel_task(run_id, (task_id, map_index), now)
+            .cancel_task(in_round, run_id, (task_id, map_index), now)
             .await?;
         if cancelled != TaskCancel::Stopping {
             return Ok((cancelled, Vec::new()));
@@ -3655,13 +3809,14 @@ impl Dispatcher {
     /// [`DispatchError`] for an unknown run or task, or a database failure.
     pub async fn retry_task(
         &mut self,
+        in_round: &InRound,
         run_id: &str,
         (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
     ) -> Result<TaskRetry, DispatchError> {
         let retried = self
             .execution
-            .retry_task(run_id, (task_id, map_index), now)
+            .retry_task(in_round, run_id, (task_id, map_index), now)
             .await?;
         if let TaskRetry::Queued(instance_id) = &retried {
             self.rejections.remove(instance_id);
@@ -3677,10 +3832,11 @@ impl Dispatcher {
     /// [`DispatchError`] for an unknown run or a database failure.
     pub async fn cancel_run(
         &mut self,
+        in_round: &InRound,
         run_id: &str,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, DispatchError> {
-        let cancelled = self.execution.cancel_run(run_id, now).await?;
+        let cancelled = self.execution.cancel_run(in_round, run_id, now).await?;
         let running: BTreeSet<(&TaskId, i32)> =
             cancelled.running.iter().map(|(t, i)| (t, *i)).collect();
         Ok(self
@@ -3695,6 +3851,7 @@ impl Dispatcher {
 
     async fn record(
         &mut self,
+        in_round: &InRound,
         attempt: &StoredAttempt,
         end: &AttemptEnd,
         result: &AttemptResult,
@@ -3708,6 +3865,7 @@ impl Dispatcher {
             let recorded = self
                 .execution
                 .attempt_finished(
+                    in_round,
                     &attempt.run_id,
                     &attempt.task_id,
                     attempt.map_index,
@@ -3742,6 +3900,7 @@ impl Dispatcher {
 
     async fn end(
         &mut self,
+        in_round: &InRound,
         attempt_id: &str,
         run_id: &str,
         (task_id, map_index): (&TaskId, i32),
@@ -3761,7 +3920,7 @@ impl Dispatcher {
             self.metrics.attempt_ended(&end.status);
             let recorded = self
                 .execution
-                .attempt_finished(run_id, task_id, map_index, &result, now)
+                .attempt_finished(in_round, run_id, task_id, map_index, &result, now)
                 .await?;
             self.stop(run_id, &recorded.stops).await?;
         }

@@ -576,7 +576,7 @@ pub struct HiddenLimits {
     pub runs_per_planning_pass: usize,
     /// The most runs one pass starts for a DAG started by `RunOf`. (`MASTER__RUN_OF_RUNS_PER_PASS`)
     pub run_of_runs_per_pass: usize,
-    /// The most messages of a failed group handled one by one in a turn (M4B.3). (`MASTER__FAILED_GROUP_MESSAGES_PER_TURN`)
+    /// The most messages of a failed batch of workers' results handled one by one in a round (M4B.3; in the round since M5.2cB). (`MASTER__FAILED_GROUP_MESSAGES_PER_TURN`)
     pub failed_group_messages_per_turn: usize,
     /// The messages that wait for a worker before it is taken for one that stopped reading. (`MASTER__WORKER_STREAM_BUFFER`)
     pub worker_stream_buffer: usize,

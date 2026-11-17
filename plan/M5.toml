@@ -15,7 +15,13 @@ inside the container). So fewer round trips under the lock: assign's per-task re
 the idle round parts (M5.2b), then the core lock released during database calls (decision
 501: M5.2cA, M5.2cB, M5.2cC), then the worker's start path (M5.2d), then release 1.2.0 (R1.2). The target (the user,
 2026-11-17): half of what the slots allow, 160 tasks a second in scenario 1 (32 slots, tasks of
-0.1 s). M5.2a measured 40.5 (the assign part's lock time 26.7 s → 6.2 s).
+0.1 s). M5.2a measured 40.5 (the assign part's lock time 26.7 s → 6.2 s). Revised (the user,
+2026-11-18): at least 100 tasks a second, 120 very good. A slot's cycle (~120 ms of task, 66 ms
+to start, ~350 ms from its result to its next assignment) leaves the master ~15 ms at 160, out of
+reach while a slot idles as the master decides: lookahead and lanes would take the master off
+that path, and are M7's (research). M5.2cB became "only the round moves runs forward"
+(decision 505), M5.2cC became M5.2cB4 (the path from a result to the next assignment), the
+trigger messages M5.2e.
 
 First, the start path (the user, 2026-11-11, after 1.0.0): M4B's stress comparison (guide,
 Stress tests, After M4B) made finishing faster and starting slower (assigned → started p99 up
@@ -348,23 +354,35 @@ done = 2026-11-17
 
 [[steps]]
 id = "M5.2cB"
-title = "Turns' reads before the core lock"
+title = "Only the round moves runs forward"
 scope = '''
-(decision 501, its second part) a worker's `Finished` and `Started` groups read their attempts, runs and instances before taking the core lock; under it only their writes and the commit, with what was read checked by the writes' own conditions
+(decision 505, the user's design replacing decision 501's second part) a worker's `Started`, `Finished`, `TaskEnded`, `Rejected` and `Deregister` queued by its turn and handled by the next round in one transaction for all workers; a registration's take-backs done by the round; an `InRound` token only the round makes, asked by every function that moves runs
 '''
 done_when = '''
-the turns' lock time per task measured down in scenario 1 (release) against M5.2cA's; every stress scenario passes, the cut scenarios 17-21 locally
+scenario 1 (release) measured against M5.2cA's; the round's results part's time and the lock's measured; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review, the user)
+'''
+status = "done"
+done = 2026-11-17
+
+[[steps]]
+id = "M5.2cB3"
+title = "The round's results part: one set of statements, its reads before the lock"
+scope = '''
+(decision 505; decision 501's second part, kept by the user) the results part goes through the dispatcher once for the whole batch, not once per worker (one attempts read, one start update, one end update, one outputs insert, one instance update, each run read once); then its reads (attempts, runs, instances) before the core lock, true until its writes since only the round moves runs (`InRound`); each measured on its own
+'''
+done_when = '''
+the results part's time per round and the lock's measured in scenario 1 (release) against M5.2cB's, with a slot's idle time (an attempt's end to its worker's next assignment) in the stress report
 '''
 status = "planned"
 
 [[steps]]
-id = "M5.2cC"
-title = "The core lock off the writes: the master's memory behind a short lock"
+id = "M5.2cB4"
+title = "The path from a task's result to its slot's next assignment"
 scope = '''
-(decision 501, its last part; decisions 469 and 480 open) the core's memory (slots, active attempts, connections, the jobs it gave out) behind a lock never held across a database call; each transaction on its own connection, safe by its writes' conditions; memory changed after the commit, a slot reserved before it and given back on a rollback; on SQLite (one writer) the serial lock stays. Laid out step by step before it is built
+(the user, 2026-11-18; was M5.2cC, whose lock off the writes is deferred) a slot idles ~350 ms between tasks in scenario 1 (the round's wait and gap, its parts up to Assign): first a slot's idle time in the stress report (if M5.2cB3 hasn't added it), then cut while keeping the master's invariants (assignment only of ready tasks, "assigned but not started" brief): candidates a shorter gap when results wait, a round woken by results running results → prepare → assign, prepare's work for a finished run done in the results part. Lookahead and lanes are M7's. Laid out step by step, with measurements, before it is built
 '''
 done_when = '''
-scenario 1 (release, Postgres) at 160 tasks a second or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally
+scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
 '''
 status = "planned"
 
@@ -375,7 +393,18 @@ scope = '''
 (the user, 2026-11-17) what a worker takes from an assignment to the task's start (assigned → started 0.077 s at the median in scenario 1 on the release build, M5.2a), profiled and cut where it limits the target
 '''
 done_when = '''
-scenario 1's assigned → started measured against M5.2cC's, and its share of the remaining gap to 160 tasks a second stated
+scenario 1's assigned → started measured against M5.2cB4's, and its share of the remaining gap to 100 tasks a second (120 very good) stated
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2e"
+title = "Many DAG triggers: a stress scenario, then their messages batched in the turn"
+scope = '''
+(the user, 2026-11-17; was M5.2cB2) first a stress scenario with many DAG triggers: a worker's watcher slots full of `@trigger.poke` triggers (each reporting `TriggerPoked` with every heartbeat) and event triggers firing steadily, measuring the lock time of trigger messages, events a second (an event to its run) and task throughput beside them. Then a turn's trigger messages (`TriggerEvent`, `TriggerPoked`, `TriggerStopped`) in one transaction, still handled on arrival: the back-pressure count and a trigger stopped or failed kept in memory across the batch, a failed batch redone one by one. Not chosen: the trigger messages in the round (decision 505's pattern), which would make each event wait for a round (the user: it slows events down)
+'''
+done_when = '''
+the scenario in the suite, its numbers before and after the batching in the journal; skipped batching only by the user's decision, if the scenario shows trigger messages don't add up
 '''
 status = "planned"
 
@@ -383,7 +412,7 @@ status = "planned"
 id = "R1.2"
 title = "Release 1.2.0"
 scope = '''
-(the user, 2026-11-17) M5.2 ends with 1.2.0: the master's throughput and the bugs fixed by then (B255, B256 among them). If M5.2 falls short of 160 tasks a second in scenario 1, whether to stretch it before the release is decided then. The stress suite's table "After M5.2" on the stress page, against 1.0.0's and 1.1.0's form (the quick profile, 1.1.0's code and M5.2's one after the other on an otherwise idle machine); the changelog; the version bumped; an rc first only if a migration was added (decision 498); `scripts/upgrade_check.py` against 1.1.0
+(the user, 2026-11-17) M5.2 ends with 1.2.0: the master's throughput and the bugs fixed by then (B255, B256 among them). If M5.2 falls short of 100 tasks a second in scenario 1 (120 very good; the user, 2026-11-18, was 160), whether to stretch it before the release is decided then. The stress suite's table "After M5.2" on the stress page, against 1.0.0's and 1.1.0's form (the quick profile, 1.1.0's code and M5.2's one after the other on an otherwise idle machine); the changelog; the version bumped; an rc first only if a migration was added (decision 498); `scripts/upgrade_check.py` against 1.1.0
 '''
 done_when = '''
 1.2.0 on PyPI and its images on ghcr.io; the stress page's "After M5.2" table

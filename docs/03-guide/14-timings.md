@@ -219,7 +219,7 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT` | 4096 | The most characters of each text in them (a host's code, a warning's message); longer ones are cut. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |
-| `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages from one worker handled in a turn. Its `Started`s are stored in one transaction, then its `Finished`s in another, with the core lock released between groups. More makes each group longer. |
+| `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages from one worker taken in a turn. Its `Started`s and results are queued for the next round, which stores every worker's in one transaction (decision 505). |
 | `SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND` | 50 | The most assignments a round makes in a batch transaction. The rest wait for later rounds, the longest ready first. More starts a burst sooner and holds the core lock longer for that transaction. |
 | `SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND` | 50 | The most assignments a round takes back as never started. |
 | `SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND` | 100 | The most waiting reasons a round writes, a statement each; they are only shown, so the rest wait a round. |
@@ -230,7 +230,7 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__MASTER__RETRIES_PER_ROUND` | 100 | The most failed tasks a round queues again once their retry delay passed. |
 | `SCHEDR_HIDDEN__MASTER__RUNS_PER_PLANNING_PASS` | 100 | The most runs the scheduler creates for one DAG in one pass (a `catchup` backlog with no `max_active_runs` goes on in the next). |
 | `SCHEDR_HIDDEN__MASTER__RUN_OF_RUNS_PER_PASS` | 50 | The most runs one pass starts for a DAG started by `RunOf`; `[triggers] max_queued_events` caps it too. |
-| `SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN` | 10 | The most messages of a failed group handled one by one in a turn (M4B.3), so a failing group doesn't hold the lock for a whole turn of single transactions. |
+| `SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN` | 10 | The most messages of a failed batch of results handled one by one in a round (M4B.3), so a failing batch doesn't hold the lock for a long run of single transactions; the rest wait for the next round. |
 | `SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER` | 1024 | The messages that wait for a worker before it is taken for one that stopped reading and disconnected. Less disconnects a slow worker sooner; more holds more memory per worker. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS` | 50 | The most notifications one pass of the sender delivers; the rest go in the next pass. |
 

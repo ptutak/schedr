@@ -5,6 +5,7 @@
 //! Assigning tasks to workers and the messages of the
 //! protocol use these operations (see archive/PROJECT.md, Task assignment).
 
+use crate::core::round::InRound;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -298,6 +299,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or a database failure.
     pub async fn late_cleanup_failed(
         &self,
+        _: &InRound,
         run_id: &str,
         task: &str,
         error: Option<String>,
@@ -362,7 +364,11 @@ impl Execution {
     /// # Errors
     ///
     /// [`ExecutionError::Db`] if the database fails.
-    pub async fn prepare_runs(&self, now: Timestamp) -> Result<Vec<String>, ExecutionError> {
+    pub async fn prepare_runs(
+        &self,
+        _: &InRound,
+        now: Timestamp,
+    ) -> Result<Vec<String>, ExecutionError> {
         let mut prepared = Vec::new();
         let mut created = 0;
         for run in self.db.newly_running().await? {
@@ -410,13 +416,14 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or task, or a database failure.
     pub async fn attempt_finished(
         &self,
+        in_round: &InRound,
         run_id: &str,
         task_id: &TaskId,
         map_index: i32,
         result: &AttemptResult,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
-        self.attempts_finished(run_id, &[(task_id, map_index, result)], now)
+        self.attempts_finished(in_round, run_id, &[(task_id, map_index, result)], now)
             .await
     }
 
@@ -436,6 +443,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or task, or a database failure.
     pub async fn attempts_finished(
         &self,
+        _: &InRound,
         run_id: &str,
         results: &[(&TaskId, i32, &AttemptResult)],
         now: Timestamp,
@@ -601,6 +609,7 @@ impl Execution {
     /// [`ExecutionError::Db`] if the database fails.
     pub async fn cleaning_up(
         &self,
+        _: &InRound,
         run_id: &str,
         task_id: &TaskId,
         map_index: i32,
@@ -616,7 +625,11 @@ impl Execution {
     /// # Errors
     ///
     /// [`ExecutionError::Db`] if the database fails.
-    pub async fn queue_due_retries(&self, now: Timestamp) -> Result<usize, ExecutionError> {
+    pub async fn queue_due_retries(
+        &self,
+        _: &InRound,
+        now: Timestamp,
+    ) -> Result<usize, ExecutionError> {
         let mut due = self.db.due_retries(now).await?;
         // At most so many a round, the earliest due first; the rest in the next ones (B18).
         due.truncate(self.rounds.retries);
@@ -639,6 +652,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or a database failure.
     pub async fn cancel_run(
         &self,
+        _: &InRound,
         run_id: &str,
         now: Timestamp,
     ) -> Result<Cancelled, ExecutionError> {
@@ -687,6 +701,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or a database failure.
     pub async fn wind_down(
         &self,
+        _: &InRound,
         run_id: &str,
         now: Timestamp,
     ) -> Result<Option<RunState>, ExecutionError> {
@@ -724,6 +739,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or task, or a database failure.
     pub async fn cancel_task(
         &self,
+        _: &InRound,
         run_id: &str,
         (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
@@ -853,6 +869,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or task, or a database failure.
     pub async fn retry_task(
         &self,
+        _: &InRound,
         run_id: &str,
         (task_id, map_index): (&TaskId, Option<i32>),
         now: Timestamp,
@@ -906,6 +923,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or a database failure.
     pub async fn fail_unschedulable(
         &self,
+        _: &InRound,
         run_id: &str,
         (task_id, map_index): (&TaskId, i32),
         reason: String,
@@ -934,6 +952,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or a database failure.
     pub async fn wait_ended(
         &self,
+        _: &InRound,
         run_id: &str,
         task_id: &TaskId,
         ended: WaitEnd,
@@ -997,6 +1016,7 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or a database failure.
     pub async fn settle(
         &self,
+        _: &InRound,
         run_id: &str,
         now: Timestamp,
     ) -> Result<Option<RunState>, ExecutionError> {

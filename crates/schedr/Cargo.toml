@@ -50,6 +50,7 @@ uuid.workspace = true
 bcrypt.workspace = true
 sqlx.workspace = true
 schedr-tls = { workspace = true, features = ["testing"] }
+schedr-master = { workspace = true, features = ["testing"] }
 http-body-util.workspace = true
 pretty_assertions.workspace = true
 rstest.workspace = true

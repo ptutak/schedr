@@ -49,6 +49,21 @@ Ideas logged for M7, not decided:
   edge of a skipped task passes `None`, so the parse-time check of `None` would have to
   cover it; "mark success" would need an output schedr can't invent), whether a running task
   can be skipped, a mapped task's instances, and the command log recording who and why.
+- **The master off the task path: lookahead and lanes (research)** (the user, 2026-11-18, from
+  M5.2's measurements; journal D505's entry and 2026-11-18's): a slot idles ~350 ms between
+  tasks while the master stores a result and assigns the next, so very short tasks can't reach
+  near what the slots allow. Two ideas that complement each other: **lookahead**, a worker's
+  capacity `slots + depth` (it holds the next ready task and starts it as a slot frees: for many
+  short independent tasks); **lanes**, a chain (one upstream, one downstream each) assigned
+  together to one worker, each next task started with its upstream's output on the worker (for
+  chains; built on lookahead's queue). Each breaks an invariant the master's recovery rests on:
+  "assigned but not started" is brief (lookahead); a task is assigned only after its upstream's
+  result is stored (lanes). So every rule reading those (expiry, take-backs B17/B240, cancels,
+  drains, registration, takeover) is redesigned and tested again, with stress cuts and the clock
+  simulation. Research first: whether real workloads need it (task durations, shapes; scenario 1
+  with twice the slots shows how far plain scaling goes, the master being idle half the time);
+  then a design from the internals (assignment, the worker's slots and `NoFreeSlot`, expiry and
+  take-backs, journal states, limits, cancel/drain, the attempt rows) for the user's decisions.
 - **Human in the loop** (the user, 2026-11-05: built in M7, after 1.0.0; designed, decisions
   283-289, archive/PROJECT.md "Human in the loop"): `approve(...)` and `ask(...)`, a wait step the
   master holds (no worker slot), the answer typed and checked, `Rejected` and `TimedOut`

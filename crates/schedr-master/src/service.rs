@@ -5,7 +5,7 @@
 //! to send (assignments, cancels, acknowledgements) is delivered through it, from a stream's
 //! messages and from the loop's ticks alike.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -130,6 +130,9 @@ pub struct Hub {
     alone_per_turn: usize,
     /// The most a round assigns: its upstream is read before the core lock (M5.2cA).
     assignments_per_round: usize,
+    /// The workers' results (`Finished`, `TaskEnded`, `Rejected`) a turn received, for the next
+    /// round to handle (M5.2cB, decision 505): turns don't move runs forward, rounds do.
+    results: Arc<std::sync::Mutex<Vec<QueuedResult>>>,
     /// The messages that wait for a worker before it is taken for one that stopped reading.
     stream_buffer: usize,
     /// When each worker's latest message arrived (the core's).
@@ -204,6 +207,7 @@ impl Hub {
             messages_per_turn: core.settings().messages_per_turn.max(1),
             alone_per_turn: core.settings().failed_group_messages_per_turn.max(1),
             assignments_per_round: core.assignments_per_round(),
+            results: Arc::default(),
             stream_buffer: core.settings().worker_stream_buffer.max(1),
             timings: core.settings().timings,
             metrics: core.metrics().clone(),
@@ -549,6 +553,10 @@ impl Hub {
                 if part == RoundPart::Commands {
                     self.commands().await?;
                     continue;
+                }
+                if part == RoundPart::Prepare {
+                    // The workers' results first: their runs moved forward here (M5.2cB).
+                    Box::pin(self.round_results((self.clock)())).await?;
                 }
                 let mut outgoing = Vec::new();
                 let now = (self.clock)();
@@ -1054,11 +1062,17 @@ impl Hub {
     async fn handle(
         &self,
         core: &mut MasterCore,
-        worker_id: &str,
+        (worker_id, in_round): (&str, bool),
         message: worker_message::Message,
     ) -> Result<Vec<Outgoing>, CoreError> {
         let worker_message::Message::ApiCall(call) = message else {
-            return core.handle(worker_id, message, (self.clock)()).await;
+            // The round's: what moves runs forward too (M5.2cB).
+            return if in_round {
+                core.handle_in_round(worker_id, message, (self.clock)())
+                    .await
+            } else {
+                core.handle(worker_id, message, (self.clock)()).await
+            };
         };
         match core.plan_api_call(worker_id, call, (self.clock)()).await? {
             ApiCallPlan::Answered(answer) => Ok(vec![*answer]),
@@ -1093,94 +1107,36 @@ impl Hub {
         }
     }
 
-    /// One turn of a worker's messages (M4B.3, decision 397): its `Started`s and `Finished`s as
-    /// one group, stored together, heartbeats and warnings after it; any other message ends the
-    /// group (it is stored first) and is handled alone. A group that fails is redone one by one,
-    /// [`ALONE_PER_TURN`] now and the rest first in the next turn, with what this turn hadn't
-    /// reached. The core's lock is taken for each transaction on its own (the `Started` group,
-    /// the `Finished` group, each message alone) and its stream checked again each time, so
-    /// rounds and other workers' turns get in between (decision 480); what each sends goes out
-    /// at once.
+    /// One turn of a worker's messages: its `Started`s and results queued for the round, which
+    /// handles them (M5.2cB, decision 505); heartbeats and warnings after them, each alone; any
+    /// other message ends the stretch (what came before it queued first) and is handled alone,
+    /// or queued behind the worker's results still waiting ([`Self::alone_served`]). The core's
+    /// lock is taken for each message on its own and the stream checked again each time, so
+    /// rounds and other workers' turns get in between (decision 480).
     async fn turn(
         &self,
         (worker_id, stream): (&str, &Outbound),
-        turn: Vec<Turned>,
-        carried: &mut VecDeque<Turned>,
+        turn: Vec<worker_message::Message>,
     ) -> TurnEnd {
-        let mut group = Group::default();
+        let mut results = Vec::new();
         let mut after = Vec::new();
         let mut messages = turn.into_iter();
-        let mut barrier = None;
         loop {
-            let next = messages.next();
-            match next {
-                Some(Turned::Grouped(worker_message::Message::Started(started))) => {
-                    group.started.push(started);
+            let barrier = match messages.next() {
+                Some(message) if is_result(&message) => {
+                    results.push(message);
                     continue;
                 }
-                Some(Turned::Grouped(worker_message::Message::Finished(finished))) => {
-                    group.finished.push(finished);
-                    continue;
-                }
-                Some(Turned::Grouped(
+                Some(
                     message @ (worker_message::Message::Heartbeat(_)
                     | worker_message::Message::Warnings(_)),
-                )) => {
+                ) => {
                     after.push(message);
                     continue;
                 }
-                Some(Turned::Grouped(message) | Turned::Alone(message)) => barrier = Some(message),
-                None => {}
-            }
-            // The groups so far (`Started`s, then `Finished`s: each kind its own transaction,
-            // decision 397), then what waited for them, then the barrier.
-            let results = Group {
-                started: Vec::new(),
-                finished: std::mem::take(&mut group.finished),
+                other => other,
             };
-            let mut kinds = VecDeque::from([std::mem::take(&mut group), results]);
-            while let Some(kind) = kinds.pop_front() {
-                if kind.is_empty() {
-                    continue;
-                }
-                let wakes = !kind.finished.is_empty();
-                let (part, count) = if kind.started.is_empty() {
-                    ("finished", kind.finished.len())
-                } else {
-                    ("started", kind.started.len())
-                };
-                let Some(mut core) = self.served_core(worker_id, stream).await else {
-                    return TurnEnd::Dropped;
-                };
-                let began = std::time::Instant::now();
-                let handled = core.handle_group(worker_id, kind, (self.clock)()).await;
-                self.metrics.turn_part_done(part, count, began.elapsed());
-                drop(core);
-                match handled {
-                    Ok(out) => self.sent(out, wakes).await,
-                    Err(failed) => {
-                        let mut failed = failed.into_messages().into_iter();
-                        for message in failed.by_ref().take(self.alone_per_turn) {
-                            let (end, _) = self.alone_served(worker_id, stream, message).await;
-                            if !matches!(end, TurnEnd::Goes) {
-                                return end;
-                            }
-                        }
-                        // The rest in order: a `Finished` never stored before its `Started`.
-                        carried.extend(failed.map(Turned::Alone));
-                        carried.extend(
-                            kinds
-                                .into_iter()
-                                .flat_map(Group::into_messages)
-                                .map(Turned::Grouped),
-                        );
-                        carried.extend(after.drain(..).map(Turned::Grouped));
-                        carried.extend(barrier.take().map(Turned::Alone));
-                        carried.extend(messages);
-                        return TurnEnd::Goes;
-                    }
-                }
-            }
+            self.queue_results(worker_id, stream, &mut results);
             let rest = after.len() + usize::from(barrier.is_some());
             let mut held = std::time::Duration::ZERO;
             for message in after.drain(..) {
@@ -1191,7 +1147,7 @@ impl Hub {
                     return end;
                 }
             }
-            let end = match barrier.take() {
+            let end = match barrier {
                 Some(message) => {
                     let (end, took) = self.alone_served(worker_id, stream, message).await;
                     held += took;
@@ -1211,8 +1167,253 @@ impl Hub {
         }
     }
 
-    /// The core, locked, if `stream` still carries its worker's messages (see
-    /// [`Self::still_served`]); none when it doesn't, and the stream is let go.
+    /// A turn's results, queued for the next round, which is woken (M5.2cB, decision 505).
+    fn queue_results(
+        &self,
+        worker_id: &str,
+        stream: &Outbound,
+        results: &mut Vec<worker_message::Message>,
+    ) {
+        if results.is_empty() {
+            return;
+        }
+        self.queued_results()
+            .extend(results.drain(..).map(|message| QueuedResult {
+                worker_id: worker_id.to_owned(),
+                stream: stream.clone(),
+                message: Some(message),
+            }));
+        self.finished.notify_one();
+    }
+
+    fn queued_results(&self) -> std::sync::MutexGuard<'_, Vec<QueuedResult>> {
+        self.results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether `worker_id` has results waiting for the round: its later messages wait behind
+    /// them (M5.2cB), so a `Deregister` never overtakes the `Finished` sent before it. Asked
+    /// under the core's lock, which the round takes the queue under.
+    fn results_waiting(&self, worker_id: &str) -> bool {
+        self.queued_results()
+            .iter()
+            .any(|r| r.worker_id == worker_id)
+    }
+
+    /// The round's results part (M5.2cB, decision 505): the workers' `Started`s and results
+    /// queued since the last round, in the order they arrived. Each run of `Started`s and
+    /// `Finished`s, whatever their worker, is one transaction ([`MasterCore::handle_results`]);
+    /// any other message is handled alone after the ones before it. One from a replaced
+    /// stream, or a worker taken for lost, changes nothing (B44): the worker sends it again.
+    /// What they send goes out after the lock.
+    async fn round_results(&self, now: Timestamp) -> Result<(), CoreError> {
+        if self.queued_results().is_empty() {
+            return Ok(());
+        }
+        // Taken under the lock: a turn finds a worker's results still queued, or handled.
+        let mut core = self.core_for("round").await;
+        let mut queued: VecDeque<QueuedResult> = std::mem::take(&mut *self.queued_results()).into();
+        let began = std::time::Instant::now();
+        let mut handling = Handling {
+            outgoing: Vec::new(),
+            alone_left: self.alone_per_turn,
+            back: Vec::new(),
+            ended: BTreeSet::new(),
+        };
+        let mut batch: Vec<Stretch> = Vec::new();
+        while let Some(QueuedResult {
+            worker_id,
+            stream,
+            message,
+        }) = queued.pop_front()
+        {
+            if !handling.back.is_empty() {
+                handling.back.push(QueuedResult {
+                    worker_id,
+                    stream,
+                    message,
+                });
+                continue;
+            }
+            // A replaced stream's, or a lost worker's, changes nothing (B44); one that has
+            // ended since still counts (it said this before its end). After one of its messages
+            // ended its stream this round, nothing more of the worker's counts.
+            if handling.ended.contains(&worker_id)
+                || !self.queued_served(&core, &worker_id, &stream).await
+            {
+                continue;
+            }
+            match message {
+                // Its stream ended after the rest: the worker disconnected, in order.
+                None => {
+                    let ended = std::mem::take(&mut batch);
+                    Box::pin(self.results_batch(&mut core, ended, now, &mut handling)).await;
+                    if !handling.back.is_empty() {
+                        handling.back.push(QueuedResult {
+                            worker_id,
+                            stream,
+                            message: None,
+                        });
+                    } else if let Err(error) = core.disconnected(&worker_id, now).await {
+                        tracing::error!(worker_id, %error, "worker disconnect not recorded");
+                    }
+                }
+                Some(worker_message::Message::Started(started)) => {
+                    stretch_of(&mut batch, &worker_id, &stream)
+                        .started
+                        .push(started);
+                }
+                Some(worker_message::Message::Finished(finished)) => {
+                    stretch_of(&mut batch, &worker_id, &stream)
+                        .finished
+                        .push(finished);
+                }
+                Some(other) => {
+                    let ended = std::mem::take(&mut batch);
+                    Box::pin(self.results_batch(&mut core, ended, now, &mut handling)).await;
+                    self.result_alone(&mut core, (&worker_id, &stream), other, &mut handling)
+                        .await;
+                }
+            }
+        }
+        Box::pin(self.results_batch(&mut core, batch, now, &mut handling)).await;
+        self.metrics.round_part_done("results", began.elapsed());
+        if !handling.back.is_empty() {
+            // What a failed batch left unhandled: first in the next round, which is woken.
+            let mut queue = self.queued_results();
+            let later = std::mem::take(&mut *queue);
+            queue.extend(handling.back);
+            queue.extend(later);
+            self.finished.notify_one();
+        }
+        drop(core);
+        self.deliver(handling.outgoing).await;
+        Ok(())
+    }
+
+    /// A round's run of `Started`s and `Finished`s in one transaction; failing, each worker's
+    /// stretch as a group, then message by message, at most [`ALONE_PER_TURN`] alone a round
+    /// (by default): the rest go back, for the next round.
+    async fn results_batch(
+        &self,
+        core: &mut MasterCore,
+        batch: Vec<Stretch>,
+        now: Timestamp,
+        handling: &mut Handling,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+        let (streams, groups): (Vec<_>, Vec<_>) = batch
+            .into_iter()
+            .map(|s| ((s.worker_id.clone(), s.stream), (s.worker_id, s.group)))
+            .unzip();
+        let failed = match core.handle_results(groups, now).await {
+            Ok(out) => {
+                handling.outgoing.extend(out);
+                return;
+            }
+            Err(failed) => failed,
+        };
+        for ((worker_id, group), (_, stream)) in failed.into_iter().zip(streams) {
+            if !handling.back.is_empty() {
+                handling.put_back(&worker_id, &stream, group.into_messages());
+                continue;
+            }
+            match core.handle_group(&worker_id, group, now).await {
+                Ok(out) => handling.outgoing.extend(out),
+                Err(group) => {
+                    for message in group.into_messages() {
+                        self.result_alone(core, (&worker_id, &stream), message, handling)
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// One message handled alone in the round, as a turn handles one ([`Self::alone`]): one
+    /// that can't be handled ends its worker's stream, so it registers again (B101). Past the
+    /// round's share of them, or after one put back, it goes back too.
+    async fn result_alone(
+        &self,
+        core: &mut MasterCore,
+        (worker_id, stream): (&str, &Outbound),
+        message: worker_message::Message,
+        handling: &mut Handling,
+    ) {
+        if !handling.back.is_empty() || handling.alone_left == 0 {
+            handling.put_back(worker_id, stream, vec![message]);
+            return;
+        }
+        handling.alone_left -= 1;
+        let mut done = TurnDone::default();
+        if !self
+            .alone(core, (worker_id, true), message, &mut done)
+            .await
+            || done.unhandled
+        {
+            // As a turn's end then: the stream let go and the worker disconnected, so it
+            // registers again; what it queued after this is dropped, and sent again (B101).
+            let mut streams = self.streams.lock().await;
+            if streams
+                .get(worker_id)
+                .is_some_and(|s| s.same_channel(stream))
+            {
+                streams.remove(worker_id);
+            }
+            drop(streams);
+            if let Err(error) = core.disconnected(worker_id, (self.clock)()).await {
+                tracing::error!(worker_id, %error, "worker disconnect not recorded");
+            }
+            handling.ended.insert(worker_id.to_owned());
+        }
+        handling.outgoing.extend(done.outgoing);
+    }
+
+    /// Whether a queued message still counts when the round comes to it (under the core's
+    /// lock): not once a newer stream of its worker is in place (B44), nor once the worker was
+    /// taken for lost (its lease) while it waited, the stream then let go, as a turn would. Its
+    /// stream having ended since is no reason: what it said came before its end, which waits
+    /// behind it (M5.2cB).
+    async fn queued_served(&self, core: &MasterCore, worker_id: &str, stream: &Outbound) -> bool {
+        let mut streams = self.streams.lock().await;
+        let current = streams.get(worker_id);
+        if current.is_some_and(|s| !s.same_channel(stream)) {
+            tracing::warn!(worker_id, "a queued message of a replaced stream dropped");
+            return false;
+        }
+        if !core.is_live(worker_id) {
+            if current.is_some() {
+                streams.remove(worker_id);
+            }
+            tracing::warn!(
+                worker_id,
+                "a queued message of a worker taken for lost dropped"
+            );
+            return false;
+        }
+        true
+    }
+
+    /// A stream's end, under the core's lock: the worker disconnected now, or once the round has
+    /// handled what it queued before its end (M5.2cB), so that, a `Deregister`, still counts.
+    async fn stream_ended(&self, core: &mut MasterCore, worker_id: &str, stream: &Outbound) {
+        if self.results_waiting(worker_id) {
+            self.queued_results().push(QueuedResult {
+                worker_id: worker_id.to_owned(),
+                stream: stream.clone(),
+                message: None,
+            });
+            self.finished.notify_one();
+            return;
+        }
+        if let Err(error) = core.disconnected(worker_id, (self.clock)()).await {
+            tracing::error!(worker_id, %error, "worker disconnect not recorded");
+        }
+    }
+
     async fn served_core(
         &self,
         worker_id: &str,
@@ -1235,9 +1436,21 @@ impl Hub {
         let Some(mut core) = self.served_core(worker_id, stream).await else {
             return (TurnEnd::Dropped, std::time::Duration::ZERO);
         };
+        if self.results_waiting(worker_id)
+            && !matches!(
+                message,
+                worker_message::Message::Heartbeat(_) | worker_message::Message::Warnings(_)
+            )
+        {
+            drop(core);
+            self.queue_results(worker_id, stream, &mut vec![message]);
+            return (TurnEnd::Goes, std::time::Duration::ZERO);
+        }
         let began = std::time::Instant::now();
         let mut done = TurnDone::default();
-        let goes_on = self.alone(&mut core, worker_id, message, &mut done).await;
+        let goes_on = self
+            .alone(&mut core, (worker_id, false), message, &mut done)
+            .await;
         let took = began.elapsed();
         drop(core);
         self.sent(done.outgoing, done.finished).await;
@@ -1262,12 +1475,12 @@ impl Hub {
     async fn alone(
         &self,
         core: &mut MasterCore,
-        worker_id: &str,
+        (worker_id, in_round): (&str, bool),
         message: worker_message::Message,
         done: &mut TurnDone,
     ) -> bool {
         let is_finished = matches!(message, worker_message::Message::Finished(_));
-        match self.handle(core, worker_id, message).await {
+        match self.handle(core, (worker_id, in_round), message).await {
             // A round wakes for a `Finished` recorded, not one dropped or whose handling ended
             // the stream (B191, decision 42).
             Ok(out) => {
@@ -1348,37 +1561,21 @@ impl Hub {
             },
         ));
         let mut closing = self.closing.subscribe();
-        // A failed group's messages not redone in its turn, first in the next (M4B.3).
-        let mut carried: VecDeque<Turned> = VecDeque::new();
         loop {
-            let first = if let Some(first) = carried.pop_front() {
-                // As `next_to_handle`: the master stopping lets the stream go (Grok's review).
-                if !self.leading_unless_closing().await {
+            let first = match self.next_to_handle(&mut queued, &mut closing).await {
+                Next::Message(first) => *first,
+                Next::Ended => break,
+                // The master stopping: this stream's sender let go, its worker not written
+                // as disconnected (the lease is given back), as the master's end.
+                Next::Closing => {
                     reader.abort();
                     return;
-                }
-                first
-            } else {
-                match self.next_to_handle(&mut queued, &mut closing).await {
-                    Next::Message(first) => Turned::Grouped(*first),
-                    Next::Ended => break,
-                    // The master stopping: this stream's sender let go, its worker not written
-                    // as disconnected (the lease is given back), as the master's end.
-                    Next::Closing => {
-                        reader.abort();
-                        return;
-                    }
                 }
             };
             // Everything already queued, up to the turn's limit, in one turn of the lock: one
             // message per turn left a worker's messages behind every round in between (B12).
-            let turn = fill_turn(
-                first,
-                &mut carried,
-                &mut queued,
-                (self.messages_per_turn, self.alone_per_turn),
-            );
-            match self.turn((&worker_id, &stream), turn, &mut carried).await {
+            let turn = fill_turn(first, &mut queued, self.messages_per_turn);
+            match Box::pin(self.turn((&worker_id, &stream), turn)).await {
                 TurnEnd::Goes => {}
                 TurnEnd::Dropped => {
                     reader.abort();
@@ -1408,10 +1605,7 @@ impl Hub {
         }
         streams.remove(&worker_id);
         drop(streams);
-        let now = (self.clock)();
-        if let Err(error) = core.disconnected(&worker_id, now).await {
-            tracing::error!(worker_id, %error, "worker disconnect not recorded");
-        }
+        self.stream_ended(&mut core, &worker_id, &stream).await;
     }
 
     /// Registers a worker on its stream, and serves the stream from then on. Not to be cancelled
@@ -1455,6 +1649,10 @@ impl Hub {
             lock_heard(&self.heard).remove(&register.worker_id);
         }
         let registered = core.register(&register, (self.clock)()).await;
+        if core.dispatcher().takes_back() {
+            // What it never started is the next round's to take back (M5.2cB).
+            self.finished.notify_one();
+        }
         match &registered {
             // Its journal is the whole truth now: what it reports is adopted (started) or
             // ended, and a start known of an attempt it doesn't report (a `Started` that
@@ -1525,6 +1723,9 @@ impl Hub {
         // Each stream's server lets its sender go: a full one ends once its worker read it.
         self.closing.send_replace(true);
         let streams = std::mem::take(&mut *self.streams.lock().await);
+        // What waits for a round holds its stream's sender too: let go, or the stream never
+        // ends (Grok's review of M4B.3); the worker sends it again to the next leader.
+        drop(std::mem::take(&mut *self.queued_results()));
         for stream in streams.into_values() {
             // Full, the worker isn't reading: its stream ends when its other senders go.
             stream.end(Status::unavailable(STOPPING));
@@ -1541,40 +1742,100 @@ impl Hub {
     }
 }
 
-/// What a worker's stream's server does next.
-/// A turn from `first`: the carried messages first, then what is queued, up to `limit`; a
-/// failed group's messages, each alone, at most `alone_limit` ([`ALONE_PER_TURN`] by default;
-/// Grok's review of M4B.3: the carried ones took a whole turn's).
+/// A turn from `first`: what is queued after it, up to `limit`.
 fn fill_turn(
-    first: Turned,
-    carried: &mut VecDeque<Turned>,
+    first: worker_message::Message,
     queued: &mut mpsc::UnboundedReceiver<worker_message::Message>,
-    (limit, alone_limit): (usize, usize),
-) -> Vec<Turned> {
-    let mut alone = usize::from(matches!(first, Turned::Alone(_)));
+    limit: usize,
+) -> Vec<worker_message::Message> {
     let mut turn = vec![first];
     while turn.len() < limit {
-        if alone >= alone_limit && matches!(carried.front(), Some(Turned::Alone(_))) {
-            break;
-        }
-        let Some(next) = carried
-            .pop_front()
-            .or_else(|| queued.try_recv().ok().map(Turned::Grouped))
-        else {
+        let Some(next) = queued.try_recv().ok() else {
             break;
         };
-        alone += usize::from(matches!(next, Turned::Alone(_)));
         turn.push(next);
     }
     turn
 }
 
-/// A message of a turn: grouped with the others like it, or (a failed group's, M4B.3) handled
-/// alone.
+/// A worker's result waiting for the round (M5.2cB), with the stream it came on.
 #[derive(Debug)]
-enum Turned {
-    Grouped(worker_message::Message),
-    Alone(worker_message::Message),
+struct QueuedResult {
+    worker_id: String,
+    stream: Outbound,
+    /// The message; none: its stream's end, which waits behind what it said before.
+    message: Option<worker_message::Message>,
+}
+
+/// A worker's consecutive `Started`s and `Finished`s in a round's batch.
+struct Stretch {
+    worker_id: String,
+    stream: Outbound,
+    group: Group,
+}
+
+/// The group `worker_id`'s next `Started` or `Finished` joins: that worker's in the batch, or
+/// a new one. A batch holds only these, so each worker's keep their order; between workers it
+/// doesn't matter (decision 505).
+fn stretch_of<'a>(
+    batch: &'a mut Vec<Stretch>,
+    worker_id: &str,
+    stream: &Outbound,
+) -> &'a mut Group {
+    let at = batch
+        .iter()
+        .position(|s| s.worker_id == worker_id)
+        .unwrap_or_else(|| {
+            batch.push(Stretch {
+                worker_id: worker_id.to_owned(),
+                stream: stream.clone(),
+                group: Group::default(),
+            });
+            batch.len() - 1
+        });
+    &mut batch[at].group
+}
+
+/// What a round's results part has come to.
+struct Handling {
+    outgoing: Vec<Outgoing>,
+    /// How many more it may handle alone.
+    alone_left: usize,
+    /// What goes back to the queue, for the next round, in order.
+    back: Vec<QueuedResult>,
+    /// The workers whose stream a message ended this round: their later messages are dropped
+    /// (the worker registers again and sends them again), as a turn's were.
+    ended: BTreeSet<String>,
+}
+
+impl Handling {
+    fn put_back(
+        &mut self,
+        worker_id: &str,
+        stream: &Outbound,
+        messages: Vec<worker_message::Message>,
+    ) {
+        self.back
+            .extend(messages.into_iter().map(|message| QueuedResult {
+                worker_id: worker_id.to_owned(),
+                stream: stream.clone(),
+                message: Some(message),
+            }));
+    }
+}
+
+/// A worker's message the round handles, not its turn (M5.2cB, decision 505): what moves an
+/// instance, and so its run, forward; a `Started` with them, which keeps its order; and a
+/// `Deregister`, which ends the worker's open attempts.
+const fn is_result(message: &worker_message::Message) -> bool {
+    matches!(
+        message,
+        worker_message::Message::Started(_)
+            | worker_message::Message::Finished(_)
+            | worker_message::Message::TaskEnded(_)
+            | worker_message::Message::Rejected(_)
+            | worker_message::Message::Deregister(_)
+    )
 }
 
 /// What a turn came to.
@@ -1598,6 +1859,7 @@ enum TurnEnd {
     Unhandled,
 }
 
+/// What a worker's stream's server does next.
 enum Next {
     /// Handles this message (boxed: a message is far larger than the other cases).
     Message(Box<worker_message::Message>),

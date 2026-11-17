@@ -379,17 +379,38 @@ Each is one line; the reader's page has the diagrams.
   stress runs of 10 to 160: steady throughput within noise at every size, a burst of 500 wait-step
   ends recorded fastest from 60 up, and starts slower again from 120. Not chosen: 40 (bursts
   recorded later), 120 or more (slower starts).
-- **The master's core lock is released during database calls** (D501, planned (M5.2cC)): The
-  master's core lock stops covering database calls, as Python's GIL is let go during I/O. Built in
-  three measured parts: the assign part's reads before the lock (M5.2cA); a worker's `Started` and
-  `Finished` groups' reads before it (M5.2cB); then the core's memory (slots, active attempts,
-  connections, the jobs it gave out) behind a lock never held across a database call, each
-  transaction on its own connection and safe by its writes' conditions (a claim only `WHERE state =
-  'queued'`), the memory changed after the commit (a slot reserved before, given back on a
-  rollback); on SQLite, one writer, the serial lock stays (M5.2cC). The target: 160 tasks a second
-  in scenario 1, half of what its slots allow. Not chosen: only the reads before the lock (estimated
-  80 to 120 tasks a second, the writes still serial); the concurrent design at once, without the
-  parts measured between.
+- **The master's core lock is released during database calls** (D501): The master's core lock stops
+  covering database calls, as Python's GIL is let go during I/O. Built in three measured parts: the
+  assign part's reads before the lock (M5.2cA); a worker's `Started` and `Finished` groups' reads
+  before it (M5.2cB); then the core's memory (slots, active attempts, connections, the jobs it gave
+  out) behind a lock never held across a database call, each transaction on its own connection and
+  safe by its writes' conditions (a claim only `WHERE state = 'queued'`), the memory changed after
+  the commit (a slot reserved before, given back on a rollback); on SQLite, one writer, the serial
+  lock stays (M5.2cC). The target: 160 tasks a second in scenario 1, half of what its slots allow.
+  Not chosen: only the reads before the lock (estimated 80 to 120 tasks a second, the writes still
+  serial); the concurrent design at once, without the parts measured between. Since (2026-11-18):
+  the first part built (M5.2cA); the second became decision 505 (only the round moves runs forward),
+  its reads before the lock M5.2cB3; the last, the lock off the writes, deferred (the master idle
+  half the time, throughput bound by a slot's wait, not the lock; M5.2cB4 instead), the target 100
+  tasks a second, 120 very good.
+- **Only the round moves runs forward: turns queue a worker's starts and results for it** (D505): A
+  worker's turn no longer handles what moves an instance, and so its run, forward: its `Started`,
+  `Finished`, `TaskEnded`, `Rejected` and `Deregister` go, with the stream they came on, into a
+  queue the next round handles in its results part (before `Prepare`), woken as a `Finished` woke
+  it. The round checks each as a turn did (a replaced stream's, or a worker taken for lost
+  meanwhile, changes nothing: the worker sends it again), puts each worker's `Started`s and
+  `Finished`s of the whole queue together in one transaction (`Started`s first), handles any other
+  alone, and acknowledges only after its commit; a failed batch is redone worker by worker, then
+  message by message, at most `MASTER__FAILED_GROUP_MESSAGES_PER_TURN` alone a round, the rest first
+  in the next. A worker's later messages wait behind its queued ones (a `Deregister` never overtakes
+  its `Finished`); closing the streams empties the queue (it holds their senders). A registration
+  only finds what its worker never started; the next round's `Prepare` takes it back, read afresh.
+  Every function that changes an instance's or a run's state takes an `InRound`, made only in
+  `core/round.rs`: a writer outside the round doesn't compile. So what the round reads stays true
+  until its writes, whether read under the core lock or before it. Measured in scenario 1 (release):
+  55.7 -> 60.2 tasks a second, the lock held 41.2 -> 30.5 s. Not chosen: reads before the lock
+  guarded by conditions on every write (option A then), a per-run change counter (B), checking every
+  write (C), a registration's results kept in `task_result` (i).
 
 ### From other topics
 
@@ -519,8 +540,10 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/core.rs::DEFAULT_SCRIPT_ROOT_GRACE` (D303)
 - `crates/schedr-master/src/core.rs::USAGE_EVERY` (D463)
 - `crates/schedr-master/src/core.rs::handle_group` (D397)
+- `crates/schedr-master/src/core.rs::handle_results_in` (D505)
 - `crates/schedr-master/src/core.rs::take_back` (D308)
 - `crates/schedr-master/src/core.rs::takeover_wait` (D444)
+- `crates/schedr-master/src/core/round.rs::InRound` (D505)
 - `crates/schedr-master/src/dispatch.rs` (D242, D243, D255, D282)
 - `crates/schedr-master/src/dispatch.rs::NO_CLEANUP_WORKER` (D221)
 - `crates/schedr-master/src/dispatch.rs::RESULT_NOT_STORED` (D115)
@@ -532,6 +555,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/dispatch.rs::finished_group` (D396)
 - `crates/schedr-master/src/dispatch.rs::incarnation_replaced` (D443)
 - `crates/schedr-master/src/dispatch.rs::resume` (D109)
+- `crates/schedr-master/src/dispatch.rs::take_back_found` (D505)
 - `crates/schedr-master/src/dispatch/tests.rs` (D220, D221)
 - `crates/schedr-master/src/execution.rs::attempts_finished` (D396)
 - `crates/schedr-master/src/metrics.rs::stage` (D397)
@@ -539,6 +563,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/service.rs::MESSAGES_PER_TURN` (D484)
 - `crates/schedr-master/src/service.rs::NOT_LEADING` (D297)
 - `crates/schedr-master/src/service.rs::is_current` (D443)
+- `crates/schedr-master/src/service.rs::round_results` (D505)
 - `crates/schedr-master/src/service.rs::stamp_of` (D442)
 - `crates/schedr-master/src/service.rs::turn` (D397, D480)
 - `crates/schedr-master/src/service.rs::with_epoch` (D444)
@@ -561,6 +586,6 @@ None.
 <!-- generated by scripts/records.py: details -->
 Details and edge cases, with the reasons; read them before changing this:
 
-- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453, D455, D468, D480, D483, D484, D495, D497, D501
+- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453, D455, D468, D480, D483, D484, D495, D497, D501, D505
 - archive/PROJECT.md: Cleanup and resources, DAG code delivery, Master–worker protocol, Web UI and CLI, Worker lifecycle, Worker memory protection and crash recovery
 <!-- end of details -->

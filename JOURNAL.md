@@ -1809,3 +1809,60 @@ Measured (scenario 1, quick x2, release): 51.2 -> 55.7 tasks a second; the assig
 time 35.7 -> 13.7 ms a round; the lock held 49.2 -> 41.2 s. A `Finished` group still holds it
 25.5 ms, its run read 0.14 ms of it on the server: a turn's time is its round trips and writes.
 The user, on the review: one at the end of M5.2c ("I mean at the end of M5.2c").
+
+### <a id="D505"></a>2026-11-17: only the round moves runs forward (decision 505, M5.2cB)
+
+Planned as the turns' reads before the core lock, checked by their writes' conditions. Reading a
+run before the lock races: two turns finishing two tasks of one run could each decide from a view
+without the other's end, and nobody ends the run. Options were guards (conditions on every write,
+a change counter per run); the user's design removed the race instead: "can't we just 'notify'
+and do it next round?" A turn queues a worker's `Started`s and results; the round, the one serial
+loop, handles them all, as the only place moving runs. Kept by the worker until acknowledged, a
+result queued in the master's memory risks nothing more than one waiting for a turn did (the
+user asked; (i), keeping it in `task_result`, would have made a state recovery has to learn).
+
+Built in steps, each measured in scenario 1 (release): results in the round, one stretch per run
+of a worker's consecutive messages: 51.1 tasks a second, worse than M5.2cA's 55.7 (2,031 attempt
+reads against 1,285: a batch broke into many small pieces). One stretch per worker: 60.2, the lock
+held 30.5 s (41.2), the results part 108 ms a round. A `Deregister` after a queued `Finished` would
+have overtaken it (the attempt ended `lost`, the task run again): a worker's later messages wait
+behind its queued ones. make check's draining test: a worker's `Deregister`, then its stream's end, was dropped (the
+end, handled at once, made it not live before the round): a stream's end now waits behind its
+queued messages, and the round drops one only for a replaced stream or a lost worker. A side
+agent's note (one effect kept: a worker whose stream drops while its messages wait, reconnecting
+within that round's gap, is refused once as still live and registers again on its next try);
+the queue holds streams' senders, so a master not
+leading would keep them open (Grok's review of M4B.3): closing the streams empties it. A
+registration's take-backs moved to the round (the user: A, not a change counter, which would miss
+writers or cost re-reads); then the user asked for the `InRound` token: the compiler found one more
+writer outside the round, `Deregister` (now queued too); a token made in `core.rs` doesn't compile.
+
+The measurements re-planned the rest: the master is idle half the time; a slot waits ~350 ms from
+its task's end to its next assignment (a round's wait, the gap, the round's parts), so throughput
+is bound by that path, not by the lock. Reads before the lock shorten the lock, not the round: the
+user kept them as the better design (M5.2cB3, with one set of statements per batch). `TriggerEvent`
+to the round became M5.2e (the user): a stress scenario with many DAG triggers first, then a
+turn's trigger messages batched in one transaction, not the round, which would slow events. M5.2cC's re-plan waits for the user.
+
+### 2026-11-18: M5.2's target and the rest of M5.2c re-planned from the measurements
+
+Scenario 1 after M5.2cB: 60.2 tasks a second, the master idle half the time. A slot's cycle is
+~530 ms: ~120 ms of task (`sleep 0.1`, the spawn), 66 ms assigned → started (p50), ~350 ms from its
+result to its next assignment (the wait for a round, the 50 ms gap, the round's parts up to Assign).
+160 a second needs a 200 ms cycle, leaving the master ~15 ms: out of reach while a slot idles as the
+master decides, however fast it gets. Two ideas take the master off that path: lookahead (a worker
+holds the next ready task, `slots + depth`; for many short independent tasks) and lanes (a chain run
+end to end on one worker; for chains): they complement each other, and each breaks an invariant
+recovery rests on ("assigned but not started" is brief; a task is assigned only after its upstream's
+result is stored), more to test than the master today (the user). Both to M7 as research. The
+target (the user): at least 100 a second, 120 very good. M5.2cC became M5.2cB4: the result → next
+assignment path, keeping the invariants (a shorter gap when results wait, a round woken by results,
+prepare's work in the results part); M5.2cB3 (one set of statements a batch, the reads before the
+lock) comes first. The trigger messages became M5.2e: a stress scenario first, then a turn's
+trigger messages batched; not the round, which would slow events (the user). Also from M5.2cB's
+checks: the clock simulation now models the round's queue (the turns queue, the round handles in
+order, a stream's end waits, a dead master's queue is lost); a queued message that can't be handled
+ends the stream and disconnects the worker, as a turn's end did (it registers again); a worker
+refused once as still live reconnects after 200-400 ms (`FIRST_BACKOFF`, doubled), its refused try
+still a sign of life (`arrivals.arrived` before the check). B257 logged (a roles test's restarted
+master finding its kept port taken).

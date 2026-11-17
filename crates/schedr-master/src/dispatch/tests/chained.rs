@@ -4,6 +4,7 @@
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::core::round::InRound;
 use crate::dispatch::chained as kinds;
 use crate::faults::{Scenario, fail_each_write};
 
@@ -78,7 +79,10 @@ async fn chaining(dag: Dag) -> (Dispatcher, Database, String) {
 
 async fn step(dispatcher: &mut Dispatcher, at: Timestamp) -> Vec<Outgoing> {
     let mut out = Vec::new();
-    dispatcher.step_into(at, &mut out).await.unwrap();
+    dispatcher
+        .step_into(&InRound::for_tests(), at, &mut out)
+        .await
+        .unwrap();
     out
 }
 
@@ -284,7 +288,10 @@ async fn cancelling_its_run_cancels_the_run_it_waits_for() {
         };
         let (mut dispatcher, db, run_id) = chaining(chaining_dag(&extra, false, 0)).await;
         step(&mut dispatcher, ts(NOW)).await;
-        dispatcher.cancel_run(&run_id, later(1)).await.unwrap();
+        dispatcher
+            .cancel_run(&InRound::for_tests(), &run_id, later(1))
+            .await
+            .unwrap();
         step(&mut dispatcher, later(2)).await;
         let run = db.run_record(&run_id).await.unwrap().unwrap();
         assert_eq!(run.state, RunState::Cancelled, "wait={wait}");
@@ -308,7 +315,11 @@ async fn cancelling_its_run_cancels_the_run_it_waits_for() {
 async fn a_master_stopped_before_creating_the_run_creates_it_by_its_recorded_id() {
     let (mut dispatcher, db, run_id) = chaining(chaining_dag(&json!({}), false, 0)).await;
     // The round that started the attempt ended there.
-    dispatcher.execution.prepare_runs(ts(NOW)).await.unwrap();
+    dispatcher
+        .execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     let instance = run
         .instances
@@ -604,7 +615,10 @@ async fn extract_gives(dispatcher: &mut Dispatcher, output: &Json) {
         .await
         .unwrap();
     let done = finished(&attempt, pb::AttemptStatus::Success, output);
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     step(dispatcher, later(1)).await;
     step(dispatcher, later(2)).await;
 }
@@ -681,7 +695,10 @@ impl Scenario for Chaining {
         }
     }
     async fn run(&mut self) {
-        let _ = self.dispatcher.step_into(ts(NOW), &mut Vec::new()).await;
+        let _ = self
+            .dispatcher
+            .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
+            .await;
     }
     fn db(&self) -> &Database {
         &self.db
@@ -693,7 +710,10 @@ impl Scenario for Chaining {
         &self.dispatcher
     }
     async fn recover(&mut self) {
-        let _ = self.dispatcher.step_into(later(1), &mut Vec::new()).await;
+        let _ = self
+            .dispatcher
+            .step_into(&InRound::for_tests(), later(1), &mut Vec::new())
+            .await;
     }
     async fn extra(&self) -> Vec<String> {
         let mut found = Vec::new();
@@ -731,7 +751,11 @@ impl Scenario for ChainEnding {
         Self(chaining)
     }
     async fn run(&mut self) {
-        let _ = self.0.dispatcher.step_into(later(2), &mut Vec::new()).await;
+        let _ = self
+            .0
+            .dispatcher
+            .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
+            .await;
     }
     fn db(&self) -> &Database {
         &self.0.db
@@ -743,7 +767,11 @@ impl Scenario for ChainEnding {
         &self.0.dispatcher
     }
     async fn recover(&mut self) {
-        let _ = self.0.dispatcher.step_into(later(3), &mut Vec::new()).await;
+        let _ = self
+            .0
+            .dispatcher
+            .step_into(&InRound::for_tests(), later(3), &mut Vec::new())
+            .await;
     }
     async fn extra(&self) -> Vec<String> {
         let (state, _) = state_of(&self.0.db, &self.0.run_id, "start").await;

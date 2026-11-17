@@ -382,14 +382,22 @@ async fn run_state(db: &Database, dag: &str) -> Option<RunState> {
     runs.first().map(|r| r.state)
 }
 
-/// Asks the agent to stop and waits until it has drained.
+/// Asks the agent to stop and waits until it has drained, the master's rounds going on: they
+/// acknowledge the results it waits on (M5.2cB).
 async fn shut_down(mut world: World) {
     let _ = world.stop.send(1);
-    let agent = std::mem::replace(&mut world.agent, tokio::spawn(async {}));
-    tokio::time::timeout(Duration::from_secs(20), agent)
-        .await
-        .expect("the agent drains")
-        .unwrap();
+    let mut agent = std::mem::replace(&mut world.agent, tokio::spawn(async {}));
+    let drained = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            tokio::select! {
+                done = &mut agent => break done,
+                () = tokio::time::sleep(Duration::from_millis(20)) => {
+                    world.hub.tick().await.unwrap();
+                }
+            }
+        }
+    });
+    drained.await.expect("the agent drains").unwrap();
 }
 
 #[tokio::test]

@@ -6,6 +6,7 @@ use serde_json::Value as Json;
 use sqlx::AssertSqlSafe;
 
 use super::*;
+use crate::core::round::InRound;
 use crate::dispatch::DEFAULT_CANCEL_GRACE;
 
 mod backfill;
@@ -101,7 +102,12 @@ impl World {
 
     async fn apply(&mut self) -> Applied {
         self.commander
-            .apply_pending(&self.scheduler, &mut self.dispatcher, ts(NOW))
+            .apply_pending(
+                &InRound::for_tests(),
+                &self.scheduler,
+                &mut self.dispatcher,
+                ts(NOW),
+            )
             .await
             .unwrap()
     }
@@ -285,7 +291,11 @@ async fn cancelling_a_running_run_stops_its_attempts_and_a_finished_one_is_rejec
         .as_str()
         .unwrap()
         .to_owned();
-    let assigned = world.dispatcher.step(ts(NOW)).await.unwrap();
+    let assigned = world
+        .dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let Some(pb::master_message::Message::AssignTask(assign)) = &assigned[0].message.message else {
         panic!("expected AssignTask")
     };
@@ -320,7 +330,7 @@ async fn cancelling_a_running_run_stops_its_attempts_and_a_finished_one_is_rejec
     };
     world
         .dispatcher
-        .finished("w1", &finished, ts(NOW))
+        .finished(&InRound::for_tests(), "w1", &finished, ts(NOW))
         .await
         .unwrap();
     world
@@ -406,6 +416,7 @@ async fn a_payload_that_doesnt_read_is_rejected() {
 #[tokio::test]
 async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
     let mut world = world().await;
+    let round = InRound::for_tests();
     let extract = TaskId::new("extract").unwrap();
     let ghost = TaskId::new("ghost").unwrap();
     let unknown_run = "0190a3e5-0000-7000-8000-000000000000".to_owned();
@@ -456,7 +467,7 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
         ]
     );
 
-    world.dispatcher.step(ts(NOW)).await.unwrap();
+    world.dispatcher.step(&round, ts(NOW)).await.unwrap();
     world.ask(&retry(&extract)).await;
     world.ask(&cancel(&extract)).await;
     let applied = world.apply().await;
@@ -490,7 +501,7 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
     };
     world
         .dispatcher
-        .rejected("w1", &busy, ts(NOW))
+        .rejected(&round, "w1", &busy, ts(NOW))
         .await
         .unwrap();
     world.ask(&cancel(&extract)).await;
@@ -523,7 +534,11 @@ async fn a_database_failure_leaves_a_task_command_pending() {
         .as_str()
         .unwrap()
         .to_owned();
-    world.dispatcher.step(ts(NOW)).await.unwrap();
+    world
+        .dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let schedr_db::database::Pool::Sqlite(pool) = world.db.pool() else {
         panic!("expected SQLite")
     };
@@ -542,7 +557,12 @@ async fn a_database_failure_leaves_a_task_command_pending() {
         .await;
     let applied = world
         .commander
-        .apply_pending(&world.scheduler, &mut world.dispatcher, ts(NOW))
+        .apply_pending(
+            &InRound::for_tests(),
+            &world.scheduler,
+            &mut world.dispatcher,
+            ts(NOW),
+        )
         .await;
     assert!(applied.is_err(), "{applied:?}");
     assert_eq!(world.db.pending_commands(100).await.unwrap().len(), 1);
@@ -629,6 +649,7 @@ async fn applying_into_adds_to_what_was_applied_before() {
     world
         .commander
         .apply_into(
+            &InRound::for_tests(),
             &world.scheduler,
             &mut world.dispatcher,
             &mut applied,
@@ -1132,6 +1153,7 @@ async fn failing_at_each_write(
         let result = world
             .commander
             .apply_into(
+                &InRound::for_tests(),
                 &world.scheduler,
                 &mut world.dispatcher,
                 &mut applied,
@@ -1198,7 +1220,11 @@ async fn a_cancel_whose_transaction_fails_at_any_write_sends_nothing_and_keeps_i
         .as_str()
         .unwrap()
         .to_owned();
-    let assigned = world.dispatcher.step(ts(NOW)).await.unwrap();
+    let assigned = world
+        .dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let Some(pb::master_message::Message::AssignTask(assign)) = &assigned[0].message.message else {
         panic!("expected AssignTask")
     };
@@ -1256,6 +1282,7 @@ async fn a_command_whose_commit_answer_is_lost_runs_once_whether_it_landed_or_no
         let first = world
             .commander
             .apply_into(
+                &InRound::for_tests(),
                 &world.scheduler,
                 &mut world.dispatcher,
                 &mut applied,
@@ -1297,6 +1324,7 @@ async fn applied_losing_commit(world: &mut World, landed: bool) -> (Applied, boo
     let failed = world
         .commander
         .apply_into(
+            &InRound::for_tests(),
             &world.scheduler,
             &mut world.dispatcher,
             &mut applied,
@@ -1328,7 +1356,11 @@ async fn a_cancel_whose_commit_answer_is_lost_is_sent_only_if_it_landed() {
             .as_str()
             .unwrap()
             .to_owned();
-        let assigned = world.dispatcher.step(ts(NOW)).await.unwrap();
+        let assigned = world
+            .dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         let Some(pb::master_message::Message::AssignTask(assign)) = &assigned[0].message.message
         else {
             panic!("expected AssignTask")

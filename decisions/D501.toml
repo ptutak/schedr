@@ -13,7 +13,11 @@ writes' conditions (a claim only `WHERE state = 'queued'`), the memory changed a
 commit (a slot reserved before, given back on a rollback); on SQLite, one writer, the serial lock
 stays (M5.2cC). The target: 160 tasks a second in scenario 1, half of what its slots allow.
 Not chosen: only the reads before the lock (estimated 80 to 120 tasks a second, the writes still
-serial); the concurrent design at once, without the parts measured between.
+serial); the concurrent design at once, without the parts measured between. Since (2026-11-18):
+the first part built (M5.2cA); the second became decision 505 (only the round moves runs
+forward), its reads before the lock M5.2cB3; the last, the lock off the writes, deferred (the
+master idle half the time, throughput bound by a slot's wait, not the lock; M5.2cB4 instead),
+the target 100 tasks a second, 120 very good.
 '''
 history = "JOURNAL.md#D501"
-step = "M5.2cC"
+step = "M5.2cA"

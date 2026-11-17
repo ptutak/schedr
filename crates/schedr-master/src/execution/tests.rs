@@ -5,6 +5,7 @@ use schedr_model::{Dag, DagId, RunKind};
 use serde_json::{Value as Json, json};
 
 use super::*;
+use crate::core::round::InRound;
 use TaskInstanceState as S;
 
 fn ts(text: &str) -> Timestamp {
@@ -146,7 +147,10 @@ async fn run_state(db: &Database, run_id: &str) -> RunState {
 async fn a_new_run_gets_its_instances_once() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
     assert_eq!(
-        execution.prepare_runs(ts(NOW)).await.unwrap(),
+        execution
+            .prepare_runs(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
         std::slice::from_ref(&run_id)
     );
     assert_eq!(
@@ -158,7 +162,10 @@ async fn a_new_run_gets_its_instances_once() {
         ])
     );
     assert_eq!(
-        execution.prepare_runs(ts(NOW)).await.unwrap(),
+        execution
+            .prepare_runs(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
         Vec::<String>::new()
     );
 }
@@ -169,7 +176,10 @@ async fn a_run_of_empty_tasks_finishes_when_prepared() {
     let (mut execution, db, run_id) = with_run(only_empty, RunState::Running).await;
     let wakes = crate::quiet::Wakes::default();
     execution.set_wakes(wakes.clone());
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(run_state(&db, &run_id).await, RunState::Success);
     // Its DAG woken, as any finished run's: a queued run may take its place.
     let woken: Vec<(String, crate::quiet::WakeReason)> = wakes
@@ -186,14 +196,24 @@ async fn a_run_of_empty_tasks_finishes_when_prepared() {
 #[tokio::test]
 async fn successes_move_the_run_forward_and_finish_it() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     let result = AttemptResult {
         output: Some(json!({"rows": 3})),
         ..ended(AttemptStatus::Success)
     };
     let recorded = execution
-        .attempt_finished(&run_id, &id("extract"), -1, &result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("extract"),
+            -1,
+            &result,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -222,6 +242,7 @@ async fn successes_move_the_run_forward_and_finish_it() {
     start(&db, &run_id, "load").await;
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("load"),
             -1,
@@ -237,10 +258,14 @@ async fn successes_move_the_run_forward_and_finish_it() {
 #[tokio::test]
 async fn a_failure_with_retries_left_waits_then_queues_again() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -252,14 +277,14 @@ async fn a_failure_with_retries_left_waits_then_queues_again() {
     assert_eq!(recorded.state, Some(S::UpForRetry));
     assert_eq!(
         execution
-            .queue_due_retries(ts("2026-10-21T08:00:59Z"))
+            .queue_due_retries(&InRound::for_tests(), ts("2026-10-21T08:00:59Z"))
             .await
             .unwrap(),
         0
     );
     assert_eq!(
         execution
-            .queue_due_retries(ts("2026-10-21T08:01:00Z"))
+            .queue_due_retries(&InRound::for_tests(), ts("2026-10-21T08:01:00Z"))
             .await
             .unwrap(),
         1
@@ -272,6 +297,7 @@ async fn a_failure_with_retries_left_waits_then_queues_again() {
     start(&db, &run_id, "extract").await;
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -297,10 +323,14 @@ async fn a_failure_with_retries_left_waits_then_queues_again() {
 #[tokio::test]
 async fn an_interrupted_attempt_runs_again_without_a_retry() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -317,15 +347,32 @@ async fn an_interrupted_attempt_runs_again_without_a_retry() {
 #[tokio::test]
 async fn a_repeated_result_is_ignored() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     let success = ended(AttemptStatus::Success);
     execution
-        .attempt_finished(&run_id, &id("extract"), -1, &success, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("extract"),
+            -1,
+            &success,
+            ts(NOW),
+        )
         .await
         .unwrap();
     let again = execution
-        .attempt_finished(&run_id, &id("extract"), -1, &success, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("extract"),
+            -1,
+            &success,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -341,9 +388,13 @@ async fn a_repeated_result_is_ignored() {
 #[tokio::test]
 async fn unknown_runs_and_tasks_are_errors() {
     let (execution, _db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let error = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("ghost"),
             -1,
@@ -357,14 +408,20 @@ async fn unknown_runs_and_tasks_are_errors() {
         format!("run `{run_id}` has no task `ghost`")
     );
     let missing = "0190a3e5-0000-7000-8000-000000000000";
-    let error = execution.cancel_run(missing, ts(NOW)).await.unwrap_err();
+    let error = execution
+        .cancel_run(&InRound::for_tests(), missing, ts(NOW))
+        .await
+        .unwrap_err();
     assert_eq!(error.to_string(), format!("no run `{missing}`"));
 }
 
 #[tokio::test]
 async fn cancelling_a_queued_run_ends_it_at_once() {
     let (execution, db, run_id) = with_run(chain(), RunState::Queued).await;
-    let cancelled = execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let cancelled = execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         cancelled,
         Cancelled {
@@ -373,7 +430,10 @@ async fn cancelling_a_queued_run_ends_it_at_once() {
         }
     );
     assert_eq!(run_state(&db, &run_id).await, RunState::Cancelled);
-    let again = execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let again = execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         again,
         Cancelled {
@@ -386,9 +446,15 @@ async fn cancelling_a_queued_run_ends_it_at_once() {
 #[tokio::test]
 async fn cancelling_a_running_run_stops_the_rest_and_its_attempts_decide_the_result() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
-    let cancelled = execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let cancelled = execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         cancelled,
         Cancelled {
@@ -407,6 +473,7 @@ async fn cancelling_a_running_run_stops_the_rest_and_its_attempts_decide_the_res
     // The attempt failed before the cancel reached it: a failure isn't retried, and counts.
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -428,11 +495,18 @@ async fn cancelling_a_running_run_stops_the_rest_and_its_attempts_decide_the_res
 #[tokio::test]
 async fn a_cancelled_attempt_ends_the_run_cancelled() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
-    execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -447,8 +521,14 @@ async fn a_cancelled_attempt_ends_the_run_cancelled() {
 #[tokio::test]
 async fn cancelling_when_nothing_runs_finishes_the_run() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
-    let cancelled = execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    let cancelled = execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(cancelled.run_result, Some(RunState::Cancelled));
     assert_eq!(run_state(&db, &run_id).await, RunState::Cancelled);
 }
@@ -458,16 +538,29 @@ async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
     assert_eq!(
         execution
-            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskCancel::RunQueued,
         "no instances yet"
     );
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         execution
-            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskCancel::Cancelled(Some(RunState::Cancelled))
@@ -482,7 +575,12 @@ async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
     );
     assert_eq!(
         execution
-            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskCancel::RunFinished(RunState::Cancelled)
@@ -492,10 +590,18 @@ async fn a_task_that_hasnt_started_is_cancelled_with_its_downstream() {
 #[tokio::test]
 async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         execution
-            .cancel_task(&run_id, (&id("start"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("start"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskCancel::AlreadyFinished(S::Success)
@@ -503,7 +609,12 @@ async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
     start(&db, &run_id, "extract").await;
     assert_eq!(
         execution
-            .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskCancel::Stopping
@@ -512,6 +623,7 @@ async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
     // An expired assignment would run it again; being cancelled, it is cancelled instead.
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -535,14 +647,23 @@ async fn a_running_task_is_stopped_and_ends_cancelled_whatever_ends_it() {
 #[tokio::test]
 async fn a_failure_of_a_task_being_cancelled_isnt_retried() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     execution
-        .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+        .cancel_task(
+            &InRound::for_tests(),
+            &run_id,
+            (&id("extract"), None),
+            ts(NOW),
+        )
         .await
         .unwrap();
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -559,17 +680,37 @@ async fn cancelling_an_unknown_task_is_an_error_and_settling_a_finished_run_does
     let (execution, _db, run_id) = with_run(chain(), RunState::Running).await;
     assert!(matches!(
         execution
-            .cancel_task(&run_id, (&id("ghost"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("ghost"), None),
+                ts(NOW)
+            )
             .await,
         Err(ExecutionError::UnknownTask { .. })
     ));
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
-    assert_eq!(execution.settle(&run_id, ts(NOW)).await.unwrap(), None);
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        execution
+            .settle(&InRound::for_tests(), &run_id, ts(NOW))
+            .await
+            .unwrap(),
+        None
+    );
     db.finish_run(&run_id, RunState::Failed, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(execution.settle(&run_id, ts(NOW)).await.unwrap(), None);
+    assert_eq!(
+        execution
+            .settle(&InRound::for_tests(), &run_id, ts(NOW))
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 /// A DAG of `count` independent Python tasks.
@@ -607,9 +748,15 @@ async fn a_round_creates_at_most_so_many_instances_a_run_whole() {
         .unwrap()
         .unwrap();
     // Two runs would be over the cap: one this round (never split), the other next.
-    let prepared = execution.prepare_runs(ts(NOW)).await.unwrap();
+    let prepared = execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(prepared.len(), 1);
-    let next = execution.prepare_runs(ts(NOW)).await.unwrap();
+    let next = execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(next.len(), 1);
     assert_ne!(prepared, next);
     for run in [&first, &second] {
@@ -621,7 +768,10 @@ async fn a_round_creates_at_most_so_many_instances_a_run_whole() {
 async fn a_round_queues_at_most_so_many_retries_the_rest_in_the_next() {
     let count = RETRIES_PER_ROUND + 5;
     let (execution, db, run_id) = with_run(wide(count), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let waiting: Vec<InstanceUpdate> = (0..count)
         .map(|i| InstanceUpdate {
             ready_at: Some(ts(NOW)),
@@ -632,10 +782,19 @@ async fn a_round_queues_at_most_so_many_retries_the_rest_in_the_next() {
         .await
         .unwrap();
     assert_eq!(
-        execution.queue_due_retries(ts(NOW)).await.unwrap(),
+        execution
+            .queue_due_retries(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
         RETRIES_PER_ROUND
     );
-    assert_eq!(execution.queue_due_retries(ts(NOW)).await.unwrap(), 5);
+    assert_eq!(
+        execution
+            .queue_due_retries(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        5
+    );
 }
 
 #[tokio::test]
@@ -654,7 +813,10 @@ async fn a_reported_outcome_is_stored_and_routes_the_run() {
         ]),
     );
     let (execution, db, run_id) = with_run(routed, RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "fetch").await;
     let result = AttemptResult {
         output: Some(json!({"reason": "down"})),
@@ -662,7 +824,14 @@ async fn a_reported_outcome_is_stored_and_routes_the_run() {
         ..ended(AttemptStatus::Success)
     };
     execution
-        .attempt_finished(&run_id, &id("fetch"), -1, &result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("fetch"),
+            -1,
+            &result,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -706,14 +875,24 @@ async fn a_branchs_stored_choice_routes_the_run() {
         ]),
     );
     let (execution, db, run_id) = with_run(branched, RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "pick").await;
     let result = AttemptResult {
         output: Some(json!(["b"])),
         ..ended(AttemptStatus::Success)
     };
     execution
-        .attempt_finished(&run_id, &id("pick"), -1, &result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("pick"),
+            -1,
+            &result,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -787,10 +966,14 @@ async fn rows(db: &Database, run_id: &str) -> Vec<(String, i32, TaskInstanceStat
 async fn a_mapped_task_expands_over_an_output_and_its_instances_get_their_elements() {
     let dag = mapped();
     let (execution, db, run_id) = with_run(dag.clone(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("files"),
             -1,
@@ -830,7 +1013,14 @@ async fn a_mapped_task_expands_over_an_output_and_its_instances_get_their_elemen
     // `load[1]` succeeds: `check[1]` is queued with that output as its element.
     start_instance(&db, &run_id, "load", 1).await;
     execution
-        .attempt_finished(&run_id, &id("load"), 1, &with_output(json!(7)), ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("load"),
+            1,
+            &with_output(json!(7)),
+            ts(NOW),
+        )
         .await
         .unwrap();
     let check = dag.task(&id("check")).unwrap();
@@ -846,6 +1036,7 @@ async fn a_mapped_task_expands_over_an_output_and_its_instances_get_their_elemen
     start_instance(&db, &run_id, "load", 0).await;
     let failed = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("load"),
             0,
@@ -886,10 +1077,20 @@ async fn a_mapped_task_that_cant_expand_fails_with_its_reason() {
     ] {
         let (mut execution, db, run_id) = with_run(mapped(), RunState::Running).await;
         execution.set_max_instances(max);
-        execution.prepare_runs(ts(NOW)).await.unwrap();
+        execution
+            .prepare_runs(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         start_instance(&db, &run_id, "files", -1).await;
         execution
-            .attempt_finished(&run_id, &id("files"), -1, &with_output(output), ts(NOW))
+            .attempt_finished(
+                &InRound::for_tests(),
+                &run_id,
+                &id("files"),
+                -1,
+                &with_output(output),
+                ts(NOW),
+            )
             .await
             .unwrap();
         let run = db.run_tasks(&run_id).await.unwrap().unwrap();
@@ -909,10 +1110,14 @@ async fn a_mapped_task_that_cant_expand_fails_with_its_reason() {
 #[tokio::test]
 async fn cancelling_a_run_cancels_its_instances_and_stops_the_running_ones() {
     let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("files"),
             -1,
@@ -922,12 +1127,16 @@ async fn cancelling_a_run_cancels_its_instances_and_stops_the_running_ones() {
         .await
         .unwrap();
     start_instance(&db, &run_id, "load", 0).await;
-    let cancelled = execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let cancelled = execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(cancelled.running, [(id("load"), 0)]);
     assert_eq!(cancelled.run_result, None);
     // The stopped instance reports: `load` and the run end cancelled.
     let ended = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("load"),
             0,
@@ -944,11 +1153,21 @@ async fn cancelling_a_run_cancels_its_instances_and_stops_the_running_ones() {
 #[tokio::test]
 async fn one_instance_is_cancelled_and_the_mapped_task_ends_cancelled_after_the_others() {
     let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     let files = with_output(json!(["a", "b"]));
     execution
-        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("files"),
+            -1,
+            &files,
+            ts(NOW),
+        )
         .await
         .unwrap();
     start_instance(&db, &run_id, "load", 0).await;
@@ -956,7 +1175,7 @@ async fn one_instance_is_cancelled_and_the_mapped_task_ends_cancelled_after_the_
     let running = (&id("load"), Some(0));
     assert_eq!(
         execution
-            .cancel_task(&run_id, running, ts(NOW))
+            .cancel_task(&InRound::for_tests(), &run_id, running, ts(NOW))
             .await
             .unwrap(),
         TaskCancel::Stopping
@@ -964,13 +1183,18 @@ async fn one_instance_is_cancelled_and_the_mapped_task_ends_cancelled_after_the_
     let queued = (&id("load"), Some(1));
     assert_eq!(
         execution
-            .cancel_task(&run_id, queued, ts(NOW))
+            .cancel_task(&InRound::for_tests(), &run_id, queued, ts(NOW))
             .await
             .unwrap(),
         TaskCancel::Cancelled(None)
     );
     let unknown = execution
-        .cancel_task(&run_id, (&id("load"), Some(7)), ts(NOW))
+        .cancel_task(
+            &InRound::for_tests(),
+            &run_id,
+            (&id("load"), Some(7)),
+            ts(NOW),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -983,7 +1207,14 @@ async fn one_instance_is_cancelled_and_the_mapped_task_ends_cancelled_after_the_
     // `load` waits for its stopped instance, then ends cancelled, as the run does.
     let stopped = ended(AttemptStatus::Cancelled);
     let finished = execution
-        .attempt_finished(&run_id, &id("load"), 0, &stopped, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("load"),
+            0,
+            &stopped,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(finished.run_result, Some(RunState::Cancelled));
@@ -1003,7 +1234,10 @@ async fn sqlite(db: &Database, sql: &str) {
 #[tokio::test]
 async fn an_expansion_is_stored_whole_or_not_at_all() {
     let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     let before = rows(&db, &run_id).await;
     // The instances are created, then the whole task's row is marked: that second write fails.
@@ -1016,14 +1250,28 @@ async fn an_expansion_is_stored_whole_or_not_at_all() {
     .await;
     let files = with_output(json!(["a.csv", "b.csv"]));
     execution
-        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("files"),
+            -1,
+            &files,
+            ts(NOW),
+        )
         .await
         .unwrap_err();
     assert_eq!(rows(&db, &run_id).await, before);
     // Once the write works, the result arrives again and expands `load` as usual.
     sqlite(&db, "DROP TRIGGER refuse_mark").await;
     execution
-        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("files"),
+            -1,
+            &files,
+            ts(NOW),
+        )
         .await
         .unwrap();
     let load: Vec<_> = rows(&db, &run_id)
@@ -1038,11 +1286,21 @@ async fn an_expansion_is_stored_whole_or_not_at_all() {
 #[tokio::test]
 async fn instances_that_exist_are_never_expanded_again() {
     let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     let files = with_output(json!(["a.csv", "b.csv"]));
     execution
-        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("files"),
+            -1,
+            &files,
+            ts(NOW),
+        )
         .await
         .unwrap();
     start_instance(&db, &run_id, "load", 0).await;
@@ -1055,7 +1313,10 @@ async fn instances_that_exist_are_never_expanded_again() {
     db.update_instances(&run_id, &[unmarked], ts(NOW))
         .await
         .unwrap();
-    execution.settle(&run_id, ts(NOW)).await.unwrap();
+    execution
+        .settle(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     let load: Vec<_> = rows(&db, &run_id)
         .await
         .into_iter()
@@ -1068,11 +1329,21 @@ async fn instances_that_exist_are_never_expanded_again() {
 #[tokio::test]
 async fn a_result_after_its_mapped_task_failed_is_ignored() {
     let (execution, db, run_id) = with_run(mapped(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     let files = with_output(json!(["a.csv", "b.csv"]));
     execution
-        .attempt_finished(&run_id, &id("files"), -1, &files, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("files"),
+            -1,
+            &files,
+            ts(NOW),
+        )
         .await
         .unwrap();
     start_instance(&db, &run_id, "load", 0).await;
@@ -1080,6 +1351,7 @@ async fn a_result_after_its_mapped_task_failed_is_ignored() {
     // Instance 0 fails: the step fails at once and instance 1 is stopped (decision 75a).
     let failed = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("load"),
             0,
@@ -1091,7 +1363,14 @@ async fn a_result_after_its_mapped_task_failed_is_ignored() {
     assert_eq!(failed.stops, [(id("load"), 1)]);
     // Its success arrives before the stop does: ignored, the instance ends cancelled.
     let late = execution
-        .attempt_finished(&run_id, &id("load"), 1, &with_output(json!(7)), ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("load"),
+            1,
+            &with_output(json!(7)),
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(late.state, Some(S::Cancelled));
@@ -1137,10 +1416,14 @@ async fn an_expansion_over_an_instance_that_just_finished_sees_its_output() {
         ]),
     );
     let (execution, db, run_id) = with_run(dag, RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("files"),
             -1,
@@ -1153,7 +1436,14 @@ async fn an_expansion_over_an_instance_that_just_finished_sees_its_output() {
         start_instance(&db, &run_id, "load", index).await;
         let output = json!([10 * (index + 1), 20 * (index + 1)]);
         execution
-            .attempt_finished(&run_id, &id("load"), index, &with_output(output), ts(NOW))
+            .attempt_finished(
+                &InRound::for_tests(),
+                &run_id,
+                &id("load"),
+                index,
+                &with_output(output),
+                ts(NOW),
+            )
             .await
             .unwrap();
     }
@@ -1180,14 +1470,24 @@ async fn an_expansion_narrowed_to_an_outcome_sees_the_outcome_just_reported() {
     }
     let dag: Dag = serde_json::from_value(dag_json).unwrap();
     let (execution, db, run_id) = with_run(dag, RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start_instance(&db, &run_id, "files", -1).await;
     let result = AttemptResult {
         outcome: Some("EMPTY".to_owned()),
         ..with_output(json!(["a.csv", "b.csv"]))
     };
     execution
-        .attempt_finished(&run_id, &id("files"), -1, &result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("files"),
+            -1,
+            &result,
+            ts(NOW),
+        )
         .await
         .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
@@ -1214,7 +1514,14 @@ fn cleaned(status: AttemptStatus, cleanup: CleanupResult) -> AttemptResult {
 
 async fn finish(execution: &Execution, run_id: &str, name: &str, result: &AttemptResult) {
     execution
-        .attempt_finished(run_id, &id(name), -1, result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            run_id,
+            &id(name),
+            -1,
+            result,
+            ts(NOW),
+        )
         .await
         .unwrap();
 }
@@ -1222,10 +1529,13 @@ async fn finish(execution: &Execution, run_id: &str, name: &str, result: &Attemp
 #[tokio::test]
 async fn a_task_in_its_cleanup_is_cleaning_up_until_it_finishes() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     execution
-        .cleaning_up(&run_id, &id("extract"), -1, ts(NOW))
+        .cleaning_up(&InRound::for_tests(), &run_id, &id("extract"), -1, ts(NOW))
         .await
         .unwrap();
     assert!(
@@ -1245,7 +1555,10 @@ async fn a_task_in_its_cleanup_is_cleaning_up_until_it_finishes() {
 #[tokio::test]
 async fn a_failed_cleanup_fails_the_run_though_every_task_succeeded() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     let failed = cleaned(AttemptStatus::Success, CleanupResult::Failed);
     finish(&execution, &run_id, "extract", &failed).await;
@@ -1257,7 +1570,10 @@ async fn a_failed_cleanup_fails_the_run_though_every_task_succeeded() {
 #[tokio::test]
 async fn a_failed_cleanup_stays_after_a_retry_whose_cleanup_worked() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     let first = cleaned(AttemptStatus::Failed, CleanupResult::Failed);
     finish(&execution, &run_id, "extract", &first).await;
@@ -1332,21 +1648,31 @@ async fn first_output(db: &Database, run_id: &str) -> Json {
 #[tokio::test]
 async fn a_first_of_ends_with_the_first_task_taken_and_the_others_run_on() {
     let (execution, db, run_id) = with_run(first_of_dag(None), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c"] {
         start(&db, &run_id, name).await;
     }
     // On an outcome its edge isn't taken on: it doesn't count.
     let other = succeeded_with(json!("other"), "Other");
     execution
-        .attempt_finished(&run_id, &id("a"), -1, &other, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("a"),
+            -1,
+            &other,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(state_of(&db, &run_id, "first").await, S::Scheduled);
 
     let won = succeeded_with(json!("b's"), "Rows");
     execution
-        .attempt_finished(&run_id, &id("b"), -1, &won, ts(NOW))
+        .attempt_finished(&InRound::for_tests(), &run_id, &id("b"), -1, &won, ts(NOW))
         .await
         .unwrap();
     assert_eq!(state_of(&db, &run_id, "first").await, S::Success);
@@ -1376,6 +1702,7 @@ async fn a_first_of_ends_with_the_first_task_taken_and_the_others_run_on() {
     start(&db, &run_id, "after").await;
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("after"),
             -1,
@@ -1387,6 +1714,7 @@ async fn a_first_of_ends_with_the_first_task_taken_and_the_others_run_on() {
     assert_eq!(run_state(&db, &run_id).await, RunState::Running);
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("c"),
             -1,
@@ -1403,13 +1731,17 @@ async fn a_first_of_ends_with_the_first_task_taken_and_the_others_run_on() {
 #[tokio::test]
 async fn at_least_ends_with_its_count_in_the_order_they_ended() {
     let (execution, db, run_id) = with_run(first_of_dag(Some(2)), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c"] {
         start(&db, &run_id, name).await;
     }
     let result = |value: &str| succeeded_with(json!(value), "SUCCESS");
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("c"),
             -1,
@@ -1421,6 +1753,7 @@ async fn at_least_ends_with_its_count_in_the_order_they_ended() {
     assert_eq!(state_of(&db, &run_id, "first").await, S::Scheduled);
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("b"),
             -1,
@@ -1439,14 +1772,24 @@ async fn at_least_ends_with_its_count_in_the_order_they_ended() {
 #[tokio::test]
 async fn a_first_of_none_can_make_ends_as_what_stopped_them() {
     let (execution, db, run_id) = with_run(first_of_dag(None), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c"] {
         start(&db, &run_id, name).await;
     }
     let failed = ended(AttemptStatus::Failed);
     for name in ["a", "b"] {
         execution
-            .attempt_finished(&run_id, &id(name), -1, &failed, ts(NOW))
+            .attempt_finished(
+                &InRound::for_tests(),
+                &run_id,
+                &id(name),
+                -1,
+                &failed,
+                ts(NOW),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1456,7 +1799,14 @@ async fn a_first_of_none_can_make_ends_as_what_stopped_them() {
         );
     }
     execution
-        .attempt_finished(&run_id, &id("c"), -1, &failed, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("c"),
+            -1,
+            &failed,
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(state_of(&db, &run_id, "first").await, S::UpstreamFailed);
@@ -1477,7 +1827,10 @@ async fn a_first_of_held_back_chooses_by_when_they_ended_not_by_its_edges() {
         .unwrap()
         .push(task("gate", "python", 0));
     let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c", "gate"] {
         start(&db, &run_id, name).await;
     }
@@ -1488,7 +1841,14 @@ async fn a_first_of_held_back_chooses_by_when_they_ended_not_by_its_edges() {
     ] {
         let result = succeeded_with(json!(name), "SUCCESS");
         execution
-            .attempt_finished(&run_id, &id(name), -1, &result, ts(at))
+            .attempt_finished(
+                &InRound::for_tests(),
+                &run_id,
+                &id(name),
+                -1,
+                &result,
+                ts(at),
+            )
             .await
             .unwrap();
     }
@@ -1499,6 +1859,7 @@ async fn a_first_of_held_back_chooses_by_when_they_ended_not_by_its_edges() {
     );
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("gate"),
             -1,
@@ -1542,7 +1903,7 @@ async fn finish_together(execution: &Execution, run_id: &str, names: &[&str]) {
         .map(|(id, r)| (id, -1, r))
         .collect();
     execution
-        .attempts_finished(run_id, &batch, ts(NOW))
+        .attempts_finished(&InRound::for_tests(), run_id, &batch, ts(NOW))
         .await
         .unwrap();
 }
@@ -1552,7 +1913,10 @@ async fn a_first_of_ended_by_one_batch_chooses_the_first_in_it_not_by_its_edges(
     // M4B.4: c, then a, then b in one batch; its edges are a, b, c.
     let (execution, db, run_id) =
         with_run(first_of_dag_plain(None, &[], &[]), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c"] {
         start(&db, &run_id, name).await;
     }
@@ -1567,7 +1931,10 @@ async fn a_first_of_ended_by_one_batch_chooses_the_first_in_it_not_by_its_edges(
 async fn at_least_ended_by_one_batch_keeps_the_order_in_it() {
     let (execution, db, run_id) =
         with_run(first_of_dag_plain(Some(2), &[], &[]), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c"] {
         start(&db, &run_id, name).await;
     }
@@ -1587,7 +1954,10 @@ async fn a_first_of_held_back_after_one_batch_chooses_the_first_in_it_not_by_nam
         &[json!({"from": "gate", "to": "first", "kind": "requirement"})],
     );
     let (execution, db, run_id) = with_run(dag, RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["a", "b", "c", "gate"] {
         start(&db, &run_id, name).await;
     }
@@ -1599,6 +1969,7 @@ async fn a_first_of_held_back_after_one_batch_chooses_the_first_in_it_not_by_nam
     );
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("gate"),
             -1,
@@ -1627,11 +1998,21 @@ async fn a_mapped_task_expands_over_what_a_first_of_chose() {
         .unwrap()
         .push(json!({"from": "first", "to": "each", "kind": "data"}));
     let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "b").await;
     let result = succeeded_with(json!([1, 2, 3]), "SUCCESS");
     execution
-        .attempt_finished(&run_id, &id("b"), -1, &result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("b"),
+            -1,
+            &result,
+            ts(NOW),
+        )
         .await
         .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
@@ -1659,11 +2040,21 @@ async fn a_first_of_of_a_first_of_keeps_the_inner_ones_value() {
         {"from": "c", "to": "outer", "kind": "data"}
     ]);
     let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "a").await;
     let result = succeeded_with(json!("a's"), "SUCCESS");
     execution
-        .attempt_finished(&run_id, &id("a"), -1, &result, ts(NOW))
+        .attempt_finished(
+            &InRound::for_tests(),
+            &run_id,
+            &id("a"),
+            -1,
+            &result,
+            ts(NOW),
+        )
         .await
         .unwrap();
     let outer = id("outer");
@@ -1682,12 +2073,22 @@ async fn a_first_of_whose_choice_is_over_what_its_options_may_give_fails() {
     }
     let edges = serde_json::to_value(first_of_dag(Some(2)).edges).unwrap();
     let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["b", "c"] {
         start(&db, &run_id, name).await;
         let result = succeeded_with(json!("x".repeat(30)), "SUCCESS");
         execution
-            .attempt_finished(&run_id, &id(name), -1, &result, ts(NOW))
+            .attempt_finished(
+                &InRound::for_tests(),
+                &run_id,
+                &id(name),
+                -1,
+                &result,
+                ts(NOW),
+            )
             .await
             .unwrap();
     }
@@ -1716,12 +2117,22 @@ async fn a_first_of_keeps_what_its_options_were_each_allowed_whatever_its_own_li
     tasks[3]["settings"]["max_output_size"] = json!(32);
     let edges = serde_json::to_value(first_of_dag(Some(2)).edges).unwrap();
     let (execution, db, run_id) = with_run(dag(&tasks, &edges), RunState::Running).await;
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     for name in ["b", "c"] {
         start(&db, &run_id, name).await;
         let result = succeeded_with(json!("x".repeat(30)), "SUCCESS");
         execution
-            .attempt_finished(&run_id, &id(name), -1, &result, ts(NOW))
+            .attempt_finished(
+                &InRound::for_tests(),
+                &run_id,
+                &id(name),
+                -1,
+                &result,
+                ts(NOW),
+            )
             .await
             .unwrap();
     }
@@ -1777,10 +2188,14 @@ async fn queued(db: &Database) -> Vec<(String, String, Json)> {
 async fn a_retry_and_a_failed_run_queue_what_each_channel_chose() {
     let (mut execution, db, run_id) = with_run(notifying_chain(), RunState::Running).await;
     execution.set_notifications(ops_notifications());
-    execution.prepare_runs(ts(NOW)).await.unwrap();
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     start(&db, &run_id, "extract").await;
     execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -1800,12 +2215,13 @@ async fn a_retry_and_a_failed_run_queue_what_each_channel_chose() {
     );
 
     execution
-        .queue_due_retries(ts("2026-10-21T08:01:00Z"))
+        .queue_due_retries(&InRound::for_tests(), ts("2026-10-21T08:01:00Z"))
         .await
         .unwrap();
     start(&db, &run_id, "extract").await;
     let recorded = execution
         .attempt_finished(
+            &InRound::for_tests(),
             &run_id,
             &id("extract"),
             -1,
@@ -1850,7 +2266,10 @@ async fn a_retry_and_a_failed_run_queue_what_each_channel_chose() {
 async fn a_pure_cancel_tells_only_the_channels_that_chose_it() {
     let (mut execution, db, run_id) = with_run(notifying_chain(), RunState::Queued).await;
     execution.set_notifications(ops_notifications());
-    execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     let events: Vec<(String, String)> = queued(&db)
         .await
         .into_iter()
@@ -1863,6 +2282,9 @@ async fn a_pure_cancel_tells_only_the_channels_that_chose_it() {
 async fn a_dag_without_notify_queues_nothing() {
     let (mut execution, db, run_id) = with_run(chain(), RunState::Queued).await;
     execution.set_notifications(ops_notifications());
-    execution.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    execution
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(queued(&db).await, Vec::new());
 }

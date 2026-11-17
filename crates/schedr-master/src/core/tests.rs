@@ -173,11 +173,14 @@ async fn an_uploaded_parse_stores_its_dags_and_a_known_hash_needs_no_job() {
     let changed = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
         root: Some(root("h1")),
     });
-    assert_eq!(core.handle("w1", changed, ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        core.handle_in_round("w1", changed, ts(NOW)).await.unwrap(),
+        []
+    );
     let new_code = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
         root: Some(root("h2")),
     });
-    let out = core.handle("w1", new_code, ts(NOW)).await.unwrap();
+    let out = core.handle_in_round("w1", new_code, ts(NOW)).await.unwrap();
     assert!(matches!(
         message(&out[0]),
         master_message::Message::AssignParse(_)
@@ -189,7 +192,7 @@ async fn an_uploaded_parse_stores_its_dags_and_a_known_hash_needs_no_job() {
         }),
     });
     // A script root is read for its `schedr.toml` files (M4.9): a parse job of its kind.
-    let out = core.handle("w1", scripts, ts(NOW)).await.unwrap();
+    let out = core.handle_in_round("w1", scripts, ts(NOW)).await.unwrap();
     let master_message::Message::AssignParse(job) = message(&out[0]) else {
         panic!("expected AssignParse")
     };
@@ -200,9 +203,15 @@ async fn an_uploaded_parse_stores_its_dags_and_a_known_hash_needs_no_job() {
             ..root("h4")
         }),
     });
-    assert_eq!(core.handle("w1", unknown, ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        core.handle_in_round("w1", unknown, ts(NOW)).await.unwrap(),
+        []
+    );
     let empty = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged { root: None });
-    assert_eq!(core.handle("w1", empty, ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        core.handle_in_round("w1", empty, ts(NOW)).await.unwrap(),
+        []
+    );
 }
 
 /// Makes the database refuse writes matching `when` (an SQLite trigger on `table`), as a
@@ -235,7 +244,7 @@ async fn a_finished_message_is_stored_whole_or_not_at_all() {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     // The run's own write fails: the last of the `Finished`'s writes (and so does the run's
     // failure the master stores instead of a refused result, B106).
     refuse(&core, "runs", "NEW.state IN ('success', 'failed')").await;
@@ -245,7 +254,7 @@ async fn a_finished_message_is_stored_whole_or_not_at_all() {
         output_json: b"null".to_vec(),
         ..pb::Finished::default()
     });
-    assert!(core.handle("w1", finished, ts(NOW)).await.is_err());
+    assert!(core.handle_in_round("w1", finished, ts(NOW)).await.is_err());
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.status, None, "a part of the `Finished` was stored");
     // Nor in memory (code review): the attempt still runs, so its slot is still taken.
@@ -275,7 +284,7 @@ async fn a_result_the_database_refuses_is_stored_as_the_attempts_failure() {
         duration_ms: Some(1500),
         ..pb::Finished::default()
     });
-    let ack = core.handle("w1", finished, ts(NOW)).await.unwrap();
+    let ack = core.handle_in_round("w1", finished, ts(NOW)).await.unwrap();
     assert!(matches!(
         message(&ack[0]),
         master_message::Message::FinishedAck(_)
@@ -327,7 +336,7 @@ async fn a_refused_results_failure_keeps_nothing_that_would_be_refused_again() {
         code_hash: "sha256-ab\0cd".to_owned(),
         ..pb::Finished::default()
     });
-    let ack = core.handle("w1", finished, ts(NOW)).await.unwrap();
+    let ack = core.handle_in_round("w1", finished, ts(NOW)).await.unwrap();
     assert!(matches!(
         message(&ack[0]),
         master_message::Message::FinishedAck(_)
@@ -359,14 +368,17 @@ async fn a_tick_applies_commands_and_assigns_the_task_which_then_runs_to_the_end
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    assert_eq!(core.handle("w1", started, ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        core.handle_in_round("w1", started, ts(NOW)).await.unwrap(),
+        []
+    );
     let finished = worker_message::Message::Finished(pb::Finished {
         attempt_id: assign.attempt_id.clone(),
         status: pb::AttemptStatus::Success.into(),
         output_json: b"null".to_vec(),
         ..pb::Finished::default()
     });
-    let ack = core.handle("w1", finished, ts(NOW)).await.unwrap();
+    let ack = core.handle_in_round("w1", finished, ts(NOW)).await.unwrap();
     assert!(matches!(
         message(&ack[0]),
         master_message::Message::FinishedAck(_)
@@ -414,7 +426,9 @@ async fn what_a_worker_uses_is_kept_at_most_once_a_minute() {
             .clone()
             .expect("stored")
     };
-    core.handle("w1", beat(100, 1.5), later(1)).await.unwrap();
+    core.handle_in_round("w1", beat(100, 1.5), later(1))
+        .await
+        .unwrap();
     let first = stored(&core).await;
     assert_eq!(first.process.resident_bytes, 100);
     assert_eq!(first.process.container_bytes, Some(900));
@@ -428,10 +442,12 @@ async fn what_a_worker_uses_is_kept_at_most_once_a_minute() {
     );
     assert_eq!(first.largest_tasks[0].task_id, "load");
     // Within the minute: kept as it was.
-    core.handle("w1", beat(200, 2.0), later(40)).await.unwrap();
+    core.handle_in_round("w1", beat(200, 2.0), later(40))
+        .await
+        .unwrap();
     assert_eq!(stored(&core).await.process.resident_bytes, 100);
     // A minute on: the latest; a figure that isn't one is stored as 0.
-    core.handle("w1", beat(300, f64::NAN), later(61))
+    core.handle_in_round("w1", beat(300, f64::NAN), later(61))
         .await
         .unwrap();
     let last = stored(&core).await;
@@ -440,7 +456,7 @@ async fn what_a_worker_uses_is_kept_at_most_once_a_minute() {
         (300, 0.0)
     );
     // A heartbeat without it (an older worker) changes nothing.
-    core.handle(
+    core.handle_in_round(
         "w1",
         worker_message::Message::Heartbeat(pb::Heartbeat::default()),
         later(200),
@@ -467,7 +483,7 @@ async fn what_a_worker_says_of_its_hosts_is_kept_for_people() {
             ..pb::Heartbeat::default()
         })
     };
-    core.handle("w1", beat(vec![host.clone()]), later(1))
+    core.handle_in_round("w1", beat(vec![host.clone()]), later(1))
         .await
         .unwrap();
     let stored = core.db.workers().await.unwrap();
@@ -482,12 +498,14 @@ async fn what_a_worker_says_of_its_hosts_is_kept_for_people() {
         tied_threads: 99,
         ..host.clone()
     };
-    core.handle("w1", beat(vec![tied_past_its_threads]), later(2))
+    core.handle_in_round("w1", beat(vec![tied_past_its_threads]), later(2))
         .await
         .unwrap();
     let stored = core.db.workers().await.unwrap();
     assert_eq!(stored[0].watcher_hosts[0].tied_threads, 31);
-    core.handle("w1", beat(Vec::new()), later(3)).await.unwrap();
+    core.handle_in_round("w1", beat(Vec::new()), later(3))
+        .await
+        .unwrap();
     assert_eq!(core.db.workers().await.unwrap()[0].watcher_hosts, []);
 }
 
@@ -500,15 +518,27 @@ async fn rejections_heartbeats_and_draining_are_handled() {
         panic!("expected AssignTask")
     };
     let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    assert_eq!(core.handle("w1", heartbeat, later(30)).await.unwrap(), []);
+    assert_eq!(
+        core.handle_in_round("w1", heartbeat, later(30))
+            .await
+            .unwrap(),
+        []
+    );
     let rejected = worker_message::Message::Rejected(pb::Rejected {
         attempt_id: assign.attempt_id.clone(),
         reason: pb::RejectReason::NoFreeSlot.into(),
         detail: String::new(),
     });
-    assert_eq!(core.handle("w1", rejected, later(30)).await.unwrap(), []);
+    assert_eq!(
+        core.handle_in_round("w1", rejected, later(30))
+            .await
+            .unwrap(),
+        []
+    );
     let draining = worker_message::Message::Draining(pb::Draining {});
-    core.handle("w1", draining, later(30)).await.unwrap();
+    core.handle_in_round("w1", draining, later(30))
+        .await
+        .unwrap();
     assert_eq!(core.tick(later(31)).await.unwrap(), []);
 }
 
@@ -528,7 +558,7 @@ async fn a_workers_warnings_replace_the_last_ones() {
         })
     };
     assert_eq!(
-        core.handle("w1", report(&["a", "b"]), later(1))
+        core.handle_in_round("w1", report(&["a", "b"]), later(1))
             .await
             .unwrap(),
         []
@@ -545,7 +575,9 @@ async fn a_workers_warnings_replace_the_last_ones() {
         }
     };
     assert_eq!(stored(&core).await, ["a", "b"]);
-    core.handle("w1", report(&[]), later(2)).await.unwrap();
+    core.handle_in_round("w1", report(&[]), later(2))
+        .await
+        .unwrap();
     assert_eq!(stored(&core).await, Vec::<String>::new());
 }
 
@@ -553,7 +585,10 @@ async fn a_workers_warnings_replace_the_last_ones() {
 async fn a_second_register_on_the_stream_is_a_bad_message() {
     let mut core = with_dag().await;
     let again = worker_message::Message::Register(register("w1", "i1", vec![]));
-    let error = core.handle("w1", again, ts(NOW)).await.unwrap_err();
+    let error = core
+        .handle_in_round("w1", again, ts(NOW))
+        .await
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         "message from worker `w1`: `Register` is only the first message"
@@ -645,7 +680,9 @@ async fn journal_entries_are_continued_acknowledged_or_killed() {
         status: pb::AttemptStatus::Success.into(),
         ..pb::Finished::default()
     });
-    core.handle("w1", finished, later(6)).await.unwrap();
+    core.handle_in_round("w1", finished, later(6))
+        .await
+        .unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
     let journal = vec![
         entry(&open, pb::JournalState::Finished),
@@ -716,7 +753,9 @@ async fn a_registration_goes_on_when_adopting_an_attempt_is_refused_for_its_data
         output_json: b"null".to_vec(),
         ..pb::Finished::default()
     });
-    core.handle("w1", finished, later(6)).await.unwrap();
+    core.handle_in_round("w1", finished, later(6))
+        .await
+        .unwrap();
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
 }
@@ -807,7 +846,7 @@ async fn a_worker_silent_past_its_lease_is_lost_and_its_attempts_with_it() {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(60)).await.unwrap();
     assert!(
@@ -874,11 +913,15 @@ async fn a_new_incarnations_old_unstarted_attempt_whose_cleanup_may_move_waits_f
     };
     // Held from the registration at 2 s for the lease (60 s); then its cleanup moves.
     for at in (10..=60).step_by(10) {
-        core.handle("w1", heartbeat(), later(at)).await.unwrap();
+        core.handle_in_round("w1", heartbeat(), later(at))
+            .await
+            .unwrap();
         core.tick(later(at)).await.unwrap();
         assert_eq!(state(&core).await, (None, 0), "held at {at} s");
     }
-    core.handle("w1", heartbeat(), later(63)).await.unwrap();
+    core.handle_in_round("w1", heartbeat(), later(63))
+        .await
+        .unwrap();
     core.tick(later(63)).await.unwrap();
     assert_eq!(state(&core).await, (None, 1), "its cleanup moved");
 }
@@ -1017,7 +1060,7 @@ async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_bac
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(61)).await.unwrap();
     let waiting = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
@@ -1046,7 +1089,9 @@ async fn a_cleanup_that_ended_while_its_worker_was_away_counts_when_it_comes_bac
         }),
         ..pb::Finished::default()
     });
-    core.handle("w1", finished, later(63)).await.unwrap();
+    core.handle_in_round("w1", finished, later(63))
+        .await
+        .unwrap();
     let ended = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
     assert_eq!(
@@ -1070,7 +1115,7 @@ async fn moved_away_from_w1() -> (MasterCore, String) {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(61)).await.unwrap();
     let waiting = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
@@ -1139,7 +1184,7 @@ async fn a_waiting_cleanup_goes_back_to_its_worker_holding_handles_the_master_la
         pb::AttemptStatus::Success,
         pb::CleanupStatus::Ok,
     );
-    core.handle("w1", done, later(63)).await.unwrap();
+    core.handle_in_round("w1", done, later(63)).await.unwrap();
     let ended = core.db.attempt(&attempt_id).await.unwrap().unwrap();
     assert_eq!(
         ended.status,
@@ -1155,7 +1200,10 @@ async fn may_start(core: &mut MasterCore, worker: &str, attempt_id: &str, rest: 
         attempt_id: attempt_id.to_owned(),
         rest,
     });
-    let out = core.handle(worker, start, later(129)).await.unwrap();
+    let out = core
+        .handle_in_round(worker, start, later(129))
+        .await
+        .unwrap();
     let [answer] = out.as_slice() else {
         panic!("one answer: {out:?}")
     };
@@ -1178,7 +1226,9 @@ async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_ow
         .await
         .unwrap();
     let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    core.handle("w2", heartbeat, later(100)).await.unwrap();
+    core.handle_in_round("w2", heartbeat, later(100))
+        .await
+        .unwrap();
     core.tick(later(125)).await.unwrap();
     // Moved to w2: its whole cleanup is w2's, not w1's.
     assert!(may_start(&mut core, "w2", &attempt_id, false).await);
@@ -1199,7 +1249,9 @@ async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_ow
         pb::AttemptStatus::Lost,
         pb::CleanupStatus::NotNeeded,
     );
-    core.handle("w2", not_needed, later(128)).await.unwrap();
+    core.handle_in_round("w2", not_needed, later(128))
+        .await
+        .unwrap();
     assert!(
         !may_start(&mut core, "w2", &attempt_id, false).await,
         "ended"
@@ -1235,7 +1287,9 @@ async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_
     assert!(out.is_empty(), "{out:?}");
     // Alive past its first lease, when the moved cleanup is given to it.
     let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    core.handle("w2", heartbeat, later(100)).await.unwrap();
+    core.handle_in_round("w2", heartbeat, later(100))
+        .await
+        .unwrap();
     let out = core.tick(later(125)).await.unwrap();
     assert!(
         out.iter()
@@ -1248,7 +1302,9 @@ async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_
         pb::AttemptStatus::Lost,
         pb::CleanupStatus::NotNeeded,
     );
-    core.handle("w2", not_needed, later(126)).await.unwrap();
+    core.handle_in_round("w2", not_needed, later(126))
+        .await
+        .unwrap();
     let ended = core.db.attempt(&attempt_id).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
     // Nothing missing: nothing to clean there.
@@ -1277,7 +1333,7 @@ async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_
         pb::AttemptStatus::Lost,
         pb::CleanupStatus::Failed,
     );
-    core.handle("w1", rest, later(129)).await.unwrap();
+    core.handle_in_round("w1", rest, later(129)).await.unwrap();
     let run = core.db.run_tasks(&ended.run_id).await.unwrap().unwrap();
     let instance = run
         .instances
@@ -1329,7 +1385,7 @@ async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     // The task succeeded; w1 was cut off while it cleaned up.
     let ended = worker_message::Message::TaskEnded(pb::TaskEnded {
         result: Some(pb::Finished {
@@ -1338,21 +1394,23 @@ async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
             ..pb::Finished::default()
         }),
     });
-    core.handle("w1", ended, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", ended, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(61)).await.unwrap();
     core.register(&register("w2", "i2", vec![]), later(62))
         .await
         .unwrap();
     let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    core.handle("w2", heartbeat, later(100)).await.unwrap();
+    core.handle_in_round("w2", heartbeat, later(100))
+        .await
+        .unwrap();
     core.tick(later(125)).await.unwrap();
     let moved = finished_with_cleanup(
         &attempt_id,
         pb::AttemptStatus::Lost,
         pb::CleanupStatus::NotNeeded,
     );
-    core.handle("w2", moved, later(126)).await.unwrap();
+    core.handle_in_round("w2", moved, later(126)).await.unwrap();
     core.tick(later(127)).await.unwrap();
     let attempt = core.db.attempt(&attempt_id).await.unwrap().unwrap();
     let run_id = attempt.run_id.clone();
@@ -1381,7 +1439,7 @@ async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
         }),
         ..pb::Finished::default()
     };
-    core.handle(
+    core.handle_in_round(
         "w1",
         worker_message::Message::Finished(rest.clone()),
         later(129),
@@ -1398,7 +1456,7 @@ async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
     );
     // A rest said to be one never counts as the whole cleanup, even from the attempt's worker.
     rest.cleanup.as_mut().unwrap().status = pb::CleanupStatus::Ok.into();
-    core.handle("w1", worker_message::Message::Finished(rest), later(130))
+    core.handle_in_round("w1", worker_message::Message::Finished(rest), later(130))
         .await
         .unwrap();
     assert_eq!(
@@ -1422,7 +1480,7 @@ fn rest_end() -> schedr_db::attempts::CleanupEnd {
 async fn deregistering_forgets_the_worker() {
     let mut core = with_dag().await;
     let bye = worker_message::Message::Deregister(pb::Deregister {});
-    assert_eq!(core.handle("w1", bye, ts(NOW)).await.unwrap(), []);
+    assert_eq!(core.handle_in_round("w1", bye, ts(NOW)).await.unwrap(), []);
     assert!(!core.is_live("w1"));
     assert!(core.dispatcher().workers().get("w1").is_none());
 }
@@ -1459,7 +1517,7 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     core.disconnected("w1", ts(NOW)).await.unwrap();
     let runs = core
         .db
@@ -1653,7 +1711,11 @@ async fn a_start_or_result_that_couldnt_be_stored_keeps_the_attempt_from_being_t
         // As the stream's reader records it on arrival.
         core.arrivals().start_arrived("w1", &id);
         core.db.fail_write(1);
-        assert!(core.handle("w1", reported, later(1)).await.is_err());
+        assert!(
+            core.handle_in_round("w1", reported, later(1))
+                .await
+                .is_err()
+        );
         core.db.count_writes();
         let out = core.tick(later(30)).await.unwrap();
         let attempt = core.db.attempt(&id).await.unwrap().unwrap();
@@ -1689,7 +1751,7 @@ async fn started_attempt(core: &mut MasterCore) -> String {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     });
-    core.handle("w1", started, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
     assign.attempt_id.clone()
 }
 
@@ -1701,7 +1763,9 @@ async fn the_registry_follows_a_worker_through_its_states_and_keeps_it_when_lost
         (WorkerState::Active, None)
     );
     let draining = worker_message::Message::Draining(pb::Draining {});
-    core.handle("w1", draining, later(1)).await.unwrap();
+    core.handle_in_round("w1", draining, later(1))
+        .await
+        .unwrap();
     assert_eq!(registry_state(&core, "w1").await.0, WorkerState::Draining);
     core.disconnected("w1", later(2)).await.unwrap();
     assert_eq!(
@@ -1719,7 +1783,7 @@ async fn the_registry_follows_a_worker_through_its_states_and_keeps_it_when_lost
 async fn a_deregistered_worker_stays_listed_as_offline() {
     let mut core = with_dag().await;
     let bye = worker_message::Message::Deregister(pb::Deregister {});
-    core.handle("w1", bye, later(3)).await.unwrap();
+    core.handle_in_round("w1", bye, later(3)).await.unwrap();
     assert_eq!(
         registry_state(&core, "w1").await,
         (WorkerState::Offline, Some(later(3)))
@@ -1730,13 +1794,17 @@ async fn a_deregistered_worker_stays_listed_as_offline() {
 async fn signs_of_life_are_written_at_most_once_per_heartbeat_interval() {
     let mut core = with_dag().await;
     let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    core.handle("w1", heartbeat(), later(5)).await.unwrap();
+    core.handle_in_round("w1", heartbeat(), later(5))
+        .await
+        .unwrap();
     let seen = |core: &MasterCore| {
         let db = core.db.clone();
         async move { db.workers().await.unwrap()[0].last_heartbeat_at }
     };
     assert_eq!(seen(&core).await, ts(NOW));
-    core.handle("w1", heartbeat(), later(10)).await.unwrap();
+    core.handle_in_round("w1", heartbeat(), later(10))
+        .await
+        .unwrap();
     assert_eq!(seen(&core).await, later(10));
 }
 
@@ -1784,7 +1852,9 @@ async fn an_old_incarnation_reporting_a_held_attempt_keeps_it() {
     let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
     for at in [65, 66, 130] {
         // Alive throughout: its heartbeats keep it from being lost.
-        core.handle("w1", heartbeat(), later(at)).await.unwrap();
+        core.handle_in_round("w1", heartbeat(), later(at))
+            .await
+            .unwrap();
         core.tick(later(at)).await.unwrap();
         let open = core.db.attempt(&attempt).await.unwrap().unwrap();
         assert_eq!(open.status, None, "ended at {at} s");
@@ -1811,8 +1881,12 @@ async fn another_workers_journal_leaves_a_held_attempt_held() {
     );
     let heartbeat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
     for at in [30, 60, 65] {
-        core.handle("w1", heartbeat(), later(at)).await.unwrap();
-        core.handle("w2", heartbeat(), later(at)).await.unwrap();
+        core.handle_in_round("w1", heartbeat(), later(at))
+            .await
+            .unwrap();
+        core.handle_in_round("w2", heartbeat(), later(at))
+            .await
+            .unwrap();
     }
     core.tick(later(65)).await.unwrap();
     assert_eq!(
@@ -1943,7 +2017,9 @@ async fn no_assignment_is_taken_back_from_a_disconnected_worker_within_its_lease
     };
     // Seen at 50 s, then gone: its lease runs to 110 s; no start deadline takes it back first.
     let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
-    core.handle("w1", heartbeat, later(50)).await.unwrap();
+    core.handle_in_round("w1", heartbeat, later(50))
+        .await
+        .unwrap();
     core.disconnected("w1", later(50)).await.unwrap();
     for at in [61, 100, 110] {
         core.tick(later(at)).await.unwrap();
@@ -2005,7 +2081,7 @@ async fn tasks_go_to_the_worker_with_the_newest_code_until_it_leaves() {
     );
     // w2 leaves (its attempt is lost, no retries left): the next run's task goes to w1, on h1.
     let bye = worker_message::Message::Deregister(pb::Deregister {});
-    core.handle("w2", bye, later(61)).await.unwrap();
+    core.handle_in_round("w2", bye, later(61)).await.unwrap();
     trigger(&mut core).await;
     let out = core.tick(later(62)).await.unwrap();
     let master_message::Message::AssignTask(assign) = message(&out[0]) else {
@@ -2060,7 +2136,7 @@ async fn a_worker_that_said_it_drains_registering_again_gets_its_job_once() {
         .await
         .unwrap();
     let draining = worker_message::Message::Draining(pb::Draining {});
-    core.handle("w1", draining, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", draining, ts(NOW)).await.unwrap();
     core.disconnected("w1", later(1)).await.unwrap();
     let (_, again) = core
         .register(&register("w1", "i1", vec![]), later(1))
@@ -2101,7 +2177,7 @@ async fn a_worker_saying_it_drains_hands_its_parse_jobs_over() {
         .await
         .unwrap();
     let draining = worker_message::Message::Draining(pb::Draining {});
-    let out = core.handle("w1", draining, ts(NOW)).await.unwrap();
+    let out = core.handle_in_round("w1", draining, ts(NOW)).await.unwrap();
     let master_message::Message::AssignParse(job) = message(&out[0]) else {
         panic!("expected AssignParse, got {out:?}")
     };
@@ -2183,7 +2259,7 @@ mod faults {
                 start_method: pb::StartMethod::Spawn.into(),
                 ..pb::Started::default()
             });
-            core.handle("w1", started, ts(NOW)).await.unwrap();
+            core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
             let run_id = assign.run.as_ref().unwrap().run_id.clone();
             Self { core, run_id }
         }
@@ -2300,7 +2376,7 @@ mod faults {
         async fn recover(&mut self) {
             for group in std::mem::take(&mut self.failed) {
                 for message in group.into_messages() {
-                    let _ = self.core.handle("w1", message, ts(NOW)).await;
+                    let _ = self.core.handle_in_round("w1", message, ts(NOW)).await;
                 }
             }
         }
@@ -2347,7 +2423,10 @@ async fn a_code_switch_rolled_back_is_recorded_when_the_worker_reports_it_again(
             root: Some(root(hash)),
         })
     };
-    let out = core.handle("w1", switch("h2"), later(1)).await.unwrap();
+    let out = core
+        .handle_in_round("w1", switch("h2"), later(1))
+        .await
+        .unwrap();
     let master_message::Message::AssignParse(job) = message(&out[0]) else {
         panic!("expected AssignParse, got {out:?}")
     };
@@ -2356,7 +2435,9 @@ async fn a_code_switch_rolled_back_is_recorded_when_the_worker_reports_it_again(
     core.upload(parsed, later(2)).await.unwrap();
     // A revert to h1, whose second write (h1 current again) fails: rolled back whole.
     core.db.fail_write(2);
-    core.handle("w1", switch("h1"), later(3)).await.unwrap_err();
+    core.handle_in_round("w1", switch("h1"), later(3))
+        .await
+        .unwrap_err();
     // Its link drops; it registers again, at h1.
     core.disconnected("w1", later(4)).await.unwrap();
     core.register(&register("w1", "i1", vec![]), later(5))
@@ -2372,7 +2453,7 @@ async fn a_revert_in_a_registration_that_failed_is_recorded_when_it_registers_ag
     // writes; failing, it left them dropped, so the retry didn't see the revert as a switch.
     let mut core = with_dag().await;
     let out = core
-        .handle(
+        .handle_in_round(
             "w1",
             worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
                 root: Some(root("h2")),
@@ -2529,7 +2610,7 @@ async fn a_workers_answer_to_a_connections_job_fills_in_its_command() {
         report_json: vec![serde_json::to_vec(&report).unwrap()],
     };
     // Another worker's answer to it is dropped.
-    core.handle(
+    core.handle_in_round(
         "w9",
         worker_message::Message::ConnectionJobDone(done()),
         ts(NOW),
@@ -2537,7 +2618,7 @@ async fn a_workers_answer_to_a_connections_job_fills_in_its_command() {
     .await
     .unwrap();
     assert_eq!(stored(&core, &id).await["jobs"][0]["state"], "running");
-    core.handle(
+    core.handle_in_round(
         "w1",
         worker_message::Message::ConnectionJobDone(done()),
         ts(NOW),
@@ -2555,7 +2636,7 @@ async fn a_workers_answer_to_a_connections_job_fills_in_its_command() {
         report_json: vec![b"{}".to_vec()],
     };
     assert!(matches!(
-        core.handle(
+        core.handle_in_round(
             "w1",
             worker_message::Message::ConnectionJobDone(bad),
             ts(NOW)
@@ -2570,7 +2651,7 @@ async fn a_connections_job_is_lost_with_its_worker() {
     let mut core = with_connection().await;
     let (_, id) = check(&mut core).await;
     let bye = worker_message::Message::Deregister(pb::Deregister {});
-    core.handle("w1", bye, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", bye, ts(NOW)).await.unwrap();
     assert_eq!(
         stored(&core, &id).await,
         json!({"jobs": [{"root": "etl", "worker": "w1", "state": "lost",
@@ -2639,12 +2720,12 @@ async fn a_connections_job_whose_answer_wasnt_stored_is_still_lost_with_its_work
         })
     };
     // Another worker's answer leaves it waiting for its own.
-    core.handle("w9", done(), ts(NOW)).await.unwrap();
+    core.handle_in_round("w9", done(), ts(NOW)).await.unwrap();
     refuse(&core, "commands", "NEW.result LIKE '%done%'").await;
-    assert!(core.handle("w1", done(), ts(NOW)).await.is_err());
+    assert!(core.handle_in_round("w1", done(), ts(NOW)).await.is_err());
     allow(&core, "commands").await;
     let bye = worker_message::Message::Deregister(pb::Deregister {});
-    core.handle("w1", bye, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", bye, ts(NOW)).await.unwrap();
     assert_eq!(stored(&core, &id).await["jobs"][0]["state"], "lost");
 }
 
@@ -2725,7 +2806,7 @@ async fn a_kept_result_the_database_refuses_doesnt_hold_its_worker_for_ever() {
         start_method: pb::StartMethod::Spawn.into(),
         ..pb::Started::default()
     };
-    core.handle("w1", worker_message::Message::Started(started), ts(NOW))
+    core.handle_in_round("w1", worker_message::Message::Started(started), ts(NOW))
         .await
         .unwrap();
     refuse(&core, "attempts", "instr(NEW.code_hash, char(0)) > 0").await;
@@ -2737,9 +2818,9 @@ async fn a_kept_result_the_database_refuses_doesnt_hold_its_worker_for_ever() {
             ..pb::Finished::default()
         }),
     });
-    core.handle("w1", ended, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", ended, ts(NOW)).await.unwrap();
     let gone = worker_message::Message::Deregister(pb::Deregister::default());
-    core.handle("w1", gone, ts(NOW)).await.unwrap();
+    core.handle_in_round("w1", gone, ts(NOW)).await.unwrap();
     let attempt = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Failed));
 }
@@ -2794,7 +2875,9 @@ async fn the_script_roots_a_dag_root_uses_go_to_the_workers_and_a_root_can_be_wi
     let withdrawn = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
         root: Some(root("")),
     });
-    core.handle("w1", withdrawn, later(4)).await.unwrap();
+    core.handle_in_round("w1", withdrawn, later(4))
+        .await
+        .unwrap();
     let w1 = core.dispatcher().workers().get("w1").unwrap();
     assert_eq!(w1.roots.get("etl"), None);
     assert_eq!(
@@ -2965,7 +3048,7 @@ async fn a_new_key_queues_a_run_and_a_repeat_only_moves_the_bookmark() {
     assert_eq!(assign.dag_id, "sync");
     for (seq, key) in [(1, "a"), (2, "b"), (3, "a")] {
         let answer = core
-            .handle("w1", found(&assign, seq, key), later(2))
+            .handle_in_round("w1", found(&assign, seq, key), later(2))
             .await
             .unwrap();
         assert_eq!(ack_of(&answer), Some(seq), "acknowledged once stored");
@@ -2985,7 +3068,7 @@ async fn what_an_old_instance_found_is_acknowledged_and_not_stored() {
     let (mut core, mut assign) = Box::pin(with_trigger()).await;
     assign.instance_id = "someone-else".to_owned();
     let answer = core
-        .handle("w1", found(&assign, 1, "a"), later(2))
+        .handle_in_round("w1", found(&assign, 1, "a"), later(2))
         .await
         .unwrap();
     assert_eq!(ack_of(&answer), Some(1));
@@ -3000,7 +3083,7 @@ async fn what_an_old_instance_found_is_acknowledged_and_not_stored() {
 #[tokio::test]
 async fn pausing_stops_a_trigger_and_it_comes_back_from_its_bookmark() {
     let (mut core, assign) = Box::pin(with_trigger()).await;
-    core.handle("w1", found(&assign, 1, "a"), later(2))
+    core.handle_in_round("w1", found(&assign, 1, "a"), later(2))
         .await
         .unwrap();
     let dag = DagId::new("sync").unwrap();
@@ -3019,7 +3102,7 @@ async fn pausing_stops_a_trigger_and_it_comes_back_from_its_bookmark() {
         instance_id: assign.instance_id.clone(),
         ..pb::TriggerStopped::default()
     });
-    core.handle("w1", ended, later(3)).await.unwrap();
+    core.handle_in_round("w1", ended, later(3)).await.unwrap();
     assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
     core.db.set_paused(&dag, false).await.unwrap();
     let again = assign_of(&core.tick(later(4)).await.unwrap()).unwrap();
@@ -3037,7 +3120,7 @@ async fn a_failed_trigger_starts_again_only_after_its_wait() {
         message: "ValueError: no".to_owned(),
         ..pb::TriggerStopped::default()
     });
-    core.handle("w1", stopped, later(2)).await.unwrap();
+    core.handle_in_round("w1", stopped, later(2)).await.unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     assert_eq!(stored.failures, 1);
     assert_eq!(
@@ -3067,7 +3150,7 @@ async fn a_lost_worker_gives_up_its_trigger_and_one_it_reports_late_is_stopped()
         running_triggers: vec![assign.instance_id.clone()],
         ..pb::Heartbeat::default()
     });
-    let told = core.handle("w1", beat, later(4)).await.unwrap();
+    let told = core.handle_in_round("w1", beat, later(4)).await.unwrap();
     assert!(
         told.iter().any(|o| matches!(
             message(o),
@@ -3137,7 +3220,7 @@ async fn what_a_trigger_of_an_older_version_found_starts_nothing() {
         .await
         .unwrap();
     let answer = core
-        .handle("w1", found(&assign, 1, "a"), later(2))
+        .handle_in_round("w1", found(&assign, 1, "a"), later(2))
         .await
         .unwrap();
     assert_eq!(ack_of(&answer), Some(1));
@@ -3182,7 +3265,7 @@ async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
         .await
         .unwrap();
     let answer = core
-        .handle("w2", found(&assign, 1, "planted"), later(3))
+        .handle_in_round("w2", found(&assign, 1, "planted"), later(3))
         .await
         .unwrap();
     assert_eq!(ack_of(&answer), Some(1));
@@ -3195,7 +3278,7 @@ async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
         message: "planted".to_owned(),
         ..pb::TriggerStopped::default()
     });
-    core.handle("w2", stopped, later(3)).await.unwrap();
+    core.handle_in_round("w2", stopped, later(3)).await.unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     assert_eq!(
         stored.instance_id.as_deref(),
@@ -3210,7 +3293,7 @@ async fn only_the_worker_that_has_a_trigger_speaks_for_it() {
         message: String::new(),
         ..pb::TriggerStopped::default()
     });
-    core.handle("w2", stopped, later(3)).await.unwrap();
+    core.handle_in_round("w2", stopped, later(3)).await.unwrap();
     assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 1);
 }
 
@@ -3257,7 +3340,7 @@ async fn what_cant_be_an_event_fails_the_trigger_and_stores_nothing() {
             ..bad
         };
         let answer = core
-            .handle("w1", worker_message::Message::TriggerEvent(event), later(2))
+            .handle_in_round("w1", worker_message::Message::TriggerEvent(event), later(2))
             .await
             .unwrap();
         assert_eq!(ack_of(&answer), None);
@@ -3286,7 +3369,7 @@ async fn a_long_error_is_kept_short() {
         message: "x\0".repeat(1_000_000),
         ..pb::TriggerStopped::default()
     });
-    core.handle("w1", stopped, later(2)).await.unwrap();
+    core.handle_in_round("w1", stopped, later(2)).await.unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     let error = stored.last_error.unwrap();
     assert_eq!(error.chars().count(), 4096);
@@ -3307,7 +3390,7 @@ fn stopped_with(assign: &pb::AssignTrigger, kind: &str, struck: bool) -> worker_
 #[tokio::test]
 async fn a_generator_that_returned_stays_stopped_until_new_code() {
     let (mut core, assign) = Box::pin(with_trigger()).await;
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&assign, "trigger_returned", false),
         later(2),
@@ -3353,7 +3436,7 @@ async fn too_many_queued_runs_stop_a_trigger_until_they_have_started() {
     core.db.set_paused(&dag, false).await.unwrap();
     let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
     for (seq, key) in [(1, "a"), (2, "b")] {
-        core.handle("w1", found(&assign, seq, key), later(2))
+        core.handle_in_round("w1", found(&assign, seq, key), later(2))
             .await
             .unwrap();
     }
@@ -3396,7 +3479,7 @@ async fn a_trigger_that_keeps_blocking_is_switched_off_until_new_code() {
     let (mut core, assign) = Box::pin(with_trigger()).await;
     let mut given = assign;
     for at in [2, 100, 200] {
-        core.handle(
+        core.handle_in_round(
             "w1",
             stopped_with(&given, "blocked_event_loop", true),
             later(at),
@@ -3432,7 +3515,7 @@ async fn a_poke_report_is_kept_and_a_call_that_went_well_clears_it() {
             failures,
         })
     };
-    core.handle("w1", poked("ValueError: no", 2), later(2))
+    core.handle_in_round("w1", poked("ValueError: no", 2), later(2))
         .await
         .unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
@@ -3444,7 +3527,9 @@ async fn a_poke_report_is_kept_and_a_call_that_went_well_clears_it() {
         Some(assign.instance_id.as_str()),
         "it goes on"
     );
-    core.handle("w1", poked("", 0), later(3)).await.unwrap();
+    core.handle_in_round("w1", poked("", 0), later(3))
+        .await
+        .unwrap();
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     assert_eq!(stored.failures, 0);
     assert_eq!(stored.last_error, None);
@@ -3463,7 +3548,7 @@ async fn a_trigger_message_wakes_the_trigger_loop_though_it_writes_nothing() {
     let wake = core.dispatcher().trigger_wake();
     // The pass that gave the trigger out freed nothing; drop any wake from before.
     let _ = tokio::time::timeout(Duration::from_millis(10), wake.notified()).await;
-    core.handle(
+    core.handle_in_round(
         "w1",
         worker_message::Message::TriggerPoked(pb::TriggerPoked {
             dag_id: assign.dag_id.clone(),
@@ -3534,7 +3619,7 @@ async fn a_generator_finding_nothing_for_its_idle_time_starts_again() {
     let first = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
     assert_eq!(look(&core).await, Some(later(61)), "60 s after its start");
     assert_eq!(assign_of(&core.tick(later(30)).await.unwrap()), None);
-    core.handle("w1", found(&first, 1, "a"), later(40))
+    core.handle_in_round("w1", found(&first, 1, "a"), later(40))
         .await
         .unwrap();
     assert_eq!(
@@ -3575,7 +3660,7 @@ async fn a_trigger_told_to_stop_keeps_its_slot_and_its_strike_counts() {
         unreachable!()
     };
     one.code_hash = String::new();
-    core.handle("w1", stopped, later(3)).await.unwrap();
+    core.handle_in_round("w1", stopped, later(3)).await.unwrap();
     assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
     let strikes = core.db.wait_step_strikes("sync", "found").await.unwrap();
     assert_eq!(strikes.unwrap().strikes, 1);
@@ -3605,13 +3690,13 @@ async fn events_past_the_queue_limit_stop_the_trigger_at_once() {
     let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
     for (seq, key) in [(1, "a"), (2, "b")] {
         let answer = core
-            .handle("w1", found(&assign, seq, key), later(2))
+            .handle_in_round("w1", found(&assign, seq, key), later(2))
             .await
             .unwrap();
         assert_eq!(ack_of(&answer), Some(seq));
     }
     let answer = core
-        .handle("w1", found(&assign, 3, "c"), later(2))
+        .handle_in_round("w1", found(&assign, 3, "c"), later(2))
         .await
         .unwrap();
     assert_eq!(ack_of(&answer), None);
@@ -3885,7 +3970,7 @@ async fn what_a_worker_reports_for_people_is_kept_within_limits() {
         watcher_hosts: vec![host; 300],
         ..pb::Heartbeat::default()
     });
-    core.handle("w1", beat, later(1)).await.unwrap();
+    core.handle_in_round("w1", beat, later(1)).await.unwrap();
     let warning = pb::WorkerWarning {
         kind: "fork_server_disabled".to_owned(),
         interpreter: "python".to_owned(),
@@ -3894,7 +3979,7 @@ async fn what_a_worker_reports_for_people_is_kept_within_limits() {
     let report = worker_message::Message::Warnings(pb::Warnings {
         warnings: vec![warning; 300],
     });
-    core.handle("w1", report, later(2)).await.unwrap();
+    core.handle_in_round("w1", report, later(2)).await.unwrap();
     let workers = core.db.workers().await.unwrap();
     let w1 = workers.iter().find(|w| w.id == "w1").unwrap();
     assert_eq!(w1.watcher_hosts.len(), 256);
@@ -4026,16 +4111,18 @@ async fn a_trigger_waiting_for_runs_is_called_once_for_each_that_ends_with_it() 
     );
     // Its event, keyed by the run, then a clean end: the next call gets the next run.
     let answer = core
-        .handle("w1", found(&assign, 1, &first), later(6))
+        .handle_in_round("w1", found(&assign, 1, &first), later(6))
         .await
         .unwrap();
     assert_eq!(ack_of(&answer), Some(1));
-    core.handle("w1", returned(&assign), later(6))
+    core.handle_in_round("w1", returned(&assign), later(6))
         .await
         .unwrap();
     let next = assign_of(&core.tick(later(7)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&next), second);
-    core.handle("w1", returned(&next), later(7)).await.unwrap();
+    core.handle_in_round("w1", returned(&next), later(7))
+        .await
+        .unwrap();
     assert!(assign_of(&core.tick(later(8)).await.unwrap()).is_none());
     assert_eq!(
         sync_runs(&core).await.len(),
@@ -4053,7 +4140,7 @@ async fn a_trigger_waiting_for_runs_gets_the_same_run_after_failing_until_its_re
     let second = orders_succeeded(&core, ts("2026-10-22T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&assign), first);
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&assign, "trigger_failed", false),
         later(3),
@@ -4066,7 +4153,7 @@ async fn a_trigger_waiting_for_runs_gets_the_same_run_after_failing_until_its_re
     );
     let again = assign_of(&core.tick(later(60)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&again), first, "the same run, tried again");
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&again, "trigger_failed", false),
         later(60),
@@ -4110,7 +4197,7 @@ async fn skip_passes_the_run_a_trigger_keeps_failing_on_but_not_while_it_is_call
         "{:?}",
         record.reason
     );
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&assign, "trigger_failed", false),
         later(4),
@@ -4121,7 +4208,7 @@ async fn skip_passes_the_run_a_trigger_keeps_failing_on_but_not_while_it_is_call
     for at in [10, 25, 50] {
         let call = assign_of(&core.tick(later(at)).await.unwrap()).unwrap();
         assert_eq!(handed_run(&call), first, "never passed by itself");
-        core.handle(
+        core.handle_in_round(
             "w1",
             stopped_with(&call, "trigger_failed", false),
             later(at),
@@ -4156,7 +4243,7 @@ async fn a_waiting_trigger_interrupted_or_cancelled_keeps_its_run() {
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     // Asked to stop by its worker (draining): no error, but not done.
-    core.handle("w1", stopped_with(&assign, "", false), later(3))
+    core.handle_in_round("w1", stopped_with(&assign, "", false), later(3))
         .await
         .unwrap();
     let again = assign_of(&core.tick(later(4)).await.unwrap()).unwrap();
@@ -4171,7 +4258,7 @@ async fn a_waiting_trigger_s_call_ends_with_its_run_passed_or_not_at_all() {
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
     core.db.fail_write(1);
     assert!(
-        core.handle("w1", returned(&assign), later(3))
+        core.handle_in_round("w1", returned(&assign), later(3))
             .await
             .is_err()
     );
@@ -4181,7 +4268,7 @@ async fn a_waiting_trigger_s_call_ends_with_its_run_passed_or_not_at_all() {
         Some(assign.instance_id.as_str()),
         "the call is still held, so its end can come again"
     );
-    core.handle("w1", returned(&assign), later(4))
+    core.handle_in_round("w1", returned(&assign), later(4))
         .await
         .unwrap();
     let next = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
@@ -4193,7 +4280,7 @@ async fn a_new_run_after_a_pause_has_its_own_retries_and_a_return_clears_strikes
     let mut core = Box::pin(with_waiting_trigger(Some(1))).await;
     orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&assign, "trigger_failed", true),
         later(3),
@@ -4212,7 +4299,7 @@ async fn a_new_run_after_a_pause_has_its_own_retries_and_a_return_clears_strikes
         "the run from before the pause is dropped"
     );
     assert_eq!(call.failures, 0, "the dropped run's failures aren't its");
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&call, "trigger_failed", false),
         later(10),
@@ -4221,7 +4308,7 @@ async fn a_new_run_after_a_pause_has_its_own_retries_and_a_return_clears_strikes
     .unwrap();
     let retried = assign_of(&core.tick(later(20)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&retried), fresh, "its one retry");
-    core.handle("w1", returned(&retried), later(20))
+    core.handle_in_round("w1", returned(&retried), later(20))
         .await
         .unwrap();
     let strikes = core
@@ -4240,7 +4327,7 @@ async fn a_skip_applied_before_its_decision_was_stored_is_applied_again() {
     let mut core = Box::pin(with_waiting_trigger(None)).await;
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&assign, "trigger_failed", false),
         later(3),
@@ -4305,7 +4392,7 @@ async fn a_call_being_stopped_is_not_made_again_until_it_has_ended() {
     );
     assert!(assign_of(&core.tick(later(5)).await.unwrap()).is_none());
     // Its end, cancelled: the run, kept, is called on the other worker.
-    core.handle("w1", stopped_with(&assign, "", false), later(5))
+    core.handle_in_round("w1", stopped_with(&assign, "", false), later(5))
         .await
         .unwrap();
     let again = core.tick(later(6)).await.unwrap();
@@ -4340,7 +4427,7 @@ async fn a_worker_being_stopped_cant_pass_another_dags_run() {
     let of = |dag: &str| calls.iter().find(|a| a.dag_id == dag).unwrap().clone();
     let (sync, report) = (of("sync"), of("report"));
     // `report`'s call fails: between calls, its run handed.
-    core.handle(
+    core.handle_in_round(
         "w1",
         stopped_with(&report, "trigger_failed", false),
         later(3),
@@ -4361,7 +4448,7 @@ async fn a_worker_being_stopped_cant_pass_another_dags_run() {
         done: true,
         ..pb::TriggerStopped::default()
     });
-    core.handle("w1", lie, later(5)).await.unwrap();
+    core.handle_in_round("w1", lie, later(5)).await.unwrap();
     assert_eq!(
         core.db.trigger_run_handed("report").await.unwrap(),
         handed,
@@ -4454,7 +4541,7 @@ async fn a_call_a_restarted_master_doesnt_know_holds_back_waiting_triggers_until
         instance_id: "from-before".to_owned(),
         ..pb::TriggerStopped::default()
     });
-    core.handle("w2", ended, later(4)).await.unwrap();
+    core.handle_in_round("w2", ended, later(4)).await.unwrap();
     let call = assign_of(&core.tick(later(5)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&call), first);
 }
@@ -4577,11 +4664,11 @@ async fn a_call_s_event_the_master_didn_t_store_hands_its_item_again() {
         .await
         .unwrap();
     let answer = core
-        .handle("w1", found(&assign, 1, "o-1"), later(4))
+        .handle_in_round("w1", found(&assign, 1, "o-1"), later(4))
         .await
         .unwrap();
     assert_eq!(ack_of(&answer), Some(1), "acknowledged, not stored");
-    core.handle("w1", returned_with_event(&assign), later(4))
+    core.handle_in_round("w1", returned_with_event(&assign), later(4))
         .await
         .unwrap();
     assert_eq!(
@@ -4591,10 +4678,10 @@ async fn a_call_s_event_the_master_didn_t_store_hands_its_item_again() {
     );
     let again = assign_of(&core.tick(later(5)).await.unwrap()).expect("handed again");
     assert_eq!(handed_event(&again)["key"], json!("o-1"));
-    core.handle("w1", found(&again, 1, "o-1"), later(6))
+    core.handle_in_round("w1", found(&again, 1, "o-1"), later(6))
         .await
         .unwrap();
-    core.handle("w1", returned_with_event(&again), later(6))
+    core.handle_in_round("w1", returned_with_event(&again), later(6))
         .await
         .unwrap();
     assert_eq!(core.db.queued_runs(&sync).await.unwrap().len(), 1, "stored");
@@ -4629,7 +4716,7 @@ async fn a_trigger_waiting_for_events_is_called_once_for_each_posted_while_live(
         (&event["key"], &event["data"]["amount"]),
         (&json!("o-1"), &json!(40))
     );
-    core.handle("w1", returned(&assign), later(5))
+    core.handle_in_round("w1", returned(&assign), later(5))
         .await
         .unwrap();
     let next = assign_of(&core.tick(later(6)).await.unwrap()).unwrap();
@@ -4639,7 +4726,9 @@ async fn a_trigger_waiting_for_events_is_called_once_for_each_posted_while_live(
         "each post is an event"
     );
     assert_ne!(next.instance_id, assign.instance_id);
-    core.handle("w1", returned(&next), later(6)).await.unwrap();
+    core.handle_in_round("w1", returned(&next), later(6))
+        .await
+        .unwrap();
     assert!(assign_of(&core.tick(later(7)).await.unwrap()).is_none());
 }
 
@@ -4654,13 +4743,15 @@ async fn a_trigger_waiting_for_events_is_called_for_one_stored_behind_the_last_o
     post(&core, "o-2", later(5), later(5)).await;
     let assign = assign_of(&core.tick(later(6)).await.unwrap()).unwrap();
     assert_eq!(handed_event(&assign)["key"], json!("o-2"));
-    core.handle("w1", returned(&assign), later(6))
+    core.handle_in_round("w1", returned(&assign), later(6))
         .await
         .unwrap();
     post(&core, "o-1", later(3), later(3)).await;
     let late = assign_of(&core.tick(later(7)).await.unwrap()).unwrap();
     assert_eq!(handed_event(&late)["key"], json!("o-1"), "the late one too");
-    core.handle("w1", returned(&late), later(7)).await.unwrap();
+    core.handle_in_round("w1", returned(&late), later(7))
+        .await
+        .unwrap();
     assert!(
         assign_of(&core.tick(later(8)).await.unwrap()).is_none(),
         "and each once"
@@ -4682,7 +4773,7 @@ async fn only_named_events_are_kept_as_passed_and_a_removed_dag_s_are_forgotten(
     let mut core = Box::pin(with_waiting_trigger(None)).await;
     orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
-    core.handle("w1", returned(&assign), later(3))
+    core.handle_in_round("w1", returned(&assign), later(3))
         .await
         .unwrap();
     assert_eq!(count(&core).await, 0, "a run of another DAG isn't kept");
@@ -4692,7 +4783,7 @@ async fn only_named_events_are_kept_as_passed_and_a_removed_dag_s_are_forgotten(
     core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
     post(&core, "o-1", later(2), later(2)).await;
     let assign = assign_of(&core.tick(later(3)).await.unwrap()).unwrap();
-    core.handle("w1", returned(&assign), later(3))
+    core.handle_in_round("w1", returned(&assign), later(3))
         .await
         .unwrap();
     assert_eq!(count(&core).await, 1, "a named event is");
@@ -4717,7 +4808,7 @@ async fn an_event_passed_isn_t_handed_again_after_a_late_one_and_the_pruning() {
     core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
     let call = async |core: &mut MasterCore, at: i64| -> Option<serde_json::Value> {
         let assign = assign_of(&core.tick(later(at)).await.unwrap())?;
-        core.handle("w1", returned(&assign), later(at))
+        core.handle_in_round("w1", returned(&assign), later(at))
             .await
             .unwrap();
         Some(handed_event(&assign)["key"].clone())
@@ -4742,7 +4833,7 @@ async fn a_lookback_raised_after_the_pruning_hands_nothing_passed_again() {
     core.db.set_paused_at(&sync, false, later(1)).await.unwrap();
     let call = async |core: &mut MasterCore, at: i64| -> Option<serde_json::Value> {
         let assign = assign_of(&core.tick(later(at)).await.unwrap())?;
-        core.handle("w1", returned(&assign), later(at))
+        core.handle_in_round("w1", returned(&assign), later(at))
             .await
             .unwrap();
         Some(handed_event(&assign)["key"].clone())
@@ -4812,12 +4903,12 @@ async fn a_tasks_api_call_runs_as_the_task_only_from_its_worker_on_a_listed_rout
     };
     let attempt = assign.attempt_id.as_str();
     let posted = core
-        .handle("w1", call(attempt, "post", "/api/v1/events"), ts(NOW))
+        .handle_in_round("w1", call(attempt, "post", "/api/v1/events"), ts(NOW))
         .await
         .unwrap();
     assert_eq!(status(&posted), 201);
     let off_list = core
-        .handle(
+        .handle_in_round(
             "w1",
             call(attempt, "POST", "/api/v1/dags/sync/pause"),
             ts(NOW),
@@ -4826,12 +4917,12 @@ async fn a_tasks_api_call_runs_as_the_task_only_from_its_worker_on_a_listed_rout
         .unwrap();
     assert_eq!(status(&off_list), 403);
     let another_worker = core
-        .handle("w2", call(attempt, "POST", "/api/v1/events"), ts(NOW))
+        .handle_in_round("w2", call(attempt, "POST", "/api/v1/events"), ts(NOW))
         .await
         .unwrap();
     assert_eq!(status(&another_worker), 403);
     let unknown = core
-        .handle("w1", call("nope", "POST", "/api/v1/events"), ts(NOW))
+        .handle_in_round("w1", call("nope", "POST", "/api/v1/events"), ts(NOW))
         .await
         .unwrap();
     assert_eq!(status(&unknown), 403);
@@ -4901,7 +4992,9 @@ async fn a_poke_trigger_crossing_failing_after_tells_its_channels_once() {
         async move { db.due_notifications(later(10_000), 10).await.unwrap() }
     };
     for (failures, expected) in [(4, 0), (5, 1), (6, 1)] {
-        core.handle("w1", poked(failures), later(2)).await.unwrap();
+        core.handle_in_round("w1", poked(failures), later(2))
+            .await
+            .unwrap();
         assert_eq!(
             queued(&core).await.len(),
             expected,
@@ -4979,7 +5072,10 @@ async fn a_tasks_notification_is_queued_once_per_call_within_its_quota() {
         ("w1", "e", r#"{"channel": "ops", "extra": 1}"#),
         ("w2", "f", ok),
     ] {
-        let out = core.handle(worker, call(key, body), ts(NOW)).await.unwrap();
+        let out = core
+            .handle_in_round(worker, call(key, body), ts(NOW))
+            .await
+            .unwrap();
         statuses.push(answer(&out));
     }
     let codes: Vec<u32> = statuses.iter().map(|(code, _)| *code).collect();
@@ -5002,4 +5098,26 @@ async fn a_tasks_notification_is_queued_once_per_call_within_its_quota() {
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].event, "MESSAGE");
     assert_eq!(queued[0].body, json!({"text": "extract: loaded (12)"}));
+}
+
+#[tokio::test]
+async fn a_turn_is_refused_what_the_round_handles() {
+    // M5.2cB (decision 505): only the round moves runs forward; the service queues these for
+    // it, and the turns' way in refuses them.
+    let mut core = core().await;
+    core.register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    for message in [
+        worker_message::Message::Finished(pb::Finished::default()),
+        worker_message::Message::TaskEnded(pb::TaskEnded::default()),
+        worker_message::Message::Rejected(pb::Rejected::default()),
+        worker_message::Message::Deregister(pb::Deregister {}),
+    ] {
+        let refused = core.handle("w1", message, ts(NOW)).await;
+        assert!(
+            matches!(refused, Err(CoreError::BadMessage { ref reason, .. }) if reason.contains("round")),
+            "{refused:?}"
+        );
+    }
 }

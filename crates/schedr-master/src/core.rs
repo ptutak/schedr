@@ -22,6 +22,7 @@ use schedr_proto::pb::{self, master_message, worker_message};
 use schedr_proto::{PROTOCOL_VERSION, check_worker_version};
 
 use crate::commands::{Applied, CommandError, Commander, parse_connection_job_id};
+use crate::core::round::InRound;
 use crate::discovery::{Discovery, ParseUpload};
 use crate::dispatch::{
     DEFAULT_CANCEL_GRACE, DEFAULT_CODE_WAIT, DispatchError, Dispatcher, KeptResults, Outgoing,
@@ -32,6 +33,7 @@ use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey}
 use crate::quiet::{QuietSettings, Wakes};
 use crate::scheduler::{Scheduler, SchedulerError};
 
+pub mod round;
 pub mod task_api;
 pub(crate) mod triggers;
 
@@ -1078,7 +1080,7 @@ impl MasterCore {
             .map(|entry| entry.attempt_id.as_str())
             .collect();
         self.dispatcher
-            .unreported_unstarted(worker_id, &reported, now)
+            .unreported_unstarted(worker_id, &reported)
             .await?;
         Ok(())
     }
@@ -1200,6 +1202,7 @@ impl MasterCore {
     /// meanwhile (decision 229); `Finished` settles the attempt otherwise.
     async fn task_ended(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         ended: pb::TaskEnded,
         now: Timestamp,
@@ -1209,8 +1212,13 @@ impl MasterCore {
         };
         let (db, memory) = (self.db.clone(), self.dispatcher.memory());
         let id = result.attempt_id.as_str();
-        let handled =
-            Box::pin(db.atomically(self.dispatcher.task_ended(worker_id, &result, now))).await;
+        let handled = Box::pin(
+            db.atomically(
+                self.dispatcher
+                    .task_ended(in_round, worker_id, &result, now),
+            ),
+        )
+        .await;
         self.settle(handled, memory, id, result_landed).await?;
         Ok(())
     }
@@ -1374,6 +1382,19 @@ impl MasterCore {
         message: worker_message::Message,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
+        self.handle_in(None, worker_id, message, now).await
+    }
+
+    /// [`Self::handle`], and in a round (`in_round`) also what moves runs forward: a result, a
+    /// rejection, a task's end, a worker deregistering (M5.2cB, decision 505). Out of a round
+    /// those are refused: the service queues them for the round.
+    pub(super) async fn handle_in(
+        &mut self,
+        in_round: Option<&InRound>,
+        worker_id: &str,
+        message: worker_message::Message,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
         self.heard_from(worker_id, now).await;
         Ok(match message {
             worker_message::Message::Register(_) => {
@@ -1430,38 +1451,22 @@ impl MasterCore {
             }
             worker_message::Message::Rejected(rejected) => {
                 let (db, memory) = (self.db.clone(), self.dispatcher.memory());
-                let handled =
-                    Box::pin(db.atomically(self.dispatcher.rejected(worker_id, &rejected, now)))
-                        .await;
+                let handled = Box::pin(db.atomically(self.dispatcher.rejected(
+                    for_the_round(in_round, worker_id)?,
+                    worker_id,
+                    &rejected,
+                    now,
+                )))
+                .await;
                 let id = rejected.attempt_id.as_str();
                 // Undone, the attempt is deleted.
                 self.settle(handled, memory, id, |a| a.is_none()).await?;
                 Vec::new()
             }
             worker_message::Message::Finished(finished) => {
-                let settled = match self.finished(worker_id, &finished, now).await {
-                    // Refused for its data, it would be refused again after every reconnect,
-                    // the worker's later results waiting behind it: stored as the attempt's
-                    // failure instead, and acknowledged (B106).
-                    Err(error) if error.is_data_fault() => {
-                        tracing::error!(
-                            worker_id,
-                            attempt_id = finished.attempt_id,
-                            %error,
-                            "a result the database refuses is stored as the attempt's failure"
-                        );
-                        self.finished(worker_id, &not_stored(&finished, &error), now)
-                            .await
-                    }
-                    settled => settled,
-                };
-                let id = finished.attempt_id.as_str();
-                // As for `Started`: not stored, the worker sends it again (B41), and the
-                // attempt isn't taken back meanwhile.
-                if settled.is_ok() {
-                    self.arrivals.start_handled(id);
-                }
-                vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
+                let in_round = for_the_round(in_round, worker_id)?;
+                self.finished_message(in_round, worker_id, &finished, now)
+                    .await?
             }
             worker_message::Message::ApiCall(call) => self.api_call(worker_id, call, now).await?,
             worker_message::Message::CleanupStart(start) => {
@@ -1471,11 +1476,15 @@ impl MasterCore {
                 self.handles_added(worker_id, &added).await?
             }
             worker_message::Message::TaskEnded(ended) => {
-                self.task_ended(worker_id, ended, now).await?;
+                self.task_ended(for_the_round(in_round, worker_id)?, worker_id, ended, now)
+                    .await?;
                 Vec::new()
             }
             worker_message::Message::Draining(_) => self.worker_draining(worker_id, now).await?,
-            worker_message::Message::Deregister(_) => self.deregistered(worker_id, now).await,
+            worker_message::Message::Deregister(_) => {
+                self.deregistered(for_the_round(in_round, worker_id)?, worker_id, now)
+                    .await
+            }
             worker_message::Message::ConnectionJobDone(done) => {
                 self.connection_job_done(worker_id, done).await?;
                 Vec::new()
@@ -1618,27 +1627,36 @@ impl MasterCore {
     /// # Errors
     ///
     /// The first failure; what was done before it stays done, and the next tick goes on.
-    pub async fn tick(&mut self, now: Timestamp) -> Result<Vec<Outgoing>, CoreError> {
-        let (outgoing, result) = self.tick_partial(now).await;
+    pub(super) async fn tick_in(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        let (outgoing, result) = self.tick_partial_in(in_round, now).await;
         result.map(|()| outgoing)
     }
 
     /// As [`Self::tick`], with the messages built before a failure: each is built after the
     /// write it stands for is stored, so they are delivered whatever comes after (B7: a cancel
     /// dropped with its failed round was sent again only when the worker reconnected).
-    pub async fn tick_partial(&mut self, now: Timestamp) -> (Vec<Outgoing>, Result<(), CoreError>) {
+    pub(super) async fn tick_partial_in(
+        &mut self,
+        in_round: &InRound,
+        now: Timestamp,
+    ) -> (Vec<Outgoing>, Result<(), CoreError>) {
         let mut outgoing = Vec::new();
-        let result = self.tick_into(&mut outgoing, now).await;
+        let result = self.tick_into(in_round, &mut outgoing, now).await;
         (outgoing, result)
     }
 
     async fn tick_into(
         &mut self,
+        in_round: &InRound,
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
         for part in RoundPart::ALL {
-            self.round_part(part, now, outgoing).await?;
+            self.round_part_in(in_round, part, now, outgoing).await?;
         }
         Ok(())
     }
@@ -1661,27 +1679,29 @@ impl MasterCore {
     /// # Errors
     ///
     /// The part's failure: the round's later parts wait for the next round.
-    pub async fn round_part(
+    pub(super) async fn round_part_in(
         &mut self,
+        in_round: &InRound,
         part: RoundPart,
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), CoreError> {
         let started = std::time::Instant::now();
         let result = match part {
-            RoundPart::Commands => self.round_commands(outgoing, now).await,
+            RoundPart::Commands => self.round_commands(in_round, outgoing, now).await,
             RoundPart::Scheduler => (self.scheduler.pass(now).await)
                 .map(|_| ())
                 .map_err(CoreError::from),
             RoundPart::Triggers => Box::pin(self.trigger_pass(now, outgoing)).await,
             RoundPart::Prepare => {
-                (self.dispatcher.prepare(now, outgoing).await).map_err(CoreError::from)
+                (self.dispatcher.prepare(in_round, now, outgoing).await).map_err(CoreError::from)
             }
-            RoundPart::Expire => (self.dispatcher.expire_round(now).await).map_err(CoreError::from),
-            RoundPart::Assign => {
-                (self.dispatcher.assign_round(now, outgoing).await).map_err(CoreError::from)
+            RoundPart::Expire => {
+                (self.dispatcher.expire_round(in_round, now).await).map_err(CoreError::from)
             }
-            RoundPart::Rest => self.round_rest(outgoing, now).await,
+            RoundPart::Assign => (self.dispatcher.assign_round(in_round, now, outgoing).await)
+                .map_err(CoreError::from),
+            RoundPart::Rest => self.round_rest(in_round, outgoing, now).await,
         };
         self.metrics.round_part_done(part.name(), started.elapsed());
         result
@@ -1692,13 +1712,16 @@ impl MasterCore {
     /// (decision 483).
     async fn round_commands(
         &mut self,
+        in_round: &InRound,
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
         let pending = self.commands_to_apply(outgoing, now).await?;
         let mut failed = Ok(());
         for command in pending {
-            failed = self.apply_command(command, outgoing, now).await;
+            failed = self
+                .apply_command_in(in_round, command, outgoing, now)
+                .await;
             if failed.is_err() {
                 break;
             }
@@ -1729,8 +1752,9 @@ impl MasterCore {
     ///
     /// [`CoreError`] if the database fails: the command stays pending, the round's later ones
     /// wait for the next round.
-    pub async fn apply_command(
+    pub(super) async fn apply_command_in(
         &mut self,
+        in_round: &InRound,
         pending: schedr_db::commands::PendingCommand,
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
@@ -1739,6 +1763,7 @@ impl MasterCore {
         let result = self
             .commander
             .apply_one(
+                in_round,
                 pending,
                 &self.scheduler,
                 &mut self.dispatcher,
@@ -1811,6 +1836,7 @@ impl MasterCore {
     /// A round's last part: parse jobs past their time given again, lost workers forgotten.
     async fn round_rest(
         &mut self,
+        in_round: &InRound,
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
@@ -1830,7 +1856,7 @@ impl MasterCore {
             .map(|(id, _)| id.clone())
             .collect();
         for worker_id in lost {
-            self.forget(&worker_id, WorkerState::Lost, now, outgoing)
+            self.forget(in_round, &worker_id, WorkerState::Lost, now, outgoing)
                 .await?;
         }
         Ok(())
@@ -1894,6 +1920,42 @@ impl MasterCore {
         Ok(self.dispatcher.attempt_inputs(attempt_id).await?)
     }
 
+    /// A worker's `Finished`, handled in the round; one refused for its data stored as the
+    /// attempt's failure (B106).
+    async fn finished_message(
+        &mut self,
+        in_round: &InRound,
+        worker_id: &str,
+        finished: &pb::Finished,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        let settled = match self.finished(in_round, worker_id, finished, now).await {
+            // Refused for its data, it would be refused again after every reconnect,
+            // the worker's later results waiting behind it: stored as the attempt's
+            // failure instead, and acknowledged (B106).
+            Err(error) if error.is_data_fault() => {
+                tracing::error!(
+                    worker_id,
+                    attempt_id = finished.attempt_id,
+                    %error,
+                    "a result the database refuses is stored as the attempt's failure"
+                );
+                self.finished(in_round, worker_id, &not_stored(finished, &error), now)
+                    .await
+            }
+            settled => settled,
+        };
+        let id = finished.attempt_id.as_str();
+        // As for `Started`: not stored, the worker sends it again (B41), and the
+        // attempt isn't taken back meanwhile.
+        if settled.is_ok() {
+            self.arrivals.start_handled(id);
+        }
+        Ok(vec![settled?.unwrap_or_else(|| {
+            crate::dispatch::finished_ack(worker_id, id)
+        })])
+    }
+
     /// What a worker message's handling comes to: its result when stored; when its commit was
     /// cut off and attempt `id` (or its absence) reads back as `landed` (see
     /// [`crate::dispatch::ReadBack`]), `Ok(None)`: stored after all, memory kept; otherwise
@@ -1901,13 +1963,15 @@ impl MasterCore {
     /// A worker's `Finished` stored in one transaction (see [`Self::settle`]).
     async fn finished(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         finished: &pb::Finished,
         now: Timestamp,
     ) -> Result<Option<Outgoing>, CoreError> {
         let (db, memory) = (self.db.clone(), self.dispatcher.memory());
         let handled =
-            Box::pin(db.atomically(self.dispatcher.finished(worker_id, finished, now))).await;
+            Box::pin(db.atomically(self.dispatcher.finished(in_round, worker_id, finished, now)))
+                .await;
         self.settle(handled, memory, &finished.attempt_id, |a| {
             a.is_some_and(|a| a.status.is_some())
         })
@@ -1924,8 +1988,9 @@ impl MasterCore {
     /// The group handed back, its memory put back and nothing of it counted, when it failed
     /// (any message's error, the lease, the commit): the caller handles its messages one by
     /// one, which decides each one's fate as before.
-    pub async fn handle_group(
+    pub(super) async fn handle_group_in(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         group: Group,
         now: Timestamp,
@@ -1949,7 +2014,7 @@ impl MasterCore {
             if !group.finished.is_empty() {
                 out.extend(
                     dispatcher
-                        .finished_group(worker_id, &group.finished, now)
+                        .finished_group(in_round, worker_id, &group.finished, now)
                         .await?,
                 );
             }
@@ -1975,6 +2040,73 @@ impl MasterCore {
         self.metrics.count_staged();
         for id in group.attempt_ids() {
             self.arrivals.start_handled(id);
+        }
+        Ok(out)
+    }
+
+    /// The workers' `Started`s and `Finished`s a round takes from its queue (M5.2cB, decision
+    /// 505), in one transaction: each worker's stretch as [`Self::handle_group`] handles a group, one
+    /// lease check and one commit for all, the memory snapshot put back if it fails. The round
+    /// is the only place a worker's result is handled, so the only one moving runs forward on
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// The batch handed back, its memory put back and nothing of it counted: the caller
+    /// handles each worker's run as a group, then message by message.
+    pub(super) async fn handle_results_in(
+        &mut self,
+        in_round: &InRound,
+        batch: Vec<(String, Group)>,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, Vec<(String, Group)>> {
+        let (db, memory) = (self.db.clone(), self.dispatcher.memory());
+        self.metrics.stage();
+        self.dispatcher.take_witnesses();
+        let dispatcher = &mut self.dispatcher;
+        let mut out = Vec::new();
+        let handled = Box::pin(db.atomically(async {
+            for (worker_id, group) in &batch {
+                if !group.started.is_empty() {
+                    out.extend(
+                        dispatcher
+                            .started_group(worker_id, &group.started, now)
+                            .await?,
+                    );
+                }
+                if !group.finished.is_empty() {
+                    out.extend(
+                        dispatcher
+                            .finished_group(in_round, worker_id, &group.finished, now)
+                            .await?,
+                    );
+                }
+            }
+            Ok::<_, DispatchError>(())
+        }))
+        .await;
+        match handled {
+            Ok(()) => {}
+            Err(DispatchError::Db(DbError::CommitUnknown)) if self.group_landed().await => {}
+            Err(error) => {
+                self.metrics.drop_staged();
+                self.dispatcher.undo(memory, &error);
+                tracing::warn!(
+                    %error,
+                    messages = batch
+                        .iter()
+                        .map(|(_, g)| g.started.len() + g.finished.len())
+                        .sum::<usize>(),
+                    "a round's results failed together: handled worker by worker"
+                );
+                return Err(batch);
+            }
+        }
+        self.metrics.count_staged();
+        for (_, group) in &batch {
+            for id in group.attempt_ids() {
+                self.arrivals.start_handled(id);
+            }
         }
         Ok(out)
     }
@@ -2283,6 +2415,7 @@ impl MasterCore {
     /// fails.
     async fn store_gone(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         state: WorkerState,
         results: KeptResults,
@@ -2291,7 +2424,9 @@ impl MasterCore {
         let (db, memory) = (self.db.clone(), self.dispatcher.memory());
         let stored = Box::pin(db.atomically(async {
             self.db.set_worker_state(worker_id, state, now).await?;
-            self.dispatcher.worker_lost(worker_id, results, now).await?;
+            self.dispatcher
+                .worker_lost(in_round, worker_id, results, now)
+                .await?;
             Ok::<(), CoreError>(())
         }))
         .await;
@@ -2311,6 +2446,7 @@ impl MasterCore {
     /// parse jobs move on, and the registry keeps it listed in that state.
     async fn forget(
         &mut self,
+        in_round: &InRound,
         worker_id: &str,
         state: WorkerState,
         now: Timestamp,
@@ -2322,14 +2458,14 @@ impl MasterCore {
         // connections (B42); each step can be done again. (`worker_lost` joins this
         // transaction; the snapshot here covers its memory too.)
         let stored = self
-            .store_gone(worker_id, state, KeptResults::Used, now)
+            .store_gone(in_round, worker_id, state, KeptResults::Used, now)
             .await;
         match stored {
             // A kept result the database refuses would hold the worker, and those after it,
             // for ever: this time without it.
             Err(error) if error.is_data_fault() => {
                 tracing::error!(worker_id, %error, "a kept result the database refuses");
-                self.store_gone(worker_id, state, KeptResults::Refused, now)
+                self.store_gone(in_round, worker_id, state, KeptResults::Refused, now)
                     .await?;
             }
             stored => stored?,
@@ -2359,10 +2495,21 @@ impl MasterCore {
     /// A worker deregistered: forgotten as `Offline`. A failure is retried by the lease check
     /// (the connection stays); the parse jobs already moved go out either way, or they'd wait
     /// for their timeout.
-    async fn deregistered(&mut self, worker_id: &str, now: Timestamp) -> Vec<Outgoing> {
+    async fn deregistered(
+        &mut self,
+        in_round: &InRound,
+        worker_id: &str,
+        now: Timestamp,
+    ) -> Vec<Outgoing> {
         let mut outgoing = Vec::new();
         if let Err(error) = self
-            .forget(worker_id, WorkerState::Offline, now, &mut outgoing)
+            .forget(
+                in_round,
+                worker_id,
+                WorkerState::Offline,
+                now,
+                &mut outgoing,
+            )
             .await
         {
             tracing::error!(worker_id, %error, "a deregistered worker not forgotten yet");
@@ -2470,4 +2617,16 @@ fn parsed_kind(root: &pb::RootHash) -> bool {
 
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The round's proof a message that moves runs forward needs (M5.2cB); out of a round, such a
+/// message is refused (the service never hands one to a turn).
+fn for_the_round<'a>(
+    in_round: Option<&'a round::InRound>,
+    worker_id: &str,
+) -> Result<&'a round::InRound, CoreError> {
+    in_round.ok_or_else(|| CoreError::BadMessage {
+        worker_id: worker_id.to_owned(),
+        reason: "a message the master's round handles, not a turn".to_owned(),
+    })
 }

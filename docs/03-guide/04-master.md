@@ -309,29 +309,36 @@ gets the same item; `NOT_YET` waits for a later match.
 
 ## Between rounds: messages from workers
 
-Messages from workers are handled as they arrive, under the same lock, in order for each
-worker. A worker's messages that are already waiting are handled together, up to 80 in one turn
-(`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), the rest in the worker's next turn. A turn takes
-the lock for each of its transactions on its own (decision 480), and checks each time that its
-stream is still the worker's: the round and other workers' turns get in between. (A task sends `Started` and
-`Finished`. A forked Python task sends `Started` twice, the second with `start_method` `fork`.)
+Messages from workers are read as they arrive, in order for each worker. A worker's messages
+that are already waiting are taken together, up to 80 in one turn
+(`SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN`), the rest in the worker's next turn. (A task sends
+`Started` and `Finished`. A forked Python task sends `Started` twice, the second with
+`start_method` `fork`.)
 
-In a turn, the `Started`s are stored together in one transaction, then the `Finished`s in
-another. Each group needs one lease check and one commit. Heartbeats and warnings are handled
-after the groups. Any other message (`Rejected`, `Draining`, a code
-report, a trigger's) is a barrier: what came before it is stored first, then it is handled
-alone, as before.
+A turn doesn't handle what moves a task, and so its run, forward: its `Started`, `Finished`,
+`TaskEnded`, `Rejected` and `Deregister` go into a queue for the next round, which the turn wakes
+(decision 505). Only the round moves runs forward, so what it reads stays true until it writes.
+Heartbeats and warnings are handled at once, under the lock. Any other message (`Draining`, a code
+report, a trigger's) is handled alone after what came before it, also under the lock; a worker
+whose earlier messages still wait for the round has it queued behind them, so its messages keep
+their order. Each time it takes the lock, a turn checks that its stream is still the worker's.
+
+The round handles the queue first, before preparing runs: every worker's `Started`s and
+`Finished`s in one transaction (one lease check, one commit), each worker's `Started`s before its
+`Finished`s; anything else alone, in order. Results are acknowledged once that commit is stored.
+A message whose stream was replaced, or whose worker was taken for lost meanwhile, changes nothing:
+the worker sends it again. If the batch fails, each worker's part is redone on its own, then
+message by message, at most 10 alone a round
+(`SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN`), the rest first in the next round.
 
 ```mermaid
 flowchart TD
-    messages["Waiting worker messages"] --> group["Collect Started and Finished"]
-    group --> starts["Store Started group: one transaction"]
-    starts --> finishes["Store Finished group: one transaction"]
-    finishes --> after["Handle heartbeats and warnings"]
-    after --> barrier{"A barrier message?"}
-    barrier -->|yes| alone["Handle it alone"]
-    alone --> messages
-    barrier -->|no| done["End turn at its message limit"]
+    messages["A worker's waiting messages"] --> kind{"Moves a task forward?"}
+    kind -->|"Started, Finished, TaskEnded, Rejected, Deregister"| queue["Queue for the round; wake it"]
+    kind -->|"heartbeat, warning"| now["Handle it now"]
+    kind -->|other| alone["Handle it alone, after the queued ones"]
+    queue --> round["Round: all workers' Started and Finished in one transaction"]
+    round --> ack["Acknowledge once stored"]
 ```
 
 The `Finished`s of a group are written together too: their attempts read in one query, their

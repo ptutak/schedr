@@ -54,8 +54,23 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 2 | B257: a restarted master in the roles tests can find its kept port taken (Address already in use) | 2 | low | possible | tests |
+| 3 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 4 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B257: a restarted master in the roles tests can find its kept port taken (Address already in use)
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): a roles test restarting its master flakes when another process took the master's port meanwhile.
+- **Found:** 2026-11-17, by `make check` during M5.2cB:
+  `a_handle_registered_while_the_master_is_down_is_cleaned_up_after_its_restart` failed with the
+  restarted master's `error: can't listen on 127.0.0.1:44829: Address already in use`, then
+  passed on the next run. The test cluster keeps a master's gRPC port for a restart
+  (`crates/schedr/tests/support/mod.rs`, "the master's port once it listens (kept for a
+  restart)"), so workers find it again; between the kill and the restart, another test's role
+  binding a free port (port 0) can be handed the same one under `make check`'s parallel load.
+- **A fix:** the restart retrying its bind for a few seconds (the port may be the dying
+  master's still, or another's briefly); or the cluster reserving the port (a listener it holds
+  and hands over); or workers given the master's new port on a restart.
 
 ## B254: a worker's RUNNING count includes its wait steps, against its task slots
 

@@ -6,6 +6,7 @@ use schedr_model::{Dag, DagId, RunKind, RunState};
 use serde_json::{Value as Json, json};
 
 use super::*;
+use crate::core::round::InRound;
 use pb::master_message::Message;
 
 fn ts(text: &str) -> Timestamp {
@@ -197,7 +198,10 @@ async fn a_batchs_tasks_get_their_inputs_and_outcomes_from_its_one_upstream_read
     // M5.2a: the batch's upstream outcomes and outputs are read in one statement; each
     // assignment carries what it did when read task by task.
     let (mut dispatcher, _db, _run_id) = with_run(dag_two_downstream()).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let extract = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&extract), ts(NOW))
@@ -205,13 +209,17 @@ async fn a_batchs_tasks_get_their_inputs_and_outcomes_from_its_one_upstream_read
         .unwrap();
     dispatcher
         .finished(
+            &InRound::for_tests(),
             "w1",
             &finished(&extract, pb::AttemptStatus::Success, &json!([1, 2])),
             ts(NOW),
         )
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let mut tasks: Vec<&str> = out.iter().map(|o| assignment(o).task_id.as_str()).collect();
     tasks.sort_unstable();
     assert_eq!(tasks, ["load", "report"], "both in one batch");
@@ -234,7 +242,10 @@ async fn a_batchs_tasks_get_their_inputs_and_outcomes_from_its_one_upstream_read
 #[tokio::test]
 async fn a_run_goes_through_assignment_start_and_finish() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].worker_id, "w1");
     let assign = assignment(&out[0]);
@@ -273,6 +284,7 @@ async fn a_run_goes_through_assignment_start_and_finish() {
     );
     let ack = dispatcher
         .finished(
+            &InRound::for_tests(),
             "w1",
             &finished(&extract_attempt, pb::AttemptStatus::Success, &json!([1, 2])),
             ts(NOW),
@@ -282,7 +294,10 @@ async fn a_run_goes_through_assignment_start_and_finish() {
     assert!(matches!(ack.message.message, Some(Message::FinishedAck(_))));
     assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 2);
 
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let load = assignment(&out[0]);
     assert_eq!(load.task_id, "load");
     let inputs: Json = serde_json::from_slice(&load.inputs_json).unwrap();
@@ -293,6 +308,7 @@ async fn a_run_goes_through_assignment_start_and_finish() {
         .unwrap();
     dispatcher
         .finished(
+            &InRound::for_tests(),
             "w1",
             &finished(&load.attempt_id, pb::AttemptStatus::Success, &json!(null)),
             ts(NOW),
@@ -308,7 +324,10 @@ async fn a_run_goes_through_assignment_start_and_finish() {
 #[tokio::test]
 async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let later = ts(NOW) + jiff::SignedDuration::from_secs(5);
     dispatcher
@@ -322,7 +341,7 @@ async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
     // The master's wall clock stepped back 4 s between `Started` and `Finished`.
     let stepped_back = later - jiff::SignedDuration::from_secs(4);
     dispatcher
-        .finished("w1", &done, stepped_back)
+        .finished(&InRound::for_tests(), "w1", &done, stepped_back)
         .await
         .unwrap();
     let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
@@ -334,7 +353,10 @@ async fn the_duration_is_the_workers_even_when_the_clock_steps_back() {
 #[tokio::test]
 async fn a_forked_start_is_stored_as_fork() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let forked = pb::Started {
         start_method: pb::StartMethod::Fork.into(),
@@ -364,7 +386,10 @@ async fn a_start_is_placed_by_the_wall_and_master_clocks_read_together() {
     // Grok's review of M5.1m: `now` is read before the lock and the transaction; master time
     // later. The worker started at master time 1003 s after `NOW`, so 3 s after it on the wall.
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher.set_steady(master_later);
     dispatcher.set_wall(wall_later);
@@ -414,7 +439,10 @@ async fn a_start_is_recorded_at_the_workers_time_on_this_masters_timeline() {
         (at(-60_000), crate::clock::timeline(), at(0)),
     ] {
         let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         let attempt = assignment(&out[0]).attempt_id.clone();
         let start = pb::Started {
             started_master_ms: said,
@@ -435,7 +463,10 @@ async fn a_start_is_recorded_at_the_workers_time_on_this_masters_timeline() {
         );
     }
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let start = pb::Started {
         started_master_ms: at(1_500),
@@ -482,7 +513,10 @@ async fn a_rounds_assignments_that_fail_together_are_made_one_at_a_time() {
     .await
     .unwrap();
     let mut out = Vec::new();
-    dispatcher.step_into(ts(NOW), &mut out).await.unwrap();
+    dispatcher
+        .step_into(&InRound::for_tests(), ts(NOW), &mut out)
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1, "the first, alone");
     let first = assignment(&out[0]).task_id.clone();
     let other = if first == "extract" {
@@ -502,8 +536,17 @@ async fn a_rounds_assignments_that_fail_together_are_made_one_at_a_time() {
         .unwrap();
     // The other, set aside, once its time is up (the first, never started here, has expired
     // by then and goes again too).
-    assert_eq!(dispatcher.step(later(1)).await.unwrap(), []);
-    let out = dispatcher.step(later(61)).await.unwrap();
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(1))
+            .await
+            .unwrap(),
+        []
+    );
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(61))
+        .await
+        .unwrap();
     assert!(
         out.iter().any(|o| assignment(o).task_id == other),
         "{out:?}"
@@ -526,14 +569,26 @@ async fn when_every_task_fails_the_round_fails_and_none_is_set_aside() {
     .await
     .unwrap();
     let mut out = Vec::new();
-    assert!(dispatcher.step_into(ts(NOW), &mut out).await.is_err());
+    assert!(
+        dispatcher
+            .step_into(&InRound::for_tests(), ts(NOW), &mut out)
+            .await
+            .is_err()
+    );
     assert_eq!(out, []);
     assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 2);
     sqlx::query("DROP TRIGGER refuse_all")
         .execute(pool)
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(later(1)).await.unwrap().len(), 2);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(1))
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -553,17 +608,29 @@ async fn a_task_that_always_fails_to_be_assigned_is_set_aside_and_the_rest_go_on
     .execute(pool)
     .await
     .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let assigned: Vec<&str> = out.iter().map(|o| assignment(o).task_id.as_str()).collect();
     assert_eq!(assigned, ["extract"]);
     // Set aside: the next rounds don't try it (nor fail on it).
-    assert_eq!(dispatcher.step(later(1)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(1))
+            .await
+            .unwrap(),
+        []
+    );
     // Once its time is up, tried again: assigned now that it can be.
     sqlx::query("DROP TRIGGER refuse_audit")
         .execute(pool)
         .await
         .unwrap();
-    let out = dispatcher.step(later(61)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(61))
+        .await
+        .unwrap();
     assert_eq!(assignment(&out[0]).task_id, "audit");
 }
 
@@ -574,31 +641,52 @@ async fn without_a_free_slot_nothing_is_assigned() {
         .register("w1", "i2", &[], 0, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     dispatcher
         .register("w1", "i2", &[], 1, ts(NOW))
         .await
         .unwrap();
     dispatcher.draining("w1");
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
 }
 
 #[tokio::test]
 async fn a_repeated_finish_is_acknowledged_and_changes_nothing() {
     let (mut dispatcher, db, run_id) = with_run(dag(1)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     let failed = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
-    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
         TaskInstanceState::UpForRetry
     );
-    let again = dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    let again = dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, ts(NOW))
+        .await
+        .unwrap();
     assert!(matches!(
         again.message.message,
         Some(Message::FinishedAck(_))
@@ -608,7 +696,10 @@ async fn a_repeated_finish_is_acknowledged_and_changes_nothing() {
         pb::AttemptStatus::Success,
         &json!(1),
     );
-    dispatcher.finished("w1", &unknown, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &unknown, ts(NOW))
+        .await
+        .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     assert_eq!(run.instances[0].retries_used, 1);
 }
@@ -621,7 +712,10 @@ async fn a_finish_from_another_worker_is_acknowledged_but_not_stored() {
         .register("w2", "i2", &[], 2, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let assigned = assignment(&out[0]);
     let (attempt, owner) = (assigned.attempt_id.clone(), out[0].worker_id.clone());
     let other = if owner == "w1" { "w2" } else { "w1" };
@@ -630,7 +724,10 @@ async fn a_finish_from_another_worker_is_acknowledged_but_not_stored() {
         .await
         .unwrap();
     let done = finished(&attempt, pb::AttemptStatus::Success, &json!([1]));
-    let answer = dispatcher.finished(other, &done, ts(NOW)).await.unwrap();
+    let answer = dispatcher
+        .finished(&InRound::for_tests(), other, &done, ts(NOW))
+        .await
+        .unwrap();
     assert!(matches!(
         answer.message.message,
         Some(Message::FinishedAck(_))
@@ -642,7 +739,10 @@ async fn a_finish_from_another_worker_is_acknowledged_but_not_stored() {
         TaskInstanceState::Running
     );
     // Its own worker's finish still counts.
-    dispatcher.finished(&owner, &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), &owner, &done, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
         TaskInstanceState::Success
@@ -652,12 +752,18 @@ async fn a_finish_from_another_worker_is_acknowledged_but_not_stored() {
 #[tokio::test]
 async fn a_start_for_an_attempt_taken_back_is_answered_with_a_cancel() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     // Its worker's echo shows it unstarted: taken back, and assigned again (try 2, no retry
     // used); its `Started` comes anyway (as after a stream the worker had already left).
     handled_unstarted(&dispatcher, "w1", &[&attempt]);
-    let out = dispatcher.step(later(11)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(11))
+        .await
+        .unwrap();
     let second = assignment(&out[0]);
     assert_eq!(second.try_number, 2);
     assert_eq!(
@@ -683,25 +789,41 @@ async fn an_attempt_whose_start_arrived_is_not_taken_back() {
     let (dispatcher, _db, _run_id) = with_run(dag(0)).await;
     let arrivals = crate::core::Arrivals::default();
     let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     handled_unstarted(&dispatcher, "w1", &[&attempt]);
     // Its `Started` arrived; the master hasn't handled it yet.
     arrivals.start_arrived("w1", &attempt);
-    assert_eq!(dispatcher.step(later(11)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(11))
+            .await
+            .unwrap(),
+        []
+    );
     // Handled, it no longer protects the attempt: with no `Started` stored, it expires.
     arrivals.start_handled(&attempt);
-    let out = dispatcher.step(later(12)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(12))
+        .await
+        .unwrap();
     assert_eq!(assignment(&out[0]).try_number, 2);
 }
 
 #[tokio::test]
 async fn temporary_rejections_queue_the_task_again_at_once() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .rejected(
+            &InRound::for_tests(),
             "w1",
             &rejected(&attempt, pb::RejectReason::NoFreeSlot, ""),
             ts(NOW),
@@ -712,23 +834,45 @@ async fn temporary_rejections_queue_the_task_again_at_once() {
         state_of(&db, &run_id, "extract").await,
         (TaskInstanceState::Queued, 0)
     );
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(assignment(&out[0]).try_number, 1);
 }
 
 #[tokio::test]
 async fn code_not_there_yet_waits_before_the_next_try() {
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let missing = rejected(
         &attempt,
         pb::RejectReason::DagFileMissing,
         "team/sync.py not found",
     );
-    dispatcher.rejected("w1", &missing, ts(NOW)).await.unwrap();
-    assert_eq!(dispatcher.step(later(34)).await.unwrap(), []);
-    assert_eq!(dispatcher.step(later(35)).await.unwrap().len(), 1);
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &missing, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(34))
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(35))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -738,26 +882,38 @@ async fn worker_specific_rejections_try_other_workers_then_make_the_task_unsched
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let first = assignment(&out[0]).attempt_id.clone();
     assert_eq!(out[0].worker_id, "w1");
     let no_venv = |a: &str| rejected(a, pb::RejectReason::InterpreterUndefined, "no etl-venv");
     dispatcher
-        .rejected("w1", &no_venv(&first), ts(NOW))
+        .rejected(&InRound::for_tests(), "w1", &no_venv(&first), ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out[0].worker_id, "w2");
     let second = assignment(&out[0]).attempt_id.clone();
     dispatcher
-        .rejected("w2", &no_venv(&second), ts(NOW))
+        .rejected(&InRound::for_tests(), "w2", &no_venv(&second), ts(NOW))
         .await
         .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
         TaskInstanceState::Unschedulable
     );
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     // A new worker gives it another chance.
     dispatcher
         .register("w3", "i1", &[], 1, ts(NOW))
@@ -772,21 +928,33 @@ async fn worker_specific_rejections_try_other_workers_then_make_the_task_unsched
 #[tokio::test]
 async fn rejections_that_dont_match_an_open_assignment_are_ignored() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let reason = rejected(&attempt, pb::RejectReason::NoFreeSlot, "");
-    dispatcher.rejected("w2", &reason, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w2", &reason, ts(NOW))
+        .await
+        .unwrap();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
-    dispatcher.rejected("w1", &reason, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &reason, ts(NOW))
+        .await
+        .unwrap();
     let unknown = rejected(
         "0190a3e5-0000-7000-8000-000000000000",
         pb::RejectReason::NoFreeSlot,
         "",
     );
-    dispatcher.rejected("w1", &unknown, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &unknown, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
         TaskInstanceState::Running
@@ -800,7 +968,10 @@ async fn messages_with_unknown_values_are_errors() {
         reason: 99,
         ..rejected("a", pb::RejectReason::NoFreeSlot, "")
     };
-    let error = dispatcher.rejected("w1", &bad, ts(NOW)).await.unwrap_err();
+    let error = dispatcher
+        .rejected(&InRound::for_tests(), "w1", &bad, ts(NOW))
+        .await
+        .unwrap_err();
     assert!(
         error.to_string().starts_with("message from worker `w1`: "),
         "{error}"
@@ -810,7 +981,9 @@ async fn messages_with_unknown_values_are_errors() {
         ..pb::Finished::default()
     };
     assert!(matches!(
-        dispatcher.finished("w1", &bad, ts(NOW)).await,
+        dispatcher
+            .finished(&InRound::for_tests(), "w1", &bad, ts(NOW))
+            .await,
         Err(DispatchError::BadMessage { .. })
     ));
 }
@@ -818,14 +991,17 @@ async fn messages_with_unknown_values_are_errors() {
 #[tokio::test]
 async fn a_lost_workers_attempts_use_a_retry() {
     let (mut dispatcher, db, run_id) = with_run(dag(1)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     assert_eq!(dispatcher.workers().get("w1"), None);
@@ -862,20 +1038,26 @@ async fn extract_instance(db: &Database, run_id: &str) -> schedr_db::instances::
 async fn a_worker_lost_during_the_cleanup_leaves_the_tasks_result() {
     // Decision 229: a finished task isn't run again; its cleanup counts as failed.
     let (mut dispatcher, db, run_id) = with_run(dag_with_cleanup(1)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
-    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    dispatcher
+        .task_ended(&InRound::for_tests(), "w1", &result, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         extract_instance(&db, &run_id).await.state,
         TaskInstanceState::CleaningUp
     );
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     let extract = extract_instance(&db, &run_id).await;
@@ -900,14 +1082,17 @@ async fn a_worker_lost_during_the_cleanup_leaves_the_tasks_result() {
 async fn a_task_lost_with_its_worker_has_a_failed_cleanup_and_its_retry() {
     // Decision 220: the master can't know what the attempt did.
     let (mut dispatcher, db, run_id) = with_run(dag_with_cleanup(1)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     let extract = extract_instance(&db, &run_id).await;
@@ -927,19 +1112,28 @@ async fn a_task_lost_with_its_worker_has_a_failed_cleanup_and_its_retry() {
 #[tokio::test]
 async fn an_attempt_a_restarted_agent_doesnt_report_keeps_its_tasks_result() {
     let (mut dispatcher, db, run_id) = with_run(dag_with_cleanup(1)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
-    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
+    dispatcher
+        .task_ended(&InRound::for_tests(), "w1", &result, ts(NOW))
+        .await
+        .unwrap();
     dispatcher
         .incarnation_replaced("w1", &BTreeSet::new(), ts(NOW))
         .await
         .unwrap();
-    dispatcher.end_replaced(later(10)).await.unwrap();
+    dispatcher
+        .end_replaced(&InRound::for_tests(), later(10))
+        .await
+        .unwrap();
     let extract = extract_instance(&db, &run_id).await;
     assert_eq!(
         (extract.state, extract.cleanup_result),
@@ -958,7 +1152,10 @@ fn dag_with_anywhere(retries: u32, cleanup_retries: u32) -> Dag {
 
 /// A run's first attempt started on `w1`.
 async fn started_attempt(dispatcher: &mut Dispatcher) -> String {
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
@@ -1002,13 +1199,22 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
     let added = handles_of(&attempt, 0, &[job("j-1")]);
     dispatcher.handles_added("w1", &added).await.unwrap();
     let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
-    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .task_ended(&InRound::for_tests(), "w1", &result, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     // No worker: it waits, its attempt open, the reason shown (decisions 221, 244).
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), Vec::new());
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        Vec::new()
+    );
     let extract = extract_instance(&db, &run_id).await;
     assert_eq!(extract.state, TaskInstanceState::CleaningUp);
     let waiting = db.waiting_cleanups(ts(NOW)).await.unwrap();
@@ -1022,7 +1228,10 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!((out.len(), out[0].worker_id.as_str()), (1, "w2"));
     let assigned = assignment(&out[0]);
     assert_eq!(assigned.attempt_id, attempt);
@@ -1034,7 +1243,7 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
         .unwrap();
     // The new worker knows nothing of the task: the kept result stands.
     dispatcher
-        .finished("w2", &cleaned(&attempt), ts(NOW))
+        .finished(&InRound::for_tests(), "w2", &cleaned(&attempt), ts(NOW))
         .await
         .unwrap();
     let extract = extract_instance(&db, &run_id).await;
@@ -1051,7 +1260,7 @@ async fn a_task_lost_with_its_worker_is_retried_after_its_moved_cleanup() {
     let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -1063,13 +1272,16 @@ async fn a_task_lost_with_its_worker_is_retried_after_its_moved_cleanup() {
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     dispatcher
         .started("w2", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     dispatcher
-        .finished("w2", &cleaned(&attempt), ts(NOW))
+        .finished(&InRound::for_tests(), "w2", &cleaned(&attempt), ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -1088,20 +1300,23 @@ async fn a_cleanup_that_keeps_losing_workers_ends_worker_lost() {
     let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     dispatcher
         .started("w2", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     dispatcher
-        .worker_lost("w2", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -1125,16 +1340,31 @@ async fn a_replaced_incarnations_cleanup_moves_once() {
         .incarnation_replaced("w1", &none, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
+    assert_eq!(
+        dispatcher
+            .end_replaced(&InRound::for_tests(), later(10))
+            .await
+            .unwrap(),
+        1
+    );
     let moved = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((moved.cleanup_moves, moved.status), (1, None));
     // Moved, assigned again after its wait, and started.
-    dispatcher.step(later(600)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(600))
+        .await
+        .unwrap();
     dispatcher
         .started("w1", &started(&attempt), later(600))
         .await
         .unwrap();
-    assert_eq!(dispatcher.end_replaced(later(700)).await.unwrap(), 0);
+    assert_eq!(
+        dispatcher
+            .end_replaced(&InRound::for_tests(), later(700))
+            .await
+            .unwrap(),
+        0
+    );
     let kept = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(
         (kept.cleanup_moves, kept.worker_id.as_str(), kept.status),
@@ -1150,14 +1380,17 @@ async fn a_moved_cleanup_not_started_when_its_worker_restarts_keeps_waiting() {
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let moving = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((moving.worker_id.as_str(), moving.moving), ("w2", true));
     assert_eq!(
@@ -1168,7 +1401,10 @@ async fn a_moved_cleanup_not_started_when_its_worker_restarts_keeps_waiting() {
         1,
         "held: the old process may have started it"
     );
-    dispatcher.end_replaced(later(19)).await.unwrap();
+    dispatcher
+        .end_replaced(&InRound::for_tests(), later(19))
+        .await
+        .unwrap();
     let waiting = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1188,18 +1424,21 @@ async fn a_moved_cleanup_its_worker_surely_never_started_waits_again_at_once() {
         let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
         let attempt = started_attempt(&mut dispatcher).await;
         dispatcher
-            .worker_lost("w1", KeptResults::Used, ts(NOW))
+            .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
             .await
             .unwrap();
         dispatcher
             .register("w2", "i1", &[], 1, ts(NOW))
             .await
             .unwrap();
-        dispatcher.step(ts(NOW)).await.unwrap();
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         handled_unstarted(&dispatcher, "w2", &[&attempt]);
         if lost {
             dispatcher
-                .worker_lost("w2", KeptResults::Used, later(9))
+                .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, later(9))
                 .await
                 .unwrap();
         } else {
@@ -1208,6 +1447,11 @@ async fn a_moved_cleanup_its_worker_surely_never_started_waits_again_at_once() {
                 .await
                 .unwrap();
             assert_eq!(held, 0, "nothing held");
+            // Taken back by the next round (M5.2cB).
+            dispatcher
+                .prepare(&InRound::for_tests(), later(9), &mut Vec::new())
+                .await
+                .unwrap();
         }
         let waiting = db.attempt(&attempt).await.unwrap().unwrap();
         assert_eq!(
@@ -1229,17 +1473,20 @@ async fn a_moved_cleanup_never_sent_waits_again_without_a_move() {
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 3)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     dispatcher.arrivals.unsent("w2", &attempt);
     dispatcher
-        .worker_lost("w2", KeptResults::Used, later(61))
+        .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, later(61))
         .await
         .unwrap();
     let waiting = db.attempt(&attempt).await.unwrap().unwrap();
@@ -1265,12 +1512,18 @@ async fn a_lost_workers_held_cleanup_moves_once() {
         .await
         .unwrap();
     dispatcher
-        .worker_lost("w1", KeptResults::Used, later(1))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, later(1))
         .await
         .unwrap();
     let moved = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((moved.cleanup_moves, moved.status), (1, None));
-    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 0);
+    assert_eq!(
+        dispatcher
+            .end_replaced(&InRound::for_tests(), later(10))
+            .await
+            .unwrap(),
+        0
+    );
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().cleanup_moves,
         1
@@ -1282,27 +1535,36 @@ async fn a_moved_cleanup_refused_or_never_started_waits_again_without_a_move() {
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let refused = rejected(&attempt, pb::RejectReason::CodeMismatch, "not yet");
-    dispatcher.rejected("w2", &refused, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w2", &refused, ts(NOW))
+        .await
+        .unwrap();
     let stored = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((stored.worker_id.as_str(), stored.cleanup_moves), ("", 1));
     assert_eq!(dispatcher.workers().get("w2").unwrap().attempts.len(), 0);
 
     // Past the set-aside it goes out again; never started, as w2 shows, and it comes back.
     let again = later(600);
-    let out = dispatcher.step(again).await.unwrap();
+    let out = dispatcher.step(&InRound::for_tests(), again).await.unwrap();
     assert_eq!(out.len(), 1);
     handled_unstarted(&dispatcher, "w2", &[&attempt]);
     let expired = later(1200);
-    dispatcher.expire(expired).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), expired)
+        .await
+        .unwrap();
     let stored = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((stored.worker_id.as_str(), stored.status), ("", None));
 }
@@ -1314,11 +1576,11 @@ async fn a_cleanup_reported_by_the_worker_it_moved_from_counts_and_doesnt_move()
     let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
-        .finished("w1", &cleaned(&attempt), ts(NOW))
+        .finished(&InRound::for_tests(), "w1", &cleaned(&attempt), ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -1332,7 +1594,10 @@ async fn a_cleanup_reported_by_the_worker_it_moved_from_counts_and_doesnt_move()
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert!(
         out.iter().all(|o| assignment(o).cleanup_only.is_none()),
         "the cleanup ran: it doesn't move"
@@ -1346,28 +1611,38 @@ async fn a_cleanup_reported_by_a_worker_it_moved_from_again_keeps_the_tasks_resu
     let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 3)).await;
     let attempt = started_attempt(&mut dispatcher).await;
     let result = finished(&attempt, pb::AttemptStatus::Success, &json!(7));
-    dispatcher.task_ended("w1", &result, ts(NOW)).await.unwrap();
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .task_ended(&InRound::for_tests(), "w1", &result, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 1);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     dispatcher
         .started("w2", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     dispatcher
-        .worker_lost("w2", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     let waiting = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((waiting.worker_id.as_str(), waiting.cleanup_moves), ("", 2));
     dispatcher
-        .finished("w2", &cleaned(&attempt), ts(NOW))
+        .finished(&InRound::for_tests(), "w2", &cleaned(&attempt), ts(NOW))
         .await
         .unwrap();
     let extract = extract_instance(&db, &run_id).await;
@@ -1386,7 +1661,7 @@ async fn a_cleanup_reported_by_its_old_worker_after_it_moved_is_ignored() {
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = moved_to_w2(&mut dispatcher).await;
     dispatcher
-        .finished("w1", &cleaned(&attempt), ts(NOW))
+        .finished(&InRound::for_tests(), "w1", &cleaned(&attempt), ts(NOW))
         .await
         .unwrap();
     let stored = db.attempt(&attempt).await.unwrap().unwrap();
@@ -1397,14 +1672,17 @@ async fn a_cleanup_reported_by_its_old_worker_after_it_moved_is_ignored() {
 async fn moved_to_w2(dispatcher: &mut Dispatcher) -> String {
     let attempt = started_attempt(dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1);
     attempt
 }
@@ -1415,16 +1693,29 @@ async fn a_lost_workers_cleanup_waits_for_a_task_it_cant_see_to_stop() {
     let mut dispatcher = dispatcher.with_cleanup_move_wait(Duration::from_secs(40));
     let attempt = started_attempt(&mut dispatcher).await;
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     dispatcher
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(later(39)).await.unwrap(), Vec::new());
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(39))
+            .await
+            .unwrap(),
+        Vec::new()
+    );
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "");
-    assert_eq!(dispatcher.step(later(40)).await.unwrap().len(), 1);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(40))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }
 
@@ -1436,10 +1727,16 @@ async fn a_moved_cleanup_whose_start_arrived_is_not_taken_back() {
     let attempt = moved_to_w2(&mut dispatcher).await;
     handled_unstarted(&dispatcher, "w2", &[&attempt]);
     arrivals.start_arrived("w2", &attempt);
-    dispatcher.expire(later(1200)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
     arrivals.start_handled(&attempt);
-    dispatcher.expire(later(1200)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "");
 }
 
@@ -1448,7 +1745,10 @@ async fn a_moved_cleanup_adopted_after_a_reconnect_is_not_taken_back() {
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = moved_to_w2(&mut dispatcher).await;
     dispatcher.adopt("w2", &attempt, later(5)).await.unwrap();
-    dispatcher.expire(later(1200)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }
 
@@ -1466,14 +1766,23 @@ async fn a_moved_cleanup_refused_goes_to_another_worker_and_back_if_none_is_left
         .await
         .unwrap();
     let refused = rejected(&attempt, pb::RejectReason::DiskNotWritable, "full");
-    dispatcher.rejected("w2", &refused, ts(NOW)).await.unwrap();
-    let out = dispatcher.step(later(600)).await.unwrap();
-    assert_eq!(out[0].worker_id, "w3");
     dispatcher
-        .rejected("w3", &refused, later(600))
+        .rejected(&InRound::for_tests(), "w2", &refused, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(later(1200)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(600))
+        .await
+        .unwrap();
+    assert_eq!(out[0].worker_id, "w3");
+    dispatcher
+        .rejected(&InRound::for_tests(), "w3", &refused, later(600))
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(
         out.len(),
         1,
@@ -1541,12 +1850,15 @@ async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
     // retry, though assignments sent as it began draining never ran there: with no retries,
     // their runs failed (stress scenario 7, now and then).
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     // Its worker said it had handled it, with no start before (B240).
     handled_unstarted(&dispatcher, "w1", &[&attempt]);
     dispatcher
-        .worker_lost("w1", KeptResults::Used, ts(NOW))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -1569,20 +1881,29 @@ async fn a_worker_leaving_gives_back_what_it_never_started_without_a_retry() {
 #[tokio::test]
 async fn cancelling_a_run_cancels_its_running_attempts() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1);
     assert_eq!(
         (out[0].worker_id.as_str(), cancelled_attempt(&out[0])),
         ("w1", attempt.as_str())
     );
     let done = finished(&attempt, pb::AttemptStatus::Cancelled, &json!(null));
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         db.run_tasks(&run_id).await.unwrap().unwrap().state,
         RunState::Cancelled
@@ -1595,12 +1916,21 @@ async fn an_unstarted_assignment_is_taken_back_once_its_worker_shows_it_never_st
     // handled stays (its `Started` may be on its way); once a message names it as handled
     // with no start before, it goes back at once.
     let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
-    dispatcher.expire(later(3_600)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(3_600))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
     handled_unstarted(&dispatcher, "w1", &[&attempt]);
-    dispatcher.expire(later(3_600)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(3_600))
+        .await
+        .unwrap();
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(AttemptStatus::AssignmentExpired)
@@ -1613,12 +1943,22 @@ async fn a_worker_without_a_stream_is_given_no_task_until_it_registers_again() {
     // lease later ended the attempt `lost`, using a retry, though it never left the master.
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
     dispatcher.worker_disconnected("w1");
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     dispatcher
         .register("w1", "i1", &[], 2, later(1))
         .await
         .unwrap();
-    let out = dispatcher.step(later(1)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(1))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1, "assigned once it is back");
 }
 
@@ -1626,11 +1966,14 @@ async fn a_worker_without_a_stream_is_given_no_task_until_it_registers_again() {
 async fn an_assignment_that_never_left_the_master_goes_back_without_a_retry() {
     // Grok's review of B240: no stream, or one full or closed, as it was sent.
     let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher.arrivals.unsent("w1", &attempt);
     dispatcher
-        .worker_lost("w1", KeptResults::Used, later(61))
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, later(61))
         .await
         .unwrap();
     assert_eq!(
@@ -1642,7 +1985,10 @@ async fn an_assignment_that_never_left_the_master_goes_back_without_a_retry() {
 #[tokio::test]
 async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let none = BTreeSet::new();
     dispatcher
@@ -1667,10 +2013,22 @@ async fn a_replaced_incarnation_loses_only_its_started_unreported_attempts() {
     );
     // Decision 443 (B230): the old process may still run it until its lease (10 s here) is
     // over in master time.
-    assert_eq!(dispatcher.end_replaced(later(9)).await.unwrap(), 0);
+    assert_eq!(
+        dispatcher
+            .end_replaced(&InRound::for_tests(), later(9))
+            .await
+            .unwrap(),
+        0
+    );
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
     assert_eq!(dispatcher.metrics.replaced_held.get(), 1, "held, and shown");
-    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
+    assert_eq!(
+        dispatcher
+            .end_replaced(&InRound::for_tests(), later(10))
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(dispatcher.metrics.replaced_held.get(), 0);
     let ended = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(ended.status, Some(AttemptStatus::Lost));
@@ -1692,7 +2050,10 @@ async fn a_replaced_incarnation_gives_back_what_it_surely_never_started_and_hold
     // unstarted may run in the old process, its `Started` lost with the stream: held as a
     // started one (decision 443).
     let (mut dispatcher, db, _run_id) = with_run(dag_with_tasks(2)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let (known, unknown) = (
         assignment(&out[0]).attempt_id.clone(),
         assignment(&out[1]).attempt_id.clone(),
@@ -1707,12 +2068,23 @@ async fn a_replaced_incarnation_gives_back_what_it_surely_never_started_and_hold
         .await
         .unwrap();
     assert_eq!(held, 1, "the one not known unstarted");
+    // Taken back by the next round (M5.2cB).
+    dispatcher
+        .prepare(&InRound::for_tests(), ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
     assert_eq!(
         db.attempt(&known).await.unwrap().unwrap().status,
         Some(AttemptStatus::AssignmentExpired)
     );
     assert_eq!(db.attempt(&unknown).await.unwrap().unwrap().status, None);
-    assert_eq!(dispatcher.end_replaced(later(10)).await.unwrap(), 1);
+    assert_eq!(
+        dispatcher
+            .end_replaced(&InRound::for_tests(), later(10))
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(
         db.attempt(&unknown).await.unwrap().unwrap().status,
         Some(AttemptStatus::Lost)
@@ -1722,21 +2094,29 @@ async fn a_replaced_incarnation_gives_back_what_it_surely_never_started_and_hold
 #[tokio::test]
 async fn the_same_process_registering_again_gives_back_what_its_journal_lacks() {
     // B240: its journal holds every assignment it accepted; one not in it never started.
+    // Found at the registration, taken back by the next round's `Prepare` (M5.2cB).
     let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let none = BTreeSet::new();
     assert_eq!(
-        dispatcher
-            .unreported_unstarted("w1", &none, ts(NOW))
-            .await
-            .unwrap(),
+        dispatcher.unreported_unstarted("w1", &none).await.unwrap(),
         1
     );
+    assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().status, None);
+    assert!(dispatcher.takes_back());
+    dispatcher
+        .prepare(&InRound::for_tests(), ts(NOW), &mut Vec::new())
+        .await
+        .unwrap();
     assert_eq!(
         db.attempt(&attempt).await.unwrap().unwrap().status,
         Some(AttemptStatus::AssignmentExpired)
     );
+    assert!(!dispatcher.takes_back());
 }
 
 async fn reason_of(db: &Database, run_id: &str, task: &str) -> Option<String> {
@@ -1779,13 +2159,19 @@ async fn a_round_writes_at_most_so_many_waiting_reasons() {
         .await
         .unwrap()
     };
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         with_reason().await,
         i64::try_from(REASONS_PER_ROUND).unwrap()
     );
     // The rest in the next round.
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(with_reason().await, i64::try_from(width).unwrap());
 }
 
@@ -1796,7 +2182,13 @@ async fn a_task_that_waits_says_why() {
         .register("w1", "i2", &["large".to_owned()], 2, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("no active worker serves queue `default`")
@@ -1805,7 +2197,13 @@ async fn a_task_that_waits_says_why() {
         .register("w2", "i1", &[], 0, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("waiting for a free slot on the workers serving queue `default`")
@@ -1814,7 +2212,10 @@ async fn a_task_that_waits_says_why() {
         .register("w2", "i2", &[], 1, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out[0].worker_id, "w2");
     assert_eq!(reason_of(&db, &run_id, "extract").await, None);
 }
@@ -1837,13 +2238,16 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
         // Still missing everywhere, 70 s after the first: unschedulable.
         ("w1", TaskInstanceState::Unschedulable),
     ] {
-        let out = dispatcher.step(later(at)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), later(at))
+            .await
+            .unwrap();
         let attempt = out.iter().find(|o| o.worker_id == worker).map_or_else(
             || panic!("nothing for {worker} at {at} s: {out:?}"),
             |o| assignment(o).attempt_id.clone(),
         );
         dispatcher
-            .rejected(worker, &missing(&attempt), later(at))
+            .rejected(&InRound::for_tests(), worker, &missing(&attempt), later(at))
             .await
             .unwrap();
         assert_eq!(
@@ -1861,7 +2265,12 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
     );
     assert!(matches!(
         dispatcher
-            .retry_task(&run_id, (&id("extract"), None), later(at))
+            .retry_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                later(at)
+            )
             .await
             .unwrap(),
         TaskRetry::Queued(_)
@@ -1872,14 +2281,24 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
     );
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, (&id("extract"), None), later(at))
+            .retry_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                later(at)
+            )
             .await
             .unwrap(),
         TaskRetry::NotUnschedulable(TaskInstanceState::Queued)
     );
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, (&id("load"), None), later(at))
+            .retry_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("load"), None),
+                later(at)
+            )
             .await
             .unwrap(),
         TaskRetry::NotUnschedulable(TaskInstanceState::Scheduled)
@@ -1891,7 +2310,12 @@ async fn retrying_needs_a_known_task_of_an_unfinished_run() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, (&id("extract"), None), ts(NOW))
+            .retry_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskRetry::RunQueued,
@@ -1899,13 +2323,19 @@ async fn retrying_needs_a_known_task_of_an_unfinished_run() {
     );
     assert!(matches!(
         dispatcher
-            .retry_task(&run_id, (&id("ghost"), None), ts(NOW))
+            .retry_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("ghost"), None),
+                ts(NOW)
+            )
             .await,
         Err(DispatchError::Execution(ExecutionError::UnknownTask { .. }))
     ));
     assert!(matches!(
         dispatcher
             .retry_task(
+                &InRound::for_tests(),
                 "0190a3e5-0000-7000-8000-000000000000",
                 (&id("extract"), None),
                 ts(NOW)
@@ -1918,7 +2348,12 @@ async fn retrying_needs_a_known_task_of_an_unfinished_run() {
         .unwrap();
     assert_eq!(
         dispatcher
-            .retry_task(&run_id, (&id("extract"), None), ts(NOW))
+            .retry_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("extract"), None),
+                ts(NOW)
+            )
             .await
             .unwrap(),
         TaskRetry::RunFinished(RunState::Failed)
@@ -1928,22 +2363,33 @@ async fn retrying_needs_a_known_task_of_an_unfinished_run() {
 #[tokio::test]
 async fn a_running_task_is_cancelled_through_its_worker() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let (cancelled, out) = dispatcher
-        .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+        .cancel_task(
+            &InRound::for_tests(),
+            &run_id,
+            (&id("extract"), None),
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(cancelled, TaskCancel::Stopping);
     assert_eq!(cancelled_attempt(&out[0]), attempt);
     let done = finished(&attempt, pb::AttemptStatus::Cancelled, &json!(null));
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         db.run_tasks(&run_id).await.unwrap().unwrap().state,
         RunState::Cancelled
     );
     let (cancelled, out) = dispatcher
-        .cancel_task(&run_id, (&id("load"), None), ts(NOW))
+        .cancel_task(&InRound::for_tests(), &run_id, (&id("load"), None), ts(NOW))
         .await
         .unwrap();
     assert_eq!(
@@ -1965,14 +2411,22 @@ async fn a_mapped_task_cancelled_as_a_whole_stops_its_running_instances() {
     // -1, the whole task as the API lists it, is the same as no instance (both stopped).
     for whole in [None, Some(-1)] {
         let (mut dispatcher, _, run_id) = with_run(mapped.clone()).await;
-        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         let mut attempts: Vec<String> = out
             .iter()
             .map(|o| assignment(o).attempt_id.clone())
             .collect();
         assert_eq!(attempts.len(), 2);
         let (cancelled, out) = dispatcher
-            .cancel_task(&run_id, (&id("fetch"), whole), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("fetch"), whole),
+                ts(NOW),
+            )
             .await
             .unwrap();
         assert_eq!(cancelled, TaskCancel::Stopping, "{whole:?}");
@@ -2001,7 +2455,10 @@ async fn an_expand_kwargs_element_that_isnt_a_dict_fails_its_instance_unretried(
     }))
     .unwrap();
     let (mut dispatcher, db, run_id) = with_run(lanes).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     // `nums[0]` returns a number, `nums[1]` a dict of arguments; `load[0]` is assigned first.
     for (assigned, value) in out.iter().zip([json!(1), json!({"n": 2})]) {
         let attempt = assignment(assigned);
@@ -2011,9 +2468,15 @@ async fn an_expand_kwargs_element_that_isnt_a_dict_fails_its_instance_unretried(
             .await
             .unwrap();
         let done = finished(&attempt.attempt_id, pb::AttemptStatus::Success, &value);
-        dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+        dispatcher
+            .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+            .await
+            .unwrap();
     }
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     // `load[0]` is never sent; its failure fails `load` at once, so `load[1]` isn't either.
     assert!(out.is_empty(), "{out:?}");
     // `load[0]` failed without a try on a worker and isn't retried: it would fail again.
@@ -2043,18 +2506,32 @@ async fn an_expand_kwargs_element_that_isnt_a_dict_fails_its_instance_unretried(
 async fn a_rejected_assignment_of_a_task_being_cancelled_cancels_it() {
     for whole_run in [false, true] {
         let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         let attempt = assignment(&out[0]).attempt_id.clone();
         if whole_run {
-            dispatcher.cancel_run(&run_id, ts(NOW)).await.unwrap();
+            dispatcher
+                .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+                .await
+                .unwrap();
         } else {
             dispatcher
-                .cancel_task(&run_id, (&id("extract"), None), ts(NOW))
+                .cancel_task(
+                    &InRound::for_tests(),
+                    &run_id,
+                    (&id("extract"), None),
+                    ts(NOW),
+                )
                 .await
                 .unwrap();
         }
         let busy = rejected(&attempt, pb::RejectReason::NoFreeSlot, "no free slot");
-        dispatcher.rejected("w1", &busy, ts(NOW)).await.unwrap();
+        dispatcher
+            .rejected(&InRound::for_tests(), "w1", &busy, ts(NOW))
+            .await
+            .unwrap();
         assert_eq!(
             state_of(&db, &run_id, "extract").await,
             (TaskInstanceState::Cancelled, 0),
@@ -2099,11 +2576,19 @@ async fn worker_specific_and_code_rejections_together_make_the_task_unschedulabl
             TaskInstanceState::Unschedulable,
         ),
     ] {
-        let out = dispatcher.step(later(at)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), later(at))
+            .await
+            .unwrap();
         assert_eq!(out[0].worker_id, worker, "{at} s");
         let attempt = assignment(&out[0]).attempt_id.clone();
         dispatcher
-            .rejected(worker, &rejected(&attempt, reason, "no"), later(at))
+            .rejected(
+                &InRound::for_tests(),
+                worker,
+                &rejected(&attempt, reason, "no"),
+                later(at),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -2124,25 +2609,37 @@ async fn a_task_that_started_somewhere_forgets_who_rejected_it() {
     let (dispatcher, db, run_id) = with_run(dag(1)).await;
     let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
     let missing = |a: &str| rejected(a, pb::RejectReason::DagFileMissing, "no team/sync.py");
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
-    let first = assignment(&out[0]).attempt_id.clone();
-    dispatcher
-        .rejected("w1", &missing(&first), ts(NOW))
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(later(35)).await.unwrap();
+    let first = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &missing(&first), ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(35))
+        .await
+        .unwrap();
     let second = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&second), later(35))
         .await
         .unwrap();
     let failed = finished(&second, pb::AttemptStatus::Failed, &json!(null));
-    dispatcher.finished("w1", &failed, later(36)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, later(36))
+        .await
+        .unwrap();
     // The retry, long after the first rejection, meets missing code again: a fresh wait.
-    let out = dispatcher.step(later(600)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(600))
+        .await
+        .unwrap();
     let third = assignment(&out[0]).attempt_id.clone();
     dispatcher
-        .rejected("w1", &missing(&third), later(600))
+        .rejected(&InRound::for_tests(), "w1", &missing(&third), later(600))
         .await
         .unwrap();
     assert_eq!(
@@ -2158,15 +2655,27 @@ async fn a_task_every_remaining_worker_rejected_says_so() {
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
-    let attempt = assignment(&out[0]).attempt_id.clone();
-    let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
-    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
-    dispatcher
-        .worker_lost("w2", KeptResults::Used, ts(NOW))
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &no_venv, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("every active worker serving queue `default` rejected it")
@@ -2178,7 +2687,13 @@ async fn only_workers_with_the_newest_code_get_the_task_and_are_told_its_hash() 
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     dispatcher.report_root("w1", "etl", "h1");
     dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("waiting for workers serving queue `default` to have the newest code of root `etl`")
@@ -2188,7 +2703,10 @@ async fn only_workers_with_the_newest_code_get_the_task_and_are_told_its_hash() 
         .await
         .unwrap();
     dispatcher.report_root("w2", "etl", "h2");
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out[0].worker_id, "w2");
     assert_eq!(assignment(&out[0]).expected_code_hash, "h2");
 }
@@ -2197,13 +2715,22 @@ async fn only_workers_with_the_newest_code_get_the_task_and_are_told_its_hash() 
 async fn a_worker_older_than_the_parse_doesnt_get_the_task() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     dispatcher.set_worker_version("w1", Some(SchedrVersion::new(0, 9)));
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("no worker with schedr ≥ 1.0 serves queue `default`")
     );
     dispatcher.set_worker_version("w1", Some(SchedrVersion::new(1, 0)));
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         assignment(&out[0]).expected_code_hash,
         "",
@@ -2221,7 +2748,13 @@ async fn the_current_codes_version_counts_too() {
         &BTreeSet::from(["h2".to_owned()]),
         Some(SchedrVersion::new(1, 1)),
     );
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("no worker with schedr ≥ 1.1 serves queue `default`")
@@ -2233,12 +2766,18 @@ async fn no_eligible_worker_left_isnt_everyone_rejecting_it() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     dispatcher.report_root("w1", "etl", "h1");
     dispatcher.set_current_code("etl", &BTreeSet::from(["h1".to_owned()]), None);
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     // Meanwhile newer code is current, which w1 hasn't synced: nobody is eligible.
     dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
     let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
-    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &no_venv, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
         TaskInstanceState::Queued
@@ -2274,7 +2813,10 @@ async fn gone_after(
     summary: Option<&str>,
 ) -> Option<ErrorSummary> {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     change(&db).await;
     let failed = pb::Finished {
@@ -2282,7 +2824,10 @@ async fn gone_after(
         error_summary_json: summary.map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
         ..finished(&attempt, pb::AttemptStatus::Failed, &json!(null))
     };
-    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, ts(NOW))
+        .await
+        .unwrap();
     db.task_attempts(&run_id, &id("extract")).await.unwrap()[0]
         .error_summary
         .as_deref()
@@ -2353,7 +2898,10 @@ async fn a_removed_dags_tasks_not_started_are_cancelled() {
         dag_id: DagId::new("sync").unwrap(),
     };
     db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert!(
         !out.iter().any(|o| matches!(
             o.message.message,
@@ -2372,7 +2920,10 @@ async fn a_removed_dags_running_task_finishes_and_nothing_after_it_starts() {
     // Codex's review of B192: only ready tasks were cancelled, so a scheduled downstream task
     // outlived the removal and ran once the DAG came back; the running one isn't stopped.
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let extract = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&extract), ts(NOW))
@@ -2382,7 +2933,10 @@ async fn a_removed_dags_running_task_finishes_and_nothing_after_it_starts() {
         dag_id: DagId::new("sync").unwrap(),
     };
     db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
-    let out = dispatcher.step(later(1)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(1))
+        .await
+        .unwrap();
     assert!(out.is_empty(), "nothing assigned, nothing stopped: {out:?}");
     assert_eq!(
         state_of(&db, &run_id, "load").await.0,
@@ -2395,13 +2949,17 @@ async fn a_removed_dags_running_task_finishes_and_nothing_after_it_starts() {
     redefine(&db, dag(0)).await;
     dispatcher
         .finished(
+            &InRound::for_tests(),
             "w1",
             &finished(&extract, pb::AttemptStatus::Success, &json!([1])),
             later(2),
         )
         .await
         .unwrap();
-    let out = dispatcher.step(later(3)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(3))
+        .await
+        .unwrap();
     assert!(out.is_empty(), "{out:?}");
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
@@ -2416,13 +2974,19 @@ async fn a_removed_dags_assignment_not_started_is_cancelled() {
     // Codex's review of B192: an assignment whose `Started` hadn't come was left running, so
     // the worker could still start it after the removal.
     let (mut dispatcher, db, _run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let extract = assignment(&out[0]).attempt_id.clone();
     let gone = DagChange::Remove {
         dag_id: DagId::new("sync").unwrap(),
     };
     db.apply_dag_changes(&[gone], ts(NOW)).await.unwrap();
-    let out = dispatcher.step(later(1)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(1))
+        .await
+        .unwrap();
     let cancels: Vec<&str> = out
         .iter()
         .filter_map(|o| match &o.message.message {
@@ -2432,7 +2996,11 @@ async fn a_removed_dags_assignment_not_started_is_cancelled() {
         .collect();
     assert_eq!(cancels, [extract.as_str()], "{out:?}");
     assert!(
-        dispatcher.step(later(2)).await.unwrap().is_empty(),
+        dispatcher
+            .step(&InRound::for_tests(), later(2))
+            .await
+            .unwrap()
+            .is_empty(),
         "asked once"
     );
 }
@@ -2448,7 +3016,10 @@ async fn a_dag_in_an_id_conflict_keeps_its_tasks_queued_until_it_is_resolved() {
         pause: false,
     };
     db.apply_dag_changes(&[conflict], ts(NOW)).await.unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert!(out.is_empty(), "{out:?}");
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
@@ -2459,7 +3030,10 @@ async fn a_dag_in_an_id_conflict_keeps_its_tasks_queued_until_it_is_resolved() {
         Some(DAG_IN_CONFLICT)
     );
     redefine(&db, dag(0)).await;
-    let out = dispatcher.step(later(1)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(1))
+        .await
+        .unwrap();
     assert_eq!(assignment(&out[0]).task_id, "extract");
 }
 
@@ -2469,7 +3043,10 @@ async fn a_worker_on_newer_code_whose_parse_is_on_its_way_gets_the_task() {
     dispatcher.report_root("w1", "etl", "h3");
     let accepted = BTreeSet::from(["h2".to_owned(), "h3".to_owned()]);
     dispatcher.set_current_code("etl", &accepted, None);
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         assignment(&out[0]).expected_code_hash,
         "h3",
@@ -2480,10 +3057,16 @@ async fn a_worker_on_newer_code_whose_parse_is_on_its_way_gets_the_task() {
 #[tokio::test]
 async fn resuming_a_worker_gives_unschedulable_tasks_another_chance() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let no_venv = rejected(&attempt, pb::RejectReason::InterpreterUndefined, "no venv");
-    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &no_venv, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "extract").await.0,
         TaskInstanceState::Unschedulable
@@ -2500,7 +3083,13 @@ async fn resuming_a_worker_gives_unschedulable_tasks_another_chance() {
 async fn a_queue_whose_workers_are_drained_says_so() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     dispatcher.drain("w1");
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         reason_of(&db, &run_id, "extract").await.as_deref(),
         Some("the workers serving queue `default` are drained (`schedr workers resume`)")
@@ -2511,7 +3100,10 @@ async fn a_queue_whose_workers_are_drained_says_so() {
 async fn memory_put_back_undoes_what_changed_since() {
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
     let before = dispatcher.memory();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1);
     assert_eq!(dispatcher.workers().get("w1").unwrap().free_slots(), 1);
     dispatcher.restore(before);
@@ -2528,9 +3120,15 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
         .register("w1", "i1", &[], u32::try_from(width * 2).unwrap(), ts(NOW))
         .await
         .unwrap();
-    let mut sent = dispatcher.step(ts(NOW)).await.unwrap();
+    let mut sent = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(sent.len(), ASSIGNMENTS_PER_ROUND);
-    let more = dispatcher.step(ts(NOW)).await.unwrap();
+    let more = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(more.len(), 5);
     sent.extend(more);
     // None starts, as the worker shows: taken back at most EXPIRIES_PER_ROUND a round.
@@ -2539,7 +3137,10 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
         .map(|o| assignment(o).attempt_id.as_str())
         .collect();
     handled_unstarted(&dispatcher, "w1", &attempts);
-    dispatcher.step(later(11)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(11))
+        .await
+        .unwrap();
     let schedr_db::Pool::Sqlite(pool) = db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
@@ -2552,7 +3153,10 @@ async fn a_round_assigns_and_takes_back_at_most_so_many_the_rest_in_the_next() {
         .unwrap()
     };
     assert_eq!(expired().await, i64::try_from(EXPIRIES_PER_ROUND).unwrap());
-    dispatcher.step(later(12)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(12))
+        .await
+        .unwrap();
     assert_eq!(expired().await, i64::try_from(width).unwrap());
 }
 
@@ -2568,7 +3172,14 @@ async fn the_pending_reason_names_the_configured_cap() {
         .register("w1", "i1", &[], 4, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 1);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let schedr_db::Pool::Sqlite(pool) = db.pool() else {
         unreachable!("the tests' database is SQLite")
     };
@@ -2596,7 +3207,11 @@ async fn the_tasks_past_a_rounds_cap_show_pending_and_go_in_the_next() {
         .await
         .unwrap();
     assert_eq!(
-        dispatcher.step(ts(NOW)).await.unwrap().len(),
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
         ASSIGNMENTS_PER_ROUND
     );
     let schedr_db::Pool::Sqlite(pool) = db.pool() else {
@@ -2614,7 +3229,14 @@ async fn the_tasks_past_a_rounds_cap_show_pending_and_go_in_the_next() {
             .all(|r| r.as_deref() == Some(pending_reason(ASSIGNMENTS_PER_ROUND).as_str())),
         "{pending:?}"
     );
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 5);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        5
+    );
 }
 
 #[tokio::test]
@@ -2631,7 +3253,10 @@ async fn a_batch_redone_one_at_a_time_still_stops_at_the_rounds_cap() {
         .register("w1", "i1", &[], slots, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), ASSIGNMENTS_PER_ROUND);
     assert_eq!(
         state_of(&db, &run_id, "big").await.0,
@@ -2669,7 +3294,12 @@ async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
         .register("w1", "i1", &[], u32::try_from(width * 2).unwrap(), ts(NOW))
         .await
         .unwrap();
-    while !dispatcher.step(ts(NOW)).await.unwrap().is_empty() {}
+    while !dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap()
+        .is_empty()
+    {}
     let unstarted = db.unstarted_attempts(later(11), &[], 1000).await.unwrap();
     assert_eq!(unstarted.len(), width);
     let ids_of: Vec<&str> = unstarted.iter().map(|a| a.id.as_str()).collect();
@@ -2678,7 +3308,10 @@ async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
     for attempt in &unstarted[..EXPIRIES_PER_ROUND] {
         arrivals.start_arrived("w1", &attempt.id);
     }
-    dispatcher.step(later(11)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(11))
+        .await
+        .unwrap();
     let left = db.unstarted_attempts(later(11), &[], 1000).await.unwrap();
     let ids = |attempts: &[schedr_db::attempts::StoredAttempt]| -> Vec<String> {
         attempts.iter().map(|a| a.id.clone()).collect()
@@ -2735,7 +3368,10 @@ mod faults {
     impl Running {
         async fn new(start: bool) -> Self {
             let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
-            let out = dispatcher.step(ts(NOW)).await.unwrap();
+            let out = dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap();
             let attempt = assignment(&out[0]).attempt_id.clone();
             if start {
                 dispatcher
@@ -2762,7 +3398,11 @@ mod faults {
         }
         async fn run(&mut self) {
             handled_unstarted(&self.0.dispatcher, "w1", &[&self.0.attempt]);
-            let _ = self.0.dispatcher.expire(ts(NOW)).await;
+            let _ = self
+                .0
+                .dispatcher
+                .expire(&InRound::for_tests(), ts(NOW))
+                .await;
         }
         fn db(&self) -> &Database {
             &self.0.db
@@ -2786,8 +3426,13 @@ mod faults {
         async fn run(&mut self) {
             let done = finished(&self.0.attempt, pb::AttemptStatus::Success, &json!([1]));
             let (db, memory) = (self.0.db.clone(), self.0.dispatcher.memory());
-            let handled =
-                Box::pin(db.atomically(self.0.dispatcher.finished("w1", &done, ts(NOW)))).await;
+            let handled = Box::pin(db.atomically(self.0.dispatcher.finished(
+                &InRound::for_tests(),
+                "w1",
+                &done,
+                ts(NOW),
+            )))
+            .await;
             if handled.is_err() {
                 self.0.dispatcher.restore(memory);
             }
@@ -2815,7 +3460,7 @@ mod faults {
             let _ = self
                 .0
                 .dispatcher
-                .worker_lost("w1", KeptResults::Used, ts(NOW))
+                .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
                 .await;
         }
         fn db(&self) -> &Database {
@@ -2882,7 +3527,10 @@ mod faults {
                 .register("w2", "i2", &[], 1, ts(NOW))
                 .await
                 .unwrap();
-            let out = dispatcher.step(ts(NOW)).await.unwrap();
+            let out = dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap();
             let mut by_worker: BTreeMap<String, usize> = BTreeMap::new();
             for o in &out {
                 let attempt = &assignment(o).attempt_id;
@@ -2909,7 +3557,7 @@ mod faults {
             let lost = self.lost.clone();
             let _ = self
                 .dispatcher
-                .worker_lost(&lost, KeptResults::Used, ts(NOW))
+                .worker_lost(&InRound::for_tests(), &lost, KeptResults::Used, ts(NOW))
                 .await;
         }
         fn db(&self) -> &Database {
@@ -2941,10 +3589,10 @@ mod faults {
             }
         }
         async fn run(&mut self) {
-            let _ = self.dispatcher.step(ts(NOW)).await;
+            let _ = self.dispatcher.step(&InRound::for_tests(), ts(NOW)).await;
         }
         async fn recover(&mut self) {
-            let _ = self.dispatcher.step(later(1)).await;
+            let _ = self.dispatcher.step(&InRound::for_tests(), later(1)).await;
         }
         /// `extract`, the DAG's first task, is no longer waiting: preparing went through.
         async fn extra(&self) -> Vec<String> {
@@ -3122,6 +3770,7 @@ async fn reasons_of(db: &Database, run_id: &str, task: &str) -> Vec<Option<Strin
 async fn succeed(dispatcher: &mut Dispatcher, attempt_id: &str) {
     dispatcher
         .finished(
+            &InRound::for_tests(),
             "w1",
             &finished(attempt_id, pb::AttemptStatus::Success, &json!(null)),
             ts(NOW),
@@ -3145,7 +3794,12 @@ async fn max_active_per_run_holds_a_mapped_tasks_instances_back() {
         .register("w1", "i2", &[], 10, ts(NOW))
         .await
         .unwrap();
-    let first = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    let first = assigned(
+        &dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+    );
     assert_eq!(first.len(), 2);
     let waiting = Some("waiting: `max_active_per_run` (2) reached".to_owned());
     assert_eq!(
@@ -3153,12 +3807,36 @@ async fn max_active_per_run_holds_a_mapped_tasks_instances_back() {
         [None, None, waiting.clone(), waiting]
     );
     // Nothing more while both run; one more once one ends.
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     succeed(&mut dispatcher, &first[0]).await;
-    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 1);
+    assert_eq!(
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        )
+        .len(),
+        1
+    );
     // Another run has its own count.
     let second = another_run(&db).await;
-    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 2);
+    assert_eq!(
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        )
+        .len(),
+        2
+    );
     assert_eq!(dispatcher.active().of_run_task(&second, &id("fetch")), 2);
 }
 
@@ -3178,7 +3856,12 @@ async fn max_active_and_max_active_tasks_count_across_runs() {
             .await
             .unwrap();
         let second = another_run(&db).await;
-        let out = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+        let out = assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap(),
+        );
         assert_eq!(out.len(), 3, "{name}");
         // Oldest ready first: three of the first run's, none of the second's.
         let reason = Some(format!("waiting: `{name}` (3) reached"));
@@ -3204,14 +3887,38 @@ async fn limits_across_runs_are_the_current_versions() {
         .register("w1", "i2", &[], 10, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 1);
+    assert_eq!(
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        )
+        .len(),
+        1
+    );
     redefine(&db, limited(&json!({"max_active": 10}), &json!({}))).await;
     // The run's own `max_active_per_run` (1) still holds it back.
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     // A new run of the new version has no `max_active_per_run`: its 4 go, 5 open under
     // `max_active` 10.
     let _second = another_run(&db).await;
-    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 4);
+    assert_eq!(
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        )
+        .len(),
+        4
+    );
 }
 
 #[tokio::test]
@@ -3223,13 +3930,28 @@ async fn the_counts_are_read_back_after_a_restart() {
         .register("w1", "i2", &[], 10, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(assigned(&dispatcher.step(ts(NOW)).await.unwrap()).len(), 2);
+    assert_eq!(
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        )
+        .len(),
+        2
+    );
     let mut restarted = Dispatcher::new(db.clone(), DEFAULT_CANCEL_GRACE);
     restarted
         .register("w2", "i1", &[], 10, ts(NOW))
         .await
         .unwrap();
-    assert_eq!(restarted.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        restarted
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(restarted.active().of_run_task(&run_id, &id("fetch")), 2);
 }
 
@@ -3237,23 +3959,46 @@ async fn the_counts_are_read_back_after_a_restart() {
 async fn a_rejected_or_expired_attempt_stops_counting() {
     let (mut dispatcher, _db, _run_id) =
         with_run(limited(&json!({"max_active_per_run": 1}), &json!({}))).await;
-    let first = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    let first = assigned(
+        &dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+    );
     dispatcher
         .rejected(
+            &InRound::for_tests(),
             "w1",
             &rejected(&first[0], pb::RejectReason::NoFreeSlot, ""),
             ts(NOW),
         )
         .await
         .unwrap();
-    let again = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    let again = assigned(
+        &dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+    );
     assert_eq!(again.len(), 1);
     // Never started, as its worker shows: taken back, and another goes.
     handled_unstarted(&dispatcher, "w1", &[&again[0]]);
     let expiry = 1;
-    assert_eq!(dispatcher.expire(later(expiry)).await.unwrap(), 1);
     assert_eq!(
-        assigned(&dispatcher.step(later(expiry)).await.unwrap()).len(),
+        dispatcher
+            .expire(&InRound::for_tests(), later(expiry))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), later(expiry))
+                .await
+                .unwrap()
+        )
+        .len(),
         1
     );
 }
@@ -3265,18 +4010,31 @@ async fn an_expiry_whose_commit_answer_was_lost_leaves_no_count_behind() {
     // task back until the master restarted.
     let (mut dispatcher, db, _run_id) =
         with_run(limited(&json!({}), &json!({"max_active_tasks": 1}))).await;
-    let first = assigned(&dispatcher.step(ts(NOW)).await.unwrap());
+    let first = assigned(
+        &dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+    );
     assert_eq!(first.len(), 1);
     handled_unstarted(&dispatcher, "w1", &[&first[0]]);
     let expiry = 1;
     db.lose_commit_answer();
-    let expired = dispatcher.expire(later(expiry)).await;
+    let expired = dispatcher
+        .expire(&InRound::for_tests(), later(expiry))
+        .await;
     assert!(
         matches!(expired, Err(DispatchError::Db(DbError::CommitUnknown))),
         "{expired:?}"
     );
     assert_eq!(
-        assigned(&dispatcher.step(later(expiry)).await.unwrap()).len(),
+        assigned(
+            &dispatcher
+                .step(&InRound::for_tests(), later(expiry))
+                .await
+                .unwrap()
+        )
+        .len(),
         1,
         "the expired attempt no longer counts"
     );
@@ -3286,7 +4044,10 @@ async fn an_expiry_whose_commit_answer_was_lost_leaves_no_count_behind() {
 async fn an_instance_is_sent_without_what_its_task_maps_over() {
     // B119: a literal list travelled in every instance's task JSON (its square in all).
     let (mut dispatcher, _db, _run_id) = with_run(limited(&json!({}), &json!({}))).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let task: Json = serde_json::from_slice(&assignment(&out[0]).task_json).unwrap();
     assert_eq!(task["id"], "fetch");
     assert_eq!(task.get("expand"), None, "{task}");
@@ -3311,7 +4072,10 @@ async fn an_assignment_carries_only_the_connections_its_task_declares() {
         &BTreeMap::from([("etl".to_owned(), Arc::new(registry))]),
         &BTreeMap::new(),
     );
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let sent: Registry = serde_json::from_slice(&assignment(&out[0]).connections_json).unwrap();
     assert_eq!(
         sent,
@@ -3364,13 +4128,23 @@ async fn a_resources_cleanup_goes_first_and_isnt_held_by_limits() {
         .unwrap();
     // Both ready together: the cleanup first, then `hold` waits for the DAG's limit.
     assert_eq!(
-        assigned_tasks(&dispatcher.step(ts(NOW)).await.unwrap()),
+        assigned_tasks(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        ),
         ["tmp.cleanup"]
     );
     // With the limit reached, another run's cleanup still goes; its `hold` doesn't.
     another_run(&db).await;
     assert_eq!(
-        assigned_tasks(&dispatcher.step(ts(NOW)).await.unwrap()),
+        assigned_tasks(
+            &dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+        ),
         ["tmp.cleanup"]
     );
 }
@@ -3378,24 +4152,42 @@ async fn a_resources_cleanup_goes_first_and_isnt_held_by_limits() {
 #[tokio::test]
 async fn a_cancelled_run_still_runs_and_retries_its_resources_cleanup() {
     let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(assigned_tasks(&out), ["hold"]);
     let hold = assignment(&out[0]).attempt_id.clone();
-    let stops = dispatcher.cancel_run(&run_id, ts(NOW)).await.unwrap();
+    let stops = dispatcher
+        .cancel_run(&InRound::for_tests(), &run_id, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(cancelled_attempt(&stops[0]), hold);
     let done = finished(&hold, pb::AttemptStatus::Cancelled, &json!(null));
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     // The user is done: the cleanup runs, and a failure of it is tried again.
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(assigned_tasks(&out), ["tmp.cleanup"]);
     let first = assignment(&out[0]).attempt_id.clone();
     let failed = finished(&first, pb::AttemptStatus::Failed, &json!(null));
-    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "tmp.cleanup").await.0,
         TaskInstanceState::UpForRetry
     );
-    let out = dispatcher.step(later(1)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(1))
+        .await
+        .unwrap();
     let second = assignment(&out[0]).attempt_id.clone();
     succeed(&mut dispatcher, &second).await;
     assert_eq!(
@@ -3408,24 +4200,38 @@ async fn a_cancelled_run_still_runs_and_retries_its_resources_cleanup() {
 async fn a_running_resource_cleanup_is_cancelled_and_its_run_ends_cancelled() {
     // Decision 279: `schedr tasks cancel` stops a resource's cleanup (a run's cancel doesn't).
     let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let hold = assignment(&out[0]).attempt_id.clone();
     assert!(!assignment(&out[0]).resource_cleanup);
     succeed(&mut dispatcher, &hold).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(assigned_tasks(&out), ["tmp.cleanup"]);
     // The worker gives it `resource_cleanup_timeout` when it sets no timeout.
     assert!(assignment(&out[0]).resource_cleanup);
     let cleanup = assignment(&out[0]).attempt_id.clone();
     let (cancelled, stops) = dispatcher
-        .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+        .cancel_task(
+            &InRound::for_tests(),
+            &run_id,
+            (&id("tmp.cleanup"), None),
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(cancelled, TaskCancel::Stopping);
     assert_eq!(cancelled_attempt(&stops[0]), cleanup);
     // Stopped, it reports so: cancelled, without a retry (it has one).
     let done = finished(&cleanup, pb::AttemptStatus::Cancelled, &json!(null));
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "tmp.cleanup").await.0,
         TaskInstanceState::Cancelled
@@ -3440,15 +4246,29 @@ async fn a_running_resource_cleanup_is_cancelled_and_its_run_ends_cancelled() {
 async fn a_resource_cleanup_waiting_for_its_users_or_a_retry_is_cancelled_at_once() {
     // Waiting for its user: cancelled now; the run ends once `hold` has, `cancelled`.
     let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let hold = assignment(&out[0]).attempt_id.clone();
     let (cancelled, out) = dispatcher
-        .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+        .cancel_task(
+            &InRound::for_tests(),
+            &run_id,
+            (&id("tmp.cleanup"), None),
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!((cancelled, out.len()), (TaskCancel::Cancelled(None), 0));
     succeed(&mut dispatcher, &hold).await;
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         db.run_tasks(&run_id).await.unwrap().unwrap().state,
         RunState::Cancelled
@@ -3456,23 +4276,43 @@ async fn a_resource_cleanup_waiting_for_its_users_or_a_retry_is_cancelled_at_onc
 
     // Waiting to be tried again: cancelled now, and the run ends with it.
     let (mut dispatcher, db, run_id) = with_run(tmp_resource(true, &json!({}))).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let hold = assignment(&out[0]).attempt_id.clone();
     succeed(&mut dispatcher, &hold).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let first = assignment(&out[0]).attempt_id.clone();
     let failed = finished(&first, pb::AttemptStatus::Failed, &json!(null));
-    dispatcher.finished("w1", &failed, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "tmp.cleanup").await.0,
         TaskInstanceState::UpForRetry
     );
     let (cancelled, _) = dispatcher
-        .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+        .cancel_task(
+            &InRound::for_tests(),
+            &run_id,
+            (&id("tmp.cleanup"), None),
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(cancelled, TaskCancel::Cancelled(Some(RunState::Cancelled)));
-    assert_eq!(dispatcher.step(later(1)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(1))
+            .await
+            .unwrap(),
+        []
+    );
 }
 
 #[tokio::test]
@@ -3496,14 +4336,25 @@ async fn cancelling_a_blocking_cleanup_cancels_what_follows_its_group_a_non_bloc
             );
         }
         let (mut dispatcher, db, run_id) = with_run(dag).await;
-        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         let hold = assignment(&out[0]).attempt_id.clone();
         dispatcher
-            .cancel_task(&run_id, (&id("tmp.cleanup"), None), ts(NOW))
+            .cancel_task(
+                &InRound::for_tests(),
+                &run_id,
+                (&id("tmp.cleanup"), None),
+                ts(NOW),
+            )
             .await
             .unwrap();
         succeed(&mut dispatcher, &hold).await;
-        let out = dispatcher.step(ts(NOW)).await.unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         let after = state_of(&db, &run_id, "after").await.0;
         if blocking {
             assert_eq!((after, out.len()), (TaskInstanceState::Cancelled, 0));
@@ -3526,25 +4377,40 @@ async fn a_user_waiting_for_a_worker_past_the_timeout_fails_and_the_cleanup_runs
     let mut dag = tmp_resource(true, &json!({}));
     dag.resources[0].unschedulable_timeout_ms = Some(60_000);
     let (mut dispatcher, db, run_id) = with_run(dag).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let no_venv = rejected(
         &attempt,
         pb::RejectReason::InterpreterUndefined,
         "no etl-venv",
     );
-    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &no_venv, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "hold").await.0,
         TaskInstanceState::Unschedulable
     );
     // Not before the timeout: it may still get a worker.
-    assert_eq!(dispatcher.step(later(59)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(59))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         state_of(&db, &run_id, "hold").await.0,
         TaskInstanceState::Unschedulable
     );
-    let out = dispatcher.step(later(60)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(60))
+        .await
+        .unwrap();
     assert_eq!(assigned_tasks(&out), ["tmp.cleanup"]);
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     let hold = run
@@ -3566,14 +4432,20 @@ async fn timing_out() -> (Dispatcher, Database, String) {
     dag.resources[0].unschedulable_timeout_ms = Some(60_000);
     dag.tasks[1].kind = schedr_model::TaskKind::Empty;
     let (mut dispatcher, db, run_id) = with_run(dag).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let no_venv = rejected(
         &attempt,
         pb::RejectReason::InterpreterUndefined,
         "no etl-venv",
     );
-    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &no_venv, ts(NOW))
+        .await
+        .unwrap();
     (dispatcher, db, run_id)
 }
 
@@ -3583,15 +4455,27 @@ async fn a_timeout_whose_writes_fail_is_done_whole_next_round() {
     // between them left a run whose tasks had all ended `running` for ever.
     let (mut dispatcher, db, _) = timing_out().await;
     db.count_writes();
-    dispatcher.step(later(60)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(60))
+        .await
+        .unwrap();
     let writes = db.writes();
     assert!(writes >= 2, "{writes}");
     for nth in 1..=writes {
         let (mut dispatcher, db, run_id) = timing_out().await;
         db.fail_write(nth);
-        assert!(dispatcher.step(later(60)).await.is_err(), "write {nth}");
+        assert!(
+            dispatcher
+                .step(&InRound::for_tests(), later(60))
+                .await
+                .is_err(),
+            "write {nth}"
+        );
         db.fail_write(0);
-        dispatcher.step(later(61)).await.unwrap();
+        dispatcher
+            .step(&InRound::for_tests(), later(61))
+            .await
+            .unwrap();
         let run = db.run_tasks(&run_id).await.unwrap().unwrap();
         assert_eq!(run.state, RunState::Failed, "write {nth}");
     }
@@ -3606,7 +4490,10 @@ async fn a_mapped_user_timing_out_stops_its_running_instances() {
         serde_json::from_value(json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]}))
             .unwrap();
     let (mut dispatcher, db, run_id) = with_run(dag).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(assigned_tasks(&out), ["hold", "hold"]);
     let first = assignment(&out[0]).attempt_id.clone();
     let running = assignment(&out[1]).attempt_id.clone();
@@ -3620,8 +4507,14 @@ async fn a_mapped_user_timing_out_stops_its_running_instances() {
         pb::RejectReason::InterpreterUndefined,
         "no etl-venv",
     );
-    dispatcher.rejected("w1", &no_venv, ts(NOW)).await.unwrap();
-    let out = dispatcher.step(later(60)).await.unwrap();
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &no_venv, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(60))
+        .await
+        .unwrap();
     assert_eq!(
         out.iter()
             .filter_map(|o| match &o.message.message {
@@ -3637,9 +4530,17 @@ async fn a_mapped_user_timing_out_stops_its_running_instances() {
         TaskInstanceState::Scheduled
     );
     let done = finished(&running, pb::AttemptStatus::Cancelled, &json!(null));
-    dispatcher.finished("w1", &done, later(60)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, later(60))
+        .await
+        .unwrap();
     assert_eq!(
-        assigned_tasks(&dispatcher.step(later(60)).await.unwrap()),
+        assigned_tasks(
+            &dispatcher
+                .step(&InRound::for_tests(), later(60))
+                .await
+                .unwrap()
+        ),
         ["tmp.cleanup"]
     );
 }
@@ -3681,7 +4582,10 @@ async fn a_switched_off_wait_step_fails_at_once_even_with_no_worker_to_take_it()
         .register("w1", "i2", &[], 0, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 0);
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
@@ -3705,7 +4609,10 @@ async fn a_switched_off_wait_step_past_the_rounds_cap_still_fails_that_round() {
         .await
         .unwrap();
     dispatcher.report_root("w1", "etl", "h1");
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), ASSIGNMENTS_PER_ROUND);
     assert!(out.iter().all(|o| assignment(o).task_id != "wait"));
     assert_eq!(
@@ -3721,7 +4628,11 @@ async fn while_its_code_can_still_run_it_stays_off() {
         switched_off_on_h1(&db).await;
         dispatcher.set_current_code("etl", &accepted(known), None);
         assert_eq!(
-            dispatcher.step(ts(NOW)).await.unwrap().len(),
+            dispatcher
+                .step(&InRound::for_tests(), ts(NOW))
+                .await
+                .unwrap()
+                .len(),
             0,
             "{known:?}"
         );
@@ -3736,7 +4647,14 @@ async fn while_its_code_can_still_run_it_stays_off() {
 async fn after_a_restart_with_no_code_known_it_stays_off() {
     let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
     switched_off_on_h1(&db).await;
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Failed
@@ -3749,7 +4667,10 @@ async fn once_its_code_is_gone_it_has_one_chance() {
     switched_off_on_h1(&db).await;
     dispatcher.set_current_code("etl", &accepted(&["h2"]), None);
     // It isn't failed; no worker has that code yet, so it waits for one.
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Queued
@@ -3761,7 +4682,10 @@ async fn once_its_code_is_gone_it_has_one_chance() {
 #[tokio::test]
 async fn a_strike_is_of_the_code_the_attempt_ran_and_counted_once() {
     let (mut dispatcher, db, _) = with_run(sensor_dag()).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     // New code came while it ran.
     dispatcher.set_current_code("etl", &accepted(&["h2"]), None);
@@ -3772,8 +4696,14 @@ async fn a_strike_is_of_the_code_the_attempt_ran_and_counted_once() {
         ..finished(&attempt, pb::AttemptStatus::Failed, &json!(null))
     };
     let mut dispatcher = dispatcher.with_switch_off_after(1);
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     let off = db.wait_step_strikes("sync", "wait").await.unwrap().unwrap();
     assert_eq!(off.strikes, 1);
     assert_eq!(off.off_code.as_deref(), Some("h1"));
@@ -3787,13 +4717,19 @@ async fn a_success_forgets_its_strikes() {
             .await
             .unwrap()
     );
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let done = pb::Finished {
         wait_step: true,
         ..finished(&attempt, pb::AttemptStatus::Success, &json!(1))
     };
-    dispatcher.finished("w1", &done, ts(NOW)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(db.wait_step_strikes("sync", "wait").await.unwrap(), None);
 }
 
@@ -3804,14 +4740,17 @@ async fn a_success_in_a_group_forgets_its_strikes() {
     db.strike_wait_step(("sync", "wait"), 3, "h1", ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let done = pb::Finished {
         wait_step: true,
         ..finished(&attempt, pb::AttemptStatus::Success, &json!(1))
     };
     dispatcher
-        .finished_group("w1", &[done], ts(NOW))
+        .finished_group(&InRound::for_tests(), "w1", &[done], ts(NOW))
         .await
         .unwrap();
     assert_eq!(db.wait_step_strikes("sync", "wait").await.unwrap(), None);
@@ -3827,7 +4766,10 @@ async fn a_strike_after_a_success_of_the_same_wait_step_in_a_group_stays() {
     let (dispatcher, db, _) = with_run(dag).await;
     another_run(&db).await;
     let mut dispatcher = dispatcher.with_switch_off_after(1);
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 2, "both runs' wait steps assigned");
     let (first, second) = (
         assignment(&out[0]).attempt_id.clone(),
@@ -3850,7 +4792,7 @@ async fn a_strike_after_a_success_of_the_same_wait_step_in_a_group_stays() {
         ..finished(&second, pb::AttemptStatus::Failed, &json!(null))
     };
     dispatcher
-        .finished_group("w1", &[success, struck], ts(NOW))
+        .finished_group(&InRound::for_tests(), "w1", &[success, struck], ts(NOW))
         .await
         .unwrap();
     let off = db.wait_step_strikes("sync", "wait").await.unwrap().unwrap();
@@ -3865,7 +4807,10 @@ async fn a_wait_step_takes_a_watcher_slot_and_leaves_the_task_slots_alone() {
         .register("w1", "i2", &[], 0, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1, "no task slot needed");
     let worker = dispatcher.workers().get("w1").unwrap();
     assert_eq!((worker.attempts.len(), worker.wait_steps.len()), (0, 1));
@@ -3875,7 +4820,13 @@ async fn a_wait_step_takes_a_watcher_slot_and_leaves_the_task_slots_alone() {
 async fn with_no_free_watcher_slot_it_waits_saying_so() {
     let (mut dispatcher, db, run_id) = with_run(sensor_dag()).await;
     dispatcher.set_watcher_slots("w1", 0);
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Queued
@@ -3902,7 +4853,10 @@ async fn its_time_runs_from_its_first_start_over_attempts_and_is_sent() {
         *max_wait_ms = Some(60_000);
     }
     let (mut dispatcher, _db, _) = with_run(dag).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(max_wait_sent(&out[0]), Some(60_000), "nothing has run yet");
     assert_eq!(assignment(&out[0]).first_started, None, "its own start");
     let attempt = assignment(&out[0]).attempt_id.clone();
@@ -3912,8 +4866,11 @@ async fn its_time_runs_from_its_first_start_over_attempts_and_is_sent() {
         .unwrap();
     let failed = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
     let at = later(20);
-    dispatcher.finished("w1", &failed, at).await.unwrap();
-    let out = dispatcher.step(at).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, at)
+        .await
+        .unwrap();
+    let out = dispatcher.step(&InRound::for_tests(), at).await.unwrap();
     assert_eq!(max_wait_sent(&out[0]), Some(40_000));
     // `delay` counts from it too (M4.11g).
     assert_eq!(assignment(&out[0]).first_started, Some(proto_time(ts(NOW))));
@@ -3926,7 +4883,10 @@ async fn a_maintenance_drain_moves_pokes_and_leaves_the_others() {
         *mode = schedr_model::SensorMode::Poke;
     }
     let (mut dispatcher, _db, _) = with_run(poke).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     let sent = dispatcher.drain("w1");
     let Some(pb::master_message::Message::CancelAttempt(cancel)) = &sent[0].message.message else {
@@ -3936,7 +4896,10 @@ async fn a_maintenance_drain_moves_pokes_and_leaves_the_others() {
     assert!(cancel.interrupted);
 
     let (mut dispatcher, _db, _) = with_run(sensor_dag()).await;
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     assert_eq!(dispatcher.drain("w1"), []);
 }
 
@@ -3947,7 +4910,10 @@ async fn a_wait_step_adopted_holds_its_watcher_slot_once() {
         *mode = schedr_model::SensorMode::Poke;
     }
     let (mut dispatcher, _db, _) = with_run(poke).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher.adopt("w1", &attempt, ts(NOW)).await.unwrap();
     let worker = dispatcher.workers().get("w1").unwrap();
@@ -3963,21 +4929,39 @@ async fn out_of_time_while_waiting_to_run_again_it_times_out_with_no_worker_free
         *max_wait_ms = Some(60_000);
     }
     let (mut dispatcher, db, run_id) = with_run(dag).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), ts(NOW))
         .await
         .unwrap();
     let failed = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
-    dispatcher.finished("w1", &failed, later(10)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &failed, later(10))
+        .await
+        .unwrap();
     dispatcher.set_watcher_slots("w1", 0);
-    assert_eq!(dispatcher.step(later(20)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(20))
+            .await
+            .unwrap(),
+        []
+    );
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Queued
     );
-    assert_eq!(dispatcher.step(later(61)).await.unwrap(), []);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(61))
+            .await
+            .unwrap(),
+        []
+    );
     let instances = db.run_instances(&run_id).await.unwrap();
     assert_eq!(instances[0].state, TaskInstanceState::Success);
     assert_eq!(instances[0].outcome.as_deref(), Some("TimedOut"));
@@ -4038,7 +5022,7 @@ async fn a_wait_for_an_event_ends_with_the_first_of_its_key_posted_since_its_run
     // Before the run: doesn't count.
     post_paid(&db, "o-1", ts("2026-10-21T07:00:00Z")).await;
     dispatcher
-        .step_into(later(1), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(1), &mut Vec::new())
         .await
         .unwrap();
     let (state, _) = state_of(&db, &run_id, "wait").await;
@@ -4050,7 +5034,7 @@ async fn a_wait_for_an_event_ends_with_the_first_of_its_key_posted_since_its_run
     );
     post_paid(&db, "o-2", later(2)).await;
     dispatcher
-        .step_into(later(3), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(3), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4060,7 +5044,7 @@ async fn a_wait_for_an_event_ends_with_the_first_of_its_key_posted_since_its_run
     );
     post_paid(&db, "o-1", later(4)).await;
     dispatcher
-        .step_into(later(5), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(5), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4089,7 +5073,7 @@ async fn a_wait_for_an_event_resolves_its_key_in_its_run(
     let (mut dispatcher, db, run_id) = with_run(event_waiting_dag(key.as_ref())).await;
     post_paid(&db, &run_id, later(1)).await;
     dispatcher
-        .step_into(later(2), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
         .await
         .unwrap();
     let want = if ends {
@@ -4105,11 +5089,11 @@ async fn a_wait_for_an_event_that_doesnt_come_times_out() {
     let (mut dispatcher, db, run_id) =
         with_run(event_waiting_dag(Some(&json!({"literal": "o-1"})))).await;
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     dispatcher
-        .step_into(later(61), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(61), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4210,7 +5194,7 @@ async fn a_waiting_step_is_parked_until_a_run_of_its_dag_ends_or_its_time_runs_o
         }
     };
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     assert!(!ready(later(1)).await, "parked");
@@ -4218,7 +5202,7 @@ async fn a_waiting_step_is_parked_until_a_run_of_its_dag_ends_or_its_time_runs_o
     orders_run(&db, ts("2026-10-20T08:00:00Z"), RunState::Success, later(1)).await;
     assert!(ready(later(1)).await, "a run of its DAG ended");
     dispatcher
-        .step_into(later(2), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4234,7 +5218,7 @@ async fn a_wait_for_ends_with_the_run_it_waits_for_and_says_what_it_waits_for_me
     let (mut dispatcher, db, run_id) =
         with_run(waiting_dag(&json!({"dag": "orders", "lag_ms": 0}), false)).await;
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4248,7 +5232,7 @@ async fn a_wait_for_ends_with_the_run_it_waits_for_and_says_what_it_waits_for_me
     // Another day's run doesn't count; the one planned for the same moment does.
     orders_run(&db, ts("2026-10-20T08:00:00Z"), RunState::Success, later(1)).await;
     dispatcher
-        .step_into(later(2), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4257,7 +5241,7 @@ async fn a_wait_for_ends_with_the_run_it_waits_for_and_says_what_it_waits_for_me
     );
     let theirs = orders_run(&db, ts(NOW), RunState::Success, later(3)).await;
     dispatcher
-        .step_into(later(4), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(4), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4277,12 +5261,12 @@ async fn a_failure_waited_for_fails_the_step_unless_the_dag_takes_it() {
         let (mut dispatcher, db, run_id) =
             with_run(waiting_dag(&json!({"dag": "orders"}), routed)).await;
         dispatcher
-            .step_into(ts(NOW), &mut Vec::new())
+            .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
             .await
             .unwrap();
         let theirs = orders_run(&db, ts(NOW), RunState::Failed, later(1)).await;
         dispatcher
-            .step_into(later(2), &mut Vec::new())
+            .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
             .await
             .unwrap();
         let (state, _) = state_of(&db, &run_id, "wait").await;
@@ -4314,11 +5298,11 @@ async fn a_wait_for_with_nothing_to_wait_for_times_out() {
     ))
     .await;
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     dispatcher
-        .step_into(later(59), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(59), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4326,7 +5310,7 @@ async fn a_wait_for_with_nothing_to_wait_for_times_out() {
         TaskInstanceState::Queued
     );
     dispatcher
-        .step_into(later(61), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(61), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4372,12 +5356,12 @@ async fn what_ended_after_its_time_ran_out_doesnt_count_though_seen_late() {
     ] {
         let (mut dispatcher, db, run_id) = with_run(waiting_dag(&lag, false)).await;
         dispatcher
-            .step_into(ts(NOW), &mut Vec::new())
+            .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
             .await
             .unwrap();
         orders_run(&db, ts(NOW), RunState::Success, later(61)).await;
         dispatcher
-            .step_into(later(62), &mut Vec::new())
+            .step_into(&InRound::for_tests(), later(62), &mut Vec::new())
             .await
             .unwrap();
         let run = db.run_tasks(&run_id).await.unwrap().unwrap();
@@ -4425,7 +5409,7 @@ async fn a_task_waited_for_counts_once_it_ends_not_when_its_cleanup_reports() {
         .await
         .unwrap();
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     let instance = db.run_tasks(&theirs).await.unwrap().unwrap().instances[0]
@@ -4435,7 +5419,7 @@ async fn a_task_waited_for_counts_once_it_ends_not_when_its_cleanup_reports() {
         .await
         .unwrap();
     dispatcher
-        .step_into(later(2), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4488,7 +5472,7 @@ async fn a_rerun_on_its_way_is_waited_for() {
     .await
     .unwrap();
     dispatcher
-        .step_into(later(1), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(1), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4505,12 +5489,12 @@ async fn a_lag_past_the_times_there_are_matches_nothing() {
     ))
     .await;
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     orders_run(&db, ts(NOW), RunState::Success, later(1)).await;
     dispatcher
-        .step_into(later(2), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4548,7 +5532,7 @@ async fn only_the_newest_run_for_the_moment_decides() {
         .await
         .unwrap();
     dispatcher
-        .step_into(later(1), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(1), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4562,7 +5546,7 @@ async fn only_the_newest_run_for_the_moment_decides() {
         .await
         .unwrap();
     dispatcher
-        .step_into(later(3), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(3), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4591,11 +5575,21 @@ async fn a_sensor_waiting_for_a_run_is_called_once_it_ends_and_then_for_a_newer_
     let (mut dispatcher, db, run_id) =
         with_run(run_sensor_dag(&json!({"dag": "orders", "lag_ms": 0}))).await;
     // Nothing of `orders` yet: no call, no slot; it says what it waits for.
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     let (state, _) = state_of(&db, &run_id, "wait").await;
     assert_eq!(state, TaskInstanceState::Queued);
     let failed = orders_run(&db, ts(NOW), RunState::Failed, later(1)).await;
-    let out = dispatcher.step(later(2)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(2))
+        .await
+        .unwrap();
     assert_eq!(
         out.len(),
         1,
@@ -4619,7 +5613,10 @@ async fn a_sensor_waiting_for_a_run_is_called_once_it_ends_and_then_for_a_newer_
         outcome: "NotYet".to_owned(),
         ..finished(&attempt, pb::AttemptStatus::Success, &json!(null))
     };
-    dispatcher.finished("w1", &not_yet, later(3)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &not_yet, later(3))
+        .await
+        .unwrap();
     let tasks = db.run_tasks(&run_id).await.unwrap().unwrap();
     let wait = tasks
         .instances
@@ -4632,9 +5629,19 @@ async fn a_sensor_waiting_for_a_run_is_called_once_it_ends_and_then_for_a_newer_
         "no retry used"
     );
     // The same run isn't given again: it waits for a newer one for the moment.
-    assert_eq!(dispatcher.step(later(4)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(4))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     let again = orders_run(&db, ts(NOW), RunState::Success, later(5)).await;
-    let out = dispatcher.step(later(6)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(6))
+        .await
+        .unwrap();
     assert_eq!(handed_run(&out[0])["run_id"], json!(again));
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
@@ -4642,7 +5649,10 @@ async fn a_sensor_waiting_for_a_run_is_called_once_it_ends_and_then_for_a_newer_
         .await
         .unwrap();
     let done = finished(&attempt, pb::AttemptStatus::Success, &json!("rows"));
-    dispatcher.finished("w1", &done, later(7)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, later(7))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Success
@@ -4653,10 +5663,31 @@ async fn a_sensor_waiting_for_a_run_is_called_once_it_ends_and_then_for_a_newer_
 async fn a_sensor_waiting_for_a_run_times_out_from_when_it_began_to_wait() {
     let (mut dispatcher, db, run_id) =
         with_run(run_sensor_dag(&json!({"dag": "orders", "task": "load"}))).await;
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     // Without `lag`, the next to end after it began waiting; and its task's output comes too.
-    assert_eq!(dispatcher.step(later(59)).await.unwrap().len(), 0);
-    assert_eq!(dispatcher.step(later(61)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(59))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(61))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     let wait = run
         .instances
@@ -4678,16 +5709,25 @@ async fn a_sensor_retried_after_its_function_raised_gets_the_same_run() {
     dag["tasks"][0]["settings"]["retry_delay_ms"] = json!(0);
     let (mut dispatcher, db, _) = with_run(serde_json::from_value(dag).unwrap()).await;
     let first = orders_run(&db, ts(NOW), RunState::Failed, later(1)).await;
-    let out = dispatcher.step(later(2)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(2))
+        .await
+        .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&attempt), later(2))
         .await
         .unwrap();
     let raised = finished(&attempt, pb::AttemptStatus::Failed, &json!(null));
-    dispatcher.finished("w1", &raised, later(3)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &raised, later(3))
+        .await
+        .unwrap();
     orders_run(&db, ts(NOW), RunState::Success, later(4)).await;
-    let out = dispatcher.step(later(5)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(5))
+        .await
+        .unwrap();
     assert_eq!(handed_run(&out[0])["run_id"], json!(first));
 }
 
@@ -4697,20 +5737,29 @@ async fn a_sensor_timing_out_while_it_waits_is_done_whole_though_a_write_fails()
     let waiting = || async {
         let (mut dispatcher, db, run_id) =
             with_run(run_sensor_dag(&json!({"dag": "orders"}))).await;
-        dispatcher.step(ts(NOW)).await.unwrap();
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
         (dispatcher, db, run_id)
     };
     let (mut dispatcher, db, _) = waiting().await;
     db.count_writes();
-    dispatcher.step(later(61)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(61))
+        .await
+        .unwrap();
     let writes = db.writes();
     assert!(writes >= 2, "{writes}");
     for nth in 1..=writes {
         let (mut dispatcher, db, run_id) = waiting().await;
         db.fail_write(nth);
-        let _ = dispatcher.step(later(61)).await;
+        let _ = dispatcher.step(&InRound::for_tests(), later(61)).await;
         db.fail_write(0);
-        dispatcher.step(later(62)).await.unwrap();
+        dispatcher
+            .step(&InRound::for_tests(), later(62))
+            .await
+            .unwrap();
         let run = db.run_tasks(&run_id).await.unwrap().unwrap();
         let wait = run
             .instances
@@ -4765,9 +5814,15 @@ async fn a_sensors_run_ending_within_its_wait_is_handed_though_seen_on_the_deadl
     // Grok's review of M4.11d2: found, then timed out before the call.
     let (mut dispatcher, db, _) =
         with_run(run_sensor_dag(&json!({"dag": "orders", "lag_ms": 0}))).await;
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let ended = orders_run(&db, ts(NOW), RunState::Success, later(59)).await;
-    let out = dispatcher.step(later(60)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(60))
+        .await
+        .unwrap();
     assert_eq!(handed_run(&out[0])["run_id"], json!(ended));
     let task: Json = serde_json::from_slice(&assignment(&out[0]).task_json).unwrap();
     assert_eq!(
@@ -4786,7 +5841,10 @@ async fn a_sensor_is_handed_another_dags_output_masked_and_a_mapped_tasks_as_a_l
     .await;
     let secret = json!({"password": "hunter2", "dsn": "postgres://u:s3cret@db/app", "rows": 3});
     orders_with_load(&db, later(1), Some(&secret), &[]).await;
-    let out = dispatcher.step(later(2)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(2))
+        .await
+        .unwrap();
     assert_eq!(
         handed_run(&out[0])["output"],
         json!({"password": "****", "dsn": "postgres://u:****@db/app", "rows": 3})
@@ -4796,7 +5854,10 @@ async fn a_sensor_is_handed_another_dags_output_masked_and_a_mapped_tasks_as_a_l
     ))
     .await;
     orders_with_load(&db, later(1), None, &[json!({"n": 7}), json!({"n": 8})]).await;
-    let out = dispatcher.step(later(2)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(2))
+        .await
+        .unwrap();
     assert_eq!(handed_run(&out[0])["output"], json!([{"n": 7}, {"n": 8}]));
 }
 
@@ -4804,7 +5865,10 @@ async fn a_sensor_is_handed_another_dags_output_masked_and_a_mapped_tasks_as_a_l
 async fn a_sensor_waits_from_when_it_was_queued_and_an_idle_round_writes_nothing() {
     // Grok's review of M4.11d2: from the first round that looked, and a write every round.
     let (mut dispatcher, db, run_id) = with_run(run_sensor_dag(&json!({"dag": "orders"}))).await;
-    dispatcher.step(ts(NOW)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let pool = match db.pool() {
         schedr_db::Pool::Sqlite(pool) => pool.clone(),
         schedr_db::Pool::Postgres(_) => unreachable!(),
@@ -4831,7 +5895,10 @@ async fn a_sensor_waits_from_when_it_was_queued_and_an_idle_round_writes_nothing
         "from when it was queued, not the round that looked"
     );
     db.count_writes();
-    dispatcher.step(later(6)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(6))
+        .await
+        .unwrap();
     assert_eq!(db.writes(), 0, "an idle round only reads");
 }
 
@@ -4873,7 +5940,10 @@ async fn inputs_under_the_inline_limit_that_take_the_assignment_over_go_separate
     // the task failed `inputs_too_large`; the worker fetches them instead.
     let (dispatcher, db, run_id) = with_run(dag(0)).await;
     let mut dispatcher = dispatcher.with_max_message_size(64 * 1024);
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let extract = assignment(&out[0]).attempt_id.clone();
     dispatcher
         .started("w1", &started(&extract), ts(NOW))
@@ -4882,13 +5952,17 @@ async fn inputs_under_the_inline_limit_that_take_the_assignment_over_go_separate
     let big = json!("x".repeat(70 * 1024));
     dispatcher
         .finished(
+            &InRound::for_tests(),
             "w1",
             &finished(&extract, pb::AttemptStatus::Success, &big),
             ts(NOW),
         )
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let load = assignment(&out[0]);
     assert_eq!(load.task_id, "load");
     assert!(load.inputs_external && load.inputs_json.is_empty());
@@ -4910,12 +5984,12 @@ async fn an_event_posted_after_the_wait_ran_out_doesnt_count_though_seen_late() 
     let (mut dispatcher, db, run_id) =
         with_run(event_waiting_dag(Some(&json!({"literal": "o-1"})))).await;
     dispatcher
-        .step_into(ts(NOW), &mut Vec::new())
+        .step_into(&InRound::for_tests(), ts(NOW), &mut Vec::new())
         .await
         .unwrap();
     post_paid(&db, "o-1", later(70)).await;
     dispatcher
-        .step_into(later(75), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(75), &mut Vec::new())
         .await
         .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
@@ -4944,7 +6018,7 @@ async fn a_wait_s_key_from_a_parameter_reads_a_tuple_as_the_runner_does() {
     .unwrap();
     post_paid(&db, "o-1", later(1)).await;
     dispatcher
-        .step_into(later(2), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(2), &mut Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -4969,7 +6043,7 @@ async fn a_wait_s_key_from_a_field_named_as_a_secret_is_hidden_in_its_reason() {
     .await
     .unwrap();
     dispatcher
-        .step_into(later(1), &mut Vec::new())
+        .step_into(&InRound::for_tests(), later(1), &mut Vec::new())
         .await
         .unwrap();
     let reason = reason_of(&db, &run_id, "wait").await;
@@ -4996,12 +6070,19 @@ async fn a_sensor_waiting_for_an_event_is_called_with_it_and_then_with_a_later_o
     post_paid(&db, "o-1", later(-1)).await;
     post_paid(&db, "o-2", later(1)).await;
     assert_eq!(
-        dispatcher.step(later(1)).await.unwrap().len(),
+        dispatcher
+            .step(&InRound::for_tests(), later(1))
+            .await
+            .unwrap()
+            .len(),
         0,
         "one before its run, and another key"
     );
     post_paid(&db, "o-1", later(2)).await;
-    let out = dispatcher.step(later(3)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(3))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1);
     let first = handed_run(&out[0]);
     assert_eq!(
@@ -5017,14 +6098,24 @@ async fn a_sensor_waiting_for_an_event_is_called_with_it_and_then_with_a_later_o
         outcome: "NotYet".to_owned(),
         ..finished(&attempt, pb::AttemptStatus::Success, &json!(null))
     };
-    dispatcher.finished("w1", &not_yet, later(4)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &not_yet, later(4))
+        .await
+        .unwrap();
     assert_eq!(
-        dispatcher.step(later(5)).await.unwrap().len(),
+        dispatcher
+            .step(&InRound::for_tests(), later(5))
+            .await
+            .unwrap()
+            .len(),
         0,
         "not the same event again"
     );
     post_paid(&db, "o-1", later(6)).await;
-    let out = dispatcher.step(later(7)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(7))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1, "a later one");
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
@@ -5032,7 +6123,10 @@ async fn a_sensor_waiting_for_an_event_is_called_with_it_and_then_with_a_later_o
         .await
         .unwrap();
     let done = finished(&attempt, pb::AttemptStatus::Success, &json!("rows"));
-    dispatcher.finished("w1", &done, later(8)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &done, later(8))
+        .await
+        .unwrap();
     assert_eq!(
         state_of(&db, &run_id, "wait").await.0,
         TaskInstanceState::Success
@@ -5045,7 +6139,10 @@ async fn a_sensor_that_said_not_yet_still_sees_an_event_committed_late_with_an_e
     // earlier-timed one, committed after, sat behind the sensor's cursor and was never given.
     let (mut dispatcher, db, _run_id) = with_run(event_sensor_dag()).await;
     post_paid(&db, "o-1", later(5)).await;
-    let out = dispatcher.step(later(6)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(6))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1);
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
@@ -5056,15 +6153,25 @@ async fn a_sensor_that_said_not_yet_still_sees_an_event_committed_late_with_an_e
         outcome: "NotYet".to_owned(),
         ..finished(&attempt, pb::AttemptStatus::Success, &json!(null))
     };
-    dispatcher.finished("w1", &not_yet, later(7)).await.unwrap();
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &not_yet, later(7))
+        .await
+        .unwrap();
     assert_eq!(
-        dispatcher.step(later(8)).await.unwrap().len(),
+        dispatcher
+            .step(&InRound::for_tests(), later(8))
+            .await
+            .unwrap()
+            .len(),
         0,
         "not it again"
     );
     // Posted at 3 s, committed now.
     post_paid(&db, "o-1", later(3)).await;
-    let out = dispatcher.step(later(9)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(9))
+        .await
+        .unwrap();
     assert_eq!(out.len(), 1, "the late one is handed");
     let attempt = assignment(&out[0]).attempt_id.clone();
     dispatcher
@@ -5072,11 +6179,20 @@ async fn a_sensor_that_said_not_yet_still_sees_an_event_committed_late_with_an_e
         .await
         .unwrap();
     dispatcher
-        .finished("w1", &not_yet_of(&attempt), later(10))
+        .finished(
+            &InRound::for_tests(),
+            "w1",
+            &not_yet_of(&attempt),
+            later(10),
+        )
         .await
         .unwrap();
     assert_eq!(
-        dispatcher.step(later(11)).await.unwrap().len(),
+        dispatcher
+            .step(&InRound::for_tests(), later(11))
+            .await
+            .unwrap()
+            .len(),
         0,
         "and only once"
     );
@@ -5092,8 +6208,22 @@ fn not_yet_of(attempt: &str) -> pb::Finished {
 #[tokio::test]
 async fn a_sensor_waiting_for_an_event_that_doesnt_come_times_out() {
     let (mut dispatcher, db, run_id) = with_run(event_sensor_dag()).await;
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
-    assert_eq!(dispatcher.step(later(61)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(61))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     let wait = run
         .instances
@@ -5110,9 +6240,23 @@ async fn a_sensor_waiting_for_an_event_that_doesnt_come_times_out() {
 async fn a_sensor_isn_t_given_an_event_posted_after_its_wait_ran_out() {
     // As for the node (Codex's review of part 1).
     let (mut dispatcher, db, run_id) = with_run(event_sensor_dag()).await;
-    assert_eq!(dispatcher.step(ts(NOW)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     post_paid(&db, "o-1", later(70)).await;
-    assert_eq!(dispatcher.step(later(75)).await.unwrap().len(), 0);
+    assert_eq!(
+        dispatcher
+            .step(&InRound::for_tests(), later(75))
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
     let wait = run
         .instances
@@ -5129,13 +6273,19 @@ async fn a_moved_cleanup_isnt_taken_back_while_its_worker_may_come_back() {
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = moved_to_w2(&mut dispatcher).await;
     dispatcher.worker_disconnected("w2");
-    dispatcher.expire(later(1200)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 
     let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
     let attempt = moved_to_w2(&mut dispatcher).await;
     dispatcher.worker_away("w2");
-    dispatcher.expire(later(1200)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }
 
@@ -5159,17 +6309,28 @@ async fn attempts_of_a_worker_that_may_come_back_dont_fill_a_rounds_expiries() {
         .register("w1", "i1", &[], slots, ts(NOW))
         .await
         .unwrap();
-    while !dispatcher.step(ts(NOW)).await.unwrap().is_empty() {}
+    while !dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap()
+        .is_empty()
+    {}
     dispatcher.worker_disconnected("w1");
     dispatcher
         .register("w2", "i1", &[], 1, later(1))
         .await
         .unwrap();
-    dispatcher.step(later(1)).await.unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(1))
+        .await
+        .unwrap();
     let on_w2 = db.open_attempts(Some("w2")).await.unwrap();
     assert_eq!(on_w2.len(), 1);
     handled_unstarted(&dispatcher, "w2", &[&on_w2[0].id]);
-    dispatcher.expire(later(30)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(30))
+        .await
+        .unwrap();
     let stored = db.attempt(&on_w2[0].id).await.unwrap().unwrap();
     assert_eq!(stored.status, Some(AttemptStatus::AssignmentExpired));
     assert_eq!(
@@ -5196,7 +6357,10 @@ async fn a_moved_cleanup_adopted_unrecorded_isnt_taken_back() {
     .await
     .unwrap();
     let _ = dispatcher.adopt("w2", &attempt, later(5)).await;
-    dispatcher.expire(later(1200)).await.unwrap();
+    dispatcher
+        .expire(&InRound::for_tests(), later(1200))
+        .await
+        .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
 }
 
@@ -5234,7 +6398,10 @@ async fn twenty_assigned() -> (Dispatcher, Database, String, Vec<String>) {
         .register("w1", "i1", &[], 20, ts(NOW))
         .await
         .unwrap();
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let attempts: Vec<String> = out
         .iter()
         .map(|o| assignment(o).attempt_id.clone())
@@ -5321,12 +6488,17 @@ async fn a_repeated_finish_in_a_later_group_is_acknowledged_without_a_write() {
     let (mut dispatcher, db, run_id, attempts) = twenty_started().await;
     let success = finished(&attempts[0], pb::AttemptStatus::Success, &json!(1));
     dispatcher
-        .finished_group("w1", std::slice::from_ref(&success), ts(NOW))
+        .finished_group(
+            &InRound::for_tests(),
+            "w1",
+            std::slice::from_ref(&success),
+            ts(NOW),
+        )
         .await
         .unwrap();
     db.count_writes();
     let acks = dispatcher
-        .finished_group("w1", &[success], ts(NOW))
+        .finished_group(&InRound::for_tests(), "w1", &[success], ts(NOW))
         .await
         .unwrap();
     assert_eq!(acks.len(), 1);
@@ -5347,6 +6519,7 @@ async fn a_turns_finishes_take_a_few_writes_not_a_few_each() {
     for attempt in &attempts {
         alone
             .finished(
+                &InRound::for_tests(),
                 "w1",
                 &finished(attempt, pb::AttemptStatus::Success, &json!(1)),
                 ts(NOW),
@@ -5362,7 +6535,7 @@ async fn a_turns_finishes_take_a_few_writes_not_a_few_each() {
         .collect();
     db.count_writes();
     let acks = together
-        .finished_group("w1", &group, ts(NOW))
+        .finished_group(&InRound::for_tests(), "w1", &group, ts(NOW))
         .await
         .unwrap();
     let grouped = db.writes();
@@ -5401,12 +6574,17 @@ async fn a_group_of_finishes_takes_the_uncommon_ones_alone_and_a_repeat_once() {
         success(&attempts[1]),
     ];
     let acks = dispatcher
-        .finished_group("w1", &group, ts(NOW))
+        .finished_group(&InRound::for_tests(), "w1", &group, ts(NOW))
         .await
         .unwrap();
     assert_eq!(acks.len(), 3);
     let foreign = dispatcher
-        .finished_group("w2", &[success(&attempts[2])], ts(NOW))
+        .finished_group(
+            &InRound::for_tests(),
+            "w2",
+            &[success(&attempts[2])],
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(foreign.len(), 1);
@@ -5442,7 +6620,10 @@ async fn an_uncommon_failure_after_a_mapped_siblings_success_leaves_the_success(
     }))
     .unwrap();
     let (mut dispatcher, db, run_id) = with_run(mapped).await;
-    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     let ids: Vec<String> = out
         .iter()
         .map(|o| assignment(o).attempt_id.clone())
@@ -5467,7 +6648,7 @@ async fn an_uncommon_failure_after_a_mapped_siblings_success_leaves_the_success(
         ..finished(&by_index[&0], pb::AttemptStatus::Failed, &json!(null))
     };
     dispatcher
-        .finished_group("w1", &[success, gone], ts(NOW))
+        .finished_group(&InRound::for_tests(), "w1", &[success, gone], ts(NOW))
         .await
         .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();

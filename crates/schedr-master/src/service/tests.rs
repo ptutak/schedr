@@ -130,6 +130,17 @@ fn numbered(message: worker_message::Message, sequence: u64, heard: u64) -> pb::
     }
 }
 
+/// The round's results part once a turn has queued something for it (M5.2cB): what the loop
+/// does, these tests running no loop.
+async fn results_handled(hub: &Hub) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while hub.queued_results().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "a result queued");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+}
+
 async fn next(stream: &mut Streaming<pb::MasterMessage>) -> master_message::Message {
     tokio::time::timeout(Duration::from_secs(5), stream.message())
         .await
@@ -239,21 +250,21 @@ async fn a_worker_registers_parses_runs_a_task_and_is_acknowledged() {
         })))
         .await
         .unwrap();
+    results_handled(&hub).await;
     let master_message::Message::FinishedAck(ack) = next(&mut stream).await else {
         panic!("expected FinishedAck")
     };
     assert_eq!(ack.attempt_id, assign.attempt_id);
-    // M5.1a: the lock's waits and the turn's parts are recorded where they happen.
+    // M5.1a: the lock's waits and the parts are recorded where they happen; the `Started` and
+    // `Finished` in the round's results part, their turn taking no lock (M5.2cB).
     let mut registry = prometheus_client::registry::Registry::with_prefix("schedr");
     hub.metrics.register(&mut registry);
     let mut scraped = String::new();
     prometheus_client::encoding::text::encode(&mut scraped, &registry).unwrap();
     for series in [
-        "schedr_master_core_lock_wait_seconds_count{by=\"turn\"}",
         "schedr_master_core_lock_wait_seconds_count{by=\"round\"}",
         "schedr_master_core_lock_wait_seconds_count{by=\"upload\"}",
-        "schedr_master_turn_part_seconds_count{part=\"started\"}",
-        "schedr_master_turn_part_seconds_count{part=\"finished\"}",
+        "schedr_master_round_part_seconds_count{part=\"results\"}",
     ] {
         let count = scraped
             .lines()
@@ -943,6 +954,8 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
         })))
         .await
         .unwrap();
+    // Stored by the round (M5.2cB).
+    results_handled(&hub).await;
     for _ in 0..100 {
         if db
             .attempt(&assign.attempt_id)
@@ -962,8 +975,11 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
         if !hub.core().lock().await.is_live("w1") {
             break;
         }
+        // Its end waits behind what it queued, if anything: the round's (M5.2cB).
+        Box::pin(hub.round_results(moving_now())).await.unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert!(!hub.core().lock().await.is_live("w1"), "disconnected");
     // The master is stuck, a round waits for it, and the worker comes back 50 s later with
     // its attempt still running.
     let stuck = hub.core().lock_owned().await;
@@ -1422,10 +1438,10 @@ async fn a_task_whose_start_arrived_isnt_taken_back_while_the_master_is_busy() {
 }
 
 #[tokio::test]
-async fn a_turns_groups_each_take_the_lock_so_a_round_gets_in_between() {
-    // Decision 480: a turn takes the master's lock for each transaction, so a round (here the
-    // test) gets in between its `Started`s and its `Finished`s; B12 still holds: both were
-    // queued together and are handled in that one turn, with no message after them.
+async fn a_turn_queues_its_starts_and_results_without_waiting_for_the_lock() {
+    // M5.2cB (decision 505; decision 480 before it): a turn queues its `Started`s and results
+    // for the round without the master's lock, so a round (here the test) holding it doesn't
+    // hold them up; the round's results part stores them together, in their order.
     let (hub, db, mut client) = connected().await;
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -1473,34 +1489,26 @@ async fn a_turns_groups_each_take_the_lock_so_a_round_gets_in_between() {
     ] {
         to_master.send(wrap(message)).await.unwrap();
     }
-    // The worker's handler is waiting for the lock by then (an in-memory connection).
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    drop(busy);
-    // Next in line after the handler's first transaction (the lock is first come, first
-    // served): its `Started` is stored, its `Finished` waits for the lock.
-    let round = core.lock().await;
-    assert!(stored(&db, &assign.attempt_id, false).await);
-    let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
-    assert_eq!(
-        attempt.status, None,
-        "the round got in before the `Finished`s"
-    );
-    drop(round);
+    // Queued meanwhile, the lock still held: nothing stored yet.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !stored(&db, &assign.attempt_id, true).await {
+    while hub.queued_results().len() < 2 {
         assert!(
             std::time::Instant::now() < deadline,
-            "the same turn ends it"
+            "queued under a held lock"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert!(!stored(&db, &assign.attempt_id, false).await);
+    drop(busy);
+    results_handled(&hub).await;
+    assert!(stored(&db, &assign.attempt_id, true).await);
 }
 
 #[tokio::test]
-async fn a_turn_checks_its_stream_again_after_each_release_of_the_lock() {
-    // Decision 480: between a turn's `Started`s and its `Finished`s the lock is let go; the
-    // worker taken for lost meanwhile, the `Finished`s change nothing (its stream is let go,
-    // B44), as a turn whose stream wasn't served any more always did.
+async fn a_round_checks_a_queued_messages_stream_as_a_turn_did() {
+    // Decision 480, in the round since M5.2cB: between a turn queueing its `Started` and
+    // `Finished` and the round handling them, the worker is taken for lost; they change
+    // nothing (its stream is let go, B44), as a turn whose stream wasn't served any more.
     let (hub, db, mut client) = connected().await;
     let (to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
     let id = assign.attempt_id.as_str();
@@ -1510,13 +1518,13 @@ async fn a_turn_checks_its_stream_again_after_each_release_of_the_lock() {
     to_master.send(wrap(finished_msg(id))).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(busy);
-    // In between the turn's two transactions (first come, first served).
+    // Between the turn queueing them and the round.
     let mut between = core.lock().await;
-    assert!(stored(&db, id, false).await);
     between.disconnected("w1", fixed_now()).await.unwrap();
     drop(between);
-    // The turn reached its next transaction: it found its stream no longer served and let it
-    // go (Grok's review: a sleep alone would pass on a `Finished` stored late).
+    results_handled(&hub).await;
+    // The round found its stream no longer served and let it go (Grok's review: a sleep alone
+    // would pass on a `Finished` stored late).
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while hub.streams.lock().await.contains_key("w1") {
         assert!(std::time::Instant::now() < deadline, "the stream is let go");
@@ -1527,6 +1535,7 @@ async fn a_turn_checks_its_stream_again_after_each_release_of_the_lock() {
         attempt.status, None,
         "the `Finished` of a stream no longer served"
     );
+    assert!(!attempt.started, "nor its `Started`");
     assert_eq!(successes(&hub), 0);
 }
 
@@ -1637,6 +1646,8 @@ async fn in_one_turn(
         }
         assert!(std::time::Instant::now() < deadline, "the turn ends");
     }
+    // Its results, queued for the round (M5.2cB): that round's results part.
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
     db.commits() - before
 }
 
@@ -1656,9 +1667,9 @@ fn successes(hub: &Hub) -> u64 {
 }
 
 #[tokio::test]
-async fn a_turns_starts_and_finishes_are_two_transactions() {
-    // M4B.3 (decision 397): five messages, one transaction for the `Started`s and one for the
-    // `Finished`s (each message one before), the attempt stored started, then ended, once.
+async fn a_turns_starts_and_finishes_are_one_transaction_of_the_round() {
+    // M4B.3 (decision 397), in the round since M5.2cB: five messages, the `Started`s stored
+    // before the `Finished`s in one transaction, the attempt ended once.
     let (hub, db, mut client) = connected().await;
     let (to_master, mut stream, assign) = assigned_one(&hub, &db, &mut client).await;
     let id = assign.attempt_id.as_str();
@@ -1670,7 +1681,7 @@ async fn a_turns_starts_and_finishes_are_two_transactions() {
         finished_msg(id),
     ];
     let commits = in_one_turn(&hub, &db, &to_master, turn, || {}).await;
-    assert_eq!(commits, 2);
+    assert_eq!(commits, 1);
     let attempt = db.attempt(id).await.unwrap().unwrap();
     assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
     assert_eq!(successes(&hub), 1);
@@ -1684,19 +1695,104 @@ async fn a_turns_starts_and_finishes_are_two_transactions() {
 }
 
 #[tokio::test]
-async fn a_failed_group_is_redone_one_by_one_and_counted_once() {
-    // M4B.3: the `Started`s' group fails at its first write; rolled back, its messages are
-    // redone one at a time, the `Finished` in the next turn: stored, the end counted once.
+async fn a_failed_batch_is_redone_as_its_workers_group_and_counted_once() {
+    // M4B.3, in the round since M5.2cB: the batch fails at its first write; rolled back, the
+    // worker's stretch is redone as one group: stored, the end counted once.
     let (hub, db, mut client) = connected().await;
     let (to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
     let id = assign.attempt_id.as_str();
     let turn = vec![started_msg(id), started_msg(id), finished_msg(id)];
     let commits = in_one_turn(&hub, &db, &to_master, turn, || db.fail_write(1)).await;
-    // The group failed (no commit), then each `Started` alone, then the `Finished`, carried to
-    // the next turn (a `Finished` never stored before its `Started`).
-    assert_eq!(commits, 3);
+    // The batch failed (no commit), then the worker's group, `Started`s before the `Finished`.
+    assert_eq!(commits, 1);
     assert!(stored(&db, id, true).await);
     assert_eq!(successes(&hub), 1);
+}
+
+#[tokio::test]
+async fn a_worker_deregistering_after_its_result_is_forgotten_only_after_the_result_is_stored() {
+    // M5.2cB: the `Finished` waits for the round; the `Deregister` after it in the same turn
+    // waits behind it, so the worker isn't forgotten (its attempt ended `lost`) first.
+    let (hub, db, mut client) = connected().await;
+    let (to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let id = assign.attempt_id.as_str();
+    let turn = vec![
+        started_msg(id),
+        finished_msg(id),
+        worker_message::Message::Deregister(pb::Deregister {}),
+    ];
+    in_one_turn(&hub, &db, &to_master, turn, || {}).await;
+    let attempt = db.attempt(id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
+    assert_eq!(successes(&hub), 1);
+    assert!(!hub.core().lock().await.is_live("w1"), "then deregistered");
+}
+
+#[tokio::test]
+async fn what_a_worker_said_before_its_stream_ended_still_counts_and_then_it_is_offline() {
+    // M5.2cB (make check's draining test): the worker sends its result and `Deregister`, then
+    // closes its stream, all before the round; the stream's end waits behind them, so the
+    // result is stored and the worker ends offline, not disconnected (then lost).
+    let (hub, db, mut client) = connected().await;
+    let (to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let id = assign.attempt_id.clone();
+    let core = hub.core();
+    let busy = core.lock().await;
+    for message in [
+        started_msg(&id),
+        finished_msg(&id),
+        worker_message::Message::Deregister(pb::Deregister {}),
+    ] {
+        to_master.send(wrap(message)).await.unwrap();
+    }
+    drop(to_master);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(busy);
+    // The stream's end is queued behind them.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !hub.queued_results().iter().any(|r| r.message.is_none()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stream's end queued"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    let attempt = db.attempt(&id).await.unwrap().unwrap();
+    assert_eq!(attempt.status, Some(schedr_model::AttemptStatus::Success));
+    assert_eq!(
+        db.workers().await.unwrap()[0].state,
+        schedr_model::WorkerState::Offline
+    );
+}
+
+#[tokio::test]
+async fn a_queued_message_that_cant_be_handled_ends_the_stream_and_drops_what_came_after() {
+    // M5.2cB, as a turn's end did (B101): the stream let go, the worker disconnected (so it
+    // registers again), and its `Deregister` after the bad message dropped, not forgetting the
+    // worker before what it sent is sorted out.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
+    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let mut messages = vec![
+        worker_message::Message::Rejected(pb::Rejected {
+            attempt_id: "01a00000-0000-7000-8000-000000000001".to_owned(),
+            reason: 999,
+            ..pb::Rejected::default()
+        }),
+        worker_message::Message::Deregister(pb::Deregister {}),
+    ];
+    hub.queue_results("w1", &outbound, &mut messages);
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    assert!(
+        !hub.streams.lock().await.contains_key("w1"),
+        "the stream let go"
+    );
+    assert_eq!(
+        db.workers().await.unwrap()[0].state,
+        schedr_model::WorkerState::Disconnected,
+        "disconnected, not forgotten by the `Deregister` after it"
+    );
 }
 
 #[tokio::test]
@@ -1809,14 +1905,15 @@ async fn a_group_that_landed_is_counted_though_its_last_message_changed_nothing(
 }
 
 #[tokio::test]
-async fn a_carried_message_lets_the_stream_go_when_the_master_stops() {
+async fn a_turn_lets_the_stream_go_when_the_master_stops() {
     // Grok's review of M4B.3: a failed group's eleventh message, carried to the next turn,
     // waited for the master to lead again, deaf to its stopping: tonic's graceful shutdown
-    // waited on the stream.
+    // waited on the stream. Since M5.2cB a turn queues them for a round, holding the stream's
+    // sender, and a master not leading runs no round: closing lets them go, the stream ends.
     let (hub, db, mut client) = connected().await;
     // What holds the core before the worker's stream: its serving task holds it too.
     let before = Arc::strong_count(&hub.core);
-    let (to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let (to_master, mut stream, assign) = assigned_one(&hub, &db, &mut client).await;
     let id = assign.attempt_id.as_str();
     let turn: Vec<_> = (0..11).map(|_| started_msg(id)).collect();
     let core = hub.core();
@@ -1830,7 +1927,11 @@ async fn a_carried_message_lets_the_stream_go_when_the_master_stops() {
     drop(busy);
     drop(core);
     tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!hub.queued_results().is_empty(), "queued for a round");
     hub.close_streams().await;
+    // Their senders let go: a worker that stopped reading (its buffer full, the closing status
+    // not sent) has its stream end only once no sender of it is left.
+    assert!(hub.queued_results().is_empty(), "let go with the streams");
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while Arc::strong_count(&hub.core) > before {
         assert!(
@@ -1839,6 +1940,15 @@ async fn a_carried_message_lets_the_stream_go_when_the_master_stops() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // The worker's stream ends: no sender of it is left.
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Ok(Some(_)) = stream.message().await {}
+    })
+    .await;
+    assert!(
+        ended.is_ok(),
+        "the worker's stream ends after close_streams"
+    );
 }
 
 #[tokio::test]
@@ -1859,43 +1969,40 @@ async fn a_landed_group_whose_answer_was_lost_still_sends_its_cancels() {
     assert_eq!(cancelled, unknown);
 }
 
-#[test]
-fn a_failed_groups_messages_go_alone_at_most_ten_a_turn() {
-    // Grok's review of M4B.3: after a failed group's first ten, the carried rest took the
-    // whole next turn, one transaction each. Then what is queued follows them.
-    let started = |n: u32| {
-        worker_message::Message::Started(pb::Started {
-            attempt_id: format!("a{n}"),
-            start_method: 0,
-            ..pb::Started::default()
+#[tokio::test]
+async fn a_round_handles_at_most_ten_messages_alone_and_leaves_the_rest_in_order_for_the_next() {
+    // M5.2cB (as Grok's review of M4B.3 for a turn): messages handled one by one, each its own
+    // transaction, hold the lock; past ten a round, the rest wait at the queue's front.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
+    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let rejected = |n: u32| {
+        worker_message::Message::Rejected(pb::Rejected {
+            attempt_id: format!("01a00000-0000-7000-8000-0000000000{n:02}"),
+            reason: pb::RejectReason::NoFreeSlot.into(),
+            ..pb::Rejected::default()
         })
     };
-    let (queue, mut queued) = mpsc::unbounded_channel();
-    queue.send(started(99)).unwrap();
-    let mut carried: VecDeque<Turned> = (1..=20).map(|n| Turned::Alone(started(n))).collect();
-    let turn = fill_turn(
-        Turned::Alone(started(0)),
-        &mut carried,
-        &mut queued,
-        (40, ALONE_PER_TURN),
+    let mut messages: Vec<_> = (0..12).map(rejected).collect();
+    hub.queue_results("w1", &outbound, &mut messages);
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    let left: Vec<String> = hub
+        .queued_results()
+        .iter()
+        .map(|r| match &r.message {
+            Some(worker_message::Message::Rejected(r)) => r.attempt_id.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        left,
+        [
+            "01a00000-0000-7000-8000-000000000010",
+            "01a00000-0000-7000-8000-000000000011"
+        ]
     );
-    assert_eq!(turn.len(), 10);
-    assert_eq!(carried.len(), 11);
-    let turn = fill_turn(
-        carried.pop_front().unwrap(),
-        &mut carried,
-        &mut queued,
-        (40, ALONE_PER_TURN),
-    );
-    assert_eq!(turn.len(), 10);
-    let turn = fill_turn(
-        carried.pop_front().unwrap(),
-        &mut carried,
-        &mut queued,
-        (40, ALONE_PER_TURN),
-    );
-    assert_eq!(turn.len(), 2, "the last carried one, then the queued one");
-    assert!(matches!(turn[1], Turned::Grouped(_)));
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    assert!(hub.queued_results().is_empty(), "the next round's");
 }
 
 #[tokio::test]
@@ -1975,6 +2082,15 @@ async fn a_cleanup_at_its_barrier_may_start_only_while_its_attempt_is_open_and_t
         })))
         .await
         .unwrap();
+    // Handled by a round (M5.2cB), once the turn has queued it.
+    for _ in 0..100 {
+        hub.tick().await.unwrap();
+        let attempt = db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+        if attempt.status.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(!ask(&assign.attempt_id).await, "an attempt ended");
 }
 

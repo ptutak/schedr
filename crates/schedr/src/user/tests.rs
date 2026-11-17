@@ -43,7 +43,12 @@ impl Transport for InProcess {
             let mut master = self.master.lock().await;
             let (commander, scheduler, dispatcher) = &mut *master;
             commander
-                .apply_pending(scheduler, dispatcher, ts(NOW))
+                .apply_pending(
+                    &schedr_master::core::round::InRound::for_tests(),
+                    scheduler,
+                    dispatcher,
+                    ts(NOW),
+                )
                 .await
                 .unwrap();
         }
@@ -744,7 +749,11 @@ async fn a_task_is_cancelled_and_only_an_unschedulable_one_retried() {
     assert!(error.contains("hasn't started its tasks yet"), "{error}");
 
     let mut master = client.transport().master.lock().await;
-    master.2.step(ts(NOW)).await.unwrap();
+    master
+        .2
+        .step(&schedr_master::core::round::InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
     drop(master);
     let error = tasks(&client, TasksCommand::Retry(target(&run_id, None)))
         .await
@@ -846,7 +855,7 @@ async fn assigned_task(
         .lock()
         .await
         .2
-        .step(ts(NOW))
+        .step(&schedr_master::core::round::InRound::for_tests(), ts(NOW))
         .await
         .unwrap();
     let queues = vec![];
@@ -906,7 +915,7 @@ async fn following_a_task_that_ended_untried_stops_saying_so() {
         .lock()
         .await
         .2
-        .step(ts(NOW))
+        .step(&schedr_master::core::round::InRound::for_tests(), ts(NOW))
         .await
         .unwrap();
     let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {

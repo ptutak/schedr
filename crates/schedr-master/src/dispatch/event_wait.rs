@@ -11,6 +11,7 @@ use schedr_model::value::{DagCtxField, Reference, Value};
 use serde_json::{Value as Json, json};
 
 use super::{DispatchError, Dispatcher};
+use crate::core::round::InRound;
 use crate::execution::WaitEnd;
 use crate::mapping;
 
@@ -20,6 +21,7 @@ impl Dispatcher {
     /// `max_wait`, failed if its key isn't one; else it says what it waits for.
     pub(super) async fn wait_for_event(
         &mut self,
+        in_round: &InRound,
         waiting: &ReadyInstance,
         event: &EventNamed,
         max_wait_ms: Option<u64>,
@@ -71,7 +73,7 @@ impl Dispatcher {
         self.whole(async |me| {
             let (_, stops) = me
                 .execution
-                .wait_ended(&waiting.run_id, &waiting.task_id, ended, now)
+                .wait_ended(in_round, &waiting.run_id, &waiting.task_id, ended, now)
                 .await?;
             me.stop(&waiting.run_id, &stops).await
         })
@@ -86,6 +88,7 @@ impl Dispatcher {
     /// Returns whether it is to be assigned.
     pub(super) async fn sensor_event(
         &mut self,
+        in_round: &InRound,
         waiting: &ReadyInstance,
         event: &EventNamed,
         wait: &SensorWait,
@@ -109,7 +112,7 @@ impl Dispatcher {
                 self.whole(async |me| {
                     let (_, stops) = me
                         .execution
-                        .wait_ended(&waiting.run_id, &waiting.task_id, ended, now)
+                        .wait_ended(in_round, &waiting.run_id, &waiting.task_id, ended, now)
                         .await?;
                     me.stop(&waiting.run_id, &stops).await
                 })
@@ -157,7 +160,7 @@ impl Dispatcher {
             return Ok(true);
         }
         if now >= deadline {
-            self.whole(async |me| me.time_out(waiting, now).await)
+            self.whole(async |me| me.time_out(in_round, waiting, now).await)
                 .await?;
             return Ok(false);
         }
