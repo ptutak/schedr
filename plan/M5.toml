@@ -1,11 +1,18 @@
-title = "Performance, metrics, Airflow migration tools"
+title = "Performance, metrics, the master's throughput"
 order = 80
 done_when = "Not set yet (archive/PROJECT.md, Roadmap)."
 notes = '''
 Two parts (the user, 2026-11-13): M5.1, performance (M5.1a-f) and metrics in the UI (M5.1g-l),
-with the worker's start time (M5.1m); then release 1.1.0 (R1.1); then M5.2, the Airflow
-migration tool (decisions 470-475), converting Airflow 2 and 3 DAG files into native ones once.
-The look-alike layer is dropped (decision 475).
+with the worker's start time (M5.1m); then release 1.1.0 (R1.1); then M5.2, the master's
+throughput (the user, 2026-11-17), before the Airflow migration tool, which moved to M6.
+
+M5.2 follows scenario 1 measured on 2026-11-17 (quick x2, 4 workers): 8 slots a worker gave 25.4
+tasks a second, 16 gave 30.4, the master's CPU about a third of a core; the release build 30.7
+(the master at 15 %). The core lock was held about the whole task phase (81.9 s), mostly waiting
+for Postgres's answers: no synchronous commit gained 6 %; Postgres executed about 11 s of
+statements; one round trip through the stress suite's published port costs 0.98 ms (0.25 ms
+inside the container). So fewer round trips under the lock: assign's per-task reads (M5.2a),
+the idle round parts (M5.2b), then the reads outside the lock as a design question (M5.2c).
 
 First, the start path (the user, 2026-11-11, after 1.0.0): M4B's stress comparison (guide,
 Stress tests, After M4B) made finishing faster and starting slower (assigned → started p99 up
@@ -297,71 +304,39 @@ first the stress suite's table for the release (the user, 2026-11-14): the quick
 done_when = '''
 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
 '''
-status = "planned"
+status = "done"
+done = 2026-11-16
 
 [[steps]]
 id = "M5.2a"
-title = "The recording stub and the comparison"
+title = "Assign's per-task reads once per round"
 scope = '''
-(decisions 470, 475) a stub `airflow` package (Airflow 2 and 3 import paths) that records a DAG file's DAGs as it imports, and a comparison of that record with a native DAG as `schedr dags check` loads it by the paths a run can take (which tasks run, after which, for each way their upstream tasks end; an emulated task compared as the task it stands for) and by schedules, retries, timeouts; the corpus started (Airflow's example DAGs, Apache-2.0)
+(the user, 2026-11-17, after scenario 1's diagnosis: the core lock is held about the whole task phase, mostly waiting for Postgres's answers; Postgres executes about 11 s of the 78 s held; one round trip through the stress suite's published port costs about 1 ms) the reads `build_one` makes for each assigned task, under the core lock, made once for the round's batch: `upstream_outcomes` (two statements a task in scenario 1) and the upstream outputs `mapping::inputs` reads (one a task), each as one statement over all the batch's tasks (array parameters); what the per-task path does with them unchanged. Also `make stress STRESS_RELEASE=1`: the roles from the release build (the test profile's are unoptimized)
 '''
 done_when = '''
-the corpus's DAGs recorded; a hand-written native twin of a few compared equal, a changed one reported different
+scenario 1 (quick, `STRESS_RELEASE=1`, `STRESS_STATEMENTS=1`) shows those reads once per assign round, not once per task; its tasks a second against the 2026-11-17 baseline (30.7, 8 slots; the core lock held 81.9 s); every stress scenario passes
 '''
 status = "planned"
 
 [[steps]]
 id = "M5.2b"
-title = "The rewrite: the authoring core"
+title = "Idle round parts cheap"
 scope = '''
-(decisions 470, 471) `schedr airflow migrate --airflow 2|3 <paths> --out <dir>` with LibCST (`schedr[migrate]`): `DAG`/`@dag`, `@task`, the Bash, Python and Empty operators, dependencies (`>>`, `<<`, `chain`, lists), schedules (cron, presets, `timedelta`, `@once`, `None`), `start_date`/`end_date`/`catchup`, `default_args`, retries, timeouts, tags, description, `max_active_*`, params; each mode's forms and defaults (the defaults checked against Airflow 2's and 3's docs), an import contradicting the mode an error; every result compared (M5.2a)
+(the user, 2026-11-17) in scenario 1 the commands, scheduler and prepare parts held the core lock about 85 ms a round with nothing to do, and the round's probe (decision 485) was the costliest statement a call (2.06 ms mean, 600 calls): find the statements those parts run when idle and skip what the probe already answers, or make the probe cheaper
 '''
 done_when = '''
-the corpus's DAGs within this scope convert and compare equal; the share converted in the guide
+the idle parts' lock time per round measured down in scenario 1 (release); tasks a second against M5.2a's
 '''
 status = "planned"
 
 [[steps]]
 id = "M5.2c"
-title = "Branching, groups, mapping, trigger rules, emulations"
+title = "The round's reads outside the core lock (a design question first)"
 scope = '''
-(decisions 472, 473) task groups, `.partial()`/`.expand()`, `@task.branch`/`BranchPythonOperator`, short-circuit, trigger rules onto `NoneFailed`/`AllSucceeded` with the start anchor and dropped edges, `all_done` leaves and `@setup`/`@teardown` onto resources; what has no exact form under TODO comments
+(the user, 2026-11-17) the core lock serializes the master's memory (slots, active attempts, connections) with its transactions, and is held through each statement's round trip: read ready tasks and the round's reads before taking it, and under it only check that nothing changed, reserve, write and commit. Laid out to the user as options first (decisions 469 and 480 open); built only once decided
 '''
 done_when = '''
-each translation with a corpus or hand-written case compared equal; each refusal with its report line
-'''
-status = "planned"
-
-[[steps]]
-id = "M5.2d"
-title = "Templates, XCom, sensors, chained runs, email"
-scope = '''
-(decision 472) Jinja in `bash_command` and templated fields (`ds`, `params`, `ti.xcom_pull`, ...) onto the task context and outputs; XCom pulls onto outputs; the standard sensors onto wait steps; `TriggerDagRunOperator` onto `TriggerDagOperator`; `email`/`email_on_failure`/`email_on_retry` onto channels; what isn't exact reported
-'''
-done_when = '''
-the corpus's uses converted or reported, the report's counts in the guide
-'''
-status = "planned"
-
-[[steps]]
-id = "M5.2e"
-title = "Connections and Variables"
-scope = '''
-(decision 474) `airflow connections export` / `airflow variables export` JSON into schedr connection definitions and secrets (`schedr airflow migrate-connections`); provider operators counted in the report
-'''
-done_when = '''
-the common connection types (Postgres, MySQL, HTTP, SSH, S3) converted and checked with `schedr connections check`; secrets never written in plain text
-'''
-status = "planned"
-
-[[steps]]
-id = "M5.2f"
-title = "The report and the migration guide"
-scope = '''
-the report (Markdown and JSON per DAG and a summary), a guide page on migrating from Airflow (what converts, what to do with each TODO), the corpus's conversion rate
-'''
-done_when = '''
-the guide page; the corpus's rate measured and stated
+decided with the user; if built, scenario 1's lock time per assigned task and tasks a second measured against M5.2b's, every stress scenario passing
 '''
 status = "planned"
 

@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** R1.1, Release 1.1.0.
+**Next:** M5.2a, Assign's per-task reads once per round.
 
 ## M0: Foundations
 
@@ -224,7 +224,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | R1.0b | The master's side in the clock simulator | done 2026-11-12 |  |
 | R1.0c | Images on glibc beside Alpine | done 2026-11-11 | D454 |
 
-## M5: Performance, metrics, Airflow migration tools
+## M5: Performance, metrics, the master's throughput
 
 **Done when:** Not set yet (archive/PROJECT.md, Roadmap). Scope, criteria and notes: `plan/M5.toml`.
 
@@ -252,15 +252,25 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1o | A poke may be a plain def | done 2026-11-15 | D489 |
 | M5.1p | Tunable constants as hidden settings | done 2026-11-15 | D493 |
 | M5.1q | A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits | done 2026-11-15 | D495, D496, D497 |
-| R1.1 | Release 1.1.0 | **next** | D498, D499, D500 |
-| M5.2a | The recording stub and the comparison | planned | D475 |
-| M5.2b | The rewrite: the authoring core | planned | D470, D471 |
-| M5.2c | Branching, groups, mapping, trigger rules, emulations | planned | D472, D473 |
-| M5.2d | Templates, XCom, sensors, chained runs, email | planned |  |
-| M5.2e | Connections and Variables | planned | D474 |
-| M5.2f | The report and the migration guide | planned |  |
+| R1.1 | Release 1.1.0 | done 2026-11-16 | D498, D499, D500 |
+| M5.2a | Assign's per-task reads once per round | **next** |  |
+| M5.2b | Idle round parts cheap | planned |  |
+| M5.2c | The round's reads outside the core lock (a design question first) | planned |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
 
-## M6: sign-in against LDAP
+## M6: Airflow migration tools
 
-**Done when:** A person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests. Scope, criteria and notes: `plan/M6.toml`.
+**Done when:** Not set yet (archive/PROJECT.md, Roadmap). Scope, criteria and notes: `plan/M6.toml`.
+
+| Step | Title | State | Decisions |
+|---|---|---|---|
+| M6.1 | The recording stub and the comparison | planned | D475 |
+| M6.2 | The rewrite: the authoring core | planned | D470, D471 |
+| M6.3 | Branching, groups, mapping, trigger rules, emulations | planned | D472, D473 |
+| M6.4 | Templates, XCom, sensors, chained runs, email | planned |  |
+| M6.5 | Connections and Variables | planned | D474 |
+| M6.6 | The report and the migration guide | planned |  |
+
+## M7: sign-in against LDAP
+
+**Done when:** A person signs in with their directory password through the UI and the CLI, against a real directory in the integration tests. Scope, criteria and notes: `plan/M7.toml`.

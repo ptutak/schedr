@@ -9,5 +9,5 @@ Each answer records who answered, when, what they answered and an optional comme
 The task panel shows the record; an answer is final.
 '''
 history = "archive/PROJECT.md#D289"
-step = "M6"
+step = "M7"
 checked = 2026-11-09

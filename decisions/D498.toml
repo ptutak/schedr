@@ -5,7 +5,7 @@ status = "active"  # active, superseded, dropped, untraced
 topic = "development"  # a topic of design/README.md
 section = "Releases"
 summary = '''
-A release whose code adds a migration file is first published as a release candidate (`vX.Y.Zrc1`: TestPyPI, a GitHub pre-release, images tagged `X.Y.Zrc1`) and checked, then released; 1.1.0 too, for `0002_next_looks.sql`. Before either tag, `scripts/upgrade_check.py` migrates a database the previous release filled. Not chosen: 1.1.0 without an rc (the user's call of 2026-11-14, from a release workflow unchanged since 1.0.0).
+A release whose code adds a migration file is first published as a release candidate (a tag such as v1.1.0rc1: TestPyPI, a GitHub pre-release, images tagged with the rc's version) and checked, then released; 1.1.0 too, for `0002_next_looks.sql`. Before either tag, `scripts/upgrade_check.py` migrates a database the previous release filled. Not chosen: 1.1.0 without an rc (the user's call of 2026-11-14, from a release workflow unchanged since 1.0.0).
 '''
 history = "JOURNAL.md#D498"  # <a id="D498"></a> starts its JOURNAL.md entry
 step = "R1.1"  # the plan step that builds it; "later"; "n/a" for a rule

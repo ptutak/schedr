@@ -9,5 +9,5 @@ summary = '''
 The answer is the step's output and the master validates it against its schema.
 '''
 history = "archive/PROJECT.md#D284"
-step = "M6"
+step = "M7"
 checked = 2026-11-09

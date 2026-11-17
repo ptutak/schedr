@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui upgrade-check stressstandalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: distributed standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui upgrade-check stressstandalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -247,17 +247,18 @@ STANDALONE_SECRETS := "etl/db password=s3cret-db-password" "etl/api token=s3cret
 # secret key made once in DIR/secret.key (`SCHEDR_SECRET_KEY`), and STANDALONE_SECRETS set
 # where missing (listed, never decrypted: one written under another key is kept). A new database is migrated first to hold them; one there already is migrated
 # by `standalone --migrate`.
+PREPARE_BIN = target/debug/schedr
 STANDALONE_PREPARE = prepare() { \
 	local key="$$1/secret.key" url="sqlite://$$1/schedr.db" entry path pair; \
 	mkdir -p "$$1"; \
-	if [ ! -s "$$key" ]; then (umask 077; target/debug/schedr secrets new-key > "$$key"); fi; \
-	[ -e "$$1/schedr.db" ] || SCHEDR_CONFIG__DATABASE__URL="$$url" target/debug/schedr db migrate; \
-	stored="$$(SCHEDR_CONFIG__DATABASE__URL="$$url" target/debug/schedr secrets list | cut -f1,2)"; \
+	if [ ! -s "$$key" ]; then (umask 077; $(PREPARE_BIN) secrets new-key > "$$key"); fi; \
+	[ -e "$$1/schedr.db" ] || SCHEDR_CONFIG__DATABASE__URL="$$url" $(PREPARE_BIN) db migrate; \
+	stored="$$(SCHEDR_CONFIG__DATABASE__URL="$$url" $(PREPARE_BIN) secrets list | cut -f1,2)"; \
 	for entry in $(STANDALONE_SECRETS); do \
 		path=$${entry%% *}; pair=$${entry\#* }; \
 		grep -qxF "$$path	$${pair%%=*}" <<< "$$stored" \
 		|| SCHEDR_CONFIG__DATABASE__URL="$$url" SCHEDR_SECRET_KEY="$$(cat "$$key")" \
-			target/debug/schedr secrets set "$$path" "$$pair" >/dev/null; \
+			$(PREPARE_BIN) secrets set "$$path" "$$pair" >/dev/null; \
 	done; \
 }
 
@@ -372,6 +373,74 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 	: "every process, not the first to end: a master killed to see the standby take over"; \
 	wait
 
+# A distributed deployment on this machine, to watch memory and load on the Metrics page: two
+# masters (the second a standby, started once the first leads) behind scripts/master_proxy.py,
+# a webserver, DIST_WORKERS workers of DIST_SLOTS task slots each, and a `schedr ui` over the
+# webserver. SQLite in .schedr/distributed/, plain links ([tls] mode = mesh). The DAGs of DAGS;
+# examples/metrics_load.py is unpaused once the webserver answers. Ports from DIST_PORT (+70 the
+# masters' address, +71/+72 the masters' gRPC, +80 the API, +82 the UI, +90.. ops; worker i's
+# log endpoint +60+i, its ops +40+i): beside `make standalone` and `standalone-separate-ui`.
+# Ctrl-C, or the shell ending, stops them all; killing one master shows the standby take over.
+# Runs the released wheel (DIST_VERSION), not this checkout's code.
+DIST_WORKERS ?= 4
+DIST_SLOTS ?= 4
+DIST_PORT ?= 8300
+# The release run: schedr DIST_VERSION from PyPI, installed once into DIST_ENV (its binary and
+# its Python, the tasks' interpreter), not this checkout's debug build.
+DIST_VERSION ?= 1.1.0
+DIST_PYTHON ?= 3.14
+DIST_ENV = $(abspath $(STANDALONE_DIR))/distributed-env/$(DIST_VERSION)
+distributed: PREPARE_BIN = $(DIST_ENV)/bin/schedr
+
+distributed: SHELL := /bin/bash
+distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST_SLOTS (4) slots and a UI on SQLite; the Metrics page on DIST_PORT+82 (8382)
+	set -euo pipefail; env="$(DIST_ENV)"; \
+	if [ "$$("$$env/bin/schedr" --version 2>/dev/null)" != "schedr $(DIST_VERSION)" ]; then \
+		uv venv --quiet --allow-existing --python $(DIST_PYTHON) "$$env"; \
+		uv pip install --quiet --python "$$env/bin/python" --index-url https://pypi.org/simple "schedr==$(DIST_VERSION)"; \
+	fi; \
+	"$$env/bin/schedr" --version
+	$(STANDALONE_PREPARE); \
+	d="$(abspath $(STANDALONE_DIR))/distributed"; prepare "$$d" || exit 1; \
+	python="$(DIST_ENV)/bin/python"; bin="$(DIST_ENV)/bin/schedr"; \
+	b=$(DIST_PORT); \
+	role() { \
+		SCHEDR_SECRET_KEY="$$(cat "$$d/secret.key")" \
+		SCHEDR_CONFIG__DATABASE__URL="sqlite://$$d/schedr.db" \
+		SCHEDR_CONFIG_FILE="$(STANDALONE_CONFIG)" \
+		SCHEDR_CONFIG__TLS__MODE=mesh \
+		exec env "$$@"; \
+	}; \
+	trap 'kill $$(jobs -p) 2>/dev/null; wait' EXIT INT TERM; \
+	( role SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((b + 72)) SCHEDR_CONFIG__OPS__PORT=$$((b + 90)) \
+		"$$bin" master --migrate ) & \
+	python3 scripts/master_proxy.py --listen $$((b + 70)) \
+		--master $$((b + 72)):$$((b + 90)) --master $$((b + 71)):$$((b + 91)) & \
+	( role SCHEDR_CONFIG__WEBSERVER__PORT=$$((b + 80)) SCHEDR_CONFIG__WEBSERVER__BIND=$(LISTEN) \
+		SCHEDR_CONFIG__OPS__PORT=$$((b + 93)) "$$bin" webserver ) & \
+	for i in $$(seq 1 $(DIST_WORKERS)); do \
+		( role SCHEDR_DAG_PATH="$(abspath $(DAGS))" SCHEDR_CONFIG__WORKER__ID=worker-$$i \
+			SCHEDR_CONFIG__WORKER__SLOTS=$(DIST_SLOTS) \
+			SCHEDR_CONFIG__WORKER__MASTER_URL=http://127.0.0.1:$$((b + 70)) \
+			SCHEDR_CONFIG__WORKER__DATA_DIR="$$d/worker-$$i" \
+			SCHEDR_CONFIG__WORKER__LOG_BIND=127.0.0.1 SCHEDR_CONFIG__WORKER__LOG_ADDRESS=127.0.0.1 \
+			SCHEDR_CONFIG__WORKER__LOG_PORT=$$((b + 60 + i)) SCHEDR_CONFIG__OPS__PORT=$$((b + 40 + i)) \
+			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
+			SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
+			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
+			PATH="$(DIST_ENV)/bin:$$PATH" "$$bin" worker ) & \
+	done; \
+	printf '[ui]\nbind = "%s"\nport = %s\ndocs_dir = "%s"\n\n[ops]\nbind = "127.0.0.1"\nport = %s\n\n[[ui.deployments]]\nname = "distributed"\nurl = "http://127.0.0.1:%s"\n' \
+		"$(LISTEN)" $$((b + 82)) "$(if $(wildcard site/index.html),$(abspath site))" $$((b + 92)) $$((b + 80)) > "$$d/ui.toml"; \
+	"$$bin" --config "$$d/ui.toml" ui & \
+	( until curl -sf -o /dev/null "http://127.0.0.1:$$((b + 80))/api/v1/dags"; do sleep 0.5; done; \
+	  role SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((b + 71)) SCHEDR_CONFIG__OPS__PORT=$$((b + 91)) \
+		"$$bin" master ) & \
+	( until curl -sf -o /dev/null "http://127.0.0.1:$$((b + 80))/api/v1/dags"; do sleep 0.5; done; sleep 5; \
+	  ( role SCHEDR_SERVER=http://127.0.0.1:$$((b + 80)) "$$bin" dags unpause metrics_load ) \
+	  && echo "distributed: the Metrics page on http://127.0.0.1:$$((b + 82))" ) & \
+	wait
+
 # The greenhouse showcase (examples/showcase): its simulator against a standalone running its
 # DAGs, started first in another terminal with `make standalone DAGS=examples/showcase/dags`.
 # Unpauses the four DAGs, then plays the devices, an operator and the pager's receiver
@@ -438,10 +507,13 @@ STRESS ?=
 # `STRESS_STATEMENTS=1`: Postgres counts its statements (`pg_stat_statements`), written to
 # target/stress/statements.txt at the end (scripts/stress-statements.sql; M5.1d).
 STRESS_STATEMENTS ?=
+# `STRESS_RELEASE=1`: the roles run the release build, not the unoptimized test profile's.
+STRESS_RELEASE ?=
+STRESS_CARGO = $(if $(STRESS_RELEASE),--cargo-profile release)
 
 stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<filter>)
 	@set -e; \
-	cargo nextest run -p schedr --test stress --no-run; \
+	cargo nextest run -p schedr --test stress $(STRESS_CARGO) --no-run; \
 	sync -f .; \
 	net=schedr-stress-$$$$; pg=schedr-stress-pg-$$$$; bouncer=schedr-stress-bouncer-$$$$; \
 	$(CONTAINER) network create $$net >/dev/null; \
@@ -463,7 +535,7 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	export SCHEDR_STRESS_PROFILE=$(STRESS_PROFILE); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
-	rc=0; cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast \
+	rc=0; cargo nextest run -p schedr --test stress $(STRESS_CARGO) --test-threads 1 --no-fail-fast \
 		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)') || rc=$$?; \
 	$(if $(STRESS_STATEMENTS),mkdir -p target/stress; \
 		$(CONTAINER) exec -i $$pg psql -q -U postgres -d postgres \

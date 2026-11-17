@@ -15,4 +15,4 @@ converted in. Not chosen: Airflow 3 only (most of those leaving Airflow are on 2
 version from the imports.
 '''
 history = "JOURNAL.md#D471"
-step = "M5.2b"
+step = "M6.2"

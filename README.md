@@ -45,7 +45,7 @@ the stress suite than 1.0.0) and metrics in the web UI. Within 1.x the database 
 only through new migrations (`schedr db migrate`), and the protocol between schedr's processes
 (2.x) only additively, so the master is upgraded first; DAG JSON, the REST API and the
 configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a
-fresh database. An Airflow DAG translator comes next (M5.2); see `PLAN.md`.
+fresh database. The master's throughput comes next (M5.2), then an Airflow DAG translator (M6); see `PLAN.md`.
 
 What works:
 

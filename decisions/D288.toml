@@ -9,6 +9,6 @@ The UI has a Waiting for you list, badge and task-panel answer form; the CLI pro
 A `WAITING_FOR_ANSWER` notification is sent through configured channels, with email linking to the task.
 '''
 history = "archive/PROJECT.md#D288"
-step = "M6"
+step = "M7"
 also = ["ui-cli"]
 checked = 2026-11-09

@@ -7,7 +7,7 @@ section = "Access and authentication"
 summary = '''
 schedr keeps no user database, user management UI, admin role or sessions. People remain with the
 organisation’s identity provider; Basic auth retains its users file for labs and single machines. A
-separate LDAP mode checking Basic credentials by directory bind is planned for M6.
+separate LDAP mode checking Basic credentials by directory bind is planned for M7.
 '''
 history = "archive/PROJECT.md#D39"
 step = "n/a"

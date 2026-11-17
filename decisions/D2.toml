@@ -4,7 +4,7 @@ by = "user"
 status = "untraced"
 topic = "development"
 summary = '''
-PLAN.md’s decisions 1–12 are a separate local list of M6 proposals for B39.
+PLAN.md’s decisions 1–12 are a separate local list of M7 proposals for B39.
 No record of this decision number was found.
 '''
 history = "none"

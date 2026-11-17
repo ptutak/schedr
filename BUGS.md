@@ -54,8 +54,8 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39) | 2 | low | possible | usability |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B254: a worker's RUNNING count includes its wait steps, against its task slots
 
@@ -71,9 +71,9 @@ step touches their code or the user schedules them.
   the DAG version's steps, or a column), and show wait steps against `watcher_slots` beside
   the tasks, in the CLI, the API's `running` and the Workers page.
 
-## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M6)
+## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 
-- **Rating:** severity **low**, probability **possible**, usability (score 2): DAGs with many groups drawn far too wide (M6).
+- **Rating:** severity **low**, probability **possible**, usability (score 2): DAGs with many groups drawn far too wide (M7).
 - **Found:** 2026-10-30, by Grok's review of M4.2b's graph layout (decision 65). A group was
   moved only on the layers holding its tasks while its box covers every layer between, so
   boxes stretched and pushed the next group further each pass: 8 sibling groups of 3 tasks
@@ -90,7 +90,7 @@ step touches their code or the user schedules them.
   parent doesn't drag a layer holding it); tests 2 A, 3 A (random trees of 1-6 groups, a
   4-deep nest, a group skipping layers), 8 B (one extra row in the random width bound). The
   original shape is fixed (8 groups: 29,987 px before, now within the side-by-side bound).
-- **Open (Codex's review), for M6:** the 139 random shapes the merged layout draws wider; R1
+- **Open (Codex's review), for M7:** the 139 random shapes the merged layout draws wider; R1
   (high) nested staggered siblings still grow about 4x per doubling (16 parents 27,169 px, 32:
   100,629, against 7.4 million and 4.6e11 px before); R2 quadratic scans per round (`take_group`,
   `align_group`, `shift_closure`, `clear`); R3 a transitive push moves only the innermost
@@ -102,15 +102,15 @@ step touches their code or the user schedules them.
 - **Seen again, 2026-10-31:** `grouped_nodes_never_overlap_and_fit` found a random 13-node,
   two-deep grouping 5,830 px wide against the bound's 5,612 (seed saved in
   `crates/schedr-ui/proptest-regressions/graph/tests.txt`); the test bound now has 10% more
-  room (the user), the shape stays replayed, the layout itself waits for M6.
-- **Parked** (the user, 2026-10-30): back in M6, as a layout correct by construction (each
+  room (the user), the shape stays replayed, the layout itself waits for M7.
+- **Parked** (the user, 2026-10-30): back in M7, as a layout correct by construction (each
   group a block, placed recursively) plus a safety net (check, then fall back to strips),
-  PLAN.md M6. It affects only how DAGs with many groups are drawn, nothing that runs; each
+  PLAN.md M7. It affects only how DAGs with many groups are drawn, nothing that runs; each
   review round of the repair approach found the next shape.
 
-## B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M6, with B39)
+## B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39)
 
-- **Rating:** severity **low**, probability **possible**, usability (score 2): an edge drawn through a group's box (M6).
+- **Rating:** severity **low**, probability **possible**, usability (score 2): an edge drawn through a group's box (M7).
 - **Found:** 2026-10-30, by Grok's review of M4.2b's graph layout. On a layer a group spans
   without a task there, a task outside it is pushed right of the box on that layer only;
   the edge from it to a task on the other side is a curve between the two, through the box.

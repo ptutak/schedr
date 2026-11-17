@@ -5,9 +5,9 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Now (2026-11-16)
 
-- **Milestone:** M5, Performance, metrics, Airflow migration tools.
-- **Next step:** R1.1, Release 1.1.0 (decisions D498, D499, D500). Done when: 1.1.0 on PyPI and its images on ghcr.io carry 1.1.0; a 1.0.0 worker served by a 1.1.0 master and the other way round as the upgrade rules say
-- **Then:** M5.2a, M5.2b, M5.2c, M5.2d, M5.2e.
+- **Milestone:** M5, Performance, metrics, the master's throughput.
+- **Next step:** M5.2a, Assign's per-task reads once per round. Done when: scenario 1 (quick, `STRESS_RELEASE=1`, `STRESS_STATEMENTS=1`) shows those reads once per assign round, not once per task; its tasks a second against the 2026-11-17 baseline (30.7, 8 slots; the core lock held 81.9 s); every stress scenario passes
+- **Then:** M5.2b, M5.2c, M5.3a, M6.1, M6.2.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **Open bugs:** 3; first: B254 (low/likely), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
@@ -18,24 +18,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D498 (2026-11-15): a release with a new migration goes through an rc first
 - D497 (2026-11-15): an unset cleanup timeout fits in the grace period
 - D496 (2026-11-15): a role starting waits for a database it can't reach yet
+- R1.1 (2026-11-16): Release 1.1.0
 - M5.1q (2026-11-15): A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits
 - M5.1p (2026-11-15): Tunable constants as hidden settings
-- M5.1o (2026-11-15): A poke may be a plain def
 
 ## In progress
 
-- M5.1 done 2026-11-15 (M5.1a-M5.1q). Every bug fixed but B38 and B39 (they wait for M6) and B254 (low: a worker's RUNNING count includes its wait steps).
-- R1.1: 1.1.0rc2 published 2026-11-16 and checked (TestPyPI install; the upgrade check from 1.0.0 with its binary and Python on SQLite and Postgres; all six images). 1.1.0's version commit next, then the tag `v1.1.0` (annotated, as 1.0.0's).
-- The Stress workflow writes a results table to its run's summary (`scripts/stress_summary.py`).
+- R1.1 done 2026-11-16: 1.1.0 on PyPI, the GitHub release, the images tagged 1.1.0 on ghcr.io (no `latest` tag, by design).
+- Replanned (the user, 2026-11-17): M5.2 is the master's throughput (M5.2a assign's per-task reads once per round, M5.2b idle round parts cheap, M5.2c the round's reads outside the core lock as a design question); the Airflow migration tool moved to M6 (M6.1-M6.6), LDAP to M7 (B38, B39 wait for M7).
+- M5.2's baseline (2026-11-17, scenario 1 quick x2, `STRESS_RELEASE=1`): 30.7 tasks a second, the core lock held 81.9 s, the master at 15 % CPU; per-task reads 4,800 `upstream_outcomes` + 2,400 outputs; one round trip 0.98 ms through podman's port. Data in the session's scratchpad; the step's records carry the numbers.
+- Not committed yet: R1.1's records, the Makefile's `distributed` target (the PyPI release's binary, `PREPARE_BIN`) and `STRESS_RELEASE`, this replan.
+- Open bugs: B38 and B39 (they wait for M7) and B254 (low: a worker's RUNNING count includes its wait steps).
 
 ## Waiting for the user
 
-- Approving the `pypi` environment in the v1.1.0 release run.
-- After 1.1.0: whether 26 tasks/s is the master's own limit (one throughput run with twice the slots, the master's CPU sampled).
+- Accepting the commit of the items above.
 
 ## Rules in force
 
-- Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; stop just before R1.1. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
+- Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
 - One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly or when the user asks; a step changing how the master recovers runs the cut scenarios 17-21 locally before pushing.
@@ -48,4 +49,4 @@ Codex at 39% of its week after D500's review (2026-11-16). Grok unused this week
 
 Resume this session with:
 
-claude --resume 0f288ee8-d79c-4c85-9781-7c4774e2f509
+claude --resume d97b91b3-700a-492f-b226-1e8f6e6ea11b

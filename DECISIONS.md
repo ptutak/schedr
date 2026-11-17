@@ -12,15 +12,15 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 ## Deferred questions
 
 - Q2 (until if asked, `deployment`): Should the chart provide NetworkPolicies for clusters without a mesh?
-- Q4 (until M6, `assignment`): Should concurrency limits be editable without a code change and shared across DAGs?
-- Q9 (until M6, `ui-cli`): How should LDAP find a person’s directory entry?
-- Q10 (until M6, `ui-cli`): Who may sign in through LDAP?
-- Q11 (until M6, `ui-cli`): What encryption should LDAP connections require?
-- Q12 (until M6, `ui-cli`): Should users be able to skip or set a task state from the UI and CLI?
-- Q13 (until M6, `ui-cli`): Should schedr provide OIDC integration for deployments without a mesh?
-- Q14 (until M6, `ui-cli`): Should the CLI obtain OIDC tokens through a login command?
+- Q4 (until M7, `assignment`): Should concurrency limits be editable without a code change and shared across DAGs?
+- Q9 (until M7, `ui-cli`): How should LDAP find a person’s directory entry?
+- Q10 (until M7, `ui-cli`): Who may sign in through LDAP?
+- Q11 (until M7, `ui-cli`): What encryption should LDAP connections require?
+- Q12 (until M7, `ui-cli`): Should users be able to skip or set a task state from the UI and CLI?
+- Q13 (until M7, `ui-cli`): Should schedr provide OIDC integration for deployments without a mesh?
+- Q14 (until M7, `ui-cli`): Should the CLI obtain OIDC tokens through a login command?
 - Q15 (until M4B, `state`): Should database tables be partitioned by time?
-- Q21 (until M6, `wait-steps`): Should a wait step support .expand()?
+- Q21 (until M7, `wait-steps`): Should a wait step support .expand()?
 - Q24 (until later, `triggers`): Should a new worker take triggers that are already running?
 
 ## Unverified claims
@@ -31,9 +31,9 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D500 | 2026-11-16 | user | planned (R1.1) | ui-cli | The DAGs page filters by name, trigger switch, kind and tag |
-| D499 | 2026-11-16 | user | planned (R1.1) | ui-cli | The Metrics page folds the processes that ended into one line |
-| D498 | 2026-11-15 | user | planned (R1.1) | development | A release with a new migration goes through an rc first |
+| D500 | 2026-11-16 | user | built R1.1 | ui-cli | The DAGs page filters by name, trigger switch, kind and tag |
+| D499 | 2026-11-16 | user | built R1.1 | ui-cli | The Metrics page folds the processes that ended into one line |
+| D498 | 2026-11-15 | user | built R1.1 | development | A release with a new migration goes through an rc first |
 | D497 | 2026-11-15 | user | built M5.1q | workers | An unset cleanup timeout fits in the grace period |
 | D496 | 2026-11-15 | user | built M5.1q | state | A role starting waits for a database it can't reach yet |
 | D495 | 2026-11-15 | user | built M5.1q | workers | A stopping worker waits for the master to take its Deregister |
@@ -56,12 +56,12 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D478 | 2026-11-13 | user | rule | wait-steps | User-set deadlines count on the wall clock |
 | D477 | 2026-11-13 | user | built M5.1b2 | development | PyPI shows a page of its own: installing and a first run |
 | D476 | 2026-11-13 | user | built M5.1b2 | components | A worker or standalone with no DAG directories warns at start |
-| D475 | 2026-11-13 | user | planned (M5.2a) | airflow | No Airflow look-alike layer: the migration tool replaces it |
-| D474 | 2026-11-13 | user | planned (M5.2e) | airflow | Airflow connections and Variables are converted; provider operators are reported |
-| D473 | 2026-11-13 | user | planned (M5.2c) | airflow | The migration tool emulates Airflow behaviour with native constructs where exact |
-| D472 | 2026-11-13 | user | planned (M5.2c) | airflow | What the migration tool converts, and what it leaves marked for a person |
-| D471 | 2026-11-13 | user | planned (M5.2b) | airflow | The migration tool has an Airflow 2 mode and an Airflow 3 mode |
-| D470 | 2026-11-13 | user | planned (M5.2b) | airflow | The Airflow migration tool rewrites the source, checked against the original's structure |
+| D475 | 2026-11-13 | user | planned (M6.1) | airflow | No Airflow look-alike layer: the migration tool replaces it |
+| D474 | 2026-11-13 | user | planned (M6.5) | airflow | Airflow connections and Variables are converted; provider operators are reported |
+| D473 | 2026-11-13 | user | planned (M6.3) | airflow | The migration tool emulates Airflow behaviour with native constructs where exact |
+| D472 | 2026-11-13 | user | planned (M6.3) | airflow | What the migration tool converts, and what it leaves marked for a person |
+| D471 | 2026-11-13 | user | planned (M6.2) | airflow | The migration tool has an Airflow 2 mode and an Airflow 3 mode |
+| D470 | 2026-11-13 | user | planned (M6.2) | airflow | The Airflow migration tool rewrites the source, checked against the original's structure |
 | D469 | 2026-11-13 | user | built M5.1c1 | assignment | A round releases the core lock between its batches of assignments |
 | D468 | 2026-11-13 | user | superseded by D480 | workers | One inbox for all workers: a turn takes every worker's messages, in phases |
 | D467 | 2026-11-13 | user | built M5.1k | ui-cli | A task's peak memory over its attempts is charted |
@@ -242,13 +242,13 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D292 | 2026-11-05 | user | rule | scripts | M4.9 delivers scripts in three reviewed steps |
 | D291 | 2026-11-05 | user | built M4.8z | cleanup | Resource graph lines summarize users and expand on hover |
 | D290 | 2026-11-05 | user | built M4.8z | cleanup | Resource tasks appear in a box beside the run graph |
-| D289 | 2026-11-05 | user | planned (M6) | human-in-the-loop | Answers are final and recorded in the command log |
-| D288 | 2026-11-05 | user | planned (M6) | human-in-the-loop | Pending questions appear in the UI, CLI and notifications |
-| D287 | 2026-11-05 | user | planned (M6) | human-in-the-loop | Questions time out with the TimedOut outcome |
-| D286 | 2026-11-05 | user | planned (M6) | human-in-the-loop | Approvers default to users who may trigger the DAG |
-| D285 | 2026-11-05 | user | planned (M6) | human-in-the-loop | A rejected approval has the Rejected outcome |
-| D284 | 2026-11-05 | user | planned (M6) | human-in-the-loop | Approval and question answers have typed outputs |
-| D283 | 2026-11-05 | user | planned (M6) | human-in-the-loop | The master holds approval and question steps |
+| D289 | 2026-11-05 | user | planned (M7) | human-in-the-loop | Answers are final and recorded in the command log |
+| D288 | 2026-11-05 | user | planned (M7) | human-in-the-loop | Pending questions appear in the UI, CLI and notifications |
+| D287 | 2026-11-05 | user | planned (M7) | human-in-the-loop | Questions time out with the TimedOut outcome |
+| D286 | 2026-11-05 | user | planned (M7) | human-in-the-loop | Approvers default to users who may trigger the DAG |
+| D285 | 2026-11-05 | user | planned (M7) | human-in-the-loop | A rejected approval has the Rejected outcome |
+| D284 | 2026-11-05 | user | planned (M7) | human-in-the-loop | Approval and question answers have typed outputs |
+| D283 | 2026-11-05 | user | planned (M7) | human-in-the-loop | The master holds approval and question steps |
 | D282 | 2026-11-05 | user | built M4.8z | cleanup | A moving cleanup's result from the worker it moved from counts |
 | D281 | 2026-11-05 | user | built M4.8z | workers | An assignment cannot start after its worker lease expires |
 | D280 | 2026-11-05 | user | built M4.8z | workers | A disconnected or frozen worker can cause a task to run twice |

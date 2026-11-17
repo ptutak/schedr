@@ -3,5 +3,5 @@ asked = 2026-11-09
 topic = "ui-cli"
 status = "deferred"
 proposal = "Consider requiring TLS with plaintext only on loopback, or allowing plaintext with a flag and warning."
-history = "plan/M6.toml: notes; archive/PROJECT.md: Roadmap"
-until = "M6"
+history = "plan/M7.toml: notes; archive/PROJECT.md: Roadmap"
+until = "M7"

@@ -16,4 +16,4 @@ extra (`schedr[migrate]`). Not chosen: building DAGs by running the original alo
 unrolled, the user's structure lost); a rewrite without the check.
 '''
 history = "JOURNAL.md#D470"
-step = "M5.2b"
+step = "M6.2"
