@@ -146,6 +146,63 @@ impl RoundReads {
     }
 }
 
+/// What a round's assign part reads from the database alone, before it takes the core lock
+/// (M5.2cA, decision 501): the ready tasks, the DAGs held, the wait steps' reads, each DAG's
+/// current version, and the upstream outcomes and outputs of a round's worth of ready tasks.
+/// Under the lock only what the batch decides is checked again: the slots and limits in memory,
+/// then the claim, `WHERE state = 'queued'`, refusing a task anything changed meanwhile (a
+/// refused one gives its slot back).
+#[derive(Debug)]
+pub struct AssignReads {
+    ready: Vec<ReadyInstance>,
+    held: BTreeMap<String, bool>,
+    round_reads: RoundReads,
+    versions: BTreeMap<DagId, String>,
+    upstream: mapping::Upstream,
+}
+
+impl AssignReads {
+    /// Reads them at `now`, the upstream of the first `most` ready tasks (a round assigns at
+    /// most that many: one picked past them is read under the lock, as before).
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if the database fails.
+    pub async fn read(db: &Database, now: Timestamp, most: usize) -> Result<Self, DispatchError> {
+        let ready = db.ready_instances(now).await?;
+        if ready.is_empty() {
+            return Ok(Self {
+                ready,
+                held: BTreeMap::new(),
+                round_reads: RoundReads::default(),
+                versions: BTreeMap::new(),
+                upstream: mapping::Upstream::default(),
+            });
+        }
+        let held = db.held_dags().await?;
+        let round_reads = RoundReads::read(db, &ready).await?;
+        let versions = db.active_dag_versions().await?.into_iter().collect();
+        let wanted: BTreeSet<(String, TaskId)> = ready
+            .iter()
+            .take(most)
+            .filter_map(|one| Some((one, one.dag.task(&one.task_id)?)))
+            .flat_map(|(one, task)| {
+                mapping::upstream_wanted(task)
+                    .into_iter()
+                    .map(|upstream| (one.run_id.clone(), upstream))
+            })
+            .collect();
+        let upstream = mapping::Upstream::read(db, wanted).await?;
+        Ok(Self {
+            ready,
+            held,
+            round_reads,
+            versions,
+            upstream,
+        })
+    }
+}
+
 /// Why a moved cleanup waits, shown as `unschedulable` (decision 244).
 const NO_CLEANUP_WORKER: &str = "no worker for the cleanup";
 
@@ -414,6 +471,10 @@ pub struct Dispatcher {
     /// What a round's assignments read once for all its ready tasks, while it assigns
     /// (decision 482); none outside it.
     round_reads: Option<RoundReads>,
+    /// What the next assign part read before the core lock (M5.2cA); none: it reads them.
+    assign_reads: Option<AssignReads>,
+    /// The upstream read with them, for the round's picks it covers.
+    read_upstream: Option<mapping::Upstream>,
     /// Attempts a reconnecting worker runs whose start the database refused to record (B128):
     /// not taken back as never started while a worker holds them.
     adopted_unrecorded: BTreeSet<String>,
@@ -541,6 +602,8 @@ impl Dispatcher {
             stops: Vec::new(),
             resolved: mapping::Resolved::new(),
             round_reads: None,
+            assign_reads: None,
+            read_upstream: None,
             active: Active::new(),
             current_versions: BTreeMap::new(),
             rounds: crate::core::RoundLimits::default(),
@@ -727,6 +790,11 @@ impl Dispatcher {
     /// The most instances a mapped task may have (`[mapping] max_instances`).
     pub const fn set_max_instances(&mut self, max_instances: usize) {
         self.execution.set_max_instances(max_instances);
+    }
+
+    /// What the next assign part reads, read before the core lock (M5.2cA).
+    pub fn give_reads(&mut self, reads: AssignReads) {
+        self.assign_reads = Some(reads);
     }
 
     /// How much a round does at most (decision 493), its execution's part too.
@@ -1130,9 +1198,11 @@ impl Dispatcher {
         now: Timestamp,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
-        let assigned = self.assign_reading(now, outgoing).await;
+        let read = self.assign_reads.take();
+        let assigned = self.assign_reading(now, read, outgoing).await;
         // Read for these assignments only: a later round, or a turn, reads afresh.
         self.round_reads = None;
+        self.read_upstream = None;
         assigned
     }
 
@@ -1140,6 +1210,7 @@ impl Dispatcher {
     async fn assign_reading(
         &mut self,
         now: Timestamp,
+        read: Option<AssignReads>,
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         self.set_aside.retain(|_, until| *until > now);
@@ -1148,8 +1219,19 @@ impl Dispatcher {
         outgoing.append(&mut self.stops);
         self.assign_cleanups(now, outgoing).await?;
         self.wind_down_removed(now, outgoing).await?;
-        let ready = self.db.ready_instances(now).await?;
-        let ready = self.unless_held(ready, now).await?;
+        // Read before the core lock, or now (M5.2cA).
+        let read = match read {
+            Some(read) => read,
+            None => AssignReads::read(&self.db, now, self.rounds.assignments).await?,
+        };
+        let AssignReads {
+            ready,
+            held,
+            round_reads,
+            versions,
+            upstream,
+        } = read;
+        let ready = self.unless_held(ready, &held, now).await?;
         let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
             .filter(|r| !self.set_aside.contains_key(&r.instance_id))
@@ -1166,8 +1248,9 @@ impl Dispatcher {
             self.metrics.set_waiting(&[]);
             return Ok(());
         }
-        self.round_reads = Some(RoundReads::read(&self.db, &ready).await?);
-        self.read_limits().await?;
+        self.round_reads = Some(round_reads);
+        self.read_upstream = Some(upstream);
+        self.read_limits(versions).await?;
         // The step's assignments are one transaction: stored together, with one lease check
         // and one commit (T2, 2.10b). What they changed in memory (the slots reserved) and the
         // messages built for them go with a rollback.
@@ -1278,12 +1361,12 @@ impl Dispatcher {
     async fn unless_held(
         &mut self,
         ready: Vec<ReadyInstance>,
+        held: &BTreeMap<String, bool>,
         now: Timestamp,
     ) -> Result<Vec<ReadyInstance>, DispatchError> {
         if ready.is_empty() {
             return Ok(ready);
         }
-        let held = self.db.held_dags().await?;
         let mut free = Vec::with_capacity(ready.len());
         let mut reasons = Vec::new();
         for instance in ready {
@@ -1576,12 +1659,16 @@ impl Dispatcher {
     }
 
     /// Reads what the concurrency limits need: the open attempts, once (the master's first
-    /// round with tasks ready; then kept in memory), and each DAG's current version.
-    async fn read_limits(&mut self) -> Result<(), DispatchError> {
+    /// round with tasks ready; then kept in memory); each DAG's current version, `versions`, is
+    /// read with the ready tasks.
+    async fn read_limits(
+        &mut self,
+        versions: BTreeMap<DagId, String>,
+    ) -> Result<(), DispatchError> {
         if !self.active.is_loaded() {
             self.active.load(self.db.active_attempts().await?);
         }
-        self.current_versions = self.db.active_dag_versions().await?.into_iter().collect();
+        self.current_versions = versions;
         Ok(())
     }
 
@@ -1708,7 +1795,8 @@ impl Dispatcher {
             if error.commit_unknown() {
                 // The rest of the round counts what is stored.
                 self.recount();
-                self.read_limits().await?;
+                let versions = self.db.active_dag_versions().await?.into_iter().collect();
+                self.read_limits(versions).await?;
             }
             outgoing.truncate(built);
             if !task_specific(&error) {
@@ -1791,7 +1879,11 @@ impl Dispatcher {
                     .map(|upstream| (one.run_id.clone(), upstream))
             })
             .collect();
-        let read = mapping::Upstream::read(&self.db, wanted).await?;
+        // Read before the lock when it covers the picks (M5.2cA); else now.
+        let read = match self.read_upstream.take() {
+            Some(read) if read.covers_all(&wanted) => read,
+            _ => mapping::Upstream::read(&self.db, wanted).await?,
+        };
         for (one, pick) in picks {
             let try_number = tries.get(&one.instance_id).copied();
             let built = (pick, try_number);

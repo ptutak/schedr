@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-16)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.2cA, Assign's reads before the core lock. Done when: the assign part's lock time per round measured down in scenario 1 (release) against M5.2b's; every stress scenario passes, the cut scenarios 17-21 locally
-- **Then:** M5.2cB, M5.2cC, M5.2d, R1.2, M5.3a.
+- **Next step:** M5.2cB, Turns' reads before the core lock. Done when: the turns' lock time per task measured down in scenario 1 (release) against M5.2cA's; every stress scenario passes, the cut scenarios 17-21 locally
+- **Then:** M5.2cC, M5.2d, R1.2, M5.3a, M5.3b.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **Open bugs:** 3; first: B254 (low/likely), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
@@ -18,14 +18,14 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D502 (2026-11-17): one probe a round; a read skipped on it after a write wakes the next round
 - D501 (2026-11-17): the master's core lock is released during database calls
 - D500 (2026-11-16): the DAGs page filters by name, trigger switch, kind and tag
+- M5.2cA (2026-11-17): Assign's reads before the core lock
 - M5.2b (2026-11-17): Idle round parts cheap
 - M5.2a (2026-11-17): Assign's per-task reads once per round
-- R1.1 (2026-11-16): Release 1.1.0
 
 ## In progress
 
-- M5.2cA next (decision 501: assign's reads before the lock, check-reserve-claim-commit under it), then M5.2cB, M5.2cC, each reviewed and committed; then M5.2d and R1.2 (release 1.2.0). Committed last: M5.2a, M5.2b, B256 and B255 together (51.2 tasks a second in scenario 1, against 30.7 for 1.1.0).
-- M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.
+- M5.2cB next: a design choice with the user (the user's: turns only end attempts and wake the loop, rounds move the runs forward; against A, B, C). Then M5.2cC's layout to the user; one review at the end of M5.2c, the whole stress suite; M5.2d; R1.2.
+- Committed last: M5.2cA (55.7 tasks a second in scenario 1). M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.
 
 ## Waiting for the user
 
@@ -33,7 +33,7 @@ Nothing.
 
 ## Rules in force
 
-- Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its review and checks, no push; stop for any decision.
+- Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its measurement and make check, no push; stop for any decision and before building M5.2cC (its layout to the user). One review at the end of M5.2c over its three parts (the user: "I mean at the end of M5.2c"), then the whole stress suite; M5.2d reviewed on its own.
 - Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
 - One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).

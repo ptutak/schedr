@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.2cA, Assign's reads before the core lock.
+**Next:** M5.2cB, Turns' reads before the core lock.
 
 ## M0: Foundations
 
@@ -255,8 +255,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | R1.1 | Release 1.1.0 | done 2026-11-16 | D498, D499, D500 |
 | M5.2a | Assign's per-task reads once per round | done 2026-11-17 |  |
 | M5.2b | Idle round parts cheap | done 2026-11-17 | D502, D503 |
-| M5.2cA | Assign's reads before the core lock | **next** |  |
-| M5.2cB | Turns' reads before the core lock | planned |  |
+| M5.2cA | Assign's reads before the core lock | done 2026-11-17 |  |
+| M5.2cB | Turns' reads before the core lock | **next** |  |
 | M5.2cC | The core lock off the writes: the master's memory behind a short lock | planned | D501 |
 | M5.2d | The worker's start path | planned |  |
 | R1.2 | Release 1.2.0 | planned |  |

@@ -346,6 +346,12 @@ impl Upstream {
         })
     }
 
+    /// Whether every pair of `wanted` was read.
+    #[must_use]
+    pub fn covers_all(&self, wanted: &BTreeSet<(String, TaskId)>) -> bool {
+        wanted.is_subset(&self.asked)
+    }
+
     /// Whether every one of `tasks` of `run_id` was read.
     #[must_use]
     pub fn covers(&self, run_id: &str, tasks: &[&TaskId]) -> bool {

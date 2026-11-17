@@ -23,7 +23,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::core::task_api::ApiCallPlan;
 use crate::core::{Arrivals, CoreError, Group, MasterCore, RoundPart};
-use crate::dispatch::Outgoing;
+use crate::dispatch::{AssignReads, Outgoing};
 use crate::lease::{Leadership, Renewal};
 use crate::metrics::MasterMetrics;
 use crate::problems::{ProblemKind, Problems};
@@ -128,6 +128,8 @@ pub struct Hub {
     messages_per_turn: usize,
     /// The most messages of a failed group handled one by one in a turn (decision 493).
     alone_per_turn: usize,
+    /// The most a round assigns: its upstream is read before the core lock (M5.2cA).
+    assignments_per_round: usize,
     /// The messages that wait for a worker before it is taken for one that stopped reading.
     stream_buffer: usize,
     /// When each worker's latest message arrived (the core's).
@@ -201,6 +203,7 @@ impl Hub {
             max_message_size: core.settings().max_message_size,
             messages_per_turn: core.settings().messages_per_turn.max(1),
             alone_per_turn: core.settings().failed_group_messages_per_turn.max(1),
+            assignments_per_round: core.assignments_per_round(),
             stream_buffer: core.settings().worker_stream_buffer.max(1),
             timings: core.settings().timings,
             metrics: core.metrics().clone(),
@@ -548,11 +551,20 @@ impl Hub {
                     continue;
                 }
                 let mut outgoing = Vec::new();
-                let result = self
-                    .core_for("round")
-                    .await
-                    .round_part(part, (self.clock)(), &mut outgoing)
-                    .await;
+                let now = (self.clock)();
+                // The assign part's reads before the core lock (M5.2cA, decision 501): under
+                // it only what the batch decides is checked again, and claimed.
+                let reads = if part == RoundPart::Assign {
+                    Some(AssignReads::read(&self.db, now, self.assignments_per_round).await?)
+                } else {
+                    None
+                };
+                let mut core = self.core_for("round").await;
+                if let Some(reads) = reads {
+                    core.give_assign_reads(reads);
+                }
+                let result = core.round_part(part, now, &mut outgoing).await;
+                drop(core);
                 self.deliver(outgoing).await;
                 result?;
             }

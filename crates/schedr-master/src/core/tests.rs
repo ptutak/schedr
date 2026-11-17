@@ -1497,6 +1497,65 @@ async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
     assert_eq!(cancels, [assign.attempt_id.as_str()]);
 }
 
+/// The assign messages among `out`, by task.
+fn assigned_tasks(out: &[Outgoing]) -> Vec<&str> {
+    out.iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::AssignTask(a) => Some(a.task_id.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_assign_parts_reads_made_before_the_lock_dont_assign_what_changed_since() {
+    // M5.2cA: the assign part reads before taking the core lock; a task cancelled between the
+    // reads and the claim isn't assigned, and its worker's slot stays free for the next.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let mut out = Vec::new();
+    for part in [
+        RoundPart::Commands,
+        RoundPart::Scheduler,
+        RoundPart::Prepare,
+    ] {
+        core.round_part(part, ts(NOW), &mut out).await.unwrap();
+    }
+    let reads = crate::dispatch::AssignReads::read(&core.db, ts(NOW), 10)
+        .await
+        .unwrap();
+    let runs = core
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap();
+    let cancel = schedr_model::commands::Command::CancelTask {
+        run_id: runs[0].id.clone(),
+        task_id: schedr_model::TaskId::new("extract").unwrap(),
+        map_index: None,
+    };
+    core.db
+        .insert_command(&cancel, "anna", ts(NOW))
+        .await
+        .unwrap();
+    core.round_part(RoundPart::Commands, ts(NOW), &mut out)
+        .await
+        .unwrap();
+    core.give_assign_reads(reads);
+    let mut assigned = Vec::new();
+    core.round_part(RoundPart::Assign, ts(NOW), &mut assigned)
+        .await
+        .unwrap();
+    assert_eq!(assigned_tasks(&assigned), Vec::<&str>::new());
+    // The slot it was picked for is given back.
+    let w1 = core.dispatcher().workers().get("w1").unwrap();
+    assert_eq!(w1.free_slots(), 2);
+    // And the next run's task is assigned as usual.
+    trigger(&mut core).await;
+    let out = core.tick(later(1)).await.unwrap();
+    assert_eq!(assigned_tasks(&out), ["extract"]);
+}
+
 #[tokio::test]
 async fn a_task_cancelled_while_its_worker_is_away_is_cancelled_on_reconnect() {
     // B43: a `CancelTask` (not the run's) missed while away is sent again too.

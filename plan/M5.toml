@@ -343,7 +343,8 @@ scope = '''
 done_when = '''
 the assign part's lock time per round measured down in scenario 1 (release) against M5.2b's; every stress scenario passes, the cut scenarios 17-21 locally
 '''
-status = "planned"
+status = "done"
+done = 2026-11-17
 
 [[steps]]
 id = "M5.2cB"

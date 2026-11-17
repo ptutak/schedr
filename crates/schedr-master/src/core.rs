@@ -1643,6 +1643,17 @@ impl MasterCore {
         Ok(())
     }
 
+    /// What the next assign part reads, read before the core lock (M5.2cA, decision 501).
+    pub fn give_assign_reads(&mut self, reads: crate::dispatch::AssignReads) {
+        self.dispatcher.give_reads(reads);
+    }
+
+    /// The most a round assigns (`ASSIGNMENTS_PER_ROUND`).
+    #[must_use]
+    pub const fn assignments_per_round(&self) -> usize {
+        self.settings.rounds.assignments
+    }
+
     /// One part of a round, its messages into `outgoing` (each built after the write it stands
     /// for is stored). The service takes the core's lock for each part on its own, so a
     /// worker's turn gets in between them (decision 469); [`Self::tick`] runs them all.

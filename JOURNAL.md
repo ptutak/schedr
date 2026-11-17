@@ -1798,3 +1798,14 @@ try reads the gate first. (3) A cleanup restored from the journal had no gate, s
 `CLEAN_REST` couldn't reach it: it has one, and a waiting cleanup's boundary is left to where its
 handles are skipped, not drained twice. The user, on stress: "I don't think we have to run stress
 again": the cut scenarios passed on the first barrier; not run again.
+
+### 2026-11-17: M5.2cA, the assign part's reads before the core lock (decision 501, its first part)
+
+The assign part reads the ready tasks, the DAGs held, the wait steps' reads, each DAG's current
+version and the upstream of a round's worth of ready tasks before taking the lock
+(`AssignReads`); under it the slots and limits in memory, the claim (`WHERE state = 'queued'`,
+refusing a task anything changed since: its slot given back), the messages and the commit.
+Measured (scenario 1, quick x2, release): 51.2 -> 55.7 tasks a second; the assign part's lock
+time 35.7 -> 13.7 ms a round; the lock held 49.2 -> 41.2 s. A `Finished` group still holds it
+25.5 ms, its run read 0.14 ms of it on the server: a turn's time is its round trips and writes.
+The user, on the review: one at the end of M5.2c ("I mean at the end of M5.2c").

@@ -4,14 +4,14 @@
 updated = 2026-11-16
 
 in_progress = [
-    "M5.2cA next (decision 501: assign's reads before the lock, check-reserve-claim-commit under it), then M5.2cB, M5.2cC, each reviewed and committed; then M5.2d and R1.2 (release 1.2.0). Committed last: M5.2a, M5.2b, B256 and B255 together (51.2 tasks a second in scenario 1, against 30.7 for 1.1.0).",
-    "M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.",
+    "M5.2cB next: a design choice with the user (the user's: turns only end attempts and wake the loop, rounds move the runs forward; against A, B, C). Then M5.2cC's layout to the user; one review at the end of M5.2c, the whole stress suite; M5.2d; R1.2.",
+    "Committed last: M5.2cA (55.7 tasks a second in scenario 1). M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.",
 ]
 
 waiting = []
 
 rules = [
-    "Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its review and checks, no push; stop for any decision.",
+    "Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its measurement and make check, no push; stop for any decision and before building M5.2cC (its layout to the user). One review at the end of M5.2c over its three parts (the user: \"I mean at the end of M5.2c\"), then the whole stress suite; M5.2d reviewed on its own.",
     "Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).",
     "One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.",
     "Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).",
