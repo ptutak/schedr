@@ -114,7 +114,7 @@ impl Database {
             Listening::NotPostgres => {
                 const LAST: &str = "SELECT COALESCE(MAX(seq), 0) FROM changes";
                 let after: i64 = on_pool!(self, |pool, backend| {
-                    sqlx::query_scalar(sql(backend, LAST))
+                    crate::query::query_scalar(sql(backend, LAST))
                         .fetch_one(pool)
                         .await?
                 });
@@ -180,7 +180,7 @@ impl Database {
         match self.pool() {
             Pool::Postgres(pool) => {
                 let names: Vec<&str> = triggers().map(|(_, name)| name).collect();
-                let on: i64 = sqlx::query_scalar(
+                let on: i64 = crate::query::query_scalar(
                     "SELECT COUNT(*) FROM pg_trigger WHERE tgname = ANY($1) AND tgenabled <> 'D'",
                 )
                 .bind(&names)
@@ -189,7 +189,7 @@ impl Database {
                 Ok(usize::try_from(on).is_ok_and(|on| on == names.len()))
             }
             Pool::Sqlite(pool) => {
-                let on: i64 = sqlx::query_scalar("SELECT notify FROM changes_switch")
+                let on: i64 = crate::query::query_scalar("SELECT notify FROM changes_switch")
                     .fetch_one(pool)
                     .await?;
                 Ok(on != 0)
@@ -217,14 +217,14 @@ impl Database {
                 let mut tx = starting.begin("BEGIN").await?;
                 for (table, name) in triggers() {
                     let statement = format!("ALTER TABLE {table} {verb} TRIGGER {name}");
-                    sqlx::query(sqlx::AssertSqlSafe(statement))
+                    crate::query::query(sqlx::AssertSqlSafe(statement))
                         .execute(&mut *tx)
                         .await?;
                 }
                 tx.commit().await?;
             }
             Pool::Sqlite(pool) => {
-                sqlx::query("UPDATE changes_switch SET notify = $1")
+                crate::query::query("UPDATE changes_switch SET notify = $1")
                     .bind(i64::from(on))
                     .execute(pool)
                     .await?;
@@ -294,7 +294,7 @@ impl Changes {
 async fn read_after(db: &Database, after: &mut i64, rows: i64) -> Result<Vec<Change>, DbError> {
     const AFTER: &str = "SELECT seq, change FROM changes WHERE seq > $1 ORDER BY seq LIMIT $2";
     let rows: Vec<(i64, String)> = on_pool!(db, |pool, backend| {
-        sqlx::query_as(sql(backend, AFTER))
+        crate::query::query_as(sql(backend, AFTER))
             .bind(*after)
             .bind(rows)
             .fetch_all(pool)

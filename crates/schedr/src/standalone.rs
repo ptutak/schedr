@@ -65,6 +65,15 @@ impl std::fmt::Debug for Standalone {
     }
 }
 
+/// How a standalone connects to its database.
+#[derive(Debug, Clone, Copy)]
+pub struct Connecting {
+    /// The longest a database query may take.
+    pub query_timeout: Duration,
+    /// `[database] prepared_statements`: whether queries stay prepared on their connections.
+    pub prepared_statements: bool,
+}
+
 /// Everything `schedr standalone` runs, read from the configuration.
 #[derive(Clone)]
 pub struct Standalone {
@@ -101,8 +110,8 @@ pub struct Standalone {
     pub worker_stop_after_failure: Duration,
     /// How long a loop may go without turning before liveness fails.
     pub loop_stall_timeout: Duration,
-    /// The longest a database query may take.
-    pub query_timeout: Duration,
+    /// How the database is connected.
+    pub connecting: Connecting,
     /// `[database] notifications`: whether new commands are announced and listened for.
     pub notifications: bool,
     /// `[database] notifications_url`: what the master listens through, if not the database's
@@ -181,7 +190,10 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         logs: localhost(config.worker.log_port),
         ops: localhost(config.ops.port),
         loop_stall_timeout: config.timings.loop_stall_timeout,
-        query_timeout: config.timings.query_timeout,
+        connecting: Connecting {
+            query_timeout: config.timings.query_timeout,
+            prepared_statements: config.database.prepared_statements,
+        },
         notifications: config.database.notifications,
         notifications_url: config.database.notifications_url.clone(),
         lease_period: config.timings.lease_period,
@@ -251,12 +263,14 @@ async fn bind(setup: &Standalone) -> Result<([tokio::net::TcpListener; 4], Liste
 impl Standalone {
     /// Its database, connected, with its notifications and DAG cache as configured.
     async fn database(&self) -> Result<Database, AppError> {
-        Ok(
-            Database::connect_with_timeout(&self.database_url, self.query_timeout)
-                .await?
-                .with_notifications(self.notifications, self.notifications_url.clone())
-                .with_dag_versions_cached(self.dag_versions_cached),
+        Ok(Database::connect_prepared(
+            &self.database_url,
+            self.connecting.query_timeout,
+            self.connecting.prepared_statements,
         )
+        .await?
+        .with_notifications(self.notifications, self.notifications_url.clone())
+        .with_dag_versions_cached(self.dag_versions_cached))
     }
 
     /// Its master's row: the configuration shown, how often it is written and how long it

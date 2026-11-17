@@ -1464,6 +1464,9 @@ impl MasterCore {
                 vec![settled?.unwrap_or_else(|| crate::dispatch::finished_ack(worker_id, id))]
             }
             worker_message::Message::ApiCall(call) => self.api_call(worker_id, call, now).await?,
+            worker_message::Message::CleanupStart(start) => {
+                vec![self.cleanup_go(worker_id, start).await?]
+            }
             worker_message::Message::HandlesAdded(added) => {
                 self.handles_added(worker_id, &added).await?
             }
@@ -2196,6 +2199,47 @@ impl MasterCore {
             }
         };
         Ok((decision, 0, outgoing))
+    }
+
+    /// The answer to a cleanup at its barrier (B255, decision 504).
+    async fn cleanup_go(
+        &self,
+        worker_id: &str,
+        start: pb::CleanupStart,
+    ) -> Result<Outgoing, CoreError> {
+        let go = self
+            .cleanup_may_start(worker_id, &start.attempt_id, start.rest)
+            .await?;
+        Ok(Outgoing {
+            worker_id: worker_id.to_owned(),
+            message: pb::MasterMessage {
+                message: Some(master_message::Message::CleanupGo(pb::CleanupGo {
+                    attempt_id: start.attempt_id,
+                    go,
+                })),
+                clock: None,
+            },
+        })
+    }
+
+    /// Whether a cleanup waiting at its barrier may run on `worker_id` (B255, decision 504): its
+    /// attempt still open and the cleanup this worker's; the `rest` of its handles while this
+    /// worker owes them (B169: as `CLEAN_REST` was given, whether the attempt ended or not; a
+    /// worker told `Kill` runs no rest). Read only: the cleanup can't move before this worker
+    /// is lost, a lease after this message.
+    async fn cleanup_may_start(
+        &self,
+        worker_id: &str,
+        attempt_id: &str,
+        rest: bool,
+    ) -> Result<bool, CoreError> {
+        if rest {
+            return Ok(self.db.rest_owed_by(attempt_id).await?.as_deref() == Some(worker_id));
+        }
+        let Some(attempt) = self.db.attempt(attempt_id).await? else {
+            return Ok(false);
+        };
+        Ok(attempt.status.is_none() && attempt.worker_id == worker_id)
     }
 
     /// Undoes a waiting cleanup's move back to `worker_id` (B169). The task's result the

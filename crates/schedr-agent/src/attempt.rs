@@ -170,6 +170,12 @@ pub struct AttemptSpec {
     pub api: Option<crate::api::ApiCaller>,
     /// Passed between the task's end and its cleanup, with `cleanup_anywhere` (decision 253).
     pub cleanup_gate: Option<CleanupGate>,
+    /// With `cleanup_anywhere`: each try of its cleanup waits at a barrier for the master's word
+    /// (B255, decision 504).
+    pub cleanup_ask: Option<crate::barrier::CleanupAsk>,
+    /// Its cleanup runs on the handles the master didn't have only, from this one on
+    /// (`CLEAN_REST`, B169).
+    pub cleanup_rest: Option<u32>,
     /// Set for a trigger: what it starts from, and where its events go.
     pub trigger: Option<(
         schedr_model::runner::TriggerStart,
@@ -282,6 +288,8 @@ impl AttemptSpec {
             handle_sink: None,
             api: None,
             cleanup_gate: None,
+            cleanup_ask: None,
+            cleanup_rest: None,
             trigger: None,
         })
     }
@@ -710,6 +718,7 @@ fn plan_kind(
                     mask: spec.mask.clone(),
                     start_timeout: setup.timeouts.runner_start,
                     output_drain: setup.timeouts.output_drain,
+                    barrier: None,
                 },
                 request: Box::new(TaskRequest {
                     dag_file: DagFile {
@@ -764,6 +773,7 @@ fn plan_kind(
                 mask: spec.mask.clone(),
                 start_timeout: setup.timeouts.runner_start,
                 output_drain: setup.timeouts.output_drain,
+                barrier: None,
             }))
         }
         TaskKind::Empty => Err(NotRun::Rejected {
@@ -854,6 +864,7 @@ fn plan_script(
         mask: spec.mask.clone(),
         start_timeout: setup.timeouts.runner_start,
         output_drain: setup.timeouts.output_drain,
+        barrier: None,
     }))
 }
 

@@ -26,6 +26,7 @@ fn shell(dir: &Path, script: &str, max_output_size: usize) -> ProcessSpec {
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
         output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
+        barrier: None,
     }
 }
 

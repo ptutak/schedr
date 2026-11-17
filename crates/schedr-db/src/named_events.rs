@@ -102,7 +102,7 @@ impl Database {
         // What it woke (decision 486): its triggers' listeners, its waiting steps.
         let mut woke = (false, false);
         let earlier: Option<(String, String, String, String)> = in_tx!(self, |tx, backend| {
-            let inserted = sqlx::query(sql(backend, INSERT))
+            let inserted = crate::query::query(sql(backend, INSERT))
                 .bind(&id)
                 .bind(event.name)
                 .bind(event.key)
@@ -115,12 +115,12 @@ impl Database {
                 .await?
                 .rows_affected();
             if inserted == 1 {
-                let listeners = sqlx::query(sql(backend, LISTENERS))
+                let listeners = crate::query::query(sql(backend, LISTENERS))
                     .bind(event.name)
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
-                let waiters = sqlx::query(sql(backend, WAITERS))
+                let waiters = crate::query::query(sql(backend, WAITERS))
                     .bind(event.name)
                     .execute(&mut *tx)
                     .await?
@@ -129,7 +129,7 @@ impl Database {
                 None
             } else {
                 Some(
-                    sqlx::query_as(sql(backend, BY_KEY))
+                    crate::query::query_as(sql(backend, BY_KEY))
                         .bind(posted_by)
                         .bind(request_key)
                         .fetch_one(&mut *tx)
@@ -186,7 +186,7 @@ impl Database {
              ORDER BY n.posted_at, n.id LIMIT $4"
         );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
+            crate::query::query_as(sql_text(backend, &query))
                 .bind(name)
                 .bind(db_time(since))
                 .bind(dag_id)
@@ -216,7 +216,7 @@ impl Database {
              AND p.item = n.id{{text}}) ORDER BY n.posted_at, n.id LIMIT 1"
         );
         let found: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
+            crate::query::query_as(sql_text(backend, &query))
                 .bind(name)
                 .bind(db_time(since))
                 .bind(dag_id)
@@ -246,12 +246,12 @@ impl Database {
         const FLOOR: &str = "UPDATE trigger_progress SET passed_floor = $2{ts} WHERE dag_id = $1 \
             AND (passed_floor IS NULL OR passed_floor < $2{ts})";
         let forgotten = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, FLOOR))
+            crate::query::query(sql(backend, FLOOR))
                 .bind(dag_id)
                 .bind(db_time(before))
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query(sql(backend, FORGET))
+            crate::query::query(sql(backend, FORGET))
                 .bind(dag_id)
                 .bind(name)
                 .bind(db_time(before))
@@ -270,7 +270,7 @@ impl Database {
     pub async fn passed_floor(&self, dag_id: &str) -> Result<Option<Timestamp>, DbError> {
         const FLOOR: &str = "SELECT {ts<}passed_floor{>ts} FROM trigger_progress WHERE dag_id = $1";
         let floor: Option<Option<String>> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, FLOOR))
+            crate::query::query_scalar(sql(backend, FLOOR))
                 .bind(dag_id)
                 .fetch_optional(pool)
                 .await?
@@ -303,7 +303,7 @@ impl Database {
         );
         let (after_at, after_id) = after.map_or((None, None), |(at, id)| (Some(at), Some(id)));
         let found: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
+            crate::query::query_as(sql_text(backend, &query))
                 .bind(name)
                 .bind(key)
                 .bind(db_time(since))
@@ -338,7 +338,7 @@ impl Database {
         );
         let from = after.checked_sub(back).unwrap_or(Timestamp::MIN);
         let found: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
+            crate::query::query_as(sql_text(backend, &query))
                 .bind(name)
                 .bind(key)
                 .bind(db_time(since))
@@ -358,7 +358,7 @@ impl Database {
     pub async fn named_events_by_id(&self, id: &str) -> Result<Option<NamedEvent>, DbError> {
         let query = format!("SELECT {COLUMNS} FROM named_events WHERE id = $1{{uuid}}");
         let found: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
+            crate::query::query_as(sql_text(backend, &query))
                 .bind(id)
                 .fetch_optional(pool)
                 .await?
@@ -381,7 +381,7 @@ impl Database {
              ORDER BY posted_at DESC, id DESC LIMIT $2"
         );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &query))
+            crate::query::query_as(sql_text(backend, &query))
                 .bind(name)
                 .bind(i64::from(limit))
                 .fetch_all(pool)

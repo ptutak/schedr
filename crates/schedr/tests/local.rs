@@ -1351,6 +1351,58 @@ fn task_exec_caps_the_programs_data_and_runs_it_in_its_place() {
     assert!(String::from_utf8_lossy(&missing.stderr).contains("can't start `/no/such/program`"));
 }
 
+/// B255, decision 504: `task-exec --barrier` runs its program only on the worker's `g`, given
+/// within its wait, and replies `p` when it does.
+#[test]
+fn task_exec_at_a_barrier_runs_its_program_only_on_a_go_in_time() {
+    use std::io::{Read as _, Write as _};
+    let dir = tempfile::TempDir::new().unwrap();
+    // `word`: what the worker writes (none: it closes), after `after`; the barrier's reply.
+    let run = |word: Option<u8>, after: std::time::Duration, wait_ms: u64| {
+        let socket = dir.path().join("barrier");
+        let _ = std::fs::remove_file(&socket);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            std::thread::sleep(after);
+            let word = word?;
+            stream.write_all(&[word]).ok()?;
+            let mut reply = [0_u8; 1];
+            (stream.read(&mut reply).ok()? == 1).then_some(reply[0])
+        });
+        let marker = dir.path().join("ran");
+        let _ = std::fs::remove_file(&marker);
+        let output = Command::new(BINARY)
+            .args(["task-exec", "--barrier"])
+            .arg(&socket)
+            .args(["--barrier-wait-ms", &wait_ms.to_string(), "--", "touch"])
+            .arg(&marker)
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            marker.exists(),
+            worker.join().unwrap(),
+        )
+    };
+    let now = std::time::Duration::ZERO;
+    assert_eq!(run(Some(b'g'), now, 5_000), (Some(0), true, Some(b'p')));
+    // The worker closed it: the master said no.
+    assert_eq!(run(None, now, 5_000), (Some(75), false, None));
+    // A go after its wait: it gave up and left, nothing runs. (A go landing as the wait ends
+    // is answered `l`; the worker's side of that is in the agent's barrier tests.)
+    let late = std::time::Duration::from_millis(600);
+    assert_eq!(run(Some(b'g'), late, 200), (Some(75), false, None));
+    // No worker listening at all.
+    let output = Command::new(BINARY)
+        .args(["task-exec", "--barrier"])
+        .arg(dir.path().join("nobody"))
+        .args(["--barrier-wait-ms", "200", "--", "true"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(75));
+}
+
 /// B209, B211: a test's folder is its user's only, and Ctrl-C stops the run's tasks (not the
 /// CLI alone) and removes the folder.
 #[test]

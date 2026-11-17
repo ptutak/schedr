@@ -196,6 +196,7 @@ fn reads_the_database_url() {
             notifications: true,
             notifications_url: None,
             change_notifications: true,
+            prepared_statements: true,
         }
     );
     let config = parse(

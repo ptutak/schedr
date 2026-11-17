@@ -129,7 +129,7 @@ impl Database {
         let usage = master.usage.map(to_json);
         let gone = now.checked_sub(kept).unwrap_or(Timestamp::UNIX_EPOCH);
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, UPSERT))
+            crate::query::query(sql(backend, UPSERT))
                 .bind(master.master_id)
                 .bind(master.process_id)
                 .bind(master.host)
@@ -141,7 +141,7 @@ impl Database {
                 .bind(&usage)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query(sql(backend, PRUNE))
+            crate::query::query(sql(backend, PRUNE))
                 .bind(db_time(gone))
                 .execute(&mut *tx)
                 .await?;
@@ -171,7 +171,7 @@ impl Database {
             Option<String>,
         );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, MASTERS))
+            crate::query::query_as(sql(backend, MASTERS))
                 .bind(db_time(since))
                 .fetch_all(pool)
                 .await?
@@ -227,7 +227,7 @@ impl Database {
             WHERE worker_id = $4";
         let config = config.map(|c| storable_json(c.to_string()));
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(master_id)
                 .bind(process_id)
                 .bind(config)
@@ -254,7 +254,9 @@ impl Database {
             Option<String>,
         );
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, NODES)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, NODES))
+                .fetch_all(pool)
+                .await?
         });
         rows.into_iter()
             .map(|(worker_id, master_id, process_id, config, usage)| {
@@ -285,7 +287,7 @@ impl Database {
         const SET: &str =
             "UPDATE workers SET usage = $1{json}, usage_at = $3{ts} WHERE worker_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(to_json(usage))
                 .bind(worker_id)
                 .bind(db_time(now))

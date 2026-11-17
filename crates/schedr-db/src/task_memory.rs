@@ -74,7 +74,7 @@ impl Database {
             ORDER BY a.ended_at DESC, a.id DESC LIMIT $3";
         type Row = (String, String, i64, i64, String, Option<i64>, String);
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, LAST))
+            crate::query::query_as(sql(backend, LAST))
                 .bind(dag_id)
                 .bind(task_id)
                 .bind(i64::from(count))
@@ -132,7 +132,7 @@ impl Database {
             WHERE a.ended_at >= $2{ts} AND a.peak_memory_bytes IS NOT NULL\
             ) newest WHERE n <= $3 ORDER BY task_id";
         let rows: Vec<(String, i64, i32)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, PEAKS))
+            crate::query::query_as(sql(backend, PEAKS))
                 .bind(dag_id)
                 .bind(db_time(since))
                 .bind(i64::from(runs))

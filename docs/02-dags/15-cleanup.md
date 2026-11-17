@@ -70,8 +70,16 @@ success](../03-guide/03-life-of-a-run.md#7-the-next-task-and-the-end). The clean
 runs here or on another worker. After the master marks the worker lost, it waits 40 s by
 default before moving cleanup.
 
+Each try of such a cleanup asks the master first. Its process starts and waits before running
+anything; only then does the worker ask, and the process runs only if the master answers,
+within half the worker lease, that the cleanup is still this worker's. A worker frozen or cut
+off just before a try therefore never starts it after it moved: a late answer finds the
+process gone. A try with no answer in time isn't counted; it is made again.
+
 A cleanup already running when the connection is lost continues and can overlap one moved to
-another worker. A frozen VM cannot stop its task at all. The cleanup must therefore still be
+another worker, if it is still running when the move comes (the lease and the 40 s after it). A
+frozen VM cannot stop its task at all, and a cleanup's wait for the master may not count the
+pause. The cleanup must therefore still be
 safe during the task as well as safe to repeat. A handle can also be cleaned twice if the
 master received one past a gap, or if the original cleanup overlaps a move. A cleanup that
 fails because something is already gone is a common cause of a late failure: treat an already

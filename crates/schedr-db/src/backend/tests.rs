@@ -102,6 +102,31 @@ fn unknown_postgres_parameters_are_named() {
 }
 
 #[test]
+fn a_urls_statement_cache_capacity_is_read() {
+    // Codex's review of M5.2b: a URL turning sqlx's cache off wins over the setting (B256).
+    assert_eq!(statement_cache_capacity("postgres://u@db/x"), None);
+    assert_eq!(
+        statement_cache_capacity("postgres://u@db/x?sslmode=require&statement-cache-capacity=0#f"),
+        Some(0)
+    );
+    assert_eq!(
+        statement_cache_capacity("postgres://u@db/x?statement%2Dcache%2Dcapacity=0"),
+        Some(0)
+    );
+    assert_eq!(
+        statement_cache_capacity(
+            "postgres://u@db/x?statement-cache-capacity=0&statement-cache-capacity=50"
+        ),
+        Some(50),
+        "the last one, as sqlx reads it"
+    );
+    assert_eq!(
+        statement_cache_capacity("postgres://u@db/x?statement-cache-capacity=many"),
+        None
+    );
+}
+
+#[test]
 fn a_databases_place_names_its_host_never_its_credentials() {
     // The user, 2026-11-15: a role waiting for its database says where, without its password.
     for (url, place) in [

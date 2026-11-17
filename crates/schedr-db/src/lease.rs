@@ -121,10 +121,10 @@ impl Database {
         self.limited(self.query_timeout(), async {
             match self.pool() {
                 Pool::Sqlite(pool) => {
-                    sqlx::query(CREATE_SQLITE).execute(pool).await?;
+                    crate::query::query(CREATE_SQLITE).execute(pool).await?;
                 }
                 Pool::Postgres(pool) => {
-                    sqlx::query(CREATE_POSTGRES).execute(pool).await?;
+                    crate::query::query(CREATE_POSTGRES).execute(pool).await?;
                 }
             }
             Ok(())
@@ -145,7 +145,7 @@ impl Database {
             .limited(self.query_timeout(), async {
                 Ok(match self.pool() {
                     Pool::Sqlite(pool) => {
-                        sqlx::query_scalar(TAKE_SQLITE)
+                        crate::query::query_scalar(TAKE_SQLITE)
                             .bind(holder)
                             .bind(sqlite_period(period))
                             .fetch_optional(pool)
@@ -155,8 +155,8 @@ impl Database {
                         // Not `pool.begin()`: a start cut short mustn't go back to the pool (B84).
                         let mut starting = crate::query::Starting::new(pool.acquire().await?);
                         let mut tx = starting.begin("BEGIN").await?;
-                        sqlx::query(LOCK_POSTGRES).execute(&mut *tx).await?;
-                        let epoch = sqlx::query_scalar(TAKE_POSTGRES)
+                        crate::query::query(LOCK_POSTGRES).execute(&mut *tx).await?;
+                        let epoch = crate::query::query_scalar(TAKE_POSTGRES)
                             .bind(holder)
                             .bind(millis(period))
                             .fetch_optional(&mut *tx)
@@ -188,7 +188,7 @@ impl Database {
             .limited(self.query_timeout(), async {
                 Ok(match self.pool() {
                     Pool::Sqlite(pool) => {
-                        sqlx::query_scalar(RENEW_SQLITE)
+                        crate::query::query_scalar(RENEW_SQLITE)
                             .bind(holder)
                             .bind(epoch)
                             .bind(sqlite_period(period))
@@ -196,7 +196,7 @@ impl Database {
                             .await?
                     }
                     Pool::Postgres(pool) => {
-                        sqlx::query_scalar(RENEW_POSTGRES)
+                        crate::query::query_scalar(RENEW_POSTGRES)
                             .bind(holder)
                             .bind(epoch)
                             .bind(millis(period))
@@ -219,12 +219,12 @@ impl Database {
         self.limited(self.query_timeout(), async {
             Ok(match self.pool() {
                 Pool::Sqlite(pool) => {
-                    sqlx::query_scalar(HOLDER_SQLITE)
+                    crate::query::query_scalar(HOLDER_SQLITE)
                         .fetch_optional(pool)
                         .await?
                 }
                 Pool::Postgres(pool) => {
-                    sqlx::query_scalar(HOLDER_POSTGRES)
+                    crate::query::query_scalar(HOLDER_POSTGRES)
                         .fetch_optional(pool)
                         .await?
                 }
@@ -243,8 +243,16 @@ impl Database {
     pub async fn lease_held(&self) -> Result<Option<(String, String)>, DbError> {
         self.limited(self.query_timeout(), async {
             Ok(match self.pool() {
-                Pool::Sqlite(pool) => sqlx::query_as(HELD_SQLITE).fetch_optional(pool).await?,
-                Pool::Postgres(pool) => sqlx::query_as(HELD_POSTGRES).fetch_optional(pool).await?,
+                Pool::Sqlite(pool) => {
+                    crate::query::query_as(HELD_SQLITE)
+                        .fetch_optional(pool)
+                        .await?
+                }
+                Pool::Postgres(pool) => {
+                    crate::query::query_as(HELD_POSTGRES)
+                        .fetch_optional(pool)
+                        .await?
+                }
             })
         })
         .await
@@ -260,13 +268,13 @@ impl Database {
         self.limited(self.query_timeout(), async {
             match self.pool() {
                 Pool::Sqlite(pool) => {
-                    sqlx::query(RELEASE_SQLITE)
+                    crate::query::query(RELEASE_SQLITE)
                         .bind(holder)
                         .execute(pool)
                         .await?;
                 }
                 Pool::Postgres(pool) => {
-                    sqlx::query(RELEASE_POSTGRES)
+                    crate::query::query(RELEASE_POSTGRES)
                         .bind(holder)
                         .execute(pool)
                         .await?;
@@ -286,7 +294,7 @@ impl Database {
         let Some(fence) = self.fence() else {
             return Ok(());
         };
-        let held: Option<i32> = sqlx::query_scalar(FENCE_SQLITE)
+        let held: Option<i32> = crate::query::query_scalar(FENCE_SQLITE)
             .bind(&fence.holder)
             .bind(fence.epoch)
             .fetch_optional(tx)

@@ -12,7 +12,10 @@ tasks a second, 16 gave 30.4, the master's CPU about a third of a core; the rele
 for Postgres's answers: no synchronous commit gained 6 %; Postgres executed about 11 s of
 statements; one round trip through the stress suite's published port costs 0.98 ms (0.25 ms
 inside the container). So fewer round trips under the lock: assign's per-task reads (M5.2a),
-the idle round parts (M5.2b), then the reads outside the lock as a design question (M5.2c).
+the idle round parts (M5.2b), then the core lock released during database calls (decision
+501: M5.2cA, M5.2cB, M5.2cC), then the worker's start path (M5.2d), then release 1.2.0 (R1.2). The target (the user,
+2026-11-17): half of what the slots allow, 160 tasks a second in scenario 1 (32 slots, tasks of
+0.1 s). M5.2a measured 40.5 (the assign part's lock time 26.7 s → 6.2 s).
 
 First, the start path (the user, 2026-11-11, after 1.0.0): M4B's stress comparison (guide,
 Stress tests, After M4B) made finishing faster and starting slower (assigned → started p99 up
@@ -316,7 +319,8 @@ scope = '''
 done_when = '''
 scenario 1 (quick, `STRESS_RELEASE=1`, `STRESS_STATEMENTS=1`) shows those reads once per assign round, not once per task; its tasks a second against the 2026-11-17 baseline (30.7, 8 slots; the core lock held 81.9 s); every stress scenario passes
 '''
-status = "planned"
+status = "done"
+done = 2026-11-17
 
 [[steps]]
 id = "M5.2b"
@@ -327,16 +331,61 @@ scope = '''
 done_when = '''
 the idle parts' lock time per round measured down in scenario 1 (release); tasks a second against M5.2a's
 '''
+status = "done"
+done = 2026-11-17
+
+[[steps]]
+id = "M5.2cA"
+title = "Assign's reads before the core lock"
+scope = '''
+(decision 501, its first part) the assign part reads what it decides from (ready tasks and what holds them back, the round's reads, limits, the upstream read of M5.2a) without the core lock; under it, as decision 469 has it, only what the batch decides is checked again: slots picked in memory, the claim (`WHERE state = 'queued'`), the messages built, the commit
+'''
+done_when = '''
+the assign part's lock time per round measured down in scenario 1 (release) against M5.2b's; every stress scenario passes, the cut scenarios 17-21 locally
+'''
 status = "planned"
 
 [[steps]]
-id = "M5.2c"
-title = "The round's reads outside the core lock (a design question first)"
+id = "M5.2cB"
+title = "Turns' reads before the core lock"
 scope = '''
-(the user, 2026-11-17) the core lock serializes the master's memory (slots, active attempts, connections) with its transactions, and is held through each statement's round trip: read ready tasks and the round's reads before taking it, and under it only check that nothing changed, reserve, write and commit. Laid out to the user as options first (decisions 469 and 480 open); built only once decided
+(decision 501, its second part) a worker's `Finished` and `Started` groups read their attempts, runs and instances before taking the core lock; under it only their writes and the commit, with what was read checked by the writes' own conditions
 '''
 done_when = '''
-decided with the user; if built, scenario 1's lock time per assigned task and tasks a second measured against M5.2b's, every stress scenario passing
+the turns' lock time per task measured down in scenario 1 (release) against M5.2cA's; every stress scenario passes, the cut scenarios 17-21 locally
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2cC"
+title = "The core lock off the writes: the master's memory behind a short lock"
+scope = '''
+(decision 501, its last part; decisions 469 and 480 open) the core's memory (slots, active attempts, connections, the jobs it gave out) behind a lock never held across a database call; each transaction on its own connection, safe by its writes' conditions; memory changed after the commit, a slot reserved before it and given back on a rollback; on SQLite (one writer) the serial lock stays. Laid out step by step before it is built
+'''
+done_when = '''
+scenario 1 (release, Postgres) at 160 tasks a second or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2d"
+title = "The worker's start path"
+scope = '''
+(the user, 2026-11-17) what a worker takes from an assignment to the task's start (assigned → started 0.077 s at the median in scenario 1 on the release build, M5.2a), profiled and cut where it limits the target
+'''
+done_when = '''
+scenario 1's assigned → started measured against M5.2cC's, and its share of the remaining gap to 160 tasks a second stated
+'''
+status = "planned"
+
+[[steps]]
+id = "R1.2"
+title = "Release 1.2.0"
+scope = '''
+(the user, 2026-11-17) M5.2 ends with 1.2.0: the master's throughput and the bugs fixed by then (B255, B256 among them). If M5.2 falls short of 160 tasks a second in scenario 1, whether to stretch it before the release is decided then. The stress suite's table "After M5.2" on the stress page, against 1.0.0's and 1.1.0's form (the quick profile, 1.1.0's code and M5.2's one after the other on an otherwise idle machine); the changelog; the version bumped; an rc first only if a migration was added (decision 498); `scripts/upgrade_check.py` against 1.1.0
+'''
+done_when = '''
+1.2.0 on PyPI and its images on ghcr.io; the stress page's "After M5.2" table
 '''
 status = "planned"
 
@@ -348,5 +397,16 @@ scope = '''
 '''
 done_when = '''
 with `master.replicas: 2` on Postgres, the leading master pod killed: the other takes the lease within the lease period, the workers reconnect through the Service, and a run under way finishes with its attempts kept; the chart's default unchanged
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.3b"
+title = "A started cleanup's move, after its worker is lost"
+scope = '''
+(the user, 2026-11-17, B255) decision 504's barrier knows when a `cleanup_anywhere` cleanup started: the worker let it through on the master's `go`. Whether the master, losing that worker, still moves it (at least once: two may overlap when the first runs past the lease and the move wait) or never moves a cleanup it said `go` to (no overlap: a `go` that never arrived leaves it unrun); and whether the worker reports the start (`p`) to the master, narrowing the cases it can't tell. The user decides the guarantee; then built, with the guide's guarantee rewritten
+'''
+done_when = '''
+the user's choice built and tested, the guarantees page saying it
 '''
 status = "planned"

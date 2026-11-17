@@ -151,6 +151,8 @@ struct Round {
     now: Timestamp,
     ahead: jiff::SignedDuration,
     seen: Arc<std::sync::Mutex<Option<Seen>>>,
+    /// Whether a read was skipped on a probe a write had since made stale (M5.2b).
+    stale: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
@@ -170,7 +172,7 @@ impl Database {
     /// [`DbError`] if the statement fails.
     pub async fn probe(&self, now: Timestamp) -> Result<Probe, DbError> {
         let found: Vec<bool> = on_pool!(self, |pool, backend| {
-            let row = sqlx::query(sql_text(backend, statement()))
+            let row = crate::query::query(sql_text(backend, statement()))
                 .bind(db_time(now))
                 .fetch_one(pool)
                 .await?;
@@ -194,7 +196,7 @@ impl Database {
     pub async fn exists(&self, check: Check, now: Timestamp) -> Result<bool, DbError> {
         let statement = format!("SELECT EXISTS (SELECT 1 {})", check.from());
         let found: bool = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql_text(backend, &statement))
+            crate::query::query_scalar(sql_text(backend, &statement))
                 .bind(db_time(now))
                 .fetch_one(pool)
                 .await?
@@ -203,22 +205,39 @@ impl Database {
     }
 
     /// Runs `work` as a master's round at `now`: its reads that the probe says find nothing are
-    /// skipped (decision 485). The probe is taken at the first such read, looking `ahead` (the
-    /// tick: a time-bounded check counts what is due by then), and again after any write
-    /// transaction ended since, or for a time-bounded read past what it covered.
+    /// skipped (decision 485). The probe is taken once, at the first such read, looking `ahead`
+    /// (the tick: a time-bounded check counts what is due by then), and again only for a
+    /// time-bounded read past what it covered. A write ending after it doesn't take it again
+    /// (M5.2b): what said nothing is still skipped, and [`Self::in_round_noting`] tells the
+    /// caller, which runs another round soon.
     pub async fn in_round<F: std::future::Future>(
         &self,
         now: Timestamp,
         ahead: std::time::Duration,
         work: F,
     ) -> F::Output {
+        self.in_round_noting(now, ahead, work).await.0
+    }
+
+    /// As [`Self::in_round`], with whether a read was skipped on a probe that a write had made
+    /// stale: what that write made possible waits for another round, which the caller runs
+    /// soon (M5.2b; the master after its round gap).
+    pub async fn in_round_noting<F: std::future::Future>(
+        &self,
+        now: Timestamp,
+        ahead: std::time::Duration,
+        work: F,
+    ) -> (F::Output, bool) {
+        let stale = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let round = Round {
             database: self.identity().clone(),
             now,
             ahead: jiff::SignedDuration::try_from(ahead).unwrap_or(jiff::SignedDuration::ZERO),
             seen: Arc::default(),
+            stale: Arc::clone(&stale),
         };
-        ROUND.scope(round, work).await
+        let output = ROUND.scope(round, work).await;
+        (output, stale.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     /// Whether this read, `check`'s, is skipped: inside a round on this database whose probe
@@ -262,6 +281,13 @@ impl Database {
             // ahead without a new probe (not skipping is always safe), so a busy round probes
             // only for checks that said no.
             Some(seen) if seen.probe.found(check) => return Ok(false),
+            // Said nothing, a write having ended since: skipped on it all the same, not probed
+            // again (a probe a round, M5.2b); the round notes it, so another one follows soon
+            // for what that write may have made possible.
+            Some(seen) if at.is_none_or(|at| at <= seen.until) => {
+                round.stale.store(true, std::sync::atomic::Ordering::SeqCst);
+                return Ok(true);
+            }
             _ => {
                 let from = at.map_or(round.now, |at| at.max(round.now));
                 let until = from.checked_add(round.ahead).unwrap_or(from);

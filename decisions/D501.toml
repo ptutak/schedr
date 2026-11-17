@@ -1,0 +1,19 @@
+title = "The master's core lock is released during database calls"
+date = 2026-11-17
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+The master's core lock stops covering database calls, as Python's GIL is let go during I/O. Built in three measured
+parts: the assign part's reads before the lock (M5.2cA); a worker's `Started` and `Finished` groups'
+reads before it (M5.2cB); then the core's memory (slots, active attempts, connections, the jobs it gave out) behind a lock
+never held across a database call, each transaction on its own connection and safe by its
+writes' conditions (a claim only `WHERE state = 'queued'`), the memory changed after the
+commit (a slot reserved before, given back on a rollback); on SQLite, one writer, the serial lock
+stays (M5.2cC). The target: 160 tasks a second in scenario 1, half of what its slots allow.
+Not chosen: only the reads before the lock (estimated 80 to 120 tasks a second, the writes still
+serial); the concurrent design at once, without the parts measured between.
+'''
+history = "JOURNAL.md#D501"
+step = "M5.2cC"

@@ -75,9 +75,21 @@ where
     // A task's start under a hard memory cap: nothing else first, its program replaces this.
     if let cli::Command::TaskExec {
         data_limit,
+        barrier,
+        barrier_wait_ms,
         command,
     } = &cli.command
     {
+        if let (Some(socket), Some(wait)) = (barrier, barrier_wait_ms)
+            && !barrier_passed(socket, std::time::Duration::from_millis(*wait))
+        {
+            return report(
+                err,
+                "cleanup not started: the master didn't confirm in time that it is still this \
+                 worker's\n",
+                BARRIER_CLOSED,
+            );
+        }
         return task_exec(*data_limit, command, err);
     }
     if let cli::Command::DagCtx { command } = &cli.command {
@@ -143,21 +155,56 @@ fn report(stream: &mut impl Write, message: &str, code: u8) -> u8 {
     code
 }
 
-/// `schedr task-exec`: sets `RLIMIT_DATA` to `limit` (current and maximum: the task can't raise
-/// it) and runs `command` in this process's place, so its pid, process group, environment and
-/// inherited descriptors stay the worker's to watch. Returns only when that fails.
-fn task_exec(limit: u64, command: &[std::ffi::OsString], err: &mut impl Write) -> u8 {
-    use std::os::unix::process::CommandExt as _;
-    let cap = rustix::process::Rlimit {
-        current: Some(limit),
-        maximum: Some(limit),
+/// `schedr task-exec`'s exit when its barrier didn't let it through (B255): nothing ran.
+pub const BARRIER_CLOSED: u8 = 75;
+
+/// A `cleanup_anywhere` cleanup's barrier (B255, decision 504): says it waits by connecting to
+/// `socket`, then waits at most `wait`, counted from before that, for a `g`, and replies `p`
+/// once through. Anything else (no worker listening, the connection closed, the time over)
+/// keeps it shut: the master may have moved the cleanup, and only a word given within `wait`
+/// is sure it hadn't. The socket is closed on exec.
+fn barrier_passed(socket: &std::path::Path, wait: std::time::Duration) -> bool {
+    use std::io::{Read as _, Write as _};
+    let until = std::time::Instant::now() + wait;
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(socket) else {
+        return false;
     };
-    if let Err(error) = rustix::process::setrlimit(rustix::process::Resource::Data, cap) {
-        return report(
-            err,
-            &format!("error: can't cap the task's memory: {error}\n"),
-            1,
-        );
+    let mut word = [0_u8; 1];
+    loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match stream.read(&mut word) {
+            // Its reply: `p`, passed (it runs now: the cleanup started), or `l`, too late.
+            Ok(1) if word[0] == b'g' => {
+                let passed = std::time::Instant::now() < until;
+                return stream.write_all(if passed { b"p" } else { b"l" }).is_ok() && passed;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            _ => return false,
+        }
+    }
+}
+
+/// `schedr task-exec`: sets `RLIMIT_DATA` to `limit` if given (current and maximum: the task
+/// can't raise it) and runs `command` in this process's place, so its pid, process group,
+/// environment and inherited descriptors stay the worker's to watch. Returns only when that
+/// fails.
+fn task_exec(limit: Option<u64>, command: &[std::ffi::OsString], err: &mut impl Write) -> u8 {
+    use std::os::unix::process::CommandExt as _;
+    if let Some(limit) = limit {
+        let cap = rustix::process::Rlimit {
+            current: Some(limit),
+            maximum: Some(limit),
+        };
+        if let Err(error) = rustix::process::setrlimit(rustix::process::Resource::Data, cap) {
+            return report(
+                err,
+                &format!("error: can't cap the task's memory: {error}\n"),
+                1,
+            );
+        }
     }
     let Some((program, args)) = command.split_first() else {
         return report(err, "error: task-exec: no program given\n", EXIT_USAGE);

@@ -196,14 +196,19 @@ are still due, so the next round makes that visit again.
 Each round begins with one statement, the **probe**, that asks the database, for each read
 the round would make, whether that read would find anything: commands to apply, queued
 runs, scheduled DAGs due, runs just started, retries due, tasks ready, attempts to take back
-or move, triggers to look after. A read whose answer is no isn't made. A write the round makes
-for its later parts (a run started, then its tasks, then their assignment) takes the probe
-again before the next read, so those parts happen in the same round.
+or move, triggers to look after. A read whose answer is no isn't made.
+
+The probe is taken once a round. A write ending after it, the round's own or a worker's
+message handled between its parts, doesn't take it again: a read it said no to is still
+skipped. The round notes that, and the master runs another round after the round gap (50 ms),
+as for a finished task. So a run started in a round has its tasks prepared by the next round
+and assigned by the one after, each a round gap apart, not a tick later. Taking the probe
+again after every write cost about four probes a round under load, each planned anew.
 
 A round's parts each run at their own time, a little later than the last. The probe looks
 one tick ahead: what comes due before the next tick (a task ready, a retry, a fire time) is
 found, so the parts share one probe. A read for a time past that, in a round that ran long,
-takes the probe again for its own time: work a part stores is found by the next part.
+takes the probe again for its own time.
 
 Each check is its read's own condition, so the two can't disagree. A read that takes a
 value the probe doesn't have (a worker's cutoff, say) is checked without it: the check

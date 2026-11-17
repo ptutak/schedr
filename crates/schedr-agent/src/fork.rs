@@ -379,6 +379,7 @@ impl ForkServers {
             mask: crate::mask::Mask::default(),
             start_timeout: setup.timeouts.runner_start,
             output_drain: setup.timeouts.output_drain,
+            barrier: None,
         };
         let setup = ForkSetup {
             interpreter: config.interpreter.clone(),
@@ -803,6 +804,7 @@ async fn fork_on(
             mode,
             env: spec.env.clone(),
             cwd: spec.working_dir.to_string_lossy().into_owned(),
+            barrier: spec.barrier.clone(),
         });
         let fds = [
             OwnedFd::from(theirs),

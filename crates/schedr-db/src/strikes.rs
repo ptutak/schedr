@@ -56,7 +56,7 @@ impl Database {
         const READ: &str = "SELECT dag_id, task_id, strikes, one_chance, off_at{text}, off_code \
                             FROM wait_step_strikes WHERE dag_id = $1 AND task_id = $2";
         let row: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, READ))
+            crate::query::query_as(sql(backend, READ))
                 .bind(dag_id)
                 .bind(task_id)
                 .fetch_optional(pool)
@@ -75,7 +75,9 @@ impl Database {
                             FROM wait_step_strikes WHERE off_at IS NOT NULL \
                             ORDER BY dag_id, task_id";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, LIST)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, LIST))
+                .fetch_all(pool)
+                .await?
         });
         rows.into_iter().map(stored).collect()
     }
@@ -101,7 +103,7 @@ impl Database {
                            WHERE dag_id = $3 AND task_id = $4";
         let at = db_time(now);
         let off = in_tx!(self, |tx, backend| {
-            let (strikes, one_chance): (i32, i32) = sqlx::query_as(sql(backend, COUNT))
+            let (strikes, one_chance): (i32, i32) = crate::query::query_as(sql(backend, COUNT))
                 .bind(dag_id)
                 .bind(task_id)
                 .fetch_one(&mut *tx)
@@ -109,7 +111,7 @@ impl Database {
             let reached = limit > 0 && u32::try_from(strikes).unwrap_or(0) >= limit;
             let off = reached || (limit > 0 && one_chance != 0);
             if off {
-                sqlx::query(sql(backend, OFF))
+                crate::query::query(sql(backend, OFF))
                     .bind(&at)
                     .bind(code)
                     .bind(dag_id)
@@ -132,7 +134,7 @@ impl Database {
                           SET off_at = NULL, off_code = NULL, one_chance = 1, strikes = 0 \
                           WHERE dag_id = $1 AND task_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, ON))
+            crate::query::query(sql(backend, ON))
                 .bind(dag_id)
                 .bind(task_id)
                 .execute(&mut *tx)
@@ -155,7 +157,7 @@ impl Database {
         }
         let list = crate::query::to_json(&task_ids);
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, CLEAR))
+            crate::query::query(sql(backend, CLEAR))
                 .bind(dag_id)
                 .bind(&list)
                 .execute(&mut *tx)
@@ -172,7 +174,7 @@ impl Database {
     pub async fn clear_wait_step(&self, dag_id: &str, task_id: &str) -> Result<bool, DbError> {
         const CLEAR: &str = "DELETE FROM wait_step_strikes WHERE dag_id = $1 AND task_id = $2";
         let changed = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, CLEAR))
+            crate::query::query(sql(backend, CLEAR))
                 .bind(dag_id)
                 .bind(task_id)
                 .execute(&mut *tx)

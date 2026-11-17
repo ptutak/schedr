@@ -187,7 +187,8 @@ def _fork(
         channel.send(_failed(request_id, f"fork: {e}"))
         return None
     if pid == 0:  # pragma: no cover - the child's frame (tests: test_fork_server)
-        _shim(channel, {"mode": mode, "env": env, "cwd": cwd}, fds, reader)
+        request = {"mode": mode, "env": env, "cwd": cwd, "barrier": message.get("barrier")}
+        _shim(channel, request, fds, reader)
     channel.send({"type": "forked", "id": request_id})
     return None
 
@@ -269,7 +270,15 @@ def _process(
         sys.argv[1:] = [request["mode"]]
         _forget_server_exit_handlers()
         own_exit_handlers = True
-        code = main([request["mode"]], {FD_ENV: str(channel_fd)})
+        if _barrier_passed(request.get("barrier")):
+            code = main([request["mode"]], {FD_ENV: str(channel_fd)})
+        else:
+            os.write(
+                2,
+                b"cleanup not started: the master didn't confirm in time that it is still this "
+                b"worker's\n",
+            )
+            code = EXIT_BARRIER_CLOSED
     except BaseException:
         traceback.print_exc()
     finally:
@@ -279,6 +288,37 @@ def _process(
             with contextlib.suppress(Exception):
                 stream.flush()
         os._exit(code)
+
+
+EXIT_BARRIER_CLOSED = 75
+"""A forked process its barrier didn't let through: nothing ran (as `schedr task-exec`'s)."""
+
+
+def _barrier_passed(barrier: Mapping[str, Any] | None) -> bool:
+    """A `cleanup_anywhere` cleanup's barrier (B255, decision 504), as `schedr task-exec`'s.
+
+    Says it waits by connecting to the worker's socket, then waits at most `wait_ms`, counted
+    from before that, for a `g`, and replies `p` once through (`l`: too late). Anything else
+    keeps it shut: the master may have moved the cleanup. No barrier: through.
+    """
+    if barrier is None:
+        return True
+    until = time.monotonic() + int(barrier["wait_ms"]) / 1000
+    try:
+        with socket.socket(socket.AF_UNIX) as stream:
+            stream.settimeout(max(until - time.monotonic(), 0.001))
+            stream.connect(str(barrier["socket"]))
+            left = until - time.monotonic()
+            if left <= 0:
+                return False
+            stream.settimeout(left)
+            if stream.recv(1) != b"g":
+                return False
+            passed = time.monotonic() < until
+            stream.sendall(b"p" if passed else b"l")
+            return passed
+    except OSError:
+        return False
 
 
 def _forget_server_exit_handlers() -> None:

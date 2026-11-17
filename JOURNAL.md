@@ -1691,3 +1691,110 @@ field over the older list: kept fields take the address's value on a history res
 change held while a radio dropdown was open was dropped on closing it: read then. (7) A read
 owed after a slow one didn't count for the pacing: it does. (8) The hidden timings' count in a
 test (121).
+
+### <a id="D501"></a>2026-11-17: the master's core lock is released during database calls (decision 501)
+
+After 1.1.0 the user asked whether 26 tasks a second is the master's own limit. Scenario 1
+(quick x2, 4 workers) with 8 slots a worker gave 25.4 tasks a second, with 16 gave 30.4; the
+master used about a third of a core (15 % on the release build, 30.7 tasks a second). Its core
+lock was held about the whole task phase (81.9 s on release): waiting for Postgres's answers,
+not computing. No synchronous commit gained 6 %; Postgres executed about 11 s of statements; one
+round trip through the stress suite's published port costs 0.98 ms (0.25 ms inside the
+container). Assign's per-task upstream reads (7,200 statements) were the first cut (M5.2a: 40.5
+tasks a second).
+
+The user asked why the master needs a lock: the core's memory (each worker's free slots, the
+attempts it holds, connections, jobs given out) must agree with what was committed, and a
+rollback restores it from a copy; one task at a time makes that so. The user: "so master lock
+is an easy fix to a very complex problem, although quite costly, something like GIL in Python".
+Python's GIL is let go during I/O; this lock isn't. Options laid out: A, the assign part's
+reads before the lock (about 50 tasks a second); B, the turns' reads too (about 80 to 120,
+the writes still serial); C, the lock off the database calls altogether (the target reachable).
+The user set the target, "50% of theoretical throughput": 160 tasks a second in scenario 1
+(32 slots, tasks of 0.1 s), and chose C, built A, then B, then C, measured after each
+(M5.2cA, M5.2cB, M5.2cC), the worker's start path after it (M5.2d).
+
+Not chosen: B alone (short of the target by the estimate); C at once (no measurement between
+the parts, and A and B shape each operation as C needs it).
+
+### <a id="D502"></a>2026-11-17: one probe a round; a read skipped on it after a write wakes the next round (decision 502)
+
+M5.2b. Tracing scenario 1's round parts on the master (each part's window and the statements
+in it) showed the round's idle parts spending their lock time on one statement, the probe:
+taken about four times a round, because decision 485 took it again after any write and a
+worker's turn writes between every two parts. Each probe planned anew in 5 to 9 ms and ran in
+1 to 2 (statement cache off). Options laid out: after a write, each check's own read instead of
+the probe; a smaller re-probe of the checks a write can affect; one probe a round, accepting
+that work a write made possible waits for the next round. The user asked what would wait:
+a new run's first task, up to two ticks (2 s) on a quiet cluster. The user: "can we make those
+also retrigger the run with 50ms backoff?". Compared, per busy round: the reads instead of a
+re-probe saved little (about 15 small reads), the re-wake about 30 ms; its cost, up to about
+100 ms for a new run's first task on a quiet cluster. The user chose the re-wake. `Hub::tick`,
+which tests turn by hand, runs the follow-up rounds at once (at most 4) and is for tests only.
+
+Measured (scenario 1, quick x2, release, statement cache off): 40.5 -> 43.8 tasks a second;
+probes 620 -> 273; the commands, scheduler and prepare parts 35/25/25 -> 21.5/13.1/12.4 ms a
+round.
+
+### <a id="D503"></a>2026-11-17: queries stay prepared on their connections by default (decision 503)
+
+M5.2b found the probe planned anew on every call: the Postgres pool had sqlx's statement cache
+off (`statement_cache_capacity(0)`, M2.10: "unnamed statements, which every pooler and version
+passes"). The user: "go on with M5.2b if we can turn the cache on that's an additional gain, an
+extra, not a default": a key, off by default. Writing its test showed off wasn't unnamed: sqlx
+0.9 prepares a persistent query (its default) under a new name and keeps it only in an enabled
+cache, so each query was prepared under a new name and left on the connection until it retired
+(B256). Off was no friendlier to poolers than on, and slower. Options: off made unnamed
+(`persistent(false)` on every query); the cache on by default; both. The user chose both.
+
+Measured (scenario 1, quick x2, release): 43.8 -> 51.2 tasks a second; a `Finished` group's
+lock time 41 -> 27.5 ms, a `Started` group's 24 -> 18 ms.
+
+Then Codex's review of M5.2a, M5.2b and B256 (session 01a1e9e1, Sol high): four findings, each
+shown by a failing test. (1) A URL setting `statement-cache-capacity=0` turned sqlx's cache off
+under the setting on, bringing B256 back: the URL now wins, and the queries are unnamed. (2) A
+scheduled DAG visited for its queued run (held by `max_active_runs`) had its unchanged next
+fire time written at every visit, and every write wakes another round (decision 502): rounds
+every round gap for as long as the run was held. Its stored time is read first now. (3) The
+assign round's batch read filtered runs and tasks apart, reading the outputs of every run and
+task named (50 pairs read 2,500 outputs): it filters the pairs too. (4) The lease's and the
+migrations' statements are built outside `on_pool!` and `in_tx!`, so unnamed with the setting
+on: kept so, a few statements a minute.
+
+### <a id="D504"></a>2026-11-17: a movable cleanup's try waits at a barrier for the master's word (decision 504)
+
+B255 (nightly Stress, scenario 20): a `cleanup_anywhere` cleanup ran on the worker it moved to
+and again on the frozen one, thawed. Grok found the cause (session c543e145): the cleanup gate is
+read once, and the process starts after several awaits; a worker frozen between them starts it
+after its deadline. Claude proposed a recheck just before the spawn, the deadline checked in
+the new process, or both. The user: "none of that prevents it then": a freeze can fall between
+any two instructions. The user's design: "the worker sends the request to master and starts the
+cleanup, ... the cleanup holds on the barrier waiting for the response from the master with a
+timeout". Claude's first version asked as the process started; the user: "the worker starts the
+cleanup and waits for the cleanup to reach the barrier and THEN sends the request to master ...
+so it's typical critical section": the process's wait must start before the question leaves.
+The user also: "just letting through should be considered as cleanup started and could be
+reported back to the master"; asked whether that changes the guarantee: not alone, the report
+can be lost; what changes it is whether the master moves a cleanup it said `go` to, after
+losing its worker. Kept for later (the user: "if we don't do that today then probably we
+shouldn't leave this idea"): step M5.3b. Built in the M5.2a+b commit (the user: "put it with
+M5.2ab").
+
+Codex's review of B255's barrier (session 01a1ea41, Sol high): four findings, each shown by a
+failing test, all fixed. (1) A worker told `Kill` after its cleanup moved was let through, the
+master's answer taking any rest owed to it for the whole cleanup; (2) a rest owed after the
+attempt ended was refused. The question now says whether it is a rest, answered as registration
+answers it. (3) A try asked again after no word took the gate's word but not its new `CLEAN_REST`
+boundary. (4) Without `schedr task-exec` the cleanup started unasked; it doesn't start now.
+Then the user, told a forked Python cleanup was spawned to reach the barrier: "we could do fork
+barrier aswell": the fork server's child waits at the same barrier.
+
+Codex's review of the fork barrier and those fixes (session 01a1ea72, Sol high; the user: "do a
+fork review aswell"): three findings, each shown by a failing test, all fixed. (1) Each try asked
+again left out the `CLEAN_REST` boundary's handles once more, dropping handles never cleaned:
+`AttemptHandles::skip` counts from the first handle now, idempotent. (2) A retry after a failed
+try didn't see a `CLEAN_REST` given meanwhile, asked as the whole cleanup and was refused: every
+try reads the gate first. (3) A cleanup restored from the journal had no gate, so a later
+`CLEAN_REST` couldn't reach it: it has one, and a waiting cleanup's boundary is left to where its
+handles are skipped, not drained twice. The user, on stress: "I don't think we have to run stress
+again": the cut scenarios passed on the first barrier; not run again.

@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+# Opens test helpers to other crates' tests (`Hub::tick`).
+testing = []
+
 [dependencies]
 prometheus-client.workspace = true
 croner.workspace = true

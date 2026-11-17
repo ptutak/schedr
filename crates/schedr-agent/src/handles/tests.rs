@@ -163,3 +163,20 @@ async fn each_handle_is_told_on_with_its_place() {
         [(0, "A".to_owned()), (1, "B".to_owned())]
     );
 }
+
+#[test]
+fn skipping_counts_from_the_first_handle_however_often_it_is_told() {
+    // Codex's review of B255: each try asked again told the same `CLEAN_REST` boundary, and
+    // each one dropped more handles, never cleaned.
+    let handles = AttemptHandles::restored(
+        (0..3).map(|n| handle("Job", json!(n))).collect(),
+        Arc::new(MaskSet::new(4)),
+    );
+    handles.skip(1);
+    handles.skip(1);
+    handles.skip(0);
+    let left: Vec<_> = handles.list().into_iter().map(|h| h.value).collect();
+    assert_eq!(left, [json!(1), json!(2)]);
+    handles.skip(2);
+    assert_eq!(handles.list().len(), 1, "a later boundary leaves out more");
+}

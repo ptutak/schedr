@@ -205,12 +205,25 @@ sequenceDiagram
     W->>M: TaskEnded (task result)
     M->>M: Keep result, instance cleaning_up
     loop Cleanup tries and retry delays, slot remains held
+        opt cleanup_anywhere
+            W->>W: Start the try, its process waits at its barrier
+            W->>M: CleanupStart
+            M-->>W: CleanupGo (go, or not this worker's)
+            Note over W: Go: the process runs. No: nothing runs here. No word within its wait: the process leaves, the try isn't counted
+        end
         W->>W: Run cleanup with handles and secrets
         Note over W: Cleanup try: at most 5 min by default
     end
     W->>M: Finished (task and cleanup results)
     M-->>W: FinishedAck
 ```
+
+A `cleanup_anywhere` cleanup's try starts its process first, through `schedr task-exec`,
+which waits at a barrier before running anything. Only once it waits does the worker send
+`CleanupStart`; the process's own wait (half the worker lease) is counted from before that.
+The master can move the cleanup only after losing the worker, a lease after its last message
+at the earliest. So a `go`, however late (a frozen worker, a cut stream), finds the process
+waiting while the cleanup is still this worker's, or finds it gone (B255, decision 504).
 
 ## Reconnect while the agent lives
 
@@ -499,6 +512,7 @@ that names it.
 | `TriggerPoked` | Worker when poke status changes, otherwise with a heartbeat | Keep the call time, last error and consecutive failures | Yes | — |
 | `TriggerStopped` | Worker when a trigger ends, including on the next stream if disconnected | Free its slot; record `struck` and `code_hash`; a failure can start it again after a wait | Yes | — |
 | `ConnectionJobDone` | Worker after connection check or test | Store reports if job is still open | Late or already settled answer is dropped | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) plus job allowance |
+| `CleanupStart` | Worker when a `cleanup_anywhere` cleanup's try waits at its barrier (protocol 2.2) | Answer `CleanupGo`: `go` while the attempt is open and the cleanup is this worker's; for a `rest` (B169), while this worker owes it, the attempt ended or not | Yes: read only | The process waits half the worker lease, counted from before the question |
 | `ApiCall` | Worker for a task's or trigger's `schedr.api` request (its body and key masked with the secrets it read); all unanswered again on a new stream | Check the attempt (or trigger instance) is open on this worker and the route is on the allow-list, then run it through the REST router as the task, outside the core's lock, on the fenced database; answer `ApiAnswer` | Yes: every call carries an `Idempotency-Key` (the task's, or one made for it) | The agent gives up after a minute (503 naming the key); over `[grpc] max_message_size` it answers 413 itself |
 
 ### Master to worker on `Control`
@@ -524,6 +538,7 @@ No deadline reads the wall clock it carries.
 | `CancelTrigger` | Master when a trigger should stop: paused, moved, new code, or reported and not current | Stop it | Yes | — |
 | `TriggerEventAck` | Master when an event is stored, or is an old instance's | Let the trigger go on to the next one | Yes | — |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |
+| `CleanupGo` | Master on `CleanupStart` (protocol 2.2) | `go`: let the waiting process through, the cleanup started; else nothing runs here, as for `Kill`. One for no waiting try is dropped | Yes | A late one finds the process gone; the try is made again |
 | `ApiAnswer` | Master when an `ApiCall` ran or was refused (403 off the list or not this worker's) | Hand the status and body to the call of that `request_id`; one for no pending call is dropped | Yes | An answer over the message limit is a 502 |
 | `ConnectionJob` | Master for a check or test | Run one job, return reports | Do not rely on repeated execution being harmless for a test | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) |
 

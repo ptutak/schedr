@@ -37,6 +37,12 @@ pub const INPUT_CHUNK: usize = 1024 * 1024;
 /// How many messages wait for a worker before it is taken for one that stopped reading.
 pub const STREAM_BUFFER: usize = 1024;
 
+/// The most rounds [`Hub::tick`] runs after its first, each asked for by a read the one before
+/// skipped on a stale probe (M5.2b): a round creating a run, then one preparing it, then one
+/// assigning it, with room for writes from worker turns in between.
+#[cfg(any(test, feature = "testing"))]
+const FOLLOW_UP_ROUNDS: usize = 4;
+
 /// A worker's stream of messages. Sending never waits (see [`Hub::deliver`]).
 /// A worker's stream to it (B240): each message's `MasterClock.sequence` is taken and the
 /// message queued under one lock, by the core's deliveries and the reader's answers alike, so
@@ -478,26 +484,49 @@ impl Hub {
     }
 
     /// One tick of the master's loop, its messages delivered; its probe looks no time ahead.
+    /// With the rounds a read skipped on a stale probe asks for (M5.2b), one after the other,
+    /// as the loop runs them after its round gap: at most [`FOLLOW_UP_ROUNDS`] more. For tests
+    /// only: the loop runs [`Self::tick_ahead`], one round, and its follow-ups after the gap.
     ///
     /// # Errors
     ///
     /// The core's failure (the next tick goes on).
+    #[cfg(any(test, feature = "testing"))]
     pub async fn tick(&self) -> Result<(), CoreError> {
-        self.tick_ahead(Duration::ZERO).await
+        for _ in 0..=FOLLOW_UP_ROUNDS {
+            if !self.round(Duration::ZERO).await? {
+                break;
+            }
+        }
+        Ok(())
     }
 
-    /// As [`Self::tick`], its probe looking `ahead` (the loop's tick interval: what comes due
-    /// before the next tick is found, so the round's parts share one probe, decision 485).
+    /// One round, as the tests' `tick` runs, its probe looking `ahead` (the loop's tick interval: what comes due
+    /// before the next tick is found, so the round's parts share one probe, decision 485),
+    /// and one round only: one that skipped a read on a stale probe wakes the loop for another
+    /// after the round gap (M5.2b).
     ///
     /// # Errors
     ///
     /// The core's failure (the next tick goes on).
     pub async fn tick_ahead(&self, ahead: Duration) -> Result<(), CoreError> {
+        if self.round(ahead).await? {
+            // As for a stored `Finished`: another round after the gap, for what a write made
+            // possible after the probe.
+            self.finished.notify_one();
+        }
+        Ok(())
+    }
+
+    /// One round, looking `ahead`: whether it skipped a read on a probe a write had made
+    /// stale (M5.2b), so another round should follow.
+    async fn round(&self, ahead: Duration) -> Result<bool, CoreError> {
         // The lock taken for each part on its own, so a worker's turn gets in between them
         // (decision 469), each part at the time it runs. What a part built before a failure is
         // delivered too (B7); a failed part ends the round, as before. The round's reads the
-        // probe finds empty are skipped (decision 485): an idle tick is one statement.
-        Box::pin(self.db.in_round((self.clock)(), ahead, async {
+        // probe finds empty are skipped (decision 485): an idle tick is one statement. The probe
+        // is taken once a round (M5.2b); a read skipped on it after a write wakes another round.
+        let (result, stale) = Box::pin(self.db.in_round_noting((self.clock)(), ahead, async {
             // The trigger pass is the trigger loop's (decision 486): woken when a trigger's
             // stored moment has come, or its last pass failed.
             if self
@@ -529,7 +558,8 @@ impl Hub {
             }
             Ok(())
         }))
-        .await
+        .await;
+        result.map(|()| stale)
     }
 
     /// The round's commands part, the core's lock taken for each command on its own (decision

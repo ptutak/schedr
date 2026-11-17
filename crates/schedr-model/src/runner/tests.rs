@@ -243,6 +243,28 @@ fn a_summary_schedr_writes_has_no_traceback() {
 }
 
 #[test]
+fn a_fork_requests_barrier_has_its_wire_shape() {
+    // B255, decision 504: a `cleanup_anywhere` cleanup forked waits at its barrier.
+    let message = AgentMessage::Fork(ForkRequest {
+        id: 8,
+        mode: RunnerMode::Task,
+        env: [("PATH".to_owned(), "/usr/bin".to_owned())].into(),
+        cwd: "/tmp".into(),
+        barrier: Some(ForkBarrier {
+            socket: "/tmp/b/1".into(),
+            wait_ms: 30_000,
+        }),
+    });
+    let expected = json!({"type": "fork", "id": 8, "mode": "task", "env": {"PATH": "/usr/bin"},
+        "cwd": "/tmp", "barrier": {"socket": "/tmp/b/1", "wait_ms": 30_000}});
+    assert_eq!(serde_json::to_value(&message).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_value::<AgentMessage>(expected).unwrap(),
+        message
+    );
+}
+
+#[test]
 fn fork_server_messages_have_their_wire_shapes() {
     let cases = [
         (
@@ -257,6 +279,7 @@ fn fork_server_messages_have_their_wire_shapes() {
                 mode: RunnerMode::Task,
                 env: [("PATH".to_owned(), "/usr/bin".to_owned())].into(),
                 cwd: "/tmp".into(),
+                barrier: None,
             }),
             json!({"type": "fork", "id": 7, "mode": "task", "env": {"PATH": "/usr/bin"}, "cwd": "/tmp"}),
         ),

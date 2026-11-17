@@ -145,7 +145,7 @@ impl Database {
             last_heartbeat_at = excluded.last_heartbeat_at, offline_at = NULL, \
             watcher_slots = excluded.watcher_slots, watcher_hosts = excluded.watcher_hosts";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, UPSERT))
+            crate::query::query(sql(backend, UPSERT))
                 .bind(worker.id)
                 .bind(worker.incarnation)
                 .bind(worker.protocol_version)
@@ -170,7 +170,7 @@ impl Database {
     pub async fn worker_seen(&self, worker_id: &str, now: Timestamp) -> Result<(), DbError> {
         const SEEN: &str = "UPDATE workers SET last_heartbeat_at = $1{ts} WHERE worker_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SEEN))
+            crate::query::query(sql(backend, SEEN))
                 .bind(db_time(now))
                 .bind(worker_id)
                 .execute(&mut *tx)
@@ -191,7 +191,7 @@ impl Database {
     ) -> Result<(), DbError> {
         const SET: &str = "UPDATE workers SET warnings = $1{json} WHERE worker_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(to_json(&warnings))
                 .bind(worker_id)
                 .execute(&mut *tx)
@@ -212,7 +212,7 @@ impl Database {
     ) -> Result<(), DbError> {
         const SET: &str = "UPDATE workers SET watcher_hosts = $1{json} WHERE worker_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(to_json(&hosts))
                 .bind(worker_id)
                 .execute(&mut *tx)
@@ -235,7 +235,7 @@ impl Database {
         const STATE: &str = "UPDATE workers SET state = $1, \
             offline_at = CASE WHEN $2 THEN $3{ts} ELSE offline_at END WHERE worker_id = $4";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, STATE))
+            crate::query::query(sql(backend, STATE))
                 .bind(state.to_string())
                 .bind(state.is_gone())
                 .bind(db_time(now))
@@ -258,7 +258,7 @@ impl Database {
     ) -> Result<bool, DbError> {
         const DRAINED: &str = "UPDATE workers SET drained = $1 WHERE worker_id = $2";
         let updated = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, DRAINED))
+            crate::query::query(sql(backend, DRAINED))
                 .bind(drained)
                 .bind(worker_id)
                 .execute(&mut *tx)
@@ -278,13 +278,13 @@ impl Database {
         const RESUME: &str = "UPDATE workers SET drained = $1 WHERE worker_id = $2 AND drained";
         const KNOWN: &str = "SELECT 1 FROM workers WHERE worker_id = $1";
         let (resumed, known) = in_tx!(self, |tx, backend| {
-            let resumed = sqlx::query(sql(backend, RESUME))
+            let resumed = crate::query::query(sql(backend, RESUME))
                 .bind(false)
                 .bind(worker_id)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
-            let known: Option<i32> = sqlx::query_scalar(sql(backend, KNOWN))
+            let known: Option<i32> = crate::query::query_scalar(sql(backend, KNOWN))
                 .bind(worker_id)
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -301,7 +301,7 @@ impl Database {
     pub async fn worker_drained(&self, worker_id: &str) -> Result<bool, DbError> {
         const DRAINED: &str = "SELECT drained FROM workers WHERE worker_id = $1";
         let drained: Option<bool> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, DRAINED))
+            crate::query::query_scalar(sql(backend, DRAINED))
                 .bind(worker_id)
                 .fetch_optional(pool)
                 .await?
@@ -321,7 +321,7 @@ impl Database {
     ) -> Result<Option<(WorkerState, String)>, DbError> {
         const ENDPOINT: &str = "SELECT state, log_endpoint FROM workers WHERE worker_id = $1";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ENDPOINT))
+            crate::query::query_as(sql(backend, ENDPOINT))
                 .bind(worker_id)
                 .fetch_optional(pool)
                 .await?
@@ -344,7 +344,7 @@ impl Database {
             w.watcher_hosts{text} \
             FROM workers w ORDER BY w.worker_id";
         let rows: Vec<WorkerRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, WORKERS))
+            crate::query::query_as(sql(backend, WORKERS))
                 .fetch_all(pool)
                 .await?
         });

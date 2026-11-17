@@ -1352,13 +1352,17 @@ pub async fn run_worker(
 /// [`AppError::NoDatabase`] without a URL; [`AppError::Db`] if it can't be reached.
 pub async fn connect_database(config: &Config, role: &str) -> Result<Database, AppError> {
     let url = config.database.url.as_deref().ok_or(AppError::NoDatabase)?;
-    let db = Database::connect_with_timeout(url, config.timings.query_timeout)
-        .await?
-        .with_notifications(
-            config.database.notifications,
-            config.database.notifications_url.clone(),
-        )
-        .with_dag_versions_cached(config.limits.dag_versions_cached);
+    let db = Database::connect_prepared(
+        url,
+        config.timings.query_timeout,
+        config.database.prepared_statements,
+    )
+    .await?
+    .with_notifications(
+        config.database.notifications,
+        config.database.notifications_url.clone(),
+    )
+    .with_dag_versions_cached(config.limits.dag_versions_cached);
     if db.backend() == Backend::Sqlite {
         tracing::warn!(
             "schedr {role} on SQLite: every role must run on this host, on a local disk; \

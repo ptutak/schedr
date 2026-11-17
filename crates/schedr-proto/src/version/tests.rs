@@ -8,9 +8,19 @@ const fn v(major: u32, minor: u32) -> ProtocolVersion {
 }
 
 #[test]
-fn the_current_version_is_2_1() {
-    // 2.1 for 1.1.0: the heartbeat's usage (decision 463), moved once for the release.
-    assert_eq!(PROTOCOL_VERSION, v(2, 1));
+fn the_current_version_is_2_2() {
+    // 2.2 for 1.2.0: a cleanup's barrier (`CleanupStart`, `CleanupGo`; B255, decision 504),
+    // moved once for the release.
+    assert_eq!(PROTOCOL_VERSION, v(2, 2));
+}
+
+#[test]
+fn a_1_1_workers_protocol_2_1_is_served() {
+    // Upgrading the master first: its 1.1.0 workers keep working, their cleanups unbarriered.
+    assert_eq!(
+        check_worker_version(PROTOCOL_VERSION, Some(v(2, 1))),
+        Ok(())
+    );
 }
 
 #[test]

@@ -31,6 +31,10 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D504 | 2026-11-17 | user | built (B255 fixed) | cleanup | A movable cleanup's try waits at a barrier for the master's word, asked only once it waits |
+| D503 | 2026-11-17 | user | built M5.2b | state | Queries stay prepared on their connections by default; off, each is an unnamed statement |
+| D502 | 2026-11-17 | user | built M5.2b | assignment | One probe a round; a read skipped on it after a write wakes the next round |
+| D501 | 2026-11-17 | user | planned (M5.2cC) | workers | The master's core lock is released during database calls |
 | D500 | 2026-11-16 | user | built R1.1 | ui-cli | The DAGs page filters by name, trigger switch, kind and tag |
 | D499 | 2026-11-16 | user | built R1.1 | ui-cli | The Metrics page folds the processes that ended into one line |
 | D498 | 2026-11-15 | user | built R1.1 | development | A release with a new migration goes through an rc first |
@@ -46,7 +50,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D488 | 2026-11-14 | user | built M5.1n | code-delivery | Standalone takes --dag-path and --script-path |
 | D487 | 2026-11-14 | user | built M5.1f2 | triggers | A waiting wait_for step stores its deadline and what it waits for |
 | D486 | 2026-11-14 | user | built M5.1f2 | triggers | The trigger loop runs after any write, at a stored moment, or for a posted event |
-| D485 | 2026-11-14 | user | built M5.1f1 | assignment | Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own |
+| D485 | 2026-11-14 | user | superseded by D502 | assignment | Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own |
 | D484 | 2026-11-14 | claude | built M5.1e | workers | A worker's turn takes up to 80 messages |
 | D483 | 2026-11-13 | user | built M5.1c3 | workers | A command is one transaction, the core lock released between commands; it reads only its own DAG |
 | D482 | 2026-11-13 | claude | built M5.1c1 | assignment | The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch |
@@ -545,8 +549,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### assignment
 
+- D502: One probe a round; a read skipped on it after a write wakes the next round
 - D490: started_at is the worker's start, in master time
-- D485: Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own
 - D482: The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch
 - D481: Tasks past a round's assignment cap are not visited; they show as pending
 - D469: A round releases the core lock between its batches of assignments
@@ -582,6 +586,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### cleanup
 
+- D504: A movable cleanup's try waits at a barrier for the master's word, asked only once it waits
 - D346: Running cleanup continues past the drain deadline
 - D309: A late cleanup failure turns a successful run yellow
 - D308: The returning worker cleans handles the master never received
@@ -911,6 +916,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### state
 
+- D503: Queries stay prepared on their connections by default; off, each is an unnamed statement
 - D496: A role starting waits for a database it can't reach yet
 - D440: Retention also keeps the runs catchup counts as done, and runs still read
 - D435: An output deleted by retention answers 410 Gone
@@ -1058,6 +1064,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D501: The master's core lock is released during database calls
 - D497: An unset cleanup timeout fits in the grace period
 - D495: A stopping worker waits for the master to take its Deregister
 - D484: A worker's turn takes up to 80 messages

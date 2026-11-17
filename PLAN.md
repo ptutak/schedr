@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.2a, Assign's per-task reads once per round.
+**Next:** M5.2cA, Assign's reads before the core lock.
 
 ## M0: Foundations
 
@@ -238,7 +238,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1c3 | A command one transaction, the lock released between commands | done 2026-11-13 | D483 |
 | M5.1d | Pokes and rounds through PgBouncer | done 2026-11-14 |  |
 | M5.1e | The turn size from data | done 2026-11-14 | D484 |
-| M5.1f1 | The idle cost: one probe a tick, the moments stored | done 2026-11-14 | D485 |
+| M5.1f1 | The idle cost: one probe a tick, the moments stored | done 2026-11-14 |  |
 | M5.1f2 | Triggers and events in a round of their own | done 2026-11-14 | D486, D487 |
 | M5.1g | The Status block | done 2026-11-14 | D462 |
 | M5.1h | Memory and CPU reported | done 2026-11-14 | D463 |
@@ -253,10 +253,15 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.1p | Tunable constants as hidden settings | done 2026-11-15 | D493 |
 | M5.1q | A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits | done 2026-11-15 | D495, D496, D497 |
 | R1.1 | Release 1.1.0 | done 2026-11-16 | D498, D499, D500 |
-| M5.2a | Assign's per-task reads once per round | **next** |  |
-| M5.2b | Idle round parts cheap | planned |  |
-| M5.2c | The round's reads outside the core lock (a design question first) | planned |  |
+| M5.2a | Assign's per-task reads once per round | done 2026-11-17 |  |
+| M5.2b | Idle round parts cheap | done 2026-11-17 | D502, D503 |
+| M5.2cA | Assign's reads before the core lock | **next** |  |
+| M5.2cB | Turns' reads before the core lock | planned |  |
+| M5.2cC | The core lock off the writes: the master's memory behind a short lock | planned | D501 |
+| M5.2d | The worker's start path | planned |  |
+| R1.2 | Release 1.2.0 | planned |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
+| M5.3b | A started cleanup's move, after its worker is lost | planned |  |
 
 ## M6: Airflow migration tools
 

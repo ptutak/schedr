@@ -3318,6 +3318,7 @@ dependencies = [
  "jiff",
  "pretty_assertions",
  "rstest",
+ "schedr-db",
  "schedr-model",
  "serde",
  "serde_json",

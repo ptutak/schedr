@@ -322,6 +322,82 @@ pub fn kind_of(json: &Json) -> &'static str {
     }
 }
 
+/// The upstream tasks' outcomes and outputs an assign round's batch uses, read in one
+/// statement before its messages are built (M5.2a): what [`sources_from`] and the
+/// dispatcher's outcomes take instead of a statement or two per task. Only what it was asked
+/// for counts as read; anything else is read from the database as before.
+#[derive(Debug, Default)]
+pub struct Upstream {
+    asked: BTreeSet<(String, TaskId)>,
+    reads: schedr_db::attempts::UpstreamReads,
+}
+
+impl Upstream {
+    /// Reads `wanted` (each a run and an upstream task of it).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the database fails.
+    pub async fn read(db: &Database, wanted: BTreeSet<(String, TaskId)>) -> Result<Self, DbError> {
+        let reads = db.upstream_of_runs(&wanted).await?;
+        Ok(Self {
+            asked: wanted,
+            reads,
+        })
+    }
+
+    /// Whether every one of `tasks` of `run_id` was read.
+    #[must_use]
+    pub fn covers(&self, run_id: &str, tasks: &[&TaskId]) -> bool {
+        tasks
+            .iter()
+            .all(|task| self.asked.contains(&(run_id.to_owned(), (*task).clone())))
+    }
+
+    /// The outcomes of `tasks` of `run_id`, as [`Database::upstream_outcomes`] gives them.
+    #[must_use]
+    pub fn outcomes(&self, run_id: &str, tasks: &[&TaskId]) -> BTreeMap<TaskId, Option<String>> {
+        tasks
+            .iter()
+            .filter_map(|task| {
+                let key = (run_id.to_owned(), (*task).clone());
+                self.reads
+                    .outcomes
+                    .get(&key)
+                    .map(|outcome| ((*task).clone(), outcome.clone()))
+            })
+            .collect()
+    }
+
+    /// The outputs of `tasks` of `run_id`, as [`Database::outputs_of`] gives them.
+    #[must_use]
+    pub fn outputs(&self, run_id: &str, tasks: &[&TaskId]) -> BTreeMap<TaskId, Json> {
+        tasks
+            .iter()
+            .filter_map(|task| {
+                let key = (run_id.to_owned(), (*task).clone());
+                self.reads
+                    .outputs
+                    .get(&key)
+                    .map(|output| ((*task).clone(), output.clone()))
+            })
+            .collect()
+    }
+}
+
+/// The upstream tasks whose outcomes and outputs assigning `task` may read: those its
+/// references name and the setup of a resource's cleanup (what [`inputs`] and the
+/// dispatcher's outcomes ask for, or more).
+#[must_use]
+pub fn upstream_wanted(task: &Task) -> BTreeSet<TaskId> {
+    task.references()
+        .into_iter()
+        .filter_map(Reference::upstream_task)
+        .cloned()
+        .chain(resource_setup(task).cloned())
+        .collect()
+}
+
 /// The whole outputs and outcomes of `tasks` in a run, to resolve mapped values against: a
 /// mapped task's output is the list of its instances' outputs, in `map_index` order, `null`
 /// for one that didn't succeed (decision 77). `known` gives an instance's state when the
@@ -338,13 +414,40 @@ pub async fn sources(
     tasks: &BTreeSet<&TaskId>,
     known: impl Fn(&TaskId, i32) -> Option<TaskInstanceState>,
 ) -> Result<Sources, DbError> {
+    sources_from(db, dag, run_id, tasks, known, None).await
+}
+
+/// As [`sources`], the plain tasks' outputs and every task's outcome taken from `upstream`
+/// when it read them all (an assign round's, M5.2a), from the database otherwise.
+///
+/// # Errors
+///
+/// [`DbError`] if the database fails.
+pub async fn sources_from(
+    db: &Database,
+    dag: &Dag,
+    run_id: &str,
+    tasks: &BTreeSet<&TaskId>,
+    known: impl Fn(&TaskId, i32) -> Option<TaskInstanceState>,
+    upstream: Option<&Upstream>,
+) -> Result<Sources, DbError> {
     let all: Vec<&TaskId> = tasks.iter().copied().collect();
     let (mapped, plain): (Vec<&TaskId>, Vec<&TaskId>) = all
         .iter()
         .partition(|task| dag.task(task).is_some_and(is_mapped));
+    let (outputs, outcomes) = match upstream.filter(|u| u.covers(run_id, &all)) {
+        Some(upstream) => (
+            upstream.outputs(run_id, &plain),
+            upstream.outcomes(run_id, &all),
+        ),
+        None => (
+            db.outputs_of(run_id, &plain).await?,
+            db.upstream_outcomes(run_id, &all).await?,
+        ),
+    };
     let mut sources = Sources {
-        outputs: db.outputs_of(run_id, &plain).await?,
-        outcomes: db.upstream_outcomes(run_id, &all).await?,
+        outputs,
+        outcomes,
         mapped: BTreeSet::new(),
     };
     for task in mapped {
@@ -414,8 +517,25 @@ pub async fn inputs(
     db: &Database,
     dag: &Dag,
     run_id: &str,
+    at: (&Task, i32),
+    resolved: &mut Resolved,
+) -> Result<Json, InputsError> {
+    inputs_from(db, dag, run_id, at, resolved, None).await
+}
+
+/// As [`inputs`], the upstream outputs and outcomes from `read` where it read them (an
+/// assign round's, M5.2a).
+///
+/// # Errors
+///
+/// As [`inputs`].
+pub async fn inputs_from(
+    db: &Database,
+    dag: &Dag,
+    run_id: &str,
     (task, map_index): (&Task, i32),
     resolved: &mut Resolved,
+    read: Option<&Upstream>,
 ) -> Result<Json, InputsError> {
     let lanes = lane_sources(dag, task);
     let upstream = |references: Vec<&Reference>| -> BTreeSet<TaskId> {
@@ -455,7 +575,7 @@ pub async fn inputs(
         whole.clone()
     };
     let used: BTreeSet<&TaskId> = used.iter().collect();
-    let sources = sources(db, dag, run_id, &used, |_, _| None).await?;
+    let sources = sources_from(db, dag, run_id, &used, |_, _| None, read).await?;
     let mut inputs: serde_json::Map<String, Json> = sources
         .outputs
         .iter()

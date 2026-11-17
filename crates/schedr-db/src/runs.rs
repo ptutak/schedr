@@ -261,7 +261,7 @@ impl Database {
              $11{json}, $12{json}, $13{uuid}, $14{uuid}) ON CONFLICT DO NOTHING";
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
         let inserted = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, INSERT))
+            crate::query::query(sql(backend, INSERT))
                 .bind(id)
                 .bind(run.dag_id.as_str())
                 .bind(run.dag_version_id)
@@ -291,7 +291,7 @@ impl Database {
     pub async fn run_params(&self, run_id: &str) -> Result<Option<serde_json::Value>, DbError> {
         const PARAMS: &str = "SELECT params{text} FROM runs WHERE id = $1{uuid}";
         let text: Option<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, PARAMS))
+            crate::query::query_scalar(sql(backend, PARAMS))
                 .bind(run_id)
                 .fetch_optional(pool)
                 .await?
@@ -334,7 +334,7 @@ impl Database {
         at: Option<Timestamp>,
     ) -> Result<Option<Timestamp>, DbError> {
         let text: Option<String> = on_pool!(self, |pool, backend| {
-            let mut q = sqlx::query_scalar(sql(backend, query)).bind(dag_id.as_str());
+            let mut q = crate::query::query_scalar(sql(backend, query)).bind(dag_id.as_str());
             if let Some(at) = at {
                 q = q.bind(db_time(at));
             }
@@ -351,7 +351,7 @@ impl Database {
     pub async fn running_count(&self, dag_id: &DagId) -> Result<u32, DbError> {
         const COUNT: &str = "SELECT COUNT(*) FROM runs WHERE dag_id = $1 AND state = 'running'";
         let count: i64 = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, COUNT))
+            crate::query::query_scalar(sql(backend, COUNT))
                 .bind(dag_id.as_str())
                 .fetch_one(pool)
                 .await?
@@ -369,7 +369,7 @@ impl Database {
             {ts<}planned_for{>ts} FROM runs \
             WHERE dag_id = $1 AND state = 'queued' ORDER BY triggered_at, planned_for, id";
         let rows: Vec<(String, String, String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, QUEUED))
+            crate::query::query_as(sql(backend, QUEUED))
                 .bind(dag_id.as_str())
                 .fetch_all(pool)
                 .await?
@@ -437,9 +437,9 @@ impl Database {
         );
         // One connection, one time limit, for all three.
         let (running, last, queued): Rows = on_pool!(self, |pool, backend| {
-            let mut running_query = sqlx::query_as(sql_text(backend, &running));
-            let mut last_query = sqlx::query_as(sql_text(backend, &last));
-            let mut queued_query = sqlx::query_as(sql_text(backend, &queued));
+            let mut running_query = crate::query::query_as(sql_text(backend, &running));
+            let mut last_query = crate::query::query_as(sql_text(backend, &last));
+            let mut queued_query = crate::query::query_as(sql_text(backend, &queued));
             for dag in dags {
                 running_query = running_query.bind(dag.as_str());
                 last_query = last_query.bind(dag.as_str());
@@ -483,7 +483,7 @@ impl Database {
         const IN_PROGRESS: &str = "SELECT id{text} FROM runs \
             WHERE dag_id = $1 AND state IN ('queued', 'running') ORDER BY triggered_at, id";
         let ids: Vec<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, IN_PROGRESS))
+            crate::query::query_scalar(sql(backend, IN_PROGRESS))
                 .bind(dag_id.as_str())
                 .fetch_all(pool)
                 .await?
@@ -506,7 +506,7 @@ impl Database {
         const MARK: &str = "UPDATE runs SET late_failure = $1 \
             WHERE id = $2{uuid} AND state = 'success' AND late_failure IS NULL RETURNING dag_id";
         let marked: Option<(String,)> = in_tx!(self, |tx, backend| {
-            sqlx::query_as(sql(backend, MARK))
+            crate::query::query_as(sql(backend, MARK))
                 .bind(reason)
                 .bind(run_id)
                 .fetch_optional(&mut *tx)
@@ -524,7 +524,7 @@ impl Database {
         const START: &str = "UPDATE runs SET state = 'running', started_at = $1{ts} \
             WHERE id = $2{uuid} AND state = 'queued'";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, START))
+            crate::query::query(sql(backend, START))
                 .bind(db_time(now))
                 .bind(run_id)
                 .execute(&mut *tx)
@@ -557,7 +557,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let rows: Vec<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, QUEUED))
+            crate::query::query_scalar(sql(backend, QUEUED))
                 .fetch_all(pool)
                 .await?
         });
@@ -576,7 +576,7 @@ impl Database {
             WHERE current_version_id IS NOT NULL AND removed_at IS NULL AND conflict IS NULL \
             ORDER BY dag_id";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, VERSIONS))
+            crate::query::query_as(sql(backend, VERSIONS))
                 .fetch_all(pool)
                 .await?
         });
@@ -614,7 +614,7 @@ impl Database {
             among("d.dag_id", dags.len())
         );
         let rows: Vec<(bool, String, String)> = on_pool!(self, |pool, backend| {
-            let mut query = sqlx::query_as(sql_text(backend, &text));
+            let mut query = crate::query::query_as(sql_text(backend, &text));
             for dag in dags {
                 query = query.bind(dag.as_str());
             }

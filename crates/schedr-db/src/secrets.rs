@@ -215,7 +215,7 @@ impl Database {
                 Backend::Sqlite => "json_patch(secrets.data, excluded.data)",
             };
             let query = UPSERT.replace("{merged}", merged);
-            sqlx::query(sql_text(backend, &query))
+            crate::query::query(sql_text(backend, &query))
                 .bind(path)
                 .bind(&text)
                 .bind(db_time(now))
@@ -237,7 +237,7 @@ impl Database {
     ) -> Result<Option<BTreeMap<String, String>>, SecretsError> {
         const READ: &str = "SELECT data{text} FROM secrets WHERE path = $1";
         let stored: Option<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, READ))
+            crate::query::query_as(sql(backend, READ))
                 .bind(path)
                 .fetch_optional(pool)
                 .await?
@@ -261,7 +261,9 @@ impl Database {
         const LIST: &str = "SELECT path, data{text}, {ts<}updated_at{>ts} FROM secrets \
             ORDER BY path";
         let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, LIST)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, LIST))
+                .fetch_all(pool)
+                .await?
         });
         rows.into_iter()
             .filter(|(path, _, _)| path.starts_with(prefix))
@@ -285,7 +287,7 @@ impl Database {
         const DELETE: &str = "DELETE FROM secrets WHERE path = $1";
         let mut removed = 0;
         in_tx!(self, |tx, backend| {
-            removed = sqlx::query(sql(backend, DELETE))
+            removed = crate::query::query(sql(backend, DELETE))
                 .bind(path)
                 .execute(&mut *tx)
                 .await?

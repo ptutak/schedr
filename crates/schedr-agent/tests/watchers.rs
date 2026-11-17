@@ -534,6 +534,7 @@ fn spec(setup: &WorkerSetup, root: &Path, log: &Path, mode: &str) -> ProcessSpec
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: RUNNER_START_TIMEOUT,
         output_drain: Duration::from_secs(5),
+        barrier: None,
     }
 }
 

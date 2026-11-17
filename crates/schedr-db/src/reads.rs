@@ -326,7 +326,7 @@ impl Database {
         let dags = match filter.dag_contains.as_deref() {
             Some(part) => {
                 let dags: Vec<String> = on_pool!(self, |pool, backend| {
-                    sqlx::query_scalar(sql(backend, DAGS_HOLDING))
+                    crate::query::query_scalar(sql(backend, DAGS_HOLDING))
                         .bind(contains_pattern(part))
                         .fetch_all(pool)
                         .await?
@@ -340,7 +340,7 @@ impl Database {
         };
         let rows: Vec<RunRow> = on_pool!(self, |pool, backend| {
             let postgres = matches!(backend, crate::backend::Backend::Postgres);
-            let query = sqlx::query_as(sql(
+            let query = crate::query::query_as(sql(
                 backend,
                 match (&dags, postgres) {
                     (None, _) => RUNS_FILTERED,
@@ -377,7 +377,7 @@ impl Database {
         const DAG: &str = "SELECT v.dag_json{text} FROM runs r \
             JOIN dag_versions v ON v.id = r.dag_version_id WHERE r.id = $1{uuid}";
         let row: Option<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DAG))
+            crate::query::query_as(sql(backend, DAG))
                 .bind(run_id)
                 .fetch_optional(pool)
                 .await?
@@ -398,7 +398,7 @@ impl Database {
     ) -> Result<Option<std::sync::Arc<schedr_model::Dag>>, DbError> {
         const VERSION: &str = "SELECT dag_version_id{text} FROM runs WHERE id = $1{uuid}";
         let version: Option<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, VERSION))
+            crate::query::query_scalar(sql(backend, VERSION))
                 .bind(run_id)
                 .fetch_optional(pool)
                 .await?
@@ -423,7 +423,7 @@ impl Database {
         }
         let list = to_json(&run_ids);
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DAGS))
+            crate::query::query_as(sql(backend, DAGS))
                 .bind(&list)
                 .fetch_all(pool)
                 .await?
@@ -440,7 +440,7 @@ impl Database {
         const COUNT: &str = "SELECT COUNT(*) FROM task_instances \
             WHERE run_id = $1{uuid} AND task_id = $2 AND map_index >= 0";
         let count: i64 = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, COUNT))
+            crate::query::query_scalar(sql(backend, COUNT))
                 .bind(run_id)
                 .bind(task_id.as_str())
                 .fetch_one(pool)
@@ -478,7 +478,7 @@ impl Database {
             JOIN task_instances t ON t.id = o.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, OUTPUT))
+            crate::query::query_as(sql(backend, OUTPUT))
                 .bind(run_id)
                 .bind(task_id.as_str())
                 .bind(map_index)
@@ -498,7 +498,7 @@ impl Database {
         const DELETED: &str = "SELECT 1 FROM runs WHERE id = $1{uuid} \
             AND outputs_deleted_at IS NOT NULL";
         let found: Option<i32> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, DELETED))
+            crate::query::query_scalar(sql(backend, DELETED))
                 .bind(run_id)
                 .fetch_optional(pool)
                 .await?
@@ -519,7 +519,7 @@ impl Database {
         limit: u32,
     ) -> Result<Vec<RunRecord>, DbError> {
         let rows: Vec<RunRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, RUN_COLUMNS_OF_DAG))
+            crate::query::query_as(sql(backend, RUN_COLUMNS_OF_DAG))
                 .bind(dag_id.as_str())
                 .bind(planned_for.map(db_time))
                 .bind(i64::from(limit.min(MAX_RUNS)))
@@ -536,7 +536,7 @@ impl Database {
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn run_record(&self, run_id: &str) -> Result<Option<RunRecord>, DbError> {
         let row: Option<RunRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, RUN_COLUMNS_ONE))
+            crate::query::query_as(sql(backend, RUN_COLUMNS_ONE))
                 .bind(run_id)
                 .fetch_optional(pool)
                 .await?
@@ -555,7 +555,7 @@ impl Database {
             {ts<}updated_at{>ts}, map_index, reason, cleanup_result FROM task_instances \
             WHERE run_id = $1{uuid} ORDER BY task_id, map_index";
         let rows: Vec<InstanceRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, INSTANCES))
+            crate::query::query_as(sql(backend, INSTANCES))
                 .bind(run_id)
                 .fetch_all(pool)
                 .await?
@@ -603,7 +603,7 @@ impl Database {
             WHERE t.run_id = $1{uuid} AND a.code_hash IS NOT NULL AND a.code_hash <> '' \
             GROUP BY a.code_hash ORDER BY MIN(COALESCE(a.started_at, a.assigned_at)), a.code_hash";
         let hashes = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, HASHES))
+            crate::query::query_scalar(sql(backend, HASHES))
                 .bind(run_id)
                 .fetch_all(pool)
                 .await?
@@ -626,13 +626,13 @@ impl Database {
         const WORKERS: &str = "SELECT state, COUNT(*) FROM workers GROUP BY state ORDER BY state";
         let (runs, tasks, workers) = on_pool!(self, |pool, backend| {
             (
-                sqlx::query_as(sql(backend, RUNS))
+                crate::query::query_as(sql(backend, RUNS))
                     .fetch_all(&mut *pool)
                     .await?,
-                sqlx::query_as(sql(backend, TASKS))
+                crate::query::query_as(sql(backend, TASKS))
                     .fetch_all(&mut *pool)
                     .await?,
-                sqlx::query_as(sql(backend, WORKERS))
+                crate::query::query_as(sql(backend, WORKERS))
                     .fetch_all(&mut *pool)
                     .await?,
             )
@@ -687,19 +687,19 @@ impl Database {
         let (rows, cleanups, handles): (Vec<AttemptRow>, Vec<CleanupRow>, Vec<(String, String)>) =
             on_pool!(self, |pool, backend| {
                 (
-                    sqlx::query_as(sql(backend, ATTEMPTS))
+                    crate::query::query_as(sql(backend, ATTEMPTS))
                         .bind(run_id)
                         .bind(task_id.as_str())
                         .bind(map_index)
                         .fetch_all(&mut *pool)
                         .await?,
-                    sqlx::query_as(sql(backend, CLEANUPS))
+                    crate::query::query_as(sql(backend, CLEANUPS))
                         .bind(run_id)
                         .bind(task_id.as_str())
                         .bind(map_index)
                         .fetch_all(&mut *pool)
                         .await?,
-                    sqlx::query_as(sql(backend, HANDLES))
+                    crate::query::query_as(sql(backend, HANDLES))
                         .bind(run_id)
                         .bind(task_id.as_str())
                         .bind(map_index)

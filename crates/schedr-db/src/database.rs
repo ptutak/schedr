@@ -102,6 +102,9 @@ pub struct Database {
     /// Writes made to fail, for tests (shared by clones; decision 98).
     #[cfg(any(test, feature = "testing"))]
     faults: Arc<crate::faults::Faults>,
+    /// Whether its queries stay prepared on their connections (B256): always on SQLite, on
+    /// Postgres by `[database] prepared_statements`; otherwise each is an unnamed statement.
+    prepared: bool,
 }
 
 /// `[database] notifications` and `notifications_url`.
@@ -345,7 +348,10 @@ impl DbError {
 
 impl From<Pool> for Database {
     fn from(pool: Pool) -> Self {
+        // SQLite's statements are this process's own: kept, whatever the setting.
+        let prepared = matches!(pool, Pool::Sqlite(_));
         Self {
+            prepared,
             pool,
             fence: None,
             dags: Arc::default(),
@@ -381,7 +387,7 @@ impl Database {
     /// Returns [`DbError::UnsupportedUrl`] for an unknown scheme, or [`DbError::Sqlx`] if the
     /// URL is malformed or the connection fails.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        Self::open(url, None).await
+        Self::open(url, None, false).await
     }
 
     /// Connects to the database at `url`, no query (or wait for a connection) taking longer
@@ -394,10 +400,30 @@ impl Database {
     ///
     /// As [`Self::connect`].
     pub async fn connect_with_timeout(url: &str, query_timeout: Duration) -> Result<Self, DbError> {
-        Self::open(url, Some(query_timeout)).await
+        Self::open(url, Some(query_timeout), false).await
     }
 
-    async fn open(url: &str, query_timeout: Option<Duration>) -> Result<Self, DbError> {
+    /// As [`Self::connect_with_timeout`], keeping each query prepared on its connection when
+    /// `prepared_statements` (`[database] prepared_statements`, Postgres only): one round trip
+    /// and no planning after a query's first use. Not through a connection pooler in
+    /// transaction mode that doesn't carry prepared statements.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`].
+    pub async fn connect_prepared(
+        url: &str,
+        query_timeout: Duration,
+        prepared_statements: bool,
+    ) -> Result<Self, DbError> {
+        Self::open(url, Some(query_timeout), prepared_statements).await
+    }
+
+    async fn open(
+        url: &str,
+        query_timeout: Option<Duration>,
+        prepared_statements: bool,
+    ) -> Result<Self, DbError> {
         // Without a limit, sqlx's default wait for a connection.
         let acquire = query_timeout.unwrap_or(Duration::from_secs(30));
         match Backend::from_url(url)? {
@@ -417,8 +443,9 @@ impl Database {
                 Ok(Pool::Sqlite(pool).into())
             }
             Backend::Postgres => {
-                // No session state (see `crate::lease`): no `SET` on the connection, and no
-                // named prepared statements, which a pooler in transaction mode may not keep.
+                // No session state (see `crate::lease`): no `SET` on the connection. Named
+                // prepared statements only with `prepared_statements` (B256): a pooler in
+                // transaction mode keeps them only if it carries prepared statements.
                 for name in crate::backend::unknown_postgres_parameters(url) {
                     tracing::warn!(
                         parameter = %name,
@@ -426,7 +453,20 @@ impl Database {
                          doesn't know it (a typo?)"
                     );
                 }
-                let options = PgConnectOptions::from_str(url)?.statement_cache_capacity(0);
+                // Kept, each query is prepared once per connection (sqlx's cache, the least
+                // used closed past 100); otherwise every query is an unnamed statement, parsed
+                // and planned each time, which every pooler passes (`crate::query::query`).
+                // A URL that turns the cache off (`statement-cache-capacity=0`) wins: a query
+                // left persistent without a cache would be prepared under a new name each time
+                // and never closed (B256; Codex's review of M5.2b).
+                let prepared_statements =
+                    prepared_statements && crate::backend::statement_cache_capacity(url) != Some(0);
+                let options = PgConnectOptions::from_str(url)?;
+                let options = if prepared_statements {
+                    options
+                } else {
+                    options.statement_cache_capacity(0)
+                };
                 // No ping before each use (a round trip per query): a connection that died
                 // in the pool fails its query instead, and the caller's next try gets another.
                 let pool = PgPoolOptions::new()
@@ -434,9 +474,40 @@ impl Database {
                     .acquire_timeout(acquire)
                     .connect_with(options)
                     .await?;
-                Ok(Pool::Postgres(pool).into())
+                let mut db = Self::from(Pool::Postgres(pool));
+                db.prepared = prepared_statements;
+                Ok(db)
             }
         }
+    }
+
+    /// Whether its queries stay prepared on their connections (B256).
+    #[must_use]
+    pub(crate) const fn keeps_prepared(&self) -> bool {
+        self.prepared
+    }
+
+    /// How many prepared statements one of its Postgres connections holds after a query with
+    /// a parameter ran on it twice, built as every query of this crate is (B256's test): none
+    /// unless it keeps them.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails (on SQLite, which has no `pg_prepared_statements`).
+    #[cfg(any(test, feature = "testing"))]
+    pub async fn statements_kept(&self) -> Result<i64, DbError> {
+        Ok(crate::query::on_pool!(self, |pool, backend| {
+            let _ = backend;
+            for _ in 0..2 {
+                crate::query::query_scalar::<_, i32>("SELECT $1")
+                    .bind(1_i32)
+                    .fetch_one(&mut *pool)
+                    .await?;
+            }
+            crate::query::query_scalar::<_, i64>("SELECT count(*) FROM pg_prepared_statements")
+                .fetch_one(&mut *pool)
+                .await?
+        }))
     }
 
     /// The connection pool.
@@ -471,6 +542,7 @@ impl Database {
             waits: self.waits.clone(),
             #[cfg(any(test, feature = "testing"))]
             faults: self.faults.clone(),
+            prepared: self.prepared,
             fence: Some(Arc::new(Fence {
                 holder: holder.to_owned(),
                 epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
@@ -490,7 +562,7 @@ impl Database {
             return Ok(dag);
         }
         let json: Option<String> = crate::query::on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(crate::query::sql(backend, JSON))
+            crate::query::query_scalar(crate::query::sql(backend, JSON))
                 .bind(version_id)
                 .fetch_optional(pool)
                 .await?
@@ -702,18 +774,22 @@ impl Database {
             "SELECT version, checksum FROM _sqlx_migrations WHERE success ORDER BY version";
         let applied = match &self.pool {
             Pool::Sqlite(pool) => {
-                let exists: i64 = sqlx::query_scalar(EXISTS_SQLITE).fetch_one(pool).await?;
+                let exists: i64 = crate::query::query_scalar(EXISTS_SQLITE)
+                    .fetch_one(pool)
+                    .await?;
                 if exists == 0 {
                     return Ok(Vec::new());
                 }
-                sqlx::query_as(APPLIED).fetch_all(pool).await?
+                crate::query::query_as(APPLIED).fetch_all(pool).await?
             }
             Pool::Postgres(pool) => {
-                let exists: i64 = sqlx::query_scalar(EXISTS_POSTGRES).fetch_one(pool).await?;
+                let exists: i64 = crate::query::query_scalar(EXISTS_POSTGRES)
+                    .fetch_one(pool)
+                    .await?;
                 if exists == 0 {
                     return Ok(Vec::new());
                 }
-                sqlx::query_as(APPLIED).fetch_all(pool).await?
+                crate::query::query_as(APPLIED).fetch_all(pool).await?
             }
         };
         Ok(applied)

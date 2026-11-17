@@ -50,6 +50,9 @@ pub struct ProcessSpec {
     pub start_timeout: Duration,
     /// How long its output may take to reach its log once it is stopped.
     pub output_drain: Duration,
+    /// A `cleanup_anywhere` cleanup's barrier (B255, decision 504): a forked process waits at
+    /// it itself; a spawned one through `schedr task-exec`, in its program and arguments.
+    pub barrier: Option<schedr_model::runner::ForkBarrier>,
 }
 
 /// A started task process.

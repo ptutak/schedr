@@ -865,17 +865,27 @@ pub struct DatabaseSection {
     /// scenarios 15 and 15b). Applied by `schedr db migrate` and `--migrate`, not by a running
     /// master. Off: the pages refresh every `refresh_interval` instead.
     pub change_notifications: bool,
+    /// Whether queries on Postgres are prepared once per connection and kept (at most 100 a
+    /// connection, the least used closed): a query then costs one round trip and no planning
+    /// after its first use, instead of two round trips and a plan each time (M5.2b: the
+    /// master's round probe planned in 5-9 ms and executed in 1-2). On by default. Off, each
+    /// query is an unnamed statement, for a connection pooler in transaction mode that doesn't
+    /// carry prepared statements (`PgBouncer` before 1.21, or `max_prepared_statements = 0`):
+    /// it lends each transaction another server connection, where a kept statement doesn't
+    /// exist. SQLite keeps its statements whatever it says.
+    pub prepared_statements: bool,
 }
 
 impl Default for DatabaseSection {
     /// No URL, queries limited to 10 s, notifications on (through the main URL), changes
-    /// announced.
+    /// announced, queries kept prepared.
     fn default() -> Self {
         Self {
             url: None,
             notifications: true,
             notifications_url: None,
             change_notifications: true,
+            prepared_statements: true,
         }
     }
 }
@@ -1127,6 +1137,7 @@ impl std::fmt::Debug for DatabaseSection {
             .field("notifications", &self.notifications)
             .field("notifications_url", &masked(&self.notifications_url))
             .field("change_notifications", &self.change_notifications)
+            .field("prepared_statements", &self.prepared_statements)
             .finish()
     }
 }

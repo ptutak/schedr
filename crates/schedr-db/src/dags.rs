@@ -197,7 +197,7 @@ impl Database {
             VALUES ($1, $2, $3{ts}) ON CONFLICT (root, content_hash) DO NOTHING";
         let query = if switched { SWITCH } else { SEEN };
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, query))
+            crate::query::query(sql(backend, query))
                 .bind(root)
                 .bind(content_hash)
                 .bind(db_time(now))
@@ -219,7 +219,7 @@ impl Database {
         const SWITCHES: &str = "SELECT content_hash, {ts<}switched_at{>ts} FROM root_hashes \
             WHERE root = $1";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SWITCHES))
+            crate::query::query_as(sql(backend, SWITCHES))
                 .bind(root)
                 .fetch_all(pool)
                 .await?
@@ -242,7 +242,7 @@ impl Database {
         const PARSES: &str = "SELECT id{text}, schedr_version, {ts<}parsed_at{>ts} \
             FROM parse_results WHERE root = $1 AND content_hash = $2 ORDER BY parsed_at, id";
         let rows: Vec<(String, String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, PARSES))
+            crate::query::query_as(sql(backend, PARSES))
                 .bind(root)
                 .bind(content_hash)
                 .fetch_all(pool)
@@ -273,7 +273,7 @@ impl Database {
         const FIND: &str = "SELECT id{text} FROM parse_results \
             WHERE root = $1 AND content_hash = $2 AND schedr_version = $3";
         let id = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, FIND))
+            crate::query::query_scalar(sql(backend, FIND))
                 .bind(root)
                 .bind(content_hash)
                 .bind(schedr_version)
@@ -300,7 +300,7 @@ impl Database {
             VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json}, $9{json})";
         let id = Uuid::now_v7().to_string();
         let inserted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
-            let done = sqlx::query(sql(backend, INSERT))
+            let done = crate::query::query(sql(backend, INSERT))
                 .bind(&id)
                 .bind(parse.root)
                 .bind(parse.content_hash)
@@ -312,7 +312,7 @@ impl Database {
             let inserted = done.rows_affected() == 1;
             if inserted {
                 for file in parse.files {
-                    sqlx::query(sql(backend, FILE))
+                    crate::query::query(sql(backend, FILE))
                         .bind(&id)
                         .bind(&file.path)
                         .bind(to_json(&file.dags))
@@ -359,12 +359,12 @@ impl Database {
             VALUES ($1{uuid}, $2, $3{json}, $4{json}, $5, $6, $7{ts}, $8{json}, $9{json})";
         in_tx!(self, BATCH_LIMITS, |tx, backend| {
             for file in files {
-                sqlx::query(sql(backend, DELETE))
+                crate::query::query(sql(backend, DELETE))
                     .bind(parse_id)
                     .bind(&file.path)
                     .execute(&mut *tx)
                     .await?;
-                sqlx::query(sql(backend, FILE))
+                crate::query::query(sql(backend, FILE))
                     .bind(parse_id)
                     .bind(&file.path)
                     .bind(to_json(&file.dags))
@@ -394,7 +394,7 @@ impl Database {
         const WORKERS: &str = "SELECT path, worker_id FROM parse_files \
             WHERE parse_result_id = $1{uuid}";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, WORKERS))
+            crate::query::query_as(sql(backend, WORKERS))
                 .bind(parse_id)
                 .fetch_all(pool)
                 .await?
@@ -412,7 +412,7 @@ impl Database {
         const FILES: &str = "SELECT path, dags{text}, error{text}, connections{text}, \
             script_roots{text} FROM parse_files WHERE parse_result_id = $1{uuid} ORDER BY path";
         let rows: Vec<FileRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, FILES))
+            crate::query::query_as(sql(backend, FILES))
                 .bind(parse_id)
                 .fetch_all(pool)
                 .await?
@@ -445,7 +445,7 @@ impl Database {
             JOIN parse_files f ON f.parse_result_id = c.parse_result_id \
             WHERE c.root = $1 ORDER BY f.path";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, CONNECTIONS))
+            crate::query::query_as(sql(backend, CONNECTIONS))
                 .bind(root)
                 .fetch_all(pool)
                 .await?
@@ -481,7 +481,7 @@ impl Database {
             VALUES ($1, $2{uuid}, $3{ts}) ON CONFLICT (root) DO UPDATE SET \
             parse_result_id = excluded.parse_result_id, decided_at = excluded.decided_at";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(root)
                 .bind(parse_id)
                 .bind(db_time(now))
@@ -500,7 +500,7 @@ impl Database {
     pub async fn current_parses(&self) -> Result<BTreeMap<String, String>, DbError> {
         const CURRENT: &str = "SELECT root, parse_result_id{text} FROM current_parses";
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, CURRENT))
+            crate::query::query_as(sql(backend, CURRENT))
                 .fetch_all(pool)
                 .await?
         });
@@ -522,7 +522,9 @@ impl Database {
             JOIN parse_files f ON f.parse_result_id = c.parse_result_id \
             WHERE f.error IS NOT NULL ORDER BY c.root, f.path";
         let rows: Vec<ImportErrorRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ERRORS)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, ERRORS))
+                .fetch_all(pool)
+                .await?
         });
         rows.into_iter()
             .map(
@@ -564,7 +566,9 @@ impl Database {
             LEFT JOIN dag_versions v ON v.id = d.current_version_id \
             ORDER BY d.dag_id";
         let rows: Vec<DagRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DAGS)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, DAGS))
+                .fetch_all(pool)
+                .await?
         });
         rows.into_iter().map(stored_dag).collect()
     }
@@ -580,7 +584,9 @@ impl Database {
         const HELD: &str = "SELECT dag_id, removed_at IS NOT NULL FROM dags \
             WHERE removed_at IS NOT NULL OR conflict IS NOT NULL";
         let rows: Vec<(String, bool)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, HELD)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, HELD))
+                .fetch_all(pool)
+                .await?
         });
         Ok(rows.into_iter().collect())
     }
@@ -603,7 +609,7 @@ impl Database {
             return Ok(Vec::new());
         }
         Ok(on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, RUNS))
+            crate::query::query_scalar(sql(backend, RUNS))
                 .fetch_all(pool)
                 .await?
         }))
@@ -628,7 +634,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let rows: Vec<(String, Option<String>)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DUE))
+            crate::query::query_as(sql(backend, DUE))
                 .bind(db_time(now))
                 .fetch_all(pool)
                 .await?
@@ -653,16 +659,36 @@ impl Database {
     pub async fn next_fires(&self) -> Result<HashMap<DagId, Option<Timestamp>>, DbError> {
         const ALL: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers";
         let rows: Vec<(String, Option<String>)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ALL)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, ALL))
+                .fetch_all(pool)
+                .await?
         });
-        rows.into_iter()
-            .map(|(dag, at)| {
-                let at = at
-                    .map(|at| parse_time("dag_triggers.next_fire_at", &at))
-                    .transpose()?;
-                Ok((crate::runs::dag_id_of(dag)?, at))
-            })
-            .collect()
+        next_fire_rows(rows)
+    }
+
+    /// As [`Self::next_fires`], for `dags` only.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored time doesn't read.
+    pub async fn next_fires_of(
+        &self,
+        dags: &[&DagId],
+    ) -> Result<HashMap<DagId, Option<Timestamp>>, DbError> {
+        const OF: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers \
+            WHERE dag_id IN (SELECT value FROM {json_each}($1{json}))";
+        if dags.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids: Vec<&str> = dags.iter().map(|d| d.as_str()).collect();
+        let ids = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_owned());
+        let rows: Vec<(String, Option<String>)> = on_pool!(self, |pool, backend| {
+            crate::query::query_as(sql(backend, OF))
+                .bind(&ids)
+                .fetch_all(pool)
+                .await?
+        });
+        next_fire_rows(rows)
     }
 
     /// The trigger loop's looks, taken at the start of its pass (decision 486): each trigger it
@@ -680,11 +706,11 @@ impl Database {
             WHERE kind IN ('run_of', 'event') AND NOT paused AND next_fire_at IS NULL";
         const ALL: &str = "SELECT dag_id, {ts<}next_fire_at{>ts} FROM dag_triggers";
         let rows: Vec<(String, Option<String>)> = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, CLAIM))
+            crate::query::query(sql(backend, CLAIM))
                 .bind(db_time(NO_FIRE))
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query_as(sql(backend, ALL))
+            crate::query::query_as(sql(backend, ALL))
                 .fetch_all(&mut *tx)
                 .await?
         });
@@ -715,7 +741,7 @@ impl Database {
         const SET: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} WHERE dag_id = $2 \
             AND next_fire_at = $3{ts}";
         let stored = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(db_time(at))
                 .bind(dag_id.as_str())
                 .bind(db_time(was))
@@ -736,7 +762,7 @@ impl Database {
     pub async fn set_next_fire(&self, dag_id: &DagId, at: Timestamp) -> Result<(), DbError> {
         const SET: &str = "UPDATE dag_triggers SET next_fire_at = $1{ts} WHERE dag_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(db_time(at))
                 .bind(dag_id.as_str())
                 .execute(&mut *tx)
@@ -758,7 +784,7 @@ impl Database {
             LEFT JOIN dag_versions v ON v.id = d.current_version_id \
             WHERE d.dag_id = $1";
         let row: Option<DagRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DAG))
+            crate::query::query_as(sql(backend, DAG))
                 .bind(dag_id.as_str())
                 .fetch_optional(pool)
                 .await?
@@ -795,7 +821,7 @@ impl Database {
                 AND d.conflict IS NULL) THEN COALESCE(live_since, $3{ts}) END \
             WHERE dag_id = $2";
         let changed = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, PAUSE))
+            crate::query::query(sql(backend, PAUSE))
                 .bind(paused)
                 .bind(dag_id.as_str())
                 .bind(db_time(now))
@@ -868,7 +894,7 @@ impl Database {
                         parse_id,
                         pause,
                     } => {
-                        sqlx::query(sql(backend, ENSURE))
+                        crate::query::query(sql(backend, ENSURE))
                             .bind(dag.id.as_str())
                             .bind(&now)
                             .execute(&mut *tx)
@@ -877,12 +903,12 @@ impl Database {
                         // other, so the version made current here isn't deleted meanwhile
                         // (Codex's review of M4.14). SQLite's writes are one at a time.
                         if backend == crate::Backend::Postgres {
-                            sqlx::query(sql(backend, LOCK))
+                            crate::query::query(sql(backend, LOCK))
                                 .bind(dag.id.as_str())
                                 .execute(&mut *tx)
                                 .await?;
                         }
-                        sqlx::query(sql(backend, VERSION))
+                        crate::query::query(sql(backend, VERSION))
                             .bind(Uuid::now_v7().to_string())
                             .bind(dag.id.as_str())
                             .bind(parse_id)
@@ -890,10 +916,11 @@ impl Database {
                             .bind(&now)
                             .execute(&mut *tx)
                             .await?;
-                        let old: Option<(String,)> = sqlx::query_as(sql(backend, OLD_TRIGGER))
-                            .bind(dag.id.as_str())
-                            .fetch_optional(&mut *tx)
-                            .await?;
+                        let old: Option<(String,)> =
+                            crate::query::query_as(sql(backend, OLD_TRIGGER))
+                                .bind(dag.id.as_str())
+                                .fetch_optional(&mut *tx)
+                                .await?;
                         let new_trigger = old.is_some_and(|(json,)| {
                             serde_json::from_str::<serde_json::Value>(&json)
                                 .ok()
@@ -903,7 +930,7 @@ impl Database {
                                 != serde_json::to_value(&dag.trigger).ok()
                         });
                         if let Some(kind) = dag.trigger.kind() {
-                            sqlx::query(sql(backend, SWITCH))
+                            crate::query::query(sql(backend, SWITCH))
                                 .bind(dag.id.as_str())
                                 .bind(kind)
                                 .bind(*pause)
@@ -918,12 +945,12 @@ impl Database {
                                 .execute(&mut *tx)
                                 .await?;
                         } else {
-                            sqlx::query(sql(backend, NO_SWITCH))
+                            crate::query::query(sql(backend, NO_SWITCH))
                                 .bind(dag.id.as_str())
                                 .execute(&mut *tx)
                                 .await?;
                         }
-                        sqlx::query(sql(backend, CURRENT))
+                        crate::query::query(sql(backend, CURRENT))
                             .bind(dag.id.as_str())
                             .bind(parse_id)
                             .execute(&mut *tx)
@@ -934,34 +961,34 @@ impl Database {
                         places,
                         pause,
                     } => {
-                        sqlx::query(sql(backend, ENSURE))
+                        crate::query::query(sql(backend, ENSURE))
                             .bind(dag_id.as_str())
                             .bind(&now)
                             .execute(&mut *tx)
                             .await?;
-                        sqlx::query(sql(backend, CONFLICT))
+                        crate::query::query(sql(backend, CONFLICT))
                             .bind(to_json(places))
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;
-                        sqlx::query(sql(backend, CONFLICT_SWITCH))
+                        crate::query::query(sql(backend, CONFLICT_SWITCH))
                             .bind(*pause)
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;
                     }
                     DagChange::Remove { dag_id } => {
-                        sqlx::query(sql(backend, REMOVE))
+                        crate::query::query(sql(backend, REMOVE))
                             .bind(&now)
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;
-                        sqlx::query(sql(backend, REMOVE_SWITCH))
+                        crate::query::query(sql(backend, REMOVE_SWITCH))
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;
                         // What its trigger passed is read only while it is live (B186).
-                        sqlx::query(sql(backend, FORGET_PASSED))
+                        crate::query::query(sql(backend, FORGET_PASSED))
                             .bind(dag_id.as_str())
                             .execute(&mut *tx)
                             .await?;
@@ -995,4 +1022,18 @@ fn stored_dag(row: DagRow) -> Result<StoredDag, DbError> {
             .transpose()?,
         current,
     })
+}
+
+/// Stored next fire times, read: by DAG.
+fn next_fire_rows(
+    rows: Vec<(String, Option<String>)>,
+) -> Result<HashMap<DagId, Option<Timestamp>>, DbError> {
+    rows.into_iter()
+        .map(|(dag, at)| {
+            let at = at
+                .map(|at| parse_time("dag_triggers.next_fire_at", &at))
+                .transpose()?;
+            Ok((crate::runs::dag_id_of(dag)?, at))
+        })
+        .collect()
 }

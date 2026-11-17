@@ -25,6 +25,9 @@ type CopiesSeen = Vec<(PathBuf, bool)>;
 /// Parses each file into a DAG named after it, with one Python task; runs tasks at once,
 /// except task `wait`, which waits until it is stopped. Each attempt's "process" is one that
 /// doesn't exist.
+/// Whether a cleanup had a gate, and its rest's boundary.
+type GateAndRest = (bool, Option<u32>);
+
 #[derive(Clone, Default)]
 struct Fake {
     parsed: Arc<Mutex<Vec<Vec<String>>>>,
@@ -32,6 +35,8 @@ struct Fake {
     dirs: Arc<Mutex<Vec<PathBuf>>>,
     /// The handles of each cleanup left by an earlier agent.
     cleanups: Arc<Mutex<Vec<Vec<CleanupHandle>>>>,
+    /// Whether each such cleanup had a gate, and its rest's boundary (B169, B255).
+    cleanup_specs: Arc<Mutex<Vec<GateAndRest>>>,
     /// Why each task named `wait` was stopped.
     stops: Arc<Mutex<Vec<StopReason>>>,
     /// Each Python task's `sys.path`.
@@ -132,6 +137,10 @@ impl Executor for Fake {
             .collect();
         self.cleanup_copies.lock().unwrap().push(copies);
         self.cleanups.lock().unwrap().push(handles);
+        self.cleanup_specs
+            .lock()
+            .unwrap()
+            .push((spec.cleanup_gate.is_some(), spec.cleanup_rest));
         ended.cleanup = Some(pb::CleanupResult {
             status: pb::CleanupStatus::Ok.into(),
             tries: 1,
@@ -749,6 +758,8 @@ enum Start {
     With(Vec<(&'static str, JournalRecord)>),
     /// These records, each of an attempt of a task with a cleanup, and its one handle.
     Kept(Vec<(&'static str, JournalRecord)>),
+    /// As `Kept`, the task's cleanup with `cleanup_anywhere`.
+    KeptAnywhere(Vec<(&'static str, JournalRecord)>),
     /// A moved cleanup left by the previous agent: its handles in its assignment alone.
     Moved(&'static str),
     /// A journal that can't be written.
@@ -793,6 +804,18 @@ fn seed(journal: &Journal, start: Start) {
             for (attempt_id, record) in records {
                 journal.write(attempt_id, &record).unwrap();
                 journal.keep(attempt_id, &kept(attempt_id)).unwrap();
+                journal.add_handle(attempt_id, &one_handle()).unwrap();
+            }
+        }
+        Start::KeptAnywhere(records) => {
+            for (attempt_id, record) in records {
+                let mut anywhere = kept(attempt_id);
+                let mut task: serde_json::Value =
+                    serde_json::from_slice(&anywhere.assign.task_json).unwrap();
+                task["cleanup"]["anywhere"] = json!(true);
+                anywhere.assign.task_json = serde_json::to_vec(&task).unwrap();
+                journal.write(attempt_id, &record).unwrap();
+                journal.keep(attempt_id, &anywhere).unwrap();
                 journal.add_handle(attempt_id, &one_handle()).unwrap();
             }
         }
@@ -921,6 +944,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
             worker_message::Message::TaskEnded(_) => Some("task ended"),
             worker_message::Message::HandlesAdded(_) => Some("handles"),
             worker_message::Message::ApiCall(_) => Some("api call"),
+            worker_message::Message::CleanupStart(_) => Some("cleanup start"),
             worker_message::Message::Rejected(r) => {
                 Some(match pb::RejectReason::try_from(r.reason) {
                     Ok(pb::RejectReason::NoFreeSlot) => "rejected: no slot",
@@ -2954,6 +2978,221 @@ async fn a_cleanup_runs_after_a_failed_task_and_leaves_its_result() {
     assert_eq!(ended.cleanup, None);
 }
 
+/// `schedr task-exec`'s barrier as a script (the binary isn't built for these tests; its own
+/// barrier is tested in `schedr`): the same exchange, then the program in its place.
+const BARRIER_STAND_IN: &str = r#"#!/usr/bin/python3
+import os, socket, sys, time
+a = sys.argv
+path, wait = a[a.index("--barrier") + 1], int(a[a.index("--barrier-wait-ms") + 1]) / 1000
+until = time.monotonic() + wait
+s = socket.socket(socket.AF_UNIX)
+try:
+    s.connect(path)
+    s.settimeout(max(0.001, until - time.monotonic()))
+    word = s.recv(1)
+except OSError:
+    sys.exit(75)
+if word != b"g":
+    sys.exit(75)
+if time.monotonic() >= until:
+    s.sendall(b"l")
+    sys.exit(75)
+s.sendall(b"p")
+s.close()
+program = a[a.index("--") + 1:]
+os.execvp(program[0], program)
+"#;
+
+/// An attempt behind a barrier, its gate, and each question's `rest`.
+type Barriered = (
+    (ProcessExecutor, AttemptSpec, Plan, TempDir),
+    watch::Sender<super::Gate>,
+    Arc<Mutex<Vec<bool>>>,
+);
+
+/// The master's answers to a barrier's questions, each given after its delay (the last one for
+/// every later question).
+type Answers = &'static [(bool, std::time::Duration)];
+
+/// A `cleanup_anywhere` attempt whose cleanup writes `OUT`, behind the barrier stand-in; the
+/// master answering as `answers` say (a frozen worker's late answer: a delay), the process
+/// waiting `wait`. The gate, open, is returned to change, and each question's `rest`.
+fn behind_a_barrier(answers: Answers, wait: std::time::Duration) -> Barriered {
+    behind_a_barrier_running("echo ran >> \"$OUT\"", 0, answers, wait)
+}
+
+/// [`behind_a_barrier`], the cleanup running `cleanup`, `retries` times again if it fails.
+fn behind_a_barrier_running(
+    cleanup: &str,
+    retries: u32,
+    answers: Answers,
+    wait: std::time::Duration,
+) -> Barriered {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (mut executor, mut spec, plan, dir) =
+        attempt_with_timed_cleanup("true", cleanup, retries, &json!(5_000));
+    let stand_in = dir.path().join("task-exec");
+    std::fs::write(&stand_in, BARRIER_STAND_IN).unwrap();
+    std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executor.setup.memory.task_exec = Some(stand_in);
+    spec.task.cleanup.as_mut().unwrap().anywhere = true;
+    let (gate, gate_rx) = watch::channel(super::Gate::Open);
+    let (deadline_tx, deadline_rx) = watch::channel(Some(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(3_600),
+    ));
+    std::mem::forget(deadline_tx);
+    spec.cleanup_gate = Some(super::CleanupGate {
+        gate: gate_rx,
+        deadline: deadline_rx,
+    });
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let questions = Arc::clone(&asked);
+    let (wait_tx, wait_rx) = watch::channel(wait);
+    std::mem::forget(wait_tx);
+    spec.cleanup_ask = Some(crate::barrier::CleanupAsk {
+        ask: Arc::new(move |_, rest| {
+            let mut questions = questions.lock().unwrap();
+            let (answer, after) = answers[questions.len().min(answers.len() - 1)];
+            questions.push(rest);
+            let (to, answered) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                let _ = to.send(answer);
+            });
+            answered
+        }),
+        wait: wait_rx,
+    });
+    ((executor, spec, plan, dir), gate, asked)
+}
+
+const AT_ONCE: std::time::Duration = std::time::Duration::ZERO;
+
+#[tokio::test]
+async fn a_cleanup_behind_its_barrier_runs_once_the_master_says_go() {
+    let (attempt, _gate, asked) =
+        behind_a_barrier(&[(true, AT_ONCE)], std::time::Duration::from_secs(5));
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    assert_eq!(out, "ran\n");
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::Ok));
+    assert_eq!(cleanup.tries, 1);
+    assert_eq!(*asked.lock().unwrap(), [false]);
+}
+
+#[tokio::test]
+async fn a_cleanup_the_master_says_isnt_this_workers_never_runs_here() {
+    let (attempt, _gate, _) =
+        behind_a_barrier(&[(false, AT_ONCE)], std::time::Duration::from_secs(5));
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    assert_eq!(out, "");
+    // Not run here: reported as not needed, as a gate's drop is (the master ignores it).
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::NotNeeded));
+    assert_eq!(cleanup.tries, 0);
+}
+
+const LATE: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[tokio::test]
+async fn a_try_asked_again_runs_on_the_rest_the_master_said_meanwhile() {
+    // Codex's review of B255: a try with no word in time, then `CLEAN_REST` while it waited,
+    // then the next try let through: it runs as a rest, asks as one and says so.
+    let wait = std::time::Duration::from_millis(300);
+    let (attempt, gate, asked) = behind_a_barrier(&[(true, LATE), (true, AT_ONCE)], wait);
+    let resting = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        gate.send_replace(super::Gate::Rest(0));
+        gate
+    });
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    drop(resting.await.unwrap());
+    assert_eq!(out, "ran\n");
+    assert_eq!(*asked.lock().unwrap(), [false, true]);
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(
+        (cleanup.status, cleanup.rest),
+        (i32::from(pb::CleanupStatus::Ok), true)
+    );
+}
+
+#[tokio::test]
+async fn a_retry_after_a_failed_try_runs_on_the_rest_the_master_said_meanwhile() {
+    const ANSWERS: [(bool, std::time::Duration); 2] = [
+        (true, std::time::Duration::from_millis(200)),
+        (true, AT_ONCE),
+    ];
+    // Codex's review of B255: a try let through and failed, then `CLEAN_REST`: the retry asked
+    // as the whole cleanup, was refused, and the rest owed never ran.
+    let fails_once = "echo ran >> \"$OUT\"; [ $(wc -l < \"$OUT\") -ge 2 ]";
+    let (attempt, gate, asked) =
+        behind_a_barrier_running(fails_once, 1, &ANSWERS, std::time::Duration::from_secs(5));
+    let resting = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        gate.send_replace(super::Gate::Rest(0));
+        gate
+    });
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup(attempt, stops).await;
+    drop(resting.await.unwrap());
+    assert_eq!(out, "ran\nran\n");
+    assert_eq!(*asked.lock().unwrap(), [false, true]);
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(
+        (cleanup.status, cleanup.tries, cleanup.rest),
+        (i32::from(pb::CleanupStatus::Ok), 2, true)
+    );
+}
+
+#[tokio::test]
+async fn a_cleanup_that_cant_wait_at_its_barrier_doesnt_start() {
+    // Codex's review of B255: without `schedr task-exec`, it would start unasked.
+    let ((mut executor, spec, plan, dir), _gate, asked) =
+        behind_a_barrier(&[(true, AT_ONCE)], std::time::Duration::from_secs(5));
+    executor.setup.memory.task_exec = None;
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = run_with_cleanup((executor, spec, plan, dir), stops).await;
+    assert_eq!(out, "");
+    assert!(asked.lock().unwrap().is_empty());
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(
+        (cleanup.status, cleanup.error_kind.as_str()),
+        (i32::from(pb::CleanupStatus::Failed), START_FAILED)
+    );
+}
+
+#[tokio::test]
+async fn a_late_go_finds_the_cleanup_gone_and_a_moved_one_never_runs_here() {
+    // B255: the worker passed the gate, then froze past its lease; the master moved the
+    // cleanup meanwhile. The process, waiting at its barrier, gives up on its own clock, so
+    // the worker's go, late, starts nothing; asked again, the gate (dropped: moved) ends it.
+    let wait = std::time::Duration::from_millis(300);
+    let (attempt, gate, asked) = behind_a_barrier(&[(true, LATE)], wait);
+    let closing = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        gate.send_replace(super::Gate::Dropped);
+    });
+    let (_sender, stops) = Stops::new();
+    let (finished, _, out) = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        run_with_cleanup(attempt, stops),
+    )
+    .await
+    .expect("the attempt hung");
+    closing.await.unwrap();
+    // Let the late answer come, to show it starts nothing either.
+    tokio::time::sleep(LATE).await;
+    assert_eq!(out, "", "the cleanup ran after the master moved it");
+    let cleanup = finished.cleanup.unwrap();
+    assert_eq!(cleanup.status, i32::from(pb::CleanupStatus::NotNeeded));
+    assert_eq!(cleanup.tries, 0);
+    // Asked once or more (a try with no word is made again while the gate is open).
+    assert!(!asked.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn a_cleanup_without_a_timeout_gets_the_workers() {
     let mut attempt = attempt_with_timed_cleanup("exit 0", "sleep 30", 0, &serde_json::Value::Null);
@@ -3170,6 +3409,39 @@ async fn a_cleanup_cut_off_by_a_restart_runs_again_and_keeps_the_tasks_result() 
     let finished = result_in(&seen);
     assert_eq!(finished.output_json, b"7");
     assert!(finished.cleanup.is_some());
+}
+
+#[tokio::test]
+async fn a_kept_movable_cleanup_has_its_gate_and_runs_the_rest_its_told() {
+    // Codex's review of B255: restored from the journal it had no gate, so a later
+    // `CLEAN_REST` couldn't reach its tries; and the rest's boundary is left to the cleanup,
+    // where the handles are skipped once.
+    let ended = pb::Finished {
+        attempt_id: "old-1".to_owned(),
+        status: pb::AttemptStatus::Success.into(),
+        ..pb::Finished::default()
+    };
+    let start = Start::KeptAnywhere(vec![(
+        "old-1",
+        JournalRecord::Cleaning(ended, Some(NO_PROCESS)),
+    )]);
+    let mut rest = decided("old-1", pb::AttemptDecision::CleanRest);
+    if let Some(master_message::Message::Registered(registered)) = rest.message.as_mut() {
+        registered.decisions[0].cleanup_from = 1;
+    }
+    let done = |m: &[pb::WorkerMessage]| kinds(m).contains(&"finished: success");
+    let specs = Arc::new(Mutex::new(Vec::new()));
+    let seen_specs = Arc::clone(&specs);
+    let cleanups = Arc::new(Mutex::new(Vec::new()));
+    let seen_cleanups = Arc::clone(&cleanups);
+    against_script_with(2, start, vec![rest], done, |agent| {
+        agent.executor.cleanup_specs = seen_specs;
+        agent.executor.cleanups = seen_cleanups;
+    })
+    .await;
+    assert_eq!(*specs.lock().unwrap(), [(true, Some(1))]);
+    // The handles go whole; the cleanup leaves out the first, once.
+    assert_eq!(*cleanups.lock().unwrap(), [vec![one_handle()]]);
 }
 
 #[tokio::test]

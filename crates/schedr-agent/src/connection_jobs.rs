@@ -174,6 +174,8 @@ pub fn test_spec(
         handle_sink: None,
         api: None,
         cleanup_gate: None,
+        cleanup_ask: None,
+        cleanup_rest: None,
     })
 }
 

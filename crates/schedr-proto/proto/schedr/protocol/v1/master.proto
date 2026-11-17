@@ -47,6 +47,7 @@ message WorkerMessage {
     TriggerStopped trigger_stopped = 14;
     TriggerPoked trigger_poked = 15;
     ApiCall api_call = 16;
+    CleanupStart cleanup_start = 17;
   }
   // Its number, and what the worker had read of the master's messages (B240): every message
   // carries it.
@@ -64,6 +65,24 @@ message WorkerClock {
   // goes out before anything naming that message, so an assignment named here without a
   // `Started` before it never started.
   uint64 heard_sequence = 2;
+}
+
+// A `cleanup_anywhere` cleanup's process is waiting at its barrier (B255, decision 504): may it
+// run here? Sent only once the process waits, its own timeout running (well within the lease),
+// so an answer late for any reason finds it gone, never a cleanup moved meanwhile. Since 2.2.
+message CleanupStart {
+  string attempt_id = 1;
+  // Only the handles the master didn't have (`CLEAN_REST`, B169).
+  bool rest = 2;
+}
+
+// The master's answer to `CleanupStart`: `go` while the attempt is still open and its cleanup
+// this worker's; for the rest of its handles, while this worker owes them (B169, as at
+// registration, the attempt ended or not); else not, the cleanup having moved or ended. The cleanup can't move before the worker is lost, a lease after this
+// request at the earliest, and its move wait after that. Since 2.2.
+message CleanupGo {
+  string attempt_id = 1;
+  bool go = 2;
 }
 
 // A REST request a task (or a trigger, a wait step) makes through its agent, with no URL or
@@ -423,6 +442,7 @@ message MasterMessage {
     CancelTrigger cancel_trigger = 10;
     TriggerEventAck trigger_event_ack = 11;
     ApiAnswer api_answer = 12;
+    CleanupGo cleanup_go = 13;
   }
   // When the master sent it, on its own clock (B225): every message carries it.
   MasterClock clock = 20;

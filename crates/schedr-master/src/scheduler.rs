@@ -303,6 +303,19 @@ impl Scheduler {
                 )
             }
         };
+        // A scheduled DAG visited for another reason (its queued runs) has no stored time read
+        // yet: read it, so an unchanged one isn't written again (a write wakes another round,
+        // decision 502; Codex's review of M5.2b: a run held by `max_active_runs` kept the rounds
+        // going every round gap).
+        let unread: Vec<&DagId> = active_dags
+            .iter()
+            .filter(|a| a.dag.trigger.kind() == Some("schedule") && !a.paused)
+            .map(|a| &a.dag.id)
+            .filter(|id| !stored.contains_key(*id))
+            .collect();
+        if !unread.is_empty() {
+            stored.extend(self.db.next_fires_of(&unread).await?);
+        }
         let mut seen = HashSet::with_capacity(active_dags.len());
         for active in active_dags {
             seen.insert(active.dag.id.clone());

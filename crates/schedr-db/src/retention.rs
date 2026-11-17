@@ -60,7 +60,7 @@ impl Database {
             WHERE {select} ORDER BY r.ended_at, r.id LIMIT 1"
         );
         let dag: Option<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(crate::query::sql_text(backend, &query))
+            crate::query::query_scalar(crate::query::sql_text(backend, &query))
                 .bind(before)
                 .fetch_optional(pool)
                 .await?
@@ -94,34 +94,35 @@ impl Database {
         );
         let deleted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             if backend == crate::Backend::Postgres {
-                sqlx::query(sql(backend, LOCK_DAG))
+                crate::query::query(sql(backend, LOCK_DAG))
                     .bind(&dag_id)
                     .execute(&mut *tx)
                     .await?;
             }
-            let ids: Vec<String> = sqlx::query_scalar(crate::query::sql_text(backend, &old))
-                .bind(&before)
-                .bind(i64::from(batch))
-                .bind(&dag_id)
-                .fetch_all(&mut *tx)
-                .await?;
+            let ids: Vec<String> =
+                crate::query::query_scalar(crate::query::sql_text(backend, &old))
+                    .bind(&before)
+                    .bind(i64::from(batch))
+                    .bind(&dag_id)
+                    .fetch_all(&mut *tx)
+                    .await?;
             let mut deleted = 0;
             for id in &ids {
-                sqlx::query(sql(backend, UNLINK))
+                crate::query::query(sql(backend, UNLINK))
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
-                sqlx::query(sql(backend, PASSED))
+                crate::query::query(sql(backend, PASSED))
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
-                deleted += sqlx::query(sql(backend, DELETE))
+                deleted += crate::query::query(sql(backend, DELETE))
                     .bind(id)
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
             }
-            sqlx::query(sql(backend, BACKFILLS))
+            crate::query::query(sql(backend, BACKFILLS))
                 .bind(&before)
                 .execute(&mut *tx)
                 .await?;
@@ -159,23 +160,24 @@ impl Database {
         );
         let marked = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             if backend == crate::Backend::Postgres {
-                sqlx::query(sql(backend, LOCK_DAG))
+                crate::query::query(sql(backend, LOCK_DAG))
                     .bind(&dag_id)
                     .execute(&mut *tx)
                     .await?;
             }
-            let ids: Vec<String> = sqlx::query_scalar(crate::query::sql_text(backend, &old))
-                .bind(&before)
-                .bind(i64::from(batch))
-                .bind(&dag_id)
-                .fetch_all(&mut *tx)
-                .await?;
+            let ids: Vec<String> =
+                crate::query::query_scalar(crate::query::sql_text(backend, &old))
+                    .bind(&before)
+                    .bind(i64::from(batch))
+                    .bind(&dag_id)
+                    .fetch_all(&mut *tx)
+                    .await?;
             for id in &ids {
-                sqlx::query(sql(backend, OUTPUTS))
+                crate::query::query(sql(backend, OUTPUTS))
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
-                sqlx::query(sql(backend, MARK))
+                crate::query::query(sql(backend, MARK))
                     .bind(id)
                     .bind(&now)
                     .execute(&mut *tx)
@@ -203,7 +205,7 @@ impl Database {
             (SELECT v.id FROM dag_versions v WHERE v.dag_id = $1 AND {UNUSED})"
         );
         let dag: Option<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(crate::query::sql_text(backend, &any))
+            crate::query::query_scalar(crate::query::sql_text(backend, &any))
                 .fetch_optional(pool)
                 .await?
         });
@@ -212,12 +214,12 @@ impl Database {
         };
         let deleted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
             if backend == crate::Backend::Postgres {
-                sqlx::query(sql(backend, LOCK_DAG))
+                crate::query::query(sql(backend, LOCK_DAG))
                     .bind(&dag_id)
                     .execute(&mut *tx)
                     .await?;
             }
-            sqlx::query(crate::query::sql_text(backend, &delete))
+            crate::query::query(crate::query::sql_text(backend, &delete))
                 .bind(&dag_id)
                 .execute(&mut *tx)
                 .await?
@@ -247,23 +249,23 @@ impl Database {
         const DELETE: &str = "DELETE FROM named_events WHERE id = $1{uuid}";
         let before = db_time(before);
         let deleted = in_tx!(self, BATCH_LIMITS, |tx, backend| {
-            let mut deleted = sqlx::query(sql(backend, FOUND))
+            let mut deleted = crate::query::query(sql(backend, FOUND))
                 .bind(&before)
                 .bind(i64::from(batch))
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
-            let ids: Vec<String> = sqlx::query_scalar(sql(backend, POSTED))
+            let ids: Vec<String> = crate::query::query_scalar(sql(backend, POSTED))
                 .bind(&before)
                 .bind(i64::from(batch))
                 .fetch_all(&mut *tx)
                 .await?;
             for id in &ids {
-                sqlx::query(sql(backend, PASSED))
+                crate::query::query(sql(backend, PASSED))
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
-                deleted += sqlx::query(sql(backend, DELETE))
+                deleted += crate::query::query(sql(backend, DELETE))
                     .bind(id)
                     .execute(&mut *tx)
                     .await?
@@ -285,7 +287,7 @@ impl Database {
             WHERE status <> 'pending' AND requested_at < $1{ts} ORDER BY requested_at LIMIT $2)";
         let before = db_time(before);
         let deleted = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, DELETE))
+            crate::query::query(sql(backend, DELETE))
                 .bind(&before)
                 .bind(i64::from(batch))
                 .execute(&mut *tx)
@@ -326,7 +328,7 @@ impl Database {
         ];
         let before = db_time(before);
         let gone: Vec<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, GONE))
+            crate::query::query_scalar(sql(backend, GONE))
                 .bind(&before)
                 .fetch_all(pool)
                 .await?
@@ -338,11 +340,11 @@ impl Database {
                     crate::Backend::Postgres => LOCK_POSTGRES,
                     crate::Backend::Sqlite => STILL_SQLITE,
                 };
-                let still: Option<String> = sqlx::query_scalar(sql(backend, lock))
+                let still: Option<String> = crate::query::query_scalar(sql(backend, lock))
                     .bind(dag_id)
                     .fetch_optional(&mut *tx)
                     .await?;
-                let runs: Option<i32> = sqlx::query_scalar(sql(backend, RUNS))
+                let runs: Option<i32> = crate::query::query_scalar(sql(backend, RUNS))
                     .bind(dag_id)
                     .fetch_optional(&mut *tx)
                     .await?;
@@ -350,7 +352,7 @@ impl Database {
                     0
                 } else {
                     for statement in DEPENDENTS {
-                        sqlx::query(sql(backend, statement))
+                        crate::query::query(sql(backend, statement))
                             .bind(dag_id)
                             .execute(&mut *tx)
                             .await?;

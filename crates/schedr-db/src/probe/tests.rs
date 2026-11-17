@@ -357,16 +357,32 @@ async fn the_trigger_check_finds_a_switched_on_trigger_the_master_runs() {
 }
 
 #[tokio::test]
-async fn a_round_skips_what_the_probe_found_empty_and_probes_again_after_a_write() {
-    // Decision 485: inside a round a read the probe found empty returns nothing, and a write
-    // in between (a run started for the round's later parts) is found by the next read.
+async fn a_round_probes_once_and_notes_a_read_skipped_after_a_write() {
+    // Decision 485, as M5.2b has it: inside a round a read the probe found empty returns
+    // nothing; a write in between (a run started for the round's later parts) doesn't take
+    // the probe again: the read is still skipped and the round notes it, so the master runs
+    // another round, which finds it.
     let (db, version) = with_dag().await;
     let now = ts(NOW);
-    let found = db
-        .in_round(now, std::time::Duration::ZERO, async {
+    let (found, stale) = db
+        .in_round_noting(now, std::time::Duration::ZERO, async {
             assert!(db.skipped(Check::NewlyRunning).await.unwrap());
             assert_eq!(db.newly_running().await.unwrap().len(), 0);
             run(&db, &version, RunState::Running, NOW).await;
+            assert!(
+                db.skipped(Check::NewlyRunning).await.unwrap(),
+                "no probe again"
+            );
+            db.newly_running().await.unwrap().len()
+        })
+        .await;
+    assert_eq!(
+        (found, stale),
+        (0, true),
+        "skipped on the stale probe, and noted"
+    );
+    let (found, stale) = db
+        .in_round_noting(now, std::time::Duration::ZERO, async {
             assert!(!db.skipped(Check::NewlyRunning).await.unwrap());
             // Found, then another write: still read, whatever a probe would say.
             run(&db, &version, RunState::Queued, "2026-10-22T08:00:00Z").await;
@@ -374,7 +390,27 @@ async fn a_round_skips_what_the_probe_found_empty_and_probes_again_after_a_write
             db.newly_running().await.unwrap().len()
         })
         .await;
-    assert_eq!(found, 1);
+    assert_eq!(
+        (found, stale),
+        (1, false),
+        "the next round finds it; nothing stale"
+    );
+}
+
+#[tokio::test]
+async fn a_round_with_no_write_after_its_probe_notes_nothing() {
+    // An idle round: one probe, every read it found empty skipped, nothing to run again for.
+    let (db, _) = with_dag().await;
+    let (skipped, stale) = db
+        .in_round_noting(ts(NOW), std::time::Duration::ZERO, async {
+            let mut skipped = 0;
+            for check in [Check::NewlyRunning, Check::QueuedRuns, Check::Ready] {
+                skipped += usize::from(db.skipped(check).await.unwrap());
+            }
+            skipped
+        })
+        .await;
+    assert_eq!((skipped, stale), (3, false));
 }
 
 #[tokio::test]
@@ -389,44 +425,52 @@ async fn outside_a_round_no_read_is_skipped() {
 #[tokio::test]
 async fn a_read_for_a_later_time_than_the_rounds_probe_takes_it_again() {
     // Decision 485 (Grok's review of M5.1f1): a round's parts run at their own, later clocks.
-    // Work stored inside the round at such a time (a task queued by prepare), and a retry
-    // coming due after the round's start, are found by the read asking for that time.
+    // Work stored inside the round at such a time (a task queued by prepare) is found by the
+    // read asking for that time; a retry written after that probe waits for the next round.
     let (db, version) = with_dag().await;
     let start = ts(NOW);
     let later = ts("2026-10-21T08:00:01Z");
     let running = run(&db, &version, RunState::Running, NOW).await;
-    let found = db
-        .in_round(start, std::time::Duration::ZERO, async {
-            // The round's first probe, at its start: nothing ready.
-            assert!(db.skipped(Check::Ready).await.unwrap());
-            db.create_instances(
-                &running,
-                &[(id("extract"), -1, TaskInstanceState::Queued)],
-                later,
-            )
-            .await
-            .unwrap();
-            let ready = db.ready_instances(later).await.unwrap().len();
-            db.update_instances(
-                &running,
-                &[InstanceUpdate {
-                    task_id: id("extract"),
-                    map_index: -1,
-                    state: TaskInstanceState::UpForRetry,
-                    ready_at: Some(later),
-                    outcome: None,
-                    used_retry: true,
-                    reason: None,
-                    map_sizes: None,
-                }],
-                start,
-            )
-            .await
-            .unwrap();
-            (ready, db.due_retries(later).await.unwrap().len())
+    let found = Box::pin(db.in_round(start, std::time::Duration::ZERO, async {
+        // The round's first probe, at its start: nothing ready.
+        assert!(db.skipped(Check::Ready).await.unwrap());
+        db.create_instances(
+            &running,
+            &[(id("extract"), -1, TaskInstanceState::Queued)],
+            later,
+        )
+        .await
+        .unwrap();
+        let ready = db.ready_instances(later).await.unwrap().len();
+        db.update_instances(
+            &running,
+            &[InstanceUpdate {
+                task_id: id("extract"),
+                map_index: -1,
+                state: TaskInstanceState::UpForRetry,
+                ready_at: Some(later),
+                outcome: None,
+                used_retry: true,
+                reason: None,
+                map_sizes: None,
+            }],
+            start,
+        )
+        .await
+        .unwrap();
+        (ready, db.due_retries(later).await.unwrap().len())
+    }))
+    .await;
+    // The ready task, stored for a later time than the probe covered, is read at that time
+    // (a probe for it). The retry, written after that probe for no later time, waits for the
+    // next round (M5.2b), which the stale skip asks for.
+    assert_eq!(found, (1, 0));
+    let due = db
+        .in_round(later, std::time::Duration::ZERO, async {
+            db.due_retries(later).await.unwrap().len()
         })
         .await;
-    assert_eq!(found, (1, 1));
+    assert_eq!(due, 1, "the next round finds the retry");
 }
 
 #[tokio::test]

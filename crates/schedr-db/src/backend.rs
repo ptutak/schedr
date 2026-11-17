@@ -137,6 +137,19 @@ pub fn unknown_postgres_parameters(url: &str) -> Vec<String> {
         .collect()
 }
 
+/// The `statement-cache-capacity` a Postgres URL sets, if it sets one that reads.
+#[must_use]
+pub fn statement_cache_capacity(url: &str) -> Option<usize> {
+    let (_, query) = url.split_once('?')?;
+    let query = query.split('#').next().unwrap_or_default();
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(name, _)| percent_decoded(name) == "statement-cache-capacity")
+        .filter_map(|(_, value)| percent_decoded(value).parse().ok())
+        .next_back()
+}
+
 /// Whether a query parameter's name, percent-decoded and in any case, names a password.
 #[must_use]
 pub fn names_a_password(name: &str) -> bool {

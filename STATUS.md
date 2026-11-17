@@ -6,36 +6,34 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-16)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.2a, Assign's per-task reads once per round. Done when: scenario 1 (quick, `STRESS_RELEASE=1`, `STRESS_STATEMENTS=1`) shows those reads once per assign round, not once per task; its tasks a second against the 2026-11-17 baseline (30.7, 8 slots; the core lock held 81.9 s); every stress scenario passes
-- **Then:** M5.2b, M5.2c, M5.3a, M6.1, M6.2.
+- **Next step:** M5.2cA, Assign's reads before the core lock. Done when: the assign part's lock time per round measured down in scenario 1 (release) against M5.2b's; every stress scenario passes, the cut scenarios 17-21 locally
+- **Then:** M5.2cB, M5.2cC, M5.2d, R1.2, M5.3a.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **Open bugs:** 3; first: B254 (low/likely), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D504 (2026-11-17): a movable cleanup's try waits at a barrier for the master's word
+- D503 (2026-11-17): queries stay prepared on their connections by default
+- D502 (2026-11-17): one probe a round; a read skipped on it after a write wakes the next round
+- D501 (2026-11-17): the master's core lock is released during database calls
 - D500 (2026-11-16): the DAGs page filters by name, trigger switch, kind and tag
-- D499 (2026-11-16): the Metrics page folds the processes that ended into one line
-- D498 (2026-11-15): a release with a new migration goes through an rc first
-- D497 (2026-11-15): an unset cleanup timeout fits in the grace period
-- D496 (2026-11-15): a role starting waits for a database it can't reach yet
+- M5.2b (2026-11-17): Idle round parts cheap
+- M5.2a (2026-11-17): Assign's per-task reads once per round
 - R1.1 (2026-11-16): Release 1.1.0
-- M5.1q (2026-11-15): A worker waits for its Deregister; roles wait for their database; an unset cleanup timeout fits
-- M5.1p (2026-11-15): Tunable constants as hidden settings
 
 ## In progress
 
-- R1.1 done 2026-11-16: 1.1.0 on PyPI, the GitHub release, the images tagged 1.1.0 on ghcr.io (no `latest` tag, by design).
-- Replanned (the user, 2026-11-17): M5.2 is the master's throughput (M5.2a assign's per-task reads once per round, M5.2b idle round parts cheap, M5.2c the round's reads outside the core lock as a design question); the Airflow migration tool moved to M6 (M6.1-M6.6), LDAP to M7 (B38, B39 wait for M7).
-- M5.2's baseline (2026-11-17, scenario 1 quick x2, `STRESS_RELEASE=1`): 30.7 tasks a second, the core lock held 81.9 s, the master at 15 % CPU; per-task reads 4,800 `upstream_outcomes` + 2,400 outputs; one round trip 0.98 ms through podman's port. Data in the session's scratchpad; the step's records carry the numbers.
-- Not committed yet: R1.1's records, the Makefile's `distributed` target (the PyPI release's binary, `PREPARE_BIN`) and `STRESS_RELEASE`, this replan.
-- Open bugs: B38 and B39 (they wait for M7) and B254 (low: a worker's RUNNING count includes its wait steps).
+- M5.2cA next (decision 501: assign's reads before the lock, check-reserve-claim-commit under it), then M5.2cB, M5.2cC, each reviewed and committed; then M5.2d and R1.2 (release 1.2.0). Committed last: M5.2a, M5.2b, B256 and B255 together (51.2 tasks a second in scenario 1, against 30.7 for 1.1.0).
+- M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.
 
 ## Waiting for the user
 
-- Accepting the commit of the items above.
+Nothing.
 
 ## Rules in force
 
+- Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its review and checks, no push; stop for any decision.
 - Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
 - One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).

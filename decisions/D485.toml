@@ -1,7 +1,8 @@
 title = "Each tick one probe statement; every check on a stored row or column; triggers and events in a round of their own"
 date = 2026-11-14
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 502
 topic = "assignment"
 section = "Placement and ordering"
 also = ["triggers"]

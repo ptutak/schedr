@@ -172,7 +172,9 @@ impl Database {
             {ts<}last_restart_at{>ts}, {ts<}last_poked_at{>ts} \
             FROM trigger_progress ORDER BY dag_id";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ALL)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, ALL))
+                .fetch_all(pool)
+                .await?
         });
         rows.into_iter().map(record).collect()
     }
@@ -189,7 +191,7 @@ impl Database {
             {ts<}last_restart_at{>ts}, {ts<}last_poked_at{>ts} \
             FROM trigger_progress WHERE dag_id = $1";
         let row: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ONE))
+            crate::query::query_as(sql(backend, ONE))
                 .bind(dag_id)
                 .fetch_optional(pool)
                 .await?
@@ -218,7 +220,7 @@ impl Database {
             dag_version_id = excluded.dag_version_id, code_hash = excluded.code_hash, \
             started_at = excluded.started_at, stopped_why = NULL, stopped_on = NULL";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(dag_id)
                 .bind(instance_id)
                 .bind(worker_id)
@@ -249,7 +251,7 @@ impl Database {
             failures = failures + $2, not_before = $3{ts} \
             WHERE dag_id = $4 AND instance_id = $5";
         let ended = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, END))
+            crate::query::query(sql(backend, END))
                 .bind(error)
                 .bind(i32::from(error.is_some()))
                 .bind(not_before.map(db_time))
@@ -286,7 +288,7 @@ impl Database {
         let dag_id = run.dag_id.as_str();
         Box::pin(self.atomically(async {
             let new = in_tx!(self, |tx, backend| {
-                sqlx::query(sql(backend, EVENT))
+                crate::query::query(sql(backend, EVENT))
                     .bind(dag_id)
                     .bind(&event.key)
                     .bind(to_json(&event.data))
@@ -300,7 +302,7 @@ impl Database {
                 self.insert_run_as(run_id, run).await?;
             }
             in_tx!(self, |tx, backend| {
-                sqlx::query(sql(backend, BOOKMARK))
+                crate::query::query(sql(backend, BOOKMARK))
                     .bind(dag_id)
                     .bind(&event.key)
                     .bind(new.then(|| db_time(run.planned_for)))
@@ -342,7 +344,7 @@ impl Database {
             let mut new = Vec::new();
             for (item, raw) in items {
                 let stored = in_tx!(self, |tx, backend| {
-                    sqlx::query(sql(backend, EVENT))
+                    crate::query::query(sql(backend, EVENT))
                         .bind(dag_id)
                         .bind(&item.key)
                         .bind(to_json(&item.data))
@@ -369,7 +371,7 @@ impl Database {
                 self.insert_run_as(run_id, &run).await?;
             }
             in_tx!(self, |tx, backend| {
-                sqlx::query(sql(backend, BOOKMARK))
+                crate::query::query(sql(backend, BOOKMARK))
                     .bind(dag_id)
                     .bind(key)
                     .bind(started.is_some().then(|| db_time(run.planned_for)))
@@ -396,7 +398,7 @@ impl Database {
         const SET: &str =
             "UPDATE trigger_progress SET stopped_why = $1, stopped_on = $2 WHERE dag_id = $3";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(why.map(|(why, _)| why))
                 .bind(why.map(|(_, on)| on))
                 .bind(dag_id)
@@ -414,7 +416,7 @@ impl Database {
     pub async fn trigger_idle_restart(&self, dag_id: &str, now: Timestamp) -> Result<(), DbError> {
         const SET: &str = "UPDATE trigger_progress SET last_restart_at = $1{ts} WHERE dag_id = $2";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(db_time(now))
                 .bind(dag_id)
                 .execute(&mut *tx)
@@ -440,7 +442,7 @@ impl Database {
         const SET: &str = "UPDATE trigger_progress SET last_poked_at = $1{ts}, last_error = $2, \
             failures = $3 WHERE dag_id = $4 AND instance_id = $5";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(db_time(at))
                 .bind(error)
                 .bind(i32::try_from(failures).unwrap_or(i32::MAX))
@@ -467,7 +469,9 @@ impl Database {
             return Ok(Vec::new());
         }
         let rows: Vec<(String, i64)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, COUNT)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, COUNT))
+                .fetch_all(pool)
+                .await?
         });
         Ok(rows)
     }
@@ -483,7 +487,7 @@ impl Database {
         const SET: &str = "UPDATE trigger_progress SET stopped_why = NULL, stopped_on = NULL, \
             not_before = NULL, dag_version_id = NULL WHERE dag_id = $1";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(dag_id)
                 .execute(&mut *tx)
                 .await?;
@@ -500,7 +504,7 @@ impl Database {
         const ONE: &str = "SELECT key, data{text}, {ts<}at{>ts}, {ts<}received_at{>ts} FROM events \
             WHERE dag_id = $1 AND key = $2";
         let row: Option<EventRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ONE))
+            crate::query::query_as(sql(backend, ONE))
                 .bind(dag_id)
                 .bind(key)
                 .fetch_optional(pool)
@@ -526,7 +530,7 @@ impl Database {
                 OR (received_at = $2{ts} AND key > $3{text})) \
             ORDER BY received_at DESC, key LIMIT $4";
         let rows: Vec<EventRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ALL))
+            crate::query::query_as(sql(backend, ALL))
                 .bind(dag_id)
                 .bind(after.map(|(at, _)| db_time(at)))
                 .bind(after.map(|(_, key)| key))
@@ -546,7 +550,7 @@ impl Database {
         const COUNT: &str = "SELECT COUNT(*) FROM runs \
             WHERE state = 'queued' AND kind = 'event' AND dag_id = $1";
         let count: i64 = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, COUNT))
+            crate::query::query_scalar(sql(backend, COUNT))
                 .bind(dag_id)
                 .fetch_one(pool)
                 .await?
@@ -562,7 +566,7 @@ impl Database {
     pub async fn run_event(&self, run_id: &str) -> Result<Option<RunEvent>, DbError> {
         const EVENT: &str = "SELECT event{text} FROM runs WHERE id = $1{uuid}";
         let text: Option<Option<String>> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, EVENT))
+            crate::query::query_scalar(sql(backend, EVENT))
                 .bind(run_id)
                 .fetch_optional(pool)
                 .await?

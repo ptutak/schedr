@@ -176,6 +176,61 @@ async fn state_of(db: &Database, run_id: &str, task: &str) -> (TaskInstanceState
     (instance.state, instance.try_number)
 }
 
+/// `extract` → `load(rows=extract)` and `report(rows=extract)`, for one batch of two.
+fn dag_two_downstream() -> Dag {
+    let rows = json!({"rows": {"ref": {"kind": "output", "task": "extract"}}});
+    serde_json::from_value(json!({
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1,
+        "tasks": [task("extract", &json!({}), 0), task("load", &rows, 0), task("report", &rows, 0)],
+        "edges": [
+            {"from": "extract", "to": "load", "kind": "data"},
+            {"from": "extract", "to": "report", "kind": "data"}
+        ]
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_batchs_tasks_get_their_inputs_and_outcomes_from_its_one_upstream_read() {
+    // M5.2a: the batch's upstream outcomes and outputs are read in one statement; each
+    // assignment carries what it did when read task by task.
+    let (mut dispatcher, _db, _run_id) = with_run(dag_two_downstream()).await;
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let extract = assignment(&out[0]).attempt_id.clone();
+    dispatcher
+        .started("w1", &started(&extract), ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .finished(
+            "w1",
+            &finished(&extract, pb::AttemptStatus::Success, &json!([1, 2])),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let out = dispatcher.step(ts(NOW)).await.unwrap();
+    let mut tasks: Vec<&str> = out.iter().map(|o| assignment(o).task_id.as_str()).collect();
+    tasks.sort_unstable();
+    assert_eq!(tasks, ["load", "report"], "both in one batch");
+    for one in &out {
+        let assign = assignment(one);
+        let inputs: Json = serde_json::from_slice(&assign.inputs_json).unwrap();
+        assert_eq!(inputs, json!({"extract": [1, 2]}), "{}", assign.task_id);
+        assert_eq!(
+            assign.upstream_outcomes,
+            std::collections::HashMap::from([(
+                "extract".to_owned(),
+                schedr_model::DEFAULT_OUTCOME.to_owned()
+            )]),
+            "{}",
+            assign.task_id
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_run_goes_through_assignment_start_and_finish() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;

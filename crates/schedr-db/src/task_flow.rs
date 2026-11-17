@@ -112,7 +112,7 @@ impl Database {
         bucket_s: u32,
     ) -> Result<Vec<EndedCount>, DbError> {
         let rows: Vec<(i64, String, i64)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &ended_query(backend)))
+            crate::query::query_as(sql_text(backend, &ended_query(backend)))
                 .bind(db_time(from))
                 .bind(db_time(to))
                 .bind(i64::from(bucket_s.max(1)))
@@ -142,7 +142,7 @@ impl Database {
         bucket_s: u32,
     ) -> Result<Vec<StartLatency>, DbError> {
         let rows: Vec<(i64, i64, Option<i64>, Option<i64>)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &latency_query(backend)))
+            crate::query::query_as(sql_text(backend, &latency_query(backend)))
                 .bind(db_time(from))
                 .bind(db_time(to))
                 .bind(i64::from(bucket_s.max(1)))

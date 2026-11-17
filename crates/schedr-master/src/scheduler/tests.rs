@@ -654,6 +654,47 @@ async fn a_queued_run_wakes_its_quiet_dag_whatever_stored_it() {
 }
 
 #[tokio::test]
+async fn a_scheduled_dag_visited_for_its_queued_run_isnt_written_again_unchanged() {
+    // Codex's review of M5.2b: a scheduled DAG held by `max_active_runs`, its queued run
+    // waiting, was visited for that run every round and its unchanged next fire time written
+    // each time; a write wakes another round (decision 502), so rounds never settled.
+    let (scheduler, db) = scheduler_with(dag(&json!({}))).await;
+    db.set_paused(&sync(), false).await.unwrap();
+    let start = ts("2026-10-21T08:00:00Z");
+    let after = |seconds| start + jiff::SignedDuration::from_secs(seconds);
+    // The day's run starts and holds the one place.
+    scheduler.pass(start).await.unwrap();
+    let active = db.active_dags().await.unwrap().remove(0);
+    let times = RunTimes {
+        planned_for: after(1),
+        since: after(1),
+    };
+    let no_params = serde_json::json!({});
+    let mut run = new_run(
+        &active,
+        RunKind::Manual,
+        times,
+        after(1),
+        "anna",
+        &no_params,
+    );
+    run.state = RunState::Queued;
+    db.insert_run(&run).await.unwrap().unwrap();
+    // The first visit for the queued run may store what changed; later ones write nothing.
+    scheduler.pass(after(2)).await.unwrap();
+    let writes = db.writes_ended();
+    for n in 3..6 {
+        let pass = scheduler.pass(after(n)).await.unwrap();
+        assert!(pass.started.is_empty(), "the queued run stays held");
+    }
+    assert_eq!(
+        db.writes_ended(),
+        writes,
+        "visits that changed nothing wrote"
+    );
+}
+
+#[tokio::test]
 async fn an_unpause_whose_mark_is_missed_is_found_by_its_cleared_fire_time() {
     // Decision 485: unpausing clears the DAG's stored next fire time, so the next round
     // visits it whatever marked it: the same runs at the same times as visiting every DAG.

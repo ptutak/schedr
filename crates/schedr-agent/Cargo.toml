@@ -39,7 +39,7 @@ hyper-util.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
 rstest.workspace = true
-schedr-master.workspace = true
+schedr-master = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 tower.workspace = true
 

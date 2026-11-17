@@ -1899,6 +1899,113 @@ fn a_failed_groups_messages_go_alone_at_most_ten_a_turn() {
 }
 
 #[tokio::test]
+async fn a_run_created_in_a_round_is_assigned_by_the_round_it_wakes_not_the_next_tick() {
+    // M5.2b: the round's probe is taken once. Its commands part creates the run, after which
+    // the prepare and assign parts' reads are skipped on that probe; the round notes it and
+    // the loop runs another (and that one another) after the round gap, not a tick later.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, mut stream) = parsed_worker(&mut client).await;
+    db.insert_command(&trigger_sync(), "anna", fixed_now())
+        .await
+        .unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let started = std::time::Instant::now();
+    let running = tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            hub.run(Duration::from_mins(10), None, async {
+                let _ = stopped.await;
+            })
+            .await;
+        }
+    });
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    assert_eq!(assign.task_id, "extract");
+    // Rounds a few gaps apart, not ten minutes.
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = stop.send(());
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cleanup_at_its_barrier_may_start_only_while_its_attempt_is_open_and_this_workers() {
+    // B255, decision 504: the master's answer to `CleanupStart`.
+    let (hub, db, mut client) = connected().await;
+    let (to_master, mut stream) = parsed_worker(&mut client).await;
+    db.insert_command(&trigger_sync(), "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    let mut ask = async |attempt_id: &str| {
+        to_master
+            .send(wrap(worker_message::Message::CleanupStart(
+                pb::CleanupStart {
+                    attempt_id: attempt_id.to_owned(),
+                    rest: false,
+                },
+            )))
+            .await
+            .unwrap();
+        loop {
+            if let master_message::Message::CleanupGo(go) = next(&mut stream).await {
+                assert_eq!(go.attempt_id, attempt_id);
+                return go.go;
+            }
+        }
+    };
+    assert!(ask(&assign.attempt_id).await, "its own open attempt");
+    assert!(
+        !ask("018f0000-0000-7000-8000-000000000000").await,
+        "an attempt it doesn't know"
+    );
+    to_master
+        .send(wrap(worker_message::Message::Finished(pb::Finished {
+            attempt_id: assign.attempt_id.clone(),
+            status: pb::AttemptStatus::Success.into(),
+            ..pb::Finished::default()
+        })))
+        .await
+        .unwrap();
+    assert!(!ask(&assign.attempt_id).await, "an attempt ended");
+}
+
+#[tokio::test]
+async fn idle_rounds_settle_writing_nothing_and_asking_for_no_follow_up() {
+    // Decision 502: any write ending after a round's probe makes a read it skipped wake
+    // another round. A round that wrote for itself while idle would so run every round gap
+    // for ever (Codex's review found one in the scheduler); a heartbeat between rounds costs
+    // nothing, the next round's probe being taken after it.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream) = parsed_worker(&mut client).await;
+    let mut settled = false;
+    for _ in 0..10 {
+        if !hub.round(Duration::ZERO).await.unwrap() {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "the first rounds never settled");
+    for n in 0..3 {
+        let writes = db.writes_ended();
+        assert!(
+            !hub.round(Duration::ZERO).await.unwrap(),
+            "idle round {n} asked for another"
+        );
+        assert_eq!(db.writes_ended(), writes, "idle round {n} wrote");
+        db.worker_seen("w1", fixed_now()).await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
     let (hub, db, mut client) = connected().await;
     let (to_master, outbound) = mpsc::channel(16);

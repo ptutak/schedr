@@ -39,6 +39,7 @@ fn runner(mode: &str, root: &Path, log: &Path) -> ProcessSpec {
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
         output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
+        barrier: None,
     }
 }
 
@@ -422,6 +423,7 @@ async fn a_cancel_or_timeout_during_the_runners_start_stops_it() {
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
         output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
+        barrier: None,
     };
     let limits = |timeout| Limits {
         timeout,
@@ -482,6 +484,7 @@ async fn a_stopped_start_keeps_its_reason_and_ends_on_time() {
         mask: schedr_agent::mask::Mask::default(),
         start_timeout: schedr_agent::launch::RUNNER_START_TIMEOUT,
         output_drain: schedr_agent::launch::OUTPUT_DRAIN_TIMEOUT,
+        barrier: None,
     };
     let limits = |timeout| Limits {
         timeout,

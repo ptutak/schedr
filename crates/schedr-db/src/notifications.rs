@@ -93,7 +93,7 @@ impl Database {
         }
         in_tx!(self, |tx, backend| {
             for notification in notifications {
-                sqlx::query(sql(backend, INSERT))
+                crate::query::query(sql(backend, INSERT))
                     .bind(Uuid::now_v7().to_string())
                     .bind(&notification.dag_id)
                     .bind(&notification.channel)
@@ -123,7 +123,7 @@ impl Database {
             created_at{text}, tries FROM notifications WHERE next_try_at <= $1{ts} \
             ORDER BY next_try_at, id LIMIT $2";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DUE))
+            crate::query::query_as(sql(backend, DUE))
                 .bind(db_time(now))
                 .bind(i64::from(limit))
                 .fetch_all(pool)
@@ -156,7 +156,7 @@ impl Database {
     pub async fn delete_notification(&self, id: &str) -> Result<(), DbError> {
         const DELETE: &str = "DELETE FROM notifications WHERE id = $1{uuid}";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, DELETE))
+            crate::query::query(sql(backend, DELETE))
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
@@ -178,7 +178,7 @@ impl Database {
         const RETRY: &str = "UPDATE notifications SET tries = tries + 1, \
             next_try_at = $1{ts}, last_error = $2 WHERE id = $3{uuid}";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, RETRY))
+            crate::query::query(sql(backend, RETRY))
                 .bind(db_time(next_try_at))
                 .bind(error)
                 .bind(id)
@@ -202,7 +202,7 @@ impl Database {
         const COUNT: &str = "UPDATE attempts SET notifications_sent = notifications_sent + 1 \
             WHERE id = $1{uuid} AND notifications_sent < $2";
         let counted = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, COUNT))
+            crate::query::query(sql(backend, COUNT))
                 .bind(attempt_id)
                 .bind(i64::from(max))
                 .execute(&mut *tx)
@@ -226,7 +226,7 @@ impl Database {
         const INSERT: &str = "INSERT INTO notification_requests (attempt_id, request_key) \
             VALUES ($1{uuid}, $2) ON CONFLICT DO NOTHING";
         let inserted = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, INSERT))
+            crate::query::query(sql(backend, INSERT))
                 .bind(attempt_id)
                 .bind(request_key)
                 .execute(&mut *tx)
@@ -246,7 +246,7 @@ impl Database {
             AND ended_at IS NOT NULL AND state IN ('success', 'failed') \
             ORDER BY ended_at DESC, id DESC LIMIT 1";
         let state: Option<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, PREVIOUS))
+            crate::query::query_as(sql(backend, PREVIOUS))
                 .bind(dag_id)
                 .bind(run_id)
                 .fetch_optional(pool)
@@ -272,7 +272,7 @@ impl Database {
                  AND c.state = 'failed')) \
             ORDER BY ti.task_id, ti.map_index LIMIT $2";
         let rows: Vec<(String, i32, Option<String>)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, FAILED))
+            crate::query::query_as(sql(backend, FAILED))
                 .bind(run_id)
                 .bind(i64::from(limit))
                 .fetch_all(pool)
@@ -297,7 +297,7 @@ impl Database {
         const ERROR: &str = "SELECT error_summary{text} FROM attempts \
             WHERE task_instance_id = $1{uuid} ORDER BY try_number DESC LIMIT 1";
         let row: Option<(Option<String>,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ERROR))
+            crate::query::query_as(sql(backend, ERROR))
                 .bind(instance_id)
                 .fetch_optional(pool)
                 .await?

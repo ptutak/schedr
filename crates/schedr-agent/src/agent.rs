@@ -79,6 +79,45 @@ mod tests;
 /// The error kind of an attempt whose process couldn't be started.
 pub const START_FAILED: &str = "start_failed";
 
+/// The master's word as it is now, before each try of a cleanup (Codex's reviews of B255): a
+/// `CLEAN_REST` given meanwhile leaves out the handles it had, once. Whether it did.
+fn take_rest(spec: &mut AttemptSpec, handles: &AttemptHandles) -> bool {
+    let Some(Gate::Rest(from)) = spec.cleanup_gate.as_ref().map(|gate| *gate.gate.borrow()) else {
+        return false;
+    };
+    handles.skip(from as usize);
+    if spec.cleanup_handles.is_some() {
+        spec.cleanup_handles = Some(handles.list());
+    }
+    true
+}
+
+/// How a cleanup's try went at its barrier (`Passed` with none), said in its log when nothing
+/// ran.
+async fn barrier_word(
+    word: Option<tokio::task::JoinHandle<crate::barrier::Word>>,
+    log: &Path,
+) -> crate::barrier::Word {
+    let word = match word {
+        Some(word) => word.await.unwrap_or(crate::barrier::Word::Unanswered),
+        None => crate::barrier::Word::Passed,
+    };
+    match word {
+        crate::barrier::Word::Refused => {
+            append_log(log, "cleanup: not this worker's any more (the master)\n").await;
+        }
+        crate::barrier::Word::Unanswered => {
+            append_log(log, "cleanup: no word from the master in time, not run\n").await;
+        }
+        crate::barrier::Word::Passed | crate::barrier::Word::NeverWaited => {}
+    }
+    word
+}
+
+/// How long a gateless cleanup (moved here, or kept from an earlier agent) waits before trying
+/// again when the master's word didn't come in time (B255): no try is counted meanwhile.
+const UNANSWERED_AGAIN: Duration = Duration::from_secs(1);
+
 /// The longest wait between attempts to reach the master.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
@@ -385,8 +424,7 @@ impl Executor for ProcessExecutor {
         spawned: Spawned,
     ) -> pb::Finished {
         let connection_dir = self.setup.connection_dir.join(&spec.attempt_id);
-        let result = Box::pin(self.kept_cleanup(&mut spec, handles, &spawned)).await;
-        ended.cleanup = Some(result);
+        ended.cleanup = Box::pin(self.kept_cleanup(&mut spec, handles, &spawned)).await;
         remove_connection_files(&connection_dir).await;
         ended
     }
@@ -532,9 +570,8 @@ impl ProcessExecutor {
                 if let Pass::From(from) = pass {
                     handles.skip(from);
                 }
-                let mut result = self.run_cleanup(&spec, cleanup, shared).await;
-                result.rest = matches!(pass, Pass::From(_));
-                finished.cleanup = Some(result);
+                let rest = matches!(pass, Pass::From(_));
+                finished.cleanup = self.run_cleanup(&spec, cleanup, shared, rest).await;
             }
         }
         let log = self.setup.log_file(&spec.attempt_id);
@@ -601,18 +638,20 @@ impl ProcessExecutor {
         spec: &mut AttemptSpec,
         handles: Vec<CleanupHandle>,
         spawned: &Spawned,
-    ) -> pb::CleanupResult {
-        let failed = |kind: &str, summary: Vec<u8>| pb::CleanupResult {
-            status: pb::CleanupStatus::Failed.into(),
-            error_kind: kind.to_owned(),
-            error_summary_json: summary,
-            ..pb::CleanupResult::default()
+    ) -> Option<pb::CleanupResult> {
+        let failed = |kind: &str, summary: Vec<u8>| {
+            Some(pb::CleanupResult {
+                status: pb::CleanupStatus::Failed.into(),
+                error_kind: kind.to_owned(),
+                error_summary_json: summary,
+                ..pb::CleanupResult::default()
+            })
         };
         let Some(cleanup) = spec.task.cleanup.clone() else {
-            return pb::CleanupResult {
+            return Some(pb::CleanupResult {
                 status: pb::CleanupStatus::NotNeeded.into(),
                 ..pb::CleanupResult::default()
-            };
+            });
         };
         // Only the cleanup runs: what the task itself needed doesn't matter here.
         use_cleanup_script(&mut spec.task);
@@ -659,6 +698,9 @@ impl ProcessExecutor {
             }
         };
         let handles = Arc::new(AttemptHandles::restored(handles, Arc::clone(&secrets.mask)));
+        if let Some(from) = spec.cleanup_rest {
+            handles.skip(from as usize);
+        }
         let started = AtomicBool::new(true);
         let shared = Shared {
             secrets: &secrets,
@@ -666,18 +708,22 @@ impl ProcessExecutor {
             started: &started,
             spawned,
         };
-        self.run_cleanup(spec, &cleanup, shared).await
+        self.run_cleanup(spec, &cleanup, shared, spec.cleanup_rest.is_some())
+            .await
     }
 
     /// Runs the attempt's cleanup, in a fresh process each try, with the same budget and
     /// watchdog as the task. Nothing stops it but its own timeout: a cancel doesn't (decision
-    /// 219). The slot stays taken through its tries and delays.
+    /// 219). The slot stays taken through its tries and delays. `rest`: on the handles the
+    /// master didn't have only (B169), as said in its result. `None`: the master said it isn't
+    /// this worker's any more (B255), or the gate dropped it; nothing of it ran here.
     async fn run_cleanup(
         &self,
         spec: &AttemptSpec,
         cleanup: &TaskCleanup,
         shared: Shared<'_>,
-    ) -> pb::CleanupResult {
+        mut rest: bool,
+    ) -> Option<pb::CleanupResult> {
         shared.handles.close();
         let mut spec = spec.clone();
         spec.task.outcomes = default_outcomes();
@@ -701,28 +747,39 @@ impl ProcessExecutor {
             // Refused when the DAG is stored; run as it is, it would run the task again.
             _ => {
                 let message = "the task's cleanup doesn't match its kind";
-                return pb::CleanupResult {
+                return Some(pb::CleanupResult {
                     status: pb::CleanupStatus::Failed.into(),
                     error_kind: "invalid_cleanup".to_owned(),
                     error_summary_json: ErrorSummary::json("InvalidCleanup", message).into_bytes(),
                     ..pb::CleanupResult::default()
-                };
+                });
             }
         }
         let log = self.setup.log_file(&spec.attempt_id);
         let timeout = cleanup
             .timeout_ms
             .map_or(self.setup.timeouts.cleanup, Duration::from_millis);
+        // With `cleanup_anywhere`, each try waits at a barrier for the master's word (B255,
+        // decision 504), forked or spawned.
+        let barrier = self.cleanup_barrier(&spec, cleanup);
         let mut result = pb::CleanupResult::default();
-        for try_number in 1..=cleanup.retries.saturating_add(1) {
-            if try_number > 1 {
+        let mut try_number = 1;
+        let mut unanswered = false;
+        while try_number <= cleanup.retries.saturating_add(1) {
+            if unanswered {
+                // Nothing ran: the master's word is waited for again, not a retry's delay.
+                match spec.cleanup_gate.clone() {
+                    Some(gate) => {
+                        gate.passes().await?;
+                    }
+                    None => tokio::time::sleep(UNANSWERED_AGAIN).await,
+                }
+            } else if try_number > 1 {
                 tokio::time::sleep(Duration::from_millis(cleanup.retry_delay_ms)).await;
             }
+            rest |= take_rest(&mut spec, shared.handles);
             append_log(&log, &format!("cleanup: try {try_number}\n")).await;
-            let planned = match &spec.code_dir {
-                Some(dir) => plan_at(&spec, &self.setup, dir),
-                None => crate::attempt::plan(&spec, &self.setup),
-            };
+            let (planned, word) = self.plan_try(&spec, rest, barrier.as_ref());
             let (_sender, stops) = Stops::new();
             let mut ended = match planned {
                 Ok(plan) => {
@@ -740,19 +797,78 @@ impl ProcessExecutor {
                     failed_before_start(&spec.attempt_id, DAG_FILE_MISSING, &detail)
                 }
             };
+            match barrier_word(word, &log).await {
+                crate::barrier::Word::Refused => return None,
+                crate::barrier::Word::Unanswered => {
+                    unanswered = true;
+                    continue;
+                }
+                crate::barrier::Word::Passed | crate::barrier::Word::NeverWaited => {}
+            }
+            unanswered = false;
             result.tries = try_number;
+            result.rest = rest;
             result.duration_ms += ended.duration_ms.unwrap_or(0);
             if ended.status == i32::from(pb::AttemptStatus::Success) {
                 result.status = pb::CleanupStatus::Ok.into();
                 result.error_kind.clear();
                 result.error_summary_json.clear();
-                return result;
+                return Some(result);
             }
             result.status = pb::CleanupStatus::Failed.into();
             result.error_kind = std::mem::take(&mut ended.error_kind);
             result.error_summary_json = std::mem::take(&mut ended.error_summary_json);
+            try_number += 1;
         }
-        result
+        result.rest = rest;
+        Some(result)
+    }
+
+    /// A cleanup try's plan, behind its barrier if it has one, and the barrier's word to come.
+    fn plan_try(
+        &self,
+        spec: &AttemptSpec,
+        rest: bool,
+        barrier: Option<&Result<(crate::barrier::CleanupAsk, PathBuf), NotRun>>,
+    ) -> (
+        Result<Plan, NotRun>,
+        Option<tokio::task::JoinHandle<crate::barrier::Word>>,
+    ) {
+        let planned = match &spec.code_dir {
+            Some(dir) => plan_at(spec, &self.setup, dir),
+            None => crate::attempt::plan(spec, &self.setup),
+        };
+        match (planned, barrier) {
+            (Ok(plan), Some(Ok((ask, exec)))) => {
+                match crate::barrier::put(&spec.attempt_id, rest, ask, exec, plan) {
+                    Ok(put) => (Ok(put.plan), Some(put.word)),
+                    Err(not_run) => (Err(not_run), None),
+                }
+            }
+            // No barrier to wait at: it doesn't start (Codex's review).
+            (Ok(_), Some(Err(not_run))) => (Err(not_run.clone()), None),
+            (planned, _) => (planned, None),
+        }
+    }
+
+    /// What a `cleanup_anywhere` cleanup's tries ask with, and `schedr task-exec` to wait in
+    /// (B255, decision 504); `None` when it asks nothing. Without `schedr` itself, an error: it
+    /// can't start unasked (Codex's review).
+    fn cleanup_barrier(
+        &self,
+        spec: &AttemptSpec,
+        cleanup: &TaskCleanup,
+    ) -> Option<Result<(crate::barrier::CleanupAsk, PathBuf), NotRun>> {
+        let ask = spec.cleanup_ask.as_ref().filter(|_| cleanup.anywhere)?;
+        Some(match &self.setup.memory.task_exec {
+            Some(exec) => Ok((ask.clone(), exec.clone())),
+            None => Err(NotRun::Failed {
+                kind: START_FAILED.to_owned(),
+                message: "can't ask the master before the cleanup: `schedr task-exec` isn't \
+                          found"
+                    .to_owned(),
+            }),
+        })
     }
 
     /// Where `spec`'s watchdog records what it sees, and the task counted in the heartbeat's
@@ -943,6 +1059,7 @@ impl ProcessExecutor {
                 mask: crate::mask::Mask::default(),
                 start_timeout: self.setup.timeouts.runner_start,
                 output_drain: self.setup.timeouts.output_drain,
+                barrier: None,
             },
             memory: self.setup.memory.clone(),
             kills: self.metrics.watchdog_kills.clone(),
@@ -1084,6 +1201,12 @@ enum Done {
         call: pb::ApiCall,
         answer: oneshot::Sender<pb::ApiAnswer>,
     },
+    /// A cleanup waiting at its barrier: whether it may run here, asked of the master (B255).
+    CleanupAsk {
+        attempt_id: String,
+        rest: bool,
+        answer: oneshot::Sender<bool>,
+    },
     Parse {
         job_id: String,
         root: pb::RootHash,
@@ -1108,8 +1231,9 @@ struct WaitingCleanup {
     handles: Vec<CleanupHandle>,
     /// The task's result; `None`: it was running, and is `lost`.
     ended: Option<pb::Finished>,
-    /// Only the handles the master didn't have (`CLEAN_REST`, B169): its result says so.
-    rest: bool,
+    /// Only the handles the master didn't have, from this one on (`CLEAN_REST`, B169): its
+    /// result says so.
+    rest_from: Option<u32>,
 }
 
 /// How many connections jobs' answers the agent keeps while no master listens.
@@ -1187,6 +1311,12 @@ pub struct Agent<E> {
     unsent_answers: std::collections::VecDeque<pb::ConnectionJobDone>,
     /// Tasks' API calls not answered yet, by request ID: sent again on a new stream (M4.11h).
     api_calls: BTreeMap<u64, (pb::ApiCall, oneshot::Sender<pb::ApiAnswer>)>,
+    /// Cleanups waiting at their barriers for the master's word, by attempt (B255). Not sent
+    /// again on a new stream: their processes' waits are short, and a try not answered is made
+    /// again.
+    cleanup_asks: BTreeMap<String, oneshot::Sender<bool>>,
+    /// How long a barrier's process waits: half the lease the master told.
+    barrier_wait: watch::Sender<Duration>,
     /// The last API call's request ID.
     api_call_id: u64,
     /// The content hash of each started attempt's root when it started (sent in `Finished`).
@@ -1339,6 +1469,8 @@ impl<E: Executor> Agent<E> {
             unacked: BTreeMap::new(),
             unsent_answers: std::collections::VecDeque::new(),
             api_calls: BTreeMap::new(),
+            cleanup_asks: BTreeMap::new(),
+            barrier_wait: watch::channel(crate::barrier::UNTOLD_WAIT).0,
             api_call_id: first_api_call_id(),
             code_hashes: BTreeMap::new(),
             other_copies: BTreeMap::new(),
@@ -1930,6 +2062,9 @@ impl<E: Executor> Agent<E> {
         };
         spec.code_dir = kept.code_dir;
         spec.root_copies = kept.root_copies;
+        self.ask_for(&mut spec);
+        // Its gate too: a later `CLEAN_REST` reaches its tries (Codex's review of B255).
+        self.set_gate(&mut spec);
         spec.script_dir = kept.script_dir;
         if let Some(hash) = kept.code_hash {
             self.code_hashes.insert(attempt_id.to_owned(), hash);
@@ -1941,7 +2076,7 @@ impl<E: Executor> Agent<E> {
             spec,
             handles,
             ended,
-            rest: false,
+            rest_from: None,
         };
         self.waiting.insert(attempt_id.to_owned(), waiting);
         true
@@ -1968,12 +2103,10 @@ impl<E: Executor> Agent<E> {
         });
         self.task_ended(ended.clone(), Some(to_master)).await;
         let executor = self.executor.clone();
-        let (spec, handles, rest) = (waiting.spec, waiting.handles, waiting.rest);
+        let (mut spec, handles) = (waiting.spec, waiting.handles);
+        spec.cleanup_rest = waiting.rest_from;
         tokio::spawn(async move {
-            let mut finished = executor.cleanup(spec, ended, handles, spawned).await;
-            if let Some(cleanup) = finished.cleanup.as_mut() {
-                cleanup.rest = rest;
-            }
+            let finished = executor.cleanup(spec, ended, handles, spawned).await;
             let _ = done.send(Done::Attempt(finished));
         });
     }
@@ -2570,8 +2703,13 @@ impl<E: Executor> Agent<E> {
                     *heartbeat = heartbeat_timer(self.heartbeat);
                     self.lease = (timing.lease_timeout_ms > 0)
                         .then(|| Duration::from_millis(timing.lease_timeout_ms));
+                    if let Some(lease) = self.lease {
+                        self.barrier_wait.send_replace(lease / 2);
+                    }
                     self.publish_deadline();
                 }
+                // Asked on the old stream: an answer may never come, the try is made again.
+                self.cleanup_asks.clear();
                 self.cut_off = false;
                 for decision in registered.decisions {
                     self.decide(&decision, to_master).await;
@@ -2618,6 +2756,11 @@ impl<E: Executor> Agent<E> {
                     let _ = to.send(answer);
                 }
             }
+            master_message::Message::CleanupGo(go) => {
+                if let Some(to) = self.cleanup_asks.remove(&go.attempt_id) {
+                    let _ = to.send(go.go);
+                }
+            }
             master_message::Message::TriggerEventAck(ack) => {
                 if let Some(trigger) = self.triggers.get_mut(&ack.instance_id)
                     && let Some((_, stored)) = trigger.unstored.remove(&ack.seq)
@@ -2659,9 +2802,8 @@ impl<E: Executor> Agent<E> {
                     gate.send_replace(Gate::Rest(from));
                 }
                 if let Some(mut waiting) = self.waiting.remove(id) {
-                    let from = (from as usize).min(waiting.handles.len());
-                    waiting.handles.drain(..from);
-                    waiting.rest = true;
+                    // Left out where the handles are cleaned, once (`AttemptHandles::skip`).
+                    waiting.rest_from = Some(from);
                     self.start_waiting(id, waiting, to_master).await;
                 }
                 // The master ended the task: stopped here, the rest cleaned once it stops.
@@ -2935,6 +3077,7 @@ impl<E: Executor> Agent<E> {
         self.remember_code(&assign, &spec);
         self.note_cleanup(&mut spec, &assign);
         spec.api = Some(ApiCaller::of_attempt(&spec.attempt_id, self.api_send()));
+        self.ask_for(&mut spec);
         if let Some(only) = &assign.cleanup_only
             && !matches!(planned, Err(NotRun::Rejected { .. }))
         {
@@ -3520,7 +3663,7 @@ impl<E: Executor> Agent<E> {
             spec,
             handles,
             ended: None,
-            rest: false,
+            rest_from: None,
         };
         self.start_waiting(&id, waiting, to_master).await;
     }
@@ -3692,6 +3835,27 @@ impl<E: Executor> Agent<E> {
         // Calls given up (their task gone, or out of time) aren't kept.
         self.api_calls.retain(|_, (_, answer)| !answer.is_closed());
         self.api_calls.insert(call.request_id, (call, answer));
+    }
+
+    /// A task with `cleanup_anywhere`: each try of its cleanup asks the master through this
+    /// loop before it runs (B255, decision 504).
+    fn ask_for(&self, spec: &mut AttemptSpec) {
+        if !spec.task.cleanup.as_ref().is_some_and(|c| c.anywhere) {
+            return;
+        }
+        let done = self.done_tx.clone();
+        spec.cleanup_ask = Some(crate::barrier::CleanupAsk {
+            ask: Arc::new(move |attempt_id, rest| {
+                let (answer, answered) = oneshot::channel();
+                let _ = done.send(Done::CleanupAsk {
+                    attempt_id,
+                    rest,
+                    answer,
+                });
+                answered
+            }),
+            wait: self.barrier_wait.subscribe(),
+        });
     }
 
     /// Where a task's API calls go: through the agent's loop, on to the master (M4.11h).
@@ -4187,6 +4351,24 @@ impl<E: Executor> Agent<E> {
             Done::Trigger(done) => self.trigger_done(done, link.map(|(to, _)| to)),
             Done::ApiCall { call, answer } => {
                 self.api_call(call, answer, link.map(|(to, _)| to));
+            }
+            Done::CleanupAsk {
+                attempt_id,
+                rest,
+                answer,
+            } => {
+                // No stream: no answer can come in time, the try is made again.
+                if let Some((to_master, _)) = link
+                    && !answer.is_closed()
+                {
+                    let start = pb::CleanupStart {
+                        attempt_id: attempt_id.clone(),
+                        rest,
+                    };
+                    let _ = to_master.send(wrap(worker_message::Message::CleanupStart(start)));
+                    self.cleanup_asks.retain(|_, answer| !answer.is_closed());
+                    self.cleanup_asks.insert(attempt_id, answer);
+                }
             }
             Done::Parse {
                 job_id,

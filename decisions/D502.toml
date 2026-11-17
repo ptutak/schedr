@@ -1,0 +1,33 @@
+title = "One probe a round; a read skipped on it after a write wakes the next round"
+date = 2026-11-17
+by = "user"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+also = ["triggers"]
+summary = '''
+Each master round starts with one statement, the probe (`Database::probe`): for each read the
+round makes, whether it would find anything. Inside `Database::in_round_noting` a read whose
+check said no returns nothing; the probe looks a tick ahead and is taken once a round, again
+only for a time-bounded read past what it covered. A write ending after it doesn't take it
+again: a read it said no to is still skipped, the round notes it, and the master runs another
+round after the round gap (`round_gap`, 50 ms), as for a stored `Finished`. Every check reads
+a stored row or column: a scheduled DAG stores `next_fire_at`, so a round visits the DAGs due,
+queued or marked and keeps nothing in memory to decide it; the tick stays 1 s. Triggers and
+events get a round of their own (M5.1f2). Not chosen: the probe again after every write
+(decision 485: about four a round under load, each planned anew); one probe a round with no
+follow-up (work a write made possible waiting up to a tick); after a write, each check's own
+read instead of the probe.
+'''
+history = "JOURNAL.md#D502"
+step = "M5.2b"
+code = [
+    "crates/schedr-db/src/probe.rs::in_round_noting",
+    "crates/schedr-master/src/service.rs::tick_ahead",
+    "crates/schedr-db/src/dags.rs::scheduled_due",
+    "crates/schedr-db/src/dags.rs::NO_FIRE",
+    "crates/schedr-master/src/quiet.rs::QuietDags",
+    "crates/schedr-master/src/scheduler.rs::create_due",
+    "crates/schedr-master/src/planning.rs::first_waiting",
+    "crates/schedr-config/src/loader.rs::RETIRED_TIMINGS",
+]

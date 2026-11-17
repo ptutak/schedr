@@ -1780,10 +1780,30 @@ impl Dispatcher {
             self.db.claim_attempts(&claims, now).await?
         };
         let in_batch = picks.len() > 1;
+        // The batch's upstream outcomes and outputs in one statement, not two or three a task
+        // (M5.2a): each task's inputs and outcomes are built from it.
+        let wanted: BTreeSet<(String, TaskId)> = picks
+            .iter()
+            .filter_map(|(one, _)| Some((one, one.dag.task(&one.task_id)?)))
+            .flat_map(|(one, task)| {
+                mapping::upstream_wanted(task)
+                    .into_iter()
+                    .map(|upstream| (one.run_id.clone(), upstream))
+            })
+            .collect();
+        let read = mapping::Upstream::read(&self.db, wanted).await?;
         for (one, pick) in picks {
             let try_number = tries.get(&one.instance_id).copied();
-            self.build_one(now, one, (pick, try_number), in_batch, outgoing, &mut tally)
-                .await?;
+            let built = (pick, try_number);
+            self.build_one(
+                now,
+                one,
+                built,
+                (in_batch, Some(&read)),
+                outgoing,
+                &mut tally,
+            )
+            .await?;
         }
         self.db.set_queued_reasons(&tally.reasons, now).await?;
         let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
@@ -1860,8 +1880,15 @@ impl Dispatcher {
         )];
         let tries = self.db.claim_attempts(&claim, now).await?;
         let try_number = tries.get(&ready.instance_id).copied();
-        self.build_one(now, ready, (pick, try_number), false, outgoing, tally)
-            .await
+        self.build_one(
+            now,
+            ready,
+            (pick, try_number),
+            (false, None),
+            outgoing,
+            tally,
+        )
+        .await
     }
 
     /// The first part of an assignment (decision 482): whether `ready` goes this round, and to
@@ -1930,7 +1957,7 @@ impl Dispatcher {
         now: Timestamp,
         ready: &ReadyInstance,
         (pick, try_number): (Pick, Option<u32>),
-        in_batch: bool,
+        (in_batch, read): (bool, Option<&mapping::Upstream>),
         outgoing: &mut Vec<Outgoing>,
         tally: &mut Tally,
     ) -> Result<(), DispatchError> {
@@ -1946,12 +1973,13 @@ impl Dispatcher {
             self.unpick(&attempt_id, tally);
             return Ok(());
         };
-        let inputs = mapping::inputs(
+        let inputs = mapping::inputs_from(
             &self.db,
             &ready.dag,
             &ready.run_id,
             (task, ready.map_index),
             &mut self.resolved,
+            read,
         )
         .await;
         let inputs = match inputs {
@@ -1968,7 +1996,7 @@ impl Dispatcher {
         };
         let inputs = serde_json::to_vec(&inputs).unwrap_or_else(|_| b"{}".to_vec());
         let outcomes =
-            upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+            upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id, read).await?;
         let params = self.params_json(ready).await?;
         if inputs.len() > MAX_INPUTS {
             if in_batch {
@@ -3413,7 +3441,7 @@ impl Dispatcher {
             None => b"{}".to_vec(),
         };
         let outcomes =
-            upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id).await?;
+            upstream_outcomes(&self.db, &ready.dag, &ready.run_id, &ready.task_id, None).await?;
         let params = self.params_json(ready).await?;
         let handles = self.db.cleanup_handles(attempt_id).await?;
         let mut message = self.assign_message(
@@ -4330,6 +4358,7 @@ async fn upstream_outcomes(
     dag: &schedr_model::Dag,
     run_id: &str,
     task_id: &TaskId,
+    read: Option<&mapping::Upstream>,
 ) -> Result<BTreeMap<String, String>, DispatchError> {
     let Some(task) = dag.task(task_id) else {
         return Ok(BTreeMap::new());
@@ -4343,9 +4372,11 @@ async fn upstream_outcomes(
         return Ok(BTreeMap::new());
     }
     let wanted: Vec<&TaskId> = used.into_iter().collect();
-    Ok(db
-        .upstream_outcomes(run_id, &wanted)
-        .await?
+    let outcomes = match read.filter(|read| read.covers(run_id, &wanted)) {
+        Some(read) => read.outcomes(run_id, &wanted),
+        None => db.upstream_outcomes(run_id, &wanted).await?,
+    };
+    Ok(outcomes
         .into_iter()
         .map(|(task, outcome)| (task.to_string(), outcome.unwrap_or_default()))
         .collect())

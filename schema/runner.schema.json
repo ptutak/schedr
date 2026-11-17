@@ -383,6 +383,17 @@
           "additionalProperties": false,
           "description": "Start a runner process (to the fork server).",
           "properties": {
+            "barrier": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ForkBarrier"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A `cleanup_anywhere` cleanup's barrier: the process waits at it before anything else."
+            },
             "cwd": {
               "description": "The process's working directory.",
               "type": "string"
@@ -1408,6 +1419,27 @@
         "name",
         "type",
         "required"
+      ],
+      "type": "object"
+    },
+    "ForkBarrier": {
+      "additionalProperties": false,
+      "description": "Where a `cleanup_anywhere` cleanup's process waits for its worker's word, and how long (B255,\ndecision 504): it connects to `socket` (it waits), runs only on a `g` received within\n`wait_ms` counted from before that, and replies `p` once through.",
+      "properties": {
+        "socket": {
+          "description": "The worker's socket.",
+          "type": "string"
+        },
+        "wait_ms": {
+          "description": "The most it waits, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "socket",
+        "wait_ms"
       ],
       "type": "object"
     },

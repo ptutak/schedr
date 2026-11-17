@@ -95,7 +95,7 @@ impl Database {
             all_fire_times, requested_by, created_at, fire_times, created_runs) \
             VALUES ($1{uuid}, $2, $3{ts}, $4{ts}, $5, $6, $7{ts}, $8, $9) ON CONFLICT DO NOTHING";
         let inserted = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, INSERT))
+            crate::query::query(sql(backend, INSERT))
                 .bind(backfill.id)
                 .bind(backfill.dag_id.as_str())
                 .bind(db_time(backfill.range_from))
@@ -128,7 +128,7 @@ impl Database {
             WHERE dag_id = $1 AND planned_for >= $2{ts} AND planned_for <= $3{ts} \
             AND state IN ('success', 'queued', 'running')";
         let rows: Vec<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, COVERED))
+            crate::query::query_as(sql(backend, COVERED))
                 .bind(dag_id.as_str())
                 .bind(db_time(from))
                 .bind(db_time(to))
@@ -156,7 +156,7 @@ impl Database {
             WHERE dag_id = $1 AND planned_for >= $2{ts} AND planned_for <= $3{ts} \
             AND state = 'success'";
         let rows: Vec<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SUCCEEDED))
+            crate::query::query_as(sql(backend, SUCCEEDED))
                 .bind(dag_id.as_str())
                 .bind(db_time(from))
                 .bind(db_time(to))
@@ -180,7 +180,7 @@ impl Database {
         const COUNTS: &str =
             "SELECT state, COUNT(*) FROM runs WHERE backfill_id = $1{uuid} GROUP BY state";
         let row: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ONE))
+            crate::query::query_as(sql(backend, ONE))
                 .bind(id)
                 .fetch_optional(pool)
                 .await?
@@ -189,7 +189,7 @@ impl Database {
             return Ok(None);
         };
         let counts: Vec<(String, i64)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, COUNTS))
+            crate::query::query_as(sql(backend, COUNTS))
                 .bind(&row.0)
                 .fetch_all(pool)
                 .await?
@@ -215,14 +215,14 @@ impl Database {
             WHERE backfill_id IN (SELECT id FROM backfills WHERE dag_id = $1 \
             ORDER BY created_at DESC, id DESC LIMIT $2) GROUP BY backfill_id, state";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, OF_DAG))
+            crate::query::query_as(sql(backend, OF_DAG))
                 .bind(dag_id.as_str())
                 .bind(i64::from(limit))
                 .fetch_all(pool)
                 .await?
         });
         let counts: Vec<(String, String, i64)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, COUNTS))
+            crate::query::query_as(sql(backend, COUNTS))
                 .bind(dag_id.as_str())
                 .bind(i64::from(limit))
                 .fetch_all(pool)
@@ -250,7 +250,7 @@ impl Database {
         const UNFINISHED: &str = "SELECT id{text} FROM runs WHERE backfill_id = $1{uuid} \
             AND state IN ('queued', 'running') ORDER BY planned_for, id";
         let rows: Vec<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, UNFINISHED))
+            crate::query::query_as(sql(backend, UNFINISHED))
                 .bind(id)
                 .fetch_all(pool)
                 .await?

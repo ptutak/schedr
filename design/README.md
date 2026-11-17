@@ -57,7 +57,7 @@ The other layers (see `AI_SETUP.md`, Project documents):
 | `async-tasks` | async task functions | Async task functions |
 | `wait-steps` | sensors, wait steps, the watcher host, `first_of`, `delay` / `until` | Sensors and triggers (wait steps) |
 | `triggers` | event triggers, `RunOf`, named events, `schedr.api` | Sensors and triggers (triggers, events) |
-| `human-in-the-loop` | approvals (M6) | Human in the loop |
+| `human-in-the-loop` | approvals (M7) | Human in the loop |
 | `cleanup` | cleanup handles, resources | Cleanup and resources |
 | `serialization` | output serialization, codecs | Output serialization |
 | `testing-dags` | `dags check` / `dags test`, `run_dag`, `task_context` | Testing DAGs |

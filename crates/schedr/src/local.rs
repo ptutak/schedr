@@ -409,6 +409,16 @@ fn directory_name(dir: &Path) -> String {
         .map_or_else(|| "root".to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
+/// The parse runner's environment: as a task's (`PYTHONPATH` changes what imports find).
+fn runner_env(env: &BTreeMap<String, String>, config: &Config) -> BTreeMap<String, String> {
+    env.iter()
+        .filter(|(name, _)| {
+            schedr_agent::env::is_allowed(name) || config.worker.pass_env.contains(name)
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// Parses a root's files with the real runner and applies the master's checks.
 ///
 /// # Errors
@@ -462,20 +472,14 @@ pub async fn check_root(
                 "schedr.runner".to_owned(),
                 "parse".to_owned(),
             ],
-            env: env
-                .iter()
-                // As a task's (`PYTHONPATH` changes what imports find).
-                .filter(|(name, _)| {
-                    schedr_agent::env::is_allowed(name) || config.worker.pass_env.contains(name)
-                })
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            env: runner_env(env, config),
             working_dir: root.dir.clone(),
             log_file: log_file.clone(),
             max_output_size: 64 * 1024,
             mask: schedr_agent::mask::Mask::default(),
             start_timeout: config.worker.runner_start_timeout,
             output_drain: config.timings.output_drain_timeout,
+            barrier: None,
         },
         memory: schedr_agent::memory::MemoryWatch::default(),
         kills: prometheus_client::metrics::counter::Counter::default(),

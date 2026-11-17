@@ -55,6 +55,32 @@ async fn fresh_url() -> String {
     format!("{server}/{name}")
 }
 
+#[tokio::test]
+async fn prepared_statements_keep_a_query_prepared_on_its_connection_only_when_asked() {
+    // `[database] prepared_statements` (M5.2b, B256): kept, a query is parsed and planned once
+    // per connection; off, each is an unnamed statement, which any pooler passes, and nothing
+    // is left on the connection (B256: before, each query was prepared under a new name and
+    // kept until the connection retired).
+    let url = fresh_url().await;
+    // A URL turning sqlx's cache off wins (Codex's review): nothing kept, the setting on or not.
+    let uncached = format!("{url}?statement-cache-capacity=0");
+    for (url, prepared, kept) in [
+        (&url, false, false),
+        (&url, true, true),
+        (&uncached, true, false),
+    ] {
+        let db = Database::connect_prepared(url, std::time::Duration::from_secs(10), prepared)
+            .await
+            .unwrap();
+        let held = db.statements_kept().await.unwrap();
+        assert_eq!(
+            held > 0,
+            kept,
+            "{url}, prepared_statements = {prepared}: {held} kept"
+        );
+    }
+}
+
 fn sync() -> DagId {
     DagId::new("sync").unwrap()
 }
@@ -634,6 +660,39 @@ async fn workers_that_may_come_back_are_left_out(db: &Database) {
 }
 
 #[tokio::test]
+async fn upstream_of_runs_reads_outcomes_and_outputs_on_postgres() {
+    // The batch read over runs (M5.2a): the run's ID through the `uuid` cast both ways.
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    db.store_output(&ready[0].instance_id, "SUCCESS", &json!({"rows": 3}))
+        .await
+        .unwrap();
+    db.update_instances(
+        &run_id,
+        &[InstanceUpdate {
+            outcome: Some("SUCCESS".to_owned()),
+            ..plain_update("extract", TaskInstanceState::Success)
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let wanted = std::collections::BTreeSet::from([
+        (run_id.clone(), id("extract")),
+        (run_id.clone(), id("load")),
+    ]);
+    let upstream = db.upstream_of_runs(&wanted).await.unwrap();
+    assert_eq!(
+        upstream.outcomes,
+        BTreeMap::from([((run_id.clone(), id("extract")), Some("SUCCESS".to_owned()))])
+    );
+    assert_eq!(
+        upstream.outputs,
+        BTreeMap::from([((run_id, id("extract")), json!({"rows": 3}))])
+    );
+}
+
+#[tokio::test]
 async fn attempts_and_outputs_move_a_task_forward() {
     let (db, run_id) = with_instances().await;
     let ready = db.ready_instances(ts(NOW)).await.unwrap();
@@ -774,13 +833,20 @@ async fn the_rounds_probe_and_stored_next_fire_times_work_on_postgres() {
         .await
         .unwrap();
     assert_eq!(db.scheduled_due(next).await.unwrap(), []);
-    // A round skips a read its probe found empty, and sees a write made in it.
-    let found = db
-        .in_round(now, std::time::Duration::ZERO, async {
+    // A round skips a read its probe found empty, still after a write made in it (one probe a
+    // round, M5.2b), noting it; the next round sees the write.
+    let (found, stale) = db
+        .in_round_noting(now, std::time::Duration::ZERO, async {
             assert!(db.skipped(Check::QueuedRuns).await.unwrap());
             db.insert_run(&run(&version, RunKind::Manual, RunState::Queued, NOW))
                 .await
                 .unwrap();
+            db.dags_with_queued_runs().await.unwrap()
+        })
+        .await;
+    assert_eq!((found, stale), (vec![], true));
+    let found = db
+        .in_round(now, std::time::Duration::ZERO, async {
             db.dags_with_queued_runs().await.unwrap()
         })
         .await;

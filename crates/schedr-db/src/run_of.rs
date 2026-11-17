@@ -86,7 +86,7 @@ impl Database {
             (Matching::EndedAfterRun(at, run), true) => (TASK_AFTER, at, Some(run)),
         };
         let rows: Vec<(String, String, Option<String>)> = on_pool!(self, |pool, backend| {
-            let mut statement = sqlx::query_as(sql(backend, query))
+            let mut statement = crate::query::query_as(sql(backend, query))
                 .bind(dag)
                 .bind(db_time(at))
                 .bind(task.unwrap_or_default());
@@ -124,7 +124,7 @@ impl Database {
         const PARK: &str = "UPDATE task_instances SET look_at = $1{ts}, waits_dag = $2, \
             waits_event = $3 WHERE id = $4{uuid} AND state = 'queued'";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, PARK))
+            crate::query::query(sql(backend, PARK))
                 .bind(db_time(look_at))
                 .bind(waits_dag)
                 .bind(waits_event)
@@ -143,7 +143,7 @@ impl Database {
     pub async fn ready_since(&self, instance_id: &str) -> Result<Option<Timestamp>, DbError> {
         const SINCE: &str = "SELECT {ts<}ready_at{>ts} FROM task_instances WHERE id = $1{uuid} AND ready_at IS NOT NULL";
         let row: Option<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SINCE))
+            crate::query::query_as(sql(backend, SINCE))
                 .bind(instance_id)
                 .fetch_optional(pool)
                 .await?
@@ -229,7 +229,7 @@ impl Database {
                 (true, true) => TASKS_ENDED,
                 (false, true) => RUNS_ENDED,
             };
-            let mut statement = sqlx::query_as(sql(backend, query))
+            let mut statement = crate::query::query_as(sql(backend, query))
                 .bind(dag)
                 .bind(db_time(since));
             if !any_end {
@@ -261,7 +261,7 @@ impl Database {
         const SINCE: &str = "SELECT {ts<}live_since{>ts} FROM dag_triggers WHERE dag_id = $1 \
              AND live_since IS NOT NULL";
         let row: Option<(String,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SINCE))
+            crate::query::query_as(sql(backend, SINCE))
                 .bind(dag)
                 .fetch_optional(pool)
                 .await?
@@ -281,7 +281,7 @@ impl Database {
             WHERE dag_id = $1 AND run_of_source = $2 AND run_of_seen_at IS NOT NULL \
             AND run_of_seen_run IS NOT NULL";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SEEN))
+            crate::query::query_as(sql(backend, SEEN))
                 .bind(dag)
                 .bind(source)
                 .fetch_optional(pool)
@@ -314,7 +314,7 @@ impl Database {
             run_of_source = excluded.run_of_source, run_of_seen_at = excluded.run_of_seen_at, \
             run_of_seen_run = excluded.run_of_seen_run";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(dag)
                 .bind(source)
                 .bind(db_time(seen.at))
@@ -372,7 +372,7 @@ impl Database {
             Option<String>,
         );
         let read: Option<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, READ))
+            crate::query::query_as(sql(backend, READ))
                 .bind(instance_id)
                 .fetch_optional(pool)
                 .await?
@@ -381,12 +381,12 @@ impl Database {
             Some(row)
         } else {
             in_tx!(self, |tx, backend| {
-                sqlx::query(sql(backend, START))
+                crate::query::query(sql(backend, START))
                     .bind(instance_id)
                     .bind(db_time(now))
                     .execute(&mut *tx)
                     .await?;
-                sqlx::query_as(sql(backend, READ))
+                crate::query::query_as(sql(backend, READ))
                     .bind(instance_id)
                     .fetch_optional(&mut *tx)
                     .await?
@@ -426,7 +426,7 @@ impl Database {
             look_at = NULL WHERE id = $1{uuid}";
         // Fenced: a master that lost its lease doesn't overwrite what the leader handed.
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, HAND))
+            crate::query::query(sql(backend, HAND))
                 .bind(instance_id)
                 .bind(run_id)
                 .bind(db_time(ended_at))
@@ -453,7 +453,7 @@ impl Database {
             SELECT $1{uuid}, id FROM named_events WHERE id = $2{uuid} \
             ON CONFLICT (instance_id, item) DO NOTHING";
         in_tx!(self, |tx, backend| {
-            let handed: Option<Option<String>> = sqlx::query_scalar(sql(backend, HANDED))
+            let handed: Option<Option<String>> = crate::query::query_scalar(sql(backend, HANDED))
                 .bind(instance_id)
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -462,13 +462,13 @@ impl Database {
                 .flatten()
                 .filter(|item| uuid::Uuid::parse_str(item).is_ok())
             {
-                sqlx::query(sql(backend, PASS))
+                crate::query::query(sql(backend, PASS))
                     .bind(instance_id)
                     .bind(item)
                     .execute(&mut *tx)
                     .await?;
             }
-            sqlx::query(sql(backend, SEEN))
+            crate::query::query(sql(backend, SEEN))
                 .bind(instance_id)
                 .execute(&mut *tx)
                 .await?;
@@ -494,7 +494,7 @@ impl Database {
             WHERE run_id = $1{uuid} AND task_id = $2 AND map_index = -1";
         let run: Option<(String, String, String, Option<String>)> =
             on_pool!(self, |pool, backend| {
-                sqlx::query_as(sql(backend, RUN))
+                crate::query::query_as(sql(backend, RUN))
                     .bind(run_id)
                     .fetch_optional(pool)
                     .await?
@@ -518,7 +518,7 @@ impl Database {
         };
         let found: Option<(String, Option<String>, Option<String>)> =
             on_pool!(self, |pool, backend| {
-                sqlx::query_as(sql(backend, TASK))
+                crate::query::query_as(sql(backend, TASK))
                     .bind(run_id)
                     .bind(task.as_str())
                     .fetch_optional(pool)
@@ -565,7 +565,7 @@ impl Database {
             run_of_handed_run = excluded.run_of_handed_run, \
             run_of_handed_at = excluded.run_of_handed_at";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, HAND))
+            crate::query::query(sql(backend, HAND))
                 .bind(dag)
                 .bind(&seen.run)
                 .bind(db_time(seen.at))
@@ -584,7 +584,7 @@ impl Database {
         const READ: &str = "SELECT run_of_handed_run, {ts<}run_of_handed_at{>ts} FROM trigger_progress \
             WHERE dag_id = $1 AND run_of_handed_run IS NOT NULL AND run_of_handed_at IS NOT NULL";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, READ))
+            crate::query::query_as(sql(backend, READ))
                 .bind(dag)
                 .fetch_optional(pool)
                 .await?
@@ -641,18 +641,18 @@ impl Database {
             OR instance_id = $2) AND EXISTS (SELECT 1 FROM named_events e \
             WHERE e.id = t.run_of_handed_run{uuid}) ON CONFLICT (dag_id, item) DO NOTHING";
         let passed = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, KEEP))
+            crate::query::query(sql(backend, KEEP))
                 .bind(dag)
                 .bind(call)
                 .execute(&mut *tx)
                 .await?;
             let statement = match call {
-                Some(call) => sqlx::query(sql(backend, END_AND_PASS))
+                Some(call) => crate::query::query(sql(backend, END_AND_PASS))
                     .bind(dag)
                     .bind(source)
                     .bind(skipped)
                     .bind(call),
-                None => sqlx::query(sql(backend, PASS))
+                None => crate::query::query(sql(backend, PASS))
                     .bind(dag)
                     .bind(source)
                     .bind(skipped),
@@ -690,12 +690,12 @@ impl Database {
             AND EXISTS (SELECT 1 FROM named_events e WHERE e.id = t.run_of_handed_run{uuid}) \
             ON CONFLICT (dag_id, item) DO NOTHING";
         let passed = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, KEEP))
+            crate::query::query(sql(backend, KEEP))
                 .bind(dag)
                 .bind(call)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query(sql(backend, PASS))
+            crate::query::query(sql(backend, PASS))
                 .bind(dag)
                 .bind(source)
                 .bind(call)
@@ -721,7 +721,7 @@ impl Database {
         const REFUSED: &str = "UPDATE trigger_progress SET last_error = $2, failures = failures + 1, \
             not_before = $3{ts} WHERE dag_id = $1 AND instance_id IS NULL";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, REFUSED))
+            crate::query::query(sql(backend, REFUSED))
                 .bind(dag)
                 .bind(error)
                 .bind(not_before.map(db_time))

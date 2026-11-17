@@ -54,10 +54,16 @@ pub async fn listening_is_safe(
 ) -> Result<bool, sqlx::Error> {
     const PROCESS: &str = "SELECT pg_backend_pid()";
     for _ in 0..PROBE_ROUNDS {
-        let before: i32 = sqlx::query_scalar(PROCESS).fetch_one(&mut *y).await?;
+        let before: i32 = crate::query::query_scalar(PROCESS)
+            .fetch_one(&mut *y)
+            .await?;
         let mut held = sqlx::Connection::begin(&mut *x).await?;
-        let other: i32 = sqlx::query_scalar(PROCESS).fetch_one(&mut *held).await?;
-        let after: i32 = sqlx::query_scalar(PROCESS).fetch_one(&mut *y).await?;
+        let other: i32 = crate::query::query_scalar(PROCESS)
+            .fetch_one(&mut *held)
+            .await?;
+        let after: i32 = crate::query::query_scalar(PROCESS)
+            .fetch_one(&mut *y)
+            .await?;
         held.rollback().await?;
         if other == before || after != before {
             return Ok(false);
@@ -248,7 +254,7 @@ impl Database {
         let id = Uuid::now_v7().to_string();
         let payload = to_json(command);
         let earlier: Option<(String, String)> = in_tx!(self, |tx, backend| {
-            let inserted = sqlx::query(sql(backend, INSERT))
+            let inserted = crate::query::query(sql(backend, INSERT))
                 .bind(&id)
                 .bind(command.kind())
                 .bind(&payload)
@@ -262,7 +268,7 @@ impl Database {
                 None
             } else {
                 Some(
-                    sqlx::query_as(sql(backend, BY_KEY))
+                    crate::query::query_as(sql(backend, BY_KEY))
                         .bind(requested_by)
                         .bind(key)
                         .fetch_one(&mut *tx)
@@ -290,7 +296,7 @@ impl Database {
     pub(crate) async fn notify(&self, channel: &str, id: &str) {
         if let Pool::Postgres(pool) = self.pool()
             && self.notifications().on
-            && let Err(error) = sqlx::query("SELECT pg_notify($1, $2)")
+            && let Err(error) = crate::query::query("SELECT pg_notify($1, $2)")
                 .bind(channel)
                 .bind(id)
                 .execute(pool)
@@ -423,7 +429,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, PENDING))
+            crate::query::query_as(sql(backend, PENDING))
                 .bind(i64::from(limit))
                 .fetch_all(pool)
                 .await?
@@ -451,7 +457,7 @@ impl Database {
         const MARK: &str = "UPDATE commands SET applying_at = $1{ts} \
             WHERE id = $2{uuid} AND status = 'pending'";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, MARK))
+            crate::query::query(sql(backend, MARK))
                 .bind(db_time(now))
                 .bind(id)
                 .execute(&mut *tx)
@@ -478,7 +484,7 @@ impl Database {
         const DECIDE: &str = "UPDATE commands SET status = $1, reason = $2, result = $3{json}, \
             decided_at = $4{ts} WHERE id = $5{uuid} AND status = 'pending'";
         let decided = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, DECIDE))
+            crate::query::query(sql(backend, DECIDE))
                 .bind(
                     serde_json::to_value(status)
                         .ok()
@@ -509,7 +515,7 @@ impl Database {
         const SET: &str =
             "UPDATE commands SET result = $1{json} WHERE id = $2{uuid} AND status = 'applied'";
         let set = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(to_json(result))
                 .bind(id)
                 .execute(&mut *tx)
@@ -528,7 +534,7 @@ impl Database {
         const ONE: &str = "SELECT id{text}, kind, status, reason, result{text}, requested_by, \
             {ts<}requested_at{>ts}, {ts<}decided_at{>ts} FROM commands WHERE id = $1{uuid}";
         let row: Option<RecordRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, ONE))
+            crate::query::query_as(sql(backend, ONE))
                 .bind(id)
                 .fetch_optional(pool)
                 .await?
@@ -550,7 +556,7 @@ impl Database {
             OR (kind = 'pause_dag' AND result{text} LIKE $2) \
             ORDER BY requested_at, commands.id";
         let rows: Vec<RecordRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, OF_RUN))
+            crate::query::query_as(sql(backend, OF_RUN))
                 .bind(run_id)
                 // A UUID has no `%` or `_`; quoted, it is one element of `cancelled_runs`.
                 .bind(format!("%\"{run_id}\"%"))
@@ -573,7 +579,7 @@ impl Database {
             WHERE status = 'applied' AND kind IN ('check_connections', 'test_connection') \
             AND result{text} LIKE '%\"running\"%'";
         let rows: Vec<RecordRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, RUNNING))
+            crate::query::query_as(sql(backend, RUNNING))
                 .fetch_all(pool)
                 .await?
         });

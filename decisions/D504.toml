@@ -1,0 +1,35 @@
+title = "A movable cleanup's try waits at a barrier for the master's word, asked only once it waits"
+date = 2026-11-17
+by = "user"
+status = "active"
+topic = "cleanup"
+section = "Moving and disconnection"
+summary = '''
+Each try of a `cleanup_anywhere` cleanup starts its process through `schedr task-exec --barrier`,
+which waits before running anything: it connects to the worker's socket and runs the program
+only on a `g` received within its own wait (half the worker lease), counted from before it
+connected, replying `p` once through. Only once it waits does the worker ask the master
+(`CleanupStart`, saying whether it runs only the rest of the handles); the master answers
+`CleanupGo`, read only: `go` while the attempt is open and the cleanup this worker's, or for the
+rest while this worker owes it (B169, the attempt ended or not). The master moves a cleanup only once
+it lost the worker, a lease after the question at the earliest, plus the move wait: a `go`,
+however late, finds the process waiting while nothing moved, or gone. A refusal ends the cleanup
+here (reported not needed); an unanswered try isn't counted, made again after the gate's word
+(or a second), on the pass that word gives; a process that never reached the barrier is a
+failed try, and one that can't wait at it (no `schedr task-exec`) doesn't start. A forked Python
+cleanup waits at the same barrier in the fork server's child (`ForkRequest.barrier`). Protocol
+2.2. Not chosen: a recheck of the gate just before
+the spawn (B255's window only narrowed, a freeze can fall between any two instructions); the
+deadline checked in the new process alone (the master's `Kill` noticed late); the process asked
+before it waits (its wait could start after the answer). Open (step M5.3b): a cleanup let
+through, then its worker lost, still moves after the lease and the move wait.
+'''
+history = "JOURNAL.md#D504"
+step = "B255"
+code = [
+    "crates/schedr-agent/src/barrier.rs::put",
+    "crates/schedr-agent/src/agent.rs::run_cleanup",
+    "crates/schedr-master/src/core.rs::cleanup_may_start",
+    "crates/schedr/src/lib.rs::barrier_passed",
+    "python/schedr/runner/fork_server.py::_barrier_passed",
+]

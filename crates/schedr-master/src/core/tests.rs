@@ -1148,6 +1148,82 @@ async fn a_waiting_cleanup_goes_back_to_its_worker_holding_handles_the_master_la
     );
 }
 
+/// The master's answer to `worker` asking whether `attempt_id`'s cleanup (only its `rest`, if
+/// said) may start (B255, decision 504).
+async fn may_start(core: &mut MasterCore, worker: &str, attempt_id: &str, rest: bool) -> bool {
+    let start = worker_message::Message::CleanupStart(pb::CleanupStart {
+        attempt_id: attempt_id.to_owned(),
+        rest,
+    });
+    let out = core.handle(worker, start, later(129)).await.unwrap();
+    let [answer] = out.as_slice() else {
+        panic!("one answer: {out:?}")
+    };
+    let master_message::Message::CleanupGo(go) = message(answer) else {
+        panic!("expected CleanupGo: {out:?}")
+    };
+    assert_eq!(
+        (answer.worker_id.as_str(), go.attempt_id.as_str()),
+        (worker, attempt_id)
+    );
+    go.go
+}
+
+#[tokio::test]
+async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_owed() {
+    // Codex's review of B255: a worker told `Kill` was let through on the rest it was owed
+    // nothing of, and one owed a rest was refused once the attempt had ended.
+    let (mut core, attempt_id) = Box::pin(moved_away_from_w1()).await;
+    core.register(&register("w2", "i2", vec![]), later(62))
+        .await
+        .unwrap();
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle("w2", heartbeat, later(100)).await.unwrap();
+    core.tick(later(125)).await.unwrap();
+    // Moved to w2: its whole cleanup is w2's, not w1's.
+    assert!(may_start(&mut core, "w2", &attempt_id, false).await);
+    let (registered, _) = core
+        .register(&register("w1", "i1", running(&attempt_id, 0)), later(127))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill)
+    );
+    assert!(
+        !may_start(&mut core, "w1", &attempt_id, false).await,
+        "w1 was told Kill"
+    );
+    let not_needed = finished_with_cleanup(
+        &attempt_id,
+        pb::AttemptStatus::Lost,
+        pb::CleanupStatus::NotNeeded,
+    );
+    core.handle("w2", not_needed, later(128)).await.unwrap();
+    assert!(
+        !may_start(&mut core, "w2", &attempt_id, false).await,
+        "ended"
+    );
+    // w1 back with handles the master never got: the rest is its, the attempt ended or not.
+    core.disconnected("w1", later(128)).await.unwrap();
+    let (registered, _) = core
+        .register(&register("w1", "i3", running(&attempt_id, 2)), later(128))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::CleanRest)
+    );
+    assert!(
+        may_start(&mut core, "w1", &attempt_id, true).await,
+        "the rest it owes"
+    );
+    assert!(
+        !may_start(&mut core, "w2", &attempt_id, true).await,
+        "w2 owes no rest"
+    );
+}
+
 #[tokio::test]
 async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_its_result() {
     // B169: the move ran elsewhere without the handle the master never got.

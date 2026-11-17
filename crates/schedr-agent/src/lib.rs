@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod api;
 pub mod attempt;
+pub mod barrier;
 pub mod channel;
 pub mod connection_env;
 pub mod connection_jobs;

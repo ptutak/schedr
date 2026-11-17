@@ -174,13 +174,20 @@ pub enum Command {
         #[command(subcommand)]
         command: DagCtxCommand,
     },
-    /// Internal, started by a worker: caps the process's data (`RLIMIT_DATA`) and runs the
-    /// task's program in its place (`hard_memory_limit=True`, decisions 50, 438).
+    /// Internal, started by a worker: runs the task's program in its place, first capping the
+    /// process's data (`RLIMIT_DATA`, `hard_memory_limit=True`, decisions 50, 438) or waiting
+    /// at a `cleanup_anywhere` cleanup's barrier for the worker's word (B255, decision 504).
     #[command(hide = true)]
     TaskExec {
         /// The cap, in bytes.
         #[arg(long)]
-        data_limit: u64,
+        data_limit: Option<u64>,
+        /// The barrier's socket: connected to say it waits, then a `g` lets it through.
+        #[arg(long, requires = "barrier_wait_ms")]
+        barrier: Option<std::path::PathBuf>,
+        /// How long it waits at the barrier, from just before it says so.
+        #[arg(long)]
+        barrier_wait_ms: Option<u64>,
         /// The program and its arguments, after `--`.
         #[arg(last = true, required = true, value_parser = clap::value_parser!(std::ffi::OsString))]
         command: Vec<std::ffi::OsString>,

@@ -25,6 +25,8 @@ uuid.workspace = true
 testing = []
 
 [dev-dependencies]
+# Its own integration tests reach what `testing` opens (B256's statements kept).
+schedr-db = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 pretty_assertions.workspace = true
 rstest.workspace = true

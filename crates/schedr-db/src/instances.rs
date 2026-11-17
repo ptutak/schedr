@@ -185,7 +185,9 @@ impl Database {
             return Ok(Vec::new());
         }
         let rows: Vec<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, NEW)).fetch_all(pool).await?
+            crate::query::query_as(sql(backend, NEW))
+                .fetch_all(pool)
+                .await?
         });
         let mut runs = Vec::with_capacity(rows.len());
         for (run_id, version_id) in rows {
@@ -233,7 +235,7 @@ impl Database {
                     rows.join(", ")
                 );
                 let text = sql_text(backend, &text);
-                let mut insert = sqlx::query(text);
+                let mut insert = crate::query::query(text);
                 for (task_id, map_index, state) in chunk {
                     let ready = (*state == TaskInstanceState::Queued).then(|| now_text.clone());
                     insert = insert
@@ -265,11 +267,11 @@ impl Database {
             map_sizes{text}, cleanup_result FROM task_instances WHERE run_id = $1{uuid} \
             ORDER BY task_id, map_index";
         let (run, rows): (Option<RunRow>, Vec<InstanceRow>) = on_pool!(self, |pool, backend| {
-            let run = sqlx::query_as(sql(backend, RUN))
+            let run = crate::query::query_as(sql(backend, RUN))
                 .bind(run_id)
                 .fetch_optional(&mut *pool)
                 .await?;
-            let rows = sqlx::query_as(sql(backend, INSTANCES))
+            let rows = crate::query::query_as(sql(backend, INSTANCES))
                 .bind(run_id)
                 .fetch_all(&mut *pool)
                 .await?;
@@ -304,7 +306,7 @@ impl Database {
             WHERE id = $3{uuid} AND (cleanup_result IS NULL \
             OR cleanup_result NOT IN ('failed', 'worker_lost'))";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, SET))
+            crate::query::query(sql(backend, SET))
                 .bind(result.to_string())
                 .bind(db_time(now))
                 .bind(instance_id)
@@ -370,7 +372,7 @@ impl Database {
                      AND t.map_index = v.column2",
                     rows.join(", ")
                 );
-                let mut update = sqlx::query(sql_text(backend, &text)).bind(run_id);
+                let mut update = crate::query::query(sql_text(backend, &text)).bind(run_id);
                 for ((one, retries), at) in chunk.iter().zip(times) {
                     update = update
                         .bind(one.task_id.as_str())
@@ -418,7 +420,7 @@ impl Database {
                          WHERE state IN ('queued', 'cleaning_up') AND id IN ({})",
                         ids.join(", ")
                     );
-                    let mut update = sqlx::query(sql_text(backend, &text))
+                    let mut update = crate::query::query(sql_text(backend, &text))
                         .bind(*reason)
                         .bind(&now);
                     for id in chunk {
@@ -444,7 +446,7 @@ impl Database {
     ) -> Result<(), DbError> {
         const FINISH: &str = "UPDATE runs SET state = $1, ended_at = $2{ts} WHERE id = $3{uuid}";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, FINISH))
+            crate::query::query(sql(backend, FINISH))
                 .bind(state.to_string())
                 .bind(db_time(now))
                 .bind(run_id)
@@ -463,7 +465,7 @@ impl Database {
         const CANCEL: &str = "UPDATE runs SET cancel_requested_at = $1{ts} \
             WHERE id = $2{uuid} AND cancel_requested_at IS NULL";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, CANCEL))
+            crate::query::query(sql(backend, CANCEL))
                 .bind(db_time(now))
                 .bind(run_id)
                 .execute(&mut *tx)
@@ -486,7 +488,7 @@ impl Database {
         const CANCEL: &str = "UPDATE task_instances SET cancel_requested_at = $1{ts} \
             WHERE run_id = $2{uuid} AND task_id = $3 AND cancel_requested_at IS NULL";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, CANCEL))
+            crate::query::query(sql(backend, CANCEL))
                 .bind(db_time(now))
                 .bind(run_id)
                 .bind(task_id.as_str())
@@ -509,7 +511,7 @@ impl Database {
         const SIZES: &str = "SELECT map_sizes{text} FROM task_instances \
             WHERE run_id = $1{uuid} AND task_id = $2 AND map_index = -1";
         let row: Option<(Option<String>,)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SIZES))
+            crate::query::query_as(sql(backend, SIZES))
                 .bind(run_id)
                 .bind(task_id.as_str())
                 .fetch_optional(pool)
@@ -537,7 +539,7 @@ impl Database {
             WHERE run_id = $2{uuid} AND task_id = $3 AND map_index = $4 \
             AND cancel_requested_at IS NULL";
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, CANCEL))
+            crate::query::query(sql(backend, CANCEL))
                 .bind(db_time(now))
                 .bind(run_id)
                 .bind(task_id.as_str())
@@ -564,7 +566,7 @@ impl Database {
             WHERE run_id = $2{uuid} AND task_id = $3 AND state = 'unschedulable' \
             AND ($4 IS NULL OR map_index = $4)";
         let updated = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, RETRY))
+            crate::query::query(sql(backend, RETRY))
                 .bind(db_time(now))
                 .bind(run_id)
                 .bind(task_id.as_str())
@@ -595,7 +597,7 @@ impl Database {
             return Ok(Vec::new());
         }
         let rows: Vec<(String, String, i32)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, DUE))
+            crate::query::query_as(sql(backend, DUE))
                 .bind(db_time(now))
                 .fetch_all(pool)
                 .await?
@@ -622,7 +624,7 @@ impl Database {
         let text = to_json(value);
         let size = i64::try_from(text.len()).unwrap_or(i64::MAX);
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, OUTPUT))
+            crate::query::query(sql(backend, OUTPUT))
                 .bind(instance_id)
                 .bind(outcome)
                 .bind(&text)
@@ -670,7 +672,7 @@ impl Database {
                      value = excluded.value, size_bytes = excluded.size_bytes",
                     values.join(", ")
                 );
-                let mut insert = sqlx::query(sql_text(backend, &text));
+                let mut insert = crate::query::query(sql_text(backend, &text));
                 for (instance_id, outcome, text) in chunk {
                     insert = insert
                         .bind(*instance_id)
@@ -705,7 +707,7 @@ impl Database {
         let text = to_json(value);
         let size = i64::try_from(text.len()).unwrap_or(i64::MAX);
         in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, OUTPUT))
+            crate::query::query(sql(backend, OUTPUT))
                 .bind(run_id)
                 .bind(task_id.as_str())
                 .bind(outcome)
@@ -729,7 +731,7 @@ impl Database {
         const OUTPUT: &str =
             "SELECT outcome, value{text} FROM outputs WHERE task_instance_id = $1{uuid}";
         let row: Option<(String, String)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, OUTPUT))
+            crate::query::query_as(sql(backend, OUTPUT))
                 .bind(instance_id)
                 .fetch_optional(pool)
                 .await?

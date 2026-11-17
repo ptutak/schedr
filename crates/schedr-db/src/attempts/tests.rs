@@ -559,6 +559,97 @@ async fn run_outputs_are_the_stored_outputs_by_task() {
 }
 
 #[tokio::test]
+async fn upstream_of_runs_reads_the_pairs_asked_over_many_runs() {
+    let (db, first) = with_run().await;
+    let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]
+        .instance_id
+        .clone();
+    db.store_output(&instance_id, "SUCCESS", &json!({"rows": 3}))
+        .await
+        .unwrap();
+    let done = InstanceUpdate {
+        task_id: id("extract"),
+        map_index: -1,
+        state: TaskInstanceState::Success,
+        ready_at: None,
+        outcome: Some("BIG".to_owned()),
+        used_retry: false,
+        reason: None,
+        map_sizes: None,
+    };
+    db.update_instances(&first, &[done], ts(NOW)).await.unwrap();
+    // A second run: `extract` skipped, `load` succeeded without an outcome stored.
+    let version_id = db.active_dags().await.unwrap()[0].version_id.clone();
+    let dag_id = DagId::new("sync").unwrap();
+    let second = db
+        .insert_run(&NewRun {
+            params: &crate::runs::NO_PARAMS,
+            event: None,
+            dag_id: &dag_id,
+            dag_version_id: &version_id,
+            kind: RunKind::Manual,
+            state: RunState::Running,
+            planned_for: ts("2026-10-21T09:00:00Z"),
+            since: ts("2026-10-20T09:00:00Z"),
+            triggered_at: ts("2026-10-21T09:00:00Z"),
+            triggered_by: "anna",
+            parent_run_id: None,
+            backfill_id: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    db.create_instances(
+        &second,
+        &[
+            (id("extract"), -1, TaskInstanceState::Skipped),
+            (id("load"), -1, TaskInstanceState::Success),
+        ],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let wanted = BTreeSet::from([
+        (first.clone(), id("extract")),
+        (first.clone(), id("load")),
+        (second.clone(), id("extract")),
+    ]);
+    let reads = db.upstream_of_runs(&wanted).await.unwrap();
+    // `load` of the first run is still scheduled: no outcome. The second run's `load`
+    // succeeded but wasn't asked for, though its run and task each were.
+    assert_eq!(
+        reads.outcomes,
+        BTreeMap::from([
+            ((first.clone(), id("extract")), Some("BIG".to_owned())),
+            ((second.clone(), id("extract")), None),
+        ])
+    );
+    assert_eq!(
+        reads.outputs,
+        BTreeMap::from([((first.clone(), id("extract")), json!({"rows": 3}))])
+    );
+    // The same as the per-run reads give.
+    assert_eq!(
+        db.upstream_outcomes(&first, &[&id("extract"), &id("load")])
+            .await
+            .unwrap(),
+        BTreeMap::from([(id("extract"), Some("BIG".to_owned()))])
+    );
+    let load_only = BTreeSet::from([(second.clone(), id("load"))]);
+    assert_eq!(
+        db.upstream_of_runs(&load_only).await.unwrap().outcomes,
+        BTreeMap::from([(
+            (second, id("load")),
+            Some(schedr_model::DEFAULT_OUTCOME.to_owned())
+        )])
+    );
+    assert_eq!(
+        db.upstream_of_runs(&BTreeSet::new()).await.unwrap(),
+        crate::attempts::UpstreamReads::default()
+    );
+}
+
+#[tokio::test]
 async fn stored_values_that_dont_read_are_errors() {
     let (db, _run_id) = with_run().await;
     let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]

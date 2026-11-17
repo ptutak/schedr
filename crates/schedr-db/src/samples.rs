@@ -169,13 +169,13 @@ impl Database {
             ORDER BY worker_id";
         type Row = (String, String, String, String);
         let masters: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, MASTERS))
+            crate::query::query_as(sql(backend, MASTERS))
                 .bind(db_time(masters_since))
                 .fetch_all(pool)
                 .await?
         });
         let workers: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, WORKERS))
+            crate::query::query_as(sql(backend, WORKERS))
                 .bind(db_time(workers_since))
                 .fetch_all(pool)
                 .await?
@@ -224,7 +224,7 @@ impl Database {
         in_tx!(self, |tx, backend| {
             for (query, chunk) in &queries {
                 let text = sql_text(backend, query);
-                let mut insert = sqlx::query(text);
+                let mut insert = crate::query::query(text);
                 for sample in *chunk {
                     insert = insert
                         .bind(sample.process_id.clone())
@@ -264,7 +264,7 @@ impl Database {
     pub async fn oldest_minute_sample(&self) -> Result<Option<Timestamp>, DbError> {
         const OLDEST: &str = "SELECT {ts<}MIN(at){>ts} FROM samples WHERE step_s = $1";
         let oldest: Option<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, OLDEST))
+            crate::query::query_scalar(sql(backend, OLDEST))
                 .bind(i64::from(MINUTE))
                 .fetch_one(pool)
                 .await?
@@ -280,7 +280,7 @@ impl Database {
     pub async fn delete_old_samples(&self, step_s: u32, before: Timestamp) -> Result<u64, DbError> {
         const DELETE: &str = "DELETE FROM samples WHERE step_s = $1 AND at < $2{ts}";
         let deleted = in_tx!(self, |tx, backend| {
-            sqlx::query(sql(backend, DELETE))
+            crate::query::query(sql(backend, DELETE))
                 .bind(i64::from(step_s))
                 .bind(db_time(before))
                 .execute(&mut *tx)
@@ -325,7 +325,7 @@ impl Database {
             WHERE step_s = $1 AND at >= $2{ts} AND at < $3{ts} \
             AND ($4{text} IS NULL OR process_id = $4{text}) ORDER BY process_id, at";
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql(backend, SAMPLES))
+            crate::query::query_as(sql(backend, SAMPLES))
                 .bind(i64::from(step_s))
                 .bind(db_time(from))
                 .bind(db_time(to))
@@ -369,7 +369,7 @@ impl Database {
             i64,
         );
         let rows: Vec<BucketRow> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &bucket_query(backend)))
+            crate::query::query_as(sql_text(backend, &bucket_query(backend)))
                 .bind(db_time(from))
                 .bind(db_time(within(from, cut, to)))
                 .bind(db_time(to))
@@ -430,7 +430,7 @@ impl Database {
             WHERE s.process_id = l.process_id AND s.step_s IN (60, 900) AND s.at = l.last";
         let rows: Vec<(String, String, Option<i64>, i64, String)> =
             on_pool!(self, |pool, backend| {
-                sqlx::query_as(sql(backend, LATEST))
+                crate::query::query_as(sql(backend, LATEST))
                     .bind(db_time(from))
                     .bind(db_time(to))
                     .bind(process)
@@ -463,7 +463,7 @@ impl Database {
     pub async fn rolled_up_to(&self) -> Result<Option<Timestamp>, DbError> {
         const NEWEST: &str = "SELECT {ts<}MAX(at){>ts} FROM samples WHERE step_s = $1";
         let newest: Option<String> = on_pool!(self, |pool, backend| {
-            sqlx::query_scalar(sql(backend, NEWEST))
+            crate::query::query_scalar(sql(backend, NEWEST))
                 .bind(i64::from(ROLLUP))
                 .fetch_one(pool)
                 .await?
@@ -493,7 +493,7 @@ impl Database {
         bucket_s: u32,
     ) -> Result<Vec<(Timestamp, u64)>, DbError> {
         let rows: Vec<(i64, i64)> = on_pool!(self, |pool, backend| {
-            sqlx::query_as(sql_text(backend, &totals_query(backend)))
+            crate::query::query_as(sql_text(backend, &totals_query(backend)))
                 .bind(db_time(from))
                 .bind(db_time(within(from, cut, to)))
                 .bind(db_time(to))

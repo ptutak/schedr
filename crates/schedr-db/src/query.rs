@@ -12,6 +12,52 @@ use sqlx::AssertSqlSafe;
 use crate::backend::Backend;
 use crate::database::DbError;
 
+tokio::task_local! {
+    /// Whether the queries built in this task stay prepared on their connections: their
+    /// database's [`Database::keeps_prepared`], set by [`on_pool`] and [`in_tx`] (B256).
+    ///
+    /// [`Database::keeps_prepared`]: crate::database::Database::keeps_prepared
+    pub(crate) static PREPARED: bool;
+}
+
+/// Whether a query built here stays prepared: as its [`on_pool`] or [`in_tx`] says; outside
+/// them, not (an unnamed statement, which every pooler passes). Outside them are the lease's
+/// statements and the migrations' (Codex's review of M5.2b): a few a minute, left unnamed.
+fn prepared() -> bool {
+    PREPARED.try_with(|prepared| *prepared).unwrap_or(false)
+}
+
+/// `sqlx::query`, prepared or unnamed as its database keeps them ([`PREPARED`], B256): with
+/// sqlx's statement cache off, a query left persistent is prepared under a new name each time
+/// and never closed.
+pub(crate) fn query<'a, DB: sqlx::Database + sqlx::database::HasStatementCache>(
+    sql: impl sqlx::SqlSafeStr,
+) -> sqlx::query::Query<'a, DB, <DB as sqlx::Database>::Arguments> {
+    sqlx::query(sql).persistent(prepared())
+}
+
+/// `sqlx::query_as`, as [`query`].
+pub(crate) fn query_as<'a, DB, O>(
+    sql: impl sqlx::SqlSafeStr,
+) -> sqlx::query::QueryAs<'a, DB, O, <DB as sqlx::Database>::Arguments>
+where
+    DB: sqlx::Database + sqlx::database::HasStatementCache,
+    O: for<'r> sqlx::FromRow<'r, DB::Row>,
+{
+    sqlx::query_as(sql).persistent(prepared())
+}
+
+/// `sqlx::query_scalar`, as [`query`].
+pub(crate) fn query_scalar<'a, DB, O>(
+    sql: impl sqlx::SqlSafeStr,
+) -> sqlx::query::QueryScalar<'a, DB, O, <DB as sqlx::Database>::Arguments>
+where
+    DB: sqlx::Database + sqlx::database::HasStatementCache,
+    (O,): for<'r> sqlx::FromRow<'r, DB::Row>,
+{
+    sqlx::query_scalar(sql).persistent(prepared())
+}
+
 /// Runs `$body` with `$pool` bound to a connection (`&mut` the backend's connection type) and
 /// `$backend` to its [`Backend`], once per backend (the queries are the same text, typed per
 /// driver), within the database's query limit: past it, the enclosing function returns
@@ -25,7 +71,7 @@ use crate::database::DbError;
 macro_rules! on_pool {
     ($db:expr, |$pool:ident, $backend:ident| $body:expr) => {{
         let db: &$crate::database::Database = $db;
-        let run = async {
+        let run = $crate::query::PREPARED.scope(db.keeps_prepared(), async {
             if let Some(scope) = $crate::scope::current(db) {
                 // Marked broken until it succeeds: a failed or cut-off query voids the
                 // transaction (see `Database::atomically`).
@@ -68,7 +114,7 @@ macro_rules! on_pool {
                     }
                 }
             })
-        };
+        });
         db.limited(db.query_timeout(), run).await?
     }};
 }
@@ -103,7 +149,7 @@ macro_rules! in_tx {
     };
     ($db:expr, $limits:expr, |$tx:ident, $backend:ident| $body:expr) => {{
         let db: &$crate::database::Database = $db;
-        let run = async {
+        let run = $crate::query::PREPARED.scope(db.keeps_prepared(), async {
             // Inside `Database::atomically` on this database: its transaction (begun, limited
             // and fenced already; committed at its end).
             if let Some(scope) = $crate::scope::current(db) {
@@ -162,7 +208,7 @@ macro_rules! in_tx {
                     done
                 }
             })
-        };
+        });
         let ended = db.limited(db.query_timeout() * $limits, run).await;
         // Inside `atomically`, its end counts the write instead.
         if $crate::scope::current(db).is_none() {

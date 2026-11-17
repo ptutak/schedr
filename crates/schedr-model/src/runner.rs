@@ -588,6 +588,21 @@ pub struct ForkRequest {
     pub env: std::collections::BTreeMap<String, String>,
     /// The process's working directory.
     pub cwd: String,
+    /// A `cleanup_anywhere` cleanup's barrier: the process waits at it before anything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barrier: Option<ForkBarrier>,
+}
+
+/// Where a `cleanup_anywhere` cleanup's process waits for its worker's word, and how long (B255,
+/// decision 504): it connects to `socket` (it waits), runs only on a `g` received within
+/// `wait_ms` counted from before that, and replies `p` once through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkBarrier {
+    /// The worker's socket.
+    pub socket: String,
+    /// The most it waits, in milliseconds.
+    pub wait_ms: u64,
 }
 
 /// A watcher host's request: what it holds for its whole life (decision 320).

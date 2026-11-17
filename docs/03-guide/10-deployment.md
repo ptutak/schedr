@@ -219,7 +219,10 @@ one; on `-alpine`, the builder takes its packages from apk and looks for musl wh
   user and password from a Secret (`existingSecret`, keys `userKey` / `passwordKey`), put
   into the URL by Kubernetes (`$(SCHEDR_DB_USER)`), so they must not contain `@ : / ? # %` or
   a space; or `database.existingSecret`, a Secret holding the whole URL. Any connection pooler
-  can sit in between. Behind one in transaction mode the master finds it
+  can sit in between. schedr keeps each query prepared on its connection
+  (`[database] prepared_statements`, on by default): a pooler in transaction mode must carry
+  prepared statements (PgBouncer 1.21 or later, `max_prepared_statements` above 0), or set it
+  to `false`, and each query is then an unnamed statement. Behind one in transaction mode the master finds it
   and polls for new commands, and the webserver can't follow changes for the UI, so the live
   pages refresh on the [refresh interval](14-timings.md#fixed-timings) (15 s by default; see
   [the master](04-master.md)). To listen anyway,

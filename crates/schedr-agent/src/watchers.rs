@@ -536,6 +536,7 @@ fn host_spec(setup: &WorkerSetup, sys_path: &[String], mask: Mask) -> ProcessSpe
         mask,
         start_timeout: setup.timeouts.runner_start,
         output_drain: setup.timeouts.output_drain,
+        barrier: None,
     }
 }
 

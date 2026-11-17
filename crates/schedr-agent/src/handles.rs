@@ -92,6 +92,8 @@ struct Registered {
     handles: Vec<CleanupHandle>,
     size: usize,
     closed: bool,
+    /// How many of the first registered were left out ([`AttemptHandles::skip`]).
+    skipped: usize,
 }
 
 /// An attempt's handles, in registration order.
@@ -157,6 +159,7 @@ impl AttemptHandles {
                 handles,
                 size: 0,
                 closed: true,
+                skipped: 0,
             }),
         }
     }
@@ -235,15 +238,19 @@ impl AttemptHandles {
             .clone()
     }
 
-    /// Leaves out the first `count` handles: a cleanup that moved had them, this one runs on
-    /// the rest (B169).
+    /// Leaves out the first `count` handles, counted from the first registered (B169: a cleanup
+    /// that moved had them, this one runs on the rest). Told again, with the same or a lower
+    /// count, it leaves out nothing more (Codex's review of B255: each try asked again told it).
     pub fn skip(&self, count: usize) {
         let mut registered = self
             .registered
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let count = count.min(registered.handles.len());
-        registered.handles.drain(..count);
+        let more = count
+            .saturating_sub(registered.skipped)
+            .min(registered.handles.len());
+        registered.handles.drain(..more);
+        registered.skipped = registered.skipped.max(count);
     }
 
     /// Stops taking handles: the cleanup starts.

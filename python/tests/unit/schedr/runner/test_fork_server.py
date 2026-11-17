@@ -1,4 +1,5 @@
 import atexit
+import contextlib
 import ctypes
 import json
 import locale
@@ -182,12 +183,15 @@ class Server:
         env: dict[str, str] | None = None,
         *,
         non_blocking: bool = False,
+        barrier: dict[str, Any] | None = None,
     ) -> Attempt:
         attempt = Attempt()
         for fd in attempt.ends if non_blocking else []:
             os.set_blocking(fd, False)  # as tokio makes its sockets and pipes
         self.requests += 1
         message = {"type": "fork", "id": self.requests, "mode": mode, "env": env or {}, "cwd": cwd}
+        if barrier is not None:
+            message["barrier"] = barrier
         send(self.sock, message, attempt.ends)
         attempt.close_ends()
         return attempt
@@ -257,6 +261,94 @@ def test_a_forked_process_runs_the_runner_set_up_as_a_spawned_one(
         assert gone(pid)
     assert numbers[0] != numbers[1]  # `random` reseeded in each process
     assert server.stop() == 0
+
+
+class Worker:
+    """A worker's end of a barrier (B255, decision 504): accepts the process, then writes
+    `word` after `after` seconds (none: closes), and keeps what it replied."""
+
+    def __init__(self, path: Path, word: bytes | None, after: float = 0) -> None:
+        self.path, self.reply = path, b""
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(path))
+        listener.listen(1)
+        listener.settimeout(20)
+
+        def serve() -> None:
+            with listener, listener.accept()[0] as stream:
+                time.sleep(after)
+                if word is None:
+                    return
+                with contextlib.suppress(OSError):
+                    stream.sendall(word)
+                    stream.settimeout(5)
+                    self.reply = stream.recv(1)
+
+        self.thread = threading.Thread(target=serve)
+        self.thread.start()
+
+    def replied(self) -> bytes:
+        self.thread.join(20)
+        return self.reply
+
+
+@pytest.mark.parametrize(
+    ("word", "after", "passed", "reply"),
+    [
+        (b"g", 0, True, b"p"),
+        (None, 0, False, b""),  # the master said no: closed
+        (b"n", 0, False, b""),
+    ],
+)
+def test_a_barrier_lets_the_process_through_only_on_a_go(
+    tmp_path: Path, word: bytes | None, after: float, passed: bool, reply: bytes
+) -> None:
+    worker = Worker(tmp_path / "b", word, after)
+    barrier = {"socket": str(worker.path), "wait_ms": 5_000}
+    assert fork_server._barrier_passed(barrier) is passed
+    assert worker.replied() == reply
+
+
+def test_a_barrier_shut_by_its_wait_runs_nothing_whatever_comes_after(tmp_path: Path) -> None:
+    worker = Worker(tmp_path / "b", b"g", after=0.6)
+    started = time.monotonic()
+    assert not fork_server._barrier_passed({"socket": str(worker.path), "wait_ms": 200})
+    assert time.monotonic() - started < 0.5
+    worker.replied()
+
+
+def test_no_barrier_lets_it_through_and_no_worker_keeps_it_shut(tmp_path: Path) -> None:
+    assert fork_server._barrier_passed(None)
+    assert not fork_server._barrier_passed({"socket": str(tmp_path / "none"), "wait_ms": 200})
+
+
+def test_a_forked_cleanup_waits_at_its_barrier_and_runs_only_on_a_go(
+    server: Server, tmp_path: Path, validate_runner_message: Validate
+) -> None:
+    (tmp_path / "probe.py").write_text(PROBE)
+    assert server.agent.receive() == {"type": "fork_server_ready"}
+    worker = Worker(tmp_path / "go", b"g")
+    attempt = server.fork(cwd=str(tmp_path), barrier={"socket": str(worker.path), "wait_ms": 5_000})
+    assert server.agent.receive()["type"] == "forked"
+    pid = attempt.started(validate_runner_message)
+    attempt.parse(tmp_path)
+    assert attempt.exited(validate_runner_message)["code"] == 0
+    assert worker.replied() == b"p"
+    attempt.output()
+    attempt.release()
+    assert gone(pid)
+    # No word: it leaves at its wait's end, nothing of the runner ran.
+    attempt = server.fork(
+        cwd=str(tmp_path), barrier={"socket": str(tmp_path / "none"), "wait_ms": 200}
+    )
+    assert server.agent.receive()["type"] == "forked"
+    pid = attempt.started(validate_runner_message)
+    assert attempt.exited(validate_runner_message)["code"] == fork_server.EXIT_BARRIER_CLOSED
+    out, err = attempt.output()
+    assert out == ""
+    assert "cleanup not started" in err
+    attempt.release()
+    assert gone(pid)
 
 
 def zombie(pid: int) -> bool:

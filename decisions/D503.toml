@@ -1,0 +1,23 @@
+title = "Queries stay prepared on their connections by default; off, each is an unnamed statement"
+date = 2026-11-17
+by = "user"
+status = "active"
+topic = "state"
+section = "Database and schema"
+summary = '''
+`[database] prepared_statements` (on by default): on Postgres each query is prepared once per
+connection and kept (sqlx's cache, at most 100 a connection), so after its first use it costs
+one round trip and no planning. Off, each query is an unnamed statement (`persistent(false)`
+through the helpers every query of `schedr-db` is built with, `crate::query::query`), for a
+pooler in transaction mode that doesn't carry prepared statements. SQLite keeps its statements
+either way. B256: the cache off had left every query prepared under a new name, never reused,
+until the connection retired. Not chosen: off by default (the user's first call, made before
+off was found not to be unnamed); a fix of the leak alone.
+'''
+history = "JOURNAL.md#D503"
+step = "M5.2b"
+code = [
+    "crates/schedr-config/src/config.rs::prepared_statements",
+    "crates/schedr-db/src/database.rs::connect_prepared",
+    "crates/schedr-db/src/query.rs::query",
+]
