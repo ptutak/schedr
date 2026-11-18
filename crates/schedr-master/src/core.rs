@@ -532,6 +532,12 @@ impl Arrivals {
         self.inner().last.get(worker_id).copied()
     }
 
+    /// The ID of `worker_id`'s latest stream (its last registration's), until it is forgotten.
+    #[must_use]
+    pub fn latest_stream(&self, worker_id: &str) -> Option<u64> {
+        self.inner().streams.get(worker_id).map(|read| read.id)
+    }
+
     /// Forgets `worker_id` (it is gone), and the starts of its that wait: their messages won't
     /// be handled any more.
     pub fn forget(&self, worker_id: &str) {

@@ -1300,11 +1300,13 @@ impl Dispatcher {
             upstream,
         } = read;
         // The DAGs held read under the lock, not before it (Codex's review of M5.2c): an ID
-        // conflict a parse upload stored meanwhile holds its tasks this round.
-        let held = self.db.held_dags().await?;
-        // The DAGs' current versions too: one a parse upload stored meanwhile holds its
-        // limits this round (Codex's review of M5.2c).
-        let versions = self.db.active_dag_versions().await?.into_iter().collect();
+        // conflict a parse upload stored meanwhile holds its tasks this round. Nothing ready
+        // (an idle round), nothing read.
+        let held = if ready.is_empty() {
+            BTreeMap::new()
+        } else {
+            self.db.held_dags().await?
+        };
         let ready = self.unless_held(ready, &held, now).await?;
         let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
@@ -1324,6 +1326,9 @@ impl Dispatcher {
         }
         self.round_reads = Some(round_reads);
         self.read_upstream = Some(upstream);
+        // The DAGs' current versions under the lock too: one a parse upload stored meanwhile
+        // holds its limits this round (Codex's review of M5.2c).
+        let versions = self.db.active_dag_versions().await?.into_iter().collect();
         self.read_limits(versions).await?;
         // The step's assignments are one transaction: stored together, with one lease check
         // and one commit (T2, 2.10b). What they changed in memory (the slots reserved) and the

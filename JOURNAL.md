@@ -1968,3 +1968,22 @@ without its fix:
 2. The DAGs' current versions were read before the assign part's lock (M5.2cA): a version a
    parse upload stored meanwhile with a lower `max_active` or `max_active_tasks` didn't hold that
    round. Read under the lock now, with the DAGs held (two short statements).
+
+### 2026-11-18: M5.2c's review by Codex, round 3 of 3 (the last)
+
+A fresh session found three, all confirmed and fixed:
+
+1. A queued message's stream counted while no stream was in place: a worker that registered
+   again and whose newer stream ended before the round (its end queued) had its old stream's
+   queued messages handled, a `Deregister` there forgetting it. Now a message with no stream in
+   place counts only if its stream is the worker's latest (`Arrivals::latest_stream`); a test
+   fails without it.
+2. Reading the DAGs held and their versions under the lock (round 2) made an idle assign part
+   two statements longer: the held DAGs are read only with a task ready, the versions only past
+   the idle return, as before M5.2cA. No test of its own: the master's statements aren't counted
+   in its tests.
+3. `a_stop_doesnt_wait_for_the_gap_after_a_round` set the trigger loop's gap, no longer the
+   rounds' a result wakes: it sets the task rounds' gap now.
+
+The cap of three reviews reached (the user): what a fourth would find goes to the stress suite
+and the next review (M5.2d's).

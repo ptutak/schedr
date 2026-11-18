@@ -1476,7 +1476,11 @@ impl Hub {
     async fn queued_served(&self, core: &MasterCore, worker_id: &str, stream: &Outbound) -> bool {
         let mut streams = self.streams.lock().await;
         let current = streams.get(worker_id);
-        if current.is_some_and(|s| !s.same_channel(stream)) {
+        // A replaced stream's: another in place, or, the newer one ended too (its end waiting
+        // in the queue), another registered after it (Codex's review of M5.2c).
+        if current.is_some_and(|s| !s.same_channel(stream))
+            || (current.is_none() && self.arrivals.latest_stream(worker_id) != Some(stream.id))
+        {
             tracing::warn!(worker_id, "a queued message of a replaced stream dropped");
             return false;
         }

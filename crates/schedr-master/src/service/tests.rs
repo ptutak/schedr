@@ -1850,6 +1850,23 @@ async fn nothing_of_a_worker_counts_in_the_round_after_its_message_ended_its_str
 }
 
 #[tokio::test]
+async fn a_queued_message_of_a_replaced_stream_is_dropped_once_the_newer_one_ended_too() {
+    // Codex's review of M5.2c: the worker registered again (a newer stream), and that one
+    // ended before the round, so no stream is in place; the old stream's queued `Deregister`
+    // must not count (it would forget the worker the newer stream belongs to).
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
+    let old = hub.streams.lock().await.get("w1").unwrap().clone();
+    // A newer registration's stream, ended since.
+    let _newer = hub.arrivals.new_stream("w1");
+    hub.streams.lock().await.remove("w1");
+    let mut messages = vec![worker_message::Message::Deregister(pb::Deregister {})];
+    hub.queue_results("w1", &old, &mut messages);
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    assert!(hub.core().lock().await.is_live("w1"), "not forgotten");
+}
+
+#[tokio::test]
 async fn a_closing_master_queues_nothing_more_for_the_round() {
     // Codex's review of M5.2c: a turn queueing after `close_streams` emptied the queue would
     // keep its stream's sender, and so the stream, open with no round left to take it.
@@ -2283,7 +2300,7 @@ async fn a_finished_task_starts_its_downstream_at_once_not_at_the_next_tick() {
 async fn a_stop_doesnt_wait_for_the_gap_after_a_round() {
     let settings = Settings {
         timings: crate::core::MasterTimings {
-            round_gap: Duration::from_mins(1),
+            task_round_gap: Duration::from_mins(1),
             ..crate::core::MasterTimings::default()
         },
         ..Settings::default()
