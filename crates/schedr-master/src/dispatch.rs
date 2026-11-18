@@ -29,6 +29,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use prost::Message as _;
 use schedr_db::attempts::{AttemptEnd, CleanupEnd, ReadyInstance, StoredAttempt};
+use schedr_db::instances::RunTasks;
 use schedr_db::run_of::{Matching, OtherRun};
 use schedr_db::{Database, DbError};
 use schedr_model::connection::Registry;
@@ -144,6 +145,52 @@ impl RoundReads {
             switched_off,
             first_starts,
         })
+    }
+}
+
+/// What a round's results part reads before the core lock (M5.2cB3, decision 505): the queued
+/// `Started`s' and `Finished`s' attempts and their runs. True until the batch writes, since only
+/// the round moves runs forward (`InRound`); taken by the batch's transaction only (a fallback
+/// after a failure reads afresh), each run on its first use only (one touched again in the same
+/// transaction is read after its own writes).
+#[derive(Debug, Default)]
+pub struct ResultsReads {
+    attempts: BTreeMap<String, StoredAttempt>,
+    runs: BTreeMap<String, RunTasks>,
+}
+
+impl ResultsReads {
+    /// The attempts `ids` name and the runs they belong to.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Db`] if the database fails.
+    pub async fn read(db: &Database, ids: &[&str]) -> Result<Self, DispatchError> {
+        let mut reads = Self::default();
+        if ids.is_empty() {
+            return Ok(reads);
+        }
+        for attempt in db.attempts_by_ids(ids).await? {
+            if !reads.runs.contains_key(&attempt.run_id)
+                && let Some(run) = db.run_tasks(&attempt.run_id).await?
+            {
+                reads.runs.insert(attempt.run_id.clone(), run);
+            }
+            reads.attempts.insert(attempt.id.clone(), attempt);
+        }
+        Ok(reads)
+    }
+
+    /// The attempts of `ids`, if every one was read (one missing may have arrived since).
+    fn attempts_of(&self, ids: &[&str]) -> Option<BTreeMap<String, StoredAttempt>> {
+        ids.iter()
+            .all(|id| self.attempts.contains_key(*id))
+            .then(|| {
+                ids.iter()
+                    .filter_map(|id| self.attempts.get(*id))
+                    .map(|a| (a.id.clone(), a.clone()))
+                    .collect()
+            })
     }
 }
 
@@ -478,6 +525,8 @@ pub struct Dispatcher {
     round_reads: Option<RoundReads>,
     /// What the next assign part read before the core lock (M5.2cA); none: it reads them.
     assign_reads: Option<AssignReads>,
+    /// What the round's results part read before the core lock, for its batch.
+    results_reads: ResultsReads,
     /// The upstream read with them, for the round's picks it covers.
     read_upstream: Option<mapping::Upstream>,
     /// Attempts a reconnecting worker runs whose start the database refused to record (B128):
@@ -609,6 +658,7 @@ impl Dispatcher {
             resolved: mapping::Resolved::new(),
             round_reads: None,
             assign_reads: None,
+            results_reads: ResultsReads::default(),
             read_upstream: None,
             active: Active::new(),
             current_versions: BTreeMap::new(),
@@ -2262,25 +2312,69 @@ impl Dispatcher {
         group: &[pb::Started],
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, DispatchError> {
-        let ids: Vec<&str> = group.iter().map(|s| s.attempt_id.as_str()).collect();
-        let attempts: BTreeMap<String, StoredAttempt> = self
+        self.started_batch(&[(worker_id, group)], now).await
+    }
+
+    /// What the round's results part read before the lock, for its batch's transaction.
+    pub fn give_results_reads(&mut self, reads: ResultsReads) {
+        self.results_reads = reads;
+    }
+
+    /// Drops what was read before the lock: past the batch's transaction (a fallback reads
+    /// afresh).
+    pub fn drop_results_reads(&mut self) {
+        self.results_reads = ResultsReads::default();
+    }
+
+    /// `ids`' attempts: as read before the lock if every one was, else read now.
+    async fn batch_attempts(
+        &self,
+        ids: &[&str],
+    ) -> Result<BTreeMap<String, StoredAttempt>, DispatchError> {
+        if let Some(read) = self.results_reads.attempts_of(ids) {
+            return Ok(read);
+        }
+        Ok(self
             .db
-            .attempts_by_ids(&ids)
+            .attempts_by_ids(ids)
             .await?
             .into_iter()
-            .filter(|a| a.worker_id == worker_id)
             .map(|a| (a.id.clone(), a))
+            .collect())
+    }
+
+    /// Workers' `Started`s together (M5.2cB3: a round's batch, every worker's), as
+    /// [`Self::started_group`] handles one worker's: the attempts read in one query, their
+    /// starts recorded in a statement for each start method. One that isn't its sender's, or
+    /// is no longer running, is answered to its sender with a cancel.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::Db`] if the database fails: the caller's transaction rolls back.
+    pub async fn started_batch(
+        &mut self,
+        batch: &[(&str, &[pb::Started])],
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
+        let ids: Vec<&str> = batch
+            .iter()
+            .flat_map(|(_, group)| group.iter().map(|s| s.attempt_id.as_str()))
             .collect();
+        let attempts = self.batch_attempts(&ids).await?;
+        let theirs =
+            |worker_id: &str, id: &str| attempts.get(id).is_some_and(|a| a.worker_id == worker_id);
         // Each attempt's last start method, as one by one would leave it, and its first
         // `Started`'s time (a later one is kept by the database anyway).
         let mut methods: BTreeMap<&str, (&str, Timestamp)> = BTreeMap::new();
-        for started in group {
-            if attempts.contains_key(&started.attempt_id) {
-                let at = self.start_time(started, now);
-                methods
-                    .entry(&started.attempt_id)
-                    .and_modify(|(method, _)| *method = start_method(started))
-                    .or_insert((start_method(started), at));
+        for &(worker_id, group) in batch {
+            for started in group {
+                if theirs(worker_id, &started.attempt_id) {
+                    let at = self.start_time(started, now);
+                    methods
+                        .entry(&started.attempt_id)
+                        .and_modify(|(method, _)| *method = start_method(started))
+                        .or_insert((start_method(started), at));
+                }
             }
         }
         let mut running = BTreeSet::new();
@@ -2302,10 +2396,16 @@ impl Dispatcher {
             self.rejections.remove(&attempt.instance_id);
             self.code_missing.remove(&attempt.instance_id);
         }
-        Ok(group
+        Ok(batch
             .iter()
-            .filter(|s| !running.contains(&s.attempt_id))
-            .map(|s| cancel(worker_id, &s.attempt_id))
+            .flat_map(|&(worker_id, group)| {
+                group
+                    .iter()
+                    .filter(|s| {
+                        !(running.contains(&s.attempt_id) && theirs(worker_id, &s.attempt_id))
+                    })
+                    .map(move |s| cancel(worker_id, &s.attempt_id))
+            })
             .collect())
     }
 
@@ -2532,8 +2632,7 @@ impl Dispatcher {
     async fn finish_common(
         &mut self,
         in_round: &InRound,
-        worker_id: &str,
-        common: &[(&StoredAttempt, &pb::Finished)],
+        common: &[(&str, &StoredAttempt, &pb::Finished)],
         now: Timestamp,
     ) -> Result<(), DispatchError> {
         if common.is_empty() {
@@ -2542,7 +2641,7 @@ impl Dispatcher {
         let mut ends = Vec::with_capacity(common.len());
         let mut results = Vec::with_capacity(common.len());
         let mut cleared = Vec::new();
-        for &(attempt, finished) in common {
+        for &(worker_id, attempt, finished) in common {
             let status = attempt_status_from_proto(finished.status).map_err(|e| {
                 DispatchError::BadMessage {
                     worker_id: worker_id.to_owned(),
@@ -2574,7 +2673,7 @@ impl Dispatcher {
         let rows: Vec<(&str, &AttemptEnd)> = common
             .iter()
             .zip(&ends)
-            .map(|((attempt, _), end)| (attempt.id.as_str(), end))
+            .map(|((_, attempt, _), end)| (attempt.id.as_str(), end))
             .collect();
         self.clear_wait_steps(&cleared).await?;
         let recorded = self.db.end_attempts(&rows, now).await?;
@@ -2593,7 +2692,13 @@ impl Dispatcher {
         for (run_id, results) in by_run {
             let done = self
                 .execution
-                .attempts_finished(in_round, run_id, &results, now)
+                .attempts_finished(
+                    in_round,
+                    run_id,
+                    &results,
+                    self.results_reads.runs.remove(run_id),
+                    now,
+                )
                 .await?;
             self.stop(run_id, &done.stops).await?;
         }
@@ -2617,40 +2722,65 @@ impl Dispatcher {
         group: &[pb::Finished],
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, DispatchError> {
-        let ids: Vec<&str> = group.iter().map(|f| f.attempt_id.as_str()).collect();
-        let attempts: BTreeMap<String, StoredAttempt> = self
-            .db
-            .attempts_by_ids(&ids)
-            .await?
-            .into_iter()
-            .map(|a| (a.id.clone(), a))
+        self.finished_batch(in_round, &[(worker_id, group)], now)
+            .await
+    }
+
+    /// Workers' `Finished`s together (M5.2cB3: a round's batch, every worker's), as
+    /// [`Self::finished_group`] handles one worker's: the attempts read in one query, the
+    /// common case ended in one statement, its outputs in another, each run read and moved
+    /// forward once; any other handled by [`Self::finished`] alone, in its place. Each is
+    /// acknowledged to its sender.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError`] if a message is malformed or the database fails: the caller's
+    /// transaction rolls back.
+    pub async fn finished_batch(
+        &mut self,
+        in_round: &InRound,
+        batch: &[(&str, &[pb::Finished])],
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, DispatchError> {
+        let ids: Vec<&str> = batch
+            .iter()
+            .flat_map(|(_, group)| group.iter().map(|f| f.attempt_id.as_str()))
             .collect();
+        let attempts = self.batch_attempts(&ids).await?;
+        // A repeat is a worker's second `Finished` for an attempt; another worker's is its own
+        // (a moved cleanup's rest).
         let mut seen = BTreeSet::new();
         let mut common = Vec::new();
-        for finished in group {
-            let first = seen.insert(finished.attempt_id.as_str());
-            match attempts.get(&finished.attempt_id) {
-                Some(attempt) if first && is_common(attempt, finished, worker_id) => {
-                    common.push((attempt, finished));
-                }
-                // Gone, or a repeat: acknowledged only (as `finished` does).
-                None => {}
-                Some(_) if !first => {}
-                Some(attempt) if is_repeat(attempt, finished, worker_id) => {}
-                // In its place (Grok's review): what came before it stored first, so a mapped
-                // sibling's success before an uncommon failure stays a success, as one by one.
-                Some(_) => {
-                    self.finish_common(in_round, worker_id, &std::mem::take(&mut common), now)
-                        .await?;
-                    self.finished(in_round, worker_id, finished, now).await?;
+        for &(worker_id, group) in batch {
+            for finished in group {
+                let first = seen.insert((worker_id, finished.attempt_id.as_str()));
+                match attempts.get(&finished.attempt_id) {
+                    Some(attempt) if first && is_common(attempt, finished, worker_id) => {
+                        common.push((worker_id, attempt, finished));
+                    }
+                    // Gone, or a repeat: acknowledged only (as `finished` does).
+                    None => {}
+                    Some(_) if !first => {}
+                    Some(attempt) if is_repeat(attempt, finished, worker_id) => {}
+                    // In its place (Grok's review): what came before it stored first, so a
+                    // mapped sibling's success before an uncommon failure stays a success, as
+                    // one by one.
+                    Some(_) => {
+                        self.finish_common(in_round, &std::mem::take(&mut common), now)
+                            .await?;
+                        self.finished(in_round, worker_id, finished, now).await?;
+                    }
                 }
             }
         }
-        self.finish_common(in_round, worker_id, &common, now)
-            .await?;
-        Ok(group
+        self.finish_common(in_round, &common, now).await?;
+        Ok(batch
             .iter()
-            .map(|f| finished_ack(worker_id, &f.attempt_id))
+            .flat_map(|&(worker_id, group)| {
+                group
+                    .iter()
+                    .map(move |f| finished_ack(worker_id, &f.attempt_id))
+            })
             .collect())
     }
 

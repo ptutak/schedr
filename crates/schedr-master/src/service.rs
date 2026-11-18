@@ -1211,8 +1211,23 @@ impl Hub {
         if self.queued_results().is_empty() {
             return Ok(());
         }
+        // The queued `Started`s' and `Finished`s' attempts and runs read before the lock
+        // (M5.2cB3): true until the batch writes, only the round moving runs forward. One
+        // queued after this is read under the lock.
+        let ids: Vec<String> = self
+            .queued_results()
+            .iter()
+            .filter_map(|r| match &r.message {
+                Some(worker_message::Message::Started(s)) => Some(s.attempt_id.clone()),
+                Some(worker_message::Message::Finished(f)) => Some(f.attempt_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let reads = crate::dispatch::ResultsReads::read(&self.db, &ids).await?;
         // Taken under the lock: a turn finds a worker's results still queued, or handled.
         let mut core = self.core_for("round").await;
+        core.give_results_reads(reads);
         let mut queued: VecDeque<QueuedResult> = std::mem::take(&mut *self.queued_results()).into();
         let began = std::time::Instant::now();
         let mut handling = Handling {
@@ -1278,6 +1293,7 @@ impl Hub {
             }
         }
         Box::pin(self.results_batch(&mut core, batch, now, &mut handling)).await;
+        core.drop_results_reads();
         self.metrics.round_part_done("results", began.elapsed());
         if !handling.back.is_empty() {
             // What a failed batch left unhandled: first in the next round, which is woken.

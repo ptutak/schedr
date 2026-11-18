@@ -1866,3 +1866,26 @@ ends the stream and disconnects the worker, as a turn's end did (it registers ag
 refused once as still live reconnects after 200-400 ms (`FIRST_BACKOFF`, doubled), its refused try
 still a sign of life (`arrivals.arrived` before the check). B257 logged (a roles test's restarted
 master finding its kept port taken).
+
+### 2026-11-18: M5.2cB3, the round's results part in one set of statements, its reads before the lock
+
+Scenario 1 (quick x2, release), each change measured: M5.2cB 56.3 tasks a second (60.2 on an
+earlier run: runs vary about 7 %); every worker's `Started`s and `Finished`s through the
+dispatcher once a batch (one attempts read, one start update a start method, one end update,
+outputs and instances once) 64.3, the results part's lock 126 -> 59 ms a round, statements
+14,993 -> 10,574; its attempts and runs read before the lock (`ResultsReads`: used by the batch's
+transaction only, attempts only if all were read, each run on its first use only) 69.8, the results
+part's lock 41 ms, the lock held 19.1 s (34.8 at M5.2cB). A message is still judged by its own
+sender in a batch: another worker's start is answered to it with a cancel, a worker's repeat is per
+worker (a moved cleanup's rest from another worker still counts).
+
+The stress report gained a slot's cycle per task and its mean parts (a first form, "the next
+assignment on that worker", misled: a worker's next assignment often fills another of its slots).
+At 69.8: cycle 459 ms = run 198 + assigned -> started 73 + end -> stored 102 + stored -> assigned
+85 (the remainder, holding the run's start and tail). The run itself is ~200 ms for `sleep 0.1`:
+even a master costing nothing reaches ~160 tasks a second here. 100 leaves start and master
+~118 ms together (today ~260). M5.2cB4 laid out with the user: the results part first; task rounds
+(results, prepare, assign) woken by results, a slow round with every part on the 1 s tick and on a
+command; the task rounds' gap 5 ms to start; a batch's runs moved forward together; task end ->
+stored profiled (the user: second after the run's own ~100 ms of overhead, which M5.2d profiles
+first). Its estimate: task end -> stored from ~100 ms to ~40-60 ms.

@@ -231,6 +231,7 @@ impl Stress {
         ));
         report.set("run_p50_s", quantile(&runs, 0.5));
         report.set("run_p99_s", quantile(&runs, 0.99));
+        self.slot_cycle(report);
         if self.cluster.ops.iter().any(|(name, _)| name == master) {
             let (_, metrics) = self.cluster.ops_get(master, "/metrics");
             report.at_most(
@@ -240,6 +241,54 @@ impl Stress {
             );
         }
         self.stages(report, master);
+    }
+
+    /// Where a slot's time goes between two tasks (M5.2cB3), recorded without limits: one
+    /// slot's cycle per task (all workers' slots × the window `tasks_per_s` uses ÷ the tasks),
+    /// and its mean parts per task: the run its worker measured, assigned → started, the task's
+    /// end on its worker → the master storing it (also its p50 and p90), and what is left, from
+    /// stored to the slot assigned again. A slot's next task can't be told from another slot's,
+    /// so that last part is the remainder; it also holds the run's start and tail, when some
+    /// slots have no work.
+    fn slot_cycle(&self, report: &mut Report) {
+        let mean = |values: &[f64]| {
+            let n = f64::from(u32::try_from(values.len()).unwrap_or(u32::MAX)).max(1.0);
+            values.iter().sum::<f64>() / n
+        };
+        let slots = self
+            .db
+            .floats("SELECT CAST(SUM(slots) AS DOUBLE PRECISION) FROM workers");
+        let span = self.db.floats(&format!(
+            "SELECT MAX({}) - MIN({}) FROM attempts",
+            self.db.epoch("ended_at"),
+            self.db.epoch("assigned_at")
+        ));
+        let done = "FROM attempts a WHERE a.status = 'success' AND a.started_at IS NOT NULL \
+                    AND a.duration_ms IS NOT NULL AND a.ended_at IS NOT NULL";
+        let runs = self.db.floats(&format!(
+            "SELECT CAST(a.duration_ms AS DOUBLE PRECISION) / 1000.0 {done}"
+        ));
+        let starts = self.db.floats(&format!(
+            "SELECT {} - {} {done}",
+            self.db.epoch("a.started_at"),
+            self.db.epoch("a.assigned_at")
+        ));
+        let stored = self.db.floats(&format!(
+            "SELECT {} - ({} + CAST(a.duration_ms AS DOUBLE PRECISION) / 1000.0) {done}",
+            self.db.epoch("a.ended_at"),
+            self.db.epoch("a.started_at")
+        ));
+        let tasks = f64::from(u32::try_from(runs.len()).unwrap_or(u32::MAX)).max(1.0);
+        let cycle =
+            slots.first().copied().unwrap_or(0.0) * span.first().copied().unwrap_or(0.0) / tasks;
+        let (run, start, store) = (mean(&runs), mean(&starts), mean(&stored));
+        report.set("slot_cycle_s", cycle);
+        report.set("slot_run_s", run);
+        report.set("slot_start_s", start);
+        report.set("slot_end_to_stored_s", store);
+        report.set("end_to_stored_p50_s", quantile(&stored, 0.5));
+        report.set("end_to_stored_p90_s", quantile(&stored, 0.9));
+        report.set("slot_stored_to_assigned_s", cycle - run - start - store);
     }
 
     /// Where a start's time goes (M5.1a), p50 and p99 of each stage, recorded without limits:
@@ -277,16 +326,19 @@ impl Stress {
                 "",
                 "started_recorded",
             );
-            for part in ["started", "finished", "rest"] {
-                let labels = format!("part=\"{part}\"");
-                let key = format!("turn_{part}");
-                put(metrics, "schedr_master_turn_part_seconds", &labels, &key);
-            }
+            // A turn handles only what doesn't move runs forward since M5.2cB: the rest.
+            put(
+                metrics,
+                "schedr_master_turn_part_seconds",
+                "part=\"rest\"",
+                "turn_rest",
+            );
             // Each part of a round (M5.1c): what a round holding the lock spends its time on.
             for part in [
                 "commands",
                 "scheduler",
                 "triggers",
+                "results",
                 "prepare",
                 "expire",
                 "assign",

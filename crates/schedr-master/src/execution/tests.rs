@@ -1903,7 +1903,7 @@ async fn finish_together(execution: &Execution, run_id: &str, names: &[&str]) {
         .map(|(id, r)| (id, -1, r))
         .collect();
     execution
-        .attempts_finished(&InRound::for_tests(), run_id, &batch, ts(NOW))
+        .attempts_finished(&InRound::for_tests(), run_id, &batch, None, ts(NOW))
         .await
         .unwrap();
 }

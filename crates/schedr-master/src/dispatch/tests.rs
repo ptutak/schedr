@@ -750,6 +750,81 @@ async fn a_finish_from_another_worker_is_acknowledged_but_not_stored() {
 }
 
 #[tokio::test]
+async fn a_batch_of_workers_judges_each_message_by_its_own_sender() {
+    // M5.2cB3: a round's batch reads every worker's attempts at once; a start or a finish from
+    // the worker an attempt isn't on still changes nothing and is answered to its sender, and
+    // its owner's own, later in the batch, still counts (not taken for a repeat).
+    let (mut dispatcher, db, run_id) = with_run(dag(1)).await;
+    dispatcher
+        .register("w2", "i2", &[], 2, ts(NOW))
+        .await
+        .unwrap();
+    let round = InRound::for_tests();
+    let out = dispatcher.step(&round, ts(NOW)).await.unwrap();
+    let assigned = assignment(&out[0]);
+    let (attempt, owner) = (assigned.attempt_id.clone(), out[0].worker_id.clone());
+    let other = if owner == "w1" { "w2" } else { "w1" };
+    let start = [started(&attempt)];
+    let answers = dispatcher
+        .started_batch(&[(other, &start), (owner.as_str(), &start)], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0].worker_id, other);
+    assert_eq!(cancelled_attempt(&answers[0]), attempt);
+    assert!(db.attempt(&attempt).await.unwrap().unwrap().started);
+    let done = [finished(&attempt, pb::AttemptStatus::Success, &json!([1]))];
+    let acks = dispatcher
+        .finished_batch(&round, &[(other, &done), (owner.as_str(), &done)], ts(NOW))
+        .await
+        .unwrap();
+    let to: Vec<&str> = acks.iter().map(|a| a.worker_id.as_str()).collect();
+    assert_eq!(to, [other, owner.as_str()]);
+    assert_eq!(
+        db.attempt(&attempt).await.unwrap().unwrap().status,
+        Some(AttemptStatus::Success)
+    );
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Success
+    );
+}
+
+#[tokio::test]
+async fn a_run_read_before_the_lock_serves_its_first_use_only() {
+    // M5.2cB3: the batch's run read before the lock; split by another worker's `Finished`, the
+    // run's two results are moved forward in two steps, and the second must see the first's
+    // writes (with the first read, `t000` would still be running and the run not end).
+    let (mut dispatcher, db, run_id) = with_run(dag_with_tasks(2)).await;
+    let round = InRound::for_tests();
+    let out = dispatcher.step(&round, ts(NOW)).await.unwrap();
+    let (a, b) = (
+        assignment(&out[0]).attempt_id.clone(),
+        assignment(&out[1]).attempt_id.clone(),
+    );
+    dispatcher
+        .started_batch(&[("w1", &[started(&a), started(&b)])], ts(NOW))
+        .await
+        .unwrap();
+    let reads = ResultsReads::read(&db, &[a.as_str(), b.as_str()])
+        .await
+        .unwrap();
+    dispatcher.give_results_reads(reads);
+    let first = [finished(&a, pb::AttemptStatus::Success, &json!([1]))];
+    let second = [finished(&b, pb::AttemptStatus::Success, &json!([2]))];
+    dispatcher
+        .finished_batch(
+            &round,
+            &[("w1", &first), ("w2", &second), ("w1", &second)],
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.state, RunState::Success);
+}
+
+#[tokio::test]
 async fn a_start_for_an_attempt_taken_back_is_answered_with_a_cancel() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
     let out = dispatcher

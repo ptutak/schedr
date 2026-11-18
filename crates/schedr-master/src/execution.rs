@@ -423,7 +423,7 @@ impl Execution {
         result: &AttemptResult,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
-        self.attempts_finished(in_round, run_id, &[(task_id, map_index, result)], now)
+        self.attempts_finished(in_round, run_id, &[(task_id, map_index, result)], None, now)
             .await
     }
 
@@ -446,9 +446,14 @@ impl Execution {
         _: &InRound,
         run_id: &str,
         results: &[(&TaskId, i32, &AttemptResult)],
+        read: Option<RunTasks>,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
-        let mut run = self.run(run_id).await?;
+        // The run as read before the core lock (M5.2cB3), true until this writes; else now.
+        let mut run = match read {
+            Some(run) => run,
+            None => self.run(run_id).await?,
+        };
         let mut updates = Vec::with_capacity(results.len());
         let mut outputs: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut state_now = None;

@@ -90,6 +90,17 @@ impl MasterCore {
         self.handle_results_in(&InRound::start(), batch, now).await
     }
 
+    /// What the round's results part read before the lock (M5.2cB3), for its next batch.
+    pub fn give_results_reads(&mut self, reads: crate::dispatch::ResultsReads) {
+        self.dispatcher.give_results_reads(reads);
+    }
+
+    /// Drops them at the results part's end, whether a batch used them or not: the next
+    /// round's are read afresh.
+    pub fn drop_results_reads(&mut self) {
+        self.dispatcher.drop_results_reads();
+    }
+
     /// One worker's stretch of a batch that failed, as a group.
     ///
     /// # Errors

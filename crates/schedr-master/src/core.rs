@@ -2065,26 +2065,30 @@ impl MasterCore {
         self.dispatcher.take_witnesses();
         let dispatcher = &mut self.dispatcher;
         let mut out = Vec::new();
+        // Every worker's `Started`s, then every worker's `Finished`s (each worker's in their
+        // order), each kind in one set of statements (M5.2cB3).
+        let started: Vec<(&str, &[pb::Started])> = batch
+            .iter()
+            .filter(|(_, g)| !g.started.is_empty())
+            .map(|(w, g)| (w.as_str(), g.started.as_slice()))
+            .collect();
+        let finished: Vec<(&str, &[pb::Finished])> = batch
+            .iter()
+            .filter(|(_, g)| !g.finished.is_empty())
+            .map(|(w, g)| (w.as_str(), g.finished.as_slice()))
+            .collect();
         let handled = Box::pin(db.atomically(async {
-            for (worker_id, group) in &batch {
-                if !group.started.is_empty() {
-                    out.extend(
-                        dispatcher
-                            .started_group(worker_id, &group.started, now)
-                            .await?,
-                    );
-                }
-                if !group.finished.is_empty() {
-                    out.extend(
-                        dispatcher
-                            .finished_group(in_round, worker_id, &group.finished, now)
-                            .await?,
-                    );
-                }
+            if !started.is_empty() {
+                out.extend(dispatcher.started_batch(&started, now).await?);
+            }
+            if !finished.is_empty() {
+                out.extend(dispatcher.finished_batch(in_round, &finished, now).await?);
             }
             Ok::<_, DispatchError>(())
         }))
         .await;
+        // What was read before the lock served this transaction only.
+        self.dispatcher.drop_results_reads();
         match handled {
             Ok(()) => {}
             Err(DispatchError::Db(DbError::CommitUnknown)) if self.group_landed().await => {}

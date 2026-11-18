@@ -373,13 +373,14 @@ scope = '''
 done_when = '''
 the results part's time per round and the lock's measured in scenario 1 (release) against M5.2cB's, with a slot's idle time (an attempt's end to its worker's next assignment) in the stress report
 '''
-status = "planned"
+status = "done"
+done = 2026-11-18
 
 [[steps]]
 id = "M5.2cB4"
 title = "The path from a task's result to its slot's next assignment"
 scope = '''
-(the user, 2026-11-18; was M5.2cC, whose lock off the writes is deferred) a slot idles ~350 ms between tasks in scenario 1 (the round's wait and gap, its parts up to Assign): first a slot's idle time in the stress report (if M5.2cB3 hasn't added it), then cut while keeping the master's invariants (assignment only of ready tasks, "assigned but not started" brief): candidates a shorter gap when results wait, a round woken by results running results → prepare → assign, prepare's work for a finished run done in the results part. Lookahead and lanes are M7's. Laid out step by step, with measurements, before it is built
+(the user, 2026-11-18; was M5.2cC, whose lock off the writes is deferred) keeping the master's invariants (only ready tasks assigned, "assigned but not started" brief), laid out with the user, each step measured: (1) the results part first in the round; (2) task rounds: woken by results, a round runs results, prepare and assign only; a slow round with every part on the 1 s tick and at once on a command (the user); (3) the task rounds' gap a hidden setting, 5 ms to start (the user), measured with statements per task, the master's CPU and the database's load, turns' lock waits and the lease's renewals, then 1 ms or 10 ms; (4) the runs of a batch read and moved forward together, not one by one; (5) a task's end to its result stored profiled step by step (the user: second after the run's own overhead, M5.2d). Lookahead and lanes are M7's
 '''
 done_when = '''
 scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
@@ -390,7 +391,7 @@ status = "planned"
 id = "M5.2d"
 title = "The worker's start path"
 scope = '''
-(the user, 2026-11-17) what a worker takes from an assignment to the task's start (assigned → started 0.077 s at the median in scenario 1 on the release build, M5.2a), profiled and cut where it limits the target
+(the user, 2026-11-17) what a worker takes from an assignment to the task's start (assigned → started 0.077 s at the median in scenario 1 on the release build, M5.2a), profiled and cut where it limits the target; first the ~100 ms a `sleep 0.1` task's run takes beyond its sleep (the run 202 ms in scenario 1, measured by its worker; the user, 2026-11-18: the best to profile)
 '''
 done_when = '''
 scenario 1's assigned → started measured against M5.2cB4's, and its share of the remaining gap to 100 tasks a second (120 very good) stated

@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.2cB3, The round's results part: one set of statements, its reads before the lock.
+**Next:** M5.2cB4, The path from a task's result to its slot's next assignment.
 
 ## M0: Foundations
 
@@ -257,8 +257,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2b | Idle round parts cheap | done 2026-11-17 | D502, D503 |
 | M5.2cA | Assign's reads before the core lock | done 2026-11-17 | D501 |
 | M5.2cB | Only the round moves runs forward | done 2026-11-17 | D505 |
-| M5.2cB3 | The round's results part: one set of statements, its reads before the lock | **next** |  |
-| M5.2cB4 | The path from a task's result to its slot's next assignment | planned |  |
+| M5.2cB3 | The round's results part: one set of statements, its reads before the lock | done 2026-11-18 |  |
+| M5.2cB4 | The path from a task's result to its slot's next assignment | **next** |  |
 | M5.2d | The worker's start path | planned |  |
 | M5.2e | Many DAG triggers: a stress scenario, then their messages batched in the turn | planned |  |
 | R1.2 | Release 1.2.0 | planned |  |
