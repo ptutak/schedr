@@ -150,8 +150,12 @@ pub struct Timings {
     pub vault_renew_check: Duration,
     /// How soon a failed Vault renewal is tried again, while the token lasts.
     pub vault_renew_retry: Duration,
-    /// At most one extra round every this long, under a stream of finished tasks.
+    /// The least time between the trigger loop's passes.
     pub round_gap: Duration,
+    /// The least time between the end of a round and the next one finished tasks wake: its
+    /// slow parts (commands, expiry, the rest) run once a tick interval at most,
+    /// so these rounds are short (M5.2cB4).
+    pub task_round_gap: Duration,
     /// After notifications failed, how long until they are tried again; polling goes on
     /// meanwhile.
     pub notification_retry: Duration,
@@ -303,6 +307,7 @@ impl Default for Timings {
             vault_renew_check: Duration::from_mins(1),
             vault_renew_retry: Duration::from_secs(10),
             round_gap: Duration::from_millis(50),
+            task_round_gap: Duration::from_millis(10),
             notification_retry: Duration::from_secs(30),
             master_alive_interval: Duration::from_secs(5),
             gauge_refresh: Duration::from_secs(15),

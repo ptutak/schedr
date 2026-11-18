@@ -18,13 +18,20 @@ announced. Every notification that has arrived by then is taken by that one roun
 burst of commands costs one round, not one each. The 1 s timer starts again after a round
 woken this way.
 
-A worker's `Finished` also wakes a round, on SQLite and Postgres alike. Its downstream tasks
-are then ready and dispatched at once, not at the next tick, which spared a chain of tasks
-up to a second on each step. A round woken this way starts at least 50 ms after the previous
-round ended. An idle master runs it at once. Under a stream of finishes it runs at most 20
-rounds a second, and each round takes every finish that arrived meanwhile. That leaves the
-lease's renewals and the workers' messages their turns. Other messages (a `Started`, a
-heartbeat, a new worker registering) wait for the next tick.
+A worker's `Started` or `Finished` also wakes a round, on SQLite and Postgres alike. Its
+downstream tasks are then ready and dispatched at once, not at the next tick, which spared a
+chain of tasks up to a second on each step. A round woken this way starts at least 10 ms after
+the previous round ended (`SCHEDR_HIDDEN__MASTER__TASK_ROUND_GAP`). An idle master runs it at
+once. Under a stream of finishes each round takes every finish that arrived meanwhile, and the
+lease's renewals and the workers' messages get their turns between a round's parts.
+
+Not every part runs in every round. The workers' results, the scheduler (it starts queued runs:
+an event's, the next one a finished run lets start), preparing runs and assigning tasks run in
+each. Commands, expiring assignments and the rest (parse jobs, lost workers) run once a tick
+interval at most, commands also at once when one is announced; a master's first round, and its
+first after leading again, runs them all. So the rounds a stream of finishes wakes stay short.
+The order: the workers' results, commands, the scheduler, preparing runs, expiring, assigning,
+the rest.
 
 **Notifications behind a connection pooler.** The master listens (Postgres `LISTEN`) on a
 connection of its own. A pooler in **transaction** mode (PgBouncer and similar) can't carry
@@ -200,9 +207,9 @@ or move, triggers to look after. A read whose answer is no isn't made.
 
 The probe is taken once a round. A write ending after it, the round's own or a worker's
 message handled between its parts, doesn't take it again: a read it said no to is still
-skipped. The round notes that, and the master runs another round after the round gap (50 ms),
-as for a finished task. So a run started in a round has its tasks prepared by the next round
-and assigned by the one after, each a round gap apart, not a tick later. Taking the probe
+skipped. The round notes that, and the master runs another round after the gap (10 ms), as for
+a finished task. So a run started in a round has its tasks prepared by the next round and
+assigned by the one after, each a gap apart, not a tick later. Taking the probe
 again after every write cost about four probes a round under load, each planned anew.
 
 A round's parts each run at their own time, a little later than the last. The probe looks
@@ -323,7 +330,7 @@ report, a trigger's) is handled alone after what came before it, also under the 
 whose earlier messages still wait for the round has it queued behind them, so its messages keep
 their order. Each time it takes the lock, a turn checks that its stream is still the worker's.
 
-The round handles the queue first, before preparing runs: every worker's `Started`s and
+The round handles the queue first, before any other part: every worker's `Started`s and
 `Finished`s in one transaction (one lease check, one commit), each worker's `Started`s before its
 `Finished`s; anything else alone, in order. Results are acknowledged once that commit is stored.
 A message whose stream was replaced, or whose worker was taken for lost meanwhile, changes nothing:

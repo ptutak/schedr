@@ -6,7 +6,7 @@ updated = 2026-11-16
 in_progress = [
     "Tonight, unattended (the user, 2026-11-18): M5.2cB4 steps 1-4 (results first; due flags: Results, Prepare, Assign always run, Commands, Scheduler, Expire, Rest each with a flag set every 1 s, Commands also on a command, all set at start and takeover; the task rounds' gap measured at 1, 5, 10, 25 ms and the best picked; a batch's runs together), each measured and committed after make check, no push. Then Codex reviews all of M5.2c; confirmed findings fixed with tests and committed, reviewed again back to back until nothing new; then the whole stress suite, failures fixed the same way until clean. A decision or a bug outside M5.2c waits for the user.",
     "Next: M5.2cB4 as laid out with the user (results first; task rounds and a slow round on the 1 s tick; the task rounds' gap 5 ms to start, measured; a batch's runs together; task end -> stored profiled), each step measured. Then M5.2c's review by Codex over all of M5.2c and the whole stress suite (the user), M5.2d (the run's own overhead profiled first), M5.2e, R1.2. Target 100 tasks a second in scenario 1, 120 very good; now 69.8.",
-    "Committed last: M5.2cB3 (one set of statements a batch, its reads before the lock: 56.3 -> 69.8 tasks a second). M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.",
+    "Committed last: M5.2cB4 steps 1-3 (results first, due flags, task rounds' gap 10 ms: ~68-69 tasks a second, the round's own ~145 ms the limit). Before: M5.2cB3 (one set of statements a batch, its reads before the lock: 56.3 -> 69.8 tasks a second). M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.",
 ]
 
 waiting = []

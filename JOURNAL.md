@@ -1889,3 +1889,23 @@ even a master costing nothing reaches ~160 tasks a second here. 100 leaves start
 command; the task rounds' gap 5 ms to start; a batch's runs moved forward together; task end ->
 stored profiled (the user: second after the run's own ~100 ms of overhead, which M5.2d profiles
 first). Its estimate: task end -> stored from ~100 ms to ~40-60 ms.
+
+### 2026-11-18: M5.2cB4 steps 1-3, results first, the slow parts' due flags, the task rounds' gap
+
+The round handles the workers' results before any other part. The user's due flags: Results, the
+Scheduler, Prepare and Assign run in every round; Commands, Expire and Rest once a tick interval
+(the stress runs' 200 ms, 1 s by default), Commands also at once on an announced command, all at a
+master's first round and its first after leading again (a failed round leaves them due). The
+Scheduler stays in every round (it starts an event's queued run, and the next one a finished run
+lets start: the event test failed with it held back; the user: keep it, measure later if it costs
+much). The rounds results wake have their own gap, `SCHEDR_HIDDEN__MASTER__TASK_ROUND_GAP`;
+`ROUND_GAP` (50 ms) is left to the trigger loop.
+
+Scenario 1 (quick x2, release), the gap at 1 / 5 / 10 / 25 ms: 67.7 / 67.7 / 69.1 / 67.9 tasks a
+second (69.8 before, runs vary ~7 %). The gap doesn't matter: rounds now run back to back, ~7 a
+second, a round ~145 ms by itself (results 47 ms, assign 17 ms under the lock and its reads before
+it, prepare 7, scheduler 6). Task end -> stored fell (p50 83 -> ~55 ms, mean 102 -> ~87), stored ->
+assigned rose by as much (85 -> ~110): the wait moved, the cycle stayed. 10 ms chosen (as good as
+any, fewer idle rounds than 1 or 5). Next: the round's own length; the results part's 47 ms first
+profiled (database time per round is small: its run reads and instance updates ~5-8 ms), then
+step 4 as the profile says.

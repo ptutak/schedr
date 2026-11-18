@@ -82,7 +82,8 @@ reason.
 | `SCHEDR_HIDDEN__MASTER__HANDED_CALL_MIN` | 1 min | The least an `@sensor(wait_for=...)`'s call gets once it is handed a run that ended within its `max_wait`, though little or none of that is left. |
 | `SCHEDR_HIDDEN__MASTER__CLEANUP_MOVE_WAIT` | 10 s | Time a lost worker's cleanup waits before it moves to another worker, on top of the cancel grace: a worker only cut off has stopped the task by then. |
 | `SCHEDR_HIDDEN__MASTER__LISTEN_RETRY` | 30 min | How often the master retries starting command listening after failure; it polls meanwhile. |
-| `SCHEDR_HIDDEN__MASTER__ROUND_GAP` | 50 ms | Minimum gap between extra rounds under a stream of finished tasks. |
+| `SCHEDR_HIDDEN__MASTER__ROUND_GAP` | 50 ms | Minimum gap between the trigger loop's passes. |
+| `SCHEDR_HIDDEN__MASTER__TASK_ROUND_GAP` | 10 ms | Minimum gap between a round's end and one a worker's results wake. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_RETRY` | 30 s | Wait before retrying failed notifications; polling continues meanwhile. |
 | `SCHEDR_HIDDEN__MASTER__ALIVE_INTERVAL` | 5 s | How often the master's loop turns at least while waiting; it must stay shorter than the loop stall timeout, or a waiting master looks stuck. |
 | `SCHEDR_HIDDEN__MASTER__GAUGE_REFRESH` | 15 s | How often the master reads gauges from the database. |

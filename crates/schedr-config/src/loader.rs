@@ -536,6 +536,7 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "WORKER__VAULT_RENEW_CHECK" => &mut timings.vault_renew_check,
         "WORKER__VAULT_RENEW_RETRY" => &mut timings.vault_renew_retry,
         "MASTER__ROUND_GAP" => &mut timings.round_gap,
+        "MASTER__TASK_ROUND_GAP" => &mut timings.task_round_gap,
         "MASTER__NOTIFICATION_RETRY" => &mut timings.notification_retry,
         "MASTER__ALIVE_INTERVAL" => &mut timings.master_alive_interval,
         "MASTER__GAUGE_REFRESH" => &mut timings.gauge_refresh,

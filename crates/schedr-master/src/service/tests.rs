@@ -2104,7 +2104,7 @@ async fn idle_rounds_settle_writing_nothing_and_asking_for_no_follow_up() {
     let (_to_master, _stream) = parsed_worker(&mut client).await;
     let mut settled = false;
     for _ in 0..10 {
-        if !hub.round(Duration::ZERO).await.unwrap() {
+        if !hub.round(Duration::ZERO, true).await.unwrap() {
             settled = true;
             break;
         }
@@ -2113,7 +2113,7 @@ async fn idle_rounds_settle_writing_nothing_and_asking_for_no_follow_up() {
     for n in 0..3 {
         let writes = db.writes_ended();
         assert!(
-            !hub.round(Duration::ZERO).await.unwrap(),
+            !hub.round(Duration::ZERO, true).await.unwrap(),
             "idle round {n} asked for another"
         );
         assert_eq!(db.writes_ended(), writes, "idle round {n} wrote");
@@ -2261,8 +2261,62 @@ async fn a_stop_doesnt_wait_for_the_gap_after_a_round() {
         .unwrap();
 }
 
+/// How many times the round's `part` ran, from the master's metrics.
+fn part_runs(hub: &Hub, part: &str) -> u64 {
+    let mut registry = prometheus_client::registry::Registry::default();
+    hub.metrics.register(&mut registry);
+    let mut text = String::new();
+    prometheus_client::encoding::text::encode(&mut text, &registry).unwrap();
+    let prefix = format!("master_round_part_seconds_count{{part=\"{part}\"}} ");
+    text.lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .map_or(0, |n| n.parse().unwrap())
+}
+
 #[tokio::test]
-async fn a_stream_of_finishes_runs_rounds_at_most_every_round_gap() {
+async fn the_slow_parts_run_once_an_interval_and_commands_also_when_announced() {
+    // M5.2cB4 (the user's due flags): a round the loop runs skips Commands, Expire and Rest
+    // until the tick interval has passed since they ran; Commands also run once announced.
+    let (hub, _db, _client) = connected().await;
+    let every = Duration::from_millis(300);
+    let first = (part_runs(&hub, "expire"), part_runs(&hub, "rest"));
+    hub.round(every, false).await.unwrap();
+    assert_eq!(
+        (part_runs(&hub, "expire"), part_runs(&hub, "rest")),
+        (first.0 + 1, first.1 + 1),
+        "the first round runs every part"
+    );
+    hub.round(every, false).await.unwrap();
+    assert_eq!(
+        part_runs(&hub, "expire"),
+        first.0 + 1,
+        "skipped within the interval"
+    );
+    let commands = part_runs(&hub, "commands");
+    hub.commands_due.store(true, Ordering::SeqCst);
+    hub.round(every, false).await.unwrap();
+    assert_eq!(
+        part_runs(&hub, "commands"),
+        commands + 1,
+        "announced: run at once"
+    );
+    assert_eq!(
+        part_runs(&hub, "expire"),
+        first.0 + 1,
+        "the others still not"
+    );
+    tokio::time::sleep(every).await;
+    hub.round(every, false).await.unwrap();
+    assert_eq!(
+        part_runs(&hub, "expire"),
+        first.0 + 2,
+        "due again after the interval"
+    );
+}
+
+#[tokio::test]
+async fn a_stream_of_finishes_runs_rounds_at_most_every_task_round_gap() {
+    // M5.2cB4: rounds finishes wake are paced by the task rounds' gap.
     let (hub, _db, mut client) = connected().await;
     let mut registry = prometheus_client::registry::Registry::default();
     hub.metrics.register(&mut registry);
@@ -2299,7 +2353,7 @@ async fn a_stream_of_finishes_runs_rounds_at_most_every_round_gap() {
         to_master.send(wrap(finished)).await.unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    tokio::time::sleep(ROUND_GAP * 2).await;
+    tokio::time::sleep(TASK_ROUND_GAP * 2).await;
     let elapsed = started.elapsed();
     let _ = stop.send(());
     running.await.unwrap();
@@ -2311,8 +2365,8 @@ async fn a_stream_of_finishes_runs_rounds_at_most_every_round_gap() {
         .expect("the rounds counted")
         .parse()
         .unwrap();
-    // The first round at once, then at most one every ROUND_GAP (and one more at the end).
-    let most = 2 + elapsed.as_millis() / ROUND_GAP.as_millis();
+    // The first round at once, then at most one every TASK_ROUND_GAP (and one more at the end).
+    let most = 2 + elapsed.as_millis() / TASK_ROUND_GAP.as_millis();
     assert!(rounds >= 3, "the finishes woke rounds: {rounds}");
     assert!(
         rounds <= most,

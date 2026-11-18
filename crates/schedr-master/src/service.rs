@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -133,6 +133,14 @@ pub struct Hub {
     /// The workers' results (`Finished`, `TaskEnded`, `Rejected`) a turn received, for the next
     /// round to handle (M5.2cB, decision 505): turns don't move runs forward, rounds do.
     results: Arc<std::sync::Mutex<Vec<QueuedResult>>>,
+    /// When the round's slow parts (Commands, Expire, Rest) last ran (M5.2cB4, the user's due
+    /// flags): they run again once a tick interval has passed, every other round running only
+    /// Results, the Scheduler (it starts queued runs: an event's, the next one a finished run
+    /// let start), Prepare and Assign. None: due (at the start, leading again, after a failed
+    /// round).
+    slow_last: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    /// The Commands part is due at once: a command was announced.
+    commands_due: Arc<AtomicBool>,
     /// The messages that wait for a worker before it is taken for one that stopped reading.
     stream_buffer: usize,
     /// When each worker's latest message arrived (the core's).
@@ -144,7 +152,7 @@ pub struct Hub {
     /// registrations and uploads wait while it doesn't.
     leading: Arc<watch::Sender<bool>>,
     /// Told when a worker's `Finished` was recorded: a round runs at once instead of at the
-    /// next tick, its downstream tasks ready (decision 42B; [`ROUND_GAP`] after the last).
+    /// next tick, its downstream tasks ready (decision 42B; [`TASK_ROUND_GAP`] after the last).
     finished: Arc<tokio::sync::Notify>,
     /// Told when the trigger loop must look (decision 486): a trigger's stored moment came
     /// (the tick's probe), a named event was announced.
@@ -208,6 +216,8 @@ impl Hub {
             alone_per_turn: core.settings().failed_group_messages_per_turn.max(1),
             assignments_per_round: core.assignments_per_round(),
             results: Arc::default(),
+            slow_last: Arc::default(),
+            commands_due: Arc::new(AtomicBool::new(true)),
             stream_buffer: core.settings().worker_stream_buffer.max(1),
             timings: core.settings().timings,
             metrics: core.metrics().clone(),
@@ -286,6 +296,8 @@ impl Hub {
         });
         self.metrics.leading.set(i64::from(leads));
         if changed && leads {
+            // Leading again: the first round runs every part.
+            *lock_slow(&self.slow_last) = None;
             tracing::info!("the master's lease is renewed: leading again");
             self.problems.clear(ProblemKind::Lease);
         } else if changed {
@@ -501,7 +513,7 @@ impl Hub {
     #[cfg(any(test, feature = "testing"))]
     pub async fn tick(&self) -> Result<(), CoreError> {
         for _ in 0..=FOLLOW_UP_ROUNDS {
-            if !self.round(Duration::ZERO).await? {
+            if !self.round(Duration::ZERO, true).await? {
                 break;
             }
         }
@@ -517,7 +529,7 @@ impl Hub {
     ///
     /// The core's failure (the next tick goes on).
     pub async fn tick_ahead(&self, ahead: Duration) -> Result<(), CoreError> {
-        if self.round(ahead).await? {
+        if self.round(ahead, false).await? {
             // As for a stored `Finished`: another round after the gap, for what a write made
             // possible after the probe.
             self.finished.notify_one();
@@ -526,8 +538,43 @@ impl Hub {
     }
 
     /// One round, looking `ahead`: whether it skipped a read on a probe a write had made
-    /// stale (M5.2b), so another round should follow.
-    async fn round(&self, ahead: Duration) -> Result<bool, CoreError> {
+    /// stale (M5.2b), so another round should follow. Results, the Scheduler, Prepare and Assign
+    /// run in every round; the slow parts (Commands, Expire, Rest) when `full`, or once `ahead`
+    /// (the tick interval) has passed since they last ran, Commands also once a command was
+    /// announced (M5.2cB4, the user's due flags). A failed round leaves them due.
+    async fn round(&self, ahead: Duration, full: bool) -> Result<bool, CoreError> {
+        let slow = full || self.slow_due(ahead);
+        let commands = self.commands_due.swap(false, Ordering::SeqCst) || slow;
+        let done = self.round_parts(ahead, slow, commands).await;
+        if done.is_err() {
+            if slow {
+                *lock_slow(&self.slow_last) = None;
+            }
+            if commands {
+                self.commands_due.store(true, Ordering::SeqCst);
+            }
+        }
+        done
+    }
+
+    /// Whether the slow parts are due (a tick interval since they last ran, or never): if so,
+    /// they count as run now.
+    fn slow_due(&self, every: Duration) -> bool {
+        let mut last = lock_slow(&self.slow_last);
+        let due = last.is_none_or(|ran| ran.elapsed() >= every);
+        if due {
+            *last = Some(std::time::Instant::now());
+        }
+        due
+    }
+
+    /// The round's parts (see [`Self::round`]).
+    async fn round_parts(
+        &self,
+        ahead: Duration,
+        slow: bool,
+        commands: bool,
+    ) -> Result<bool, CoreError> {
         // The lock taken for each part on its own, so a worker's turn gets in between them
         // (decision 469), each part at the time it runs. What a part built before a failure is
         // delivered too (B7); a failed part ends the round, as before. The round's reads the
@@ -546,17 +593,22 @@ impl Hub {
             {
                 self.triggers_due.notify_one();
             }
+            // The workers' results first: their runs moved forward here (M5.2cB), before any
+            // other part (M5.2cB4).
+            Box::pin(self.round_results((self.clock)())).await?;
             for part in RoundPart::ALL {
-                if part == RoundPart::Triggers {
-                    continue;
-                }
-                if part == RoundPart::Commands {
-                    self.commands().await?;
-                    continue;
-                }
-                if part == RoundPart::Prepare {
-                    // The workers' results first: their runs moved forward here (M5.2cB).
-                    Box::pin(self.round_results((self.clock)())).await?;
+                match part {
+                    RoundPart::Triggers => continue,
+                    RoundPart::Commands => {
+                        if commands {
+                            self.commands().await?;
+                        }
+                        continue;
+                    }
+                    RoundPart::Expire | RoundPart::Rest if !slow => {
+                        continue;
+                    }
+                    _ => {}
                 }
                 let mut outgoing = Vec::new();
                 let now = (self.clock)();
@@ -785,6 +837,7 @@ impl Hub {
                 }
                 Wake::Command => {
                     paused_until = None;
+                    self.commands_due.store(true, Ordering::SeqCst);
                     self.command_announced(notifications.as_mut()).await;
                     ticks.reset();
                 }
@@ -793,10 +846,10 @@ impl Hub {
                     continue;
                 }
                 Wake::Finished => {
-                    // At most one round every ROUND_GAP: under a stream of finishes each
+                    // At most one round every TASK_ROUND_GAP: under a stream of finishes each
                     // round takes what arrived meanwhile, and the lease's renewals and the
                     // workers' messages get their turns.
-                    let due = last_round.map(|ended| ended + self.timings.round_gap);
+                    let due = last_round.map(|ended| ended + self.timings.task_round_gap);
                     if let Some(due) = due.filter(|due| *due > tokio::time::Instant::now()) {
                         round_due = Some(due);
                         continue;
@@ -2176,10 +2229,14 @@ pub const MESSAGES_PER_TURN: usize = 80;
 /// the next, so a failing group doesn't hold the lock for 40 transactions.
 pub const ALONE_PER_TURN: usize = 10;
 
-/// The least time between the end of a round and one a worker's `Finished` wakes (decision
-/// 42B): none when the master was idle, so a finish starts its downstream tasks at once; under
-/// a stream of finishes at most 20 rounds a second, each taking what arrived meanwhile.
+/// The least time between the trigger loop's passes (decision 486); the rounds results wake
+/// have their own, [`TASK_ROUND_GAP`] (M5.2cB4).
 pub const ROUND_GAP: Duration = Duration::from_millis(50);
+
+/// The least time between the end of a round and one finished tasks wake (M5.2cB4): such a
+/// round runs its slow parts once a tick interval at most, so it is short; under a stream of
+/// finishes each takes what arrived meanwhile.
+pub const TASK_ROUND_GAP: Duration = Duration::from_millis(10);
 
 /// How long the master waits before listening again after notifications failed.
 pub const NOTIFICATION_RETRY: Duration = Duration::from_secs(30);
@@ -2254,4 +2311,11 @@ fn scopeguard_stop(stop: watch::Sender<bool>, task: tokio::task::JoinHandle<()>)
         }
     }
     Guard(stop, task)
+}
+
+fn lock_slow(
+    last: &std::sync::Mutex<Option<std::time::Instant>>,
+) -> std::sync::MutexGuard<'_, Option<std::time::Instant>> {
+    last.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

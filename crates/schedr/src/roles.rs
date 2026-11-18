@@ -242,6 +242,7 @@ pub fn master_settings(config: &Config) -> Settings {
         event_lookback: config.timings.event_lookback,
         timings: schedr_master::core::MasterTimings {
             round_gap: config.timings.round_gap,
+            task_round_gap: config.timings.task_round_gap,
             notification_retry: config.timings.notification_retry,
             alive: config.timings.master_alive_interval,
             gauge_refresh: config.timings.gauge_refresh,

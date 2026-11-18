@@ -182,6 +182,8 @@ pub struct MasterTimings {
     pub trigger_restart_backoff_max: Duration,
     /// At most one extra round every this long (`round_gap`).
     pub round_gap: Duration,
+    /// The least time between a round's end and one finished tasks wake (`task_round_gap`).
+    pub task_round_gap: Duration,
     /// How long until failed notifications are tried again (`notification_retry`).
     pub notification_retry: Duration,
     /// How often its loop turns at least while it waits (`alive_interval`).
@@ -201,6 +203,7 @@ impl Default for MasterTimings {
     fn default() -> Self {
         Self {
             round_gap: crate::service::ROUND_GAP,
+            task_round_gap: crate::service::TASK_ROUND_GAP,
             notification_retry: crate::service::NOTIFICATION_RETRY,
             alive: crate::service::ALIVE_INTERVAL,
             gauge_refresh: crate::metrics::GAUGE_REFRESH,
