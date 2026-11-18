@@ -1,0 +1,11 @@
+title = "B263, a master frozen in a statement: tried once more"
+date = 2026-11-18
+by = "user"
+on = "D115"
+kind = "corrects"
+summary = '''
+A statement cut off at the query limit (or its wait for a connection) is tried once more at once
+before the stream ends, so a master frozen in a statement ends no stream on its thaw; a failed
+`Deregister` is reported, not taken as handled.
+'''
+history = "JOURNAL.md#DN11"

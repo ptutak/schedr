@@ -1,0 +1,9 @@
+title = "Codex's review of the UI steps M5.1g-l1: seven fixed"
+date = 2026-11-15
+by = "claude"
+on = "D492"
+kind = "corrects"
+summary = '''
+Codex's review of the UI steps M5.1g-l1 found seven, all fixed: among them, metrics points are final after 15 minutes, not 5, and the All tab is `/?view=`.
+'''
+history = "JOURNAL.md#DN7"

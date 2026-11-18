@@ -143,7 +143,7 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
 - **Not chosen:** generating colleagues' usage from the skills' `USAGE.md` (outside the
   repository: CI couldn't check it).
 
-### <a id="N1"></a>2026-11-09: the design drafts deleted (note 1; corrects D373)
+### <a id="DN1"></a>2026-11-09: the design drafts deleted (decision note 1; corrects D373)
 
 - D373's entry says the 20 hand-written design drafts were kept on the local branch
   `design-drafts`. The user: "we don't need those"; the branch was deleted (it was never pushed).
@@ -155,7 +155,7 @@ to. The history up to decision 366 is `archive/PROJECT.md`, organized by topic a
   rewritten.
 - **Chosen (the user's, A):** a second kind of entry, the note (`N<n>`, anchored like a decision,
   no TOML): an event, a finding, or a correction of an earlier entry (`corrects D<n>` in its heading,
-  shown on that decision's design page). N1 is the first.
+  shown on that decision's design page). N1 is the first (DN1 since D508).
 - **Not chosen:** a third kind for corrections (rare; a note naming what it corrects covers it);
   notes without numbers (nothing could link to one, and STATUS.md couldn't list them).
 
@@ -533,7 +533,7 @@ names as heard, over the master counting from its own sends. With answered heart
 bound and the stamp's are within milliseconds; the simulator now loses heartbeats one way and
 checks the worker against the master's loss, and fails without the bound.
 
-### <a id="N2"></a>2026-11-11: B184 met; the stress comparison before and after M4B (note 2)
+### 2026-11-11: B184 met; the stress comparison before and after M4B
 
 Stress run on this laptop, the code before M4B's batching (`0da885f`) and after (`afb1b9e`),
 one after the other (the guide, Stress tests, After M4B). Stress 23 records its 500 ends with
@@ -781,7 +781,7 @@ false in 3; no schedule meaning daily in 2, manual in 3), and some imports exist
 471 now says: `--airflow 2|3`, always given, an import contradicting it an error. Not chosen:
 guessing the version from the imports.
 
-### <a id="N3"></a>2026-11-13: M5.1b's 10 s target moved to M5.1c (note 3)
+### 2026-11-13: M5.1b's 10 s target moved to M5.1c
 
 
 M5.1b wrote a burst's start records as one group, and stress 23's `all_in_s` stayed at 14.5 s
@@ -812,7 +812,7 @@ own ahead of Writing DAGs (`docs/01-start/`), and asked for PyPI to show that, n
 which is about working on the repository (decision 477): `PYPI.md`, its DAG checked against the
 example by a unit test.
 
-### <a id="N4"></a>2026-11-13: The liveness redesign drafts retired: settled by D442-D460 (note 4; corrects D442)
+### <a id="DN2"></a>2026-11-13: The liveness redesign drafts retired: settled by D442-D460 (decision note 2; corrects D442)
 
 The drafts `liveness-redesign.md` and `liveness-one-clock.md` (2026-11-11, never committed; in
 the worktree `schedr-grok-liveness`) were reviewed against what was built, and dropped with the
@@ -826,7 +826,7 @@ D442 and the guarantees page state them.
 
 ### <a id="D478"></a>2026-11-13: user-set deadlines count on the wall clock (decision 478, Q27)
 
-- **Question (Q27, from the retired liveness drafts' decision 6, N4):** liveness counts on master
+- **Question (Q27, from the retired liveness drafts' decision 6, DN2):** liveness counts on master
   time (D442), but the deadlines a person sets and the master enforces compare a stored wall-clock
   time with the wall clock now: a wait step's `max_wait` (`dispatch.rs`, `deadline`) and a
   resource's `unschedulable_timeout` (`fail_waiting_users`), both checked in the code.
@@ -902,7 +902,7 @@ D442 and the guarantees page state them.
   p99 in scenarios 13 and 23); then the user decides whether more M5.1c steps are needed before
   M5.1d.
 
-### <a id="N5"></a>2026-11-13: M5.1c2: what a round's commands spend (stress 13 and 23) (note 5)
+### 2026-11-13: M5.1c2: what a round's commands spend (stress 13 and 23)
 
 Probed after M5.1c1 (temporary timers, SQLite, stress 13 and 23; every command a `TriggerRun`),
 per command in scenario 23 (50 commands; scenario 13 about twice as slow, its machine busy with
@@ -915,7 +915,7 @@ user's decision after M5.1c1 and M5.1c2's review.
 
 ### <a id="D483"></a>2026-11-13: a command is one transaction, the lock released between commands (decision 483)
 
-- **Question:** what to do with M5.1c2's numbers (N5): a `TriggerRun` costs about 64 ms in
+- **Question:** what to do with M5.1c2's numbers (the entry before): a `TriggerRun` costs about 64 ms in
   stress 23 over eight steps, four of them writes committed on their own (41 ms), and
   `active_dags` reads every DAG to find one (10 ms); 50 commands a round hold the core lock up
   to 3.2 s. Commands are the API's actions (the CLI, the UI, `schedr.api`, tasks calling it);
@@ -933,7 +933,7 @@ user's decision after M5.1c1 and M5.1c2's review.
   commits still show after M5.1c3.
 - **Not chosen:** C (the lock held for the batch, against decision 480), D.
 
-### <a id="N6"></a>2026-11-14: M5.1d judged on the recording of a wait step's end, not the pokes' figure (note 6)
+### 2026-11-14: M5.1d judged on the recording of a wait step's end, not the pokes' figure
 
 
 M5.1d's baseline after M5.1c3 (stress 23, Postgres): pokes p99 7.75 s (11.1 s after M4B), short
@@ -1083,7 +1083,7 @@ remaining M5.1 steps were run unattended. Claude found that a root given as `.` 
   **Chosen: A**. Not chosen: B (`.` for both is still one folder in two lists).
 - **Roles:** (A) standalone only; (B) the worker too. **Chosen: A**, the guide's case.
 
-### <a id="N7"></a>2026-11-14: The UI isn't built or tested for phones (note 7; corrects D466)
+### <a id="DN3"></a>2026-11-14: The UI isn't built or tested for phones (decision note 3; corrects D466)
 
 
 While building M5.1g's Status block, Claude wrapped its table to scroll on a narrow screen; the
@@ -1108,7 +1108,7 @@ its form's. Its view: worth it, safer than the usual mistake of an `async def` t
 loop. The user: add it as the last step of M5.1 (M5.1o). Claude took the `wait_for=` forms as
 "not pokes", so async only, as the user's line drew it; to be confirmed. Not chosen: async only.
 
-### <a id="N8"></a>2026-11-14: samples by process, the webserver's its own (note 8; on D464)
+### <a id="DN4"></a>2026-11-14: samples by process, the webserver's its own (decision note 4; adds to D464)
 
 Building M5.1i, a side note pointed out that a standalone's master, worker and webserver are one
 process reporting the same figures (M5.1h): samples by node would chart it three times and a
@@ -1154,7 +1154,7 @@ the minute rows only (7 and 30 days would have lost the tasks); the container's 
 (absent outside a cgroup, and on a desktop a cgroup is the whole session). CPU stays each
 process's own: a task's CPU isn't sampled.
 
-### <a id="N9"></a>2026-11-15: Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL (note 9; corrects D464)
+### <a id="DN5"></a>2026-11-15: Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL (decision note 5; corrects D464)
 
 Codex's high review of M5.1j's storage and API (session `01a1dc3c`) found six problems, all
 reproduced on both databases and fixed with tests that failed before:
@@ -1246,7 +1246,7 @@ Not chosen: a coarser rollup tier for 30 days (first reads stay 1-4 s on SQLite,
 per process until evicted); a cache by time only (each refresh past it would read everything
 again).
 
-### <a id="N10"></a>2026-11-15: M5.1k built: a task's attempts' peaks, the DAG's p95s (decision 467) (note 10)
+### 2026-11-15: M5.1k built: a task's attempts' peaks, the DAG's p95s (decision 467)
 
 Built as decision 467 says, with two choices of Claude's:
 
@@ -1259,7 +1259,7 @@ Built as decision 467 says, with two choices of Claude's:
   (the bars show what it used, the line what holds now). A task without one shows "the worker's
   share", which differs by worker. The table and the chart need no new column or index.
 
-### <a id="N11"></a>2026-11-15: M5.1l split; the DAGs page by deployment (note 11)
+### 2026-11-15: M5.1l split; the DAGs page by deployment
 
 M5.1l had two parts. The DAGs page's tabs (the user, 2026-11-14) are built as M5.1l1. Throughput
 and start latency are M5.1l2, left for a decision: M5.1a's stage timers are Prometheus histograms
@@ -1273,7 +1273,7 @@ script and no flash of the other list. A name no deployment has shows all. Not c
 `localStorage` (the server couldn't render the remembered tab; the page would switch after
 loading).
 
-### <a id="N12"></a>2026-11-15: M5.1o built: a poke may be a plain def (note 12; on D489)
+### <a id="DN6"></a>2026-11-15: M5.1o built: a poke may be a plain def (decision note 6; adds to D489)
 
 Built as decision 489 says. A plain `def` poke is wrapped, where the hosts and `schedr.testing`
 call pokes (`awaited_poke`), into an awaited `asyncio.to_thread` call: the host's default
@@ -1306,7 +1306,7 @@ Codex's review of M5.1o (`01a1dd76`) found five; four fixed with tests, one a kn
    definition refuses it with "yields". Typing can't exclude it here.
 5. A test's 3 ms call window flaked under load: 50 ms.
 
-### <a id="N13"></a>2026-11-15: Codex's review of the UI steps M5.1g-l1: seven fixed (note 13; corrects D492)
+### <a id="DN7"></a>2026-11-15: Codex's review of the UI steps M5.1g-l1: seven fixed (decision note 7; corrects D492)
 
 
 Codex's joint review (`01a1dd5d`) of M5.1g, j, k and l1 found seven, all confirmed by tests that
@@ -1326,7 +1326,7 @@ fail on the old code, all fixed:
    such a deployment gets its own tab.
 7. The 7- and 30-day browser cases passed with no chart: each range now needs its three.
 
-### <a id="N14"></a>2026-11-15: M5.1n built: standalone's --dag-path and --script-path (note 14; on D488)
+### <a id="DN8"></a>2026-11-15: M5.1n built: standalone's --dag-path and --script-path (decision note 8; adds to D488)
 
 
 Built as decision 488 says. The options are command-line overrides of `dags.path` and
@@ -1452,7 +1452,7 @@ The same round of questions, before the user left Claude to finish M5.1 and the 
   `async def`.
 - **Getting started** (`--dag-path dags`) is committed with M5.1, not kept for the user to read.
 
-### <a id="N15"></a>2026-11-15: M5.1p built: 41 hidden settings and the masters' window (note 15; on D493)
+### <a id="DN9"></a>2026-11-15: M5.1p built: 41 hidden settings and the masters' window (decision note 9; adds to D493)
 
 
 Built as decision 493 says: 11 timings and 30 limits (the two event backlogs are two), each read
@@ -1479,7 +1479,7 @@ overflowed a timestamp parked its task for good (timings are at most 3650 days, 
 deadline saturates); `dags test` kept its own client timeouts; the pending reason named the
 constant instead of the configured cap.
 
-### <a id="N16"></a>2026-11-15: M5.1l2 built: the attempt charts on the Metrics page (note 16; on D494)
+### <a id="DN10"></a>2026-11-15: M5.1l2 built: the attempt charts on the Metrics page (decision note 10; adds to D494)
 
 Built as decision 494 says, read from the attempts: per bucket, the attempts ended by how
 (`success`; `failed`, `timed_out`, `oom_killed` as failed; the rest as stopped), and the
@@ -2087,7 +2087,7 @@ user): a run again on another worker is allowed when the first worker was in tro
 start to the other run's start; on the same worker after its run it isn't (B261's first cause
 stays caught). A test on the CI case's numbers fails on the old rule.
 
-### 2026-11-18: B263, a master frozen in a statement: tried once more (decision 115 narrowed)
+### <a id="DN11"></a>2026-11-18: B263, a master frozen in a statement: tried once more (decision note 11; corrects D115)
 
 `make test-integration` on M5.2d's code failed once (alone it passed six times) in B242's test: a
 master frozen 8 s while a worker drained; the worker ended disconnected, not offline. The worker's
@@ -2105,3 +2105,21 @@ is rolled back, and a message handled again is what a reconnect's resending does
 cost: in a real database slowdown a turn or round waits two limits, not one, before its stream
 ends. `deregistered` returns its failure now. Two tests (a turn's `Draining`, a round's
 `Deregister`, the only connection held past the limit) fail without it.
+
+### <a id="D508"></a>2026-11-18: decision notes and the user's notes (decision 508)
+
+- **Question:** notes (D377) had no rule for when one was written: since 2026-11-15 every entry
+  that wasn't a decision was a plain dated heading, and notes stopped. The user: they may have
+  their place, but which entry is which must be clear.
+- **Chosen (the user's):** an entry correcting or adding to a decision is a decision note,
+  `DN<n>`, with a TOML in `decisions/` (title, date, by, on, kind, summary, history), rendered in
+  DECISIONS.md and under its decision on the design page; `N<n>` is the user's own, written only
+  when the user asks, a TOML in `notes/`, rendered in a generated NOTES.md (one line each) and the
+  latest three in STATUS.md (the user's A of: NOTES.md, STATUS.md only, a section of
+  DECISIONS.md); any other event is a plain dated entry. The old notes reworked: the ten on a
+  decision became DN1-DN10 in date order (N1, N4, N7-N9, N12-N16), B263's entry on D115 DN11; the
+  six on none (N2, N3, N5, N6, N10, N11) plain entries, their anchors dropped and the three
+  references to them reworded.
+- **Not chosen:** keeping the old numbers with a D in front (gaps); a DN as a pointer only (its
+  summary is what the decision's page shows); the six event notes kept as the user's N1-N6 (they
+  weren't asked for); one with the M5.2d commit (kept apart).

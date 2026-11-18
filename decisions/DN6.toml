@@ -1,0 +1,9 @@
+title = "M5.1o built: a poke may be a plain def"
+date = 2026-11-15
+by = "claude"
+on = "D489"
+kind = "adds"
+summary = '''
+M5.1o built: a plain `def` poke runs in an awaited `asyncio.to_thread` call, the host's thread pool sized per wait step; a generator poke is refused; Codex's review found five, four fixed, one a known limit.
+'''
+history = "JOURNAL.md#DN6"

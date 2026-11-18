@@ -1,0 +1,9 @@
+title = "The design drafts deleted"
+date = 2026-11-09
+by = "user"
+on = "D373"
+kind = "corrects"
+summary = '''
+The design drafts' local branch `design-drafts`, which D373's entry says was kept, was deleted (the user: "we don't need those"); it was never pushed.
+'''
+history = "JOURNAL.md#DN1"

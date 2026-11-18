@@ -1,0 +1,9 @@
+title = "Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL"
+date = 2026-11-15
+by = "claude"
+on = "D464"
+kind = "corrects"
+summary = '''
+Codex's review of M5.1j: a deployment's totals are weighted by the minutes each rollup covers, a rollup's parts averaged over every minute, a container's latest limit taken, the buckets computed in SQL, and ranges hold at most 240 points.
+'''
+history = "JOURNAL.md#DN5"

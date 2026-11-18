@@ -1,0 +1,9 @@
+title = "The UI isn't built or tested for phones"
+date = 2026-11-14
+by = "user"
+on = "D466"
+kind = "corrects"
+summary = '''
+D466's promise that charts stack and tables scroll on a phone is dropped (the user: no one uses this on a phone): the Metrics page gets no phone layout and no tests for one.
+'''
+history = "JOURNAL.md#DN3"

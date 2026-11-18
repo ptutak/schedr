@@ -1,0 +1,9 @@
+title = "Samples by process, the webserver's its own"
+date = 2026-11-14
+by = "claude"
+on = "D464"
+kind = "adds"
+summary = '''
+Samples are keyed by process, a standalone's roles folded into one row; a webserver in a process of its own writes its own sample a minute; the 24 h and 30 d deletes run with the rollup, as hidden timings.
+'''
+history = "JOURNAL.md#DN4"

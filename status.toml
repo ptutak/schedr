@@ -4,8 +4,9 @@
 updated = 2026-11-18
 
 in_progress = [
-    "M5.2d done, committed with B259-B263 fixed in one commit (the user), then pushed (the user, 2026-11-18). The worker's gain is latency, not throughput (scenario 1 untraced 68.7 tasks a second against 70.2 before): the master's round gates a slot's cycle.",
-    "Next: M5.2e, the worker's waiting queue, its steps e1-e7 in the plan (designed with the user, 2026-11-18); e1 first (the decision; what reads the heard number checked). Also: whether to drop `records.py note` (the user: notes are no longer used; asked).",
+    "M5.2d with B259-B263 committed and pushed (017aac72, 2026-11-18). B263's retry went out before crash scenarios 17-21 ran on it (the stress rule for recovery changes): rerun locally after the push, results reported to the user.",
+    "Decision 508 (the user, 2026-11-18): journal entries are decisions, decision notes (DN, TOMLs in decisions/), the user's notes (N, only when asked; notes/, NOTES.md) and plain entries; the old N1-N16 reworked. Built with tests, waiting for make check and the user's acceptance of the commit; the project-docs skill updated the same way (its repo, uncommitted).",
+    "Next: M5.2e, the worker's waiting queue, its steps e1-e7 in the plan (designed with the user, 2026-11-18); e1 first.",
 ]
 
 waiting = []

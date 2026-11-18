@@ -1,0 +1,9 @@
+title = "M5.1n built: standalone's --dag-path and --script-path"
+date = 2026-11-15
+by = "claude"
+on = "D488"
+kind = "adds"
+summary = '''
+M5.1n built: `--dag-path` and `--script-path` override `dags.path` and `scripts.path`; a path is kept as given, only `.` and one ending in `..` resolved; a path that isn't UTF-8 is refused.
+'''
+history = "JOURNAL.md#DN8"

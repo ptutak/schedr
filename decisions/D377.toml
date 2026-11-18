@@ -1,7 +1,8 @@
 title = "JOURNAL.md holds notes (N) beside decisions (D)"
 date = 2026-11-09
 by = "user"
-status = "active"
+status = "superseded"
+superseded_by = 508
 topic = "development"
 section = "Documents and records"
 summary = '''

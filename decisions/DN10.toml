@@ -1,0 +1,9 @@
+title = "M5.1l2 built: the attempt charts on the Metrics page"
+date = 2026-11-15
+by = "claude"
+on = "D494"
+kind = "adds"
+summary = '''
+M5.1l2 built: the attempts ended and the started latency's p50/p95 per bucket, final buckets kept between requests; the `ended_at` and `started_at` indexes are partial; a "ready -> started" line is not built.
+'''
+history = "JOURNAL.md#DN10"

@@ -1,0 +1,19 @@
+title = "Journal entries: decisions, decision notes, the user's notes, plain entries"
+date = 2026-11-18
+by = "user"
+status = "active"
+topic = "development"
+section = "Documents and records"
+summary = '''
+A JOURNAL.md entry is a decision (`D<n>`), a decision note (`DN<n>`: it corrects or adds to a
+decision, with `decisions/DN<n>.toml`, listed in DECISIONS.md and under the decision on its design
+page; one correcting it updates the decision's summary too), the user's note (`N<n>`, only when the
+user asks: `notes/N<n>.toml`, listed in NOTES.md, the latest in STATUS.md), or a plain dated
+heading for any other event or finding. `records.py decision-note D<n> corrects|adds "<title>"` and
+`records.py note "<title>"` write the file and the heading; both kinds are numbered from 1 without
+gaps, each file and its entry checked against each other. The old notes N1-N16 became DN1-DN10 and
+plain entries.
+'''
+history = "JOURNAL.md#D508"
+step = "n/a"
+code = ["scripts/records.py::new_decision_note", "scripts/records.py::new_note", "scripts/records.py::note_problems", "scripts/records.py::render_notes"]

@@ -465,7 +465,7 @@ for each DAG, and a repeat is acknowledged without a read or a write.
 | 1 and 6: a round, p99 | 4.1 s | 4.1 s |
 
 The pokes' figure (7.75 s, then 4.4 s) is mostly where the file opens in their 5 s cycle, so
-the step is judged on the `await` steps (note 6).
+the step is judged on the `await` steps (the journal, 2026-11-14).
 
 ### The turn's size (M5.1e, 2026-11-14)
 

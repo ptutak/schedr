@@ -11,7 +11,9 @@ from types import ModuleType
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
+# The project's root: the nearest folder above holding `scripts/records.py` (schedr keeps its tests
+# at python/tests/unit/, a project set up by the project-docs skill at tests/).
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "scripts" / "records.py").exists())
 README = "| Topic | Covers |\n|---|---|\n| `runs` | runs |\n| `chained-runs` | chains |\n"
 
 
@@ -438,35 +440,107 @@ def test_status_toml_refuses_unknown_fields(tmp_path: Path) -> None:
         module.views(load(tmp_path), module.Paths(tmp_path))
 
 
-def test_a_note_is_numbered_on_and_shown_on_the_decision_it_corrects(tmp_path: Path) -> None:
+JOURNAL = '# Journal\n\n### <a id="D1"></a>2026-11-08: a choice (decision 1)\n\nWhy.\n'
+
+
+def test_a_decision_note_is_numbered_on_and_shown_under_its_decision(tmp_path: Path) -> None:
     module = project(tmp_path, {1: decision()})
-    (tmp_path / "JOURNAL.md").write_text(
-        '# Journal\n\n### <a id="D1"></a>2026-11-08: a choice (decision 1)\n\nWhy.\n'
-    )
-    heading = module.new_note(tmp_path, "the branch deleted", "D1")
-    assert heading.endswith(": the branch deleted (note 1; corrects D1)")
-    assert module.new_note(tmp_path, "a finding").endswith(": a finding (note 2)")
-    entries = module.journal(tmp_path)
-    assert [(e.id, e.corrects) for e in entries] == [("D1", ""), ("N1", "D1"), ("N2", "")]
+    (tmp_path / "JOURNAL.md").write_text(JOURNAL)
+    paths = module.Paths(tmp_path)
+    first = module.new_decision_note(paths, "D1", "corrects", "the branch deleted")
+    second = module.new_decision_note(paths, "D1", "adds", "built so")
+    assert [first.name, second.name] == ["DN1.toml", "DN2.toml"]
+    journal = (tmp_path / "JOURNAL.md").read_text()
+    assert ": the branch deleted (decision note 1; corrects D1)" in journal
+    assert ": built so (decision note 2; adds to D1)" in journal
+    for path in (first, second):
+        path.write_text(path.read_text().replace("summary = '''\n", "summary = '''\nwhat.\n"))
     loaded = load(tmp_path)
-    current = " ".join(module.design_blocks(loaded, "runs", notes=entries)["current"].split())
-    assert "what holds. *Corrected by N1:* the branch deleted." in current
+    assert [(n.id, n.relation) for n in loaded.decision_notes] == [
+        ("DN1", "corrects D1"),
+        ("DN2", "adds to D1"),
+    ]
+    current = " ".join(module.design_blocks(loaded, "runs")["current"].split())
+    assert "*Corrected by DN1:* the branch deleted. *Added to by DN2:* built so." in current
+    assert "| DN2 | " in module.render_decisions(loaded)
     assert module.note_problems(loaded, tmp_path) == []
-    with pytest.raises(module.RecordError, match="corrects a decision"):
-        module.new_note(tmp_path, "x", "B5")
+    with pytest.raises(module.RecordError, match="on a decision that exists"):
+        module.new_decision_note(paths, "D9", "adds", "x")
+    with pytest.raises(module.RecordError, match="corrects or adds"):
+        module.new_decision_note(paths, "D1", "replaces", "x")
 
 
-def test_notes_out_of_order_or_correcting_nothing_are_refused(tmp_path: Path) -> None:
+def dn(number: int, on: str = "D1", kind: str = "corrects", history: str = "") -> str:
+    """A decision note's file."""
+    return (
+        f'title = "note {number}"\ndate = 2026-11-09\nby = "user"\non = "{on}"\n'
+        f'kind = "{kind}"\nsummary = "what"\n'
+        f'history = "{history or f"JOURNAL.md#DN{number}"}"\n'
+    )
+
+
+def test_a_decision_note_and_its_journal_entry_must_agree(tmp_path: Path) -> None:
     module = project(tmp_path, {1: decision()})
+    (tmp_path / "decisions" / "DN1.toml").write_text(dn(1, kind="adds"))
+    (tmp_path / "decisions" / "DN2.toml").write_text(dn(2, history="JOURNAL.md#DN9"))
     (tmp_path / "JOURNAL.md").write_text(
-        '### <a id="N2"></a>2026-11-09: skipped one (note 2)\n\n'
-        '### <a id="N3"></a>2026-11-09: wrong target (note 3; corrects D9)\n'
+        JOURNAL + '\n### <a id="DN1"></a>2026-11-09: note 1 (decision note 1; corrects D1)\n'
+        '\n### <a id="DN3"></a>2026-11-09: stray (decision note 3; corrects D1)\n'
     )
     assert module.note_problems(load(tmp_path), tmp_path) == [
-        "JOURNAL.md: note N2 is out of order (expected N1)",
-        "JOURNAL.md: note N3 is out of order (expected N2)",
-        "JOURNAL.md: N3 corrects D9, which isn't a decision",
+        "DN1: its JOURNAL.md heading says corrects D1, its file adds to D1",
+        "DN2: `history` is JOURNAL.md#DN2",
+        'DN2: JOURNAL.md has no entry headed <a id="DN2"></a>',
+        "JOURNAL.md: DN3 has no file (decisions/DN3.toml)",
     ]
+
+
+@pytest.mark.parametrize(
+    ("files", "message"),
+    [
+        ({"DN2.toml": dn(2)}, "no file for DN1"),
+        ({"DN1.toml": dn(1, on="D7")}, "DN1: on D7, unknown"),
+        ({"DN1.toml": dn(1, kind="replaces")}, "`kind` is one of corrects, adds"),
+        ({"DN1.toml": dn(1, on="B5")}, "`on` is a decision"),
+    ],
+)
+def test_a_wrong_decision_note_is_refused(
+    tmp_path: Path, files: dict[str, str], message: str
+) -> None:
+    module = project(tmp_path, {1: decision()})
+    for name, text in files.items():
+        (tmp_path / "decisions" / name).write_text(text)
+    with pytest.raises(module.RecordError, match=message):
+        load(tmp_path)
+
+
+def test_the_users_note_gets_its_file_its_heading_and_notes_md(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    (tmp_path / "JOURNAL.md").write_text(JOURNAL)
+    paths = module.Paths(tmp_path)
+    path = module.new_note(paths, "a thought of mine")
+    assert path == tmp_path / "notes" / "N1.toml"
+    assert ": a thought of mine (note 1)" in (tmp_path / "JOURNAL.md").read_text()
+    path.write_text(path.read_text().replace("summary = '''\n", "summary = '''\nit.\n"))
+    loaded = load(tmp_path)
+    assert module.note_problems(loaded, tmp_path) == []
+    notes = module.views(loaded, paths)[tmp_path / "NOTES.md"]
+    assert "| N1 | " in notes
+    assert "a thought of mine" in notes
+    assert "**The user's notes:** 1; latest: N1" in module.status_block(loaded, tmp_path)
+    (tmp_path / "notes" / "N3.toml").write_text(path.read_text())
+    with pytest.raises(module.RecordError, match="no file for N2"):
+        load(tmp_path)
+
+
+def test_a_note_takes_only_a_title(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    (tmp_path / "JOURNAL.md").write_text(JOURNAL)
+    paths = module.Paths(tmp_path)
+    assert not module.run(["records.py", "note", "a title", "D1"], paths)
+    assert not module.run(["records.py", "decision-note", "D1", "adds", "--help"], paths)
+    assert not (tmp_path / "notes").exists()
+    assert module.load_decision_notes(tmp_path / "decisions") == []
 
 
 def test_a_deferred_question_waits_for_a_step_and_is_listed_apart(tmp_path: Path) -> None:

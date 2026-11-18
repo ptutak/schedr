@@ -1,0 +1,9 @@
+title = "The liveness redesign drafts retired: settled by D442-D460"
+date = 2026-11-13
+by = "user"
+on = "D442"
+kind = "corrects"
+summary = '''
+The liveness redesign drafts were reviewed against what was built and dropped with their worktree: their decisions became D442-D453 and D460, user-set deadlines on the wall clock became Q27, a formal model of the protocol is not planned.
+'''
+history = "JOURNAL.md#DN2"

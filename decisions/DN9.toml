@@ -1,0 +1,9 @@
+title = "M5.1p built: 41 hidden settings and the masters' window"
+date = 2026-11-15
+by = "claude"
+on = "D493"
+kind = "adds"
+summary = '''
+M5.1p built: 11 timings and 30 limits, each carried to its use with its old default; limits are 1 to 16,777,216 and timings at most 3650 days; the masters' window is three node heartbeats.
+'''
+history = "JOURNAL.md#DN9"

@@ -27,10 +27,29 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 Active decisions with a claim nobody found in the code yet (`unverified`): D57, D65, D66, D129, D192, D221, D222, D242, D243, D245, D262, D294, D303, D408, D425.
 
+## Decision notes
+
+Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its anchor in JOURNAL.md); also under the decision on its design page.
+
+| # | Date | By | On | Title |
+|---|---|---|---|---|
+| DN11 | 2026-11-18 | user | corrects D115 | B263, a master frozen in a statement: tried once more |
+| DN10 | 2026-11-15 | claude | adds to D494 | M5.1l2 built: the attempt charts on the Metrics page |
+| DN9 | 2026-11-15 | claude | adds to D493 | M5.1p built: 41 hidden settings and the masters' window |
+| DN8 | 2026-11-15 | claude | adds to D488 | M5.1n built: standalone's --dag-path and --script-path |
+| DN7 | 2026-11-15 | claude | corrects D492 | Codex's review of the UI steps M5.1g-l1: seven fixed |
+| DN6 | 2026-11-15 | claude | adds to D489 | M5.1o built: a poke may be a plain def |
+| DN5 | 2026-11-15 | claude | corrects D464 | Codex's review of M5.1j: totals, parts and limits made exact; buckets in SQL |
+| DN4 | 2026-11-14 | claude | adds to D464 | Samples by process, the webserver's its own |
+| DN3 | 2026-11-14 | user | corrects D466 | The UI isn't built or tested for phones |
+| DN2 | 2026-11-13 | user | corrects D442 | The liveness redesign drafts retired: settled by D442-D460 |
+| DN1 | 2026-11-09 | user | corrects D373 | The design drafts deleted |
+
 ## Every decision
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
 | D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |
 | D506 | 2026-11-18 | user | planned (M5.2cB4) | assignment | The round's slow parts on due flags; what is read before the lock is only what the round alone writes |
 | D505 | 2026-11-17 | user | built M5.2cB | workers | Only the round moves runs forward: turns queue a worker's starts and results for it |
@@ -161,7 +180,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 | D380 | 2026-11-09 | user | built M4.12a | chained-runs | A waiting TriggerDagOperator doesn't count towards the DAG's limits |
 | D379 | 2026-11-09 | user | built M4.12a | chained-runs | A missing or conflicting target fails the operator, with its retries |
 | D378 | 2026-11-09 | user | built M4.12a | chained-runs | In tests a TriggerDagOperator starts a real run of a target in the tested path |
-| D377 | 2026-11-09 | user | rule | development | JOURNAL.md holds notes (N) beside decisions (D) |
+| D377 | 2026-11-09 | user | superseded by D508 | development | JOURNAL.md holds notes (N) beside decisions (D) |
 | D376 | 2026-11-09 | user | rule | development | STATUS.md is generated from the records and status.toml |
 | D375 | 2026-11-09 | user | rule | development | Summaries follow the code: names checked, affected and stale decisions listed |
 | D374 | 2026-11-09 | user | rule | development | A decision lists the claims nobody found in the code (unverified) |
@@ -746,11 +765,11 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### development
 
+- D508: Journal entries: decisions, decision notes, the user's notes, plain entries
 - D498: A release with a new migration goes through an rc first
 - D479: The Python integration tests run on several processes (pytest-xdist)
 - D477: PyPI shows a page of its own: installing and a first run
 - D456: From 1.0.0 the schema and the protocol change only additively
-- D377: JOURNAL.md holds notes (N) beside decisions (D)
 - D376: STATUS.md is generated from the records and status.toml
 - D375: Summaries follow the code: names checked, affected and stale decisions listed
 - D374: A decision lists the claims nobody found in the code (unverified)

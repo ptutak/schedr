@@ -73,13 +73,33 @@ A question, `questions/Q<n>.toml`:
 `decisions/next-id` and `questions/next-id` hold the next free numbers; every number below has a
 file, and every "decision N" written in the repository is below it.
 
+A decision note, `decisions/DN<n>.toml` (the user, 2026-11-18): a journal entry that corrects or
+adds to a decision; listed in `DECISIONS.md` and under its decision on the design page:
+
+    title = "The design drafts deleted"
+    date = 2026-11-09
+    by = "user"                 # user, claude
+    on = "D373"                 # the decision
+    kind = "corrects"           # corrects (the decision's summary is updated too), adds
+    summary = '''What changed or was added, in one to three lines.'''
+    history = "JOURNAL.md#DN1"  # its anchor: <a id="DN1"></a>
+
+A note, `notes/N<n>.toml`: the user's own, written only when the user asks for one; listed in
+`NOTES.md` and the latest in `STATUS.md`. Fields: `title`, `date`, `summary`, `history`
+(`JOURNAL.md#N<n>`). Both are numbered from 1 without gaps; each has its journal entry, headed
+`### <a id="DN1"></a>2026-11-09: <title> (decision note 1; corrects D373)` (or `adds to D<n>`)
+and `### <a id="N1"></a>2026-11-20: <title> (note 1)`. Any other journal entry that isn't a
+decision is a plain dated heading.
+
 Usage:
     python3 scripts/records.py render              # write every generated file and block
     python3 scripts/records.py check               # validate; fail if anything generated is stale
     python3 scripts/records.py decision "<title>"  # a new decision's file; prints its path
     python3 scripts/records.py question "<title>"  # a new question's file; prints its path
-    python3 scripts/records.py note "<title>" [D<n>]  # a JOURNAL.md note (N<n>): an event, not a
-                                                   # choice; D<n> the decision it corrects
+    python3 scripts/records.py decision-note D<n> corrects|adds "<title>"
+                                                   # a decision note (DN<n>): its file and its
+                                                   # JOURNAL.md heading; prints the file's path
+    python3 scripts/records.py note "<title>"      # the user's note (N<n>), asked for: as above
     python3 scripts/records.py affected [<since>]  # decisions whose code changed since <since>
                                                    # (default HEAD: the uncommitted changes)
     python3 scripts/records.py stale               # decisions whose code changed after `checked`
@@ -110,6 +130,11 @@ NO_STEP = ("later", "n/a")
 BUG = re.compile(r"B[1-9][0-9]*")
 NAME = re.compile(r"D([1-9][0-9]*)\.toml")
 QUESTION_NAME = re.compile(r"Q([1-9][0-9]*)\.toml")
+DECISION_NOTE_NAME = re.compile(r"DN([1-9][0-9]*)\.toml")
+NOTE_NAME = re.compile(r"N([1-9][0-9]*)\.toml")
+NOTE_KINDS = ("corrects", "adds")
+# A decision note's or a note's anchor in JOURNAL.md.
+NOTE_ANCHOR = re.compile(r'<a id="((?:DN|N)[1-9][0-9]*)"></a>')
 TOPIC_COVERS = re.compile(r"^\| `([a-z0-9-]+)` \|([^|\n]*)\|", re.MULTILINE)
 ANCHOR = re.compile(r'<a id="(D[1-9][0-9]*)"></a>')
 HISTORY_ANCHOR = re.compile(r"((?:archive/PROJECT|JOURNAL)\.md)#(D[1-9][0-9]*)")
@@ -180,6 +205,11 @@ class Paths:
     def design(self) -> Path:
         """`design/`."""
         return self.root / "design"
+
+    @property
+    def notes(self) -> Path:
+        """`notes/`."""
+        return self.root / "notes"
 
 
 @dataclass(frozen=True)
@@ -263,6 +293,46 @@ class Question:
 
 
 @dataclass(frozen=True)
+class DecisionNote:
+    """A journal entry correcting or adding to a decision (`DN<n>`)."""
+
+    number: int
+    title: str
+    date: datetime.date
+    by: str
+    on: str
+    kind: str
+    summary: str
+    history: str
+
+    @property
+    def id(self) -> str:
+        """`DN11`."""
+        return f"DN{self.number}"
+
+    @property
+    def relation(self) -> str:
+        """`corrects D115`, `adds to D464`: as its journal heading says it."""
+        return f"corrects {self.on}" if self.kind == "corrects" else f"adds to {self.on}"
+
+
+@dataclass(frozen=True)
+class Note:
+    """The user's note (`N<n>`)."""
+
+    number: int
+    title: str
+    date: datetime.date
+    summary: str
+    history: str
+
+    @property
+    def id(self) -> str:
+        """`N3`."""
+        return f"N{self.number}"
+
+
+@dataclass(frozen=True)
 class Records:
     """Everything loaded and checked against each other."""
 
@@ -270,6 +340,8 @@ class Records:
     decisions: tuple[Decision, ...]
     questions: tuple[Question, ...]
     open_bugs: frozenset[str] = frozenset()
+    decision_notes: tuple[DecisionNote, ...] = ()
+    notes: tuple[Note, ...] = ()
 
     @property
     def milestone_ids(self) -> set[str]:
@@ -550,7 +622,12 @@ def numbered(folder: Path, letter: str, numbers: list[int]) -> None:
 def load_decisions(folder: Path, known_topics: set[str]) -> list[Decision]:
     """Every decision, by number; numbers and replacements checked."""
     decisions = sorted(
-        (read_decision(p, known_topics) for p in folder.glob("*.toml")), key=lambda d: d.number
+        (
+            read_decision(p, known_topics)
+            for p in folder.glob("*.toml")
+            if not DECISION_NOTE_NAME.fullmatch(p.name)
+        ),
+        key=lambda d: d.number,
     )
     numbers = [d.number for d in decisions]
     numbered(folder, "D", numbers)
@@ -560,6 +637,71 @@ def load_decisions(folder: Path, known_topics: set[str]) -> list[Decision]:
         if d.status == "superseded" and d.superseded_by not in numbers:
             raise RecordError(f"{d.id}: superseded by D{d.superseded_by}, unknown")
     return decisions
+
+
+def gapless(letter: str, numbers: list[int]) -> None:
+    """Numbered from 1 without gaps (`DN1`, `DN2`, ...): a note is never removed."""
+    gaps = [n for n in range(1, max(numbers, default=0) + 1) if n not in set(numbers)]
+    if gaps:
+        raise RecordError(f"no file for {', '.join(f'{letter}{n}' for n in gaps[:10])}")
+
+
+def read_decision_note(path: Path) -> DecisionNote:
+    """A decision note's file, checked on its own."""
+    match = DECISION_NOTE_NAME.fullmatch(path.name)
+    assert match is not None  # chosen by its name
+    name = path.name
+    data = parse(path)
+    fields(name, data, {"title", "date", "by", "on", "kind", "summary", "history"}, set())
+    if data["by"] not in BY:
+        raise RecordError(f"{name}: `by` is one of {', '.join(BY)}")
+    if not isinstance(data["on"], str) or not ANCHOR_ID.fullmatch(data["on"]):
+        raise RecordError(f"{name}: `on` is a decision, D<n>")
+    if data["kind"] not in NOTE_KINDS:
+        raise RecordError(f"{name}: `kind` is one of {', '.join(NOTE_KINDS)}")
+    return DecisionNote(
+        number=int(match[1]),
+        title=text_field(name, data, "title"),
+        date=date_field(name, data, "date", required=True) or datetime.date.min,
+        by=str(data["by"]),
+        on=str(data["on"]),
+        kind=str(data["kind"]),
+        summary=" ".join(text_field(name, data, "summary").split()),
+        history=text_field(name, data, "history"),
+    )
+
+
+def load_decision_notes(folder: Path) -> list[DecisionNote]:
+    """Every decision note, by number."""
+    notes = sorted((read_decision_note(p) for p in folder.glob("DN*.toml")), key=lambda n: n.number)
+    gapless("DN", [n.number for n in notes])
+    return notes
+
+
+def read_note(path: Path) -> Note:
+    """A note's file, checked on its own."""
+    match = NOTE_NAME.fullmatch(path.name)
+    if match is None:
+        raise RecordError(f"{path.name}: a note's file is named `N<number>.toml`")
+    name = path.name
+    data = parse(path)
+    fields(name, data, {"title", "date", "summary", "history"}, set())
+    return Note(
+        number=int(match[1]),
+        title=text_field(name, data, "title"),
+        date=date_field(name, data, "date", required=True) or datetime.date.min,
+        summary=" ".join(text_field(name, data, "summary").split()),
+        history=text_field(name, data, "history"),
+    )
+
+
+def load_notes(folder: Path) -> list[Note]:
+    """Every note of the user's, by number."""
+    if not folder.exists():
+        return []
+    notes = sorted((read_note(p) for p in folder.glob("*.toml")), key=lambda n: n.number)
+    gapless("N", [n.number for n in notes])
+    return notes
 
 
 # The questions.
@@ -627,6 +769,8 @@ def load(paths: Paths) -> Records:
         decisions=tuple(load_decisions(paths.decisions, known)),
         questions=tuple(load_questions(paths.questions, known)),
         open_bugs=frozenset(p.stem for p in bugs.glob("B*.toml")) if bugs.exists() else frozenset(),
+        decision_notes=tuple(load_decision_notes(paths.decisions)),
+        notes=tuple(load_notes(paths.notes)),
     )
     known_steps = set(records.steps) | records.milestone_ids
     for d in records.decisions:
@@ -640,6 +784,9 @@ def load(paths: Paths) -> Records:
                 f"{d.id}: step {d.step} isn't a step or milestone in plan/, nor a bug"
             )
     numbers = {d.number for d in records.decisions}
+    for n in records.decision_notes:
+        if int(n.on[1:]) not in numbers:
+            raise RecordError(f"{n.id}: on {n.on}, unknown")
     for q in records.questions:
         if q.decided_by and q.decided_by not in numbers:
             raise RecordError(f"{q.id}: decided by D{q.decided_by}, unknown")
@@ -677,7 +824,7 @@ def problems(records: Records, root: Path, files: list[Path]) -> list[str]:
 
 
 # Where the documents are, not the code: a name found only there isn't in the code.
-DOCUMENTS = ("decisions/", "design/", "docs/", "plan/", "questions/", "bugs/", "archive/")
+DOCUMENTS = ("decisions/", "design/", "docs/", "plan/", "questions/", "bugs/", "archive/", "notes/")
 CODE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 
 
@@ -929,6 +1076,19 @@ def render_decisions(records: Records) -> str:
         if doubted
         else "None.\n"
     )
+    parts.append("\n## Decision notes\n\n")
+    if records.decision_notes:
+        parts.append(
+            "Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its "
+            "anchor in JOURNAL.md); also under the decision on its design page.\n\n"
+            "| # | Date | By | On | Title |\n|---|---|---|---|---|\n"
+        )
+        parts.extend(
+            f"| {n.id} | {n.date.isoformat()} | {n.by} | {n.relation} | {cell(n.title)} |\n"
+            for n in reversed(records.decision_notes)
+        )
+    else:
+        parts.append("None.\n")
     parts.append(
         "\n## Every decision\n\n"
         "| # | Date | By | State | Topic | Title |\n|---|---|---|---|---|---|\n"
@@ -942,6 +1102,25 @@ def render_decisions(records: Records) -> str:
         if active:
             parts.append(f"\n### {topic}\n\n")
             parts.extend(f"- {d.id}: {d.title}\n" for d in reversed(active))
+    return "".join(parts)
+
+
+def render_notes(records: Records) -> str:
+    """NOTES.md: the user's notes, newest first, one line each; each in `notes/N<n>.toml`."""
+    parts = [
+        generated("notes/"),
+        "# Notes\n\n",
+        "The user's own notes, written when the user asks for one: one line each; the file "
+        "`notes/N<n>.toml` has its summary, its `history` its JOURNAL.md entry.\n\n",
+    ]
+    if records.notes:
+        parts.append("| # | Date | Title |\n|---|---|---|\n")
+        parts.extend(
+            f"| {n.id} | {n.date.isoformat()} | {cell(n.title)} |\n"
+            for n in reversed(records.notes)
+        )
+    else:
+        parts.append("None yet.\n")
     return "".join(parts)
 
 
@@ -961,7 +1140,6 @@ def design_blocks(
     records: Records,
     topic: str,
     places: dict[str, tuple[str, str]] | None = None,
-    notes: list[Entry] | None = None,
 ) -> dict[str, str]:
     """A design page's generated blocks.
 
@@ -984,7 +1162,9 @@ def design_blocks(
             note = "" if state.startswith("built") or state == "rule" else f", {state}"
             text = f"- **{d.title}** ({d.id}{note}): {' '.join(d.summary.split())}"
             text += "".join(
-                f" *Corrected by {n.id}:* {n.title}." for n in notes or [] if n.corrects == d.id
+                f" *{'Corrected' if n.kind == 'corrects' else 'Added to'} by {n.id}:* {n.title}."
+                for n in records.decision_notes
+                if n.on == d.id
             )
             if d.unverified:
                 text += " *Not found in the code yet:* " + "; ".join(d.unverified) + "."
@@ -1062,6 +1242,11 @@ def status_block(records: Records, root: Path) -> str:
             lines.append(f"- **Then:** {', '.join(later)}.\n")
     open_questions = [q.id for q in records.questions if q.status == "open"]
     lines.append(f"- **Open questions:** {len(open_questions)} (`DECISIONS.md`).\n")
+    if records.notes:
+        latest = "; ".join(f"{n.id} ({n.date}): {n.title}" for n in reversed(records.notes[-3:]))
+        lines.append(
+            f"- **The user's notes:** {len(records.notes)}; latest: {latest} (`NOTES.md`).\n"
+        )
     bugs = bugs_module(root)
     if bugs is not None:
         ranked = bugs.rank(bugs.load(root / "bugs"))
@@ -1111,23 +1296,23 @@ def read_status(path: Path) -> StatusNotes:
 
 
 JOURNAL_ENTRY = re.compile(
-    r'^### <a id="([DN][1-9][0-9]*)"></a>(\d{4}-\d{2}-\d{2}): (.*?)'
-    r"(?: \((?:decision|note) \d+(?:; corrects (D[1-9][0-9]*))?\))?$"
+    r'^### <a id="((?:D|DN|N)[1-9][0-9]*)"></a>(\d{4}-\d{2}-\d{2}): (.*?)'
+    r"(?: \((?:decision|decision note|note) \d+(?:; ((?:corrects|adds to) D[1-9][0-9]*))?\))?$"
 )
 
 
 @dataclass(frozen=True)
 class Entry:
-    """A JOURNAL.md entry's heading: a decision (`D<n>`) or a note (`N<n>`)."""
+    """An anchored JOURNAL.md heading: a decision, a decision note (`DN<n>`) or a note (`N<n>`)."""
 
     id: str
     date: str
     title: str
-    corrects: str = ""
+    relation: str = ""
 
 
 def journal(root: Path) -> list[Entry]:
-    """JOURNAL.md's entries, in order."""
+    """JOURNAL.md's anchored entries, in order."""
     path = root / "JOURNAL.md"
     lines = path.read_text().splitlines() if path.exists() else []
     return [
@@ -1136,39 +1321,87 @@ def journal(root: Path) -> list[Entry]:
 
 
 def note_problems(records: Records, root: Path) -> list[str]:
-    """Notes numbered N1, N2, ... without gaps, each correcting a decision that exists."""
-    notes = [e for e in journal(root) if e.id.startswith("N")]
-    found = [
-        f"JOURNAL.md: note {e.id} is out of order (expected N{i})"
-        for i, e in enumerate(notes, 1)
-        if e.id != f"N{i}"
-    ]
-    known = {d.id for d in records.decisions}
+    """Each decision note and note has its journal entry, saying what its file says, and back."""
+    entries = {e.id: e for e in journal(root) if not ANCHOR_ID.fullmatch(e.id)}
+    found: list[str] = []
+    files: dict[str, tuple[str, str]] = {
+        n.id: (n.history, n.relation) for n in records.decision_notes
+    }
+    files.update((n.id, (n.history, "")) for n in records.notes)
+    for id_, (history, relation) in files.items():
+        entry = entries.get(id_)
+        if history != f"JOURNAL.md#{id_}":
+            found.append(f"{id_}: `history` is JOURNAL.md#{id_}")
+        if entry is None:
+            found.append(f'{id_}: JOURNAL.md has no entry headed <a id="{id_}"></a>')
+        elif entry.relation != relation:
+            said = entry.relation or "nothing"
+            found.append(
+                f"{id_}: its JOURNAL.md heading says {said}, its file {relation or 'nothing'}"
+            )
     found += [
-        f"JOURNAL.md: {e.id} corrects {e.corrects}, which isn't a decision"
-        for e in notes
-        if e.corrects and e.corrects not in known
+        f"JOURNAL.md: {id_} has no file ({'decisions' if id_[1] == 'N' else 'notes'}/{id_}.toml)"
+        for id_ in entries
+        if id_ not in files
     ]
     return found
 
 
-def new_note(root: Path, title: str, corrects: str = "") -> str:
-    """A note's heading appended to JOURNAL.md with the next number; its body is written after."""
-    if corrects and not ANCHOR_ID.fullmatch(corrects):
-        raise RecordError(f"a note corrects a decision (D<n>), not {corrects!r}")
-    number = sum(e.id.startswith("N") for e in journal(root)) + 1
-    today = datetime.date.today().isoformat()
-    tail = f"; corrects {corrects}" if corrects else ""
-    heading = f'### <a id="N{number}"></a>{today}: {title} (note {number}{tail})'
+def append_heading(root: Path, heading: str) -> None:
+    """`heading` appended to JOURNAL.md; the entry's body is written after it."""
     path = root / "JOURNAL.md"
     path.write_text(path.read_text().rstrip("\n") + f"\n\n{heading}\n\n")
-    return heading
+
+
+def new_decision_note(paths: Paths, on: str, kind: str, title: str) -> Path:
+    """A decision note's file with the next number and its JOURNAL.md heading."""
+    if not ANCHOR_ID.fullmatch(on) or not (paths.decisions / f"{on}.toml").exists():
+        raise RecordError(f"a decision note is on a decision that exists (D<n>), not {on!r}")
+    if kind not in NOTE_KINDS:
+        raise RecordError(f"a decision note {' or '.join(NOTE_KINDS)} its decision, not {kind!r}")
+    # Counted, not read: the last one's summary may not be written yet.
+    number = (
+        sum(1 for p in paths.decisions.glob("DN*.toml") if DECISION_NOTE_NAME.fullmatch(p.name)) + 1
+    )
+    today = datetime.date.today().isoformat()
+    path = paths.decisions / f"DN{number}.toml"
+    path.write_text(
+        f"title = {json.dumps(title, ensure_ascii=False)}\n"
+        f"date = {today}\n"
+        'by = "user"  # user, claude\n'
+        f'on = "{on}"\n'
+        f'kind = "{kind}"  # corrects (update the decision\'s summary too), adds\n'
+        "summary = '''\n'''\n"
+        f'history = "JOURNAL.md#DN{number}"\n'
+    )
+    relation = f"corrects {on}" if kind == "corrects" else f"adds to {on}"
+    append_heading(
+        paths.root,
+        f'### <a id="DN{number}"></a>{today}: {title} (decision note {number}; {relation})',
+    )
+    return path
+
+
+def new_note(paths: Paths, title: str) -> Path:
+    """The user's note: its file with the next number and its JOURNAL.md heading."""
+    paths.notes.mkdir(exist_ok=True)
+    number = sum(1 for p in paths.notes.glob("*.toml") if NOTE_NAME.fullmatch(p.name)) + 1
+    today = datetime.date.today().isoformat()
+    path = paths.notes / f"N{number}.toml"
+    path.write_text(
+        f"title = {json.dumps(title, ensure_ascii=False)}\n"
+        f"date = {today}\n"
+        "summary = '''\n'''\n"
+        f'history = "JOURNAL.md#N{number}"\n'
+    )
+    append_heading(paths.root, f'### <a id="N{number}"></a>{today}: {title} (note {number})')
+    return path
 
 
 def recent(records: Records, root: Path, count: int = 5) -> list[str]:
     """The latest journal entries and the latest steps done, one line each."""
     entries = [
-        f"- {e.id} ({e.date}): {e.title}" + (f" (corrects {e.corrects})" if e.corrects else "")
+        f"- {e.id} ({e.date}): {e.title}" + (f" ({e.relation})" if e.relation else "")
         for e in journal(root)
     ]
     done = sorted(
@@ -1187,7 +1420,7 @@ def bullets(items: tuple[str, ...]) -> str:
 def render_status(records: Records, root: Path, notes: StatusNotes) -> str:
     """STATUS.md, whole: the records' state, then `status.toml`'s notes."""
     parts = [
-        generated("plan/, decisions/, questions/, bugs/, JOURNAL.md and status.toml"),
+        generated("plan/, decisions/, questions/, notes/, bugs/, JOURNAL.md and status.toml"),
         "# Status\n\n",
         "Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md`"
         " and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md`"
@@ -1233,10 +1466,11 @@ def views(records: Records, paths: Paths) -> dict[Path, str]:
     if records.milestones:
         out[paths.root / "PLAN.md"] = render_plan(records, paths.plan / "README.md")
     places = anchor_places(paths.root)
-    notes = journal(paths.root)
+    if paths.notes.exists():
+        out[paths.root / "NOTES.md"] = render_notes(records)
     for topic, covered in sorted(covers(paths.design / "README.md").items()):
         page = paths.design / f"{topic}.md"
-        blocks = design_blocks(records, topic, places, notes)
+        blocks = design_blocks(records, topic, places)
         if page.exists() and begin("current") in page.read_text():
             # A page with hand-written parts (development.md): only its blocks are generated.
             text = page.read_text()
@@ -1312,6 +1546,22 @@ def check(paths: Paths) -> None:
         raise RecordError("\n  ".join(["records:", *found]))
 
 
+def new_journal_record(command: str, args: list[str], paths: Paths) -> bool:
+    """`note "<title>"` or `decision-note D<n> corrects|adds "<title>"`; whether it was one."""
+    *place, title = args or [""]
+    # An option is no title: `note --help` once appended a note titled "--help" to the journal.
+    if not title.strip() or title.strip().startswith("-"):
+        return False
+    if command == "note" and not place:
+        print(new_note(paths, title.strip()).relative_to(paths.root))
+        return True
+    if command == "decision-note" and len(place) == len(("on", "kind")):
+        on, kind = place
+        print(new_decision_note(paths, on, kind, title.strip()).relative_to(paths.root))
+        return True
+    return False
+
+
 def run(argv: list[str], paths: Paths) -> bool:
     """Run the command `argv` names; whether it was one."""
     command, args = (argv[1], argv[2:]) if len(argv) > 1 else ("", [])
@@ -1328,11 +1578,8 @@ def run(argv: list[str], paths: Paths) -> bool:
         lines = stale(load(paths), paths.root)
         if lines:
             print("\n".join(lines))
-    elif command == "note" and len(args) in (1, 2) and args[0].strip():
-        # As below: `note --help` once appended a note titled "--help" to the journal.
-        if args[0].strip().startswith("-"):
-            return False
-        print(new_note(paths.root, args[0].strip(), *args[1:]))
+    elif command in ("note", "decision-note"):
+        return new_journal_record(command, args, paths)
     elif command in ("decision", "question") and len(args) == 1 and args[0].strip():
         # An option (`--help`) is no title: it would make a record named after it.
         if args[0].strip().startswith("-"):

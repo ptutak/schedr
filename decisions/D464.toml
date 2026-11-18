@@ -13,7 +13,7 @@ master, worker and webserver), a webserver in a process of its own its own. Each
 15-minute window is rolled up into averages and peaks (a worker's parts averaged over every
 minute, its largest tasks left out, the latest limit), each row with the `minutes` it covers (and of them with a CPU or container
 figure, and `covered`: its window's minutes sampled at all), by which a bucket's averages and a
-deployment's totals are weighted (note 9); minute rows are kept 24 h, rollups 30 d
+deployment's totals are weighted (DN5); minute rows are kept 24 h, rollups 30 d
 (hidden timings), deleted by the sampler. Not chosen: one a minute for 7 days without a rollup.
 '''
 history = "JOURNAL.md#D464"
