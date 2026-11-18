@@ -28,4 +28,4 @@ code = [
     "crates/schedr-db/src/commands.rs::EVENTS_CHANNEL",
     "crates/schedr-db/migrations/sqlite/0002_next_looks.sql",
 ]
-checked = 2026-11-16
+checked = 2026-11-18

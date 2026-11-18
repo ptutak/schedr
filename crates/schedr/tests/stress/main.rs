@@ -530,8 +530,14 @@ fn stress_08_code_churn() {
     let dags = command_dags(&stress, "code", files, 1, "true", 2);
     stress.start_core("master", &[]);
     stress.start_workers(size.n(2, 4), 4, &[]);
-    let parsed = stress.wait_for_dags(files, 15 * MINUTE);
-    report.at_most("parse_all_s", parsed.as_secs_f64(), 600.0);
+    // Bounds by the profile (the user, 2026-11-18): a quick run stalled (the parses of old
+    // code piling up) fails within minutes, not a quarter of an hour.
+    let parsed = stress.wait_for_dags(files, size.time(5 * MINUTE, 15 * MINUTE));
+    report.at_most(
+        "parse_all_s",
+        parsed.as_secs_f64(),
+        if size.full { 900.0 } else { 300.0 },
+    );
     let mut random = Lcg::new(8);
     let churn_until = std::time::Instant::now() + size.time(MINUTE, 5 * MINUTE);
     let mut changes = 0_u32;
@@ -554,7 +560,7 @@ fn stress_08_code_churn() {
         triggered += some.len();
         std::thread::sleep(Duration::from_secs(2));
     }
-    stress.wait_for_runs(triggered, 15 * MINUTE, |_| {});
+    stress.wait_for_runs(triggered, size.time(5 * MINUTE, 15 * MINUTE), |_| {});
     let caught_up = std::time::Instant::now();
     let parses_at_last_change = stress.db.count("SELECT COUNT(*) FROM parse_results");
     let newest_parse = || {
@@ -564,7 +570,7 @@ fn stress_08_code_churn() {
         ));
         newest.first().copied().unwrap_or(0.0)
     };
-    while newest_parse() < last_change && caught_up.elapsed() < 10 * MINUTE {
+    while newest_parse() < last_change && caught_up.elapsed() < size.time(5 * MINUTE, 10 * MINUTE) {
         std::thread::sleep(Duration::from_secs(2));
     }
     // How the parses went, whether they caught up or not.
@@ -589,15 +595,27 @@ fn stress_08_code_churn() {
     finish(&stress, report, &["success"]);
 }
 
-/// Scenario 9: Standalone on SQLite under load.
+/// Scenario 9: Standalone on SQLite under load, 8 slots.
 #[test]
 fn stress_09_standalone_sqlite() {
+    standalone_sqlite("09_standalone_sqlite", "8");
+}
+
+/// Scenario 9b: as 9 with 32 slots, scenario 1's: where standalone's own limit is, not its
+/// slots' (9 runs at 8 ÷ its slot cycle; the user, 2026-11-18).
+#[test]
+fn stress_09b_standalone_sqlite_32_slots() {
+    standalone_sqlite("09b_standalone_sqlite_32_slots", "32");
+}
+
+/// Scenario 9's load on `schedr standalone` with `slots`.
+fn standalone_sqlite(scenario: &'static str, slots: &'static str) {
     let mut stress = Stress::new(None);
     let size = stress.size;
-    let mut report = Report::new("09_standalone_sqlite");
+    let mut report = Report::new(scenario);
     let dags = command_dags(&stress, "lite", size.n(20, 100), 10, "sleep 0.1", 0);
     let mut env = load::ROLE_ENV.to_vec();
-    env.push(("SCHEDR_CONFIG__WORKER__SLOTS", "8"));
+    env.push(("SCHEDR_CONFIG__WORKER__SLOTS", slots));
     stress
         .cluster
         .start_args("standalone", &["standalone", "--migrate"], &env);

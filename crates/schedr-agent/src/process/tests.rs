@@ -170,3 +170,55 @@ fn at_its_start_the_worker_gives_its_logs_and_their_folder_the_log_mode() {
     secure_log_dir(&fresh, 0o644).unwrap();
     assert_eq!(mode_of(&fresh), 0o755);
 }
+
+#[tokio::test]
+async fn a_process_dropped_unreaped_takes_its_whole_group_with_it() {
+    // Codex's review of M5.2d: a parse dropped mid-way (its code superseded) left the runner's
+    // children running; `kill_on_drop` kills the leader alone.
+    let dir = tempfile::TempDir::new().unwrap();
+    let pid_file = dir.path().join("child.pid");
+    let spec = ProcessSpec {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".to_owned(),
+            format!("sleep 30 & echo $! > {}; wait", pid_file.display()),
+        ],
+        env: std::collections::BTreeMap::new(),
+        working_dir: dir.path().to_path_buf(),
+        log_file: dir.path().join("p.log"),
+        max_output_size: 1024,
+        mask: Mask::default(),
+        start_timeout: crate::launch::RUNNER_START_TIMEOUT,
+        output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
+        barrier: None,
+    };
+    let process = spawn(&spec).await.unwrap();
+    let child = loop {
+        if let Ok(text) = std::fs::read_to_string(&pid_file)
+            && let Ok(pid) = text.trim().parse::<i32>()
+        {
+            break pid;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let proc_dir = std::path::PathBuf::from(format!("/proc/{child}"));
+    assert!(proc_dir.exists(), "the child runs");
+    drop(process);
+    // Killed, then reaped by its parent's end (it was the shell's): gone, or a zombie.
+    let mut gone = false;
+    for _ in 0..200 {
+        let state = std::fs::read_to_string(proc_dir.join("stat")).ok();
+        if state.is_none_or(|s| stat_fields(&s).is_none_or(|(state, _)| ended(state))) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    if !gone {
+        let _ = rustix::process::kill_process(
+            rustix::process::Pid::from_raw(child).unwrap(),
+            rustix::process::Signal::KILL,
+        );
+    }
+    assert!(gone, "the child outlived its dropped leader");
+}

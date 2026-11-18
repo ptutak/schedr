@@ -521,8 +521,16 @@ resident set size when PSS cannot be read (see [Memory](#memory)).
 
 Under `<data_dir>/journal/<worker ID>/`, an attempt's record holds its process group, its
 `cleaning` task result and cleanup process, or its unacknowledged `finished` result. Records
-are written atomically (temporary file, fsync, rename). Results that end together are written
-side by side, the directory flushed once for the group, before any of them is sent (up to 32). An attempt with cleanup also keeps
+are written atomically (temporary file, fsync, rename). The writes run beside the agent's loop,
+which goes on handling messages meanwhile: records waiting together are written side by side,
+the directory flushed once for the group, and several groups are written at once. Each record
+is on disk before the message it backs goes: an attempt's `running` record before its
+`Started` and its launch, a result before its `Finished`; one attempt's records are written in
+order, and its files are removed only once the master acknowledges its result. While a start's
+record is being written, its slot is taken; a cancel arriving meanwhile ends the attempt
+without launching it (`Started`, then a result stopped before its start), and a stream ending
+meanwhile drops the start (its record removed; the master takes the assignment back as never
+started). An attempt with cleanup also keeps
 `<attempt_id>.attempt` (assignment, inputs, code copies and hash, including the script root
 copy when present) and `<attempt_id>.handles` (one handle per line). Handles are also sent to
 and stored by the master.

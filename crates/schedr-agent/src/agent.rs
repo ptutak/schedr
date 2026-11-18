@@ -1213,6 +1213,8 @@ enum Done {
         /// The content hashes of the copies it used (kept meanwhile).
         copies: Vec<String>,
         files: Result<Vec<ParsedFile>, String>,
+        /// Stopped because its root's code moved on: nothing to report.
+        stopped: bool,
     },
     Connections {
         job_id: String,
@@ -1222,6 +1224,39 @@ enum Done {
         attempt_id: Option<String>,
         reports: Vec<schedr_model::commands::ConnectionReport>,
     },
+    /// A journal write the writer handled (M5.2d): what follows it now.
+    Journaled(crate::journal_writer::Written<Journaled>),
+}
+
+/// What follows a journal write (M5.2d).
+enum Journaled {
+    /// A result on disk: it is sent (boxed: a result is large).
+    Finished(Box<pb::Finished>),
+    /// An acknowledged attempt's files removed.
+    Acknowledged,
+    /// An assignment's `running` record on disk: it is started (boxed: it is large).
+    Start(Box<PendingStart>),
+    /// A started process's identity on disk; `repeat`: a forked one's `Started` sent again.
+    Process { repeat: bool },
+}
+
+/// An assignment whose `running` record is being written (M5.2d).
+struct PendingStart {
+    prepared: Prepared,
+    /// When its session opened (the lease is checked once it is on disk, decision 281).
+    opened: tokio::time::Instant,
+}
+
+/// An assignment being started (M5.2d): its record handed to the journal writer, its
+/// `Started` not yet sent. Its slot is taken.
+#[derive(Debug)]
+struct Starting {
+    /// The master's number of its assignment, held unreported until it is released.
+    sequence: Option<u64>,
+    /// A wait step (a watcher slot), not a task.
+    wait_step: bool,
+    /// Cancelled (or interrupted) meanwhile: it isn't launched.
+    stop: Option<StopReason>,
 }
 
 /// An attempt an earlier agent left, its cleanup still to run.
@@ -1335,10 +1370,23 @@ pub struct Agent<E> {
     /// worker connecting again the jobs it held, B235) isn't started twice; the running parse
     /// answers it, the master matching a result by root and hash.
     parses_running: BTreeSet<(String, String)>,
+    /// How to stop each running parse, by root and hash: once its root's code moves on, it is
+    /// of code this worker no longer has (stress scenario 8: they piled up, starving the
+    /// newest one's).
+    parse_stops: BTreeMap<(String, String), tokio::sync::oneshot::Sender<()>>,
     /// Held by the connections job running (decision 199: one at a time).
     connection_jobs: Arc<tokio::sync::Mutex<()>>,
     done_tx: mpsc::UnboundedSender<Done>,
     done_rx: mpsc::UnboundedReceiver<Done>,
+    /// The journal's writes beside the loop (M5.2d), started on first use.
+    writer: Option<crate::journal_writer::Writer<Journaled>>,
+    /// Each of the writer's groups delayed this long (tests: a slow disk).
+    writer_stall: Duration,
+    /// Assignments being started: their `running` records with the writer (M5.2d).
+    starting: BTreeMap<String, Starting>,
+    /// The writer's last group observed in the journal's metric, by record kind: one
+    /// observation a group, as before the writer.
+    metered: BTreeMap<&'static str, u64>,
     /// What is wrong with the worker now (the executor's), sent after `Register` and on change.
     warnings: watch::Receiver<Vec<pb::WorkerWarning>>,
     heartbeat: Duration,
@@ -1446,6 +1494,10 @@ impl<E: Executor> Agent<E> {
             sample_sent: None,
             #[cfg(test)]
             journal_stall: (Duration::ZERO, Arc::default()),
+            writer: None,
+            writer_stall: Duration::ZERO,
+            starting: BTreeMap::new(),
+            metered: BTreeMap::new(),
             warnings,
             incarnation,
             journal,
@@ -1478,6 +1530,7 @@ impl<E: Executor> Agent<E> {
             reported: BTreeMap::new(),
             parsing: BTreeMap::new(),
             parses_running: BTreeSet::new(),
+            parse_stops: BTreeMap::new(),
             connection_jobs: Arc::new(tokio::sync::Mutex::new(())),
             done_tx,
             done_rx,
@@ -1541,7 +1594,18 @@ impl<E: Executor> Agent<E> {
     /// [`crate::drain`]): recovers the journal, connects with `connect`, and again whenever
     /// the connection drops, after a backoff with jitter that doubles up to [`MAX_BACKOFF`] and
     /// starts from [`FIRST_BACKOFF`] again after a session in which the master registered it.
-    pub async fn run<C, F>(&mut self, connect: C, mut shutdown: watch::Receiver<u32>)
+    /// Returns once the journal's writes handed to its writer are on disk (M5.2d).
+    pub async fn run<C, F>(&mut self, connect: C, shutdown: watch::Receiver<u32>)
+    where
+        C: Fn() -> F,
+        F: Future<Output = Result<MasterClient<Channel>, String>>,
+    {
+        self.sessions(connect, shutdown).await;
+        self.flush_journal().await;
+    }
+
+    /// [`Self::run`]'s sessions, one after another until drained.
+    async fn sessions<C, F>(&mut self, connect: C, mut shutdown: watch::Receiver<u32>)
     where
         C: Fn() -> F,
         F: Future<Output = Result<MasterClient<Channel>, String>>,
@@ -1695,6 +1759,7 @@ impl<E: Executor> Agent<E> {
         self.running
             .len()
             .saturating_add(self.triggers.len())
+            .saturating_add(self.starting.len())
             .saturating_sub(self.waiting.len().saturating_add(held))
     }
 
@@ -1935,6 +2000,13 @@ impl<E: Executor> Agent<E> {
                 let _ = stop.send(StopReason::Interrupted);
             }
         }
+        // Starts still being journaled: interrupted on the same terms, never launched
+        // (Codex's review of M5.2d).
+        for starting in self.starting.values_mut() {
+            if starting.stop.is_none() && drain.stop_due(now, Duration::ZERO) {
+                starting.stop = Some(StopReason::Interrupted);
+            }
+        }
         if step == DrainStep::Interrupt {
             tracing::warn!(
                 running = self.running.len(),
@@ -2135,6 +2207,8 @@ impl<E: Executor> Agent<E> {
 
     /// Records `record` for an attempt in the journal.
     async fn record(&self, attempt_id: &str, record: JournalRecord) -> std::io::Result<()> {
+        // What the writer holds first: a write of it queued there mustn't land after this.
+        self.flush_journal().await;
         let journal = self.journal.clone();
         let attempt_id = attempt_id.to_owned();
         tokio::task::spawn_blocking(move || journal.write(&attempt_id, &record))
@@ -2143,16 +2217,55 @@ impl<E: Executor> Agent<E> {
     }
 
     /// A result the master has: no longer kept, the journal's gauge down by it.
-    async fn acknowledged(&mut self, attempt_id: &str) {
+    fn acknowledged(&mut self, attempt_id: &str) {
         if self.unacked.remove(attempt_id).is_some() {
-            self.forget(attempt_id).await;
+            // Its files removed beside the loop (M5.2d): nothing waits on it.
+            self.writer().submit(
+                attempt_id,
+                crate::journal_writer::Op::Remove,
+                Journaled::Acknowledged,
+            );
             self.set_slot_gauges();
         }
     }
 
     /// Removes an attempt from the journal; a failure is logged (the file is then reported
     /// again after a restart, and the master decides on it).
+    /// The journal writer, started on first use (inside the runtime).
+    fn writer(&mut self) -> &crate::journal_writer::Writer<Journaled> {
+        let (journal, done, stall) = (
+            self.journal.clone(),
+            self.done_tx.clone(),
+            self.writer_stall,
+        );
+        self.writer.get_or_insert_with(|| {
+            crate::journal_writer::Writer::start(
+                journal,
+                move |written| {
+                    let _ = done.send(Done::Journaled(written));
+                },
+                stall,
+            )
+        })
+    }
+
+    /// The journal's write metric for `kind`, once per writer group.
+    fn journal_metric(&mut self, kind: &'static str, group: u64, took: Duration) {
+        if self.metered.insert(kind, group) != Some(group) {
+            self.metrics.journal_written(kind, took);
+        }
+    }
+
+    /// Waits for every journal write handed to the writer to be on disk.
+    async fn flush_journal(&self) {
+        if let Some(writer) = &self.writer {
+            writer.flush().await;
+        }
+    }
+
     async fn forget(&self, attempt_id: &str) {
+        // What the writer holds first: a write of it queued there mustn't land after this.
+        self.flush_journal().await;
         let journal = self.journal.clone();
         let id = attempt_id.to_owned();
         let removed = tokio::task::spawn_blocking(move || journal.remove(&id))
@@ -2309,10 +2422,32 @@ impl<E: Executor> Agent<E> {
                 Some(hash) => self.reported.insert(name.clone(), hash),
                 None => self.reported.remove(&name),
             };
+            self.stop_parses_of_other_code(&name, &hash);
             let changed = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
                 root: Some(root_hash(&self.settings.setup, &name, &hash)),
             });
             let _ = to_master.send(wrap(changed));
+        }
+    }
+
+    /// Stops the running parses of root `name` other than of `hash` (its code now, empty when
+    /// withdrawn): their code isn't this worker's any more.
+    fn stop_parses_of_other_code(&mut self, name: &str, hash: &str) {
+        let others: Vec<(String, String)> = self
+            .parse_stops
+            .keys()
+            .filter(|(root, of)| root == name && of != hash)
+            .cloned()
+            .collect();
+        for key in others {
+            if let Some(stop) = self.parse_stops.remove(&key) {
+                tracing::debug!(
+                    root = name,
+                    hash = key.1.as_str(),
+                    "parse of old code stopped"
+                );
+                let _ = stop.send(());
+            }
         }
     }
 
@@ -2326,7 +2461,15 @@ impl<E: Executor> Agent<E> {
     }
 
     /// One session with the master: register, then handle messages until the connection ends.
-    pub async fn session(&mut self, mut client: MasterClient<Channel>) -> SessionEnd {
+    pub async fn session(&mut self, client: MasterClient<Channel>) -> SessionEnd {
+        let end = self.session_stream(client).await;
+        // Starts still being journaled aren't this worker's any more (M5.2d).
+        self.abandon_starts().await;
+        end
+    }
+
+    /// [`Self::session`]'s stream, until it ends.
+    async fn session_stream(&mut self, mut client: MasterClient<Channel>) -> SessionEnd {
         let Some(roots) = self.hashes().await else {
             return SessionEnd::Stopped;
         };
@@ -2635,11 +2778,13 @@ impl<E: Executor> Agent<E> {
                     if let Err(end) = self.take_in(&next, clock.as_ref(), opened, to_master) {
                         // The session ends with it: those taken in before it go on as they
                         // would have one by one.
+                        let ids: Vec<String> = burst.iter().map(|a| a.attempt_id.clone()).collect();
+                        for &sequence in &sequences {
+                            to_master.hold(sequence);
+                        }
                         Box::pin(self.assign_group(burst, to_master, client, (heartbeat, opened)))
                             .await;
-                        for sequence in sequences {
-                            to_master.handled(sequence);
-                        }
+                        self.held_until_started(&ids, &sequences, to_master);
                         return Err(end);
                     }
                     let master_message::Message::AssignTask(next) = next else {
@@ -2655,12 +2800,25 @@ impl<E: Executor> Agent<E> {
                 None => break,
             }
         }
+        let ids: Vec<String> = burst.iter().map(|a| a.attempt_id.clone()).collect();
+        for &sequence in &sequences {
+            to_master.hold(sequence);
+        }
         Box::pin(self.assign_group(burst, to_master, client, (heartbeat, opened))).await;
-        // Handled once their `Started`s (or `Rejected`s) are queued (B240).
-        for sequence in sequences {
+        self.held_until_started(&ids, &sequences, to_master);
+        Ok(())
+    }
+
+    /// A burst's assignments handled (B240): each whose start is still being journaled
+    /// (M5.2d) stays held, unreported, until its `Started` is queued; the rest are released.
+    fn held_until_started(&mut self, ids: &[String], sequences: &[u64], to_master: &ToMaster) {
+        for (id, &sequence) in ids.iter().zip(sequences) {
+            match self.starting.get_mut(id) {
+                Some(starting) if starting.sequence.is_none() => starting.sequence = Some(sequence),
+                _ => to_master.release(sequence),
+            }
             to_master.handled(sequence);
         }
-        Ok(())
     }
 
     /// A message from the master taken in: refused (the session ends) if it isn't this
@@ -2771,17 +2929,21 @@ impl<E: Executor> Agent<E> {
             master_message::Message::CancelAttempt(cancel) => {
                 // It stays running (its slot taken) until its process has ended and reported;
                 // a repeated cancel changes nothing.
+                let reason = if cancel.interrupted {
+                    StopReason::Interrupted
+                } else {
+                    StopReason::Cancelled
+                };
                 if let Some(stop) = self.running.get(&cancel.attempt_id) {
-                    let _ = stop.send(if cancel.interrupted {
-                        StopReason::Interrupted
-                    } else {
-                        StopReason::Cancelled
-                    });
+                    let _ = stop.send(reason);
+                } else if let Some(starting) = self.starting.get_mut(&cancel.attempt_id) {
+                    // Its record still being written (M5.2d): not launched once it is.
+                    starting.stop = Some(reason);
                 }
             }
             master_message::Message::FinishedAck(ack) => {
                 self.forked.remove(&ack.attempt_id);
-                self.acknowledged(&ack.attempt_id).await;
+                self.acknowledged(&ack.attempt_id);
             }
         }
     }
@@ -2791,7 +2953,7 @@ impl<E: Executor> Agent<E> {
         match pb::AttemptDecision::try_from(decision.decision) {
             Ok(pb::AttemptDecision::Ack) => {
                 self.forked.remove(id);
-                self.acknowledged(id).await;
+                self.acknowledged(id);
             }
             Ok(pb::AttemptDecision::CleanRest) => {
                 // Ended, its cleanup moved without the handles from `cleanup_from` on: they
@@ -2813,7 +2975,7 @@ impl<E: Executor> Agent<E> {
             }
             Ok(pb::AttemptDecision::Kill) => {
                 self.forked.remove(id);
-                self.acknowledged(id).await;
+                self.acknowledged(id);
                 if let Some(gate) = self.gates.get(id) {
                     gate.send_replace(Gate::Dropped);
                 }
@@ -2944,6 +3106,8 @@ impl<E: Executor> Agent<E> {
             // network, they start now.
             if assign.inputs_external && !ready.is_empty() {
                 Box::pin(self.start_group(std::mem::take(&mut ready), to_master, opened)).await;
+                // Started now, on disk first (M5.2d): not held up by the fetch.
+                Box::pin(self.settle_starts(to_master, client)).await;
                 held = Held::default();
             }
             // Cut off (a fetch reaching the cutoff, or the alive tick) or past the lease: the
@@ -2962,17 +3126,177 @@ impl<E: Executor> Agent<E> {
         Box::pin(self.start_group(ready, to_master, opened)).await;
     }
 
-    /// Prepared assignments' records written as one group, then each started in order.
+    /// Prepared assignments' `running` records handed to the journal writer (M5.2d), which
+    /// writes them together; each is started once its record is on disk
+    /// ([`Self::journaled`]). One refused here goes on at once; a cleanup's kept assignment is
+    /// written first, here.
     async fn start_group(
         &mut self,
         ready: Vec<Prepared>,
         to_master: &ToMaster,
         opened: tokio::time::Instant,
     ) {
-        let journaled = self.journal_starts(&ready, opened).await;
-        for (prepared, journaled) in ready.into_iter().zip(journaled) {
-            self.after_journal(prepared, journaled, to_master).await;
+        for prepared in ready {
+            if matches!(prepared.planned, Err(NotRun::Rejected { .. })) {
+                self.after_journal(prepared, Ok(()), to_master, false).await;
+                continue;
+            }
+            #[cfg(test)]
+            if !self.journal_stall.0.is_zero() {
+                tokio::time::sleep(self.journal_stall.0).await;
+                self.journal_stall
+                    .1
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            if let Err(error) = self.keep_for_cleanup(&prepared).await {
+                let why = Some(self.disk_not_writable(&error));
+                self.after_journal(prepared, Err(why), to_master, false)
+                    .await;
+                continue;
+            }
+            let id = prepared.spec.attempt_id.clone();
+            // Its code noted now, as prepared: a watcher's tick before the record is on disk
+            // must neither collect it nor take a newer hash for it (Codex's review of M5.2d).
+            self.remember_code(&prepared.assign, &prepared.spec);
+            self.starting.insert(
+                id.clone(),
+                Starting {
+                    sequence: None,
+                    wait_step: assigned_a_wait_step(&prepared.assign),
+                    stop: None,
+                },
+            );
+            self.writer().submit(
+                &id,
+                crate::journal_writer::Op::Write(Box::new(JournalRecord::Running(None))),
+                Journaled::Start(Box::new(PendingStart { prepared, opened })),
+            );
         }
+    }
+
+    /// Waits for the journal writer, then handles what it reported (and anything else done
+    /// meanwhile, in order): starts handed to it are launched before the loop is held up.
+    async fn settle_starts(&mut self, to_master: &ToMaster, client: &mut MasterClient<Channel>) {
+        self.flush_journal().await;
+        while let Ok(done) = self.done_rx.try_recv() {
+            Box::pin(self.on_done(done, Some((to_master, &mut *client)))).await;
+        }
+    }
+
+    /// Why an assignment is refused when its journal record can't be written.
+    fn disk_not_writable(&self, error: &std::io::Error) -> (pb::RejectReason, String) {
+        let detail = format!(
+            "can't write the journal in `{}`: {error}; check the worker's data directory",
+            self.journal.dir().display()
+        );
+        (pb::RejectReason::DiskNotWritable, detail)
+    }
+
+    /// An assignment's `running` record handled by the writer: started as before (the lease
+    /// checked, decision 281), refused, or, cancelled meanwhile, ended without its process.
+    /// One the session gave up meanwhile ([`Self::abandon_starts`]) is gone already.
+    async fn start_journaled(
+        &mut self,
+        pending: PendingStart,
+        result: std::io::Result<()>,
+        to_master: Option<&ToMaster>,
+    ) {
+        let PendingStart { prepared, opened } = pending;
+        let id = prepared.spec.attempt_id.clone();
+        let Some(starting) = self.starting.remove(&id) else {
+            return;
+        };
+        let Some(to_master) = to_master else {
+            // Not in a session (abandoned with it, so not expected): not started.
+            self.drop_code(&id);
+            self.forget(&id).await;
+            return;
+        };
+        let outcome = match result {
+            Err(error) => Err(Some(self.disk_not_writable(&error))),
+            // Cut off or past the lease while journaling: not started (decision 281; Grok's
+            // review of M5.1b: the cutoff too, not only the lease).
+            Ok(()) if self.cut_off || self.gone_silent(opened) => {
+                tracing::warn!(
+                    attempt_id = id.as_str(),
+                    "the lease ran out while the attempt was journaled; not started"
+                );
+                self.forget(&id).await;
+                Err(None)
+            }
+            Ok(()) => Ok(()),
+        };
+        // No start deadline: the master takes an assignment back only once this worker's
+        // messages show it never started it (B240), so however late it came, it is still this
+        // worker's to start.
+        match (outcome, starting.stop) {
+            (Ok(()), Some(reason)) if !has_cleanup(&prepared) => {
+                self.stopped_while_journaled(prepared, reason, to_master);
+            }
+            (Ok(()), Some(reason)) => {
+                // A cleanup's attempt goes the usual way, stopped at once (a moved cleanup isn't:
+                // a cancel doesn't stop a per-task cleanup, decision 219).
+                self.after_journal(prepared, Ok(()), to_master, true).await;
+                if let Some(stop) = self.running.get(&id) {
+                    let _ = stop.send(reason);
+                }
+            }
+            // Refused, or not cancelled: as before.
+            (outcome, _) => {
+                if outcome.is_err() {
+                    self.drop_code(&id);
+                }
+                self.after_journal(prepared, outcome, to_master, true).await;
+            }
+        }
+        if let Some(sequence) = starting.sequence {
+            to_master.release(sequence);
+        }
+    }
+
+    /// A start that won't happen: the code noted for it is released (and collected if unused).
+    fn drop_code(&mut self, attempt_id: &str) {
+        if self.release_code(attempt_id).is_some() {
+            self.collect_code();
+        }
+    }
+
+    /// An assignment cancelled while its record was written: `Started`, then ended as a stop
+    /// before its process started, never launched.
+    fn stopped_while_journaled(
+        &mut self,
+        prepared: Prepared,
+        reason: StopReason,
+        to_master: &ToMaster,
+    ) {
+        let Prepared { spec, received, .. } = prepared;
+        let started = self.started(&spec.attempt_id, pb::StartMethod::Spawn);
+        let _ = to_master.send(wrap(worker_message::Message::Started(started)));
+        self.metrics
+            .assign_to_started
+            .observe(received.elapsed().as_secs_f64());
+        let ended = stopped_before_start(&spec, reason, Duration::ZERO);
+        let _ = self.done_tx.send(Done::Attempt(ended));
+    }
+
+    /// The session ended with starts still being journaled: none is started (its `Started`
+    /// would go to a master that never assigned it on this stream); their records, once
+    /// written, are removed. The master takes them back as it does any assignment never
+    /// started.
+    async fn abandon_starts(&mut self) {
+        if self.starting.is_empty() {
+            return;
+        }
+        self.flush_journal().await;
+        for id in std::mem::take(&mut self.starting).into_keys() {
+            tracing::warn!(
+                attempt_id = id.as_str(),
+                "the session ended while the attempt was journaled; not started"
+            );
+            self.drop_code(&id);
+            self.forget(&id).await;
+        }
+        self.set_slot_gauges();
     }
 
     /// An assignment checked and planned, up to its journal record; `None` when it was
@@ -3003,6 +3327,7 @@ impl<E: Executor> Agent<E> {
         }
         if self.running.contains_key(&assign.attempt_id)
             || self.unacked.contains_key(&assign.attempt_id)
+            || self.starting.contains_key(&assign.attempt_id)
             || held.ids.contains(&assign.attempt_id)
         {
             // Already started here: its journal entry must not be replaced.
@@ -3053,6 +3378,7 @@ impl<E: Executor> Agent<E> {
         prepared: Prepared,
         journaled: Result<(), Option<(pb::RejectReason, String)>>,
         to_master: &ToMaster,
+        remembered: bool,
     ) {
         let Prepared {
             assign,
@@ -3074,7 +3400,9 @@ impl<E: Executor> Agent<E> {
             }
             return;
         }
-        self.remember_code(&assign, &spec);
+        if !remembered {
+            self.remember_code(&assign, &spec);
+        }
         self.note_cleanup(&mut spec, &assign);
         spec.api = Some(ApiCaller::of_attempt(&spec.attempt_id, self.api_send()));
         self.ask_for(&mut spec);
@@ -3325,10 +3653,9 @@ impl<E: Executor> Agent<E> {
                 Err(_) => break,
             }
         }
-        self.record_results(&results).await;
-        let to_master = link.as_ref().map(|(to_master, _)| *to_master);
+        // Kept in the journal beside the loop (M5.2d), each sent once on disk.
         for finished in results {
-            self.result_recorded(finished, to_master);
+            self.record_result(finished);
         }
         if let Some(next) = next {
             Box::pin(self.on_done(next, link)).await;
@@ -3365,7 +3692,6 @@ impl<E: Executor> Agent<E> {
         first: (String, JournalRecord, bool),
         link: Option<(&ToMaster, &mut MasterClient<Channel>)>,
     ) {
-        let to_master = link.as_ref().map(|(to_master, _)| *to_master);
         let mut records = vec![first];
         let mut next = None;
         while records.len() < self.settings.setup.timeouts.starts_per_journal_group {
@@ -3385,114 +3711,85 @@ impl<E: Executor> Agent<E> {
                 Err(_) => break,
             }
         }
-        self.keep_processes(records, to_master).await;
+        self.keep_processes(records);
         if let Some(next) = next {
             Box::pin(self.on_done(next, link)).await;
         }
     }
 
-    /// Started processes' identities kept in the journal (one write for several, M5.1b), then
-    /// each forked one's `Started` repeated with its method: after its identity is on disk.
-    async fn keep_processes(
+    /// Started processes' identities handed to the journal writer (M5.2d; written together,
+    /// M5.1b); a forked one's `Started` is repeated with its method once its identity is on
+    /// disk ([`Self::journaled`]).
+    fn keep_processes(&mut self, records: Vec<(String, JournalRecord, bool)>) {
+        for (attempt_id, record, repeat) in records {
+            self.writer().submit(
+                &attempt_id,
+                crate::journal_writer::Op::Write(Box::new(record)),
+                Journaled::Process { repeat },
+            );
+        }
+    }
+
+    /// Hands a result to the journal writer (M5.2d): it goes to the master once on disk
+    /// ([`Self::journaled`]), as before, but the loop doesn't wait for the disk meanwhile.
+    fn record_result(&mut self, finished: pb::Finished) {
+        let record = JournalRecord::Finished(finished.clone());
+        let id = finished.attempt_id.clone();
+        self.writer().submit(
+            &id,
+            crate::journal_writer::Op::Write(Box::new(record)),
+            Journaled::Finished(Box::new(finished)),
+        );
+    }
+
+    /// A journal write the writer handled: what follows it now.
+    async fn journaled(
         &mut self,
-        records: Vec<(String, JournalRecord, bool)>,
+        written: crate::journal_writer::Written<Journaled>,
         to_master: Option<&ToMaster>,
     ) {
-        let began = std::time::Instant::now();
-        let written = if let [(id, record, _)] = records.as_slice() {
-            self.record(id, record.clone()).await
-        } else {
-            let journal = self.journal.clone();
-            let group: Vec<(String, JournalRecord)> = records
-                .iter()
-                .map(|(id, record, _)| (id.clone(), record.clone()))
-                .collect();
-            tokio::task::spawn_blocking(move || {
-                let refs: Vec<(&str, &JournalRecord)> = group
-                    .iter()
-                    .map(|(id, record)| (id.as_str(), record))
-                    .collect();
-                journal.write_many(&refs)
-            })
-            .await
-            .map_err(std::io::Error::other)
-            .and_then(|written| written)
-        };
-        match written {
-            Ok(()) => self.metrics.journal_written("process", began.elapsed()),
-            Err(_) if records.len() > 1 => {
-                // The group failed: each kept on its own, as before groups.
-                for (attempt_id, record, _) in &records {
-                    if let Err(error) = self.record(attempt_id, record.clone()).await {
+        let crate::journal_writer::Written {
+            attempt_id,
+            then,
+            result,
+            took,
+            group,
+        } = written;
+        match then {
+            Journaled::Finished(finished) => {
+                match result {
+                    Ok(()) => self.journal_metric("results", group, took),
+                    Err(error) => tracing::warn!(
+                        attempt_id,
+                        %error,
+                        "can't record the result; it is lost if the agent restarts before the \
+                         master acknowledges it"
+                    ),
+                }
+                self.result_recorded(*finished, to_master);
+            }
+            Journaled::Acknowledged => {
+                if let Err(error) = result {
+                    tracing::warn!(attempt_id, %error, "can't remove the attempt from the journal");
+                }
+            }
+            Journaled::Start(pending) => {
+                if result.is_ok() {
+                    self.journal_metric("start", group, took);
+                }
+                Box::pin(self.start_journaled(*pending, result, to_master)).await;
+            }
+            Journaled::Process { repeat } => {
+                match result {
+                    Ok(()) => self.journal_metric("process", group, took),
+                    Err(error) => {
                         tracing::warn!(attempt_id, %error, "can't record the task's process");
                     }
                 }
-            }
-            Err(error) => {
-                let attempt_id = records[0].0.as_str();
-                tracing::warn!(attempt_id, %error, "can't record the task's process");
-            }
-        }
-        if let Some(to_master) = to_master {
-            for (attempt_id, _, repeat) in &records {
-                if *repeat {
-                    let _ = to_master.send(forked_started(attempt_id));
+                if repeat && let Some(to_master) = to_master {
+                    let _ = to_master.send(forked_started(&attempt_id));
                 }
             }
-        }
-    }
-
-    /// Keeps results in the journal until the master has them, as one group.
-    async fn record_results(&self, results: &[pb::Finished]) {
-        if let [one] = results {
-            return self.record_finished(one).await;
-        }
-        let journal = self.journal.clone();
-        let records: Vec<(String, JournalRecord)> = results
-            .iter()
-            .map(|f| (f.attempt_id.clone(), JournalRecord::Finished(f.clone())))
-            .collect();
-        let began = std::time::Instant::now();
-        let written = tokio::task::spawn_blocking(move || {
-            let refs: Vec<(&str, &JournalRecord)> =
-                records.iter().map(|(id, r)| (id.as_str(), r)).collect();
-            journal.write_many(&refs)
-        })
-        .await
-        .map_err(std::io::Error::other)
-        .and_then(|written| written);
-        if written.is_ok() {
-            self.metrics.journal_written("results", began.elapsed());
-        }
-        if let Err(error) = written {
-            tracing::warn!(
-                results = results.len(),
-                %error,
-                "can't record the results; they are lost if the agent restarts before the \
-                 master acknowledges them"
-            );
-        }
-    }
-
-    /// Keeps a result in the journal until the master has it.
-    async fn record_finished(&self, finished: &pb::Finished) {
-        let began = std::time::Instant::now();
-        let recorded = self
-            .record(
-                &finished.attempt_id,
-                JournalRecord::Finished(finished.clone()),
-            )
-            .await;
-        if recorded.is_ok() {
-            self.metrics.journal_written("results", began.elapsed());
-        }
-        if let Err(error) = recorded {
-            tracing::warn!(
-                attempt_id = finished.attempt_id.as_str(),
-                %error,
-                "can't record the result; it is lost if the agent restarts before the \
-                 master acknowledges it"
-            );
         }
     }
 
@@ -3666,97 +3963,6 @@ impl<E: Executor> Agent<E> {
             rest_from: None,
         };
         self.start_waiting(&id, waiting, to_master).await;
-    }
-
-    /// The journal records of a group's assignments (M5.1b): those planned to run (or to fail
-    /// before they could start) kept on disk together, a cleanup's assignment kept beside its
-    /// record first. Each one's outcome in order: on disk, refused for the disk
-    /// (`DiskNotWritable`), or dropped (`None`) because the lease ran out meanwhile.
-    async fn journal_starts(
-        &self,
-        ready: &[Prepared],
-        opened: tokio::time::Instant,
-    ) -> Vec<Result<(), Option<(pb::RejectReason, String)>>> {
-        let disk = |error: &std::io::Error| {
-            let detail = format!(
-                "can't write the journal in `{}`: {error}; check the worker's data directory",
-                self.journal.dir().display()
-            );
-            Some((pb::RejectReason::DiskNotWritable, detail))
-        };
-        let mut outcomes: Vec<Result<(), Option<(pb::RejectReason, String)>>> =
-            ready.iter().map(|_| Ok(())).collect();
-        let began = std::time::Instant::now();
-        let mut writing = Vec::new();
-        for (at, prepared) in ready.iter().enumerate() {
-            if matches!(prepared.planned, Err(NotRun::Rejected { .. })) {
-                continue;
-            }
-            #[cfg(test)]
-            if !self.journal_stall.0.is_zero() {
-                tokio::time::sleep(self.journal_stall.0).await;
-                self.journal_stall
-                    .1
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            match self.keep_for_cleanup(prepared).await {
-                Ok(()) => writing.push(at),
-                Err(error) => outcomes[at] = Err(disk(&error)),
-            }
-        }
-        if writing.is_empty() {
-            return outcomes;
-        }
-        let ids: Vec<String> = writing
-            .iter()
-            .map(|&at| ready[at].spec.attempt_id.clone())
-            .collect();
-        let written = if let [id] = ids.as_slice() {
-            self.record(id, JournalRecord::Running(None)).await
-        } else {
-            let journal = self.journal.clone();
-            let records = ids.clone();
-            tokio::task::spawn_blocking(move || {
-                let running = JournalRecord::Running(None);
-                let refs: Vec<(&str, &JournalRecord)> =
-                    records.iter().map(|id| (id.as_str(), &running)).collect();
-                journal.write_many(&refs)
-            })
-            .await
-            .map_err(std::io::Error::other)
-            .and_then(|written| written)
-        };
-        match written {
-            Ok(()) => self.metrics.journal_written("start", began.elapsed()),
-            Err(_) if ids.len() > 1 => {
-                // The group failed: each written on its own, so each gets its own outcome.
-                for (&at, id) in writing.iter().zip(&ids) {
-                    if let Err(error) = self.record(id, JournalRecord::Running(None)).await {
-                        outcomes[at] = Err(disk(&error));
-                    }
-                }
-            }
-            Err(error) => outcomes[writing[0]] = Err(disk(&error)),
-        }
-        // Cut off or past the lease while journaling: not started (decision 281; Grok's review
-        // of M5.1b: the cutoff too, not only the lease).
-        if self.cut_off || self.gone_silent(opened) {
-            for &at in &writing {
-                if outcomes[at].is_ok() {
-                    let id = &ready[at].spec.attempt_id;
-                    tracing::warn!(
-                        attempt_id = id.as_str(),
-                        "the lease ran out while the attempt was journaled; not started"
-                    );
-                    self.forget(id).await;
-                    outcomes[at] = Err(None);
-                }
-            }
-        }
-        // No start deadline: the master takes an assignment back only once this worker's
-        // messages show it never started it (B240), so however late it came, it is still this
-        // worker's to start.
-        outcomes
     }
 
     /// A cleanup's assignment kept beside its journal record (to run it again after a
@@ -4169,6 +4375,7 @@ impl<E: Executor> Agent<E> {
                     root,
                     copies: vec![copy],
                     files: Ok(parsed),
+                    stopped: false,
                 });
             });
             return;
@@ -4179,13 +4386,21 @@ impl<E: Executor> Agent<E> {
             *self.parsing.entry(copy.clone()).or_default() += 1;
         }
         let executor = self.executor.clone();
+        let (stop, mut stopped) = tokio::sync::oneshot::channel();
+        self.parse_stops
+            .insert((root.root.clone(), root.content_hash.clone()), stop);
         tokio::spawn(async move {
-            let parsed = executor.parse(root.root.clone(), dir, files, code).await;
+            // Stopped: the parse dropped, its runners with it (they are killed on drop).
+            let (files, stopped) = tokio::select! {
+                parsed = executor.parse(root.root.clone(), dir, files, code) => (parsed, false),
+                Ok(()) = &mut stopped => (Err("stopped: the root's code moved on".to_owned()), true),
+            };
             let _ = done.send(Done::Parse {
                 job_id: job.parse_job_id,
                 root,
                 copies,
-                files: parsed,
+                files,
+                stopped,
             });
         });
     }
@@ -4325,10 +4540,8 @@ impl<E: Executor> Agent<E> {
                 identity,
                 forked,
             } => {
-                let to_master = link.as_ref().map(|(to_master, _)| *to_master);
                 let (record, repeat) = self.spawned_record(&attempt_id, identity, forked);
-                self.keep_processes(vec![(attempt_id, record, repeat)], to_master)
-                    .await;
+                self.keep_processes(vec![(attempt_id, record, repeat)]);
             }
             Done::TaskEnded(finished) => {
                 self.task_ended(finished, link.map(|(to_master, _)| to_master))
@@ -4345,8 +4558,11 @@ impl<E: Executor> Agent<E> {
             }
             Done::Attempt(finished) => {
                 let finished = self.result_ready(finished);
-                self.record_finished(&finished).await;
-                self.result_recorded(finished, link.map(|(to_master, _)| to_master));
+                self.record_result(finished);
+            }
+            Done::Journaled(written) => {
+                self.journaled(written, link.map(|(to_master, _)| to_master))
+                    .await;
             }
             Done::Trigger(done) => self.trigger_done(done, link.map(|(to, _)| to)),
             Done::ApiCall { call, answer } => {
@@ -4375,9 +4591,11 @@ impl<E: Executor> Agent<E> {
                 root,
                 copies,
                 files,
+                stopped,
             } => {
-                self.parses_running
-                    .remove(&(root.root.clone(), root.content_hash.clone()));
+                let key = (root.root.clone(), root.content_hash.clone());
+                self.parses_running.remove(&key);
+                self.parse_stops.remove(&key);
                 for copy in copies {
                     if let Some(count) = self.parsing.get_mut(&copy) {
                         *count -= 1;
@@ -4387,7 +4605,11 @@ impl<E: Executor> Agent<E> {
                     }
                 }
                 self.collect_code();
-                self.report_parse(job_id, root, files, link);
+                // A stopped parse is of code this worker no longer has: the master hands its
+                // job to another worker that has it, if any (its `moved_away`).
+                if !stopped {
+                    self.report_parse(job_id, root, files, link);
+                }
             }
             Done::Connections {
                 job_id,
@@ -4552,6 +4774,10 @@ impl<E: Executor> Agent<E> {
             .watcher_slots
             .saturating_sub(u32::try_from(self.wait_steps.len()).unwrap_or(u32::MAX))
             .saturating_sub(u32::try_from(self.triggers.len()).unwrap_or(u32::MAX))
+            .saturating_sub(
+                u32::try_from(self.starting.values().filter(|s| s.wait_step).count())
+                    .unwrap_or(u32::MAX),
+            )
     }
 
     fn note_wait_step(&mut self, spec: &AttemptSpec) {
@@ -4571,8 +4797,17 @@ impl<E: Executor> Agent<E> {
 
     /// The attempts running on task slots.
     fn tasks_running(&self) -> usize {
-        self.running.len().saturating_sub(self.wait_steps.len())
+        let starting = self.starting.values().filter(|s| !s.wait_step).count();
+        self.running
+            .len()
+            .saturating_sub(self.wait_steps.len())
+            .saturating_add(starting)
     }
+}
+
+/// Whether an assignment involves a cleanup (its task has one, or it is one).
+fn has_cleanup(prepared: &Prepared) -> bool {
+    prepared.spec.task.cleanup.is_some() || prepared.assign.cleanup_only.is_some()
 }
 
 /// The `Started` saying a fork server forked `attempt_id` (the master keeps the first start
@@ -5051,6 +5286,17 @@ impl ToMaster {
     /// The master's message numbered `sequence` was handled.
     fn handled(&self, sequence: u64) {
         crate::master_time::lock(&self.outbox).handled(sequence);
+    }
+
+    /// The assignment numbered `sequence` is being started (M5.2d): not reported handled
+    /// until released.
+    fn hold(&self, sequence: u64) {
+        crate::master_time::lock(&self.outbox).hold(sequence);
+    }
+
+    /// A held assignment's `Started` (or `Rejected`) is queued, or it was dropped.
+    fn release(&self, sequence: u64) {
+        crate::master_time::lock(&self.outbox).release(sequence);
     }
 }
 

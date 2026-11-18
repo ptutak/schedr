@@ -60,11 +60,26 @@ pub struct ProcessSpec {
 pub struct OsProcess {
     child: Child,
     group: Pid,
-    stdout: JoinHandle<io::Result<TailBuffer>>,
-    stderr: JoinHandle<io::Result<TailBuffer>>,
+    /// Its output's collectors, taken by [`Self::output`].
+    stdout: Option<JoinHandle<io::Result<TailBuffer>>>,
+    stderr: Option<JoinHandle<io::Result<TailBuffer>>>,
     ended: Ended,
     /// Whether its zombie was read already (`wait` may be called again).
     read: bool,
+    /// Whether it was reaped: its process group's ID may be another's since.
+    reaped: bool,
+}
+
+impl Drop for OsProcess {
+    /// A process dropped before it was reaped is killed with its whole group, as a forked one
+    /// is: `kill_on_drop` kills the leader alone, and a dropped parse job or attempt must not
+    /// leave its children running unwatched (Codex's review of M5.2d). Not yet reaped, the
+    /// leader still holds the group's ID.
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = kill_process_group(self.group, rustix::process::Signal::KILL);
+        }
+    }
 }
 
 /// Processes are started one at a time: a descriptor made inheritable for one child (see
@@ -124,20 +139,21 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
     Ok(OsProcess {
         ended: Ended::default(),
         read: false,
+        reaped: false,
         child,
         group,
-        stdout: tokio::spawn(collect(
+        stdout: Some(tokio::spawn(collect(
             stdout,
             Arc::clone(&log),
             spec.max_output_size,
             spec.mask.clone(),
-        )),
-        stderr: tokio::spawn(collect(
+        ))),
+        stderr: Some(tokio::spawn(collect(
             stderr,
             log,
             spec.max_output_size,
             spec.mask.clone(),
-        )),
+        ))),
     })
 }
 
@@ -286,9 +302,12 @@ impl OsProcess {
     /// # Errors
     ///
     /// Returns an I/O error from reading a pipe or writing the log file.
-    pub async fn output(self) -> io::Result<(TailBuffer, TailBuffer)> {
-        let stdout = self.stdout.await.map_err(io::Error::other)??;
-        let stderr = self.stderr.await.map_err(io::Error::other)??;
+    pub async fn output(mut self) -> io::Result<(TailBuffer, TailBuffer)> {
+        let (Some(stdout), Some(stderr)) = (self.stdout.take(), self.stderr.take()) else {
+            return Err(io::Error::other("the output was taken already"));
+        };
+        let stdout = stdout.await.map_err(io::Error::other)??;
+        let stderr = stderr.await.map_err(io::Error::other)??;
         Ok((stdout, stderr))
     }
 }
@@ -369,6 +388,7 @@ impl Process for OsProcess {
             self.read = true;
         }
         let status = self.child.wait().await?;
+        self.reaped = true;
         self.ended.core_dumped = status.core_dumped();
         Ok(match (status.code(), status.signal()) {
             (Some(code), _) => Termination::Exited(code),

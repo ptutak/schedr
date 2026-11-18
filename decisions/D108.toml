@@ -5,7 +5,7 @@ status = "active"
 topic = "workers"
 section = "Identity and connection"
 summary = '''
-On database trouble, undo the failed message’s effects and end the worker stream; the worker
+On database trouble, undo the failed message’s effects and end the worker stream (a statement cut off at the query limit tried once more first, D115, B263); the worker
 registers again with its roots and journal. Under D115, data faults keep the stream open: a refused
 Finished becomes an acknowledged result_not_stored failure, other refused messages are logged and
 dropped, and registration adopts open attempts whose start record was refused.
@@ -13,5 +13,5 @@ dropped, and registration adopts open attempts whose start record was refused.
 history = "archive/PROJECT.md#D108"
 step = "M4.3e"
 also = ["protocol", "state"]
-checked = 2026-11-15
+checked = 2026-11-18
 code = ["crates/schedr-master/src/core.rs::CoreError", "crates/schedr-db/src/database.rs::is_data_fault"]

@@ -54,9 +54,25 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 2 | B257: a restarted master in the roles tests can find its kept port taken (Address already in use) | 2 | low | possible | tests |
-| 3 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 4 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 2 | B258: the PgBouncer failover scenario's second master can start before the first migrated the schema, and exits | 2 | low | possible | tests |
+| 3 | B257: a restarted master in the roles tests can find its kept port taken (Address already in use) | 2 | low | possible | tests |
+| 4 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 5 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B258: the PgBouncer failover scenario's second master can start before the first migrated the schema, and exits
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): stress_06_pgbouncer_failover flakes when m2 checks the schema before m1, delayed by a PgBouncer error on its first lease attempt, has created it.
+- **Found:** 2026-11-18, the whole stress suite after M5.2c's reviews (release build): m1 started
+  with `--migrate`, its first lease attempt failed through PgBouncer in transaction mode
+  ("unnamed prepared statement does not exist") and it tried again 2 s later; m2, started without
+  `--migrate` 0.4 s after m1, found the schema uninitialized and exited ("run `schedr db
+  migrate`, or start master with `--migrate`"); the test then waited in vain for m2's gRPC
+  address. It passed in earlier runs: a timing race, not in M5.2c's code (startup and migration
+  untouched).
+- **A fix:** the scenario starting m2 once m1 leads (or m1's schema is ready); or a master
+  without `--migrate` waiting for the schema for a while instead of exiting at once (a product
+  change: the user's). Also worth a look: why the first lease statement meets an unnamed
+  prepared statement missing through the pooler.
 
 ## B257: a restarted master in the roles tests can find its kept port taken (Address already in use)
 

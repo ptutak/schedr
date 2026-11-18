@@ -1,0 +1,37 @@
+title = "A worker's journal writes beside its loop; a start in flight holds its assignment unreported"
+date = 2026-11-18
+by = "user"
+status = "active"
+topic = "workers"
+section = "Messages and transactions"
+summary = '''
+The worker agent's journal writes (one file per attempt: a temporary file, fsync, rename, fsync of
+the directory; kept so, the user: not one append-only file) go to a journal writer beside its
+event loop: the loop hands it a request and goes on; the writer writes what is pending as groups,
+up to 4 at once, and reports each request back through the loop's channel. The rules hold as
+before: `running` on disk before `Started` and the launch, `finished` before `Finished`, the files
+removed after the acknowledgement, one attempt's requests in order; a direct write or removal
+elsewhere waits for the writer first. A start in flight takes its slot and notes its code; a
+cancel meanwhile ends it cancelled before its process started, never launched (a moved cleanup
+excepted, decision 219); a drain interrupts it on the running ones' terms; the session ending
+drops it (its record removed; the master takes it back as never started); the lease check
+(decision 281) applies once it is on disk. The heard number the worker reports stays below every
+assignment whose `Started` isn't queued yet (`Outbox::hold`), so B240's take-back never takes a
+start in flight. Before an assignment whose inputs are fetched, the starts ahead of it are settled
+first. Measured in scenario 1 (release, traced): assigned -> `Started` sent p50/p90 26.6/56.8 ->
+16.8/28.6 ms, end -> `Finished` sent 25.9/66.5 -> 17.1/28.7 ms; untraced throughput unchanged
+(68.7 tasks a second against 70.2, the master's round gating a slot's cycle). Not
+chosen: one append-only journal file with one fdatasync a group (the user), writing `running` once
+after the spawn (a crash between would leave a process no record knows: run twice), one group at
+a time (starts waited behind other attempts' groups: measured slower).
+'''
+history = "JOURNAL.md#D507"
+step = "M5.2d"
+code = [
+    "crates/schedr-agent/src/journal_writer.rs::Writer",
+    "crates/schedr-agent/src/agent.rs::start_group",
+    "crates/schedr-agent/src/agent.rs::start_journaled",
+    "crates/schedr-agent/src/agent.rs::abandon_starts",
+    "crates/schedr-agent/src/master_time.rs::Outbox",
+]
+checked = 2026-11-18

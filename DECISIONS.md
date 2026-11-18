@@ -31,6 +31,8 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |
+| D506 | 2026-11-18 | user | planned (M5.2cB4) | assignment | The round's slow parts on due flags; what is read before the lock is only what the round alone writes |
 | D505 | 2026-11-17 | user | built M5.2cB | workers | Only the round moves runs forward: turns queue a worker's starts and results for it |
 | D504 | 2026-11-17 | user | built (B255 fixed) | cleanup | A movable cleanup's try waits at a barrier for the master's word, asked only once it waits |
 | D503 | 2026-11-17 | user | built M5.2b | state | Queries stay prepared on their connections by default; off, each is an unnamed statement |
@@ -550,6 +552,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### assignment
 
+- D506: The round's slow parts on due flags; what is read before the lock is only what the round alone writes
 - D502: One probe a round; a read skipped on it after a write wakes the next round
 - D490: started_at is the worker's start, in master time
 - D482: The round's assignments set-based: wait-step checks once per round, claims and deadlines per batch
@@ -1065,6 +1068,7 @@ Active decisions with a claim nobody found in the code yet (`unverified`): D57, 
 
 ### workers
 
+- D507: A worker's journal writes beside its loop; a start in flight holds its assignment unreported
 - D505: Only the round moves runs forward: turns queue a worker's starts and results for it
 - D501: The master's core lock is released during database calls
 - D497: An unset cleanup timeout fits in the grace period

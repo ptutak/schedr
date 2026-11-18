@@ -43,6 +43,19 @@ struct Fake {
     sys_paths: Arc<Mutex<Vec<Vec<String>>>>,
     /// Each cleanup's other roots' copies, and whether each was there when it ran.
     cleanup_copies: Arc<Mutex<Vec<CopiesSeen>>>,
+    /// Parses don't end: each is counted in `parses_held`, and in `parses_stopped` if stopped.
+    hold_parses: bool,
+    parses_held: Arc<std::sync::atomic::AtomicUsize>,
+    parses_stopped: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Counts a held parse stopped (its future dropped).
+struct StoppedParse(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for StoppedParse {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Executor for Fake {
@@ -157,6 +170,12 @@ impl Executor for Fake {
         _code: ParseCode,
     ) -> Result<Vec<ParsedFile>, String> {
         tokio::task::yield_now().await; // a real parse starts a runner
+        if self.hold_parses {
+            self.parses_held
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _stopped = StoppedParse(Arc::clone(&self.parses_stopped));
+            std::future::pending::<()>().await;
+        }
         self.dirs.lock().unwrap().push(dir.clone());
         self.parsed.lock().unwrap().push(files.clone());
         Ok(files
@@ -519,6 +538,10 @@ async fn a_new_file_gives_a_new_hash_and_a_new_parse() {
 
 /// A master that answers `Register` with prepared messages and records what the agent sends.
 #[derive(Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a test double's independent switches, each defaulting off"
+)]
 struct Scripted {
     script: Vec<pb::MasterMessage>,
     received: Arc<Mutex<Vec<pb::WorkerMessage>>>,
@@ -547,6 +570,8 @@ struct Scripted {
     epoch: i64,
     /// How far its wall clock runs ahead of the worker's, in milliseconds (decision 449).
     wall_ahead_ms: i64,
+    /// Its messages numbered 1, 2, ... as the master's are (else all 0; B240).
+    numbered: bool,
 }
 
 #[tonic::async_trait]
@@ -565,6 +590,8 @@ impl pb::master_server::Master for Scripted {
         // names the latest heartbeat heard (B225), as the master's do.
         let opened = Instant::now();
         let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let numbered = self.numbered;
+        let next = Arc::new(std::sync::atomic::AtomicU64::new(1));
         let epoch = self.epoch;
         let wall_ahead_ms = self.wall_ahead_ms;
         let stamp = {
@@ -583,7 +610,11 @@ impl pb::master_server::Master for Scripted {
                     .unwrap()
                         + wall_ahead_ms,
                     lease_epoch: epoch,
-                    sequence: 0,
+                    sequence: if numbered {
+                        next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    } else {
+                        0
+                    },
                 });
                 message
             }
@@ -1565,6 +1596,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         },
         copies: vec!["sha256:h".to_owned()],
         files: Ok(vec![]),
+        stopped: false,
     })
     .unwrap();
     done.send(Done::Attempt(finished)).unwrap();
@@ -1582,6 +1614,8 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         panic!("not journalled: {:?}", journal.records());
     };
     agent.offline(recorded).await;
+    // On disk; kept as unacknowledged once the loop has the writer's report (M5.2d).
+    journaled(&mut agent).await;
     let finished = i32::from(pb::JournalState::Finished);
     assert_eq!(
         agent.journal_entries(),
@@ -1965,6 +1999,443 @@ async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
     // A 500 ms upload at a 20 ms heartbeat: about 25 expected, at least a few under load.
     let counts = during.lock().unwrap().clone();
     assert!(counts[0] >= 5, "heartbeats while uploading: {counts:?}");
+}
+
+/// The master's `Registered`, heartbeats every 20 ms.
+fn registered() -> pb::MasterMessage {
+    to_worker(master_message::Message::Registered(pb::Registered {
+        script_uses: Vec::new(),
+        max_message_size: 0,
+        timing: Some(pb::Timing {
+            heartbeat_interval_ms: 20,
+            lease_timeout_ms: 60_000,
+            cancel_grace_ms: 1000,
+        }),
+        decisions: vec![],
+    }))
+}
+
+/// M5.2d: a result's journal write is beside the loop; still, its `Finished` goes only once
+/// the record is on disk (a slow disk: when the master has it, the journal holds it).
+#[tokio::test]
+async fn a_result_is_sent_only_once_it_is_on_disk() {
+    let echo = json!({"kind": "command", "command": {"argv": [[{"text": "true"}]]}});
+    let master = Scripted {
+        script: vec![
+            registered(),
+            assign("a1", &task_json(&echo), "sync.py", false),
+        ],
+        ..Scripted::default()
+    };
+    let journal_dir = Arc::new(Mutex::new(None::<PathBuf>));
+    let dir_in = Arc::clone(&journal_dir);
+    let on_disk_when_sent = Arc::new(Mutex::new(None::<bool>));
+    let seen_on_disk = Arc::clone(&on_disk_when_sent);
+    against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        move |sent| {
+            let finished = sent
+                .iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Finished(_))));
+            if finished {
+                let mut seen = seen_on_disk.lock().unwrap();
+                if seen.is_none() {
+                    let dir = journal_dir.lock().unwrap().clone().unwrap();
+                    let journal = Journal::new(dir);
+                    *seen = Some(journal.records().unwrap().iter().any(|(id, record)| {
+                        id == "a1" && matches!(record, JournalRecord::Finished(_))
+                    }));
+                }
+            }
+            finished
+        },
+        move |agent| {
+            *dir_in.lock().unwrap() = Some(agent.journal.dir().to_path_buf());
+            agent.writer_stall = Duration::from_millis(300);
+        },
+    )
+    .await;
+    assert_eq!(*on_disk_when_sent.lock().unwrap(), Some(true));
+}
+
+/// M5.2d: a result's slow journal write doesn't hold the loop: an assignment arriving
+/// meanwhile is started (its `Started` sent) before the result's `Finished` goes.
+#[tokio::test]
+async fn an_assignment_isnt_held_by_a_results_journal_write() {
+    let echo = json!({"kind": "command", "command": {"argv": [[{"text": "true"}]]}});
+    let master = Scripted {
+        script: vec![
+            registered(),
+            assign("a1", &task_json(&echo), "sync.py", false),
+        ],
+        late: Some((
+            Duration::from_millis(150),
+            vec![assign("a2", &task_json(&echo), "sync.py", false)],
+        )),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            sent.iter().any(|m| {
+                matches!(&m.message, Some(worker_message::Message::Finished(f)) if f.attempt_id == "a1")
+            })
+        },
+        |agent| agent.writer_stall = Duration::from_millis(600),
+    )
+    .await;
+    let position = |wanted: &dyn Fn(&worker_message::Message) -> bool| {
+        seen.iter()
+            .position(|m| m.message.as_ref().is_some_and(wanted))
+            .unwrap()
+    };
+    let a2_started =
+        position(&|m| matches!(m, worker_message::Message::Started(s) if s.attempt_id == "a2"));
+    let a1_finished =
+        position(&|m| matches!(m, worker_message::Message::Finished(f) if f.attempt_id == "a1"));
+    assert!(a2_started < a1_finished, "{:?}", kinds(&seen));
+}
+
+/// M5.2d: a start's `running` record is written beside the loop; still, its `Started` goes
+/// (and it is launched) only once the record is on disk.
+#[tokio::test]
+async fn a_start_is_sent_only_once_its_record_is_on_disk() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"])].concat(),
+        ..Scripted::default()
+    };
+    let journal_dir = Arc::new(Mutex::new(None::<PathBuf>));
+    let dir_in = Arc::clone(&journal_dir);
+    let on_disk_when_sent = Arc::new(Mutex::new(None::<bool>));
+    let seen_on_disk = Arc::clone(&on_disk_when_sent);
+    against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        move |sent| {
+            let started = sent
+                .iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Started(_))));
+            if started {
+                let mut seen = seen_on_disk.lock().unwrap();
+                if seen.is_none() {
+                    let journal = Journal::new(journal_dir.lock().unwrap().clone().unwrap());
+                    *seen = Some(journal.records().unwrap().iter().any(|(id, record)| {
+                        id == "a1" && matches!(record, JournalRecord::Running(_))
+                    }));
+                }
+            }
+            started
+        },
+        move |agent| {
+            *dir_in.lock().unwrap() = Some(agent.journal.dir().to_path_buf());
+            agent.writer_stall = Duration::from_millis(300);
+        },
+    )
+    .await;
+    assert_eq!(*on_disk_when_sent.lock().unwrap(), Some(true));
+}
+
+/// M5.2d, B240: while a start's record is written, the worker's messages (its heartbeats)
+/// never say its assignment was handled, or the master would take it back as never started
+/// and run it elsewhere.
+#[tokio::test]
+async fn an_assignment_being_journaled_is_never_reported_handled() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"])].concat(),
+        numbered: true,
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            // A heartbeat after its `Started` too.
+            sent.iter()
+                .skip_while(|m| !matches!(m.message, Some(worker_message::Message::Started(_))))
+                .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+        },
+        |agent| agent.writer_stall = Duration::from_millis(300),
+    )
+    .await;
+    // The assignment is the master's second message.
+    let before: Vec<&pb::WorkerMessage> = seen
+        .iter()
+        .take_while(|m| !matches!(m.message, Some(worker_message::Message::Started(_))))
+        .collect();
+    let beats = before
+        .iter()
+        .filter(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+        .count();
+    assert!(beats >= 3, "heartbeats while it was journaled: {beats}");
+    for message in before {
+        let heard = message.clock.as_ref().map_or(0, |c| c.heard_sequence);
+        assert!(
+            heard < 2,
+            "heard {heard} before its `Started`: {:?}",
+            message.message
+        );
+    }
+    let after = seen
+        .iter()
+        .rev()
+        .find(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))));
+    assert!(
+        after
+            .and_then(|m| m.clock.as_ref())
+            .map_or(0, |c| c.heard_sequence)
+            >= 2,
+        "released once started"
+    );
+}
+
+/// M5.2d: an assignment being journaled takes its slot: one arriving meanwhile on a worker
+/// with one slot is refused.
+#[tokio::test]
+async fn an_assignment_being_journaled_takes_its_slot() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"])].concat(),
+        late: Some((Duration::from_millis(100), waits(&["a2"]))),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            sent.iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Rejected(_))))
+        },
+        |agent| agent.writer_stall = Duration::from_millis(400),
+    )
+    .await;
+    let rejected: Vec<&str> = seen
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Rejected(r)) => Some(r.attempt_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rejected, ["a2"]);
+}
+
+/// M5.2d: an assignment cancelled while its record is written is never launched: `Started`,
+/// then ended as cancelled before its process started.
+#[tokio::test]
+async fn an_assignment_cancelled_while_journaled_is_never_launched() {
+    let cancel = to_worker(master_message::Message::CancelAttempt(pb::CancelAttempt {
+        interrupted: false,
+        attempt_id: "a1".to_owned(),
+    }));
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"])].concat(),
+        late: Some((Duration::from_millis(100), vec![cancel])),
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let (seen, _) = against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            sent.iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Finished(_))))
+        },
+        |agent| {
+            agent.executor.dirs = seen_launches;
+            agent.writer_stall = Duration::from_millis(400);
+        },
+    )
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    let finished = seen
+        .iter()
+        .find_map(|m| match &m.message {
+            Some(worker_message::Message::Finished(f)) => Some(f.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.status, i32::from(pb::AttemptStatus::Cancelled));
+    let order: Vec<&str> = kinds(&seen)
+        .into_iter()
+        .filter(|k| *k == "started" || k.starts_with("finished"))
+        .collect();
+    assert_eq!(order.first(), Some(&"started"), "{order:?}");
+}
+
+/// M5.2d: the session ending while a start's record is written (the master gone silent past
+/// the lease): it isn't started, and its record is removed once written.
+#[tokio::test]
+async fn an_assignment_journaled_as_the_session_ends_isnt_started() {
+    let mut script = silent_master_leased(false, 200);
+    script.truncate(1);
+    script.extend(waits(&["a1"]));
+    let master = Scripted {
+        script,
+        ..Scripted::default()
+    };
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen_launches = Arc::clone(&launched);
+    let began = Instant::now();
+    let (seen, left) = against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        move |_| began.elapsed() > Duration::from_millis(1200),
+        |agent| {
+            agent.executor.dirs = seen_launches;
+            agent.writer_stall = Duration::from_millis(500);
+        },
+    )
+    .await;
+    assert_eq!(launched.lock().unwrap().len(), 0, "{:?}", kinds(&seen));
+    assert!(!kinds(&seen).contains(&"started"), "{:?}", kinds(&seen));
+    assert_eq!(left, Vec::<String>::new());
+}
+
+/// Codex's review of M5.2d: a forced drain interrupts the running attempts; a start still
+/// being journaled must be interrupted too, or it launches once its record is on disk.
+#[tokio::test]
+async fn a_forced_drain_interrupts_a_start_still_being_journaled() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.starting.insert(
+        "a1".to_owned(),
+        Starting {
+            sequence: None,
+            wait_step: false,
+            stop: None,
+        },
+    );
+    assert!(agent.on_shutdown(1));
+    assert!(!agent.on_shutdown(2), "forced");
+    agent.drain_step(true);
+    assert_eq!(
+        agent.starting.get("a1").and_then(|s| s.stop),
+        Some(StopReason::Interrupted)
+    );
+}
+
+/// Codex's review of M5.2d: a start's code is the code it was prepared with: the root's code
+/// moving on while its record is written doesn't change the hash its result reports.
+#[tokio::test]
+async fn a_start_keeps_the_code_it_was_prepared_with_while_journaled() {
+    let echo = json!({"kind": "command", "command": {"argv": [[{"text": "true"}]]}});
+    let master = Scripted {
+        script: vec![
+            registered(),
+            assign("a1", &task_json(&echo), "sync.py", false),
+        ],
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        2,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            sent.iter()
+                .any(|m| matches!(m.message, Some(worker_message::Message::Finished(_))))
+        },
+        |agent| {
+            agent.writer_stall = Duration::from_millis(600);
+            // The root's code changes while the start is written.
+            let root = agent.settings.setup.roots["etl"].clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                std::fs::write(root.join("other.py"), "x = 1\n").unwrap();
+            });
+        },
+    )
+    .await;
+    let prepared_on = seen
+        .iter()
+        .find_map(|m| match &m.message {
+            Some(worker_message::Message::Register(r)) => r
+                .roots
+                .iter()
+                .find(|h| h.root == "etl")
+                .map(|h| h.content_hash.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let moved_to = seen.iter().find_map(|m| match &m.message {
+        Some(worker_message::Message::CodeVersionChanged(c)) => Some(c.clone()),
+        _ => None,
+    });
+    assert!(moved_to.is_some(), "the code moved on: {:?}", kinds(&seen));
+    let finished = seen
+        .iter()
+        .find_map(|m| match &m.message {
+            Some(worker_message::Message::Finished(f)) => Some(f.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.code_hash, prepared_on);
+}
+
+/// Code churn (stress scenario 8): a root's code moves on while its parse runs; that parse is
+/// of code the worker no longer has, so it is stopped, not left to run to its end (with code
+/// changing every few seconds, the parses of every version piled up, starving the newest one's,
+/// and tasks waited for the newest code without end).
+#[tokio::test]
+async fn a_parse_of_code_the_root_moved_on_from_is_stopped() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let master = Scripted {
+        parse_registered: true,
+        ..Scripted::default()
+    };
+    let fake = Fake {
+        hold_parses: true,
+        ..Fake::default()
+    };
+    let (held, stopped) = (
+        Arc::clone(&fake.parses_held),
+        Arc::clone(&fake.parses_stopped),
+    );
+    let root = Arc::new(Mutex::new(None::<PathBuf>));
+    let root_in = Arc::clone(&root);
+    let changed = std::sync::atomic::AtomicBool::new(false);
+    let (seen_held, seen_stopped) = (Arc::clone(&held), Arc::clone(&stopped));
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        move |sent| {
+            // Its parse running: the code changes.
+            if seen_held.load(SeqCst) == 1 && !changed.swap(true, SeqCst) {
+                let root = root.lock().unwrap().clone().unwrap();
+                std::fs::write(root.join("new.py"), "").unwrap();
+            }
+            let reported = sent.iter().any(|m| {
+                matches!(
+                    m.message,
+                    Some(worker_message::Message::CodeVersionChanged(_))
+                )
+            });
+            // Given time to stop it once the change is reported.
+            reported && seen_stopped.load(SeqCst) == 1
+        },
+        move |agent| {
+            *root_in.lock().unwrap() = Some(agent.settings.setup.roots["etl"].clone());
+            agent.executor = fake;
+        },
+    )
+    .await;
+    assert_eq!(stopped.load(SeqCst), 1, "the old code's parse stopped");
+    let warnings: Vec<_> = seen
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Warnings(w)) if !w.warnings.is_empty() => Some(w.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(warnings.is_empty(), "stopped quietly: {warnings:?}");
 }
 
 /// B235: the master gives a worker connecting again the parse jobs it held; one still running
@@ -3697,9 +4168,9 @@ async fn the_journal_gauge_follows_finishes_and_acknowledgements() {
         "kept until acknowledged"
     );
     assert_eq!(agent.metrics.slots_used.get(), 0);
-    agent.acknowledged("a1").await;
+    agent.acknowledged("a1");
     assert_eq!(agent.metrics.journal_records.get(), 1);
-    agent.acknowledged("a2").await;
+    agent.acknowledged("a2");
     assert_eq!(agent.metrics.journal_records.get(), 0);
 }
 
@@ -4864,6 +5335,15 @@ async fn a_stop_while_connecting_waits_for_an_unacknowledged_result() {
     assert!(ended.is_err(), "it stopped with the result unacknowledged");
 }
 
+/// What the journal writer handed in so far is on disk, and the loop's part after it done
+/// (M5.2d), for tests driving `on_done` without the loop.
+async fn journaled(agent: &mut Agent<Fake>) {
+    agent.flush_journal().await;
+    while let Ok(done) = agent.done_rx.try_recv() {
+        agent.on_done(done, None).await;
+    }
+}
+
 #[tokio::test]
 async fn a_fork_that_finished_while_disconnected_is_told_before_its_result() {
     // Grok's review of B24: a forked attempt that ended before the reconnect kept `spawn`.
@@ -4885,6 +5365,7 @@ async fn a_fork_that_finished_while_disconnected_is_told_before_its_result() {
         unreachable!()
     };
     agent.on_done(Done::Attempt(finished), None).await;
+    journaled(&mut agent).await;
     let (sender, mut sent) = mpsc::unbounded_channel();
     let to_master = ToMaster::new(sender, SharedOutbox::default());
     let decision = pb::JournalDecision {

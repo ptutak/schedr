@@ -253,15 +253,18 @@ Each is one line; the reader's page has the diagrams.
 ### Identity and connection
 
 - **Database trouble ends the worker stream; data faults are handled separately** (D108): On
-  database trouble, undo the failed message’s effects and end the worker stream; the worker
-  registers again with its roots and journal. Under D115, data faults keep the stream open: a
-  refused Finished becomes an acknowledged result_not_stored failure, other refused messages are
-  logged and dropped, and registration adopts open attempts whose start record was refused.
-- **Only database trouble ends a worker stream** (D115): Transient database errors end the stream. A
-  refused Finished becomes an acknowledged, non-retried result_not_stored failure, retaining
-  duration and usage; other data-fault messages are logged and dropped. During registration, adopt
-  an open journal attempt whose start record is refused, reserve its slot, and let the worker send
-  Finished.
+  database trouble, undo the failed message’s effects and end the worker stream (a statement cut off
+  at the query limit tried once more first, D115, B263); the worker registers again with its roots
+  and journal. Under D115, data faults keep the stream open: a refused Finished becomes an
+  acknowledged result_not_stored failure, other refused messages are logged and dropped, and
+  registration adopts open attempts whose start record was refused.
+- **Only database trouble ends a worker stream** (D115): Transient database errors end the stream; a
+  statement cut off at the query limit (or its wait for a connection) is first tried once more at
+  once, a fresh one, so a master frozen in a statement ends no stream on its thaw (B263, the user,
+  2026-11-18). A refused Finished becomes an acknowledged, non-retried result_not_stored failure,
+  retaining duration and usage; other data-fault messages are logged and dropped. During
+  registration, adopt an open journal attempt whose start record is refused, reserve its slot, and
+  let the worker send Finished.
 - **Offline workers have no problem on the Deployments graph** (D130): An offline worker is grey and
   dashed; stale warnings and import errors do not colour it. A lost worker remains an error and a
   disconnected worker a warning.
@@ -411,6 +414,26 @@ Each is one line; the reader's page has the diagrams.
   55.7 -> 60.2 tasks a second, the lock held 41.2 -> 30.5 s. Not chosen: reads before the lock
   guarded by conditions on every write (option A then), a per-run change counter (B), checking every
   write (C), a registration's results kept in `task_result` (i).
+- **A worker's journal writes beside its loop; a start in flight holds its assignment unreported**
+  (D507): The worker agent's journal writes (one file per attempt: a temporary file, fsync, rename,
+  fsync of the directory; kept so, the user: not one append-only file) go to a journal writer beside
+  its event loop: the loop hands it a request and goes on; the writer writes what is pending as
+  groups, up to 4 at once, and reports each request back through the loop's channel. The rules hold
+  as before: `running` on disk before `Started` and the launch, `finished` before `Finished`, the
+  files removed after the acknowledgement, one attempt's requests in order; a direct write or
+  removal elsewhere waits for the writer first. A start in flight takes its slot and notes its code;
+  a cancel meanwhile ends it cancelled before its process started, never launched (a moved cleanup
+  excepted, decision 219); a drain interrupts it on the running ones' terms; the session ending
+  drops it (its record removed; the master takes it back as never started); the lease check
+  (decision 281) applies once it is on disk. The heard number the worker reports stays below every
+  assignment whose `Started` isn't queued yet (`Outbox::hold`), so B240's take-back never takes a
+  start in flight. Before an assignment whose inputs are fetched, the starts ahead of it are settled
+  first. Measured in scenario 1 (release, traced): assigned -> `Started` sent p50/p90 26.6/56.8 ->
+  16.8/28.6 ms, end -> `Finished` sent 25.9/66.5 -> 17.1/28.7 ms; untraced throughput unchanged
+  (68.7 tasks a second against 70.2, the master's round gating a slot's cycle). Not chosen: one
+  append-only journal file with one fdatasync a group (the user), writing `running` once after the
+  spawn (a crash between would leave a process no record knows: run twice), one group at a time
+  (starts waited behind other attempts' groups: measured slower).
 
 ### From other topics
 
@@ -451,6 +474,7 @@ Each is one line; the reader's page has the diagrams.
 - Running cleanup continues past the drain deadline (D346, `cleanup`; built M4.11a4)
 - Masters, workers and the webserver report their memory and CPU (D463, `observability`; built M5.1h)
 - A round releases the core lock between its batches of assignments (D469, `assignment`; built M5.1c1)
+- The round's slow parts on due flags; what is read before the lock is only what the round alone writes (D506, `assignment`; planned (M5.2cB4))
 <!-- end of current -->
 
 ## Replaced
@@ -468,6 +492,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs` (D193, D243, D248, D254, D255)
 - `crates/schedr-agent/src/agent.rs::DEREGISTER_WAIT` (D495)
 - `crates/schedr-agent/src/agent.rs::NO_WORD` (D252)
+- `crates/schedr-agent/src/agent.rs::abandon_starts` (D507)
 - `crates/schedr-agent/src/agent.rs::connection_jobs` (D199)
 - `crates/schedr-agent/src/agent.rs::cut_off` (D252)
 - `crates/schedr-agent/src/agent.rs::cut_off_at` (D445)
@@ -481,6 +506,8 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs::report_changes` (D303)
 - `crates/schedr-agent/src/agent.rs::send_handles` (D242)
 - `crates/schedr-agent/src/agent.rs::silent_at` (D281)
+- `crates/schedr-agent/src/agent.rs::start_group` (D507)
+- `crates/schedr-agent/src/agent.rs::start_journaled` (D507)
 - `crates/schedr-agent/src/agent.rs::warned_room` (D250)
 - `crates/schedr-agent/src/attempt.rs::CleanupGate` (D253)
 - `crates/schedr-agent/src/connection_env.rs::default_dir` (D201)
@@ -490,7 +517,9 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/fork.rs::pass_env` (D333)
 - `crates/schedr-agent/src/jobs.rs` (D297)
 - `crates/schedr-agent/src/journal.rs::write_many` (D396)
+- `crates/schedr-agent/src/journal_writer.rs::Writer` (D507)
 - `crates/schedr-agent/src/master_time.rs::MasterTime` (D442)
+- `crates/schedr-agent/src/master_time.rs::Outbox` (D507)
 - `crates/schedr-agent/src/master_time.rs::cutoff_in` (D445, D453)
 - `crates/schedr-agent/src/master_time.rs::heard` (D447, D453)
 - `crates/schedr-agent/src/master_time.rs::wall_skew` (D449)
@@ -529,6 +558,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-db/src/attempts.rs::mark_replaced` (D443)
 - `crates/schedr-db/src/attempts.rs::move_cleanup` (D243)
 - `crates/schedr-db/src/database.rs::is_data_fault` (D108, D115)
+- `crates/schedr-db/src/database.rs::is_timeout` (D115)
 - `crates/schedr-db/src/instances.rs::store_outputs` (D396)
 - `crates/schedr-db/src/nodes.rs::NodeProblem` (D129)
 - `crates/schedr-db/src/nodes.rs::set_worker_usage` (D463)
@@ -545,8 +575,10 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/core.rs::takeover_wait` (D444)
 - `crates/schedr-master/src/core/round.rs::InRound` (D505)
 - `crates/schedr-master/src/dispatch.rs` (D242, D243, D255, D282)
+- `crates/schedr-master/src/dispatch.rs::AssignReads` (D506)
 - `crates/schedr-master/src/dispatch.rs::NO_CLEANUP_WORKER` (D221)
 - `crates/schedr-master/src/dispatch.rs::RESULT_NOT_STORED` (D115)
+- `crates/schedr-master/src/dispatch.rs::ResultsReads` (D506)
 - `crates/schedr-master/src/dispatch.rs::Weakened` (D446)
 - `crates/schedr-master/src/dispatch.rs::cleanup_move_wait` (D256)
 - `crates/schedr-master/src/dispatch.rs::connection_worker` (D193)
@@ -562,8 +594,11 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/service.rs::HeartbeatAcks` (D258)
 - `crates/schedr-master/src/service.rs::MESSAGES_PER_TURN` (D484)
 - `crates/schedr-master/src/service.rs::NOT_LEADING` (D297)
+- `crates/schedr-master/src/service.rs::alone` (D115)
 - `crates/schedr-master/src/service.rs::is_current` (D443)
+- `crates/schedr-master/src/service.rs::round` (D506)
 - `crates/schedr-master/src/service.rs::round_results` (D505)
+- `crates/schedr-master/src/service.rs::slow_due` (D506)
 - `crates/schedr-master/src/service.rs::stamp_of` (D442)
 - `crates/schedr-master/src/service.rs::turn` (D397, D480)
 - `crates/schedr-master/src/service.rs::with_epoch` (D444)
@@ -586,6 +621,6 @@ None.
 <!-- generated by scripts/records.py: details -->
 Details and edge cases, with the reasons; read them before changing this:
 
-- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453, D455, D468, D480, D483, D484, D495, D497, D501, D505
+- JOURNAL.md: D395, D396, D397, D436, D442, D443, D444, D445, D453, D455, D468, D480, D483, D484, D495, D497, D501, D505, D507
 - archive/PROJECT.md: Cleanup and resources, DAG code delivery, Master–worker protocol, Web UI and CLI, Worker lifecycle, Worker memory protection and crash recovery
 <!-- end of details -->

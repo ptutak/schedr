@@ -3,30 +3,29 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-16)
+## Now (2026-11-18)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment. Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2d, M5.2e, R1.2, M5.3a, M5.3b.
+- **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
+- **Then:** M5.2e, M5.2f, R1.2, M5.3a, M5.3b.
 - **Open questions:** 1 (`DECISIONS.md`).
-- **Open bugs:** 4; first: B254 (low/likely), B257 (low/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 5; first: B254 (low/likely), B258 (low/possible), B257 (low/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D507 (2026-11-18): M5.2d, the worker's start path: journal writes beside its loop
+- D506 (2026-11-18): M5.2cB4 steps 1-3, results first, the slow parts' due flags, the task rounds' gap
 - D505 (2026-11-17): only the round moves runs forward (decision 505, M5.2cB)
 - D504 (2026-11-17): a movable cleanup's try waits at a barrier for the master's word
 - D503 (2026-11-17): queries stay prepared on their connections by default
-- D502 (2026-11-17): one probe a round; a read skipped on it after a write wakes the next round
-- D501 (2026-11-17): the master's core lock is released during database calls
+- M5.2d (2026-11-18): The worker's start path
 - M5.2cB3 (2026-11-18): The round's results part: one set of statements, its reads before the lock
 - M5.2cB (2026-11-17): Only the round moves runs forward
-- M5.2cA (2026-11-17): Assign's reads before the core lock
 
 ## In progress
 
-- Tonight, unattended (the user, 2026-11-18): M5.2cB4 steps 1-4 (results first; due flags: Results, Prepare, Assign always run, Commands, Scheduler, Expire, Rest each with a flag set every 1 s, Commands also on a command, all set at start and takeover; the task rounds' gap measured at 1, 5, 10, 25 ms and the best picked; a batch's runs together), each measured and committed after make check, no push. Then Codex reviews all of M5.2c; confirmed findings fixed with tests and committed, reviewed again back to back until nothing new; then the whole stress suite, failures fixed the same way until clean. A decision or a bug outside M5.2c waits for the user.
-- Next: M5.2cB4 as laid out with the user (results first; task rounds and a slow round on the 1 s tick; the task rounds' gap 5 ms to start, measured; a batch's runs together; task end -> stored profiled), each step measured. Then M5.2c's review by Codex over all of M5.2c and the whole stress suite (the user), M5.2d (the run's own overhead profiled first), M5.2e, R1.2. Target 100 tasks a second in scenario 1, 120 very good; now 69.8.
-- Committed last: M5.2cB4 steps 1-3 (results first, due flags, task rounds' gap 10 ms: ~68-69 tasks a second, the round's own ~145 ms the limit). Before: M5.2cB3 (one set of statements a batch, its reads before the lock: 56.3 -> 69.8 tasks a second). M5.3b waits for the user: whether a cleanup let through at its barrier still moves after its worker is lost.
+- M5.2d done, committed with B259-B263 fixed in one commit (the user), then pushed (the user, 2026-11-18). The worker's gain is latency, not throughput (scenario 1 untraced 68.7 tasks a second against 70.2 before): the master's round gates a slot's cycle.
+- Next: M5.2e, the worker's waiting queue, its steps e1-e7 in the plan (designed with the user, 2026-11-18); e1 first (the decision; what reads the heard number checked). Also: whether to drop `records.py note` (the user: notes are no longer used; asked).
 
 ## Waiting for the user
 
@@ -44,7 +43,7 @@ Nothing.
 
 ## Colleagues
 
-Codex at 39% of its week after D500's review (2026-11-16). Grok unused this week. Usage logs in the skills' `USAGE.md`.
+Codex at 56% of its week after M5.2d's review (2026-11-18). Grok on B261 (2026-11-18). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

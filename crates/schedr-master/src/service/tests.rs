@@ -1766,6 +1766,96 @@ async fn what_a_worker_said_before_its_stream_ended_still_counts_and_then_it_is_
     );
 }
 
+/// B263, the turn's path (its case in `make test-integration`): a worker's `Draining`, handled
+/// in its turn, whose statement runs past `query_timeout` (a master frozen in it) is tried once
+/// more instead of ending the stream: the worker is draining, still connected.
+#[tokio::test]
+async fn a_turns_message_whose_statement_ran_past_its_limit_is_tried_once_more() {
+    let (hub, db, mut client) = connected_limited().await;
+    let (to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("sqlite")
+    };
+    let held = pool.acquire().await.unwrap();
+    tokio::spawn(async move {
+        tokio::time::sleep(QUERY_LIMIT + Duration::from_millis(500)).await;
+        drop(held);
+    });
+    to_master
+        .send(wrap(worker_message::Message::Draining(pb::Draining {})))
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        // Its own read waits for the connection held too: not yet.
+        let Ok(workers) = db.workers().await else {
+            continue;
+        };
+        let state = workers[0].state;
+        if state == schedr_model::WorkerState::Draining {
+            break;
+        }
+        assert_ne!(
+            state,
+            schedr_model::WorkerState::Disconnected,
+            "its stream ended on the timeout"
+        );
+        assert!(std::time::Instant::now() < deadline, "still {state:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(hub.core().lock().await.is_live("w1"), "still connected");
+}
+
+/// B263, the round's path: a `Deregister` whose statement runs past `query_timeout` (a master
+/// frozen in it, its time counted on the thaw; here the only connection held past the limit)
+/// is tried once more instead of being dropped: the worker ends offline, not disconnected.
+#[tokio::test]
+async fn a_rounds_message_whose_statement_ran_past_its_limit_is_tried_once_more() {
+    let (hub, db, mut client) = connected_limited().await;
+    let (to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("sqlite")
+    };
+    let core = hub.core();
+    let busy = core.lock().await;
+    to_master
+        .send(wrap(worker_message::Message::Deregister(pb::Deregister {})))
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while hub.queued_results().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "queued");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The only connection held a little past the limit, as a stall a thaw ends: the round's
+    // statement for it times out once, the try again gets the connection.
+    let held = pool.acquire().await.unwrap();
+    tokio::spawn(async move {
+        tokio::time::sleep(QUERY_LIMIT + Duration::from_millis(500)).await;
+        drop(held);
+    });
+    drop(busy);
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        // Its own read waits for the connection held too: not yet.
+        let Ok(workers) = db.workers().await else {
+            continue;
+        };
+        let state = workers[0].state;
+        if state == schedr_model::WorkerState::Offline {
+            break;
+        }
+        assert_ne!(
+            state,
+            schedr_model::WorkerState::Disconnected,
+            "its stream ended on the timeout"
+        );
+        assert!(std::time::Instant::now() < deadline, "still {state:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn a_queued_message_that_cant_be_handled_ends_the_stream_and_drops_what_came_after() {
     // M5.2cB, as a turn's end did (B101): the stream let go, the worker disconnected (so it

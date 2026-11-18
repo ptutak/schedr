@@ -174,6 +174,10 @@ pub struct Outbox {
     handled: u64,
     /// The most messages kept waiting to be heard of (`SENT_KEPT` by default).
     kept: usize,
+    /// Assignments whose start is still being journaled (M5.2d), by number, how many each:
+    /// what is reported handled stays below the lowest, so the master doesn't take one back
+    /// as never started (B240).
+    held: std::collections::BTreeMap<u64, usize>,
 }
 
 impl Default for Outbox {
@@ -183,6 +187,7 @@ impl Default for Outbox {
             next: 0,
             handled: 0,
             kept: SENT_KEPT,
+            held: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -204,7 +209,32 @@ impl Outbox {
     pub fn stamp(&mut self, at: Local) -> pb::WorkerClock {
         pb::WorkerClock {
             sequence: self.sent(at),
-            heard_sequence: self.handled,
+            heard_sequence: self.heard(),
+        }
+    }
+
+    /// What is reported handled: [`Self::handled`]'s highest, below the lowest held.
+    #[must_use]
+    pub fn heard(&self) -> u64 {
+        match self.held.keys().next() {
+            Some(&lowest) => self.handled.min(lowest.saturating_sub(1)),
+            None => self.handled,
+        }
+    }
+
+    /// The master's message numbered `sequence` (an assignment) is being started: not reported
+    /// handled until [`Self::release`]d.
+    pub fn hold(&mut self, sequence: u64) {
+        *self.held.entry(sequence).or_insert(0) += 1;
+    }
+
+    /// An assignment held is started or refused (its message queued).
+    pub fn release(&mut self, sequence: u64) {
+        if let Some(count) = self.held.get_mut(&sequence) {
+            *count -= 1;
+            if *count == 0 {
+                self.held.remove(&sequence);
+            }
         }
     }
 
@@ -852,6 +882,36 @@ mod window_tests {
         assert_eq!(
             time.until(13_000, at(2_000)),
             Duration::from_micros(998_001)
+        );
+    }
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::*;
+
+    #[test]
+    fn an_assignment_being_started_is_never_reported_handled() {
+        // M5.2d: assignment 5's start is journaled while 6 and 7 are handled; the master must
+        // not hear 5 handled before its `Started` is queued, or it takes 5 back (B240).
+        let mut outbox = Outbox::default();
+        outbox.handled(4);
+        outbox.hold(5);
+        outbox.handled(5);
+        outbox.handled(7);
+        assert_eq!(outbox.heard(), 4);
+        outbox.hold(9);
+        outbox.handled(9);
+        assert_eq!(outbox.heard(), 4, "the lowest held counts");
+        outbox.release(5);
+        assert_eq!(outbox.heard(), 8);
+        outbox.release(9);
+        assert_eq!(outbox.heard(), 9);
+        outbox.release(9);
+        assert_eq!(
+            outbox.heard(),
+            9,
+            "a release of nothing held changes nothing"
         );
     }
 }

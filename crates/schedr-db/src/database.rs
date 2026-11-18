@@ -311,6 +311,17 @@ impl DbError {
         }
     }
 
+    /// Whether a statement or the wait for a connection ran past the query limit
+    /// ([`Self::QueryTimeout`], or the pool's own wait, set to the same limit): a stall, which a
+    /// statement tried again may not meet (B263).
+    #[must_use]
+    pub const fn is_timeout(&self) -> bool {
+        matches!(
+            self,
+            Self::QueryTimeout(_) | Self::Sqlx(sqlx::Error::PoolTimedOut)
+        )
+    }
+
     /// Whether this is about the data a statement touched (stored data that won't read, a
     /// statement the database refuses for its data: a constraint, a trigger), not the
     /// database's own trouble (unreachable, a time limit, its own statement limit, a deadlock

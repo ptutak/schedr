@@ -404,6 +404,20 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    /// Whether a statement ran past `query_timeout` ([`DbError::is_timeout`]): a stall, the
+    /// master's own (frozen, a VM paused) or the database's, that a try again may not meet
+    /// (B263).
+    #[must_use]
+    pub const fn is_query_timeout(&self) -> bool {
+        match self {
+            Self::Db(error)
+            | Self::Dispatch(
+                DispatchError::Db(error) | DispatchError::Execution(ExecutionError::Db(error)),
+            ) => error.is_timeout(),
+            _ => false,
+        }
+    }
+
     /// Whether the database refused the data a message would store (see
     /// [`DbError::is_data_fault`]): sent again, it is refused again.
     #[must_use]
@@ -1492,7 +1506,7 @@ impl MasterCore {
             worker_message::Message::Draining(_) => self.worker_draining(worker_id, now).await?,
             worker_message::Message::Deregister(_) => {
                 self.deregistered(for_the_round(in_round, worker_id)?, worker_id, now)
-                    .await
+                    .await?
             }
             worker_message::Message::ConnectionJobDone(done) => {
                 self.connection_job_done(worker_id, done).await?;
@@ -2513,21 +2527,19 @@ impl MasterCore {
         in_round: &InRound,
         worker_id: &str,
         now: Timestamp,
-    ) -> Vec<Outgoing> {
+    ) -> Result<Vec<Outgoing>, CoreError> {
         let mut outgoing = Vec::new();
-        if let Err(error) = self
-            .forget(
-                in_round,
-                worker_id,
-                WorkerState::Offline,
-                now,
-                &mut outgoing,
-            )
-            .await
-        {
-            tracing::error!(worker_id, %error, "a deregistered worker not forgotten yet");
-        }
-        outgoing
+        // A failure is the message's (B263): tried again on a timeout, else its stream ends
+        // (decision 115), not dropped with the worker left draining.
+        self.forget(
+            in_round,
+            worker_id,
+            WorkerState::Offline,
+            now,
+            &mut outgoing,
+        )
+        .await?;
+        Ok(outgoing)
     }
 
     /// Tells the dispatcher each root's current code, as discovery decided it.

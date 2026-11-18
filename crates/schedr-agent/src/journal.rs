@@ -354,6 +354,31 @@ impl Journal {
             .collect()
     }
 
+    /// Removes several attempts' files, as [`Self::remove`] does each, with one sync of the
+    /// directory for all of them (M5.2d).
+    ///
+    /// # Errors
+    ///
+    /// The first I/O error, or `InvalidInput` for an attempt ID that isn't a safe file name.
+    pub fn remove_many(&self, attempt_ids: &[&str]) -> io::Result<()> {
+        let mut removed = false;
+        for attempt_id in attempt_ids {
+            let path = self.path(attempt_id)?;
+            for extension in [KEPT_EXTENSION, HANDLES_EXTENSION] {
+                match fs::remove_file(path.with_extension(extension)) {
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                    _ => {}
+                }
+            }
+            match fs::remove_file(path) {
+                Ok(()) => removed = true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        if removed { self.sync_dir() } else { Ok(()) }
+    }
+
     /// Forgets an attempt; one that isn't recorded is fine.
     ///
     /// # Errors

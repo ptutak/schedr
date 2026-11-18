@@ -47,8 +47,9 @@ are in the report.
 | 5 | The database stalled for the leader: shorter than its lease, then longer | it goes on; then the standby takes over, the stalled master exits, no worker is lost |
 | 6 | Scenarios 1 and 4 through PgBouncer in transaction pooling | the lease and the commands need nothing of a database session |
 | 7 | Rolling restart: workers stopped with SIGTERM one after another | draining under load; no task fails |
-| 8 | Code churn: many DAG files, changed every few seconds while runs go on | parsing keeps up; runs succeed |
-| 9 | Standalone on SQLite under load | no "database is locked"; the master's round time |
+| 8 | Code churn: many DAG files, changed every few seconds while runs go on | parsing keeps up (a parse of code a root moved on from stops, B259); runs succeed; its waits scale with the profile (the first parse within 5 minutes quick, 15 full) |
+| 9 | Standalone on SQLite under load, 8 slots | no "database is locked"; the master's round time |
+| 9b | The same with 32 slots (`09b_standalone_sqlite_32_slots`) | where standalone's own limit is, beyond its slots' (58 tasks a second against 29 at 8, 2026-11-18) |
 | 10 | Soak: a steady load (3 minutes quick, an hour full) | each role's memory and open files stay flat |
 | 11 | Heavy output: big logs read through the API at once, outputs near their limit | logs complete and served in time |
 | 12 | The memory watchdog: many tasks over their budget beside normal ones | only those are killed (`oom_killed`); the workers stay |

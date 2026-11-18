@@ -914,6 +914,9 @@ impl Dispatcher {
         accepted: &BTreeSet<String>,
         version: Option<SchedrVersion>,
     ) {
+        if self.current_code.get(root).map(|(a, _)| a) != Some(accepted) {
+            tracing::debug!(root, ?accepted, "a root's current code changed");
+        }
         self.current_code
             .insert(root.to_owned(), (accepted.clone(), version));
     }
@@ -1034,6 +1037,12 @@ impl Dispatcher {
 
     /// A worker reported a root's content hash.
     pub fn report_root(&mut self, worker_id: &str, root: &str, hash: &str) {
+        tracing::debug!(
+            worker_id,
+            root,
+            hash,
+            "a worker reported its code of a root"
+        );
         self.workers.report_root(worker_id, root, hash);
     }
 
@@ -3378,7 +3387,9 @@ impl Dispatcher {
     /// The same process registered again (a stream broken, the worker running on): its
     /// journal holds every assignment it accepted, so one not started and not in it never
     /// started there, and is taken back by the next round (B240, decision 505; what its old
-    /// stream still carries, it drops). Returns how many.
+    /// stream still carries, it drops). Not one held for a replaced incarnation (decision 443):
+    /// this process's journal can't know what only the old one accepted, which may run it; it
+    /// ends `lost` once the old lease is over (B260). Returns how many.
     ///
     /// # Errors
     ///
@@ -3394,6 +3405,16 @@ impl Dispatcher {
             .await?
             .into_iter()
             .filter(|a| (!a.started || a.moving) && !reported.contains(a.id.as_str()))
+            .collect();
+        // Read from the database: after a master's restart the hold isn't in memory yet.
+        let held: BTreeSet<String> = if unstarted.is_empty() {
+            BTreeSet::new()
+        } else {
+            self.db.replaced_attempts().await?.into_iter().collect()
+        };
+        let unstarted: Vec<StoredAttempt> = unstarted
+            .into_iter()
+            .filter(|a| !held.contains(&a.id))
             .collect();
         let found = unstarted.len();
         self.take_backs

@@ -19,6 +19,7 @@ pub mod fork;
 pub mod handles;
 pub mod jobs;
 pub mod journal;
+pub mod journal_writer;
 pub mod launch;
 pub mod logs;
 pub mod mask;

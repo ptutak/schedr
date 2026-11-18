@@ -123,7 +123,9 @@ rejected for an outage; it stays pending, and one cut off partway is applied aga
 [The master](04-master.md#a-round-is-never-cut-short)). Messages the failed round had built are
 still sent. A worker's message the master fails to handle because of the database's own trouble
 ends that worker's stream: the worker registers again and reports its code and journal afresh,
-so nothing it said is lost. A message the database refuses for its data (a constraint, data that
+so nothing it said is lost. A statement cut off at the query limit (`query_timeout`) is first
+tried once more at once: a master frozen in a statement (a VM paused) counts the stall against
+the limit on its thaw, and the try again finds the database as it is; a second ends the stream. A message the database refuses for its data (a constraint, data that
 won't read) would be refused again after every reconnect: a task's result is stored instead as
 the attempt's failure, `result_not_stored` (not retried), and any other such message is logged
 and dropped, the stream going on. A database out for longer than the master's lease lets it

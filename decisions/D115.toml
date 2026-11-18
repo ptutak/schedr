@@ -5,7 +5,9 @@ status = "active"
 topic = "workers"
 section = "Identity and connection"
 summary = '''
-Transient database errors end the stream. A refused Finished becomes an acknowledged, non-retried
+Transient database errors end the stream; a statement cut off at the query limit (or its wait
+for a connection) is first tried once more at once, a fresh one, so a master frozen in a
+statement ends no stream on its thaw (B263, the user, 2026-11-18). A refused Finished becomes an acknowledged, non-retried
 result_not_stored failure, retaining duration and usage; other data-fault messages are logged and
 dropped. During registration, adopt an open journal attempt whose start record is refused, reserve
 its slot, and let the worker send Finished.
@@ -13,5 +15,5 @@ its slot, and let the worker send Finished.
 history = "archive/PROJECT.md#D115"
 step = "M4.3e"
 also = ["protocol", "state"]
-code = ["crates/schedr-master/src/dispatch.rs::RESULT_NOT_STORED", "crates/schedr-db/src/database.rs::is_data_fault"]
-checked = 2026-11-15
+code = ["crates/schedr-master/src/dispatch.rs::RESULT_NOT_STORED", "crates/schedr-db/src/database.rs::is_data_fault", "crates/schedr-db/src/database.rs::is_timeout", "crates/schedr-master/src/service.rs::alone"]
+checked = 2026-11-18

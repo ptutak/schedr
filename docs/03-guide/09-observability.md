@@ -98,11 +98,12 @@ Both the worker and master measure parts of a task's start. The
 On the worker, `schedr_worker_assign_to_started_seconds` runs from the agent's loop taking an
 `AssignTask` to its `Started` sent: the plan, the inputs and the journal record. An
 assignment the worker rejects isn't counted. `schedr_worker_journal_write_seconds{record}`
-times each write that kept records on disk before the agent went on (a failed write isn't
-counted): `start` (the records of attempts before their `Started`s), `process` (their
-processes' identities, once started) and `results`. Each is written as a group: the
-assignments, started processes or results already waiting, up to 32, their files flushed
-together and the directory once, so a burst of 500 starts takes tens of writes, not 500. An
+times each group of journal records written (a failed write isn't counted), once per kind in
+the group: `start` (the records of attempts before their `Started`s), `process` (their
+processes' identities, once started) and `results`. The writes run beside the agent's loop;
+records waiting together go as one group, up to 64, their files flushed together and the
+directory once, and up to four groups are written at once, so a burst of 500 starts takes tens
+of writes, not 500, and a start doesn't wait behind another attempt's group. An
 assignment whose inputs the agent must fetch from the master first ends the group: those before
 it are started without waiting on that fetch. The agent sets the slot gauges
 (`schedr_worker_slots_used`, `schedr_worker_watcher_slots_used`) as each attempt starts or ends,

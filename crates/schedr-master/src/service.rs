@@ -1580,7 +1580,24 @@ impl Hub {
         done: &mut TurnDone,
     ) -> bool {
         let is_finished = matches!(message, worker_message::Message::Finished(_));
-        match self.handle(core, (worker_id, in_round), message).await {
+        // A statement cut off at `query_timeout` is tried once more at once, a fresh one (B263:
+        // a master frozen in a statement counts the stall on its thaw, and the try again finds
+        // the database as it is): a second ends the stream as any database failure does
+        // (decision 115). Safe: the cut-off transaction is rolled back, and a message handled
+        // again is what a reconnect's resending already does (B101).
+        let again = message.clone();
+        let handled = match self.handle(core, (worker_id, in_round), message).await {
+            Err(error) if error.is_query_timeout() => {
+                tracing::warn!(
+                    worker_id,
+                    %error,
+                    "a worker message's statement ran past its limit: tried once more"
+                );
+                self.handle(core, (worker_id, in_round), again).await
+            }
+            other => other,
+        };
+        match handled {
             // A round wakes for a `Finished` recorded, not one dropped or whose handling ended
             // the stream (B191, decision 42).
             Ok(out) => {

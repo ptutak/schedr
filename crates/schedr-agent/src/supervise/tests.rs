@@ -104,6 +104,33 @@ async fn a_process_that_ends_by_itself_is_not_stopped() {
     assert_eq!(*fake.signals.lock().unwrap(), Vec::<Signal>::new());
 }
 
+/// B261: a worker paused past a process's deadline (frozen, a VM stopped) after the process
+/// ended finds both ready at once: the end counts, not the timeout (which made a cleanup that
+/// had exited 0 run again).
+#[tokio::test(start_paused = true)]
+async fn a_process_that_ended_before_its_timeout_was_noticed_is_no_timeout() {
+    use futures_util::FutureExt as _;
+    let mut fake = Fake::new(None);
+    let end = fake.end.clone();
+    let signals = Arc::clone(&fake.signals);
+    let supervising = supervise(&mut fake, LIMITS, never());
+    tokio::pin!(supervising);
+    assert!((&mut supervising).now_or_never().is_none(), "running");
+    // The pause: it ends, and its deadline passes, before the worker looks again.
+    end.send_replace(Some(Termination::Exited(0)));
+    tokio::time::advance(Duration::from_secs(61)).await;
+    let result = supervising.await.unwrap();
+    assert_eq!(
+        result,
+        Supervised {
+            termination: Termination::Exited(0),
+            stopped: None,
+            killed: false
+        }
+    );
+    assert_eq!(*signals.lock().unwrap(), Vec::<Signal>::new());
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_timeout_sends_sigterm_and_a_graceful_exit_counts() {
     let mut fake = Fake::new(Some(Termination::Exited(0)));

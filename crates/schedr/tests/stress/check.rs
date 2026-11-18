@@ -410,6 +410,64 @@ pub fn marked_cleanup(marks: &Path, work: &str) -> String {
     format!("{}; {work}; {}", mark("cstart"), mark("cend"))
 }
 
+/// Whether `worker` was in trouble (cut off, frozen) at any moment from `from` to `to`.
+fn in_trouble(troubles: &[crate::chaos::Trouble], worker: &str, from: u128, to: u128) -> bool {
+    troubles
+        .iter()
+        .any(|t| t.worker == worker && t.from <= to && t.to.is_none_or(|end| from <= end))
+}
+
+/// Whether a cleanup run to its end (`first`) may run to its end again (`last`). Decision 255:
+/// a run under way when its worker lost the master (in trouble at any moment of it) may be
+/// moved and run again. And at least once (M5.3b's choice A, B262): moved to another worker
+/// when its first worker was in trouble before its result reached the master, at any moment
+/// from its start to the other run's start, its `Finished` stuck there. Not on the same worker
+/// after its run (B261: a process ended before a freeze, taken for timed out on the thaw).
+fn run_again_allowed(
+    first: &CleanupRun,
+    last: &CleanupRun,
+    in_trouble: &impl Fn(&str, u128, u128) -> bool,
+) -> bool {
+    let end = first.end.unwrap_or(first.start);
+    in_trouble(&first.worker, first.start, end)
+        || (first.worker != last.worker && in_trouble(&first.worker, first.start, last.start))
+}
+
+#[test]
+fn a_cleanup_moved_while_its_result_was_stuck_may_run_again_but_not_on_its_worker() {
+    // The nightly run of 2026-11-18 (scenario 21): w06's cleanup ended 67 µs before w06 froze
+    // for 69 s; w04 ran it once moved; w06 ran it again on the thaw (B261).
+    let run = |worker: &str, start: u128, end: u128| CleanupRun {
+        worker: worker.to_owned(),
+        start,
+        end: Some(end),
+    };
+    let first = run("w06", 1_794_998_187_654_173_781, 1_794_998_188_159_992_000);
+    let moved = run("w04", 1_794_998_242_941_685_709, 1_794_998_243_447_474_000);
+    let again = run("w06", 1_794_998_257_192_304_733, 1_794_998_257_698_283_000);
+    let troubles = [crate::chaos::Trouble {
+        worker: "w06".to_owned(),
+        from: 1_794_998_188_160_058_934,
+        to: Some(1_794_998_257_188_803_522),
+        frozen: true,
+    }];
+    let trouble = |worker: &str, from: u128, to: u128| in_trouble(&troubles, worker, from, to);
+    assert!(
+        run_again_allowed(&first, &moved, &trouble),
+        "moved: at least once"
+    );
+    assert!(
+        !run_again_allowed(&first, &again, &trouble),
+        "the same worker after its run"
+    );
+    // A first worker never in trouble: no run again anywhere.
+    assert!(!run_again_allowed(
+        &first,
+        &moved,
+        &|_: &str, _: u128, _: u128| false
+    ));
+}
+
 /// One run of a try's cleanup, by its marks.
 struct CleanupRun {
     worker: String,
@@ -419,9 +477,8 @@ struct CleanupRun {
 
 /// What the tasks' and their cleanups' marks say is wrong (PLAN.md M4.8z): a cleanup that
 /// started while its try still ran (a try with no mark never ran: its work comes after its
-/// `start` mark, decision 460); a try's cleanup run to its end more than once, unless the
-/// earlier run's worker was in trouble then (decision 255: a cleanup under way when the master
-/// goes is left running, and the master moves it); and a try whose cleanup the database says
+/// `start` mark, decision 460); a try's cleanup run to its end more than once, unless
+/// [`run_again_allowed`] (decision 255 and at least once); and a try whose cleanup the database says
 /// ran (`ok`) without a mark of it ending. `seen` holds when each task process was last seen
 /// alive, `killed` what the harness killed and when.
 pub fn cleanup_problems(
@@ -477,11 +534,7 @@ pub fn cleanup_problems(
             _ => {}
         }
     }
-    let in_trouble = |worker: &str, from: u128, to: u128| {
-        troubles
-            .iter()
-            .any(|t| t.worker == worker && t.from <= to && t.to.is_none_or(|end| from <= end))
-    };
+    let in_trouble = |worker: &str, from: u128, to: u128| in_trouble(troubles, worker, from, to);
     let mut problems = Vec::new();
     for (key, runs) in &cleanups {
         let name = format!("{}/{} try {}", key.0, key.1, key.2);
@@ -507,10 +560,7 @@ pub fn cleanup_problems(
         done.sort_by_key(|r| r.start);
         if let Some((last, earlier)) = done.split_last() {
             for run in earlier {
-                // Decision 255: a run under way when its worker lost the master (in trouble
-                // at any moment of it) may be moved and run again.
-                let end = run.end.unwrap_or(run.start);
-                if !in_trouble(&run.worker, run.start, end) {
+                if !run_again_allowed(run, last, &in_trouble) {
                     problems.push(format!(
                         "{name}: its cleanup ran to its end on {} (started {}) and again on {} \
                          (started {}), its first worker not cut off while it ran",

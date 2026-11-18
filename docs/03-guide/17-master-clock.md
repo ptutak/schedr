@@ -120,7 +120,10 @@ one (`Started` for an `AssignTask`, or `Rejected`) is queued before any later me
 it as handled. The stream keeps that order. So once the master reads a worker message naming
 an assignment's number as handled, with no `Started` or `Rejected` read before it, the worker
 did not start that assignment and never will: the master takes it back at once
-(`assignment_expired`, queued again without using a retry).
+(`assignment_expired`, queued again without using a retry). While a start's journal record is
+being written (beside the agent's loop, which sends heartbeats meanwhile), the number the
+worker names as handled stays below that assignment's, until its `Started` is queued: a
+heartbeat in between never makes the master take back a start under way.
 
 | On the stream | Worker | Master |
 |---|---|---|
@@ -135,7 +138,7 @@ happens to the worker:
 | What happens | Its unstarted assignments |
 |---|---|
 | Its messages name them as handled | Taken back at once if no `Started` came first. |
-| The same process registers again (a broken stream) | Its journal lists every assignment it accepted; one not started and not in the journal is taken back at once. What the old stream still carries, the worker drops. |
+| The same process registers again (a broken stream) | Its journal lists every assignment it accepted; one not started and not in the journal is taken back at once, except one held for a replaced incarnation (next row), which only the old process could know (B260). What the old stream still carries, the worker drops. |
 | A new incarnation registers | Those the old stream showed never started are taken back at once. The others may be running in the old process: held as started ones are, a lease from the registration (decision 443), then ended `lost`. |
 | The worker is lost | Those shown never started are taken back. The others may be running there: ended `lost`, using a retry, as a started one is. |
 

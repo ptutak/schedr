@@ -29,6 +29,19 @@ users of schedr's own). Decisions laid out on 2026-10-28, to take when M7 starts
 
 ### M7 proposals
 
+**Lanes (the user, 2026-11-18; kept in M7, more caveats than M5.2e's queue):** a lane is a
+chain of tasks each with one upstream, its head. The head waits in a worker's queue (M5.2e)
+as any task; its tail is attached to it, takes the queue's first place the moment the head
+ends there and starts at once: never run twice, its only upstream being its head. It gives up
+"a task is assigned only after its upstream's result is stored", so the worker must decide
+what the master would: the tail starts only on the head's plain success (a failure with
+retries left, a skip, an outcome or branch skipping it: the tail goes back to the master);
+the head's outputs passed to the tail by the worker, as the master builds inputs (the largest
+piece); no mapped tails, no other upstreams or trigger rules, the same queue, pool and code;
+a head taken back or retried elsewhere takes its tail with it; a crash after the tail started
+leaves the head's `finished` on disk (reported on restart) and the tail an ordinary lost
+attempt. Measured on a chain scenario.
+
 **Scheduled for M7:** B39's rest (the run graph's width with many groups; decisions 1-12 and
 open findings in BUGS.md). The user, 2026-10-30: fix it in M7 by **(1) a layout correct by
 construction**, each group laid out as a block of its own tasks first, then placed as one

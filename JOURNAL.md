@@ -1890,7 +1890,7 @@ command; the task rounds' gap 5 ms to start; a batch's runs moved forward togeth
 stored profiled (the user: second after the run's own ~100 ms of overhead, which M5.2d profiles
 first). Its estimate: task end -> stored from ~100 ms to ~40-60 ms.
 
-### 2026-11-18: M5.2cB4 steps 1-3, results first, the slow parts' due flags, the task rounds' gap
+### <a id="D506"></a>2026-11-18: M5.2cB4 steps 1-3, results first, the slow parts' due flags, the task rounds' gap (decision 506)
 
 The round handles the workers' results before any other part. The user's due flags: Results, the
 Scheduler, Prepare and Assign run in every round; Commands, Expire and Rest once a tick interval
@@ -1987,3 +1987,121 @@ A fresh session found three, all confirmed and fixed:
 
 The cap of three reviews reached (the user): what a fourth would find goes to the stress suite
 and the next review (M5.2d's).
+
+### 2026-11-18: the user's decisions after M5.2c's night
+
+Accepted: push once the whole stress suite passes; M5.2d next (the worker's side first: the run's
+~100 ms beyond its `sleep 0.1`, then assigned -> started); a decision record for the round's design
+(decision 506); 315264f7's message left as it is (the journal has the real sweep). A batch's runs
+stored together: left out (~3 %). M5.3b: option A, the master still moves a cleanup it said `go`
+to once its worker is lost (at least once; two may overlap); no start report (the user: "started"
+doesn't mean the cleanup did its job).
+
+
+### 2026-11-18: B259, a worker's superseded parses ran on (code churn, stress scenario 8)
+
+Scenario 8 (code changing every few seconds under 300 DAG files) stalled: tasks waited for "the
+newest code" that never settled. Every change starts a whole-root parse (~86-95 s for 300 files),
+and a worker never stopped a parse of a hash its root had moved on from: 19 started, 1 finished,
+~79 parse runners alive; the master's accepted code stayed at an old hash. Most likely there
+since parsing on workers began, not M5.2's. Fixed: a root's new hash reported stops the parses
+of its other hashes (`stop_parses_of_other_code`), their results not reported; a test fails
+without it. Scenario 8's waits now scale with the profile (the user: no new scenario): the first
+parse 5 / 15 min (quick / full), `parse_all_s` at most 300 / 900 s, the runs after the churn
+5 / 15 min, the newest parse after the last change 5 / 10 min. Two of the code-version traces
+added to find it stay as `debug` lines (`set_current_code`, `report_root`). Also from the
+stress runs: scenario 9b, standalone on SQLite at 32 slots beside 9's 8 (the user): 58.1 tasks a
+second against 29.4, standalone's own limit near 60.
+
+### <a id="D507"></a>2026-11-18: M5.2d, the worker's start path: journal writes beside its loop (decision 507)
+
+Profiled first (scenario 1, release, a trace of each task's path through master and worker and
+the tasks' own marks): a `sleep 0.1` command's run is 124 ms (108 its own, the rest launching and
+noticing its end); the ~200 ms mean was the DAGs' Python `plan` tasks. The worker's share was
+two windows, both its journal: ~21 ms before a launch (`running` written) and ~26 ms after an end
+(`finished` written), p90 45 and 66 ms, because its one event loop awaited each write (four a
+task, an fsync each) and everything queued behind them. The user: not one append-only journal
+file ("we're not doing one file"); the writes beside the loop instead. Built in steps, each
+measured (traced, so a little slow): results through a journal writer (55.7 -> 68.2 tasks a
+second); starts too (65.8: one group at a time, a start waited behind other attempts' groups);
+up to 4 groups at once (68.4). Assigned -> `Started` sent p50/p90 26.6/56.8 -> 16.8/28.6 ms, end ->
+`Finished` sent 25.9/66.5 -> 17.1/28.7 ms: one fsync each, the floor with a file per attempt; the
+slot cycle 575 -> 468 ms. Untraced on an idle machine, though, scenario 1 is 68.7 tasks a second
+against 70.2 before (within the ~7 % runs vary): the traced "before" run was slower than its
+untraced twin by far more than tracing costs (the hooks costing more where the loop was
+blocked), so the traced gain overstated it. The worker's gain is latency (assigned -> started,
+an end to its result), not throughput, while the master's round gates a slot's cycle: a result
+a few ms earlier waits for the same round. That is M5.2e's. B240 made one thing new: a heartbeat while a start's record is written
+would name its assignment handled and the master take it back as never started; the worker's
+reported heard number now stays below every assignment whose `Started` isn't queued
+(`Outbox::hold`). Also new with starts in flight: a cancel ends one never launched (`Started`,
+then a stop before its start), the session's end drops it, its slot is taken. The crash
+scenarios passed (3, 7, 17-21: no try run twice; lost attempts 8, 2, 4, 0, 2, 16 against M5.1's
+7, 2, 6, -, 2, 29).
+
+Codex's review (one, Sol high) found four: three confirmed and fixed, each with a test failing
+without it: a start in flight didn't hold its code (a watcher's tick could collect it or give its
+result a newer hash: noted at handover now); a forced drain didn't interrupt a start in flight
+(it launched after the interrupt: marked on the running ones' terms now); a spawned process
+dropped unreaped (a superseded parse) left its children running (`kill_on_drop` kills the leader
+alone: `OsProcess` kills its whole group now, as `ForkedProcess` did). Rejected: a moved cleanup
+cancelled while its record was written still launches, by design (decision 219: a cancel doesn't
+stop a per-task cleanup; one cancelled after its launch runs on too).
+
+### 2026-11-18: M5.2e redesigned with the user: a worker's waiting queue (lookahead with a barrier)
+
+During M5.2d the user brought M7's lookahead forward as M5.2e (the trigger messages became
+M5.2f; lanes stay M7's, with more caveats: their design in M7's notes). Settled: a queue of
+ceil(slots / 2) ready tasks beyond a worker's slots; the master knows no new state (a queued task
+is assigned, waiting for its `Started`); the barrier lives only in the worker (a freed slot takes
+the head and writes its `running` record); the master never moves a queued task (it fills free
+slots first and queues only when none is free); the worker gives back from its queue's tail, one
+a heartbeat, when its head is older than the cluster's "slow equals" (the median of all workers'
+head ages times k = 3, floor 1 s, sent in the `HeartbeatAck`; both swept in e6); assigned ->
+started read on an idle cluster from then on, throughput the headline under load. The steps
+e1-e7 in the plan.
+
+### 2026-11-18: B260 fixed, B261 to Grok: the nightly Stress workflow failing on 1.1.0
+
+The scheduled Stress workflow failed on 2026-11-17 and 18, on `main` at 1.1.0. B260, the
+simulator: a worker replaced while its old incarnation ran on got an assignment the stream still
+held up after the master saw it end; the old incarnation started it, its `Started` lost with it;
+the master held it for the old lease (decision 443) at the new incarnation's first registration,
+but its second (the new stream broken) took it back as never started (`unreported_unstarted`:
+the new process's journal can't know what only the old one accepted), and the task ran again
+beside it. Fixed: that take-back leaves alone an attempt held for a replaced incarnation (read
+from the database, so after a master's restart too); the CI seed is in the regressions file,
+failing without the fix. B261, stress 20 and 21: a task's cleanup ran to its end twice, its first
+worker never cut off, once twice on one worker: not reproduced locally; handed to Grok with the
+runs' artifacts (the user). The user asked whether it was B255, already fixed by the barrier
+(decision 504, after 1.1.0); Grok (session e77573b9) found it wasn't: each case ran the cleanup
+three times. (1) On the frozen worker, twice: a cleanup that had exited 0 just before the freeze
+was taken for timed out on the thaw, `supervise`'s biased select polling the deadline before the
+process's end, and a timeout is retried; the barrier refuses that retry only after a freeze past
+the lease, not a shorter one past the timeout; it hit any task, a success run again for a
+timeout. Fixed: the process's end before the deadline; a test fails without it. (2) On another
+worker: the master moved the cleanup while its `Finished` was stuck in the frozen worker, which
+M5.3b's choice A (at least once) allows; the stress check still held decision 255's older rule
+(a second run only with the first worker in trouble while it ran): B262, fixed at once (the
+user): a run again on another worker is allowed when the first worker was in trouble from its
+start to the other run's start; on the same worker after its run it isn't (B261's first cause
+stays caught). A test on the CI case's numbers fails on the old rule.
+
+### 2026-11-18: B263, a master frozen in a statement: tried once more (decision 115 narrowed)
+
+`make test-integration` on M5.2d's code failed once (alone it passed six times) in B242's test: a
+master frozen 8 s while a worker drained; the worker ended disconnected, not offline. The worker's
+`Draining` reached the master as it froze (30.788 / 30.797 s), its statement's wait for a
+connection counted the freeze on the thaw (7.996 s), past `query_timeout`: the turn ended the
+stream (decision 115), and the `Deregister` after it came on a dead stream. Likely since M5.2c,
+the master being far more often inside a statement. A second gap on the way: a `Deregister`
+whose own statement failed was logged ("not forgotten yet") and taken as handled, the worker left
+draining. The user, told the options and their implications: A for any message. First built as
+a put-back to the round's queue, which missed the turn's path the failure had taken; rebuilt:
+`alone`, which every message handled on its own goes through, tries a statement cut off at the
+limit (`QueryTimeout`, or the pool's own wait, `PoolTimedOut`: whichever fires first names the
+same stall) once more at once; a second ends the stream as before. Safe: the cut-off transaction
+is rolled back, and a message handled again is what a reconnect's resending does (B101). The
+cost: in a real database slowdown a turn or round waits two limits, not one, before its stream
+ends. `deregistered` returns its failure now. Two tests (a turn's `Draining`, a round's
+`Deregister`, the only connection held past the limit) fail without it.

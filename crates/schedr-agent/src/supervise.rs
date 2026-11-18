@@ -147,12 +147,14 @@ pub async fn supervise<P: Process>(
         }
     };
     // Reasons first: the memory watchdog sends its reason before its SIGKILL, so an attempt
-    // it killed is `oom_killed`, not just a process that ended.
+    // it killed is `oom_killed`, not just a process that ended. Its end before the deadline: a
+    // worker paused (frozen, a VM stopped) past the deadline finds both ready, and a process
+    // that had ended (exit 0 included) isn't a timeout, nor run again for one (B261).
     let reason = tokio::select! {
         biased;
         reason = stops.next_reason() => reason,
-        () = deadline => StopReason::TimedOut,
         termination = process.wait() => return Ok(ended(termination?, None, false)),
+        () = deadline => StopReason::TimedOut,
     };
     if reason == StopReason::OomKilled {
         // Over its memory budget: a spike can't wait for a grace period.
