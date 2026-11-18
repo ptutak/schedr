@@ -1796,6 +1796,72 @@ async fn a_queued_message_that_cant_be_handled_ends_the_stream_and_drops_what_ca
 }
 
 #[tokio::test]
+async fn a_read_before_the_lock_that_fails_doesnt_stop_the_round() {
+    // Codex's review of M5.2c: a queued message the round's read before the lock fails on (here
+    // an attempt's row that can't be read; on Postgres a malformed ID) must not fail every
+    // round with the message left queued: it is handled under the lock, the worker's stream
+    // ended over it, and the queue moves on.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let schedr_db::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("expected SQLite")
+    };
+    let mut connection = pool.acquire().await.unwrap();
+    for statement in [
+        "PRAGMA ignore_check_constraints = ON",
+        "UPDATE attempts SET status = 'bogus' WHERE id = ?",
+        "PRAGMA ignore_check_constraints = OFF",
+    ] {
+        sqlx::query(statement)
+            .bind(&assign.attempt_id)
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+    }
+    drop(connection);
+    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    hub.queue_results("w1", &outbound, &mut vec![finished_msg(&assign.attempt_id)]);
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    assert!(hub.queued_results().is_empty(), "the queue moved on");
+}
+
+#[tokio::test]
+async fn nothing_of_a_worker_counts_in_the_round_after_its_message_ended_its_stream() {
+    // Codex's review of M5.2c: a malformed `Finished` fails the batch, then alone ends the
+    // worker's stream; its `Deregister` after it must not then forget the worker.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let mut messages = vec![
+        worker_message::Message::Finished(pb::Finished {
+            attempt_id: assign.attempt_id.clone(),
+            status: 999,
+            ..pb::Finished::default()
+        }),
+        worker_message::Message::Deregister(pb::Deregister {}),
+    ];
+    hub.queue_results("w1", &outbound, &mut messages);
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    assert_eq!(
+        db.workers().await.unwrap()[0].state,
+        schedr_model::WorkerState::Disconnected,
+        "disconnected, not forgotten by the `Deregister` after it"
+    );
+}
+
+#[tokio::test]
+async fn a_closing_master_queues_nothing_more_for_the_round() {
+    // Codex's review of M5.2c: a turn queueing after `close_streams` emptied the queue would
+    // keep its stream's sender, and so the stream, open with no round left to take it.
+    let (hub, db, mut client) = connected().await;
+    let (_to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
+    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    hub.close_streams().await;
+    hub.queue_results("w1", &outbound, &mut vec![finished_msg(&assign.attempt_id)]);
+    assert!(hub.queued_results().is_empty());
+}
+
+#[tokio::test]
 async fn a_result_counted_in_a_failed_group_isnt_counted_again_when_redone() {
     // M4B.3: the `Finished`s' group fails after its attempt's end was written (its second
     // write); redone alone, the end is counted once, not once for the rolled-back try too.

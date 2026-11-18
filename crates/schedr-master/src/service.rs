@@ -1230,12 +1230,20 @@ impl Hub {
         if results.is_empty() {
             return;
         }
-        self.queued_results()
-            .extend(results.drain(..).map(|message| QueuedResult {
-                worker_id: worker_id.to_owned(),
-                stream: stream.clone(),
-                message: Some(message),
-            }));
+        let mut queue = self.queued_results();
+        // Closing: nothing more queued, the queue holding its stream's sender would keep the
+        // stream open (Codex's review of M5.2c). Asked under the queue's lock, which
+        // `close_streams` empties it under after setting this: one or the other.
+        if *self.closing.borrow() {
+            results.clear();
+            return;
+        }
+        queue.extend(results.drain(..).map(|message| QueuedResult {
+            worker_id: worker_id.to_owned(),
+            stream: stream.clone(),
+            message: Some(message),
+        }));
+        drop(queue);
         self.finished.notify_one();
     }
 
@@ -1277,7 +1285,16 @@ impl Hub {
             })
             .collect();
         let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let reads = crate::dispatch::ResultsReads::read(&self.db, &ids).await?;
+        // A failed read changes nothing: the batch reads under the lock instead (Codex's
+        // review of M5.2c: a message the read fails on, a malformed ID, would else stop every
+        // round before it is taken off the queue).
+        let reads = match crate::dispatch::ResultsReads::read(&self.db, &ids).await {
+            Ok(reads) => reads,
+            Err(error) => {
+                tracing::warn!(%error, "the round's results read before the lock failed");
+                crate::dispatch::ResultsReads::default()
+            }
+        };
         // Taken under the lock: a turn finds a worker's results still queued, or handled.
         let mut core = self.core_for("round").await;
         core.give_results_reads(reads);
@@ -1323,6 +1340,8 @@ impl Hub {
                             stream,
                             message: None,
                         });
+                    } else if handling.ended.contains(&worker_id) {
+                        // Ended by a message of its own in the flush: disconnected already.
                     } else if let Err(error) = core.disconnected(&worker_id, now).await {
                         tracing::error!(worker_id, %error, "worker disconnect not recorded");
                     }
@@ -1412,11 +1431,19 @@ impl Hub {
         message: worker_message::Message,
         handling: &mut Handling,
     ) {
+        // After one of its messages ended its stream, nothing more of the worker's counts
+        // (Codex's review of M5.2c: a fallback's later messages, a barrier after a flush).
+        if handling.ended.contains(worker_id) {
+            return;
+        }
         if !handling.back.is_empty() || handling.alone_left == 0 {
             handling.put_back(worker_id, stream, vec![message]);
             return;
         }
         handling.alone_left -= 1;
+        // What was read before the lock is no longer true once this writes (Codex's review of
+        // M5.2c: a `Deregister` before a batch of the same run's results).
+        core.drop_results_reads();
         let mut done = TurnDone::default();
         if !self
             .alone(core, (worker_id, true), message, &mut done)

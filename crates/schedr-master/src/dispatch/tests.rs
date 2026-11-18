@@ -6682,6 +6682,85 @@ async fn a_group_of_finishes_takes_the_uncommon_ones_alone_and_a_repeat_once() {
 }
 
 #[tokio::test]
+async fn an_uncommon_failure_before_a_siblings_success_isnt_undone_by_the_reads_before_the_lock() {
+    // Codex's review of M5.2c: the batch's run read before the lock; instance 0's
+    // `task_not_found` (alone, it fails the step and cancels its sibling) comes first, then
+    // instance 1's success. The success must see the failure's writes: cancelled, its output
+    // not stored, not a success on the run as read before them.
+    let mut fetch = task("fetch", &json!({}), 0);
+    fetch["expand"] = json!({"product": [{"name": "n", "value": {"literal": [1, 2]}}]});
+    let mapped: Dag = serde_json::from_value(json!({
+        "produced_by": "1.0", "id": "sync", "location": {"root": "etl", "path": "team/sync.py"},
+        "trigger": {"kind": "none"}, "initial_since": null,
+        "max_active_runs": 1, "tasks": [fetch], "edges": []
+    }))
+    .unwrap();
+    let (mut dispatcher, db, run_id) = with_run(mapped).await;
+    let round = InRound::for_tests();
+    let out = dispatcher.step(&round, ts(NOW)).await.unwrap();
+    let ids: Vec<String> = out
+        .iter()
+        .map(|o| assignment(o).attempt_id.clone())
+        .collect();
+    for id in &ids {
+        dispatcher
+            .started("w1", &started(id), ts(NOW))
+            .await
+            .unwrap();
+    }
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let by_index: BTreeMap<i32, String> = db
+        .attempts_by_ids(&refs)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.map_index, a.id))
+        .collect();
+    dispatcher.give_results_reads(ResultsReads::read(&db, &refs).await.unwrap());
+    let gone = pb::Finished {
+        error_kind: schedr_model::runner::TASK_NOT_FOUND.to_owned(),
+        ..finished(&by_index[&0], pb::AttemptStatus::Failed, &json!(null))
+    };
+    let success = finished(&by_index[&1], pb::AttemptStatus::Success, &json!(7));
+    dispatcher
+        .finished_batch(&round, &[("w1", &[gone, success])], ts(NOW))
+        .await
+        .unwrap();
+    let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let one = run.instances.iter().find(|i| i.map_index == 1).unwrap();
+    assert_eq!(one.state, TaskInstanceState::Cancelled);
+    assert_eq!(db.output(&one.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn an_id_conflict_stored_after_the_assign_reads_holds_its_tasks() {
+    // Codex's review of M5.2c: the assign part's reads taken, then a parse upload stores an ID
+    // conflict before the lock; the DAGs held are read under it, so its tasks stay queued.
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let round = InRound::for_tests();
+    let mut out = Vec::new();
+    dispatcher.prepare(&round, ts(NOW), &mut out).await.unwrap();
+    let reads = AssignReads::read(&db, ts(NOW), 100).await.unwrap();
+    assert_eq!(reads.ready.len(), 1, "`extract` ready when read");
+    let conflict = DagChange::Conflict {
+        dag_id: DagId::new("sync").unwrap(),
+        places: Vec::new(),
+        pause: false,
+    };
+    db.apply_dag_changes(&[conflict], ts(NOW)).await.unwrap();
+    dispatcher.give_reads(reads);
+    dispatcher
+        .assign_round(&round, ts(NOW), &mut out)
+        .await
+        .unwrap();
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+#[tokio::test]
 async fn an_uncommon_failure_after_a_mapped_siblings_success_leaves_the_success() {
     // Grok's review of M4B.4: instance 1's success, then instance 0's `task_not_found` (no
     // retries left: off the common path, it fails the step). Together, the failure was taken

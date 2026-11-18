@@ -1934,3 +1934,23 @@ are stored for a gain the runs can't show. The cycle now: run ~198, assigned -> 
 stored 98, stored -> assigned 96. 100 tasks a second needs a ~320 ms cycle: the master's part
 (~194 ms) and the worker's (start 68 + ~100 ms inside the run beyond `sleep 0.1`) both have to
 shrink; M5.2d's profile of the worker's side is the next real gain.
+
+### 2026-11-18: M5.2c's review by Codex, round 1 of at most 3 (the user's cap)
+
+Codex (Sol, high; all of M5.2c's code since 3e2ac562, security in the prompt) found five, each
+confirmed and fixed with a test that fails without its fix:
+
+1. A results read before the lock that fails (on Postgres a malformed attempt ID in a worker's
+   message; any persistent read error) stopped every round with the message left queued: now
+   logged and the batch reads under the lock, where the fallback ends the worker's stream.
+2. Runs read before the lock stayed in use after a message handled alone wrote them (an
+   uncommon `Finished` before a sibling's common one: a cancelled sibling stored a success; a
+   `Deregister` before another worker's batch of the same run): the reads are dropped before
+   anything is handled alone, and the runs before an uncommon `Finished` in a batch. (The
+   `Deregister` case has no test of its own: two workers on one run; the same drop covers it.)
+3. The DAGs held were read before the lock (M5.2cA): an ID conflict a parse upload stored
+   meanwhile let its tasks be assigned. Now read under the lock (one statement).
+4. After a message ended its worker's stream in the fallback, the worker's later messages were
+   still handled (a `Deregister` then forgot it): skipped now, as the clock simulation had it.
+5. A turn could queue results after `close_streams` emptied the queue, keeping the stream open:
+   a closing master queues nothing, asked under the queue's lock.

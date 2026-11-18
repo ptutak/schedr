@@ -194,15 +194,14 @@ impl ResultsReads {
 }
 
 /// What a round's assign part reads from the database alone, before it takes the core lock
-/// (M5.2cA, decision 501): the ready tasks, the DAGs held, the wait steps' reads, each DAG's
-/// current version, and the upstream outcomes and outputs of a round's worth of ready tasks.
-/// Under the lock only what the batch decides is checked again: the slots and limits in memory,
-/// then the claim, `WHERE state = 'queued'`, refusing a task anything changed meanwhile (a
+/// (M5.2cA, decision 501): the ready tasks, the wait steps' reads, each DAG's current version,
+/// and the upstream outcomes and outputs of a round's worth of ready tasks. Under the lock only
+/// what the batch decides is checked again: the DAGs held (read there: a conflict stored
+/// meanwhile holds them), the slots and limits in memory, then the claim, `WHERE state = 'queued'`, refusing a task anything changed meanwhile (a
 /// refused one gives its slot back).
 #[derive(Debug)]
 pub struct AssignReads {
     ready: Vec<ReadyInstance>,
-    held: BTreeMap<String, bool>,
     round_reads: RoundReads,
     versions: BTreeMap<DagId, String>,
     upstream: mapping::Upstream,
@@ -220,7 +219,6 @@ impl AssignReads {
         if ready.is_empty() {
             return Ok(Self {
                 ready,
-                held: BTreeMap::new(),
                 round_reads: RoundReads::default(),
                 versions: BTreeMap::new(),
                 upstream: mapping::Upstream::default(),
@@ -237,9 +235,8 @@ impl AssignReads {
             })
             .collect();
         // Read at once, each on its own connection: none needs another's answer (M5.2cB4).
-        let (held, round_reads, versions, upstream) = Box::pin(async {
+        let (round_reads, versions, upstream) = Box::pin(async {
             tokio::try_join!(
-                async { Ok::<_, DispatchError>(db.held_dags().await?) },
                 Box::pin(RoundReads::read(db, &ready)),
                 async { Ok(db.active_dag_versions().await?) },
                 async { Ok(Box::pin(mapping::Upstream::read(db, wanted)).await?) },
@@ -249,7 +246,6 @@ impl AssignReads {
         let versions = versions.into_iter().collect();
         Ok(Self {
             ready,
-            held,
             round_reads,
             versions,
             upstream,
@@ -1306,11 +1302,13 @@ impl Dispatcher {
         };
         let AssignReads {
             ready,
-            held,
             round_reads,
             versions,
             upstream,
         } = read;
+        // The DAGs held read under the lock, not before it (Codex's review of M5.2c): an ID
+        // conflict a parse upload stored meanwhile holds its tasks this round.
+        let held = self.db.held_dags().await?;
         let ready = self.unless_held(ready, &held, now).await?;
         let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
@@ -2774,6 +2772,9 @@ impl Dispatcher {
                     Some(_) => {
                         self.finish_common(in_round, &std::mem::take(&mut common), now)
                             .await?;
+                        // It writes runs on its own reads: those read before the lock are no
+                        // longer true (Codex's review of M5.2c).
+                        self.results_reads.runs.clear();
                         self.finished(in_round, worker_id, finished, now).await?;
                     }
                 }
