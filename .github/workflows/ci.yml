@@ -342,11 +342,8 @@ jobs:
           name: wheels-linux-x86_64
           path: dist/*.whl
 
-  # Linux aarch64 manylinux and macOS arm64 (M2.13), one matrix. The check name is
-  # `matrix.name`, so the two stay visible per platform. scripts/build-wheel.sh uses the
-  # digest-pinned manylinux2014_aarch64 image, or, on macOS, rustup-init 1.29.1
-  # (no container). One platform failing does not cancel the other.
-  # The macOS wheel tag is maturin's default macosx_11_0_arm64.
+  # Linux aarch64 manylinux (M2.13). scripts/build-wheel.sh uses the digest-pinned
+  # manylinux2014_aarch64 image.
   wheel-native:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -359,11 +356,6 @@ jobs:
             platform: manylinux-aarch64
             wheel: dist/*manylinux*.whl
             artifact: wheels-linux-aarch64
-          - name: wheel-macos-arm64
-            runner: macos-15
-            platform: macos-arm64
-            wheel: dist/*macosx*.whl
-            artifact: wheels-macos-arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -374,6 +366,26 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
+          path: dist/*.whl
+
+  # macOS arm64 (M2.13), only on a release's tag (the release workflow calls this one there):
+  # a macOS runner wasn't always found for a push to main, and the run went red with no test
+  # failed (the user, 2026-11-18). On the tag it is built and required, as the release takes the
+  # four wheels. scripts/build-wheel.sh uses rustup-init 1.29.1 (no container); the wheel's tag
+  # is maturin's default macosx_11_0_arm64.
+  wheel-macos-arm64:
+    if: github.ref_type == 'tag'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - run: scripts/build-wheel.sh macos-arm64
+      - run: scripts/smoke-wheel.sh dist/*macosx*.whl python
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-macos-arm64
           path: dist/*.whl
 
   # The Helm chart: lint and render it (see `make chart-check`).

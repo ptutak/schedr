@@ -1,0 +1,11 @@
+title = "The macOS wheel is built only on a release's tag"
+date = 2026-11-18
+by = "user"  # user, claude
+on = "D160"
+kind = "adds"  # corrects (update the decision's summary too), adds
+summary = '''
+CI builds the macOS arm64 wheel only on a release's tag (a job of its own, `if: github.ref_type ==
+'tag'`): there it is built and required, as the release takes the four wheels; a push to main no
+longer waits for a macOS runner, which wasn't always found (the run went red with no test failed).
+'''
+history = "JOURNAL.md#DN12"

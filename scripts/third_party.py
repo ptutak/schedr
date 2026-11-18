@@ -25,7 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "LICENSE-THIRD-PARTY"
-# The wheels' platforms (ci.yml: wheel, wheel-native).
+# The wheels' platforms (ci.yml: wheel, wheel-native, wheel-macos-arm64 on a tag).
 TARGETS = (
     "x86_64-unknown-linux-gnu",
     "x86_64-unknown-linux-musl",

@@ -2123,3 +2123,13 @@ ends. `deregistered` returns its failure now. Two tests (a turn's `Draining`, a 
 - **Not chosen:** keeping the old numbers with a D in front (gaps); a DN as a pointer only (its
   summary is what the decision's page shows); the six event notes kept as the user's N1-N6 (they
   weren't asked for); one with the M5.2d commit (kept apart).
+
+### <a id="DN12"></a>2026-11-18: The macOS wheel is built only on a release's tag (decision note 12; adds to D160)
+
+The CI run of M5.2d's push (44353444248) went red with every test passed: `wheel-macos-arm64` got no
+runner and was cancelled after 15 minutes, never started. The user asked whether the macOS wheel
+could stop counting for the pipeline. Two ways: `continue-on-error` on pushes (a job cancelled while
+queued might still mark the run), or the macOS wheel built only on a release's tag. The user: only
+on tags. It is a job of its own (a job's `if` can't read its matrix entry), `if: github.ref_type ==
+'tag'`; the release workflow calls CI on its tag, so a release still builds, smoke-tests and needs
+it. Not chosen: dropping it on tags too (the release takes four wheels).

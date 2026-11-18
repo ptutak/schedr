@@ -13,11 +13,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- DN12 (2026-11-18): The macOS wheel is built only on a release's tag (adds to D160)
 - D508 (2026-11-18): decision notes and the user's notes
 - DN11 (2026-11-18): B263, a master frozen in a statement: tried once more (corrects D115)
 - D507 (2026-11-18): M5.2d, the worker's start path: journal writes beside its loop
 - D506 (2026-11-18): M5.2cB4 steps 1-3, results first, the slow parts' due flags, the task rounds' gap
-- D505 (2026-11-17): only the round moves runs forward (decision 505, M5.2cB)
 - M5.2d (2026-11-18): The worker's start path
 - M5.2cB3 (2026-11-18): The round's results part: one set of statements, its reads before the lock
 - M5.2cB (2026-11-17): Only the round moves runs forward

@@ -25,7 +25,7 @@ _NUMBER = r"(?:0|[1-9][0-9]*)"
 TAG = re.compile(
     rf"^v(?P<base>(?P<series>{_NUMBER}\.{_NUMBER})\.{_NUMBER})(?:rc(?P<rc>[1-9][0-9]*))?$"
 )
-# The platforms CI builds (ci.yml: wheel, wheel-native), one wheel each.
+# The platforms CI builds (ci.yml: wheel, wheel-native, wheel-macos-arm64 on a tag), one wheel each.
 PLATFORMS = {
     # A manylinux wheel may carry two tags: `manylinux_2_17_x86_64.manylinux2014_x86_64`.
     "Linux x86_64 (manylinux)": re.compile(

@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN12 | 2026-11-18 | user | adds to D160 | The macOS wheel is built only on a release's tag |
 | DN11 | 2026-11-18 | user | corrects D115 | B263, a master frozen in a statement: tried once more |
 | DN10 | 2026-11-15 | claude | adds to D494 | M5.1l2 built: the attempt charts on the Metrics page |
 | DN9 | 2026-11-15 | claude | adds to D493 | M5.1p built: 41 hidden settings and the masters' window |
