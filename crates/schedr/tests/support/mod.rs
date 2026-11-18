@@ -250,8 +250,14 @@ impl Cluster {
             .env("SCHEDR_HIDDEN__DATABASE__QUERY_TIMEOUT", "2s")
             .env("SCHEDR_DAG_PATH", self.root());
         // A turn's size set from outside, for the stress runs comparing sizes (M5.1e).
-        if let Ok(size) = std::env::var("SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN") {
-            command.env("SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN", size);
+        // The task rounds' gap too, for the stress runs comparing gaps (M5.2cB4).
+        for name in [
+            "SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN",
+            "SCHEDR_HIDDEN__MASTER__TASK_ROUND_GAP",
+        ] {
+            if let Ok(value) = std::env::var(name) {
+                command.env(name, value);
+            }
         }
         if self.ca.is_some() {
             command

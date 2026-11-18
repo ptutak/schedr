@@ -1,6 +1,7 @@
 //! Task instances of runs: created when a run starts, moved forward by the master, and the
 //! run's result when they have all finished.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -126,6 +127,25 @@ pub struct InstanceUpdate {
 }
 
 type InstanceRow = (
+    String,
+    String,
+    String,
+    i32,
+    i32,
+    Option<String>,
+    bool,
+    Option<String>,
+    i32,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+/// A run's row with its ID first (see [`RunRow`]).
+type RunsRow = (String, String, bool, String, String);
+
+/// An instance's row with its run's ID first.
+type RunInstanceRow = (
+    String,
     String,
     String,
     String,
@@ -288,6 +308,65 @@ impl Database {
             parse_version,
             instances: rows.into_iter().map(instance).collect::<Result<_, _>>()?,
         }))
+    }
+
+    /// Several runs with their task instances, as [`Self::run_tasks`] reads one, in two
+    /// statements for all of them (M5.2cB4): a run not found is left out.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails or a row can't be read.
+    pub async fn runs_tasks(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<BTreeMap<String, RunTasks>, DbError> {
+        const RUNS: &str = "SELECT r.id{text}, r.state, r.cancel_requested_at IS NOT NULL, \
+            v.id{text}, p.schedr_version FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id \
+            JOIN parse_results p ON p.id = v.parse_result_id \
+            WHERE r.id IN (SELECT value{uuid} FROM {json_each}($1{json}))";
+        const INSTANCES: &str = "SELECT run_id{text}, id{text}, task_id, state, try_number, \
+            retries_used, {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL, outcome, map_index, \
+            reason, map_sizes{text}, cleanup_result FROM task_instances \
+            WHERE run_id IN (SELECT value{uuid} FROM {json_each}($1{json})) \
+            ORDER BY run_id, task_id, map_index";
+        let mut found = BTreeMap::new();
+        if run_ids.is_empty() {
+            return Ok(found);
+        }
+        let list = crate::query::to_json(&run_ids);
+        let (runs, rows): (Vec<RunsRow>, Vec<RunInstanceRow>) = on_pool!(self, |pool, backend| {
+            let runs = crate::query::query_as(sql(backend, RUNS))
+                .bind(&list)
+                .fetch_all(&mut *pool)
+                .await?;
+            let rows = crate::query::query_as(sql(backend, INSTANCES))
+                .bind(&list)
+                .fetch_all(&mut *pool)
+                .await?;
+            (runs, rows)
+        });
+        let mut instances: BTreeMap<String, Vec<StoredInstance>> = BTreeMap::new();
+        for (run_id, a, b, c, d, e, f, g, h, i, j, k, l) in rows {
+            instances
+                .entry(run_id)
+                .or_default()
+                .push(instance((a, b, c, d, e, f, g, h, i, j, k, l))?);
+        }
+        for (run_id, state, cancel_requested, version_id, parse_version) in runs {
+            let dag = self.dag_version(&version_id).await?;
+            let instances = instances.remove(&run_id).unwrap_or_default();
+            found.insert(
+                run_id,
+                RunTasks {
+                    state: from_name("runs.state", state)?,
+                    cancel_requested,
+                    dag,
+                    parse_version,
+                    instances,
+                },
+            );
+        }
+        Ok(found)
     }
 
     /// Records how a cleanup of an instance ended. A failure stays: a later attempt's

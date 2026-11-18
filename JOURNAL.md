@@ -1901,11 +1901,36 @@ lets start: the event test failed with it held back; the user: keep it, measure 
 much). The rounds results wake have their own gap, `SCHEDR_HIDDEN__MASTER__TASK_ROUND_GAP`;
 `ROUND_GAP` (50 ms) is left to the trigger loop.
 
-Scenario 1 (quick x2, release), the gap at 1 / 5 / 10 / 25 ms: 67.7 / 67.7 / 69.1 / 67.9 tasks a
-second (69.8 before, runs vary ~7 %). The gap doesn't matter: rounds now run back to back, ~7 a
+Correction: the first sweep never reached the master (the stress harness clears the roles'
+environment; all four ran at the 5 ms default: 67.7 / 67.7 / 69.1 / 67.9 tasks a second, the noise at
+one setting). Passed through, the gap at 1 / 5 / 10 / 25 ms: 67.2 / 68.8 / 67.4 / 69.6, task end ->
+stored p50 66 / 65 / 66 / 72 ms. The gap doesn't matter: rounds now run back to back, ~7 a
 second, a round ~145 ms by itself (results 47 ms, assign 17 ms under the lock and its reads before
 it, prepare 7, scheduler 6). Task end -> stored fell (p50 83 -> ~55 ms, mean 102 -> ~87), stored ->
 assigned rose by as much (85 -> ~110): the wait moved, the cycle stayed. 10 ms chosen (as good as
 any, fewer idle rounds than 1 or 5). Next: the round's own length; the results part's 47 ms first
 profiled (database time per round is small: its run reads and instance updates ~5-8 ms), then
 step 4 as the profile says.
+
+### 2026-11-18: M5.2cB4, where a round's time goes
+
+Profiled with temporary timers (scenario 1, gap 10 ms; no profiler on the machine), a round ~151
+ms: its probe and start 14.6; the results part's reads before the lock 28.4 (the attempts, then
+each run one after another), its transaction 45.9 (starts 6.9; finishes 32.4: the ends 7.4, each
+run ~11, its store 6.2 and outputs 3.7; the commit ~7); the assign part's reads ~33 (five, one after
+another), under the lock ~17; the scheduler, prepare, expire and the rest ~16. Settling a run takes
+0.03 ms: the time is database round trips (~1-3 ms each through PgBouncer), one after another.
+Step 4 reworked by it: the results part's runs read in one query; the assign part's independent
+reads at once; the batch's runs stored together; the probe looked into.
+
+### 2026-11-18: M5.2cB4 step 4, the round's reads together
+
+The results part's runs read in two statements for all of them (`runs_tasks`), not two each; the
+assign part's four reads that need only the ready tasks made at once, each on its own connection.
+Scenario 1: the round ~151 -> ~118 ms (the results part's reads 28 -> 16 ms, the assign part 50 ->
+41), 70.2 tasks a second, within the noise of 67-70 (a 33 ms shorter round cuts the ~456 ms cycle
+by ~7 %). A batch's runs stored together (~10 ms more, ~3 %) left for the user: it reworks how runs
+are stored for a gain the runs can't show. The cycle now: run ~198, assigned -> started 68, end ->
+stored 98, stored -> assigned 96. 100 tasks a second needs a ~320 ms cycle: the master's part
+(~194 ms) and the worker's (start 68 + ~100 ms inside the run beyond `sleep 0.1`) both have to
+shrink; M5.2d's profile of the worker's side is the next real gain.

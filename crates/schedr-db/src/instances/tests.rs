@@ -121,6 +121,17 @@ async fn instances_are_read_back_with_the_run() {
     .await
     .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    // Several runs read at once read as one does (M5.2cB4); an unknown one is left out.
+    let (other_db, other) = with_run(RunState::Queued).await;
+    drop(other_db);
+    let both = db
+        .runs_tasks(&[run_id.as_str(), other.as_str()])
+        .await
+        .unwrap();
+    assert_eq!(
+        both,
+        std::collections::BTreeMap::from([(run_id.clone(), run.clone())])
+    );
     assert_eq!(run.state, RunState::Running);
     assert!(!run.cancel_requested);
     assert_eq!(*run.dag, dag());

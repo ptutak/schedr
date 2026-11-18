@@ -1763,6 +1763,14 @@ async fn a_wide_runs_instances_are_all_created_on_postgres() {
         .await
         .unwrap();
     let run = db.run_tasks(&run_id).await.unwrap().unwrap();
+    // Several runs read at once read as one does (M5.2cB4); an unknown one is left out.
+    let unknown = "00000000-0000-4000-8000-000000000001".to_owned();
+    assert_eq!(
+        db.runs_tasks(&[run_id.as_str(), unknown.as_str()])
+            .await
+            .unwrap(),
+        BTreeMap::from([(run_id.clone(), run.clone())])
+    );
     assert_eq!(run.instances.len(), 1201);
     assert!(run.instances.iter().all(|i| i.ready_at == Some(ts(NOW))));
 }

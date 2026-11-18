@@ -171,13 +171,12 @@ impl ResultsReads {
             return Ok(reads);
         }
         for attempt in db.attempts_by_ids(ids).await? {
-            if !reads.runs.contains_key(&attempt.run_id)
-                && let Some(run) = db.run_tasks(&attempt.run_id).await?
-            {
-                reads.runs.insert(attempt.run_id.clone(), run);
-            }
             reads.attempts.insert(attempt.id.clone(), attempt);
         }
+        // Their runs in one read (M5.2cB4).
+        let runs: BTreeSet<&str> = reads.attempts.values().map(|a| a.run_id.as_str()).collect();
+        let runs: Vec<&str> = runs.into_iter().collect();
+        reads.runs = db.runs_tasks(&runs).await?;
         Ok(reads)
     }
 
@@ -227,9 +226,6 @@ impl AssignReads {
                 upstream: mapping::Upstream::default(),
             });
         }
-        let held = db.held_dags().await?;
-        let round_reads = RoundReads::read(db, &ready).await?;
-        let versions = db.active_dag_versions().await?.into_iter().collect();
         let wanted: BTreeSet<(String, TaskId)> = ready
             .iter()
             .take(most)
@@ -240,7 +236,17 @@ impl AssignReads {
                     .map(|upstream| (one.run_id.clone(), upstream))
             })
             .collect();
-        let upstream = mapping::Upstream::read(db, wanted).await?;
+        // Read at once, each on its own connection: none needs another's answer (M5.2cB4).
+        let (held, round_reads, versions, upstream) = Box::pin(async {
+            tokio::try_join!(
+                async { Ok::<_, DispatchError>(db.held_dags().await?) },
+                Box::pin(RoundReads::read(db, &ready)),
+                async { Ok(db.active_dag_versions().await?) },
+                async { Ok(Box::pin(mapping::Upstream::read(db, wanted)).await?) },
+            )
+        })
+        .await?;
+        let versions = versions.into_iter().collect();
         Ok(Self {
             ready,
             held,
