@@ -194,16 +194,15 @@ impl ResultsReads {
 }
 
 /// What a round's assign part reads from the database alone, before it takes the core lock
-/// (M5.2cA, decision 501): the ready tasks, the wait steps' reads, each DAG's current version,
-/// and the upstream outcomes and outputs of a round's worth of ready tasks. Under the lock only
-/// what the batch decides is checked again: the DAGs held (read there: a conflict stored
-/// meanwhile holds them), the slots and limits in memory, then the claim, `WHERE state = 'queued'`, refusing a task anything changed meanwhile (a
+/// (M5.2cA, decision 501): the ready tasks, the wait steps' reads, and the upstream outcomes and
+/// outputs of a round's worth of ready tasks. Under the lock only what the batch decides is
+/// checked again: the DAGs held and their current versions (read there: a conflict or a lower
+/// limit stored meanwhile holds), the slots and limits in memory, then the claim, `WHERE state = 'queued'`, refusing a task anything changed meanwhile (a
 /// refused one gives its slot back).
 #[derive(Debug)]
 pub struct AssignReads {
     ready: Vec<ReadyInstance>,
     round_reads: RoundReads,
-    versions: BTreeMap<DagId, String>,
     upstream: mapping::Upstream,
 }
 
@@ -220,7 +219,6 @@ impl AssignReads {
             return Ok(Self {
                 ready,
                 round_reads: RoundReads::default(),
-                versions: BTreeMap::new(),
                 upstream: mapping::Upstream::default(),
             });
         }
@@ -235,19 +233,15 @@ impl AssignReads {
             })
             .collect();
         // Read at once, each on its own connection: none needs another's answer (M5.2cB4).
-        let (round_reads, versions, upstream) = Box::pin(async {
-            tokio::try_join!(
-                Box::pin(RoundReads::read(db, &ready)),
-                async { Ok(db.active_dag_versions().await?) },
-                async { Ok(Box::pin(mapping::Upstream::read(db, wanted)).await?) },
-            )
+        let (round_reads, upstream) = Box::pin(async {
+            tokio::try_join!(Box::pin(RoundReads::read(db, &ready)), async {
+                Ok(Box::pin(mapping::Upstream::read(db, wanted)).await?)
+            },)
         })
         .await?;
-        let versions = versions.into_iter().collect();
         Ok(Self {
             ready,
             round_reads,
-            versions,
             upstream,
         })
     }
@@ -1303,12 +1297,14 @@ impl Dispatcher {
         let AssignReads {
             ready,
             round_reads,
-            versions,
             upstream,
         } = read;
         // The DAGs held read under the lock, not before it (Codex's review of M5.2c): an ID
         // conflict a parse upload stored meanwhile holds its tasks this round.
         let held = self.db.held_dags().await?;
+        // The DAGs' current versions too: one a parse upload stored meanwhile holds its
+        // limits this round (Codex's review of M5.2c).
+        let versions = self.db.active_dag_versions().await?.into_iter().collect();
         let ready = self.unless_held(ready, &held, now).await?;
         let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
@@ -2364,7 +2360,16 @@ impl Dispatcher {
             .iter()
             .flat_map(|(_, group)| group.iter().map(|s| s.attempt_id.as_str()))
             .collect();
-        let attempts = self.batch_attempts(&ids).await?;
+        // Read under the lock, not before it (Codex's review of M5.2c): a registration's
+        // adoption may have started one meanwhile, and a start's witness of the commit
+        // (`Witness::Started`) must say what this write changed.
+        let attempts: BTreeMap<String, StoredAttempt> = self
+            .db
+            .attempts_by_ids(&ids)
+            .await?
+            .into_iter()
+            .map(|a| (a.id.clone(), a))
+            .collect();
         let theirs =
             |worker_id: &str, id: &str| attempts.get(id).is_some_and(|a| a.worker_id == worker_id);
         // Each attempt's last start method, as one by one would leave it, and its first

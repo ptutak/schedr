@@ -1954,3 +1954,17 @@ confirmed and fixed with a test that fails without its fix:
    still handled (a `Deregister` then forgot it): skipped now, as the clock simulation had it.
 5. A turn could queue results after `close_streams` emptied the queue, keeping the stream open:
    a closing master queues nothing, asked under the queue's lock.
+
+### 2026-11-18: M5.2c's review by Codex, round 2 of 3
+
+A fresh session over all of M5.2c found two, both confirmed and fixed with a test that fails
+without its fix:
+
+1. `started_batch` took its attempts as read before the lock: a registration adopting one
+   meanwhile (started) left it unstarted there, so a repeated `Started` witnessed the batch's
+   commit, and a commit cut off unstored was taken as stored, its results acknowledged and lost.
+   The starts' attempts are read under the lock now (the `Finished`s' still before it: their
+   witness is the end the write records).
+2. The DAGs' current versions were read before the assign part's lock (M5.2cA): a version a
+   parse upload stored meanwhile with a lower `max_active` or `max_active_tasks` didn't hold that
+   round. Read under the lock now, with the DAGs held (two short statements).

@@ -3950,6 +3950,56 @@ async fn max_active_and_max_active_tasks_count_across_runs() {
 }
 
 #[tokio::test]
+async fn a_limit_lowered_after_the_assign_reads_holds() {
+    // Codex's review of M5.2c: the assign part's reads taken, then a parse upload stores a
+    // version with a lower limit before the lock; the current versions are read under it.
+    let (mut dispatcher, db, _run_id) = with_run(limited(&json!({}), &json!({}))).await;
+    dispatcher
+        .register("w1", "i2", &[], 10, ts(NOW))
+        .await
+        .unwrap();
+    let round = InRound::for_tests();
+    let mut out = Vec::new();
+    dispatcher.prepare(&round, ts(NOW), &mut out).await.unwrap();
+    let reads = AssignReads::read(&db, ts(NOW), 100).await.unwrap();
+    assert!(reads.ready.len() > 1, "several ready when read");
+    redefine(&db, limited(&json!({}), &json!({"max_active_tasks": 1}))).await;
+    dispatcher.give_reads(reads);
+    dispatcher
+        .assign_round(&round, ts(NOW), &mut out)
+        .await
+        .unwrap();
+    assert_eq!(assigned(&out).len(), 1);
+}
+
+#[tokio::test]
+async fn a_start_after_an_adoption_meanwhile_is_no_witness_of_its_commit() {
+    // Codex's review of M5.2c: read before the lock unstarted, the attempt is adopted by a
+    // registration (started) before the batch; its repeated `Started` changes nothing, so it
+    // must not witness the batch's commit (a commit cut off unstored would be taken as stored
+    // and its results acknowledged).
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_tasks(1)).await;
+    let round = InRound::for_tests();
+    let out = dispatcher.step(&round, ts(NOW)).await.unwrap();
+    let id = assignment(&out[0]).attempt_id.clone();
+    let reads = ResultsReads::read(&db, &[id.as_str()]).await.unwrap();
+    db.mark_adopted(&id, ts(NOW)).await.unwrap();
+    dispatcher.give_results_reads(reads);
+    dispatcher.take_witnesses();
+    dispatcher
+        .started_batch(&[("w1", &[started(&id)])], ts(NOW))
+        .await
+        .unwrap();
+    assert!(
+        !dispatcher
+            .take_witnesses()
+            .iter()
+            .any(|(of, w)| of == &id && matches!(w, Witness::Started)),
+        "no start witnessed"
+    );
+}
+
+#[tokio::test]
 async fn limits_across_runs_are_the_current_versions() {
     // Decision 87A: raised in a new version, the limit across runs holds for older runs too;
     // `max_active_per_run` stays the run's own.
