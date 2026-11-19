@@ -1,0 +1,23 @@
+title = "through PgBouncer in transaction mode the webserver can panic in sqlx at startup (a data row of another statement)"
+severity = "medium"
+probability = "rare"
+kind = "reliability"
+summary = "stress_06_pgbouncer_throughput: the webserver panicked in sqlx-postgres data_row.rs (index out of bounds: the len is 1 but the index is 1) while the master logged 'unnamed prepared statement does not exist'"
+found = 2026-11-19
+suspected = false
+details = '''
+- **Found:** 2026-11-19, the quick stress suite before M5.2e's push (test build):
+  `stress_06_pgbouncer_throughput` waited in vain for the webserver's API line; the webserver
+  had panicked at `sqlx-postgres-0.9.0/src/message/data_row.rs:22:20` ("index out of bounds:
+  the len is 1 but the index is 1"), a row decoded with another statement's columns. The
+  master, on the same PgBouncer, logged "unnamed prepared statement does not exist" renewing
+  its lease twice, then led again. The other 30 scenarios passed; M5.2e touches neither startup
+  nor the database layer. B258 met the same PgBouncer error two days earlier.
+- **A guess, unverified:** sqlx's unprepared (unnamed) statements sent in two syncs (Parse and
+  Describe, then Bind and Execute) can land on two server connections in transaction mode
+  outside a transaction, so a row or a description belongs to another client's statement. A
+  panic, not an error: the process exits (restarted by its supervisor); no wrong result seen.
+- **Next:** reproduce (scenario 6 repeated, or a test driving unnamed statements through
+  PgBouncer); find the statements sent outside a transaction; check PgBouncer's
+  `max_prepared_statements` and sqlx's `statement_cache_capacity`.
+'''

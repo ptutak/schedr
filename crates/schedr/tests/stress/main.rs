@@ -101,6 +101,51 @@ fn stress_01_throughput() {
     throughput(postgres_database(), "01_throughput", false);
 }
 
+/// Scenario 1c (M5.2e, decision 509): short tasks and long ones together, the long ones in
+/// clumps (whole DAGs of them), on scenario 1's cluster: queues behind long tasks give their
+/// work back to workers that freed up. `SCHEDR_STRESS_SLOW_EQUALS_FACTOR` and
+/// `SCHEDR_STRESS_SLOW_EQUALS_FLOOR` (e.g. `3`, `1s`) set the master's slow-equals, for a sweep.
+#[test]
+fn stress_01c_mixed_lengths() {
+    let mut stress = Stress::new(Some(postgres_database()));
+    let size = stress.size;
+    let mut report = Report::new("01c_mixed_lengths");
+    let mut dags = command_dags(&stress, "short", size.n(20, 200), 10, "sleep 0.1", 0);
+    dags.extend(command_dags(
+        &stress,
+        "long",
+        size.n(4, 40),
+        10,
+        "sleep 5",
+        0,
+    ));
+    let factor = std::env::var("SCHEDR_STRESS_SLOW_EQUALS_FACTOR").ok();
+    let floor = std::env::var("SCHEDR_STRESS_SLOW_EQUALS_FLOOR").ok();
+    let mut env: Vec<(&str, &str)> = Vec::new();
+    if let Some(factor) = &factor {
+        env.push(("SCHEDR_HIDDEN__MASTER__SLOW_EQUALS_FACTOR", factor));
+    }
+    if let Some(floor) = &floor {
+        env.push(("SCHEDR_HIDDEN__MASTER__SLOW_EQUALS_FLOOR", floor));
+    }
+    stress.start_core("master", &env);
+    stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
+    stress.wait_for_dags(dags.len(), 10 * MINUTE);
+    let started = std::time::Instant::now();
+    stress.trigger(&dags, 1);
+    stress.wait_for_runs(dags.len(), size.time(20 * MINUTE, 90 * MINUTE), |_| {});
+    report.set("all_done_s", started.elapsed().as_secs_f64());
+    stress.measure(&mut report, "master", 1.0);
+    let (_, metrics) = stress.cluster.ops_get("master", "/metrics");
+    let given_back: f64 = metrics
+        .lines()
+        .filter(|l| l.starts_with("schedr_master_rejections_total") && l.contains("withdrawn"))
+        .filter_map(|l| l.rsplit(' ').next()?.parse::<f64>().ok())
+        .sum();
+    report.set("given_back", given_back);
+    finish(&stress, report, &["success"]);
+}
+
 /// Scenario 2: Command bursts: many triggers at once, a pause/unpause storm, and cancelling many
 /// running runs at once.
 #[test]

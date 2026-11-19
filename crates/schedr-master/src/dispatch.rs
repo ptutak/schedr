@@ -461,6 +461,9 @@ pub struct Dispatcher {
     sensor_max_wait: Duration,
     /// Workers that rejected a task instance for a worker-specific reason, with the detail.
     rejections: BTreeMap<String, BTreeMap<String, String>>,
+    /// Task instances a worker gave back from its queue (decision 509): the next assignment
+    /// is into a free slot only, never another queue.
+    withdrawn: BTreeSet<String>,
     /// Task instances whose code a worker didn't have: since when, and which workers said so.
     code_missing: BTreeMap<String, CodeMissing>,
     code_wait: SignedDuration,
@@ -556,6 +559,7 @@ pub struct Memory {
     workers: Workers,
     away: BTreeSet<String>,
     rejections: BTreeMap<String, BTreeMap<String, String>>,
+    withdrawn: BTreeSet<String>,
     code_missing: BTreeMap<String, CodeMissing>,
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
     stops: Vec<Outgoing>,
@@ -623,6 +627,7 @@ impl Dispatcher {
             switch_off_after: 3,
             sensor_max_wait: Duration::from_hours(24),
             rejections: BTreeMap::new(),
+            withdrawn: BTreeSet::new(),
             code_missing: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
             current_code: BTreeMap::new(),
@@ -706,6 +711,7 @@ impl Dispatcher {
             workers: self.workers.clone(),
             away: self.away.clone(),
             rejections: self.rejections.clone(),
+            withdrawn: self.withdrawn.clone(),
             code_missing: self.code_missing.clone(),
             stops: self.stops.clone(),
             active: self.active.clone(),
@@ -740,6 +746,7 @@ impl Dispatcher {
         self.workers = memory.workers;
         self.away = memory.away;
         self.rejections = memory.rejections;
+        self.withdrawn = memory.withdrawn;
         self.code_missing = memory.code_missing;
         self.stops = memory.stops;
         self.active = memory.active;
@@ -1148,6 +1155,11 @@ impl Dispatcher {
     /// A worker's watcher slots.
     pub fn set_watcher_slots(&mut self, worker_id: &str, slots: u32) {
         self.workers.set_watcher_slots(worker_id, slots);
+    }
+
+    /// How many tasks past its slots a worker keeps waiting (decision 509).
+    pub fn set_queue_depth(&mut self, worker_id: &str, depth: u32) {
+        self.workers.set_queue_depth(worker_id, depth);
     }
 
     /// A drained worker is resumed: like a new worker, it gives `unschedulable` tasks
@@ -2135,10 +2147,23 @@ impl Dispatcher {
         if let Some(missing) = self.code_missing.get(&ready.instance_id) {
             without_code.extend(missing.by.keys().cloned());
         }
+        // A free slot anywhere before any queue (decision 509; Codex's review of M5.2e: the
+        // workers with the code first, then the rest, each for a free slot, then for a queue).
+        let free_only = Needs {
+            may_queue: false,
+            ..needs
+        };
         let picked = self
             .workers
-            .pick(needs, &without_code)
-            .or_else(|| self.workers.pick(needs, &excluded));
+            .pick(free_only, &without_code)
+            .or_else(|| self.workers.pick(free_only, &excluded))
+            .or_else(|| {
+                needs.may_queue.then(|| {
+                    self.workers
+                        .pick(needs, &without_code)
+                        .or_else(|| self.workers.pick(needs, &excluded))
+                })?
+            });
         let Some(worker_id) = picked.map(str::to_owned) else {
             let (why, reason) = self.why_waiting(needs, &excluded);
             *tally.waiting.entry(why).or_default() += 1;
@@ -2153,6 +2178,8 @@ impl Dispatcher {
         let attempt_id = uuid::Uuid::now_v7().to_string();
         self.take_slot(task, (&worker_id, &attempt_id), now);
         self.active.assigned(&attempt_id, ready);
+        // Into a free slot, as a task given back must be: it may queue again later.
+        self.withdrawn.remove(&ready.instance_id);
         tally.assigned += 1;
         Ok(Some(Pick {
             worker_id,
@@ -2503,6 +2530,10 @@ impl Dispatcher {
                 .await?;
             return Ok(());
         }
+        // Given back from a queue: next into a free slot only (decision 509).
+        if rejected.reason == i32::from(pb::RejectReason::Withdrawn) {
+            self.withdrawn.insert(attempt.instance_id.clone());
+        }
         // The workers that could run it: once each has rejected it, it is unschedulable.
         let eligible: Option<Vec<String>> = run.and_then(|run| {
             let queue = &run.dag.task(&attempt.task_id)?.settings.queue;
@@ -2848,8 +2879,10 @@ impl Dispatcher {
     }
 
     fn needs_of<'a>(&'a self, ready: &'a ReadyInstance, task: &'a schedr_model::Task) -> Needs<'a> {
+        let wait_step = matches!(task.kind, schedr_model::TaskKind::Sensor { .. });
         Needs {
-            wait_step: matches!(task.kind, schedr_model::TaskKind::Sensor { .. }),
+            wait_step,
+            may_queue: !wait_step && !self.withdrawn.contains(&ready.instance_id),
             ..self.needs(&ready.dag, &task.settings.queue, &ready.parse_version)
         }
     }
@@ -4229,6 +4262,7 @@ impl Dispatcher {
             code: current.map(|(hashes, _)| (root, hashes)),
             version,
             wait_step: false,
+            may_queue: false,
         }
     }
 

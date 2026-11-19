@@ -37,6 +37,7 @@ fn register(worker: &str, incarnation: &str, journal: Vec<pb::JournalEntry>) -> 
     pb::Register {
         running_triggers: Vec::new(),
         watcher_slots: 500,
+        queue_depth: 0,
         worker_id: worker.to_owned(),
         incarnation_id: incarnation.to_owned(),
         protocol: Some(PROTOCOL_VERSION),

@@ -50,6 +50,12 @@ fn every_metric_is_registered_and_attempts_count_by_status() {
     metrics.journal_written("start", Duration::from_millis(3));
     metrics.assign_to_started.observe(0.004);
     metrics
+        .queue_given_back
+        .get_or_create(&GivenBackLabels {
+            reason: "slow".to_owned(),
+        })
+        .inc();
+    metrics
         .watchers
         .hosts_lost
         .get_or_create(&CodeLabels {

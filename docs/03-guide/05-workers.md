@@ -85,6 +85,34 @@ DAG code can read them during parsing, and parse tracebacks are not masked.
 
 ## Running a task
 
+### The waiting queue
+
+A worker keeps a short queue of tasks assigned past its slots (decision 509): when a task
+ends, the next one starts at once, with no round of the master in between. The master fills
+free slots first, on any worker, and queues only when none has one, on the worker with the most
+room left in its queue. A queued task is just assigned as far as the master knows; nothing of
+it is in the worker's journal until it takes a slot.
+
+The queue holds ceil(slots × 0.5) tasks: 1 for 2 slots, 4 for 8 (the factor is the hidden
+[`SCHEDR_HIDDEN__WORKER__QUEUE_FACTOR`](14-timings.md#fixed-limits), from 0 to 4).
+`[worker] queue = false` turns it off: then tasks are assigned only into free slots.
+
+A queue behind long tasks gives its work back. Each heartbeat reports how long the queue's
+oldest task has waited; the master answers with the cluster's slow-equals, three times the
+median of those ages over the workers with a queue, at least 1 s. A worker whose oldest queued
+task waited longer gives back one task each second, from the end of its queue: it is ready
+again at the master, no retry used, and goes only into a free slot (the master keeps that in
+memory: after a master restart such a task may be queued again). When every worker is as
+busy, nothing goes back; at a burst's end, idle workers pull the median down, and a queue still
+holding work hands it to them.
+
+A queued task cancelled goes back the same way (cancelled, no try made); a drain gives the whole
+queue back; a worker that loses its connection drops its queue, and the master takes those
+tasks back when it registers again. A worker lost with a queue (silent past its lease) ends each
+queued task `lost`, using a retry, as for any assignment whose start the master can't rule out.
+
+### What a task needs
+
 Sensors share a watcher host and have different process and cancellation behavior; see
 [The watcher host](#the-watcher-host).
 
@@ -593,8 +621,9 @@ separate figure includes shared pages in full. See [The fork server](#the-fork-s
 
 ## Draining
 
-**On SIGTERM** (a rolling update, a node drain) the agent sends `Draining`. The master stops
-assigning to it, and the agent rejects anything sent before the master knew. Running tasks get
+**On SIGTERM** (a rolling update, a node drain) the agent sends `Draining` and gives its waiting
+queue back. The master stops assigning to it, and the agent rejects anything sent before the
+master knew. Running tasks get
 `[worker] termination_grace_period` (30 s, which should match the pod's
 `terminationGracePeriodSeconds`) minus the last part, which the drain keeps for itself:
 

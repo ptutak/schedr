@@ -4,9 +4,8 @@
 updated = 2026-11-18
 
 in_progress = [
-    "M5.2d with B259-B263 committed and pushed (017aac72, 2026-11-18). B263's retry went out before crash scenarios 17-21 ran on it (the stress rule for recovery changes): rerun locally after the push, results reported to the user.",
-    "Decision 508 (the user, 2026-11-18): journal entries are decisions, decision notes (DN, TOMLs in decisions/), the user's notes (N, only when asked; notes/, NOTES.md) and plain entries; the old N1-N16 reworked. Built with tests, waiting for make check and the user's acceptance of the commit; the project-docs skill updated the same way (its repo, uncommitted).",
-    "Next: M5.2e, the worker's waiting queue, its steps e1-e7 in the plan (designed with the user, 2026-11-18); e1 first.",
+    "M5.2e (decision 509, DN13) built e1-e7: the worker's waiting queue (agent.rs `queue`, `start_queued`, `check_queue`), the master's free-slots-first picking (`Needs::may_queue`) and withdrawn marks, slow-equals (slow_equals.rs, only workers with a queue counted), protocol 2.2 fields, `[worker] queue`, hidden `WORKER__QUEUE_FACTOR`, `WORKER__QUEUE_CHECK_INTERVAL`, `MASTER__SLOW_EQUALS_FACTOR`/`_FLOOR`; simulator scenarios with a queue; stress 1c. Codex's review: four fixed, one a known limit (a withdrawn mark lost on a master restart). Measured: no throughput change where the master's round is the limit (scenario 1 off/on 65-67 tasks a second). Pre-accepted by the user: commit and push after make check, the 600-case simulator and the quick stress suite pass.",
+    "Next: M5.2f, the trigger batching (plan/M5.toml). Not yet shown in a stress run: a give-back end to end (1c's two workers stay evenly busy).",
 ]
 
 waiting = []

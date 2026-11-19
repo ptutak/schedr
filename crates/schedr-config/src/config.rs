@@ -132,6 +132,9 @@ pub struct Timings {
     pub deregister_wait: Duration,
     /// How often a drain looks at what is left.
     pub drain_tick: Duration,
+    /// How often a worker compares its waiting queue's head with the cluster's slow-equals,
+    /// giving back one task each time it is older (decision 509).
+    pub queue_check_interval: Duration,
     /// How long a drained worker waits for the master to acknowledge its last results; never
     /// past half the report period before the grace period ends, left to deregister and exit.
     pub drain_ack_wait: Duration,
@@ -244,6 +247,8 @@ pub struct Timings {
     pub event_future_tolerance: Duration,
     /// How far ahead of the master's clock a run's `--for` may be. (`MASTER__FOR_FUTURE_TOLERANCE`)
     pub for_future_tolerance: Duration,
+    /// The least the cluster's slow-equals is (decision 509). (`MASTER__SLOW_EQUALS_FLOOR`)
+    pub slow_equals_floor: Duration,
     /// When a task whose code wasn't on its worker yet is tried again: about a git-sync interval
     /// and the settle time. (`MASTER__CODE_RETRY_DELAY`)
     pub code_retry_delay: Duration,
@@ -298,6 +303,7 @@ impl Default for Timings {
             worker_alive_interval: Duration::from_secs(5),
             deregister_wait: Duration::from_hours(1),
             drain_tick: Duration::from_millis(100),
+            queue_check_interval: Duration::from_secs(1),
             drain_ack_wait: Duration::from_secs(5),
             stop_poll: Duration::from_millis(100),
             connection_job_cancel_grace: Duration::from_secs(5),
@@ -346,6 +352,7 @@ impl Default for Timings {
             memory_peaks_window: Duration::from_hours(30 * 24),
             event_future_tolerance: Duration::from_mins(1),
             for_future_tolerance: Duration::from_mins(1),
+            slow_equals_floor: Duration::from_secs(1),
             code_retry_delay: Duration::from_secs(35),
             node_row_kept: Duration::from_hours(1),
             client_connect_timeout: Duration::from_secs(5),
@@ -587,10 +594,16 @@ pub struct HiddenLimits {
     pub worker_stream_buffer: usize,
     /// The most notifications one pass of the sender delivers. (`MASTER__NOTIFICATIONS_PER_PASS`)
     pub notifications_per_pass: usize,
+    /// The factor over the median of the workers' queue head ages that makes the cluster's
+    /// slow-equals (decision 509). (`MASTER__SLOW_EQUALS_FACTOR`)
+    pub slow_equals_factor: usize,
     /// The most results a worker keeps in its journal as one group (M4B.5). (`WORKER__RESULTS_PER_JOURNAL_GROUP`)
     pub results_per_journal_group: usize,
     /// The most assignments whose journal records a worker writes as one group (M5.1b). (`WORKER__STARTS_PER_JOURNAL_GROUP`)
     pub starts_per_journal_group: usize,
+    /// A worker's waiting queue's depth per slot, in hundredths: depth = ceil(slots x this /
+    /// 100) (decision 509), 0 to 400, 0 no queue; set as a fraction, e.g. `0.5`. (`WORKER__QUEUE_FACTOR`)
+    pub queue_factor_hundredths: u32,
     /// How many times a worker sends a result again over one session before it reconnects. (`WORKER__RESULT_RESENDS`)
     pub result_resends: usize,
     /// The most heartbeats between two sends of an unacknowledged result (B41). (`WORKER__RESULT_RESEND_GAP_MAX`)
@@ -645,8 +658,10 @@ impl Default for HiddenLimits {
             failed_group_messages_per_turn: 10,
             worker_stream_buffer: 1024,
             notifications_per_pass: 50,
+            slow_equals_factor: 3,
             results_per_journal_group: 32,
             starts_per_journal_group: 32,
+            queue_factor_hundredths: 50,
             result_resends: 8,
             result_resend_gap_max: 32,
             unacked_messages_kept: 100_000,
@@ -1465,6 +1480,11 @@ pub struct WorkerSection {
     pub id: Option<String>,
     /// Task slots.
     pub slots: u32,
+    /// Whether the worker keeps a waiting queue: ready tasks assigned past its slots, each
+    /// started as a slot frees, with no round between (decision 509). A queued task that waits
+    /// longer than the cluster's usual is given back. `false`: tasks are assigned only into
+    /// free slots.
+    pub queue: bool,
     /// The queues served; none serves `default`.
     pub queues: Vec<String>,
     /// Where task logs, the journal (`journal/<id>`; keep it across restarts), the copies of
@@ -1611,6 +1631,7 @@ impl Default for WorkerSection {
         Self {
             id: None,
             slots: 2,
+            queue: true,
             queues: Vec::new(),
             data_dir: None,
             connection_dir: None,

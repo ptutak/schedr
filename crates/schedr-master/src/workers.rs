@@ -44,6 +44,8 @@ pub struct Worker {
     pub queues: BTreeSet<String>,
     /// Its task slots.
     pub slots: u32,
+    /// How many assigned tasks past `slots` it keeps waiting (its queue, decision 509).
+    pub queue_depth: u32,
     /// Its slots for wait steps.
     pub watcher_slots: u32,
     /// Its state.
@@ -78,6 +80,9 @@ pub struct Needs<'a> {
     pub version: Option<SchedrVersion>,
     /// A wait step: it takes a watcher slot.
     pub wait_step: bool,
+    /// It may wait in a worker's queue past its slots (decision 509): an ordinary task's
+    /// assignment, not one given back from a queue.
+    pub may_queue: bool,
 }
 
 impl<'a> Needs<'a> {
@@ -89,6 +94,7 @@ impl<'a> Needs<'a> {
             code: None,
             version: None,
             wait_step: false,
+            may_queue: false,
         }
     }
 }
@@ -131,6 +137,20 @@ impl Worker {
     }
 
     fn free_for(&self, needs: Needs<'_>) -> u32 {
+        if needs.wait_step {
+            self.free_watcher_slots()
+        } else if needs.may_queue {
+            // Its free slots and its queue's room (decision 509).
+            self.slots
+                .saturating_add(self.queue_depth)
+                .saturating_sub(u32::try_from(self.attempts.len()).unwrap_or(u32::MAX))
+        } else {
+            self.free_slots()
+        }
+    }
+
+    /// Its free slots for `needs`, not counting its queue: what [`Workers::pick`] fills first.
+    fn free_now(&self, needs: Needs<'_>) -> u32 {
         if needs.wait_step {
             self.free_watcher_slots()
         } else {
@@ -179,6 +199,7 @@ impl Workers {
                 incarnation: incarnation.to_owned(),
                 queues,
                 slots,
+                queue_depth: 0,
                 watcher_slots: DEFAULT_WATCHER_SLOTS,
                 state: WorkerState::Active,
                 attempts: BTreeSet::new(),
@@ -278,8 +299,11 @@ impl Workers {
         self.eligible(needs)
             .filter(|w| w.connected && w.free_for(needs) > 0 && !excluded.contains(&w.id))
             .min_by(|a, b| {
-                b.free_for(needs)
-                    .cmp(&a.free_for(needs))
+                // Free slots first; then, for a task that may queue, the most room left in a
+                // queue (decision 509).
+                b.free_now(needs)
+                    .cmp(&a.free_now(needs))
+                    .then(b.free_for(needs).cmp(&a.free_for(needs)))
                     .then(a.last_assigned.cmp(&b.last_assigned))
                     .then(a.id.cmp(&b.id))
             })
@@ -307,6 +331,13 @@ impl Workers {
                 w.pokes.insert(attempt.to_owned());
             }
             w.last_assigned = Some(now);
+        }
+    }
+
+    /// Sets how many tasks past its slots a worker keeps waiting (decision 509).
+    pub fn set_queue_depth(&mut self, id: &str, depth: u32) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            worker.queue_depth = depth;
         }
     }
 

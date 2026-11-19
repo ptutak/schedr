@@ -281,6 +281,7 @@ async fn world_timed(
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 2,
+        queue_depth: 0,
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), root.clone())]),
             parse_only: BTreeMap::new(),
@@ -563,6 +564,8 @@ struct Scripted {
     answer_after: Duration,
     /// Messages sent after the script, this long after it (held on their way, B163).
     late: Option<(Duration, Vec<pb::MasterMessage>)>,
+    /// A second batch, this long after the script.
+    later: Option<(Duration, Vec<pb::MasterMessage>)>,
     /// Each heartbeat answered with a `HeartbeatAck`, as the master does, once this long has
     /// passed since the stream opened (before it, none: a paused master).
     ack_heartbeats: Option<Duration>,
@@ -572,6 +575,8 @@ struct Scripted {
     wall_ahead_ms: i64,
     /// Its messages numbered 1, 2, ... as the master's are (else all 0; B240).
     numbered: bool,
+    /// The slow-equals its `HeartbeatAck`s carry, in ms (decision 509).
+    slow_equals_ms: u64,
 }
 
 #[tonic::async_trait]
@@ -638,7 +643,10 @@ impl pb::master_server::Master for Scripted {
             self.received.lock().unwrap().push(first);
         }
         let received = Arc::clone(&self.received);
-        if let Some((after, late)) = self.late.clone() {
+        for (after, late) in [self.late.clone(), self.later.clone()]
+            .into_iter()
+            .flatten()
+        {
             let sender = sender.clone();
             let stamp = stamp.clone();
             tokio::spawn(async move {
@@ -649,6 +657,7 @@ impl pb::master_server::Master for Scripted {
             });
         }
         let ack_heartbeats = self.ack_heartbeats;
+        let slow_equals_ms = self.slow_equals_ms;
         tokio::spawn(async move {
             while let Ok(Some(message)) = inbound.message().await {
                 let beat = match &message.message {
@@ -661,7 +670,8 @@ impl pb::master_server::Master for Scripted {
                 let acking = ack_heartbeats.is_some_and(|after| opened.elapsed() >= after);
                 if let Some(sequence) = beat.filter(|_| acking) {
                     heard.fetch_max(sequence, std::sync::atomic::Ordering::SeqCst);
-                    let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
+                    let ack =
+                        master_message::Message::HeartbeatAck(pb::HeartbeatAck { slow_equals_ms });
                     let _ = sender.send(Ok(stamp(to_worker(ack)))).await;
                 }
             }
@@ -911,6 +921,7 @@ async fn against_master(
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots,
+        queue_depth: 0,
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), root)]),
             parse_only: BTreeMap::new(),
@@ -991,6 +1002,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
                     Ok(pb::RejectReason::DagFileMissing) => "rejected: missing",
                     Ok(pb::RejectReason::DiskNotWritable) => "rejected: disk",
                     Ok(pb::RejectReason::CodeMismatch) => "rejected: code",
+                    Ok(pb::RejectReason::Withdrawn) => "rejected: withdrawn",
                     Ok(pb::RejectReason::Draining) => "rejected: draining",
                     _ => "rejected",
                 })
@@ -1542,6 +1554,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        queue_depth: 0,
         watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
@@ -1800,6 +1813,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        queue_depth: 0,
         watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
@@ -1851,6 +1865,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        queue_depth: 0,
         watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
@@ -3195,6 +3210,7 @@ fn offline_agent(dir: &Path) -> Agent<Fake> {
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
+        queue_depth: 0,
         watcher_slots: 2,
         setup: WorkerSetup {
             roots: BTreeMap::new(),
@@ -5206,6 +5222,16 @@ fn the_cleanup_gates_read_the_master_time_cutoff() {
 }
 
 #[test]
+fn a_worker_past_the_master_time_cutoff_may_be_counted_lost() {
+    // M5.2e's 600-case simulator: a start at the instant master time passed its cutoff, the
+    // receipt still fresh, ran an attempt the master had ended `lost`. The start checks read
+    // the master-time deadline, not only the receipt's.
+    let dir = TempDir::new().unwrap();
+    assert!(stamped_long_ago(dir.path(), Duration::from_secs(61)).may_be_counted_lost());
+    assert!(!stamped_long_ago(dir.path(), Duration::from_secs(30)).may_be_counted_lost());
+}
+
+#[test]
 fn the_sample_age_grows_while_no_sample_is_kept() {
     // Grok's review of D448: between sessions the gauge stayed at the last sample's age.
     let dir = TempDir::new().unwrap();
@@ -5386,4 +5412,318 @@ async fn a_fork_that_finished_while_disconnected_is_told_before_its_result() {
     }
     let fork = i32::from(pb::StartMethod::Fork);
     assert_eq!(kinds, [format!("started {fork}"), "finished".to_owned()]);
+}
+
+/// An ordinary task's assignment, one that ends at once.
+fn quick(ids: &[&str]) -> Vec<pb::MasterMessage> {
+    let task = task_json(&json!({"kind": "python"}));
+    ids.iter()
+        .map(|id| assign(id, &task, "sync.py", false))
+        .collect()
+}
+
+/// The attempts `seen` says were rejected with `reason`, in order.
+fn rejected_as(seen: &[pb::WorkerMessage], reason: pb::RejectReason) -> Vec<String> {
+    seen.iter()
+        .filter_map(|m| match &m.message {
+            Some(worker_message::Message::Rejected(r)) if r.reason == i32::from(reason) => {
+                Some(r.attempt_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where `attempt`'s `Started` is in `seen`.
+fn started_at(seen: &[pb::WorkerMessage], attempt: &str) -> Option<usize> {
+    seen.iter().position(
+        |m| matches!(&m.message, Some(worker_message::Message::Started(s)) if s.attempt_id == attempt),
+    )
+}
+
+/// Where `attempt`'s `Finished` is in `seen`.
+fn finished_at(seen: &[pb::WorkerMessage], attempt: &str) -> Option<usize> {
+    seen.iter().position(
+        |m| matches!(&m.message, Some(worker_message::Message::Finished(f)) if f.attempt_id == attempt),
+    )
+}
+
+fn cancel_of(attempt: &str) -> pb::MasterMessage {
+    to_worker(master_message::Message::CancelAttempt(pb::CancelAttempt {
+        interrupted: false,
+        attempt_id: attempt.to_owned(),
+    }))
+}
+
+/// Decision 509: an assignment past the slots waits in the queue, nothing refused, and starts
+/// once a slot frees, with no message from the master between; `Register` says the depth.
+#[tokio::test]
+async fn an_assignment_past_the_slots_waits_and_starts_when_a_slot_frees() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2"])].concat(),
+        late: Some((Duration::from_millis(300), vec![cancel_of("a1")])),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| finished_at(sent, "a2").is_some(),
+        |agent| agent.settings.queue_depth = 1,
+    )
+    .await;
+    assert!(
+        rejected_as(&seen, pb::RejectReason::NoFreeSlot).is_empty(),
+        "{:?}",
+        kinds(&seen)
+    );
+    let register = seen.iter().find_map(|m| match &m.message {
+        Some(worker_message::Message::Register(r)) => Some(r.queue_depth),
+        _ => None,
+    });
+    assert_eq!(register, Some(1));
+    let freed = finished_at(&seen, "a1").expect("a1 cancelled");
+    let queued = started_at(&seen, "a2").expect("a2 started");
+    assert!(
+        freed < queued,
+        "a2 waited for a1's slot: {:?}",
+        kinds(&seen)
+    );
+}
+
+/// Decision 509: past the queue's depth an assignment is refused as before.
+#[tokio::test]
+async fn an_assignment_past_a_full_queue_is_refused() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2", "a3"])].concat(),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| !rejected_as(sent, pb::RejectReason::NoFreeSlot).is_empty(),
+        |agent| agent.settings.queue_depth = 1,
+    )
+    .await;
+    assert_eq!(rejected_as(&seen, pb::RejectReason::NoFreeSlot), ["a3"]);
+    assert_eq!(started_at(&seen, "a2"), None, "a2 waits");
+}
+
+/// Decision 509: without a queue (depth 0) nothing waits: past the slots it is refused.
+#[tokio::test]
+async fn without_a_queue_an_assignment_past_the_slots_is_refused() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2"])].concat(),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| !rejected_as(sent, pb::RejectReason::NoFreeSlot).is_empty(),
+        |_| {},
+    )
+    .await;
+    assert_eq!(rejected_as(&seen, pb::RejectReason::NoFreeSlot), ["a2"]);
+}
+
+/// Decision 509: a queued task cancelled goes back withdrawn, never started here.
+#[tokio::test]
+async fn a_queued_task_cancelled_goes_back_withdrawn() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2"])].concat(),
+        late: Some((Duration::from_millis(200), vec![cancel_of("a2")])),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| !rejected_as(sent, pb::RejectReason::Withdrawn).is_empty(),
+        |agent| agent.settings.queue_depth = 1,
+    )
+    .await;
+    assert_eq!(rejected_as(&seen, pb::RejectReason::Withdrawn), ["a2"]);
+    assert_eq!(started_at(&seen, "a2"), None);
+}
+
+/// Decision 509: a queue whose head waited longer than the master's slow-equals gives back
+/// one task a check, from its tail.
+#[tokio::test]
+async fn a_queue_slower_than_the_cluster_gives_back_from_its_tail() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2", "a3"])].concat(),
+        ack_heartbeats: Some(Duration::ZERO),
+        slow_equals_ms: 100,
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| rejected_as(sent, pb::RejectReason::Withdrawn).len() == 2,
+        |agent| {
+            agent.settings.queue_depth = 2;
+            agent.settings.setup.timeouts.queue_check = Duration::from_millis(50);
+        },
+    )
+    .await;
+    assert_eq!(
+        rejected_as(&seen, pb::RejectReason::Withdrawn),
+        ["a3", "a2"]
+    );
+}
+
+/// Decision 509: with no slow-equals known (0), nothing goes back for being slow.
+#[tokio::test]
+async fn a_queue_keeps_its_tasks_without_a_slow_equals() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2"])].concat(),
+        ack_heartbeats: Some(Duration::ZERO),
+        late: Some((Duration::from_millis(700), vec![cancel_of("a1")])),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| finished_at(sent, "a2").is_some(),
+        |agent| {
+            agent.settings.queue_depth = 1;
+            agent.settings.setup.timeouts.queue_check = Duration::from_millis(50);
+        },
+    )
+    .await;
+    assert_eq!(
+        rejected_as(&seen, pb::RejectReason::Withdrawn),
+        Vec::<String>::new()
+    );
+}
+
+/// Decision 509, B240: a queued assignment is never reported handled before it starts, or the
+/// master would take it back as never started and run it elsewhere.
+#[tokio::test]
+async fn a_queued_assignment_is_never_reported_handled_before_it_starts() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2"])].concat(),
+        late: Some((Duration::from_millis(400), vec![cancel_of("a1")])),
+        numbered: true,
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            started_at(sent, "a2").is_some_and(|at| {
+                sent[at..]
+                    .iter()
+                    .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+            })
+        },
+        |agent| agent.settings.queue_depth = 1,
+    )
+    .await;
+    // a2's assignment is the master's third message.
+    let started = started_at(&seen, "a2").unwrap();
+    for message in &seen[..started] {
+        let heard = message.clock.as_ref().map_or(0, |c| c.heard_sequence);
+        assert!(
+            heard < 3,
+            "heard {heard} while a2 was queued: {:?}",
+            message.message
+        );
+    }
+    let after = seen[started..]
+        .iter()
+        .rev()
+        .find(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))));
+    assert!(
+        after
+            .and_then(|m| m.clock.as_ref())
+            .map_or(0, |c| c.heard_sequence)
+            >= 3,
+        "released once started"
+    );
+}
+
+/// Decision 509: a drain gives the queue back, withdrawn.
+#[tokio::test]
+async fn a_drain_gives_the_queue_back() {
+    let master = Scripted {
+        script: [vec![registered()], waits(&["a1"]), quick(&["a2"])].concat(),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| !rejected_as(sent, pb::RejectReason::Withdrawn).is_empty(),
+        |agent| {
+            agent.settings.queue_depth = 1;
+            let (requests, shutdown) = watch::channel(0);
+            agent.shutdown = Some(shutdown);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let _ = requests.send(1);
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            });
+        },
+    )
+    .await;
+    assert_eq!(rejected_as(&seen, pb::RejectReason::Withdrawn), ["a2"]);
+    assert_eq!(started_at(&seen, "a2"), None);
+}
+
+/// Codex's review of M5.2e: an assignment of an attempt already running here isn't queued
+/// beside it: queued, it started again once its result was acknowledged and a slot freed.
+#[tokio::test]
+async fn an_assignment_of_an_attempt_already_here_isnt_queued() {
+    let ack = to_worker(master_message::Message::FinishedAck(pb::FinishedAck {
+        attempt_id: "a1".to_owned(),
+    }));
+    let master = Scripted {
+        // a1 runs, a2 queues behind it, a1 again: not queued.
+        script: [vec![registered()], waits(&["a1", "a2", "a1"])].concat(),
+        // a1 ends and is acknowledged while a2 holds the slot; then a2 ends.
+        late: Some((Duration::from_millis(200), vec![cancel_of("a1")])),
+        later: Some((Duration::from_millis(500), vec![ack, cancel_of("a2")])),
+        ..Scripted::default()
+    };
+    let (seen, _) = against_master(
+        1,
+        Start::With(vec![]),
+        master,
+        |sent| {
+            finished_at(sent, "a2").is_some_and(|at| {
+                sent[at..]
+                    .iter()
+                    .any(|m| matches!(m.message, Some(worker_message::Message::Heartbeat(_))))
+            })
+        },
+        |agent| agent.settings.queue_depth = 2,
+    )
+    .await;
+    let starts = seen
+        .iter()
+        .filter(|m| matches!(&m.message, Some(worker_message::Message::Started(s)) if s.attempt_id == "a1"))
+        .count();
+    assert_eq!(starts, 1, "{:?}", kinds(&seen));
+}
+
+/// Codex's review of M5.2e: missed queue checks aren't made up in a burst.
+#[test]
+fn the_queue_check_skips_what_it_missed() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let timer = heartbeat_timer(Duration::from_secs(1));
+        assert_eq!(
+            timer.missed_tick_behavior(),
+            tokio::time::MissedTickBehavior::Delay
+        );
+    });
 }

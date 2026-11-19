@@ -270,6 +270,7 @@ fn worker_and_tls_defaults() {
         WorkerSection {
             id: None,
             slots: 2,
+            queue: true,
             queues: vec![],
             data_dir: None,
             connection_dir: None,

@@ -322,6 +322,27 @@ fn a_stall_the_boot_clock_missed_counts_every_deadline_as_passed() {
 #[path = "clock_sim/master.rs"]
 mod master;
 
+/// Decision 509: workers with one slot and a queue of one, under the faults a queue is most
+/// exposed to: none; a worker lost with its queue (cut both ways); one cut one way, still
+/// hearing the master and so able to start what it queued; a master taken over.
+#[rstest::rstest]
+#[case::without_faults(vec![])]
+#[case::lost_with_a_queue(vec![(8_000, master::Fault::Cut { worker: 0, len: 25_000, way: master::Way::Both })])]
+#[case::cut_one_way(vec![(8_000, master::Fault::Cut { worker: 1, len: 20_000, way: master::Way::Up })])]
+#[case::a_takeover(vec![(12_000, master::Fault::Master { deposed: 2_000, gap: 3_000 })])]
+fn a_waiting_queue_keeps_the_rules(#[case] faults: Vec<(u64, master::Fault)>) {
+    for seed in 1..=4 {
+        let s = master::Scenario {
+            timings: master::Timings::SCALED,
+            ppm: [0, 0],
+            seed,
+            faults: faults.clone(),
+            queue: true,
+        };
+        assert_eq!(master::simulate(&s, None), Ok(()), "seed {seed}");
+    }
+}
+
 #[test]
 fn without_faults_every_run_ends_and_no_rule_breaks() {
     let s = master::Scenario {
@@ -329,6 +350,7 @@ fn without_faults_every_run_ends_and_no_rule_breaks() {
         ppm: [0, 0],
         seed: 1,
         faults: vec![],
+        queue: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -371,6 +393,7 @@ fn an_assignment_started_as_its_worker_was_cut_off_isnt_run_again_beside_it() {
         ppm: [0, 0],
         seed: 14_284_326_171_064_715_806,
         faults: vec![cut(11_818, 20_494), cut(36_525, 22_733)],
+        queue: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -390,6 +413,7 @@ fn an_assignment_whose_worker_cant_report_isnt_started_again_beside_it() {
             cut(33_901, 1, 13_703, master::Way::Both),
             cut(58_883, 0, 20_609, master::Way::Up),
         ],
+        queue: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -437,6 +461,7 @@ fn attempts_end_after_lags_drops_and_a_takeover() {
             ),
             (51_282, Drop { worker: 0 }),
         ],
+        queue: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -504,6 +529,7 @@ fn a_moved_cleanup_given_back_to_the_worker_whose_result_is_on_its_way_runs_once
         ppm: [0, 0],
         seed: 611_699_805_573_473_486,
         faults: vec![cut(2_563, 1, 27_436), cut(15_662, 0, 15_934)],
+        queue: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }

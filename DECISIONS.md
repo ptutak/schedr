@@ -33,6 +33,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN14 | 2026-11-19 | claude | adds to D281 | A start is refused at the master-time deadline too, for every task |
+| DN13 | 2026-11-18 | claude | corrects D509 | M5.2e built: two of decision 509's small choices changed |
 | DN12 | 2026-11-18 | user | adds to D160 | The macOS wheel is built only on a release's tag |
 | DN11 | 2026-11-18 | user | corrects D115 | B263, a master frozen in a statement: tried once more |
 | DN10 | 2026-11-15 | claude | adds to D494 | M5.1l2 built: the attempt charts on the Metrics page |
@@ -50,6 +52,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D509 | 2026-11-18 | user | planned (M5.2e) | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
 | D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
 | D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |
 | D506 | 2026-11-18 | user | planned (M5.2cB4) | assignment | The round's slow parts on due flags; what is read before the lock is only what the round alone writes |
@@ -572,6 +575,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### assignment
 
+- D509: A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster
 - D506: The round's slow parts on due flags; what is read before the lock is only what the round alone writes
 - D502: One probe a round; a read skipped on it after a write wakes the next round
 - D490: started_at is the worker's start, in master time

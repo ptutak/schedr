@@ -20,6 +20,11 @@
 //!    (its attempts, a moved cleanup) run at the same time, on any worker or incarnation; the
 //!    ordinary task's only beside an attempt the master ended `lost`.
 //!
+//! A scenario's workers have four slots, or (`queue`) one slot and a waiting queue of one
+//! (decision 509): an assignment past the slot waits, nothing of it written, and starts as the
+//! slot frees, as any start (rule 1 checked then); its number held, so the master can't take
+//! it back as never started meanwhile; a cancel gives it back, a session's end drops it.
+//!
 //! Each safeguard is needed: switched off ([`Weakened`]), scenarios aimed at it break a rule.
 //!
 //! A scenario runs with one of two sets of timings, both on a 1 s heartbeat: a lease of ten
@@ -34,7 +39,7 @@
 //! on its way); a deposed master only answers heartbeats (its writes would fail on the lease).
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
@@ -94,6 +99,9 @@ const END: u64 = 400_000;
 const SETTLE_CHECK: u64 = 5_000;
 const TRIGGER_EVERY: u64 = 5_000;
 const SLOTS: usize = 4;
+/// With a queue: one slot, and a queue of one past it.
+const QUEUED_SLOTS: usize = 1;
+const QUEUE_DEPTH: usize = 1;
 /// The DAG's task without a cleanup: a worker cut off keeps running it (decision 252).
 const ORDINARY: &str = "load";
 const WORKERS: [&str; 2] = ["w1", "w2"];
@@ -140,6 +148,8 @@ pub struct Scenario {
     pub ppm: [i64; 2],
     pub seed: u64,
     pub faults: Vec<(u64, Fault)>,
+    /// The workers keep a waiting queue (decision 509).
+    pub queue: bool,
 }
 
 fn fault() -> impl Strategy<Value = Fault> {
@@ -172,14 +182,16 @@ pub fn scenario() -> impl Strategy<Value = Scenario> {
         -990..=990i64,
         any::<u64>(),
         prop::collection::vec((5_000..FAULTS_END, fault()), 0..6),
+        any::<bool>(),
     )
-        .prop_map(|(timings, a, b, seed, mut faults)| {
+        .prop_map(|(timings, a, b, seed, mut faults, queue)| {
             faults.sort_by_key(|(at, _)| *at);
             Scenario {
                 timings,
                 ppm: [a, b],
                 seed,
                 faults,
+                queue,
             }
         })
 }
@@ -258,14 +270,21 @@ pub fn aimed_at(safeguard: Weakened) -> BoxedStrategy<Scenario> {
         )
         .boxed(),
     };
-    (-990..=990i64, -990..=990i64, any::<u64>(), faults)
-        .prop_map(|(a, b, seed, mut faults)| {
+    (
+        -990..=990i64,
+        -990..=990i64,
+        any::<u64>(),
+        faults,
+        any::<bool>(),
+    )
+        .prop_map(|(a, b, seed, mut faults, queue)| {
             faults.sort_by_key(|(at, _)| *at);
             Scenario {
                 timings: Timings::SCALED,
                 ppm: [a, b],
                 seed,
                 faults,
+                queue,
             }
         })
         .boxed()
@@ -385,6 +404,8 @@ struct Instance {
     cut_off: bool,
     procs: BTreeMap<String, Proc>,
     unacked: BTreeMap<String, pb::Finished>,
+    /// Assignments waiting for a slot, with their messages' numbers, held (decision 509).
+    waiting: VecDeque<(pb::AssignTask, u64)>,
 }
 
 impl Instance {
@@ -410,6 +431,7 @@ impl Instance {
             cut_off: false,
             procs: BTreeMap::new(),
             unacked: BTreeMap::new(),
+            waiting: VecDeque::new(),
         }
     }
 
@@ -486,6 +508,9 @@ struct Sim {
     fifo: BTreeMap<(u64, bool), u64>,
     intervals: Vec<Interval>,
     failure: Option<String>,
+    /// Each worker's slots, and its queue's depth.
+    slots: usize,
+    depth: usize,
 }
 
 fn ts(ms: u64) -> Timestamp {
@@ -545,16 +570,22 @@ fn root() -> pb::RootHash {
     }
 }
 
-fn register(worker: usize, incarnation: u32, journal: Vec<pb::JournalEntry>) -> pb::Register {
+fn register(
+    worker: usize,
+    incarnation: u32,
+    journal: Vec<pb::JournalEntry>,
+    (slots, depth): (usize, usize),
+) -> pb::Register {
     pb::Register {
         running_triggers: Vec::new(),
         watcher_slots: 0,
+        queue_depth: u32::try_from(depth).unwrap(),
         worker_id: WORKERS[worker].to_owned(),
         incarnation_id: format!("i{incarnation}"),
         protocol: Some(PROTOCOL_VERSION),
         schedr_version: "1.0.0".to_owned(),
         queues: vec![],
-        slots: u32::try_from(SLOTS).unwrap(),
+        slots: u32::try_from(slots).unwrap(),
         log_endpoint: "127.0.0.1:8081".to_owned(),
         roots: vec![root()],
         secret_storages: vec![],
@@ -585,7 +616,10 @@ async fn master(timings: Timings, weakened: Option<Weakened>) -> (Database, Mast
     if let Some(safeguard) = weakened {
         core.weaken(safeguard);
     }
-    let (_, out) = core.register(&register(0, 0, vec![]), ts(0)).await.unwrap();
+    let (_, out) = core
+        .register(&register(0, 0, vec![], (SLOTS, 0)), ts(0))
+        .await
+        .unwrap();
     let Some(master_message::Message::AssignParse(job)) = &out[0].message.message else {
         panic!("expected AssignParse: {out:?}")
     };
@@ -877,6 +911,8 @@ impl Sim {
         }
         i.session = None;
         i.connecting = None;
+        // Its queue isn't its own any more: the master takes those back at the registration.
+        i.waiting.clear();
         i.next_try = self.now + i.backoff;
         i.backoff = (i.backoff * 2).min(lease / 2);
     }
@@ -979,6 +1015,39 @@ impl Sim {
             self.now = t;
             let event = self.events.remove(&seq).unwrap();
             self.handle(event).await;
+            self.start_waiting().await;
+        }
+    }
+
+    /// Each worker's queue's head into its free slot (the barrier, decision 509): started as
+    /// any assignment, rule 1 checked then; its number released after.
+    async fn start_waiting(&mut self) {
+        for inst in 0..self.instances.len() {
+            loop {
+                let now = self.now;
+                let local = self.local(inst);
+                let i = &mut self.instances[inst];
+                // Not once the master may have counted it lost (the agent's lease deadline):
+                // master time past its cutoff, or silent for the lease, as the alive tick checks.
+                let past = i.cutoff_at.is_some_and(|at| now >= at);
+                let silent = i
+                    .lease
+                    .is_some_and(|lease| local.boot >= i.heard_boot + lease);
+                if !i.alive
+                    || i.session.is_none()
+                    || i.cut_off
+                    || past
+                    || silent
+                    || i.procs.len() >= self.slots
+                {
+                    break;
+                }
+                let Some((assign, number)) = i.waiting.pop_front() else {
+                    break;
+                };
+                self.assign(inst, assign, None).await;
+                lock(&self.instances[inst].time.outbox()).release(number);
+            }
         }
     }
 
@@ -1240,7 +1309,9 @@ impl Sim {
             state: pb::JournalState::Finished.into(),
             handles: 0,
         }));
-        let message = worker_message::Message::Register(register(i.worker, i.incarnation, journal));
+        let shape = (self.slots, self.depth);
+        let message =
+            worker_message::Message::Register(register(i.worker, i.incarnation, journal, shape));
         self.up_on(inst, sid, message);
     }
 
@@ -1252,7 +1323,7 @@ impl Sim {
         let local = self.local(inst);
         let i = &self.instances[inst];
         let beat = pb::Heartbeat {
-            free_slots: u32::try_from(SLOTS.saturating_sub(i.procs.len())).unwrap(),
+            free_slots: u32::try_from(self.slots.saturating_sub(i.procs.len())).unwrap(),
             running_attempt_ids: i.procs.keys().cloned().collect(),
             ..pb::Heartbeat::default()
         };
@@ -1309,7 +1380,7 @@ impl Sim {
             let heard = self.heard.entry(sid).or_default();
             *heard = (*heard).max(clock.sequence);
             if let worker_message::Message::Heartbeat(_) = &message {
-                let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
+                let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck::default());
                 self.down(inst, sid, ack, epoch);
             }
             return;
@@ -1334,7 +1405,7 @@ impl Sim {
         }
         match &message {
             worker_message::Message::Heartbeat(_) => {
-                let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck {});
+                let ack = master_message::Message::HeartbeatAck(pb::HeartbeatAck::default());
                 self.down(inst, sid, ack, self.epoch);
             }
             worker_message::Message::Started(pb::Started { attempt_id, .. })
@@ -1468,9 +1539,28 @@ impl Sim {
                     self.decide(inst, &decision);
                 }
             }
-            master_message::Message::AssignTask(assign) => self.assign(inst, assign).await,
+            master_message::Message::AssignTask(assign) => {
+                self.assign(inst, assign, Some(number)).await;
+            }
             master_message::Message::CancelAttempt(cancel) => {
-                self.kill(inst, &cancel.attempt_id);
+                let i = &mut self.instances[inst];
+                if let Some(at) = i
+                    .waiting
+                    .iter()
+                    .position(|(a, _)| a.attempt_id == cancel.attempt_id)
+                {
+                    // Queued: given back, never started (decision 509).
+                    let (assign, number) = i.waiting.remove(at).unwrap();
+                    lock(&i.time.outbox()).release(number);
+                    let rejected = pb::Rejected {
+                        attempt_id: assign.attempt_id,
+                        reason: pb::RejectReason::Withdrawn.into(),
+                        detail: String::new(),
+                    };
+                    self.up(inst, worker_message::Message::Rejected(rejected));
+                } else {
+                    self.kill(inst, &cancel.attempt_id);
+                }
             }
             master_message::Message::FinishedAck(ack) => {
                 self.instances[inst].unacked.remove(&ack.attempt_id);
@@ -1526,16 +1616,40 @@ impl Sim {
         }
     }
 
-    async fn assign(&mut self, inst: usize, assign: pb::AssignTask) {
+    /// An assignment taken in (`number`: its message's), or the queue's head at its barrier
+    /// (`None`).
+    async fn assign(&mut self, inst: usize, assign: pb::AssignTask, number: Option<u64>) {
         let id = assign.attempt_id.clone();
         // Already here, running or its result not acknowledged: ignored, as the agent does (a
         // moved cleanup given back to the worker whose result is on its way).
         let here = &self.instances[inst];
-        if here.procs.contains_key(&id) || here.unacked.contains_key(&id) {
+        if here.procs.contains_key(&id)
+            || here.unacked.contains_key(&id)
+            || here.waiting.iter().any(|(a, _)| a.attempt_id == id)
+        {
             return;
         }
         let i = &self.instances[inst];
-        let reason = if i.procs.len() >= SLOTS || i.cut_off {
+        // No slot: it waits in the queue, its number held (decision 509).
+        if let Some(number) = number
+            && i.procs.len() >= self.slots
+            && !i.cut_off
+            && assign.cleanup_only.is_none()
+            && i.waiting.len() < self.depth
+        {
+            let i = &mut self.instances[inst];
+            lock(&i.time.outbox()).hold(number);
+            i.waiting.push_back((assign, number));
+            return;
+        }
+        // Not once the master may have counted it lost, at the moment it would start (as the
+        // agent checks before a start), not only on the alive tick.
+        let local = self.local(inst);
+        let i = &self.instances[inst];
+        let late = i.cutoff_at.is_some_and(|at| self.now >= at)
+            || i.lease
+                .is_some_and(|lease| local.boot >= i.heard_boot + lease);
+        let reason = if i.procs.len() >= self.slots || i.cut_off || late {
             Some(pb::RejectReason::NoFreeSlot)
         } else {
             None
@@ -1674,6 +1788,8 @@ pub fn simulate(scenario: &Scenario, weakened: Option<Weakened>) -> Result<(), S
                 fifo: BTreeMap::new(),
                 intervals: Vec::new(),
                 failure: None,
+                slots: if scenario.queue { QUEUED_SLOTS } else { SLOTS },
+                depth: if scenario.queue { QUEUE_DEPTH } else { 0 },
             };
             sim.run(scenario).await;
             if sim.failure.is_none() {

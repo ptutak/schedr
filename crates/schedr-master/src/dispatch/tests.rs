@@ -916,6 +916,57 @@ async fn temporary_rejections_queue_the_task_again_at_once() {
     assert_eq!(assignment(&out[0]).try_number, 1);
 }
 
+/// Decision 509: a task given back from a worker's queue goes next into a free slot only,
+/// never another queue; a task refused for no free slot may queue again.
+#[rstest::rstest]
+#[case(pb::RejectReason::Withdrawn, false)]
+#[case(pb::RejectReason::NoFreeSlot, true)]
+#[tokio::test]
+async fn a_task_given_back_from_a_queue_waits_for_a_free_slot(
+    #[case] reason: pb::RejectReason,
+    #[case] queued_again: bool,
+) {
+    let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
+    // w1's slots are none of them free; its queue has room.
+    dispatcher
+        .register("w1", "i1", &[], 0, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.set_queue_depth("w1", 2);
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    assert_eq!(out[0].worker_id, "w1", "queued");
+    dispatcher
+        .rejected(
+            &InRound::for_tests(),
+            "w1",
+            &rejected(&attempt, reason, ""),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(!out.is_empty(), queued_again, "{out:?}");
+    if !queued_again {
+        // A worker with a free slot takes it.
+        dispatcher
+            .register("w2", "i1", &[], 1, ts(NOW))
+            .await
+            .unwrap();
+        let out = dispatcher
+            .step(&InRound::for_tests(), ts(NOW))
+            .await
+            .unwrap();
+        assert_eq!(out[0].worker_id, "w2");
+    }
+}
+
 #[tokio::test]
 async fn code_not_there_yet_waits_before_the_next_try() {
     let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
@@ -948,6 +999,35 @@ async fn code_not_there_yet_waits_before_the_next_try() {
             .len(),
         1
     );
+}
+
+/// Codex's review of M5.2e: a worker that once lacked the code but has a free slot again is
+/// picked before a queue elsewhere: a free slot anywhere first.
+#[tokio::test]
+async fn a_free_slot_on_a_worker_that_lacked_the_code_comes_before_a_queue() {
+    let (mut dispatcher, _db, _run_id) = with_run(dag(0)).await;
+    // w2: no free slot, room in its queue.
+    dispatcher
+        .register("w2", "i1", &[], 0, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.set_queue_depth("w2", 2);
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(out[0].worker_id, "w1", "the free slot");
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let missing = rejected(&attempt, pb::RejectReason::DagFileMissing, "not yet");
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &missing, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(35))
+        .await
+        .unwrap();
+    assert_eq!(out[0].worker_id, "w1", "{out:?}");
 }
 
 #[tokio::test]

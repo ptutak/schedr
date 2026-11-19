@@ -1,0 +1,39 @@
+title = "A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster"
+date = 2026-11-18
+by = "user"
+status = "active"
+topic = "assignment"
+also = ["workers", "protocol"]
+section = "Placement and ordering"
+summary = '''
+A worker holds a queue of assigned tasks past its slots, ceil(slots x factor) deep (the hidden
+`SCHEDR_HIDDEN__WORKER__QUEUE_FACTOR`, 0 to 4, default 0.5; 0 no queue), on unless `[worker]
+queue = false` (public); `Register.queue_depth` announces it. A queued task is assigned to the
+master, no new state (one given back is marked in the master's memory only: after a restart it
+may queue again, a known limit); the barrier is the worker's alone: taking it into a freed slot through
+the usual start (its record written, the code checked, a mismatch `Rejected` as today). The
+master fills free slots first, then queues on the worker with the most queue room
+(`Needs::may_queue`), never moves a queued task, and puts one given back into a free slot only.
+Each heartbeat carries the queue head's age (`queue_head_age_ms`, 0 when empty); the
+`HeartbeatAck` carries the cluster's slow-equals: the median of the ages of the workers with a
+queue (one without, which says 0 busy or not, not counted) times k, at least a floor (hidden:
+`MASTER__SLOW_EQUALS_FACTOR` 3, `MASTER__SLOW_EQUALS_FLOOR` 1 s). Every
+`WORKER__QUEUE_CHECK_INTERVAL` (1 s) a worker whose head is older than the latest slow-equals
+gives back one task from the tail, `Rejected` withdrawn: undone, no retry used. A cancel gives a
+queued task back the same way (the master ends it cancelled, no try); a drain gives the queue
+back; a session's end drops it (taken back at the registration). B240's hold keeps a queued
+assignment unreported, so a worker lost with a queue ends each queued task `lost` (a retry
+used; accepted, measured). The fields join protocol 2.2. assigned -> started is read on an idle
+cluster, throughput is the headline under load; the worker's start histogram starts at the
+barrier; `worker_queued`, `worker_queue_wait_seconds`, `worker_queue_given_back` by reason.
+'''
+history = "JOURNAL.md#D509"
+step = "M5.2e"
+code = [
+    "crates/schedr-agent/src/agent.rs::start_queued",
+    "crates/schedr-agent/src/agent.rs::check_queue",
+    "crates/schedr-master/src/workers.rs::free_for",
+    "crates/schedr-master/src/slow_equals.rs::SlowEquals",
+    "crates/schedr/src/roles.rs::queue_depth",
+]
+checked = 2026-11-19

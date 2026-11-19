@@ -19,4 +19,4 @@ than `MASTER__SAMPLES_KEPT` (Codex's review of M5.1p).
 history = "JOURNAL.md#D493"  # <a id="D493"></a> starts its JOURNAL.md entry
 step = "M5.1p"  # the plan step that builds it; "later"; "n/a" for a rule
 code = ["crates/schedr-config/src/loader.rs::check_metrics_final", "crates/schedr-master/src/core.rs::RoundLimits", "crates/schedr-api/src/state.rs::ApiLimits", "crates/schedr-api/src/series/cache.rs::CacheLimits", "crates/schedr-client/src/lib.rs::Timeouts", "crates/schedr-agent/src/attempt.rs::WorkerTimeouts"]
-checked = 2026-11-18
+checked = 2026-11-19

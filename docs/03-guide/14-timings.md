@@ -100,6 +100,7 @@ reason.
 | `SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT` | 1 h | How long a gone master's row stays before it is removed; the Deployments page shows only those heard from lately either way. |
 | `SCHEDR_HIDDEN__MASTER__SAMPLE_ROLLUP_GRACE` | 2 min | How long after its end a 15-minute window waits to be rolled up, so a sample stored late is in it. A sample stored later than this is missing from its rollup, and so from the 7- and 30-day charts. Must be shorter than `WEBSERVER__METRICS_FINAL_AFTER`, and with the 15-minute window shorter than `MASTER__SAMPLES_KEPT` (or a window's first minutes would be deleted before its rollup), or schedr refuses to start. |
 | `SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY` | 35 s | When a task whose code wasn't on its worker yet is tried again: about a git-sync interval and the settle time. Set it near your code delivery's interval; shorter only retries sooner, `[master] code_wait` still bounds the whole wait. |
+| `SCHEDR_HIDDEN__MASTER__SLOW_EQUALS_FLOOR` | 1 s | The least the cluster's slow-equals is: a worker's waiting queue whose oldest task waited longer gives back a task each second (decision 509). Below about four give-backs' cost (a round, an assignment and a start each) a give-back can't pay. |
 | `SCHEDR_HIDDEN__MASTER__FOR_FUTURE_TOLERANCE` | 1 min | How far ahead of the master's clock a run's `--for` may be, for clocks apart; later is refused. Longer lets a run be planned for a moment that hasn't come. |
 
 Three master timings are retired: `QUIET_DAG_AFTER`, `QUIET_DAG_WAKE_AHEAD` and
@@ -166,6 +167,7 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WORKER__ALIVE_INTERVAL` | 5 s | How often the agent's loop turns at least, even when quiet; it must stay shorter than the loop stall timeout, or a quiet agent looks stuck. |
 | `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` | 1 h | How long a stopping worker waits, at most, for the master to take its deregistration. Its drain's end bounds it too (a quarter of the report period before the grace period ends), and by default that end alone: a master stalled for a few seconds still takes it, and shows the worker offline. Shorter, a worker may leave before a stalled master reads it, and shows as disconnected, then lost. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_TICK` | 100 ms | How often a drain checks what is left. |
+| `SCHEDR_HIDDEN__WORKER__QUEUE_CHECK_INTERVAL` | 1 s | How often a worker compares its waiting queue's oldest task with the cluster's slow-equals; each time it is older, one task goes back from the queue's tail (decision 509). Longer, a slow queue hands its work to idle workers more slowly. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT` | 5 s | How long a drained worker waits for the master to acknowledge its last results; never past half the report period before the grace period ends, left to deregister and exit. |
 | `SCHEDR_HIDDEN__WORKER__STOP_POLL` | 100 ms | How often a stopped task's process group is checked until it is gone. |
 | `SCHEDR_HIDDEN__WORKER__CONNECTION_JOB_CANCEL_GRACE` | 5 s | Time a connection test's process gets from SIGTERM to SIGKILL. |
@@ -234,6 +236,7 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__MASTER__FAILED_GROUP_MESSAGES_PER_TURN` | 10 | The most messages of a failed batch of results handled one by one in a round (M4B.3), so a failing batch doesn't hold the lock for a long run of single transactions; the rest wait for the next round. |
 | `SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER` | 1024 | The messages that wait for a worker before it is taken for one that stopped reading and disconnected. Less disconnects a slow worker sooner; more holds more memory per worker. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATIONS_PER_PASS` | 50 | The most notifications one pass of the sender delivers; the rest go in the next pass. |
+| `SCHEDR_HIDDEN__MASTER__SLOW_EQUALS_FACTOR` | 3 | The cluster's slow-equals is the median of every worker's queue head age (an empty queue 0) times this, at least the floor (decision 509): a queue that much slower than the cluster's usual gives work back. |
 
 ### Webserver and UI
 
@@ -259,6 +262,7 @@ after measuring yours, and one at a time.
 |---|---|---|
 | `SCHEDR_HIDDEN__WORKER__RESULTS_PER_JOURNAL_GROUP` | 32 | The most results a worker writes to its journal as one group (M4B.5), each a thread writing its file meanwhile. |
 | `SCHEDR_HIDDEN__WORKER__STARTS_PER_JOURNAL_GROUP` | 32 | The most assignments whose journal records are written as one group (M5.1b). |
+| `SCHEDR_HIDDEN__WORKER__QUEUE_FACTOR` | 0.5 | A worker's waiting queue's depth per slot: depth = ceil(slots x factor), a number from 0 to 4 with at most two decimals; 0, no queue (decision 509). `[worker] queue = false` turns the queue off too. |
 | `SCHEDR_HIDDEN__WORKER__RESULT_RESENDS` | 8 | How many times a result is sent again over one session before the worker reconnects, so that its registration's journal settles it. |
 | `SCHEDR_HIDDEN__WORKER__RESULT_RESEND_GAP_MAX` | 32 | The most heartbeats between two sends of an unacknowledged result; the gap doubles from one. |
 | `SCHEDR_HIDDEN__WORKER__UNACKED_MESSAGES_KEPT` | 100,000 | The messages a worker keeps waiting to be heard of, to read master time from (B240), the oldest dropped first. |

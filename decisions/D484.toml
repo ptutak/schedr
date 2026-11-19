@@ -14,4 +14,4 @@ up, and starts slower again from 120. Not chosen: 40 (bursts recorded later), 12
 history = "JOURNAL.md#D484"
 step = "M5.1e"
 code = ["crates/schedr-master/src/service.rs::MESSAGES_PER_TURN", "crates/schedr-config/src/config.rs::HiddenLimits"]
-checked = 2026-11-18
+checked = 2026-11-19

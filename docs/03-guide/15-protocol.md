@@ -27,7 +27,10 @@ sequenceDiagram
 
 `Register` carries the worker's identity, roots, journal, slots and running trigger IDs.
 `Registered` returns the timings, journal decisions, message size limit and script uses.
-A `Heartbeat` reports free slots, running attempts, triggers and usage.
+A `Heartbeat` reports free slots, running attempts, triggers and usage, and how long its
+waiting queue's oldest task has waited (`queue_head_age_ms`, protocol 2.2); the `HeartbeatAck`
+answers with the cluster's slow-equals (`slow_equals_ms`, see
+[The waiting queue](05-workers.md#the-waiting-queue)).
 
 Each `JournalEntry.handles` in `Register` counts the handles in that attempt's worker journal.
 `running_triggers` in `Register` and `Heartbeat` lists trigger instance IDs so the master
@@ -497,11 +500,11 @@ that names it.
 
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
-| `Register` | Worker on every connection | Validate, reconcile journal and `running_triggers`, and reply | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
+| `Register` | Worker on every connection; `queue_depth` its waiting queue (protocol 2.2) | Validate, reconcile journal and `running_triggers`, and reply; queue no more than `slots + queue_depth` there | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
 | `Heartbeat` | Worker periodically | Renew lease on arrival and reconcile `running_triggers` | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
 | `CodeVersionChanged` | Worker after root settles or withdraws it | Record hash and possibly plan parse; an empty hash withdraws the root | Yes, same hash | [`[dags] settle_time`](14-timings.md#public-timing-keys) |
 | `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | — |
-| `Rejected` | Worker unable to accept assignment | Requeue or select another worker | Stale rejection is ignored | — |
+| `Rejected` | Worker unable to accept assignment; `withdrawn` (protocol 2.2): given back from its waiting queue, never started there (slower than the cluster, cancelled, draining) | Requeue or select another worker; a withdrawn task goes to a free slot only, no retry used | Stale rejection is ignored | — |
 | `TaskEnded` | Worker as cleanup begins | Keep task result, mark cleaning up | Yes, for open attempt | [`[worker] cleanup_timeout`](14-timings.md#public-timing-keys) |
 | `HandlesAdded` | Worker as each handle is journaled; all again on `Continue` | Store handles from the assigned worker for a possible moved cleanup; first at each position stands, up to 1 MiB per attempt | Yes | — |
 | `Finished` | Worker after attempt and cleanup | Store result and reply with `FinishedAck` | Yes, stored result is acknowledged again | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) governs resend |

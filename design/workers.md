@@ -277,7 +277,8 @@ Each is one line; the reader's page has the diagrams.
 - **An assignment cannot start after its worker lease expires** (D281): The agent closes a stream
   silent for the worker lease and ignores messages arriving after it. Input fetches and first
   registration obey the same limit; the master takes an unstarted assignment back once the worker's
-  messages show it never started it (decision 460).
+  messages show it never started it (decision 460). *Added to by DN14:* A start is refused at the
+  master-time deadline too, for every task.
 - **One monotonic clock for the cluster: master time** (D442): Every liveness deadline is a master
   time: the leading master's monotonic clock, stamped with its timeline on every master message
   along with the latest worker message heard; the worker reads master time from when it sent that
@@ -476,6 +477,7 @@ Each is one line; the reader's page has the diagrams.
 - Masters, workers and the webserver report their memory and CPU (D463, `observability`; built M5.1h)
 - A round releases the core lock between its batches of assignments (D469, `assignment`; built M5.1c1)
 - The round's slow parts on due flags; what is read before the lock is only what the round alone writes (D506, `assignment`; planned (M5.2cB4))
+- A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster (D509, `assignment`; planned (M5.2e))
 <!-- end of current -->
 
 ## Replaced
@@ -494,6 +496,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs::DEREGISTER_WAIT` (D495)
 - `crates/schedr-agent/src/agent.rs::NO_WORD` (D252)
 - `crates/schedr-agent/src/agent.rs::abandon_starts` (D507)
+- `crates/schedr-agent/src/agent.rs::check_queue` (D509)
 - `crates/schedr-agent/src/agent.rs::connection_jobs` (D199)
 - `crates/schedr-agent/src/agent.rs::cut_off` (D252)
 - `crates/schedr-agent/src/agent.rs::cut_off_at` (D445)
@@ -509,6 +512,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs::silent_at` (D281)
 - `crates/schedr-agent/src/agent.rs::start_group` (D507)
 - `crates/schedr-agent/src/agent.rs::start_journaled` (D507)
+- `crates/schedr-agent/src/agent.rs::start_queued` (D509)
 - `crates/schedr-agent/src/agent.rs::warned_room` (D250)
 - `crates/schedr-agent/src/attempt.rs::CleanupGate` (D253)
 - `crates/schedr-agent/src/connection_env.rs::default_dir` (D201)
@@ -603,6 +607,8 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/service.rs::stamp_of` (D442)
 - `crates/schedr-master/src/service.rs::turn` (D397, D480)
 - `crates/schedr-master/src/service.rs::with_epoch` (D444)
+- `crates/schedr-master/src/slow_equals.rs::SlowEquals` (D509)
+- `crates/schedr-master/src/workers.rs::free_for` (D509)
 - `crates/schedr-model/src/commands.rs::MAX_CONNECTION_TEST_MS` (D200)
 - `crates/schedr-model/src/runner.rs::WatchersRequest` (D320)
 - `crates/schedr-model/src/usage.rs` (D463)
@@ -610,6 +616,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr/src/cli.rs` (D199)
 - `crates/schedr/src/ops.rs::readyz` (D297)
 - `crates/schedr/src/roles.rs` (D201)
+- `crates/schedr/src/roles.rs::queue_depth` (D509)
 - `python/schedr/runner/watchers.py` (D320)
 <!-- end of code -->
 

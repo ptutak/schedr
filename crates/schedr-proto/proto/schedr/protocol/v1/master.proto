@@ -197,6 +197,10 @@ message Register {
   uint32 watcher_slots = 13;
   // Its triggers still running, from before this session, by instance.
   repeated string running_triggers = 14;
+  // How many assigned tasks past `slots` it keeps waiting for a freed slot (its waiting queue,
+  // decision 509; protocol 2.2): the master queues no more there. 0, none (an older worker, or
+  // `[worker] queue = false`).
+  uint32 queue_depth = 15;
 }
 
 message Heartbeat {
@@ -211,6 +215,9 @@ message Heartbeat {
   // What its process and its children use (decision 463; protocol 2.1): none from an older
   // worker.
   WorkerUsage usage = 7;
+  // How long its waiting queue's head (the oldest queued task) has waited so far, 0 when the
+  // queue is empty (decision 509; protocol 2.2): the master's slow-equals is made from these.
+  uint64 queue_head_age_ms = 8;
 }
 
 // A schedr process's memory and CPU, and its container's (decision 463).
@@ -306,6 +313,9 @@ enum RejectReason {
   // 11 was TOO_LATE, past an assignment's start deadline: gone with the deadline (protocol
   // 2.0, B240).
   reserved 11;
+  // Given back from its waiting queue, never started there: slower than the cluster
+  // (decision 509; protocol 2.2), a drain, or the session's end. Ready again, no retry used.
+  REJECT_REASON_WITHDRAWN = 12;
 }
 
 message Rejected {
@@ -510,7 +520,12 @@ message TriggerEventAck {
 // Sent as a heartbeat arrives, while this master leads: how a worker tells a silent network from
 // a quiet master, with no other message due.
 // Its `clock.heard_sequence` names the heartbeat it answers.
-message HeartbeatAck {}
+message HeartbeatAck {
+  // The cluster's slow-equals (decision 509; protocol 2.2): a waiting queue whose head has
+  // waited longer gives back one task a second from its tail. 0, none known: nothing is given
+  // back for being slow.
+  uint64 slow_equals_ms = 1;
+}
 
 // Timing is owned by the master's configuration so all workers behave the same.
 message Timing {

@@ -1,0 +1,14 @@
+title = "A start is refused at the master-time deadline too, for every task"
+date = 2026-11-19
+by = "claude"
+on = "D281"
+kind = "adds"
+summary = '''
+The agent refuses to start an assignment, queued or direct, once the master may have counted the
+worker lost: past the lease deadline, the earlier of the receipt lease and the master-time
+cutoff (decision 445), not only the receipt lease or the cut-off flag (set only with tasks
+whose cleanup may move). Found by the 600-case simulator with a queue (M5.2e): a start at the
+instant master time passed its cutoff ran an attempt the master had ended `lost`. Running tasks
+are stopped as before (decision 252: only those with `cleanup_anywhere`).
+'''
+history = "JOURNAL.md#DN14"

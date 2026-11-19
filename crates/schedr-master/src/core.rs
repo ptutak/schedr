@@ -127,6 +127,8 @@ pub struct Settings {
     /// The messages that wait for a worker before it is taken for one that stopped reading
     /// (`SCHEDR_HIDDEN__MASTER__WORKER_STREAM_BUFFER`).
     pub worker_stream_buffer: usize,
+    /// How the cluster's slow-equals is made (decision 509).
+    pub slow_equals: crate::slow_equals::SlowEqualsSettings,
 }
 
 /// How much one round or pass of the master does at most (B18's caps, decision 493), each a
@@ -293,6 +295,7 @@ impl Default for Settings {
             code_retry_delay: crate::dispatch::CODE_RETRY_DELAY.unsigned_abs(),
             failed_group_messages_per_turn: crate::service::ALONE_PER_TURN,
             worker_stream_buffer: crate::service::STREAM_BUFFER,
+            slow_equals: crate::slow_equals::SlowEqualsSettings::default(),
         }
     }
 }
@@ -1168,6 +1171,8 @@ impl MasterCore {
             .await?;
         self.dispatcher
             .set_watcher_slots(worker_id, register.watcher_slots);
+        self.dispatcher
+            .set_queue_depth(worker_id, register.queue_depth);
         // Failing, discovery's memory goes back as it was: the worker registers again with the
         // same reports, and a switch among them is seen again (B91).
         let memory = self.discovery.memory();

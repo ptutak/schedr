@@ -24,7 +24,7 @@
 //! The work itself goes through an [`Executor`]: processes in production
 //! ([`ProcessExecutor`]), something simpler in tests.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError};
@@ -155,6 +155,9 @@ pub struct AgentSettings {
     pub queues: Vec<String>,
     /// Its task slots.
     pub slots: u32,
+    /// How many assigned tasks past its slots it keeps waiting (its waiting queue, decision
+    /// 509); 0, none.
+    pub queue_depth: u32,
     /// Its slots for wait steps (`[watchers] slots`).
     pub watcher_slots: u32,
     /// How tasks run here (roots, interpreter, environment, logs).
@@ -1157,6 +1160,16 @@ struct Prepared {
     received: std::time::Instant,
 }
 
+/// An assignment in the worker's waiting queue (decision 509).
+#[derive(Debug)]
+struct Queued {
+    assign: pb::AssignTask,
+    /// Its message's number, held unreported until it starts or goes back (B240): once set.
+    sequence: Option<u64>,
+    /// When it was taken in.
+    since: tokio::time::Instant,
+}
+
 /// What a group's assignments before this one take (M5.1b): slots not yet counted as
 /// running, and their IDs.
 #[derive(Default)]
@@ -1384,6 +1397,12 @@ pub struct Agent<E> {
     writer_stall: Duration,
     /// Assignments being started: their `running` records with the writer (M5.2d).
     starting: BTreeMap<String, Starting>,
+    /// Assignments taken past the slots, oldest first, each started as a slot frees (its
+    /// waiting queue, decision 509): nothing of them is in the journal yet.
+    queue: VecDeque<Queued>,
+    /// The cluster's slow-equals, as the master's last `HeartbeatAck` said: a queue whose head
+    /// waited longer gives back a task each check. Zero, none known.
+    slow_equals: Duration,
     /// The writer's last group observed in the journal's metric, by record kind: one
     /// observation a group, as before the writer.
     metered: BTreeMap<&'static str, u64>,
@@ -1497,6 +1516,8 @@ impl<E: Executor> Agent<E> {
             writer: None,
             writer_stall: Duration::ZERO,
             starting: BTreeMap::new(),
+            queue: VecDeque::new(),
+            slow_equals: Duration::ZERO,
             metered: BTreeMap::new(),
             warnings,
             incarnation,
@@ -1791,6 +1812,7 @@ impl<E: Executor> Agent<E> {
             queues: self.settings.queues.clone(),
             slots: self.settings.slots,
             watcher_slots: self.settings.watcher_slots,
+            queue_depth: self.queue_depth(),
             running_triggers: self
                 .triggers
                 .keys()
@@ -1895,6 +1917,15 @@ impl<E: Executor> Agent<E> {
         self.cut_off_if_late() || silent
     }
 
+    /// Whether the master may have counted this worker lost by now: past the lease after its
+    /// last word, or after the master last heard it (decision 445, B233), with or without tasks
+    /// whose cleanup may move. A queued task doesn't start then (the simulator, M5.2e): its
+    /// assignment, ended `lost` meanwhile, would run after the master took it back.
+    fn may_be_counted_lost(&self) -> bool {
+        self.lease_deadline()
+            .is_some_and(|at| at <= tokio::time::Instant::now())
+    }
+
     /// Whether the lease has run out with no word from the master ([`Self::silent_at`]).
     fn gone_silent(&self, opened: tokio::time::Instant) -> bool {
         self.silent_at(opened)
@@ -1972,6 +2003,16 @@ impl<E: Executor> Agent<E> {
             "draining: no new tasks; the running ones get until the grace period ends"
         );
         true
+    }
+
+    /// A stop asked during a session: a drain begun is told to the master (`Draining`), and the
+    /// queue given back (decision 509).
+    fn shutdown_asked(&mut self, count: u32, to_master: &ToMaster) {
+        if self.on_shutdown(count) {
+            let draining = worker_message::Message::Draining(pb::Draining {});
+            let _ = to_master.send(wrap(draining));
+            self.give_back_queue("draining", "the worker is draining", to_master);
+        }
     }
 
     /// The drain's next step; stops the attempts still running when their time is up.
@@ -2465,6 +2506,10 @@ impl<E: Executor> Agent<E> {
         let end = self.session_stream(client).await;
         // Starts still being journaled aren't this worker's any more (M5.2d).
         self.abandon_starts().await;
+        // Nor is its queue: nothing of it is in the journal, so the master takes those back as
+        // never started at the registration (decision 509).
+        self.queue.clear();
+        self.set_queue_gauge();
         end
     }
 
@@ -2497,6 +2542,9 @@ impl<E: Executor> Agent<E> {
         let timeouts = self.settings.setup.timeouts;
         let mut tick = tokio::time::interval(timeouts.drain_tick);
         let mut alive = tokio::time::interval(timeouts.alive);
+        // Missed checks (a slow turn, the queue empty) aren't made up in a burst: one a period
+        // (Codex's review of M5.2e).
+        let mut queue_check = heartbeat_timer(timeouts.queue_check);
         // The unacknowledged results' resends (B41: the master failed to store one and kept
         // the stream).
         let mut resends = Resends::limited(timeouts.result_resends, timeouts.result_resend_gap_max);
@@ -2510,12 +2558,7 @@ impl<E: Executor> Agent<E> {
                     self.cut_off_if_late();
                     return SessionEnd::Lost(NO_WORD.to_owned());
                 }
-                count = next_request(&mut self.shutdown) => {
-                    if self.on_shutdown(count) {
-                        let draining = worker_message::Message::Draining(pb::Draining {});
-                        let _ = to_master.send(wrap(draining));
-                    }
-                }
+                count = next_request(&mut self.shutdown) => self.shutdown_asked(count, &to_master),
                 _ = tick.tick(), if self.drain.is_some() => {
                     if self.drain_step(true) == DrainStep::Finish {
                         let bye = worker_message::Message::Deregister(pb::Deregister {});
@@ -2563,6 +2606,7 @@ impl<E: Executor> Agent<E> {
                 }
                 _ = watch.tick() => self.watch(&to_master),
                 _ = alive.tick() => self.on_alive(),
+                _ = queue_check.tick(), if !self.queue.is_empty() => self.check_queue(&to_master),
                 changed = self.warnings.changed(), if warnings_open => {
                     if changed.is_ok() {
                         self.report_warnings(&to_master);
@@ -2571,6 +2615,12 @@ impl<E: Executor> Agent<E> {
                         warnings_open = false;
                     }
                 }
+            }
+            // A slot freed with tasks queued: the head goes in at once, no round between
+            // (decision 509).
+            let link = (&mut heartbeat, opened);
+            if Box::pin(self.start_queued(&to_master, &mut client, link)).await {
+                return SessionEnd::Lost(NO_WORD.to_owned());
             }
         }
     }
@@ -2690,7 +2740,143 @@ impl<E: Executor> Agent<E> {
             running_triggers: self.triggers.keys().cloned().collect(),
             watcher_hosts,
             usage,
+            queue_head_age_ms: self.queue_head_age_ms(),
         }))
+    }
+
+    /// How many assigned tasks past its slots it keeps waiting (decision 509).
+    const fn queue_depth(&self) -> u32 {
+        self.settings.queue_depth
+    }
+
+    /// How long its waiting queue's head has waited, in ms: 0 with an empty queue.
+    fn queue_head_age_ms(&self) -> u64 {
+        self.queue.front().map_or(0, |head| {
+            u64::try_from(head.since.elapsed().as_millis()).unwrap_or(u64::MAX)
+        })
+    }
+
+    /// Whether `assign` waits in the queue: an ordinary task (not a wait step, not a moved
+    /// cleanup) finding no free slot (`held`'s taken too), with room in the queue, while not
+    /// draining.
+    fn queues(&self, assign: &pb::AssignTask, held: &Held) -> bool {
+        let id = &assign.attempt_id;
+        // One already here (running, starting, its result owed, in this group) isn't queued
+        // beside itself: `prepare` ignores it (Codex's review of M5.2e: it ran twice).
+        let here = self.running.contains_key(id)
+            || self.unacked.contains_key(id)
+            || self.starting.contains_key(id)
+            || held.ids.contains(id);
+        !here
+            && self.drain.is_none()
+            && assign.cleanup_only.is_none()
+            && !assigned_a_wait_step(assign)
+            && self.free_slots() <= held.tasks
+            && self.queue.len() < usize::try_from(self.settings.queue_depth).unwrap_or(usize::MAX)
+            && !self
+                .queue
+                .iter()
+                .any(|q| q.assign.attempt_id == assign.attempt_id)
+    }
+
+    fn set_queue_gauge(&self) {
+        self.metrics
+            .queued
+            .set(i64::try_from(self.queue.len()).unwrap_or(i64::MAX));
+    }
+
+    /// The queue's head taken into each free slot (the barrier): prepared and journaled as
+    /// any assignment, its number then held by its start or released. Whether the session is
+    /// over (cut off or past the lease meanwhile).
+    async fn start_queued(
+        &mut self,
+        to_master: &ToMaster,
+        client: &mut MasterClient<Channel>,
+        (heartbeat, opened): (&mut tokio::time::Interval, tokio::time::Instant),
+    ) -> bool {
+        if self.queue.is_empty() || self.free_slots() == 0 {
+            return false;
+        }
+        while self.free_slots() > 0
+            && !self.cut_off
+            && !self.gone_silent(opened)
+            && !self.may_be_counted_lost()
+            && let Some(queued) = self.queue.pop_front()
+        {
+            self.metrics
+                .queue_wait
+                .observe(queued.since.elapsed().as_secs_f64());
+            let id = queued.assign.attempt_id.clone();
+            Box::pin(self.assign_group(
+                vec![queued.assign],
+                to_master,
+                client,
+                (&mut *heartbeat, opened),
+            ))
+            .await;
+            if let Some(sequence) = queued.sequence {
+                match self.starting.get_mut(&id) {
+                    Some(starting) if starting.sequence.is_none() => {
+                        starting.sequence = Some(sequence);
+                    }
+                    _ => to_master.release(sequence),
+                }
+            }
+        }
+        self.set_queue_gauge();
+        self.cut_off || self.gone_silent(opened)
+    }
+
+    /// A queued task given back, never started here (`Rejected` withdrawn): ready again at the
+    /// master, no retry used; its number released.
+    fn give_back(&self, queued: Queued, reason: &str, detail: String, to_master: &ToMaster) {
+        tracing::info!(
+            attempt_id = queued.assign.attempt_id.as_str(),
+            reason,
+            "a queued task given back"
+        );
+        let _ = to_master.send(wrap(worker_message::Message::Rejected(pb::Rejected {
+            attempt_id: queued.assign.attempt_id,
+            reason: pb::RejectReason::Withdrawn.into(),
+            detail,
+        })));
+        if let Some(sequence) = queued.sequence {
+            to_master.release(sequence);
+        }
+        self.metrics
+            .queue_given_back
+            .get_or_create(&crate::metrics::GivenBackLabels {
+                reason: reason.to_owned(),
+            })
+            .inc();
+    }
+
+    /// The whole queue given back (a drain).
+    fn give_back_queue(&mut self, reason: &str, detail: &str, to_master: &ToMaster) {
+        while let Some(queued) = self.queue.pop_front() {
+            self.give_back(queued, reason, detail.to_owned(), to_master);
+        }
+        self.set_queue_gauge();
+    }
+
+    /// The queue's head compared with the slow-equals: older, one task goes back from the tail.
+    fn check_queue(&mut self, to_master: &ToMaster) {
+        let Some(head) = self.queue.front() else {
+            return;
+        };
+        let waited = head.since.elapsed();
+        if self.slow_equals.is_zero() || waited <= self.slow_equals {
+            return;
+        }
+        if let Some(tail) = self.queue.pop_back() {
+            let detail = format!(
+                "its queue's oldest task waited {:.1} s, past the cluster's {:.1} s",
+                waited.as_secs_f64(),
+                self.slow_equals.as_secs_f64()
+            );
+            self.give_back(tail, "slow", detail, to_master);
+        }
+        self.set_queue_gauge();
     }
 
     /// What the worker uses, by part (decision 463); none without `/proc`.
@@ -2815,7 +3001,15 @@ impl<E: Executor> Agent<E> {
         for (id, &sequence) in ids.iter().zip(sequences) {
             match self.starting.get_mut(id) {
                 Some(starting) if starting.sequence.is_none() => starting.sequence = Some(sequence),
-                _ => to_master.release(sequence),
+                // Queued (decision 509): held until it starts or goes back.
+                _ => match self
+                    .queue
+                    .iter_mut()
+                    .find(|q| q.assign.attempt_id == *id && q.sequence.is_none())
+                {
+                    Some(queued) => queued.sequence = Some(sequence),
+                    None => to_master.release(sequence),
+                },
             }
             to_master.handled(sequence);
         }
@@ -2898,8 +3092,10 @@ impl<E: Executor> Agent<E> {
                     .await;
             }
             master_message::Message::AssignParse(job) => self.parse(job),
-            // Heard: its clock was read as it arrived (B225).
-            master_message::Message::HeartbeatAck(_) => {}
+            // Heard: its clock was read as it arrived (B225); its slow-equals kept (decision 509).
+            master_message::Message::HeartbeatAck(ack) => {
+                self.slow_equals = Duration::from_millis(ack.slow_equals_ms);
+            }
             master_message::Message::ConnectionJob(job) => self.connection_job(job),
             master_message::Message::AssignTrigger(assign) => {
                 self.start_trigger(&assign, to_master);
@@ -2926,25 +3122,39 @@ impl<E: Executor> Agent<E> {
                     let _ = stored.send(());
                 }
             }
-            master_message::Message::CancelAttempt(cancel) => {
-                // It stays running (its slot taken) until its process has ended and reported;
-                // a repeated cancel changes nothing.
-                let reason = if cancel.interrupted {
-                    StopReason::Interrupted
-                } else {
-                    StopReason::Cancelled
-                };
-                if let Some(stop) = self.running.get(&cancel.attempt_id) {
-                    let _ = stop.send(reason);
-                } else if let Some(starting) = self.starting.get_mut(&cancel.attempt_id) {
-                    // Its record still being written (M5.2d): not launched once it is.
-                    starting.stop = Some(reason);
-                }
-            }
+            master_message::Message::CancelAttempt(cancel) => self.cancel(&cancel, to_master),
             master_message::Message::FinishedAck(ack) => {
                 self.forked.remove(&ack.attempt_id);
                 self.acknowledged(&ack.attempt_id);
             }
+        }
+    }
+
+    /// The master cancels an attempt here: running, it is stopped (its slot taken until its
+    /// process has ended and reported); being journaled, it isn't launched; queued, it goes
+    /// back. A repeated cancel changes nothing.
+    fn cancel(&mut self, cancel: &pb::CancelAttempt, to_master: &ToMaster) {
+        let reason = if cancel.interrupted {
+            StopReason::Interrupted
+        } else {
+            StopReason::Cancelled
+        };
+        if let Some(stop) = self.running.get(&cancel.attempt_id) {
+            let _ = stop.send(reason);
+        } else if let Some(starting) = self.starting.get_mut(&cancel.attempt_id) {
+            // Its record still being written (M5.2d): not launched once it is.
+            starting.stop = Some(reason);
+        } else if let Some(at) = self
+            .queue
+            .iter()
+            .position(|q| q.assign.attempt_id == cancel.attempt_id)
+            && let Some(queued) = self.queue.remove(at)
+        {
+            // Queued, never started (decision 509): given back, which the master takes as the
+            // cancel's end, no try made.
+            let detail = "cancelled while it waited in the queue".to_owned();
+            self.give_back(queued, "cancelled", detail, to_master);
+            self.set_queue_gauge();
         }
     }
 
@@ -3115,6 +3325,16 @@ impl<E: Executor> Agent<E> {
             if self.cut_off || self.gone_silent(opened) {
                 break;
             }
+            // No free slot: it waits for one, nothing of it written yet (decision 509).
+            if self.queues(&assign, &held) {
+                self.queue.push_back(Queued {
+                    assign,
+                    sequence: None,
+                    since: tokio::time::Instant::now(),
+                });
+                self.set_queue_gauge();
+                continue;
+            }
             let prepared = self
                 .prepare(assign, to_master, client, (&mut *heartbeat, opened), &held)
                 .await;
@@ -3215,8 +3435,10 @@ impl<E: Executor> Agent<E> {
         let outcome = match result {
             Err(error) => Err(Some(self.disk_not_writable(&error))),
             // Cut off or past the lease while journaling: not started (decision 281; Grok's
-            // review of M5.1b: the cutoff too, not only the lease).
-            Ok(()) if self.cut_off || self.gone_silent(opened) => {
+            // review of M5.1b: the cutoff too, not only the lease). Nor once the master may have
+            // counted this worker lost (its master-time deadline, any task: the simulator with a
+            // queue, M5.2e), which ends the attempt `lost`.
+            Ok(()) if self.cut_off || self.gone_silent(opened) || self.may_be_counted_lost() => {
                 tracing::warn!(
                     attempt_id = id.as_str(),
                     "the lease ran out while the attempt was journaled; not started"
@@ -3329,6 +3551,10 @@ impl<E: Executor> Agent<E> {
             || self.unacked.contains_key(&assign.attempt_id)
             || self.starting.contains_key(&assign.attempt_id)
             || held.ids.contains(&assign.attempt_id)
+            || self
+                .queue
+                .iter()
+                .any(|q| q.assign.attempt_id == assign.attempt_id)
         {
             // Already started here: its journal entry must not be replaced.
             tracing::warn!(
@@ -5179,6 +5405,9 @@ pub const DEREGISTER_WAIT: Duration = Duration::from_hours(1);
 
 /// How often a drain checks its deadline and whether it is done.
 pub const DRAIN_TICK: Duration = Duration::from_millis(100);
+
+/// How often the waiting queue's head is compared with the cluster's slow-equals (decision 509).
+pub const QUEUE_CHECK: Duration = Duration::from_secs(1);
 
 /// The next change of the shutdown request count; never, without one (or once it is gone).
 async fn next_request(shutdown: &mut Option<watch::Receiver<u32>>) -> u32 {

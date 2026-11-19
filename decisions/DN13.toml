@@ -1,0 +1,11 @@
+title = "M5.2e built: two of decision 509's small choices changed"
+date = 2026-11-18
+by = "claude"
+on = "D509"
+kind = "corrects"
+summary = '''
+A cancel gives a queued task back withdrawn (the master ends it cancelled, no try) instead of a
+stop before its start; only workers announcing a queue count in the slow-equals' median (one
+without says 0 busy or not); the queue check is the hidden `WORKER__QUEUE_CHECK_INTERVAL`.
+'''
+history = "JOURNAL.md#DN13"

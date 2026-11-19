@@ -10,6 +10,7 @@ fn messages_encode_and_decode() {
         message: Some(pb::worker_message::Message::Register(pb::Register {
             running_triggers: Vec::new(),
             watcher_slots: 500,
+            queue_depth: 4,
             worker_id: "worker-1".into(),
             incarnation_id: "0192c4e1-7a3b-7c00-8000-000000000000".into(),
             protocol: Some(super::PROTOCOL_VERSION),

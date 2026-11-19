@@ -2133,3 +2133,97 @@ queued might still mark the run), or the macOS wheel built only on a release's t
 on tags. It is a job of its own (a job's `if` can't read its matrix entry), `if: github.ref_type ==
 'tag'`; the release workflow calls CI on its tag, so a release still builds, smoke-tests and needs
 it. Not chosen: dropping it on tags too (the release takes four wheels).
+
+### <a id="D509"></a>2026-11-18: the worker's waiting queue, settled for building (decision 509)
+
+- **Question:** M5.2e's design (plan/M5.toml, from the user's of 2026-11-18) had four points to
+  settle before code, from e1's checks. What else reads the worker's heard number: only B240's
+  take-backs (`Arrivals::never_started`, four callers in `dispatch.rs`: a worker lost or
+  replaced, an assignment expired). The heartbeat's production interval: 10 s. A `Rejected`
+  with a temporary reason undoes the assignment (`undo_assignment`): no retry, no attempt row.
+  The protocol: 1.1.0 shipped 2.1, this release is 2.2 already.
+- **A lost worker's queue (the user: accept, measure):** a queued task holds the reported
+  heard number below its assignment (B240's hold), so the master can't prove it never started;
+  a worker lost with a queue (a one-way cut: it still hears the master and may start queued
+  tasks) ends each queued task `lost`, a retry used, up to the depth more per lost worker. A
+  cut healed before the lease costs nothing (the re-registration takes back what the journal
+  lacks). Not chosen: a worker unheard for two heartbeats giving its queue back (a smaller
+  window, still unprovable, so still `lost`).
+- **Pacing (the user: each second):** one give-back a heartbeat would take 40 s to hand back a
+  queue of 4; the worker checks its head every second against the latest X and gives back one
+  task a check. Not chosen: one a heartbeat; all past X at once (more than idle workers take).
+- **The depth and turning it off (the user):** "If an operator has to turn it off sometimes it
+  shouldn't be hidden": a public `[worker] queue` (default true) turns it off; the hidden
+  setting is the size factor, depth = ceil(slots x factor), 0 to 4 (0 no queue), default 0.5.
+  Not chosen: a hidden off switch; a fixed depth; a ceiling of 2; no zero.
+- **Settled by Claude, small:** the master queues on the worker with the shortest queue first;
+  a cancel of a queued task removes it and answers as a start in flight does today (cancelled
+  before its process started); the fields in protocol 2.2, the master queuing only on workers
+  announcing a queue.
+
+### <a id="DN13"></a>2026-11-18: M5.2e built: two of decision 509's small choices changed (decision note 13; corrects D509)
+
+Building e3-e5, two of the small choices recorded with decision 509 changed (Claude's), and
+one was found missing. A cancel of a queued task: not ended as a stop before its process
+started (a `Started` and a `Finished`, an attempt row), but given back, `Rejected` withdrawn,
+which the master's rejection already ends cancelled with no try (B5's path): simpler, nothing
+started. The slow-equals' median: a side note found that a worker without a queue (`[worker]
+queue = false`, or a 1.1.0 worker during an upgrade) reports 0 whether busy or not, so half the
+cluster without one would hold the slow-equals at its floor and queues behind long tasks would
+give work back every second for nothing; only workers announcing a queue count now (one
+without still gets the slow-equals). And the one-second check is a hidden timing,
+`WORKER__QUEUE_CHECK_INTERVAL`, not a constant. The simulator gained queued scenarios (one
+slot, a queue of one): rule 1 (no start after the master ended it) and rule 4 (never two
+processes of one instance) hold for the queue's starts, a worker lost with its queue, one cut
+one way, a takeover; 307 queued and 302 started from it across them.
+
+### 2026-11-18: M5.2e measured: the queue doesn't raise throughput where the master's round is the limit
+
+Scenario 1 (quick, test build), the queue off and on in turn: off 65.2 and 66.8 tasks a second,
+on 66.7 and 64.0; one earlier run with it on, 58.9, the slowest of the day, not repeated (M5.2d:
+68.7). The slot cycle stays ~0.48-0.50 s: the part from stored to assigned again (the round's
+wait, ~0.17 s before) went to ~0, but assigned -> started grew by as much, and slots stood idle
+as before. The master can't store results and assign faster than ~65-70 a second (M5.2d's
+finding), so slots are rarely all full and it seldom queues: the queue moves where the wait is,
+not how much work goes through. Its gains are elsewhere: the start of the next task when the
+master has room, and work handed from a slow worker to a free one. Scenario 1c (new: 200 short
+tasks of 0.1 s and 40 of 5 s in whole DAGs, two workers of four slots): all done in 24.8-27.1 s
+at every slow-equals tried (k 2, 3, 4 at a 1 s floor; floors 0.5 s and 2 s at k 3), within the
+runs' spread; assigned -> started p99 4.6 s, queued short tasks behind long ones; nothing given
+back, the two workers as busy as each other, as the design means (nothing goes back when the
+cluster is evenly slow). The defaults stay (k 3, 1 s). Not yet shown in a stress run: a give-back
+end to end (each side is tested, the worker against a scripted slow-equals, the master's
+answer from the heartbeats).
+
+### 2026-11-18: Codex's review of M5.2e: four fixed, one a known limit
+
+Codex's high review (session `01a1f071`, read-only, each finding shown by a throwaway test)
+found five, all confirmed: (1, critical, rare) an `AssignTask` of an attempt already running
+here was queued beside it (the queue's check came before `prepare`'s duplicate check) and ran
+again once its result was acknowledged and a slot freed: `queues` refuses an attempt running,
+starting, owed or in the group, with a test that fails without it; (2) a worker that had lacked
+the code was tried for its free slot only after the others' queues: every eligible worker is
+tried for a free slot first, then for a queue (a test); (4) the queue check's interval kept
+tokio's burst on missed ticks, so a slow turn could give back several at once: it delays, as
+the heartbeat timer does; (5) a worker restarted without a queue kept its old head age in the
+median until stale: its `None` removes it (a test). (3) a task given back is marked in the
+master's memory only, so after a master restart it may queue again: kept as a known limit
+(speed, not safety: nothing runs twice or is lost; durable, it needs a column), in decision 509
+and the guide.
+
+### 2026-11-18: M5.2e's final run: the simulator found a start past the master's cutoff
+
+The 600-case simulator (with a queue) found an attempt started at the instant master time
+passed its cutoff (50 003 ms, a replaced worker behind a cut and a lag): the master had ended it
+`lost`. The start checks looked at the cut-off flag (set only with tasks whose cleanup may
+move) and the receipt lease, not the master-time deadline itself. Both the agent and the
+simulator's worker now refuse a start, queued or not, once the master may have counted the
+worker lost (`may_be_counted_lost`: the lease deadline, decision 445, B233). The case is kept
+in the regressions file; it fails on the old model and passes now, with and without a queue.
+A unit test checks the agent's predicate (a master-time cutoff passed, the receipt fresh).
+
+### <a id="DN14"></a>2026-11-19: A start is refused at the master-time deadline too, for every task (decision note 14; adds to D281)
+
+The start checks (`may_be_counted_lost` in the agent, the same in the simulator's worker) read
+the lease deadline decision 445 defined for the cutoff; see the entry above on the final run.
+Claude's, unreviewed when written; Codex reviews it before the push.

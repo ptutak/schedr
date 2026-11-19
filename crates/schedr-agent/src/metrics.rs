@@ -48,6 +48,26 @@ const ASSIGN_TO_STARTED: MetricDoc = MetricDoc {
     help: "How long an assignment took from its `AssignTask` taken by the agent's loop to its \
         `Started` sent (its plan, inputs and journal record): not counted when rejected",
 };
+const QUEUED: MetricDoc = MetricDoc {
+    name: "worker_queued",
+    kind: MetricKind::Gauge,
+    labels: &[],
+    help: "Tasks assigned past the slots, waiting in the worker's queue for a freed slot",
+};
+const QUEUE_WAIT: MetricDoc = MetricDoc {
+    name: "worker_queue_wait_seconds",
+    kind: MetricKind::Histogram,
+    labels: &[],
+    help: "How long a task waited in the worker's queue before a freed slot took it (not \
+        counted when given back)",
+};
+const QUEUE_GIVEN_BACK: MetricDoc = MetricDoc {
+    name: "worker_queue_given_back",
+    kind: MetricKind::Counter,
+    labels: &["reason"],
+    help: "Tasks given back from the worker's queue, never started here, by reason (slow: its \
+        head waited longer than the cluster's slow-equals; cancelled; draining)",
+};
 const JOURNAL_WRITE: MetricDoc = MetricDoc {
     name: "worker_journal_write_seconds",
     kind: MetricKind::Histogram,
@@ -188,6 +208,9 @@ pub const METRICS: &[MetricDoc] = &[
     ATTEMPTS,
     TASK_START,
     ASSIGN_TO_STARTED,
+    QUEUED,
+    QUEUE_WAIT,
+    QUEUE_GIVEN_BACK,
     JOURNAL_WRITE,
     MASTER_SAMPLE_AGE,
     MASTER_ROUND_TRIP,
@@ -224,6 +247,13 @@ pub struct StartLabels {
     pub method: String,
     /// `runner` or `import`.
     pub phase: String,
+}
+
+/// Why a task left the worker's queue unstarted.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct GivenBackLabels {
+    /// `slow`, `cancelled` or `draining`.
+    pub reason: String,
 }
 
 /// A kind of journal record.
@@ -381,8 +411,14 @@ pub struct AgentMetrics {
     pub attempts: Family<StatusLabels, Counter>,
     /// How long Python tasks took to start, by start method and phase.
     pub task_start: StartHistograms,
-    /// From an `AssignTask` taken to its `Started` sent.
+    /// From an `AssignTask` taken to its `Started` sent (a queued one: from leaving the queue).
     pub assign_to_started: Histogram,
+    /// Tasks waiting in the worker's queue.
+    pub queued: Gauge,
+    /// How long a task waited in the queue before a slot took it.
+    pub queue_wait: Histogram,
+    /// Tasks given back from the queue, by reason.
+    pub queue_given_back: Family<GivenBackLabels, Counter>,
     /// How long the journal took to keep a record, by record.
     pub journal_write: Family<RecordLabels, Histogram, fn() -> Histogram>,
     /// The age of the heartbeat master time is read from, in seconds (decision 448).
@@ -417,6 +453,10 @@ impl Default for AgentMetrics {
             }),
             // 0.1 ms to about 26 s, each bucket 2 times the last.
             assign_to_started: Histogram::new(exponential_buckets(0.0001, 2.0, 19)),
+            queued: Gauge::default(),
+            // 1 ms to about 65 s.
+            queue_wait: Histogram::new(exponential_buckets(0.001, 2.0, 17)),
+            queue_given_back: Family::default(),
             journal_write: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(0.0001, 2.0, 19))
             }),
@@ -447,6 +487,13 @@ impl AgentMetrics {
             ASSIGN_TO_STARTED.name,
             ASSIGN_TO_STARTED.help,
             self.assign_to_started.clone(),
+        );
+        r.register(QUEUED.name, QUEUED.help, self.queued.clone());
+        r.register(QUEUE_WAIT.name, QUEUE_WAIT.help, self.queue_wait.clone());
+        r.register(
+            QUEUE_GIVEN_BACK.name,
+            QUEUE_GIVEN_BACK.help,
+            self.queue_given_back.clone(),
         );
         r.register(
             JOURNAL_WRITE.name,

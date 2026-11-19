@@ -15,4 +15,4 @@ worker showed as disconnected, then lost). Not chosen: leaving the bug open past
 history = "JOURNAL.md#D495"  # <a id="D495"></a> starts its JOURNAL.md entry
 step = "M5.1q"
 code = ["crates/schedr-agent/src/agent.rs::DEREGISTER_WAIT", "crates/schedr-config/src/config.rs::Timings"]
-checked = 2026-11-18
+checked = 2026-11-19

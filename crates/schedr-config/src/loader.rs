@@ -393,7 +393,7 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 35] = [
+const HIDDEN_LIMITS: [&str; 36] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
     "MASTER__NOTIFICATION_BODY",
@@ -415,6 +415,7 @@ const HIDDEN_LIMITS: [&str; 35] = [
     "MASTER__FAILED_GROUP_MESSAGES_PER_TURN",
     "MASTER__WORKER_STREAM_BUFFER",
     "MASTER__NOTIFICATIONS_PER_PASS",
+    "MASTER__SLOW_EQUALS_FACTOR",
     "WORKER__RESULTS_PER_JOURNAL_GROUP",
     "WORKER__STARTS_PER_JOURNAL_GROUP",
     "WORKER__RESULT_RESENDS",
@@ -431,10 +432,48 @@ const HIDDEN_LIMITS: [&str; 35] = [
     "TLS__HANDSHAKES_AT_ONCE",
 ];
 
-/// The fixed limits, with what `SCHEDR_HIDDEN__*` variables set: whole numbers above zero.
+/// The hidden waiting queue's factor (decision 509): a fraction from 0 to 4, not a whole number.
+const QUEUE_FACTOR: &str = "WORKER__QUEUE_FACTOR";
+
+/// The largest waiting queue's factor: four times the slots.
+const MOST_QUEUE_FACTOR_HUNDREDTHS: u32 = 400;
+
+/// `text` as a fraction from 0 to 4 with at most two decimals (`0.5`, `2`, `1.25`), in
+/// hundredths.
+fn queue_factor(text: &str) -> Option<u32> {
+    let (whole, part) = text.trim().split_once('.').unwrap_or((text.trim(), ""));
+    if whole.is_empty()
+        || part.len() > 2
+        || !(whole.chars().chain(part.chars())).all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole: u32 = whole.parse().ok()?;
+    let part: u32 = if part.is_empty() {
+        0
+    } else {
+        format!("{part:0<2}").parse().ok()?
+    };
+    let hundredths = whole.checked_mul(100)?.checked_add(part)?;
+    (hundredths <= MOST_QUEUE_FACTOR_HUNDREDTHS).then_some(hundredths)
+}
+
+/// The fixed limits, with what `SCHEDR_HIDDEN__*` variables set: whole numbers above zero (the
+/// waiting queue's factor a fraction from 0 to 4).
 fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigError> {
     let mut limits = HiddenLimits::default();
     for (name, text) in env {
+        if name.strip_prefix(HIDDEN_PREFIX) == Some(QUEUE_FACTOR) {
+            limits.queue_factor_hundredths =
+                queue_factor(text).ok_or_else(|| ConfigError::BadHiddenTiming {
+                    name: name.clone(),
+                    reason: format!(
+                        "must be a number from 0 to 4 with at most two decimals, got `{text}`"
+                    ),
+                })?;
+            limits.overridden.push(name.clone());
+            continue;
+        }
         let limit = match name.strip_prefix(HIDDEN_PREFIX) {
             Some("MASTER__WORKER_REPORT_RECORDS") => &mut limits.worker_report_records,
             Some("MASTER__WORKER_REPORT_TEXT") => &mut limits.worker_report_text,
@@ -459,6 +498,7 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             }
             Some("MASTER__WORKER_STREAM_BUFFER") => &mut limits.worker_stream_buffer,
             Some("MASTER__NOTIFICATIONS_PER_PASS") => &mut limits.notifications_per_pass,
+            Some("MASTER__SLOW_EQUALS_FACTOR") => &mut limits.slow_equals_factor,
             Some("WORKER__RESULTS_PER_JOURNAL_GROUP") => &mut limits.results_per_journal_group,
             Some("WORKER__STARTS_PER_JOURNAL_GROUP") => &mut limits.starts_per_journal_group,
             Some("WORKER__RESULT_RESENDS") => &mut limits.result_resends,
@@ -527,6 +567,7 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "WORKER__ALIVE_INTERVAL" => &mut timings.worker_alive_interval,
         "WORKER__DEREGISTER_WAIT" => &mut timings.deregister_wait,
         "WORKER__DRAIN_TICK" => &mut timings.drain_tick,
+        "WORKER__QUEUE_CHECK_INTERVAL" => &mut timings.queue_check_interval,
         "WORKER__DRAIN_ACK_WAIT" => &mut timings.drain_ack_wait,
         "WORKER__STOP_POLL" => &mut timings.stop_poll,
         "WORKER__CONNECTION_JOB_CANCEL_GRACE" => &mut timings.connection_job_cancel_grace,
@@ -575,6 +616,7 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "WEBSERVER__MEMORY_PEAKS_WINDOW" => &mut timings.memory_peaks_window,
         "EVENTS__FUTURE_TOLERANCE" => &mut timings.event_future_tolerance,
         "MASTER__FOR_FUTURE_TOLERANCE" => &mut timings.for_future_tolerance,
+        "MASTER__SLOW_EQUALS_FLOOR" => &mut timings.slow_equals_floor,
         "MASTER__CODE_RETRY_DELAY" => &mut timings.code_retry_delay,
         "MASTER__NODE_ROW_KEPT" => &mut timings.node_row_kept,
         "CLIENT__CONNECT_TIMEOUT" => &mut timings.client_connect_timeout,
@@ -609,7 +651,7 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
         let Some(key) = name.strip_prefix(HIDDEN_PREFIX) else {
             continue;
         };
-        if HIDDEN_LIMITS.contains(&key) || RETIRED_TIMINGS.contains(&key) {
+        if HIDDEN_LIMITS.contains(&key) || key == QUEUE_FACTOR || RETIRED_TIMINGS.contains(&key) {
             continue;
         }
         let Some(timing) = timing_named(&mut timings, key) else {

@@ -96,8 +96,13 @@ Both the worker and master measure parts of a task's start. The
 [stress guide](11-stress.md) reads them to find where a slow start's time went.
 
 On the worker, `schedr_worker_assign_to_started_seconds` runs from the agent's loop taking an
-`AssignTask` to its `Started` sent: the plan, the inputs and the journal record. An
-assignment the worker rejects isn't counted. `schedr_worker_journal_write_seconds{record}`
+`AssignTask` to its `Started` sent: the plan, the inputs and the journal record; for a task
+from the waiting queue, from when it left the queue. An assignment the worker rejects isn't
+counted. The queue has its own: `schedr_worker_queued` (tasks waiting),
+`schedr_worker_queue_wait_seconds` (how long each waited before a slot took it) and
+`schedr_worker_queue_given_back{reason}` (`slow`, `cancelled`, `draining`). Under load the
+master's assigned → started includes a queued task's wait: read it on an idle cluster, and
+throughput under load. `schedr_worker_journal_write_seconds{record}`
 times each group of journal records written (a failed write isn't counted), once per kind in
 the group: `start` (the records of attempts before their `Started`s), `process` (their
 processes' identities, once started) and `results`. The writes run beside the agent's loop;

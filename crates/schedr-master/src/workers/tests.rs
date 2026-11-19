@@ -178,3 +178,62 @@ fn a_drained_worker_gets_nothing_until_resumed_and_a_new_incarnation_starts_undr
         "the master applies it again"
     );
 }
+
+fn queueing() -> Needs<'static> {
+    Needs {
+        may_queue: true,
+        ..Needs::queue(DEFAULT_QUEUE)
+    }
+}
+
+#[test]
+fn free_slots_are_filled_before_any_queue() {
+    // Decision 509: a worker with a queue takes queued work only when no worker has a slot.
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &[], 1);
+    workers.set_queue_depth("w1", 2);
+    workers.register("w2", "i1", &[], 1);
+    workers.reserve("w1", "a1", ts("2026-10-21T08:00:00Z"));
+    // w1 has queue room (2) and no slot; w2 a slot: w2.
+    assert_eq!(workers.pick(queueing(), &none()), Some("w2"));
+    workers.reserve("w2", "a2", ts("2026-10-21T08:00:01Z"));
+    // No slot anywhere: w1's queue; w2 has none.
+    assert_eq!(workers.pick(queueing(), &none()), Some("w1"));
+    workers.reserve("w1", "a3", ts("2026-10-21T08:00:02Z"));
+    workers.reserve("w1", "a4", ts("2026-10-21T08:00:03Z"));
+    // Its queue full: nowhere.
+    assert_eq!(workers.pick(queueing(), &none()), None);
+}
+
+#[test]
+fn a_task_that_may_not_queue_goes_to_a_free_slot_only() {
+    // Decision 509: one given back, a wait step, a cleanup moved: never into a queue.
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &[], 1);
+    workers.set_queue_depth("w1", 4);
+    workers.reserve("w1", "a1", ts("2026-10-21T08:00:00Z"));
+    assert_eq!(workers.pick(Needs::queue(DEFAULT_QUEUE), &none()), None);
+    assert_eq!(workers.pick(queueing(), &none()), Some("w1"));
+}
+
+#[test]
+fn among_queues_the_one_with_the_most_room_gets_the_task() {
+    let mut workers = Workers::new();
+    for id in ["w1", "w2"] {
+        workers.register(id, "i1", &[], 1);
+        workers.set_queue_depth(id, 2);
+    }
+    workers.reserve("w1", "a1", ts("2026-10-21T08:00:00Z"));
+    workers.reserve("w1", "a2", ts("2026-10-21T08:00:01Z"));
+    workers.reserve("w2", "a3", ts("2026-10-21T08:00:02Z"));
+    // w1's queue holds one, w2's none.
+    assert_eq!(workers.pick(queueing(), &none()), Some("w2"));
+}
+
+#[test]
+fn a_worker_without_a_queue_takes_nothing_past_its_slots() {
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &[], 1);
+    workers.reserve("w1", "a1", ts("2026-10-21T08:00:00Z"));
+    assert_eq!(workers.pick(queueing(), &none()), None);
+}

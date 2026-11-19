@@ -128,6 +128,9 @@ pub struct Hub {
     messages_per_turn: usize,
     /// The most messages of a failed group handled one by one in a turn (decision 493).
     alone_per_turn: usize,
+    /// The workers' queue head ages, for the slow-equals each `HeartbeatAck` carries
+    /// (decision 509).
+    slow_equals: Arc<crate::slow_equals::SlowEquals>,
     /// The most a round assigns: its upstream is read before the core lock (M5.2cA).
     assignments_per_round: usize,
     /// The workers' results (`Finished`, `TaskEnded`, `Rejected`) a turn received, for the next
@@ -214,6 +217,9 @@ impl Hub {
             max_message_size: core.settings().max_message_size,
             messages_per_turn: core.settings().messages_per_turn.max(1),
             alone_per_turn: core.settings().failed_group_messages_per_turn.max(1),
+            slow_equals: Arc::new(crate::slow_equals::SlowEquals::new(
+                core.settings().slow_equals,
+            )),
             assignments_per_round: core.assignments_per_round(),
             results: Arc::default(),
             slow_last: Arc::default(),
@@ -1656,7 +1662,7 @@ impl Hub {
         worker_id: String,
         stream: Outbound,
         inbound: Streaming<pb::WorkerMessage>,
-        heard: Arc<AtomicU64>,
+        (heard, has_queue): (Arc<AtomicU64>, bool),
     ) {
         // Read apart from handling: while the master is stuck behind its lock, the worker's
         // messages still arrive, are recorded and wait in order (B6).
@@ -1675,6 +1681,7 @@ impl Hub {
                 heard,
                 epoch: self.epoch,
                 current: (worker_id.clone(), Arc::clone(&self.heard)),
+                slow_equals: (Arc::clone(&self.slow_equals), has_queue),
             },
         ));
         let mut closing = self.closing.subscribe();
@@ -1826,10 +1833,12 @@ impl Hub {
         }
         drop(core);
         self.deliver(outgoing).await;
-        tokio::spawn(
-            self.clone()
-                .serve_stream(register.worker_id, stream, inbound, heard),
-        );
+        tokio::spawn(self.clone().serve_stream(
+            register.worker_id,
+            stream,
+            inbound,
+            (heard, register.queue_depth > 0),
+        ));
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
 
@@ -2064,23 +2073,35 @@ struct HeartbeatAcks {
     /// Its worker and the hub's counters of the current streams: answered only while `heard`
     /// is its worker's current one (decision 443).
     current: (String, Counters),
+    /// The workers' queue head ages, shared by every stream (decision 509), and whether this
+    /// worker has a queue: one without counts no age (it would always say 0, busy or not).
+    slow_equals: (Arc<crate::slow_equals::SlowEquals>, bool),
 }
 
 impl HeartbeatAcks {
     /// The message numbered `sequence` arrived: noted (the latest's number goes on the
-    /// master's next stamps, B225), and a heartbeat answered with it on the answer's stamp.
-    fn heard(&self, sequence: u64, heartbeat: bool) {
+    /// master's next stamps, B225), and a heartbeat (`Some`: its queue's head age) answered
+    /// with it on the answer's stamp, and the cluster's slow-equals (decision 509).
+    fn heard(&self, sequence: u64, heartbeat: Option<Duration>) {
         let heard = self
             .heard
             .fetch_max(sequence, Ordering::SeqCst)
             .max(sequence);
-        if heartbeat
+        if let Some(head_age) = heartbeat
             && *self.leading.borrow()
             && self.is_current()
             && let Some(stream) = self.stream.upgrade()
         {
+            let (slow_equals, has_queue) = &self.slow_equals;
+            let slow = slow_equals.heard(
+                &self.current.0,
+                has_queue.then_some(head_age),
+                tokio::time::Instant::now(),
+            );
             let ack = pb::MasterMessage {
-                message: Some(master_message::Message::HeartbeatAck(pb::HeartbeatAck {})),
+                message: Some(master_message::Message::HeartbeatAck(pb::HeartbeatAck {
+                    slow_equals_ms: u64::try_from(slow.as_millis()).unwrap_or(u64::MAX),
+                })),
                 clock: Some(stamp_of(self.clocks, heard, self.epoch)),
             };
             // Full, the worker isn't reading: the next heartbeat tries again.
@@ -2117,8 +2138,12 @@ async fn read_stream(
             Ok(Some(message)) => {
                 arrivals.arrived(&worker_id, acks.steady_now());
                 // A heartbeat is answered whatever it carries; its numbers count when stamped.
-                let heartbeat =
-                    matches!(message.message, Some(worker_message::Message::Heartbeat(_)));
+                let heartbeat = match &message.message {
+                    Some(worker_message::Message::Heartbeat(beat)) => {
+                        Some(Duration::from_millis(beat.queue_head_age_ms))
+                    }
+                    _ => None,
+                };
                 acks.heard(message.clock.as_ref().map_or(0, |c| c.sequence), heartbeat);
                 if let Some(clock) = &message.clock {
                     arrivals.read(&worker_id, acks.stream_id, clock.heard_sequence);

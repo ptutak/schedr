@@ -831,8 +831,10 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
         .collect();
     // 119 since the docs review of 1.1.0 named `MASTER__EVENT_LOOKBACK` there too; 121 with
     // the Runs page's `UI__SLOW_READ` and `UI__SLOW_READ_WAIT` (decision 500); 122 with
-    // `MASTER__TASK_ROUND_GAP` (M5.2cB4).
-    assert_eq!(names.len(), 122, "{names:?}");
+    // `MASTER__TASK_ROUND_GAP` (M5.2cB4); 124 with the waiting queue's
+    // `WORKER__QUEUE_CHECK_INTERVAL` and `WORKER__QUEUE_FACTOR`, 126 with the master's
+    // `MASTER__SLOW_EQUALS_FLOOR` and `MASTER__SLOW_EQUALS_FACTOR` (decision 509).
+    assert_eq!(names.len(), 126, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         // The lease at least four heartbeats (B226); the Metrics buckets final and the minute
@@ -845,13 +847,40 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
             "1s"
         };
         let loaded = load(None, &env(&[(name, value)]), &[]);
-        if HIDDEN_LIMITS.iter().any(|limit| name.ends_with(limit)) {
+        if HIDDEN_LIMITS.iter().any(|limit| name.ends_with(limit)) || name.ends_with(QUEUE_FACTOR) {
             let limits = load(None, &env(&[(name, "1")]), &[]).unwrap().limits;
             assert_eq!(limits.overridden, [name]);
             assert!(loaded.is_err(), "a limit is a number, not a duration");
         } else {
             assert_eq!(loaded.unwrap().timings.overridden, [name]);
         }
+    }
+}
+
+#[rstest]
+#[case("0.5", Some(50))]
+#[case("0", Some(0))]
+#[case("4", Some(400))]
+#[case("1.25", Some(125))]
+#[case(" 2.1 ", Some(210))]
+#[case("4.01", None)]
+#[case("0.125", None)]
+#[case("-1", None)]
+#[case(".5", None)]
+#[case("half", None)]
+fn the_queue_factor_is_a_fraction_from_0_to_4(#[case] text: &str, #[case] hundredths: Option<u32>) {
+    let name = format!("{HIDDEN_PREFIX}{QUEUE_FACTOR}");
+    let loaded = load(None, &env(&[(&name, text)]), &[]);
+    match hundredths {
+        Some(h) => {
+            let limits = loaded.unwrap().limits;
+            assert_eq!(limits.queue_factor_hundredths, h);
+            assert_eq!(limits.overridden, [name]);
+        }
+        None => assert!(
+            matches!(loaded, Err(ConfigError::BadHiddenTiming { .. })),
+            "{text}: {loaded:?}"
+        ),
     }
 }
 

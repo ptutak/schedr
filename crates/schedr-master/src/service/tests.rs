@@ -3227,3 +3227,50 @@ async fn a_wait_for_leadership_ends_when_the_streams_close() {
     let ended = tokio::time::timeout(Duration::from_secs(5), waiting).await;
     assert!(!ended.expect("still waiting").unwrap());
 }
+
+/// The first `HeartbeatAck` on `stream`, other messages skipped.
+async fn next_ack(stream: &mut tonic::Streaming<pb::MasterMessage>) -> pb::HeartbeatAck {
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(5), stream.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if let Some(master_message::Message::HeartbeatAck(ack)) = message.message {
+            return ack;
+        }
+    }
+}
+
+/// Decision 509: a worker with a queue counts its head's age in the slow-equals its acks
+/// carry (the median times 3, at least 1 s); one without a queue gets it and counts nothing.
+#[rstest::rstest]
+#[case(4, 6000)]
+#[case(0, 1000)]
+#[tokio::test]
+async fn a_heartbeat_ack_carries_the_clusters_slow_equals(
+    #[case] queue_depth: u32,
+    #[case] expected_ms: u64,
+) {
+    let (_hub, _db, mut client) = connected().await;
+    let (to_master, outbound) = mpsc::channel(16);
+    let mut first = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(r)) = &mut first.message {
+        r.queue_depth = queue_depth;
+    }
+    to_master.send(first).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let beat = pb::Heartbeat {
+        queue_head_age_ms: 2000,
+        ..pb::Heartbeat::default()
+    };
+    to_master
+        .send(numbered(worker_message::Message::Heartbeat(beat), 1, 0))
+        .await
+        .unwrap();
+    assert_eq!(next_ack(&mut stream).await.slow_equals_ms, expected_ms);
+}

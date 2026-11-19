@@ -9,24 +9,23 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
 - **Then:** M5.2e, M5.2f, R1.2, M5.3a, M5.3b.
 - **Open questions:** 1 (`DECISIONS.md`).
-- **Open bugs:** 5; first: B254 (low/likely), B258 (low/possible), B257 (low/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 6; first: B254 (low/likely), B264 (medium/rare), B258 (low/possible), B257 (low/possible), B39 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN14 (2026-11-19): A start is refused at the master-time deadline too, for every task (adds to D281)
+- DN13 (2026-11-18): M5.2e built: two of decision 509's small choices changed (corrects D509)
+- D509 (2026-11-18): the worker's waiting queue, settled for building
 - DN12 (2026-11-18): The macOS wheel is built only on a release's tag (adds to D160)
 - D508 (2026-11-18): decision notes and the user's notes
-- DN11 (2026-11-18): B263, a master frozen in a statement: tried once more (corrects D115)
-- D507 (2026-11-18): M5.2d, the worker's start path: journal writes beside its loop
-- D506 (2026-11-18): M5.2cB4 steps 1-3, results first, the slow parts' due flags, the task rounds' gap
 - M5.2d (2026-11-18): The worker's start path
 - M5.2cB3 (2026-11-18): The round's results part: one set of statements, its reads before the lock
 - M5.2cB (2026-11-17): Only the round moves runs forward
 
 ## In progress
 
-- M5.2d with B259-B263 committed and pushed (017aac72, 2026-11-18). B263's retry went out before crash scenarios 17-21 ran on it (the stress rule for recovery changes): rerun locally after the push, results reported to the user.
-- Decision 508 (the user, 2026-11-18): journal entries are decisions, decision notes (DN, TOMLs in decisions/), the user's notes (N, only when asked; notes/, NOTES.md) and plain entries; the old N1-N16 reworked. Built with tests, waiting for make check and the user's acceptance of the commit; the project-docs skill updated the same way (its repo, uncommitted).
-- Next: M5.2e, the worker's waiting queue, its steps e1-e7 in the plan (designed with the user, 2026-11-18); e1 first.
+- M5.2e (decision 509, DN13) built e1-e7: the worker's waiting queue (agent.rs `queue`, `start_queued`, `check_queue`), the master's free-slots-first picking (`Needs::may_queue`) and withdrawn marks, slow-equals (slow_equals.rs, only workers with a queue counted), protocol 2.2 fields, `[worker] queue`, hidden `WORKER__QUEUE_FACTOR`, `WORKER__QUEUE_CHECK_INTERVAL`, `MASTER__SLOW_EQUALS_FACTOR`/`_FLOOR`; simulator scenarios with a queue; stress 1c. Codex's review: four fixed, one a known limit (a withdrawn mark lost on a master restart). Measured: no throughput change where the master's round is the limit (scenario 1 off/on 65-67 tasks a second). Pre-accepted by the user: commit and push after make check, the 600-case simulator and the quick stress suite pass.
+- Next: M5.2f, the trigger batching (plan/M5.toml). Not yet shown in a stress run: a give-back end to end (1c's two workers stay evenly busy).
 
 ## Waiting for the user
 

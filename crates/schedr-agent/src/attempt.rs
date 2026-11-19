@@ -405,6 +405,8 @@ pub struct WorkerTimeouts {
     pub deregister: Duration,
     /// How often a drain looks at its state (`drain_tick`).
     pub drain_tick: Duration,
+    /// How often the waiting queue's head is compared with the slow-equals (decision 509).
+    pub queue_check: Duration,
     /// How often a stopped process's group is looked at (`stop_poll`).
     pub stop_poll: Duration,
     /// How long a connection test's process gets from SIGTERM to SIGKILL
@@ -467,6 +469,7 @@ impl Default for WorkerTimeouts {
             alive: crate::agent::ALIVE_INTERVAL,
             deregister: crate::agent::DEREGISTER_WAIT,
             drain_tick: crate::agent::DRAIN_TICK,
+            queue_check: crate::agent::QUEUE_CHECK,
             stop_poll: crate::supervise::STOP_POLL,
             connection_cancel_grace: crate::connection_jobs::CANCEL_GRACE,
             accept_retry: Duration::from_millis(100),

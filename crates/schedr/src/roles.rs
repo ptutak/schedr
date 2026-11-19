@@ -126,6 +126,7 @@ pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts
         alive: config.timings.worker_alive_interval,
         deregister: config.timings.deregister_wait,
         drain_tick: config.timings.drain_tick,
+        queue_check: config.timings.queue_check_interval,
         stop_poll: config.timings.stop_poll,
         connection_cancel_grace: config.timings.connection_job_cancel_grace,
         accept_retry: config.timings.accept_retry,
@@ -299,6 +300,12 @@ pub fn master_settings(config: &Config) -> Settings {
         code_retry_delay: config.timings.code_retry_delay,
         failed_group_messages_per_turn: config.limits.failed_group_messages_per_turn,
         worker_stream_buffer: config.limits.worker_stream_buffer,
+        slow_equals: schedr_master::slow_equals::SlowEqualsSettings {
+            factor: u32::try_from(config.limits.slow_equals_factor).unwrap_or(u32::MAX),
+            floor: config.timings.slow_equals_floor,
+            // Three heartbeats unheard: gone or silent.
+            stale_after: config.timings.heartbeat_interval.saturating_mul(3),
+        },
     }
 }
 
@@ -327,6 +334,17 @@ pub fn data_dir(config: &Config, env: &BTreeMap<String, String>) -> Result<PathB
 }
 
 /// The worker's memory watch, refused when it leaves a task less than [`MIN_BUDGET`].
+/// The worker's waiting queue's depth (decision 509): ceil(slots x the hidden factor), none
+/// with `[worker] queue = false`.
+fn queue_depth(config: &Config) -> u32 {
+    if !config.worker.queue {
+        return 0;
+    }
+    let hundredths =
+        u64::from(config.worker.slots) * u64::from(config.limits.queue_factor_hundredths);
+    u32::try_from(hundredths.div_ceil(100)).unwrap_or(u32::MAX)
+}
+
 fn checked_memory(config: &Config, default_reserve: Reserve) -> Result<MemoryWatch, AppError> {
     if let Some(budget) = config.worker.memory_budget
         && budget < MIN_BUDGET
@@ -413,6 +431,7 @@ pub fn agent_settings(
     Ok(AgentSettings {
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
+        queue_depth: queue_depth(config),
         watcher_slots: config.watchers.slots,
         setup: WorkerSetup {
             timeouts: worker_timeouts(config),
