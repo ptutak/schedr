@@ -9,7 +9,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
 - **Then:** M5.2e, M5.2f, R1.2, M5.3a, M5.3b.
 - **Open questions:** 1 (`DECISIONS.md`).
-- **Open bugs:** 6; first: B254 (low/likely), B264 (medium/rare), B258 (low/possible), B257 (low/possible), B39 (low/possible) (`BUGS.md`).
+- **Open bugs:** 7; first: B265 (medium/possible), B254 (low/likely), B264 (medium/rare), B258 (low/possible), B257 (low/possible) (`BUGS.md`).
 
 ## Recent
 

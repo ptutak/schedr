@@ -2227,3 +2227,21 @@ A unit test checks the agent's predicate (a master-time cutoff passed, the recei
 The start checks (`may_be_counted_lost` in the agent, the same in the simulator's worker) read
 the lease deadline decision 445 defined for the cutoff; see the entry above on the final run.
 Claude's, unreviewed when written; Codex reviews it before the push.
+
+### 2026-11-19: Codex's review of DN14: a queue kept past the cutoff, then a late answer
+
+Codex's review of the start rule (session `01a1f155`, read-only) found one, critical and rare,
+shown by throwaway tests on the real core and agent: the agent doesn't end its stream at the
+master-time cutoff without cleanup gates, so a queued task refused there stayed queued; when a
+one-way cut healed, the master's heartbeat reader answered on the old stream (the worker already
+counted lost, its task ended `lost` and tried elsewhere), the new stamp moved the deadline, and
+the queued task started: run twice. Fixed: `heard_master` gives a queue back (withdrawn,
+`expired`) when the master may have counted the worker lost, before the stamp counts; a test
+fails without it. The simulator couldn't show it: its worker ends the session at the cutoff,
+the agent doesn't (B265, the user's choice how to close the gap). A fresh Codex session checks
+the fix.
+Codex's second look (session `01a1f165`) confirmed the queue fix and found the same for an
+attempt being journaled when the deadline passed, and for an assignment received after it
+(both older than the queue: M5.2d's journal writer): a late stamp let them launch. Now whatever
+hadn't started when the master may have counted the worker lost never starts in that session:
+`Starting.expired`, set before the stamp counts, and no admission past the deadline.

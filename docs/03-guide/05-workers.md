@@ -107,7 +107,8 @@ busy, nothing goes back; at a burst's end, idle workers pull the median down, an
 holding work hands it to them.
 
 A queued task cancelled goes back the same way (cancelled, no try made); a drain gives the whole
-queue back; a worker that loses its connection drops its queue, and the master takes those
+queue back, and so does a worker that may have been counted lost (past its lease deadline, a
+cut one way) before it takes in the master's next word; a worker that loses its connection drops its queue, and the master takes those
 tasks back when it registers again. A worker lost with a queue (silent past its lease) ends each
 queued task `lost`, using a retry, as for any assignment whose start the master can't rule out.
 

@@ -100,7 +100,8 @@ On the worker, `schedr_worker_assign_to_started_seconds` runs from the agent's l
 from the waiting queue, from when it left the queue. An assignment the worker rejects isn't
 counted. The queue has its own: `schedr_worker_queued` (tasks waiting),
 `schedr_worker_queue_wait_seconds` (how long each waited before a slot took it) and
-`schedr_worker_queue_given_back{reason}` (`slow`, `cancelled`, `draining`). Under load the
+`schedr_worker_queue_given_back{reason}` (`slow`, `cancelled`, `draining`, `expired`: kept past
+the moment the master may have counted the worker lost). Under load the
 master's assigned → started includes a queued task's wait: read it on an idle cluster, and
 throughput under load. `schedr_worker_journal_write_seconds{record}`
 times each group of journal records written (a failed write isn't counted), once per kind in

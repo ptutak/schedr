@@ -1270,6 +1270,9 @@ struct Starting {
     wait_step: bool,
     /// Cancelled (or interrupted) meanwhile: it isn't launched.
     stop: Option<StopReason>,
+    /// Still unstarted when the master may have counted this worker lost: never launched, even
+    /// once a later stamp moves the deadline (Codex's second review of DN14).
+    expired: bool,
 }
 
 /// An attempt an earlier agent left, its cleanup still to run.
@@ -2672,6 +2675,23 @@ impl<E: Executor> Agent<E> {
     /// A master message arrived on the live stream: the master's word, and its clock read
     /// (B225).
     fn heard_master(&mut self, clock: Option<&pb::MasterClock>, to_master: &ToMaster) {
+        // A queue kept past the moment the master may have counted this worker lost goes back
+        // before a new stamp moves the deadline: the master may have ended its tasks `lost` and
+        // tried them elsewhere, and a late answer on the old stream (a heartbeat's, as a cut
+        // heals) would let them start (Codex's review of DN14: a task run twice).
+        // What is being journaled is marked so: it never starts (Codex's second review).
+        if self.may_be_counted_lost() {
+            if !self.queue.is_empty() {
+                self.give_back_queue(
+                    "expired",
+                    "the master may have counted this worker lost",
+                    to_master,
+                );
+            }
+            for starting in self.starting.values_mut() {
+                starting.expired = true;
+            }
+        }
         self.heard = tokio::time::Instant::now();
         let skew = clock.and_then(|clock| self.master_time.heard(clock, Local::now()));
         if self
@@ -3321,8 +3341,10 @@ impl<E: Executor> Agent<E> {
                 held = Held::default();
             }
             // Cut off (a fetch reaching the cutoff, or the alive tick) or past the lease: the
-            // session ends, nothing more of the burst is prepared or started.
-            if self.cut_off || self.gone_silent(opened) {
+            // session ends, nothing more of the burst is prepared or started. Nor once the master
+            // may have counted this worker lost (Codex's second review of DN14): what came is
+            // left unstarted, so the master takes it back (B240).
+            if self.cut_off || self.gone_silent(opened) || self.may_be_counted_lost() {
                 break;
             }
             // No free slot: it waits for one, nothing of it written yet (decision 509).
@@ -3384,6 +3406,7 @@ impl<E: Executor> Agent<E> {
                     sequence: None,
                     wait_step: assigned_a_wait_step(&prepared.assign),
                     stop: None,
+                    expired: false,
                 },
             );
             self.writer().submit(
@@ -3438,7 +3461,12 @@ impl<E: Executor> Agent<E> {
             // review of M5.1b: the cutoff too, not only the lease). Nor once the master may have
             // counted this worker lost (its master-time deadline, any task: the simulator with a
             // queue, M5.2e), which ends the attempt `lost`.
-            Ok(()) if self.cut_off || self.gone_silent(opened) || self.may_be_counted_lost() => {
+            Ok(())
+                if self.cut_off
+                    || self.gone_silent(opened)
+                    || self.may_be_counted_lost()
+                    || starting.expired =>
+            {
                 tracing::warn!(
                     attempt_id = id.as_str(),
                     "the lease ran out while the attempt was journaled; not started"

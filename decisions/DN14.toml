@@ -9,6 +9,11 @@ worker lost: past the lease deadline, the earlier of the receipt lease and the m
 cutoff (decision 445), not only the receipt lease or the cut-off flag (set only with tasks
 whose cleanup may move). Found by the 600-case simulator with a queue (M5.2e): a start at the
 instant master time passed its cutoff ran an attempt the master had ended `lost`. Running tasks
-are stopped as before (decision 252: only those with `cleanup_anywhere`).
+are stopped as before (decision 252: only those with `cleanup_anywhere`). A waiting queue
+kept past that moment goes back (`Rejected` withdrawn, reason `expired`) before the master's
+next stamp is taken in, which would move the deadline: a late answer on the old stream as a
+cut heals let a task the master had ended `lost` start (Codex's review). The same holds for
+all that hadn't started then: an attempt being journaled is marked and never launched, and a
+burst arriving past the deadline isn't admitted, left for the master's take-back (B240).
 '''
 history = "JOURNAL.md#DN14"

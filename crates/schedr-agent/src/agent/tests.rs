@@ -2326,6 +2326,7 @@ async fn a_forced_drain_interrupts_a_start_still_being_journaled() {
             sequence: None,
             wait_step: false,
             stop: None,
+            expired: false,
         },
     );
     assert!(agent.on_shutdown(1));
@@ -5229,6 +5230,88 @@ fn a_worker_past_the_master_time_cutoff_may_be_counted_lost() {
     let dir = TempDir::new().unwrap();
     assert!(stamped_long_ago(dir.path(), Duration::from_secs(61)).may_be_counted_lost());
     assert!(!stamped_long_ago(dir.path(), Duration::from_secs(30)).may_be_counted_lost());
+}
+
+/// Codex's review of DN14: a queue kept past the master-time cutoff (a cut one way: the master
+/// heard nothing, ended its tasks `lost`, tried them elsewhere) goes back when the master's next
+/// word comes, before that word's stamp moves the deadline: started then, a task ran twice.
+#[test]
+fn a_queue_kept_past_the_cutoff_goes_back_before_the_next_stamp_counts() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(61));
+    agent.settings.queue_depth = 2;
+    agent.queue.push_back(Queued {
+        assign: pb::AssignTask {
+            attempt_id: "a1".to_owned(),
+            ..pb::AssignTask::default()
+        },
+        sequence: None,
+        since: tokio::time::Instant::now(),
+    });
+    let (sender, mut from_agent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, agent.master_time.outbox());
+    let clock = pb::MasterClock {
+        timeline: 8,
+        master_ms: 5_000,
+        heard_sequence: 0,
+        wall_ms: 0,
+        lease_epoch: 1,
+        sequence: 0,
+    };
+    agent.heard_master(Some(&clock), &to_master);
+    assert!(agent.queue.is_empty(), "given back, not left to start");
+    let mut withdrawn = Vec::new();
+    while let Ok(message) = from_agent.try_recv() {
+        if let Some(worker_message::Message::Rejected(r)) = message.message {
+            withdrawn.push((r.attempt_id, r.reason));
+        }
+    }
+    assert_eq!(
+        withdrawn,
+        [("a1".to_owned(), i32::from(pb::RejectReason::Withdrawn))]
+    );
+}
+
+/// Codex's second review of DN14: an attempt being journaled when the master may have counted
+/// this worker lost is marked so before the next stamp moves the deadline: never launched.
+#[test]
+fn an_attempt_journaled_past_the_cutoff_is_marked_expired() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(61));
+    agent.starting.insert(
+        "a1".to_owned(),
+        Starting {
+            sequence: None,
+            wait_step: false,
+            stop: None,
+            expired: false,
+        },
+    );
+    let (sender, _from_agent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, agent.master_time.outbox());
+    let clock = pb::MasterClock {
+        timeline: 8,
+        master_ms: 5_000,
+        heard_sequence: 0,
+        wall_ms: 0,
+        lease_epoch: 1,
+        sequence: 0,
+    };
+    agent.heard_master(Some(&clock), &to_master);
+    assert!(agent.starting["a1"].expired);
+    // Not past it: left as it is.
+    let mut fresh = stamped_long_ago(dir.path(), Duration::from_secs(1));
+    fresh.starting.insert(
+        "a2".to_owned(),
+        Starting {
+            sequence: None,
+            wait_step: false,
+            stop: None,
+            expired: false,
+        },
+    );
+    fresh.heard_master(Some(&clock), &to_master);
+    assert!(!fresh.starting["a2"].expired);
 }
 
 #[test]

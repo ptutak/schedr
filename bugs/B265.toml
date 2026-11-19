@@ -1,0 +1,19 @@
+title = "the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates"
+severity = "medium"
+probability = "possible"
+kind = "tests"
+summary = "clock_sim/master.rs's alive() ends the session once master time passes the cutoff, tasks with cleanup_anywhere or not; the agent ends its stream then only with cleanup gates (cut_off_at), so the simulator never shows a stream kept open past the cutoff"
+found = 2026-11-19
+suspected = false
+details = '''
+- **Found:** 2026-11-19, Codex's review of DN14 (M5.2e): a queued task kept past the cutoff on a
+  stream the agent didn't close started after a late heartbeat answer, though the master had
+  ended it `lost` (fixed in M5.2e: the queue goes back before the next stamp counts). The
+  simulator couldn't find it: its worker closes the session at the cutoff
+  (`clock_sim/master.rs`, `alive`: `past && session`), the agent only at `cut_off_at`, which is
+  `None` without gates (`agent.rs`).
+- **The choice (the user's):** model the agent as it is (the simulator then explores streams kept
+  past the cutoff, and may find more there), or have the agent end its stream at the cutoff for
+  every worker (a behaviour change: a worker cut one way re-registers instead of waiting for the
+  master's word; decisions 252, 281, 445).
+'''
