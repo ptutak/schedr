@@ -466,9 +466,11 @@ async fn a_read_for_a_later_time_than_the_rounds_probe_takes_it_again() {
     // next round (M5.2b), which the stale skip asks for.
     assert_eq!(found, (1, 0));
     let due = db
-        .in_round(later, std::time::Duration::ZERO, async {
-            db.due_retries(later).await.unwrap().len()
-        })
+        .in_round(
+            later,
+            std::time::Duration::ZERO,
+            Box::pin(async { db.due_retries(later).await.unwrap().len() }),
+        )
         .await;
     assert_eq!(due, 1, "the next round finds the retry");
 }
@@ -502,23 +504,29 @@ async fn a_rounds_probe_looking_ahead_finds_what_comes_due_before_the_next_tick(
         .unwrap();
     let tick = std::time::Duration::from_secs(1);
     let (skipped, due) = db
-        .in_round(start, tick, async {
-            let skipped = db.skipped(Check::DueRetries).await.unwrap();
-            let due = db
-                .due_retries(ts("2026-10-21T08:00:00.600Z"))
-                .await
-                .unwrap();
-            (skipped, due.len())
-        })
+        .in_round(
+            start,
+            tick,
+            Box::pin(async {
+                let skipped = db.skipped(Check::DueRetries).await.unwrap();
+                let due = db
+                    .due_retries(ts("2026-10-21T08:00:00.600Z"))
+                    .await
+                    .unwrap();
+                (skipped, due.len())
+            }),
+        )
         .await;
     assert_eq!((skipped, due), (false, 1), "due within the tick: read");
     db.update_instances(&running, &[retry_at("2026-10-21T08:00:05Z")], start)
         .await
         .unwrap();
     let skipped = db
-        .in_round(start, tick, async {
-            db.skipped(Check::DueRetries).await.unwrap()
-        })
+        .in_round(
+            start,
+            tick,
+            Box::pin(async { db.skipped(Check::DueRetries).await.unwrap() }),
+        )
         .await;
     assert!(skipped, "due after the next tick: skipped");
 }

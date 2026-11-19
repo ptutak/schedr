@@ -106,11 +106,19 @@ macro_rules! on_pool {
                         let $backend = $crate::backend::Backend::Sqlite;
                         $body
                     }
-                    $crate::database::Pool::Postgres(pool) => {
+                    $crate::database::Pool::Postgres(pool) if db.keeps_prepared() => {
                         let mut connection = pool.acquire().await?;
                         let $pool: &mut sqlx::PgConnection = &mut *connection;
                         let $backend = $crate::backend::Backend::Postgres;
                         $body
+                    }
+                    // Unnamed statements, each in a transaction: else a pooler may bind one on
+                    // another server connection (B264, `pg_alone`).
+                    $crate::database::Pool::Postgres(pool) => {
+                        $crate::query::pg_alone!(pool, |$pool| {
+                            let $backend = $crate::backend::Backend::Postgres;
+                            $body
+                        })
                     }
                 }
             })
@@ -119,6 +127,28 @@ macro_rules! on_pool {
     }};
 }
 pub(crate) use on_pool;
+
+/// Runs `$body` with `$connection` bound to a Postgres connection of `$pool` in a transaction
+/// of its own, committed after it (rolled back if it returns early). For a statement outside
+/// [`on_pool`] and [`in_tx`] (the lease's, the schema's, notifications): those are unnamed,
+/// which sqlx sends in two syncs (parse, then bind), and a pooler in transaction mode may give
+/// the second another server connection outside a transaction, whose unnamed statement is
+/// another client's: rows decoded with another statement's columns (a panic in sqlx), or
+/// "unnamed prepared statement does not exist" (B264).
+macro_rules! pg_alone {
+    ($pool:expr, |$connection:ident| $body:expr) => {{
+        // Not `pool.begin()`: a start cut short mustn't go back to the pool (B84).
+        let mut starting = crate::query::Starting::new($pool.acquire().await?);
+        let mut transaction = starting.begin("BEGIN").await?;
+        let value = {
+            let $connection: &mut sqlx::PgConnection = &mut *transaction;
+            $body
+        };
+        transaction.commit().await?;
+        value
+    }};
+}
+pub(crate) use pg_alone;
 
 /// How many query limits a write's transaction may take in all, by default: its statements
 /// are each limited by Postgres itself (and SQLite's busy timeout); this bounds the whole,
@@ -189,6 +219,8 @@ macro_rules! in_tx {
                     // The write lock at once, waiting for it under the busy timeout: a
                     // transaction begun deferred that reads first (the fence) fails at once if
                     // another connection writes before it does (B14).
+                    // This process's writers in line first, not in the busy handler (B266).
+                    let _writing = db.sqlite_writer().await?;
                     let mut starting = $crate::query::Starting::new(pool.acquire().await?);
                     let mut $tx = starting.begin("BEGIN IMMEDIATE").await?;
                     db.check_fence_sqlite(&mut *$tx).await?;
@@ -198,12 +230,15 @@ macro_rules! in_tx {
                 }
                 $crate::database::Pool::Postgres(pool) => {
                     let $backend = $crate::backend::Backend::Postgres;
+                    let begin = $crate::trace::point("own_tx.begin");
                     let mut starting = $crate::query::Starting::new(pool.acquire().await?);
                     let mut $tx = starting
                         .begin(db.begin_postgres())
                         .await
                         .map_err($crate::database::DbError::from_begin)?;
+                    drop(begin);
                     let done = $body;
+                    let _commit = $crate::trace::point("own_tx.commit");
                     $tx.commit().await?;
                     done
                 }

@@ -41,11 +41,13 @@ are in the report.
 | # | Scenario | What it shows |
 |---|---|---|
 | 1 | Throughput: many DAGs of short tasks and one wide DAG | every task once; tasks a second, latencies, round times |
+| 1c | Mixed lengths (`01c_mixed_lengths`, decision 509): short tasks of 0.1 s and long ones of 5 s, the long ones in whole DAGs, on scenario 1's cluster | when all are done; the tasks given back from waiting queues behind long ones; `SCHEDR_STRESS_SLOW_EQUALS_FACTOR` and `_FLOOR` set the master's slow-equals for a sweep |
 | 2 | Command bursts: many triggers at once, a pause/unpause storm, cancelling running runs at once | each command decided once; no duplicate runs |
 | 3 | Worker churn: workers killed with everything they run (`kill -9` of the process tree, as a pod dying) and back | lost tries retried; no task on two workers at once |
 | 4 | Master failover: the leader killed; then the next one frozen past its lease and thawed | the standby takes over; the thawed master's writes are refused and it exits |
 | 5 | The database stalled for the leader: shorter than its lease, then longer | it goes on; then the standby takes over, the stalled master exits, no worker is lost |
 | 6 | Scenarios 1 and 4 through PgBouncer in transaction pooling | the lease and the commands need nothing of a database session |
+| 6c | The statements outside a transaction (the lease's, the schema's, the change notifications' check) from two pools at once through PgBouncer in transaction mode, 4 tasks × 300 calls each (B264) | none fails or panics: each runs in a transaction of its own |
 | 7 | Rolling restart: workers stopped with SIGTERM one after another | draining under load; no task fails |
 | 8 | Code churn: many DAG files, changed every few seconds while runs go on | parsing keeps up (a parse of code a root moved on from stops, B259); runs succeed; its waits scale with the profile (the first parse within 5 minutes quick, 15 full) |
 | 9 | Standalone on SQLite under load, 8 slots | no "database is locked"; the master's round time |
@@ -68,6 +70,7 @@ are in the report.
 | 22 | Parsing many files (`22_parse_many_files`): `schedr dags check` of files importing a shared helper and a slow library, spawned and forked, one at a time and four at once | seconds and peak memory for each; every file parsed |
 | 23 | Many wait steps (`23_many_sensors`): 500 at once on one worker, its default `[watchers] slots`, 400 plain `@sensor`s awaiting a file and 100 pokes checking for it every 5 s | the worker's memory with its watcher hosts, idle and with all 500 in, per wait step, and what the hosts report; how soon each ends once the file is there; every one succeeds |
 | 23b | Plain pokes (`23b_plain_pokes`): 100 plain `def` pokes on one worker, each call blocking 1 s as a blocking client does, every 5 s (decision 489) | how soon each ends once the file is there, at most 7 s at p99 (its `every` and its call): on Python's default pool of at most 32 threads their calls would queue and overrun; every one succeeds |
+| 24 | Many triggers (`24_many_triggers`, M5.2f): idle `@trigger.poke`s filling the watcher slots (each reporting with every heartbeat) and `@trigger`s firing every 0.5 s, each event a run of one task, beside scenario 1's kind of load | how long trigger messages hold the master's lock, events a second, an event to its run and to its task's start, tasks a second; `SCHEDR_STRESS_POKES` and `SCHEDR_STRESS_FIRING` set the counts (0: none) |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything

@@ -1210,14 +1210,20 @@ impl MasterCore {
         Ok(())
     }
 
-    /// A heartbeat: a trigger the master doesn't count as running there is told to stop (its
-    /// worker came back after it was given elsewhere).
-    pub(crate) async fn triggers_reported(
+    /// A heartbeat's triggers, one read of them for both (M5.2f): one the master doesn't count
+    /// as running there is told to stop (its worker came back after it was given elsewhere);
+    /// its pokes' calls are stored together, in one transaction, as [`Self::trigger_poked`]
+    /// stores each. Those, like the heartbeat's time, are for people: a failed write is
+    /// logged, and the next heartbeat's reports carry them on (a crossing of `failing_after`
+    /// not stored is crossed again).
+    pub(crate) async fn heartbeat_triggers(
         &mut self,
         worker_id: &str,
         reported: &[String],
+        pokes: &[pb::TriggerPoked],
+        now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
-        if reported.is_empty() {
+        if reported.is_empty() && pokes.is_empty() {
             return Ok(Vec::new());
         }
         let records = self.db.triggers().await?;
@@ -1226,11 +1232,90 @@ impl MasterCore {
             .filter(|r| r.worker_id.as_deref() == Some(worker_id))
             .filter_map(|r| r.instance_id.as_deref())
             .collect();
-        Ok(reported
+        let told = reported
             .iter()
             .filter(|instance| !current.contains(instance.as_str()))
             .map(|instance| cancel_trigger(worker_id, instance))
-            .collect())
+            .collect();
+        if !pokes.is_empty()
+            && let Err(error) = self.pokes_stored(worker_id, &records, pokes, now).await
+        {
+            tracing::warn!(worker_id, %error, "a heartbeat's poke reports not stored");
+        }
+        Ok(told)
+    }
+
+    /// A heartbeat's pokes stored (see [`Self::heartbeat_triggers`]).
+    async fn pokes_stored(
+        &mut self,
+        worker_id: &str,
+        records: &[TriggerRecord],
+        pokes: &[pb::TriggerPoked],
+        now: Timestamp,
+    ) -> Result<(), CoreError> {
+        // A call done may change what the trigger loop decides (Grok's review of M5.1f2).
+        self.dispatcher.trigger_wake().notify_one();
+        let by_dag: BTreeMap<&str, &TriggerRecord> =
+            records.iter().map(|r| (r.dag_id.as_str(), r)).collect();
+        let limit = self.settings.failing_after;
+        let mut held = Vec::new();
+        for poked in pokes {
+            let Some(record) = by_dag
+                .get(poked.dag_id.as_str())
+                .filter(|r| holds(r, worker_id, &poked.instance_id))
+            else {
+                continue;
+            };
+            let error = (!poked.error.is_empty()).then(|| fit_error(&poked.error));
+            let at = poked
+                .at
+                .as_ref()
+                .and_then(crate::dispatch::time_of)
+                .unwrap_or(now);
+            // As `trigger_poked`: channels hear of one that keeps failing as it crosses.
+            let crossed = limit > 0 && record.failures < limit && poked.failures >= limit;
+            held.push((poked, error, at, crossed));
+        }
+        if held.is_empty() {
+            return Ok(());
+        }
+        let stored: Vec<schedr_db::triggers::Poked<'_>> = held
+            .iter()
+            .map(|(poked, error, at, _)| schedr_db::triggers::Poked {
+                dag_id: &poked.dag_id,
+                instance_id: &poked.instance_id,
+                at: *at,
+                error: error.as_deref(),
+                failures: poked.failures,
+            })
+            .collect();
+        let db = self.db.clone();
+        Box::pin(db.atomically(async {
+            self.db.triggers_poked(&stored).await?;
+            for (poked, error, _, crossed) in &held {
+                if *crossed && let Some(why) = error {
+                    self.notify_trigger_failing(&poked.dag_id, why, now).await?;
+                }
+            }
+            Ok::<_, CoreError>(())
+        }))
+        .await?;
+        // A call that went well clears its trigger's strikes: it works. Read only for DAGs that
+        // have some (rarely any).
+        let went_well: Vec<&str> = held
+            .iter()
+            .filter(|(_, error, _, _)| error.is_none())
+            .map(|(poked, _, _, _)| poked.dag_id.as_str())
+            .collect();
+        for dag in self.db.dags_with_strikes(&went_well).await? {
+            if let Ok(dag_id) = DagId::new(&dag)
+                && let Some(active) = self.db.active_dags_of(&[&dag_id]).await?.first()
+                && let Trigger::Event { task, .. } = &active.dag.trigger
+            {
+                self.db.clear_wait_step(&dag, task.id.as_str()).await?;
+            }
+        }
+        Ok(())
     }
 
     /// A worker registered: what it still runs keeps its slot, what it doesn't has ended, and
@@ -1283,7 +1368,7 @@ impl MasterCore {
                     .or_insert_with(|| (worker_id.to_owned(), String::new()));
             }
         }
-        self.triggers_reported(worker_id, reported).await
+        self.heartbeat_triggers(worker_id, reported, &[], now).await
     }
 }
 

@@ -515,6 +515,28 @@ struct Arrived {
     /// Assignments the master never sent (no stream, or one full or closed), with the worker
     /// they were for: surely never started there (Grok's review of B240).
     unsent: BTreeMap<String, String>,
+    /// Each worker's `Register`s waiting for the lock: the latest one's arrival, and how many
+    /// wait (B267).
+    registering: BTreeMap<String, (Timestamp, usize)>,
+}
+
+/// A worker's `Register` waiting for the lock ([`Arrivals::registering`]): handled once dropped.
+#[derive(Debug)]
+pub struct Registering {
+    arrivals: Arrivals,
+    worker_id: String,
+}
+
+impl Drop for Registering {
+    fn drop(&mut self) {
+        let mut inner = self.arrivals.inner();
+        if let Some(waiting) = inner.registering.get_mut(&self.worker_id) {
+            waiting.1 -= 1;
+            if waiting.1 == 0 {
+                inner.registering.remove(&self.worker_id);
+            }
+        }
+    }
 }
 
 /// What is known of a worker's current stream's numbering (B240).
@@ -543,10 +565,33 @@ impl Arrivals {
         *last = (*last).max(at);
     }
 
-    /// When the latest message from `worker_id` arrived, if one has since it was forgotten.
+    /// When the latest message from `worker_id` arrived, if one has since it was forgotten, or
+    /// a `Register` of its that still waits for the lock (B267).
     #[must_use]
     pub fn last(&self, worker_id: &str) -> Option<Timestamp> {
-        self.inner().last.get(worker_id).copied()
+        let inner = self.inner();
+        let waiting = inner.registering.get(worker_id).map(|(at, _)| *at);
+        inner.last.get(worker_id).copied().max(waiting)
+    }
+
+    /// A `Register` from `worker_id` arrived `at`: a sign of life while it waits for the lock
+    /// (B6: a reconnect during a stall), until the returned guard is dropped, once it is
+    /// handled. Not after: a refused one (its worker's old stream still live) would renew that
+    /// stream's lease with every try, and the worker be refused forever (B267). An accepted
+    /// one is heard by its registration.
+    #[must_use]
+    pub fn registering(&self, worker_id: &str, at: Timestamp) -> Registering {
+        let mut inner = self.inner();
+        let waiting = inner
+            .registering
+            .entry(worker_id.to_owned())
+            .or_insert((at, 0));
+        waiting.0 = waiting.0.max(at);
+        waiting.1 += 1;
+        Registering {
+            arrivals: self.clone(),
+            worker_id: worker_id.to_owned(),
+        }
     }
 
     /// The ID of `worker_id`'s latest stream (its last registration's), until it is forgotten.
@@ -1436,7 +1481,7 @@ impl MasterCore {
                 if let Some(usage) = beat.usage {
                     self.heard_of_usage(worker_id, usage, now).await;
                 }
-                self.triggers_reported(worker_id, &beat.running_triggers)
+                self.heartbeat_triggers(worker_id, &beat.running_triggers, &beat.pokes, now)
                     .await?
             }
             message @ (worker_message::Message::TriggerEvent(_)
@@ -1868,8 +1913,10 @@ impl MasterCore {
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
+        let parse = schedr_db::trace::point("parse_jobs_expire");
         let expired = self.discovery.jobs_mut().expire(now);
         outgoing.extend(expired.into_iter().map(assign_parse));
+        drop(parse);
         let lease =
             SignedDuration::try_from(self.settings.lease_timeout).unwrap_or(SignedDuration::MAX);
         let steady = (self.steady)(now);
@@ -1884,6 +1931,7 @@ impl MasterCore {
             .map(|(id, _)| id.clone())
             .collect();
         for worker_id in lost {
+            let _lost = schedr_db::trace::point("worker_lost");
             self.forget(in_round, &worker_id, WorkerState::Lost, now, outgoing)
                 .await?;
         }
@@ -2107,9 +2155,11 @@ impl MasterCore {
             .collect();
         let handled = Box::pin(db.atomically(async {
             if !started.is_empty() {
+                let _started = schedr_db::trace::point("batch.started");
                 out.extend(dispatcher.started_batch(&started, now).await?);
             }
             if !finished.is_empty() {
+                let _finished = schedr_db::trace::point("batch.finished");
                 out.extend(dispatcher.finished_batch(in_round, &finished, now).await?);
             }
             Ok::<_, DispatchError>(())

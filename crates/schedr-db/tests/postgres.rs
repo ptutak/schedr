@@ -14,6 +14,7 @@ use schedr_db::dags::{DagChange, NewParse};
 use schedr_db::instances::InstanceUpdate;
 use schedr_db::reads::RunFilter;
 use schedr_db::runs::NewRun;
+use schedr_db::triggers::Poked;
 use schedr_db::{Backend, Database, DbError, Pool, SchemaStatus};
 use schedr_model::commands::{Command, CommandStatus};
 use schedr_model::runner::{ErrorSummary, ParsedFile};
@@ -846,9 +847,11 @@ async fn the_rounds_probe_and_stored_next_fire_times_work_on_postgres() {
         .await;
     assert_eq!((found, stale), (vec![], true));
     let found = db
-        .in_round(now, std::time::Duration::ZERO, async {
-            db.dags_with_queued_runs().await.unwrap()
-        })
+        .in_round(
+            now,
+            std::time::Duration::ZERO,
+            Box::pin(async { db.dags_with_queued_runs().await.unwrap() }),
+        )
         .await;
     assert_eq!(found, [sync()]);
     let done = "2026-10-21T01:00:00Z";
@@ -3261,4 +3264,46 @@ async fn a_statement_timeout_is_waited_for_and_named_without_the_servers_words()
     );
     assert!(error.is_transient(), "{error}");
     assert_eq!(error.waiting_reason(), "a statement timed out, error 57014");
+}
+
+#[tokio::test]
+async fn a_heartbeats_pokes_are_stored_together_on_postgres() {
+    // M5.2f: `triggers_poked`'s Postgres statement, each poke on its own run of the trigger.
+    let (db, version) = with_dag().await;
+    db.trigger_assigned("sync", "i1", "w1", &version, "sha256:h1", ts(NOW))
+        .await
+        .unwrap();
+    db.triggers_poked(&[
+        Poked {
+            dag_id: "sync",
+            instance_id: "i1",
+            at: ts("2026-10-21T00:01:00Z"),
+            error: Some("boom"),
+            failures: 2,
+        },
+        Poked {
+            dag_id: "sync",
+            instance_id: "i0",
+            at: ts("2026-10-21T00:02:00Z"),
+            error: None,
+            failures: 0,
+        },
+    ])
+    .await
+    .unwrap();
+    let record = db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(record.last_poked_at, Some(ts("2026-10-21T00:01:00Z")));
+    assert_eq!(record.last_error.as_deref(), Some("boom"));
+    assert_eq!(record.failures, 2);
+    db.triggers_poked(&[Poked {
+        dag_id: "sync",
+        instance_id: "i1",
+        at: ts("2026-10-21T00:03:00Z"),
+        error: None,
+        failures: 0,
+    }])
+    .await
+    .unwrap();
+    let record = db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!((record.last_error, record.failures), (None, 0));
 }

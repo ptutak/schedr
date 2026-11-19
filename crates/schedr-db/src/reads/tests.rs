@@ -629,3 +629,92 @@ async fn the_rest_is_owed_by_the_worker_the_cleanup_first_moved_from() {
         Some("w2")
     );
 }
+
+#[tokio::test]
+async fn migration_0003_marks_the_cleanups_and_wait_steps_of_unfinished_runs() {
+    // Instances stored before the migration get `cleanup` and `wait_step` from their run's DAG
+    // version, only for runs not finished (Codex's review: a history-wide statement could hold
+    // SQLite's write lock past the master's lease): its backfill run again on a DAG naming
+    // `extract` a resource's cleanup and making it a sensor.
+    let (db, version) = with_dag().await;
+    let running = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
+    let done = add_run(&db, &version, "2026-10-15T04:00:00Z", RunState::Success).await;
+    let now = ts("2026-10-15T03:00:01Z");
+    for run in [&running, &done] {
+        db.create_instances(run, &[(extract(), -1, TaskInstanceState::Queued)], now)
+            .await
+            .unwrap();
+    }
+    let crate::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite")
+    };
+    sqlx::query(
+        "UPDATE dag_versions SET dag_json = json_set(dag_json, '$.resources', \
+         json('[{\"setup\": \"other\", \"cleanup\": \"extract\", \"users\": []}]'), \
+         '$.tasks[0].kind', 'sensor')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let migration = include_str!("../../migrations/sqlite/0003_cleanup_wait_steps.sql");
+    let backfill = &migration[migration.find("UPDATE").unwrap()..];
+    sqlx::raw_sql(sqlx::AssertSqlSafe(backfill))
+        .execute(pool)
+        .await
+        .unwrap();
+    let marked = |run: String| async move {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT cleanup, wait_step FROM task_instances WHERE run_id = $1",
+        )
+        .bind(run)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(marked(running).await, (1, 1));
+    assert_eq!(
+        marked(done).await,
+        (0, 0),
+        "a finished run's left as it was"
+    );
+}
+
+#[tokio::test]
+async fn a_runs_cleanups_and_wait_steps_are_marked_as_their_instances_are_made() {
+    let (db, version) = with_dag().await;
+    let run = add_run(&db, &version, "2026-10-15T03:00:00Z", RunState::Running).await;
+    let mut dag = serde_json::to_value(dag()).unwrap();
+    dag["tasks"][0]["kind"] = json!("sensor");
+    dag["tasks"][0]["mode"] = json!("loop");
+    let load = json!({"id": "load", "kind": "python",
+        "settings": {"retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+            "queue": "default", "max_output_size": 1_048_576},
+        "output_type": {"type": "none"}});
+    dag["tasks"].as_array_mut().unwrap().push(load);
+    dag["resources"] = json!([{"setup": "extract", "cleanup": "load", "users": []}]);
+    let dag: Dag = serde_json::from_value(dag).unwrap();
+    let load_id = TaskId::new("load").unwrap();
+    db.create_instances_of(
+        &run,
+        Some(&dag),
+        &[
+            (extract(), -1, TaskInstanceState::Queued),
+            (load_id, -1, TaskInstanceState::Scheduled),
+        ],
+        ts("2026-10-15T03:00:01Z"),
+    )
+    .await
+    .unwrap();
+    let crate::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("SQLite")
+    };
+    let marks: Vec<(String, i64, i64)> =
+        sqlx::query_as("SELECT task_id, cleanup, wait_step FROM task_instances ORDER BY task_id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        marks,
+        [("extract".to_owned(), 0, 1), ("load".to_owned(), 1, 0)]
+    );
+}

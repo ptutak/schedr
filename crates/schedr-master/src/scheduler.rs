@@ -251,10 +251,18 @@ impl Scheduler {
         let mut due = Vec::new();
         let mut stored = HashMap::new();
         if self.quiet().enabled() {
-            for dag in self.db.dags_with_queued_runs().await? {
+            let queued = {
+                let _read = schedr_db::trace::point("dags_with_queued_runs");
+                self.db.dags_with_queued_runs().await?
+            };
+            for dag in queued {
                 due.push((dag, WakeReason::RunQueued));
             }
-            for (dag, at) in self.db.scheduled_due(now).await? {
+            let scheduled = {
+                let _read = schedr_db::trace::point("scheduled_due");
+                self.db.scheduled_due(now).await?
+            };
+            for (dag, at) in scheduled {
                 let reason = if at.is_some() {
                     WakeReason::Timer
                 } else {
@@ -288,9 +296,13 @@ impl Scheduler {
                 self.quiet().round_done(&visit, &HashSet::new());
                 return Ok(pass);
             }
-            Visit::All => stored = self.db.next_fires().await?,
+            Visit::All => {
+                let _read = schedr_db::trace::point("next_fires");
+                stored = self.db.next_fires().await?;
+            }
             Visit::Some(_) => {}
         }
+        let read = schedr_db::trace::point("overview_and_active_dags");
         // The DAGs' runs at once: a round costs a few queries, not three per DAG (B12), and
         // reads only the DAGs it visits.
         let (overview, active_dags) = match &visit {
@@ -313,7 +325,9 @@ impl Scheduler {
             .map(|a| &a.dag.id)
             .filter(|id| !stored.contains_key(*id))
             .collect();
+        drop(read);
         if !unread.is_empty() {
+            let _read = schedr_db::trace::point("next_fires_of");
             stored.extend(self.db.next_fires_of(&unread).await?);
         }
         let mut seen = HashSet::with_capacity(active_dags.len());
@@ -345,6 +359,7 @@ impl Scheduler {
             let held = active.held.as_ref();
             if !active.paused && held.is_none() {
                 let last = overview.last_scheduled(&active.dag.id);
+                let _create = schedr_db::trace::point("dag.create_due");
                 (waiting, skipped) = self
                     .create_due(&mut pass, &active, &plan, last, &mut running, now)
                     .await?;
@@ -353,6 +368,7 @@ impl Scheduler {
                 self.passed(&active.dag.id);
             }
             if held.is_none() {
+                let _start = schedr_db::trace::point("dag.start_queued");
                 pass.started
                     .extend(self.start_queued(queued, &plan, running, now).await?);
             }
@@ -371,6 +387,7 @@ impl Scheduler {
                     plan.next_fire_after(now).unwrap_or(NO_FIRE)
                 };
                 if stored.get(&active.dag.id) != Some(&Some(next)) {
+                    let _write = schedr_db::trace::point("dag.set_next_fire");
                     self.db.set_next_fire(&active.dag.id, next).await?;
                 }
             }

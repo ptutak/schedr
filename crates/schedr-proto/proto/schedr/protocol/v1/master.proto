@@ -218,6 +218,10 @@ message Heartbeat {
   // How long its waiting queue's head (the oldest queued task) has waited so far, 0 when the
   // queue is empty (decision 509; protocol 2.2): the master's slow-equals is made from these.
   uint64 queue_head_age_ms = 8;
+  // Its pokes' calls since the last heartbeat, one each (M5.2f; protocol 2.2): stored together,
+  // in one transaction. One whose call changed how it goes (it failed, or works again) is sent
+  // at once as a `TriggerPoked` instead, as an older worker sends each.
+  repeated TriggerPoked pokes = 9;
 }
 
 // A schedr process's memory and CPU, and its container's (decision 463).

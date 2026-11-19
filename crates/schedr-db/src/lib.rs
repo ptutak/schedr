@@ -30,6 +30,7 @@ pub mod status;
 pub mod strikes;
 pub mod task_flow;
 pub mod task_memory;
+pub mod trace;
 pub mod triggers;
 pub mod workers;
 

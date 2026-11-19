@@ -371,7 +371,11 @@ impl Execution {
     ) -> Result<Vec<String>, ExecutionError> {
         let mut prepared = Vec::new();
         let mut created = 0;
-        for run in self.db.newly_running().await? {
+        let newly = {
+            let _read = schedr_db::trace::point("prepare_runs.newly_running");
+            self.db.newly_running().await?
+        };
+        for run in newly {
             // At most so many instances a round (a run is never split, and one is always
             // made): many runs starting at once go over a few rounds (B18).
             let tasks = run.dag.tasks.len();
@@ -380,6 +384,7 @@ impl Execution {
             }
             created += tasks;
             // Whole or not at all (B79): a run is found again only while it has no task rows.
+            let _run = schedr_db::trace::point("prepare_runs.run");
             Box::pin(self.db.atomically(self.prepare(&run, now))).await?;
             prepared.push(run.run_id);
         }
@@ -394,7 +399,10 @@ impl Execution {
             .iter()
             .map(|t| (t.id.clone(), -1, TaskInstanceState::Scheduled))
             .collect();
-        self.db.create_instances(&run.run_id, &first, now).await?;
+        // Its cleanups and wait steps marked on their rows (migration 0003).
+        self.db
+            .create_instances_of(&run.run_id, Some(&run.dag), &first, now)
+            .await?;
         let mut progress = RunProgress::new(&run.dag, BTreeMap::new());
         let before = progress.snapshot();
         self.settle_all(&run.run_id, &run.dag, &mut progress, &[])
@@ -450,9 +458,11 @@ impl Execution {
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
         // The run as read before the core lock (M5.2cB3), true until this writes; else now.
-        let mut run = match read {
-            Some(run) => run,
-            None => self.run(run_id).await?,
+        let mut run = if let Some(run) = read {
+            run
+        } else {
+            let _read = schedr_db::trace::point("batch.finished.run.read_run");
+            self.run(run_id).await?
         };
         let mut updates = Vec::with_capacity(results.len());
         let mut outputs: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -486,8 +496,10 @@ impl Execution {
                 .iter()
                 .map(|(id, outcome, value)| (id.as_str(), outcome.as_str(), value))
                 .collect();
+            let _write = schedr_db::trace::point("batch.finished.run.store_outputs");
             self.db.store_outputs(&rows).await?;
         }
+        let _advance = schedr_db::trace::point("batch.finished.run.advance");
         let (run_result, stops) = self.advance(run_id, &run, updates, now).await?;
         Ok(Recorded {
             state: state_now,
@@ -635,7 +647,10 @@ impl Execution {
         _: &InRound,
         now: Timestamp,
     ) -> Result<usize, ExecutionError> {
-        let mut due = self.db.due_retries(now).await?;
+        let mut due = {
+            let _read = schedr_db::trace::point("queue_due_retries.due_retries");
+            self.db.due_retries(now).await?
+        };
         // At most so many a round, the earliest due first; the rest in the next ones (B18).
         due.truncate(self.rounds.retries);
         for (run_id, task_id, map_index) in &due {
@@ -643,6 +658,7 @@ impl Execution {
                 ready_at: Some(now),
                 ..update(task_id, *map_index, TaskInstanceState::Queued)
             };
+            let _write = schedr_db::trace::point("queue_due_retries.one");
             self.db.update_instances(run_id, &[queued], now).await?;
         }
         Ok(due.len())
@@ -1048,7 +1064,11 @@ impl Execution {
         first: Vec<InstanceUpdate>,
         now: Timestamp,
     ) -> Result<(Option<RunState>, Vec<(TaskId, i32)>), ExecutionError> {
-        let mut progress = progress_of(run).with_chosen(self.chosen_of(run_id, run, &first).await?);
+        let chosen = {
+            let _read = schedr_db::trace::point("advance.chosen_of");
+            self.chosen_of(run_id, run, &first).await?
+        };
+        let mut progress = progress_of(run).with_chosen(chosen);
         let before = progress.snapshot();
         for change in &first {
             if let Ok(index) = usize::try_from(change.map_index) {
@@ -1069,13 +1089,19 @@ impl Execution {
             .filter(|u| u.map_index == -1 && u.state == TaskInstanceState::Success)
             .map(|u| u.task_id.clone())
             .collect();
-        self.settle_all(run_id, &run.dag, &mut progress, &ending)
-            .await?;
-        let stops = self
-            .store(run_id, &mut progress, &before, first, now)
-            .await?;
+        {
+            let _settle = schedr_db::trace::point("advance.settle_all");
+            self.settle_all(run_id, &run.dag, &mut progress, &ending)
+                .await?;
+        }
+        let stops = {
+            let _store = schedr_db::trace::point("advance.store");
+            self.store(run_id, &mut progress, &before, first, now)
+                .await?
+        };
         let result = progress.result();
         if let Some(result) = result {
+            let _finish = schedr_db::trace::point("advance.finish_run");
             self.finish(run_id, &run.dag, result, now).await?;
         }
         Ok((result, stops))
@@ -1307,7 +1333,7 @@ impl Execution {
         let changes = progress.changes_since(before);
         if !changes.created.is_empty() {
             self.db
-                .create_instances(run_id, &changes.created, now)
+                .create_instances_of(run_id, Some(progress.dag()), &changes.created, now)
                 .await?;
         }
         let mut updates = first;

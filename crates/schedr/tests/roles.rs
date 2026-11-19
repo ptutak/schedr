@@ -47,6 +47,28 @@ fn three_processes_on_one_sqlite_file_run_a_dag() {
 }
 
 #[test]
+fn a_master_restarted_on_its_kept_port_waits_for_it_to_be_free() {
+    // B257: between a master's kill and its restart, another process can be handed its kept
+    // port; the test cluster starts it again until the port is free.
+    let mut cluster = Cluster::new(None, "100ms");
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.start("master");
+    let port = cluster.grpc_port.unwrap();
+    cluster.kill("master");
+    let taken = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let freed = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        drop(taken);
+    });
+    cluster.start("master");
+    freed.join().unwrap();
+    assert_eq!(cluster.grpc_port_of("master"), port);
+    let log = std::fs::read_to_string(&cluster.roles.last().unwrap().log).unwrap();
+    assert!(log.contains("schedr master: gRPC on "), "{log}");
+}
+
+#[test]
 fn on_postgres_a_command_is_applied_at_once_not_at_the_next_tick() {
     // With an hour between ticks, only the notification can make the master apply a command
     // while the CLI waits for it (up to 30 s).

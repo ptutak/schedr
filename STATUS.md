@@ -3,29 +3,30 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-18)
+## Now (2026-11-19)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2e, M5.2f, R1.2, M5.3a, M5.3b.
+- **Then:** M5.2g, M5.2h, R1.2, M5.3a, M5.3b.
 - **Open questions:** 1 (`DECISIONS.md`).
-- **Open bugs:** 7; first: B265 (medium/possible), B254 (low/likely), B264 (medium/rare), B258 (low/possible), B257 (low/possible) (`BUGS.md`).
+- **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
+- **Open bugs:** 5; first: B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g)
 - DN14 (2026-11-19): A start is refused at the master-time deadline too, for every task (adds to D281)
 - DN13 (2026-11-18): M5.2e built: two of decision 509's small choices changed (corrects D509)
 - D509 (2026-11-18): the worker's waiting queue, settled for building
 - DN12 (2026-11-18): The macOS wheel is built only on a release's tag (adds to D160)
-- D508 (2026-11-18): decision notes and the user's notes
+- M5.2f (2026-11-19): Many DAG triggers: a stress scenario, and poke reports in the heartbeat
+- M5.2e (2026-11-19): A worker's waiting queue (lookahead with a barrier)
 - M5.2d (2026-11-18): The worker's start path
-- M5.2cB3 (2026-11-18): The round's results part: one set of statements, its reads before the lock
-- M5.2cB (2026-11-17): Only the round moves runs forward
 
 ## In progress
 
-- M5.2e (decision 509, DN13) built e1-e7: the worker's waiting queue (agent.rs `queue`, `start_queued`, `check_queue`), the master's free-slots-first picking (`Needs::may_queue`) and withdrawn marks, slow-equals (slow_equals.rs, only workers with a queue counted), protocol 2.2 fields, `[worker] queue`, hidden `WORKER__QUEUE_FACTOR`, `WORKER__QUEUE_CHECK_INTERVAL`, `MASTER__SLOW_EQUALS_FACTOR`/`_FLOOR`; simulator scenarios with a queue; stress 1c. Codex's review: four fixed, one a known limit (a withdrawn mark lost on a master restart). Measured: no throughput change where the master's round is the limit (scenario 1 off/on 65-67 tasks a second). Pre-accepted by the user: commit and push after make check, the 600-case simulator and the quick stress suite pass.
-- Next: M5.2f, the trigger batching (plan/M5.toml). Not yet shown in a stress run: a give-back end to end (1c's two workers stay evenly busy).
+- M5.2e done and pushed (23f0b6d8, ce101532: the queue, DN14, Codex's two review rounds). Its profile (scenario 1, release, 2026-11-19): 81 tasks a second; the round loop busy all the time (32.7 s of rounds in a 31 s window, ~13 ms a task: results 3.9, assign 1.8, commands 1.4, prepare 0.7, scheduler 0.7, off the lock 4.6); the master at 18% of one core, Postgres's statements 9.1 s in all: the round waits, mostly on round trips; workers 1.8 cores, 1.5 of it system time (cause not measured: no perf/strace here). SQLite 9b: 48-64 a second, B266 logged.
+- M5.2f prep, uncommitted: scenario 24 (`stress_24_many_triggers`), the `triggers` turn part, `SCHEDR_STRESS_METRICS`. Its runs found B267 (critical: refused registrations keep a worker live, the cluster stuck) and B268 (high, suspected: trigger messages behind results); without triggers 62.5 a second. Waits for the user: what next (B267/B268 before the batching, by the bug rule).
 
 ## Waiting for the user
 
@@ -43,7 +44,7 @@ Nothing.
 
 ## Colleagues
 
-Codex at 56% of its week after M5.2d's review (2026-11-18). Grok on B261 (2026-11-18). Usage logs in the skills' `USAGE.md`.
+Codex at 63% of its week after M5.2e's reviews (2026-11-19; resets Sat 21 Nov 23:45). Grok on B261 (2026-11-18). Usage logs in the skills' `USAGE.md`.
 
 Resume this session with:
 

@@ -185,7 +185,7 @@ fn merged(updates: &[InstanceUpdate]) -> Vec<(&InstanceUpdate, i32)> {
 /// The most task instances one `UPDATE` changes (eight parameters each).
 const UPDATES_PER_STATEMENT: usize = 500;
 
-/// The most task instances one `INSERT` creates (seven parameters each: well under SQLite's
+/// The most task instances one `INSERT` creates (nine parameters each: well under SQLite's
 /// 32,766 and Postgres's 65,535).
 const INSTANCES_PER_STATEMENT: usize = 500;
 
@@ -229,6 +229,31 @@ impl Database {
         states: &[(TaskId, i32, TaskInstanceState)],
         now: Timestamp,
     ) -> Result<(), DbError> {
+        self.create_instances_of(run_id, None, states, now).await
+    }
+
+    /// As [`Self::create_instances`], each marked from `dag` (migration 0003): whether a
+    /// resource's cleanup (`cleanup`) and whether a wait step (`wait_step`).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails (nothing is stored then).
+    pub async fn create_instances_of(
+        &self,
+        run_id: &str,
+        dag: Option<&Dag>,
+        states: &[(TaskId, i32, TaskInstanceState)],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        let marks = |task_id: &TaskId| {
+            dag.map_or((false, false), |dag| {
+                let cleanup = dag.resource_of_cleanup(task_id).is_some();
+                let wait_step = dag
+                    .task(task_id)
+                    .is_some_and(|task| matches!(task.kind, schedr_model::TaskKind::Sensor { .. }));
+                (cleanup, wait_step)
+            })
+        };
         let now_text = db_time(now);
         // Many rows a statement (a run of a wide DAG was one statement a task, B18), in chunks
         // that stay under SQLite's and Postgres's limits on parameters.
@@ -236,28 +261,33 @@ impl Database {
             for chunk in states.chunks(INSTANCES_PER_STATEMENT) {
                 let rows: Vec<String> = (0..chunk.len())
                     .map(|i| {
-                        let n = i * 7;
+                        let n = i * 9;
                         format!(
-                            "(${}{{uuid}}, ${}{{uuid}}, ${}, ${}, ${}, ${}{{ts}}, ${}{{ts}})",
+                            "(${}{{uuid}}, ${}{{uuid}}, ${}, ${}, ${}, ${}{{ts}}, ${}{{ts}}, ${}, \
+                             ${})",
                             n + 1,
                             n + 2,
                             n + 3,
                             n + 4,
                             n + 5,
                             n + 6,
-                            n + 7
+                            n + 7,
+                            n + 8,
+                            n + 9
                         )
                     })
                     .collect();
                 let text = format!(
                     "INSERT INTO task_instances \
-                     (id, run_id, task_id, map_index, state, ready_at, updated_at) VALUES {}",
+                     (id, run_id, task_id, map_index, state, ready_at, updated_at, cleanup, \
+                     wait_step) VALUES {}",
                     rows.join(", ")
                 );
                 let text = sql_text(backend, &text);
                 let mut insert = crate::query::query(text);
                 for (task_id, map_index, state) in chunk {
                     let ready = (*state == TaskInstanceState::Queued).then(|| now_text.clone());
+                    let (cleanup, wait_step) = marks(task_id);
                     insert = insert
                         .bind(Uuid::now_v7().to_string())
                         .bind(run_id)
@@ -265,7 +295,9 @@ impl Database {
                         .bind(*map_index)
                         .bind(state.to_string())
                         .bind(ready)
-                        .bind(&now_text);
+                        .bind(&now_text)
+                        .bind(cleanup)
+                        .bind(wait_step);
                 }
                 insert.execute(&mut *tx).await?;
             }

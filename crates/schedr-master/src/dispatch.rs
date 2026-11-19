@@ -170,12 +170,15 @@ impl ResultsReads {
         if ids.is_empty() {
             return Ok(reads);
         }
+        let read = schedr_db::trace::point("read_before_lock.attempts_by_ids");
         for attempt in db.attempts_by_ids(ids).await? {
             reads.attempts.insert(attempt.id.clone(), attempt);
         }
+        drop(read);
         // Their runs in one read (M5.2cB4).
         let runs: BTreeSet<&str> = reads.attempts.values().map(|a| a.run_id.as_str()).collect();
         let runs: Vec<&str> = runs.into_iter().collect();
+        let _read = schedr_db::trace::point("read_before_lock.runs_tasks");
         reads.runs = db.runs_tasks(&runs).await?;
         Ok(reads)
     }
@@ -214,7 +217,10 @@ impl AssignReads {
     ///
     /// [`DispatchError`] if the database fails.
     pub async fn read(db: &Database, now: Timestamp, most: usize) -> Result<Self, DispatchError> {
-        let ready = db.ready_instances(now).await?;
+        let ready = {
+            let _read = schedr_db::trace::point("read_before_lock.ready_instances");
+            db.ready_instances(now).await?
+        };
         if ready.is_empty() {
             return Ok(Self {
                 ready,
@@ -233,6 +239,7 @@ impl AssignReads {
             })
             .collect();
         // Read at once, each on its own connection: none needs another's answer (M5.2cB4).
+        let _read = schedr_db::trace::point("read_before_lock.upstream_and_wait_steps");
         let (round_reads, upstream) = Box::pin(async {
             tokio::try_join!(Box::pin(RoundReads::read(db, &ready)), async {
                 Ok(Box::pin(mapping::Upstream::read(db, wanted)).await?)
@@ -1223,8 +1230,15 @@ impl Dispatcher {
         outgoing.append(&mut self.stops);
         // Only a group's own writes are read back by (M4B.3); a round's aren't kept.
         self.witnesses.clear();
-        self.take_back_found(in_round, now).await?;
-        self.execution.prepare_runs(in_round, now).await?;
+        {
+            let _point = schedr_db::trace::point("take_back_found");
+            self.take_back_found(in_round, now).await?;
+        }
+        {
+            let _point = schedr_db::trace::point("prepare_runs");
+            self.execution.prepare_runs(in_round, now).await?;
+        }
+        let _point = schedr_db::trace::point("queue_due_retries");
         self.execution.queue_due_retries(in_round, now).await?;
         Ok(())
     }
@@ -1240,7 +1254,11 @@ impl Dispatcher {
         in_round: &InRound,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
-        self.expire(in_round, now).await?;
+        {
+            let _point = schedr_db::trace::point("expire_unstarted");
+            self.expire(in_round, now).await?;
+        }
+        let _point = schedr_db::trace::point("end_replaced");
         self.end_replaced(in_round, now).await?;
         Ok(())
     }
@@ -1305,11 +1323,20 @@ impl Dispatcher {
         outgoing: &mut Vec<Outgoing>,
     ) -> Result<(), DispatchError> {
         self.set_aside.retain(|_, until| *until > now);
-        self.fail_waiting_users(in_round, now).await?;
+        {
+            let _point = schedr_db::trace::point("fail_waiting_users");
+            self.fail_waiting_users(in_round, now).await?;
+        }
         // The stops of a step a timeout failed go now, not a round later.
         outgoing.append(&mut self.stops);
-        self.assign_cleanups(now, outgoing).await?;
-        self.wind_down_removed(in_round, now, outgoing).await?;
+        {
+            let _point = schedr_db::trace::point("assign_cleanups");
+            self.assign_cleanups(now, outgoing).await?;
+        }
+        {
+            let _point = schedr_db::trace::point("wind_down_removed");
+            self.wind_down_removed(in_round, now, outgoing).await?;
+        }
         // Read before the core lock, or now (M5.2cA).
         let read = match read {
             Some(read) => read,
@@ -1326,9 +1353,13 @@ impl Dispatcher {
         let held = if ready.is_empty() {
             BTreeMap::new()
         } else {
+            let _read = schedr_db::trace::point("held_dags");
             self.db.held_dags().await?
         };
-        let ready = self.unless_held(ready, &held, now).await?;
+        let ready = {
+            let _point = schedr_db::trace::point("unless_held");
+            self.unless_held(ready, &held, now).await?
+        };
         let (waits, ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
             .filter(|r| !self.set_aside.contains_key(&r.instance_id))
@@ -1336,10 +1367,16 @@ impl Dispatcher {
         let (chained, mut ready): (Vec<ReadyInstance>, Vec<ReadyInstance>) = ready
             .into_iter()
             .partition(|r| r.dag.task(&r.task_id).is_some_and(starts_a_run));
-        self.chained_into(in_round, now, &chained, outgoing).await?;
+        {
+            let _point = schedr_db::trace::point("chained_into");
+            self.chained_into(in_round, now, &chained, outgoing).await?;
+        }
         self.handing.clear();
         // The `@sensor(wait_for=...)`s whose run has come are assigned with the others.
-        ready.extend(self.wait_for_runs(in_round, now, &waits).await?);
+        {
+            let _point = schedr_db::trace::point("wait_for_runs");
+            ready.extend(self.wait_for_runs(in_round, now, &waits).await?);
+        }
         // Nothing ready (an idle round): no transaction, nothing to keep.
         if ready.is_empty() {
             self.metrics.set_waiting(&[]);
@@ -1349,8 +1386,15 @@ impl Dispatcher {
         self.read_upstream = Some(upstream);
         // The DAGs' current versions under the lock too: one a parse upload stored meanwhile
         // holds its limits this round (Codex's review of M5.2c).
-        let versions = self.db.active_dag_versions().await?.into_iter().collect();
-        self.read_limits(versions).await?;
+        let versions = {
+            let _read = schedr_db::trace::point("active_dag_versions");
+            self.db.active_dag_versions().await?.into_iter().collect()
+        };
+        {
+            let _point = schedr_db::trace::point("read_limits");
+            self.read_limits(versions).await?;
+        }
+        let tx = schedr_db::trace::point("assign_each_tx");
         // The step's assignments are one transaction: stored together, with one lease check
         // and one commit (T2, 2.10b). What they changed in memory (the slots reserved) and the
         // messages built for them go with a rollback.
@@ -1358,6 +1402,7 @@ impl Dispatcher {
         let db = self.db.clone();
         let together =
             Box::pin(db.atomically(self.assign_each(in_round, now, &ready, outgoing))).await;
+        drop(tx);
         let Err(error) = together else {
             // Counted once stored (a step redone one at a time would count them twice).
             self.count_assignments(outgoing.len() - built);
@@ -1966,16 +2011,20 @@ impl Dispatcher {
         // Picked one by one (each sees the slots and limits the ones before it took), claimed
         // together, then each one's message built (decision 482).
         let mut picks = Vec::new();
+        let picking = schedr_db::trace::point("assign_each.picks");
         for (n, one) in ready.iter().enumerate() {
             if tally.assigned >= self.rounds.assignments {
+                let _rest = schedr_db::trace::point("assign_each.past_the_cap");
                 self.past_the_cap(in_round, now, &ready[n..], &mut tally)
                     .await?;
                 break;
             }
+            let _one = schedr_db::trace::point("assign_each.pick_one");
             if let Some(pick) = self.pick_one(in_round, now, one, &mut tally).await? {
                 picks.push((one, pick));
             }
         }
+        drop(picking);
         let claims: Vec<(&str, &str, &str)> = picks
             .iter()
             .map(|(one, pick)| {
@@ -1989,6 +2038,7 @@ impl Dispatcher {
         let tries = if claims.is_empty() {
             BTreeMap::new()
         } else {
+            let _write = schedr_db::trace::point("assign_each.claim_attempts");
             self.db.claim_attempts(&claims, now).await?
         };
         let in_batch = picks.len() > 1;
@@ -2006,9 +2056,14 @@ impl Dispatcher {
         // Read before the lock when it covers the picks (M5.2cA); else now.
         let read = match self.read_upstream.take() {
             Some(read) if read.covers_all(&wanted) => read,
-            _ => mapping::Upstream::read(&self.db, wanted).await?,
+            _ => {
+                let _read = schedr_db::trace::point("assign_each.upstream_again");
+                mapping::Upstream::read(&self.db, wanted).await?
+            }
         };
+        let building = schedr_db::trace::point("assign_each.build_all");
         for (one, pick) in picks {
+            let _one = schedr_db::trace::point("assign_each.build_one");
             let try_number = tries.get(&one.instance_id).copied();
             let built = (pick, try_number);
             self.build_one(
@@ -2021,7 +2076,11 @@ impl Dispatcher {
             )
             .await?;
         }
-        self.db.set_queued_reasons(&tally.reasons, now).await?;
+        drop(building);
+        {
+            let _write = schedr_db::trace::point("assign_each.set_queued_reasons");
+            self.db.set_queued_reasons(&tally.reasons, now).await?;
+        }
         let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
         self.metrics.set_waiting(&waiting);
         Ok(())
@@ -2404,6 +2463,7 @@ impl Dispatcher {
         // Read under the lock, not before it (Codex's review of M5.2c): a registration's
         // adoption may have started one meanwhile, and a start's witness of the commit
         // (`Witness::Started`) must say what this write changed.
+        let read = schedr_db::trace::point("batch.started.attempts_by_ids");
         let attempts: BTreeMap<String, StoredAttempt> = self
             .db
             .attempts_by_ids(&ids)
@@ -2411,6 +2471,7 @@ impl Dispatcher {
             .into_iter()
             .map(|a| (a.id.clone(), a))
             .collect();
+        drop(read);
         let theirs =
             |worker_id: &str, id: &str| attempts.get(id).is_some_and(|a| a.worker_id == worker_id);
         // Each attempt's last start method, as one by one would leave it, and its first
@@ -2434,6 +2495,7 @@ impl Dispatcher {
                 .filter(|&(_, (m, _))| *m == method)
                 .map(|(id, (_, at))| (*id, *at))
                 .collect();
+            let _write = schedr_db::trace::point("batch.started.mark_started_many");
             running.extend(self.db.mark_started_many(&of, method).await?);
         }
         for id in &running {
@@ -2730,7 +2792,9 @@ impl Dispatcher {
             .map(|((_, attempt, _), end)| (attempt.id.as_str(), end))
             .collect();
         self.clear_wait_steps(&cleared).await?;
+        let write = schedr_db::trace::point("batch.finished.end_attempts");
         let recorded = self.db.end_attempts(&rows, now).await?;
+        drop(write);
         let mut by_run: BTreeMap<&str, Vec<(&TaskId, i32, &AttemptResult)>> = BTreeMap::new();
         for ((attempt, result), end) in results.iter().zip(&ends) {
             if recorded.contains(&attempt.id) {
@@ -2744,6 +2808,7 @@ impl Dispatcher {
             }
         }
         for (run_id, results) in by_run {
+            let _run = schedr_db::trace::point("batch.finished.run");
             let done = self
                 .execution
                 .attempts_finished(
@@ -2754,6 +2819,7 @@ impl Dispatcher {
                     now,
                 )
                 .await?;
+            let _stop = schedr_db::trace::point("batch.finished.run.stop");
             self.stop(run_id, &done.stops).await?;
         }
         Ok(())
@@ -2800,7 +2866,9 @@ impl Dispatcher {
             .iter()
             .flat_map(|(_, group)| group.iter().map(|f| f.attempt_id.as_str()))
             .collect();
+        let read = schedr_db::trace::point("batch.finished.batch_attempts");
         let attempts = self.batch_attempts(&ids).await?;
+        drop(read);
         // A repeat is a worker's second `Finished` for an attempt; another worker's is its own
         // (a moved cleanup's rest).
         let mut seen = BTreeSet::new();
@@ -2825,6 +2893,7 @@ impl Dispatcher {
                         // It writes runs on its own reads: those read before the lock are no
                         // longer true (Codex's review of M5.2c).
                         self.results_reads.runs.clear();
+                        let _alone = schedr_db::trace::point("batch.finished.uncommon_alone");
                         self.finished(in_round, worker_id, finished, now).await?;
                     }
                 }
@@ -3275,6 +3344,7 @@ impl Dispatcher {
             .retain(|attempt| workers.all().any(|w| w.attempts.contains(attempt)));
         // Nor those of a worker that may come back (F14): nothing of its stream is known.
         let coming_back = self.may_come_back();
+        let read = schedr_db::trace::point("expire_unstarted.reads");
         let unstarted = self
             .db
             .unstarted_attempts(Timestamp::MAX, &coming_back, u32::MAX)
@@ -3283,6 +3353,7 @@ impl Dispatcher {
             .db
             .unstarted_cleanups(Timestamp::MAX, &coming_back, u32::MAX)
             .await?;
+        drop(read);
         let mut expired = Vec::new();
         let mut taken_back = Vec::new();
         for (attempt, cleanup) in unstarted
@@ -3309,6 +3380,7 @@ impl Dispatcher {
             let result = by_master(AttemptStatus::AssignmentExpired);
             // Whole or not at all, memory with it (B49): ending the attempt and moving its
             // task are separate writes, and the slot is freed in memory before them.
+            let _one = schedr_db::trace::point("expire_unstarted.one");
             self.whole(async |dispatcher| {
                 dispatcher
                     .record(in_round, attempt, &end, &result, now)

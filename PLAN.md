@@ -260,8 +260,10 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2cB3 | The round's results part: one set of statements, its reads before the lock | done 2026-11-18 |  |
 | M5.2cB4 | The path from a task's result to its slot's next assignment | **next** | D506 |
 | M5.2d | The worker's start path | done 2026-11-18 | D507 |
-| M5.2e | A worker's waiting queue (lookahead with a barrier) | planned | D509 |
-| M5.2f | Many DAG triggers: a stress scenario, then their messages batched in the turn | planned |  |
+| M5.2e | A worker's waiting queue (lookahead with a barrier) | done 2026-11-19 | D509 |
+| M5.2f | Many DAG triggers: a stress scenario, and poke reports in the heartbeat | done 2026-11-19 |  |
+| M5.2g | Scenario 1 profiled: what each step and point of a round costs | planned |  |
+| M5.2h | Trigger events batched in one transaction | planned |  |
 | R1.2 | Release 1.2.0 | planned |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |

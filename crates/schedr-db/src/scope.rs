@@ -36,6 +36,9 @@ pub(crate) struct Scoped {
     /// aborted, its `COMMIT` a silent rollback; on SQLite partly done), even if the work
     /// handled the error and went on.
     pub(crate) broken: bool,
+    /// On SQLite, this process's turn to write, held to the end (B266). Dropped after the
+    /// connection's end: declared last.
+    _writing: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 /// One of the two backends' pooled connections.
@@ -107,9 +110,11 @@ impl Database {
         if current(self).is_some() {
             return work.await;
         }
-        let scoped = self
-            .limited(self.query_timeout(), self.begin_scope())
-            .await?;
+        let scoped = crate::trace::timed_point(
+            "tx.begin",
+            self.limited(self.query_timeout(), self.begin_scope()),
+        )
+        .await?;
         let scope = Scope {
             database: self.identity().clone(),
             connection: Arc::new(tokio::sync::Mutex::new(scoped)),
@@ -129,6 +134,7 @@ impl Database {
             return Err(DbError::CommitUnknown.into());
         }
         if result.is_ok() {
+            let _commit = crate::trace::point("tx.commit");
             self.limited(self.query_timeout(), async {
                 Ok(scoped.end("COMMIT").await?)
             })
@@ -158,10 +164,13 @@ impl Database {
     async fn begin_scope(&self) -> Result<Scoped, DbError> {
         match self.pool() {
             Pool::Sqlite(pool) => {
+                // This process's writers in line first, not in the busy handler (B266).
+                let writing = self.sqlite_writer().await?;
                 let mut scoped = Scoped {
                     connection: Connection::Sqlite(pool.acquire().await?),
                     open: true,
                     broken: false,
+                    _writing: Some(writing),
                 };
                 scoped
                     .run(AssertSqlSafe("BEGIN IMMEDIATE".to_owned()))
@@ -177,6 +186,7 @@ impl Database {
                     connection: Connection::Postgres(pool.acquire().await?),
                     open: true,
                     broken: false,
+                    _writing: None,
                 };
                 let begin = self.begin_postgres();
                 scoped

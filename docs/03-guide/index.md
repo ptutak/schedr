@@ -30,4 +30,6 @@ Read [Overview](01-overview.md) first; the other pages each go into one part.
 16-notifications
 17-master-clock
 18-guarantees
+19-masters-round
+20-simulator
 ```

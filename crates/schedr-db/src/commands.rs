@@ -54,9 +54,14 @@ pub async fn listening_is_safe(
 ) -> Result<bool, sqlx::Error> {
     const PROCESS: &str = "SELECT pg_backend_pid()";
     for _ in 0..PROBE_ROUNDS {
-        let before: i32 = crate::query::query_scalar(PROCESS)
-            .fetch_one(&mut *y)
-            .await?;
+        // A simple query, in one message: outside a transaction on purpose, so an unnamed
+        // statement's two syncs could land on two servers (B264).
+        let before: i32 = sqlx::Row::try_get(
+            &sqlx::raw_sql(sqlx::AssertSqlSafe(PROCESS))
+                .fetch_one(&mut *y)
+                .await?,
+            0,
+        )?;
         let mut held = sqlx::Connection::begin(&mut *x).await?;
         let other: i32 = crate::query::query_scalar(PROCESS)
             .fetch_one(&mut *held)
@@ -294,13 +299,19 @@ impl Database {
     /// notification only delays it to the master's next poll, so it isn't an error (a retried
     /// request would store it twice).
     pub(crate) async fn notify(&self, channel: &str, id: &str) {
+        let sent = async |pool: &sqlx::PgPool| -> Result<(), sqlx::Error> {
+            crate::query::pg_alone!(pool, |connection| {
+                crate::query::query("SELECT pg_notify($1, $2)")
+                    .bind(channel)
+                    .bind(id)
+                    .execute(connection)
+                    .await?
+            });
+            Ok(())
+        };
         if let Pool::Postgres(pool) = self.pool()
             && self.notifications().on
-            && let Err(error) = crate::query::query("SELECT pg_notify($1, $2)")
-                .bind(channel)
-                .bind(id)
-                .execute(pool)
-                .await
+            && let Err(error) = sent(pool).await
         {
             tracing::warn!(%error, channel, id, "stored, its notification failed");
         }

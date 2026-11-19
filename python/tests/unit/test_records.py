@@ -533,6 +533,19 @@ def test_the_users_note_gets_its_file_its_heading_and_notes_md(tmp_path: Path) -
         load(tmp_path)
 
 
+def test_a_note_may_carry_its_details_and_no_other_field(tmp_path: Path) -> None:
+    module = project(tmp_path, {1: decision()})
+    (tmp_path / "JOURNAL.md").write_text(JOURNAL)
+    path = module.new_note(module.Paths(tmp_path), "a table of mine")
+    text = path.read_text().replace("summary = '''\n", "summary = '''\nit.\n")
+    path.write_text(text + "details = '''\n| a | b |\n|---|---|\n| 1 | 2 |\n'''\n")
+    (note,) = load(tmp_path).notes
+    assert "| 1 | 2 |" in note.details
+    path.write_text(text + "colour = 'red'\n")
+    with pytest.raises(module.RecordError, match="colour"):
+        load(tmp_path)
+
+
 def test_a_note_takes_only_a_title(tmp_path: Path) -> None:
     module = project(tmp_path, {1: decision()})
     (tmp_path / "JOURNAL.md").write_text(JOURNAL)

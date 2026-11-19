@@ -52,7 +52,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D509 | 2026-11-18 | user | planned (M5.2e) | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
+| D509 | 2026-11-18 | user | built M5.2e | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
 | D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
 | D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |
 | D506 | 2026-11-18 | user | planned (M5.2cB4) | assignment | The round's slow parts on due flags; what is read before the lock is only what the round alone writes |

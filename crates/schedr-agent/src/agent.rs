@@ -1322,6 +1322,9 @@ pub struct Agent<E> {
     /// The triggers running here, on watcher slots: never attempts, so never journaled, and gone
     /// with the agent.
     triggers: BTreeMap<String, RunningTrigger>,
+    /// The last trigger whose poke report a heartbeat took: the next starts after it, so a
+    /// heartbeat's budget doesn't always go to the same ones (Codex's review).
+    poke_cursor: Option<String>,
     /// How triggers ended while the master was away: told on the next stream, on which they are
     /// still reported as running, or the master would take them as simply gone.
     triggers_ended: BTreeMap<String, pb::TriggerStopped>,
@@ -1529,6 +1532,7 @@ impl<E: Executor> Agent<E> {
             running: BTreeMap::new(),
             forked: BTreeSet::new(),
             triggers: BTreeMap::new(),
+            poke_cursor: None,
             triggers_ended: BTreeMap::new(),
             wait_steps: BTreeMap::new(),
             cleaning: BTreeMap::new(),
@@ -1747,7 +1751,6 @@ impl<E: Executor> Agent<E> {
                 }
                 _ = heartbeat.tick() => {
                     self.send_beat(to_master);
-                    self.send_poke_reports(to_master);
                 }
                 () = at(give_up_at) => {
                     self.heard = self.heard.max(*seen.borrow());
@@ -2745,7 +2748,16 @@ impl<E: Executor> Agent<E> {
     /// Sends a heartbeat (numbered, as every message, by the session's sender, B225, B240).
     fn send_beat(&mut self, to_master: &ToMaster) {
         self.publish_master_reading();
-        let _ = to_master.send(self.heartbeat_message());
+        let mut beat = self.heartbeat_message();
+        // The pokes' reports while they fit in half the master's limit (Codex's review: 500
+        // failing pokes' errors together could pass it, and the master would end the stream);
+        // the rest wait for the next heartbeat.
+        let budget = (self.master_limit / 2).saturating_sub(prost::Message::encoded_len(&beat));
+        let pokes = self.poke_reports(budget);
+        if let Some(worker_message::Message::Heartbeat(heartbeat)) = beat.message.as_mut() {
+            heartbeat.pokes = pokes;
+        }
+        let _ = to_master.send(beat);
     }
 
     /// A heartbeat, and the unacknowledged results due to be sent again; the session's end
@@ -2761,6 +2773,7 @@ impl<E: Executor> Agent<E> {
             watcher_hosts,
             usage,
             queue_head_age_ms: self.queue_head_age_ms(),
+            pokes: Vec::new(),
         }))
     }
 
@@ -2934,7 +2947,6 @@ impl<E: Executor> Agent<E> {
         to_master: &ToMaster,
     ) -> Option<SessionEnd> {
         self.send_beat(to_master);
-        self.send_poke_reports(to_master);
         let Some(due) = resends.due(self.unacked.keys()) else {
             return Some(SessionEnd::Lost(format!(
                 "a result is still unacknowledged after {} sends; reconnecting, so the \
@@ -4140,19 +4152,46 @@ impl<E: Executor> Agent<E> {
         trigger.poke.at = Some(Timestamp::now());
         trigger.poke.unsent = true;
         if changed && let Some(to_master) = to_master {
-            let _ = to_master.send(poke_report(instance_id, trigger));
+            let report = poke_report(instance_id, trigger);
+            let _ = to_master.send(wrap(worker_message::Message::TriggerPoked(report)));
             trigger.poke.unsent = false;
         }
     }
 
-    /// The pokes' reports not sent yet.
-    fn send_poke_reports(&mut self, to_master: &ToMaster) {
-        for (instance_id, trigger) in &mut self.triggers {
-            if trigger.poke.unsent {
-                let _ = to_master.send(poke_report(instance_id, trigger));
+    /// The pokes' reports not sent yet, for the next heartbeat (M5.2f), as many as fit in
+    /// `budget` bytes (at least one); the rest stay for the next.
+    fn poke_reports(&mut self, budget: usize) -> Vec<pb::TriggerPoked> {
+        // From the one after the last taken, round to it again.
+        let cursor = self.poke_cursor.take();
+        let mut unsent: Vec<(&String, &mut RunningTrigger)> = self
+            .triggers
+            .iter_mut()
+            .filter(|(_, t)| t.poke.unsent)
+            .collect();
+        let ids: Vec<&str> = unsent.iter().map(|(id, _)| id.as_str()).collect();
+        let after = start_after(&ids, cursor.as_deref());
+        unsent.rotate_left(after);
+        let reports: Vec<pb::TriggerPoked> = unsent
+            .iter()
+            .map(|(instance_id, trigger)| poke_report(instance_id, trigger))
+            .collect();
+        // Each one's size in the heartbeat: the field's tag and length too.
+        let sizes: Vec<usize> = reports
+            .iter()
+            .map(|r| prost::Message::encoded_len(r).saturating_add(8))
+            .collect();
+        let taken = within_budget(&sizes, budget);
+        let order: Vec<&str> = unsent.iter().map(|(id, _)| id.as_str()).collect();
+        let next = cursor_after(&order, &taken).or(cursor);
+        let mut sent = Vec::new();
+        for (((_, trigger), report), take) in unsent.into_iter().zip(reports).zip(taken) {
+            if take {
                 trigger.poke.unsent = false;
+                sent.push(report);
             }
         }
+        self.poke_cursor = next;
+        sent
     }
 
     /// A trigger ended: its slot and its code are free. A master that doesn't hear it learns
@@ -5115,14 +5154,50 @@ struct RunningTrigger {
     poke: PokeReport,
 }
 
-fn poke_report(instance_id: &str, trigger: &RunningTrigger) -> pb::WorkerMessage {
-    wrap(worker_message::Message::TriggerPoked(pb::TriggerPoked {
+/// Where in `ids` (sorted) a heartbeat's reports start: after `cursor`, the last one the
+/// previous heartbeat took, so each gets its turn.
+fn start_after(ids: &[&str], cursor: Option<&str>) -> usize {
+    cursor.map_or(0, |cursor| ids.partition_point(|id| *id <= cursor))
+}
+
+/// The next heartbeat's cursor ([`start_after`]) after taking `taken` of `order`: the last one
+/// taken before the first left out, so that one comes first next time (Codex's third review: a
+/// later smaller report taken moved the cursor past a skipped larger one, which never came
+/// first); none taken, `None` (the cursor stays).
+fn cursor_after(order: &[&str], taken: &[bool]) -> Option<String> {
+    let skipped = taken.iter().position(|t| !t).unwrap_or(taken.len());
+    order[..skipped.min(order.len())]
+        .last()
+        .map(|id| (*id).to_owned())
+}
+
+/// Which of reports of `sizes` bytes go in one message of at most `budget` bytes, in order,
+/// a report that doesn't fit left out while a later smaller one may; the first at least, else a
+/// single large report would never go (one is no larger than the `TriggerPoked` sent alone for
+/// a changed error).
+fn within_budget(sizes: &[usize], budget: usize) -> Vec<bool> {
+    let mut used = 0usize;
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(n, size)| {
+            let take = n == 0 || used.saturating_add(*size) <= budget;
+            if take {
+                used = used.saturating_add(*size);
+            }
+            take
+        })
+        .collect()
+}
+
+fn poke_report(instance_id: &str, trigger: &RunningTrigger) -> pb::TriggerPoked {
+    pb::TriggerPoked {
         dag_id: trigger.dag_id.clone(),
         instance_id: instance_id.to_owned(),
         at: trigger.poke.at.map(proto_time),
         error: trigger.poke.error.clone().unwrap_or_default(),
         failures: trigger.poke.failures,
-    }))
+    }
 }
 
 fn proto_time(time: Timestamp) -> prost_types::Timestamp {

@@ -68,8 +68,9 @@ sequenceDiagram
 The worker resends unacknowledged events on a new stream. The acknowledgement lets the
 trigger continue. `run.event_json` carries the event to each task of its run. The master
 sends `CancelTrigger` when the instance should stop; a failed trigger can be assigned again
-after a backoff from its bookmark. A poke reports its last call and consecutive failures in
-`TriggerPoked` when they change, otherwise with a heartbeat. `AssignTrigger.failures` carries
+after a backoff from its bookmark. A poke reports its last call and consecutive failures in its
+worker's next heartbeat (`Heartbeat.pokes`), stored together for all of them; a changed error
+state goes at once as `TriggerPoked`. `AssignTrigger.failures` carries
 the previous instance's count forward. `TriggerStopped.struck` reports that the trigger got
 its host killed, and `code_hash` identifies the code it ran. A stop while the stream is down
 is reported on the next stream, where the instance is still listed as running until reported.
@@ -501,7 +502,7 @@ that names it.
 | Message | Sender and when | Receiver action | Repeat safe? | Timing |
 |---|---|---|---|---|
 | `Register` | Worker on every connection; `queue_depth` its waiting queue (protocol 2.2) | Validate, reconcile journal and `running_triggers`, and reply; queue no more than `slots + queue_depth` there | New connection reconciles again; duplicate live stream refused | [worker lease](14-timings.md#fixed-timings): `SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT` |
-| `Heartbeat` | Worker periodically | Renew lease on arrival and reconcile `running_triggers` | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
+| `Heartbeat` | Worker periodically | Renew lease on arrival, reconcile `running_triggers`, store its pokes' reports (`pokes`) in one statement | Yes | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) |
 | `CodeVersionChanged` | Worker after root settles or withdraws it | Record hash and possibly plan parse; an empty hash withdraws the root | Yes, same hash | [`[dags] settle_time`](14-timings.md#public-timing-keys) |
 | `Started` | Worker before spawn; again for fork | Mark running; update method, keep first time | Yes | — |
 | `Rejected` | Worker unable to accept assignment; `withdrawn` (protocol 2.2): given back from its waiting queue, never started there (slower than the cluster, cancelled, draining) | Requeue or select another worker; a withdrawn task goes to a free slot only, no retry used | Stale rejection is ignored | — |
@@ -512,7 +513,7 @@ that names it.
 | `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT`](14-timings.md#fixed-timings) |
 | `Warnings` | Worker after registration and on change | Replace warnings | Yes | — |
 | `TriggerEvent` | Worker as a trigger finds an event; all unacknowledged again on a new stream | Store the event and queue its run, once per key | Yes | — |
-| `TriggerPoked` | Worker when poke status changes, otherwise with a heartbeat | Keep the call time, last error and consecutive failures | Yes | — |
+| `TriggerPoked` | Worker when a poke's error state changes; otherwise its reports ride the heartbeat (`Heartbeat.pokes`) | Keep the call time, last error and consecutive failures | Yes | — |
 | `TriggerStopped` | Worker when a trigger ends, including on the next stream if disconnected | Free its slot; record `struck` and `code_hash`; a failure can start it again after a wait | Yes | — |
 | `ConnectionJobDone` | Worker after connection check or test | Store reports if job is still open | Late or already settled answer is dropped | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) plus job allowance |
 | `CleanupStart` | Worker when a `cleanup_anywhere` cleanup's try waits at its barrier (protocol 2.2) | Answer `CleanupGo`: `go` while the attempt is open and the cleanup is this worker's; for a `rest` (B169), while this worker owes it, the attempt ended or not | Yes: read only | The process waits half the worker lease, counted from before the question |

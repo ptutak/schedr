@@ -53,13 +53,26 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 2 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 3 | B264: through PgBouncer in transaction mode the webserver can panic in sqlx at startup (a data row of another statement) | 2 | medium | rare | reliability |
-| 4 | B258: the PgBouncer failover scenario's second master can start before the first migrated the schema, and exits | 2 | low | possible | tests |
-| 5 | B257: a restarted master in the roles tests can find its kept port taken (Address already in use) | 2 | low | possible | tests |
-| 6 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 7 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 1 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
+| 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
+| 3 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 4 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 5 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing
+
+- **Rating:** severity **medium**, probability **likely**, tests (score 6): crates/schedr/tests/roles.rs run whole in parallel on one Postgres: 0-9 of 40 fail, on the last commit as on the next (cleanup moves, SIGTERM drains, cancels; `db migrate` timing out on the pool, 'the master's lease isn't renewed in time'); connections peak at 95-98 of Postgres's 100; make check failed once on three of them.
+- **Found:** 2026-11-19, `make check` before the M5.2f commit: three cleanup-move tests of
+  `roles.rs` timed out (`waited too long for the run to end`, a moved cleanup's handle missing),
+  the master's log saying its lease wasn't renewed in time. Alone, the three pass.
+- **Measured:** the whole `roles` file in parallel against one Postgres container (the
+  Makefile's image): on `ce101532` 0 and 3 failures in two runs, on the M5.2f work 4, 9 and 0 in
+  three; the client connections sampled each second peak at 95 (base) and 98 (M5.2f) of 100,
+  means 54 and 52. One run's failure was `db migrate`: "pool timed out while waiting for an open
+  connection". Not a regression of M5.2f: the same tests fail on both under the same load.
+- **To look at:** each test cluster's pools (master, webserver, workers' none) against
+  Postgres's `max_connections` (a test container could start with more, or the tests' pools be
+  smaller); the lease pausing under CPU load (a test's lease timing against the machine).
 
 ## B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates
 
@@ -74,53 +87,6 @@ step touches their code or the user schedules them.
   past the cutoff, and may find more there), or have the agent end its stream at the cutoff for
   every worker (a behaviour change: a worker cut one way re-registers instead of waiting for the
   master's word; decisions 252, 281, 445).
-
-## B264: through PgBouncer in transaction mode the webserver can panic in sqlx at startup (a data row of another statement)
-
-- **Rating:** severity **medium**, probability **rare**, reliability (score 2): stress_06_pgbouncer_throughput: the webserver panicked in sqlx-postgres data_row.rs (index out of bounds: the len is 1 but the index is 1) while the master logged 'unnamed prepared statement does not exist'.
-- **Found:** 2026-11-19, the quick stress suite before M5.2e's push (test build):
-  `stress_06_pgbouncer_throughput` waited in vain for the webserver's API line; the webserver
-  had panicked at `sqlx-postgres-0.9.0/src/message/data_row.rs:22:20` ("index out of bounds:
-  the len is 1 but the index is 1"), a row decoded with another statement's columns. The
-  master, on the same PgBouncer, logged "unnamed prepared statement does not exist" renewing
-  its lease twice, then led again. The other 30 scenarios passed; M5.2e touches neither startup
-  nor the database layer. B258 met the same PgBouncer error two days earlier.
-- **A guess, unverified:** sqlx's unprepared (unnamed) statements sent in two syncs (Parse and
-  Describe, then Bind and Execute) can land on two server connections in transaction mode
-  outside a transaction, so a row or a description belongs to another client's statement. A
-  panic, not an error: the process exits (restarted by its supervisor); no wrong result seen.
-- **Next:** reproduce (scenario 6 repeated, or a test driving unnamed statements through
-  PgBouncer); find the statements sent outside a transaction; check PgBouncer's
-  `max_prepared_statements` and sqlx's `statement_cache_capacity`.
-
-## B258: the PgBouncer failover scenario's second master can start before the first migrated the schema, and exits
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): stress_06_pgbouncer_failover flakes when m2 checks the schema before m1, delayed by a PgBouncer error on its first lease attempt, has created it.
-- **Found:** 2026-11-18, the whole stress suite after M5.2c's reviews (release build): m1 started
-  with `--migrate`, its first lease attempt failed through PgBouncer in transaction mode
-  ("unnamed prepared statement does not exist") and it tried again 2 s later; m2, started without
-  `--migrate` 0.4 s after m1, found the schema uninitialized and exited ("run `schedr db
-  migrate`, or start master with `--migrate`"); the test then waited in vain for m2's gRPC
-  address. It passed in earlier runs: a timing race, not in M5.2c's code (startup and migration
-  untouched).
-- **A fix:** the scenario starting m2 once m1 leads (or m1's schema is ready); or a master
-  without `--migrate` waiting for the schema for a while instead of exiting at once (a product
-  change: the user's). Also worth a look: why the first lease statement meets an unnamed
-  prepared statement missing through the pooler.
-
-## B257: a restarted master in the roles tests can find its kept port taken (Address already in use)
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): a roles test restarting its master flakes when another process took the master's port meanwhile.
-- **Found:** 2026-11-17, by `make check` during M5.2cB:
-  `a_handle_registered_while_the_master_is_down_is_cleaned_up_after_its_restart` failed with the
-  restarted master's `error: can't listen on 127.0.0.1:44829: Address already in use`, then
-  passed on the next run. The test cluster keeps a master's gRPC port for a restart
-  (`crates/schedr/tests/support/mod.rs`, "the master's port once it listens (kept for a
-  restart)"), so workers find it again; between the kill and the restart, another test's role
-  binding a free port (port 0) can be handed the same one under `make check`'s parallel load.
-- **A fix:** the restart retrying its bind for a few seconds (the port may be the dying
-  master's still, or another's briefly); or the cluster reserving the port (a listener it holds
-  and hands over); or workers given the master's new port on a restart.
 
 ## B254: a worker's RUNNING count includes its wait steps, against its task slots
 

@@ -105,6 +105,10 @@ pub struct Database {
     /// Whether its queries stay prepared on their connections (B256): always on SQLite, on
     /// Postgres by `[database] prepared_statements`; otherwise each is an unnamed statement.
     prepared: bool,
+    /// On SQLite, this process's writers in line for the file's one write lock (shared by
+    /// clones; B266): taken before `BEGIN IMMEDIATE` until the end, so they queue here, in
+    /// turn, rather than each in SQLite's busy handler, which gives up at the busy timeout.
+    writer: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// `[database] notifications` and `notifications_url`.
@@ -373,6 +377,7 @@ impl From<Pool> for Database {
             waits: Arc::default(),
             #[cfg(any(test, feature = "testing"))]
             faults: Arc::default(),
+            writer: Arc::default(),
         }
     }
 }
@@ -383,6 +388,19 @@ tokio::task_local! {
 }
 
 impl Database {
+    /// On SQLite, this process's turn to write (B266, [`Self::writer`]), waited for up to the
+    /// query limit, as SQLite's busy handler waited before.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::QueryTimeout`] if it doesn't come within the limit.
+    pub(crate) async fn sqlite_writer(&self) -> Result<tokio::sync::OwnedMutexGuard<()>, DbError> {
+        let limit = self.query_timeout();
+        tokio::time::timeout(limit, Arc::clone(&self.writer).lock_owned())
+            .await
+            .map_err(|_| DbError::QueryTimeout(limit))
+    }
+
     /// The writes made to fail (tests only).
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn faults(&self) -> &crate::faults::Faults {
@@ -445,7 +463,16 @@ impl Database {
                 if let Some(timeout) = query_timeout {
                     options = options.busy_timeout(timeout);
                 }
-                let max_connections = if url.contains(":memory:") { 1 } else { 8 };
+                let in_memory = url.contains(":memory:");
+                // A file in WAL mode (B266, the user's choice, 2026-11-19): a writer appends to
+                // `<file>-wal`, so readers go on reading what was committed instead of waiting
+                // for its commit; one writer at a time still. Kept in the file (`-wal` and
+                // `-shm` beside it, to be backed up with it); on a local filesystem only.
+                // `synchronous` stays `FULL`: a commit is on disk when it returns.
+                if !in_memory {
+                    options = options.journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+                }
+                let max_connections = if in_memory { 1 } else { 8 };
                 let pool = SqlitePoolOptions::new()
                     .max_connections(max_connections)
                     .acquire_timeout(acquire)
@@ -554,6 +581,7 @@ impl Database {
             #[cfg(any(test, feature = "testing"))]
             faults: self.faults.clone(),
             prepared: self.prepared,
+            writer: self.writer.clone(),
             fence: Some(Arc::new(Fence {
                 holder: holder.to_owned(),
                 epoch: i32::try_from(epoch).unwrap_or(i32::MAX),
@@ -793,15 +821,19 @@ impl Database {
                 }
                 crate::query::query_as(APPLIED).fetch_all(pool).await?
             }
-            Pool::Postgres(pool) => {
+            // Both in one transaction of their own, so a pooler keeps them on one server (B264).
+            Pool::Postgres(pool) => crate::query::pg_alone!(pool, |connection| {
                 let exists: i64 = crate::query::query_scalar(EXISTS_POSTGRES)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *connection)
                     .await?;
                 if exists == 0 {
-                    return Ok(Vec::new());
+                    Vec::new()
+                } else {
+                    crate::query::query_as(APPLIED)
+                        .fetch_all(connection)
+                        .await?
                 }
-                crate::query::query_as(APPLIED).fetch_all(pool).await?
-            }
+            }),
         };
         Ok(applied)
     }

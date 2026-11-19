@@ -65,6 +65,31 @@ impl Database {
         row.map(stored).transpose()
     }
 
+    /// Which of DAGs `dag_ids` have a wait step with strikes (M5.2f: a heartbeat's pokes clear
+    /// their trigger's only when there are some).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the statement fails.
+    pub async fn dags_with_strikes(
+        &self,
+        dag_ids: &[&str],
+    ) -> Result<std::collections::BTreeSet<String>, DbError> {
+        const READ: &str = "SELECT DISTINCT dag_id FROM wait_step_strikes \
+            WHERE dag_id IN (SELECT value FROM {json_each}($1{json}))";
+        if dag_ids.is_empty() {
+            return Ok(std::collections::BTreeSet::new());
+        }
+        let list = crate::query::to_json(&dag_ids);
+        let dags: Vec<String> = on_pool!(self, |pool, backend| {
+            crate::query::query_scalar(sql(backend, READ))
+                .bind(&list)
+                .fetch_all(pool)
+                .await?
+        });
+        Ok(dags.into_iter().collect())
+    }
+
     /// The wait steps switched off now, by DAG and task.
     ///
     /// # Errors

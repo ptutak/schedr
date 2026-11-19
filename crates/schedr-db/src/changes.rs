@@ -180,12 +180,14 @@ impl Database {
         match self.pool() {
             Pool::Postgres(pool) => {
                 let names: Vec<&str> = triggers().map(|(_, name)| name).collect();
-                let on: i64 = crate::query::query_scalar(
-                    "SELECT COUNT(*) FROM pg_trigger WHERE tgname = ANY($1) AND tgenabled <> 'D'",
-                )
-                .bind(&names)
-                .fetch_one(pool)
-                .await?;
+                let on: i64 = crate::query::pg_alone!(pool, |connection| {
+                    crate::query::query_scalar(
+                        "SELECT COUNT(*) FROM pg_trigger WHERE tgname = ANY($1) AND tgenabled <> 'D'",
+                    )
+                    .bind(&names)
+                    .fetch_one(connection)
+                    .await?
+                });
                 Ok(usize::try_from(on).is_ok_and(|on| on == names.len()))
             }
             Pool::Sqlite(pool) => {

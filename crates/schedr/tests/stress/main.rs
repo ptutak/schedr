@@ -2046,3 +2046,228 @@ fn gauge(metrics: &str, name: &str) -> f64 {
         .filter_map(|line| line.rsplit_once(' ')?.1.parse::<f64>().ok())
         .sum()
 }
+
+/// A DAG `id` whose `@trigger.poke` finds nothing each second: it only reports `TriggerPoked`
+/// (with every heartbeat), never starts a run.
+fn idle_poke_dag(id: &str) -> String {
+    format!(
+        r#"from datetime import timedelta
+
+from schedr import CommandOperator, Dag, Event, trigger
+
+
+@trigger.poke(every=timedelta(seconds=1))
+async def nothing(after: str | None) -> list[Event[int]]:
+    return []
+
+
+with Dag("{id}", trigger=nothing()):
+    CommandOperator("c", "true")
+"#
+    )
+}
+
+/// A DAG `id` whose `@trigger` yields `count` events, one each `every` seconds (its data and
+/// `at` the wall time it was found), then waits; each event starts a run of one command task
+/// `work`.
+fn firing_dag(id: &str, count: usize, every: f64, work: &str) -> String {
+    format!(
+        r#"import asyncio
+import time
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+
+from schedr import CommandOperator, Dag, Event, trigger
+
+
+@trigger
+async def ticks(after: str | None) -> AsyncIterator[Event[float]]:
+    start = 0 if after is None else int(after) + 1
+    for n in range(start, {count}):
+        yield Event(f"{{n:06}}", time.time(), at=datetime.now(UTC))
+        await asyncio.sleep({every})
+    await asyncio.sleep(86400)
+
+
+with Dag("{id}", trigger=ticks()):
+    CommandOperator("c", "{work}")
+"#
+    )
+}
+
+/// Scenario 24 (M5.2f): many DAG triggers beside a task load. Idle `@trigger.poke`s fill the
+/// watcher slots, each reporting `TriggerPoked` with every heartbeat; `@trigger`s fire steadily,
+/// each event a run of one task; scenario 1's kind of DAGs run beside them. It measures how long
+/// trigger messages hold the master's lock, events a second, an event's way to its run and to
+/// its task's start, and the tasks a second of it all. `SCHEDR_STRESS_POKES` and
+/// `SCHEDR_STRESS_FIRING` set the counts (0: none of that kind), for a comparison.
+#[test]
+fn stress_24_many_triggers() {
+    let mut stress = Stress::new(Some(postgres_database()));
+    let size = stress.size;
+    let mut report = Report::new("24_many_triggers");
+    let from_env = |name: &str, default: usize| {
+        std::env::var(name)
+            .ok()
+            .map_or(default, |v| v.parse().unwrap())
+    };
+    let pokes = from_env("SCHEDR_STRESS_POKES", size.n(100, 500));
+    let firing = from_env("SCHEDR_STRESS_FIRING", size.n(10, 50));
+    let events_each = size.n(30, 120);
+    let every = 0.5;
+    let work = crate::check::marked(&stress.marks, "sleep 0.1");
+    let mut triggered = Vec::new();
+    for i in 1..=pokes {
+        let id = format!("idle{i:04}");
+        stress.write_dag(&id, &idle_poke_dag(&id));
+        triggered.push(id);
+    }
+    for i in 1..=firing {
+        let id = format!("fires{i:04}");
+        stress.write_dag(&id, &firing_dag(&id, events_each, every, &work));
+        triggered.push(id);
+    }
+    let load = command_dags(&stress, "load", size.n(25, 500), 10, "sleep 0.1", 0);
+    stress.start_core("master", &[]);
+    stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
+    stress.wait_for_dags(triggered.len() + load.len(), 10 * MINUTE);
+    let started = std::time::Instant::now();
+    stress.trigger(&triggered, 0);
+    stress.trigger(&load, 1);
+    let runs = firing * events_each + load.len();
+    stress.wait_for_runs(runs, size.time(20 * MINUTE, 90 * MINUTE), |_| {});
+    let wall = started.elapsed().as_secs_f64();
+    report.set("all_done_s", wall);
+    #[expect(clippy::cast_precision_loss, reason = "a few thousand")]
+    {
+        report.set("pokes", pokes as f64);
+        report.set("firing", firing as f64);
+    }
+    stress.measure(&mut report, "master", 1.0);
+    // An event's way: found on the worker (its own wall time, `at`), received by the master, its
+    // run made, its task started (one machine: one wall clock).
+    let db = &stress.db;
+    let received = db.floats(&format!(
+        "SELECT {} - {} FROM events WHERE at IS NOT NULL",
+        db.epoch("received_at"),
+        db.epoch("at")
+    ));
+    let to_run = db.floats(&format!(
+        "SELECT {} - {} FROM runs r JOIN events e ON e.dag_id = r.dag_id \
+         AND e.key = r.event->>'key' WHERE e.at IS NOT NULL",
+        db.epoch("r.triggered_at"),
+        db.epoch("e.at")
+    ));
+    let to_start = db.floats(&format!(
+        "SELECT {} - {} FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+         JOIN runs r ON r.id = t.run_id JOIN events e ON e.dag_id = r.dag_id \
+         AND e.key = r.event->>'key' WHERE e.at IS NOT NULL AND a.started_at IS NOT NULL",
+        db.epoch("a.started_at"),
+        db.epoch("e.at")
+    ));
+    for (values, key) in [
+        (&received, "event_received"),
+        (&to_run, "event_to_run"),
+        (&to_start, "event_to_started"),
+    ] {
+        report.set(&format!("{key}_p50_s"), quantile(values, 0.5));
+        report.set(&format!("{key}_p99_s"), quantile(values, 0.99));
+    }
+    let span = db.floats(&format!(
+        "SELECT MAX({}) - MIN({}) FROM events",
+        db.epoch("received_at"),
+        db.epoch("received_at")
+    ));
+    let events = db.count("SELECT COUNT(*) FROM events");
+    #[expect(clippy::cast_precision_loss, reason = "a few thousand events")]
+    report.set(
+        "events_per_s",
+        events as f64 / span.first().copied().unwrap_or(0.0).max(0.001),
+    );
+    // How long trigger messages held the lock, beside the rest (sums over the whole run).
+    let (_, metrics) = stress.cluster.ops_get("master", "/metrics");
+    let sum = |series: &str| gauge(&metrics, series);
+    let part = |part: &str, what: &str| {
+        sum(&format!(
+            "schedr_master_turn_part_seconds_{what}{{part=\"{part}\"}}"
+        ))
+    };
+    let trigger_messages = part("triggers", "count");
+    report.set("trigger_messages", trigger_messages);
+    report.set("trigger_lock_s", part("triggers", "sum"));
+    report.set("rest_lock_s", part("rest", "sum"));
+    report.set("rounds_s", sum("schedr_master_tick_duration_seconds_sum"));
+    report.set("trigger_lock_share", part("triggers", "sum") / wall);
+    // A poke's reports ride in the heartbeat (M5.2f): only events are trigger messages.
+    if firing > 0 && trigger_messages == 0.0 {
+        report.broken(vec!["no trigger message timed".to_owned()]);
+    }
+    let wanted = i64::try_from(firing * events_each).unwrap();
+    if events < wanted {
+        report.broken(vec![format!("{events} events of {wanted}")]);
+    }
+    finish(&stress, report, &["success"]);
+}
+
+/// Scenario 6c: the statements outside a transaction (the lease's, the schema's, the change
+/// notifications' check) from two processes' pools at once through `PgBouncer` in transaction
+/// mode (B264): unnamed, each was sent in two syncs, and the pooler could bind one on another
+/// server connection, the other client's statement there: a panic decoding a row, or
+/// "unnamed prepared statement does not exist". Each now runs in a transaction of its own.
+#[test]
+fn stress_06c_pgbouncer_statements_outside_a_transaction() {
+    let direct = postgres_database();
+    let bounced = through_pgbouncer(&direct);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let failures = runtime.block_on(async {
+        schedr_db::Database::connect(&direct)
+            .await
+            .unwrap()
+            .migrate()
+            .await
+            .unwrap();
+        let mut tasks = Vec::new();
+        for _ in 0..2 {
+            let db = schedr_db::Database::connect(&bounced).await.unwrap();
+            db.create_lease_table().await.unwrap();
+            for kind in 0..4 {
+                let db = db.clone();
+                tasks.push(tokio::spawn(async move {
+                    let mut failed = Vec::new();
+                    for _ in 0..300 {
+                        let done = match kind {
+                            0 => db.schema_status().await.map(drop),
+                            1 => db
+                                .renew_lease("nobody", 1, Duration::from_secs(30))
+                                .await
+                                .map(drop),
+                            2 => db.lease_holder().await.map(drop),
+                            _ => db.change_notifications().await.map(drop),
+                        };
+                        if let Err(error) = done {
+                            failed.push(error.to_string());
+                        }
+                    }
+                    failed
+                }));
+            }
+        }
+        let mut failures = Vec::new();
+        for task in tasks {
+            match task.await {
+                Ok(failed) => failures.extend(failed),
+                Err(panic) => failures.push(format!("a task panicked: {panic}")),
+            }
+        }
+        failures
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures, first: {:?}",
+        failures.len(),
+        failures.first()
+    );
+}

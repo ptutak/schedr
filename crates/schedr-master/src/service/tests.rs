@@ -1016,6 +1016,78 @@ async fn a_stalled_master_counts_a_reconnecting_workers_register_when_it_arrives
     );
 }
 
+#[tokio::test]
+async fn a_refused_register_doesnt_keep_the_old_stream_of_its_worker_alive() {
+    // B267: each `Register` counted as a sign of life as it arrived, refused or not: a worker
+    // whose old stream stayed live (its end not handled) renewed that stream's lease with each
+    // try, and was refused forever.
+    let _clock = own_clock().await;
+    let (hub, _db, mut client) = connected_with(moving_now).await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    for at in (10..=70).step_by(10) {
+        move_to(at);
+        let (to_master, outbound) = mpsc::channel(16);
+        to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+        let status = client
+            .control(ReceiverStream::new(outbound))
+            .await
+            .expect_err("its old stream is live");
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition, "{status:?}");
+    }
+    // 70 s since it was last heard on its old stream, past the lease.
+    hub.tick().await.unwrap();
+    assert!(
+        !hub.core().lock().await.is_live("w1"),
+        "the refused registrations kept the old stream's lease"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_still_live_whose_stream_is_gone_registers_again_at_once() {
+    // B267: a stream's end waiting (behind what its worker queued for the round, or for the
+    // lock) left the worker live with no stream: its registrations were refused until then.
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    // The stream gone from the hub, its end not handled yet.
+    hub.streams.lock().await.remove("w1");
+    assert!(hub.core().lock().await.is_live("w1"));
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .expect("registered in place of the gone stream")
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // The old stream's end, handled now, leaves the new one as it is (B44).
+    drop(old);
+    drop(old_stream);
+    for _ in 0..20 {
+        Box::pin(hub.round_results(fixed_now())).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        hub.core().lock().await.is_live("w1"),
+        "the new stream disconnected"
+    );
+    assert!(hub.streams.lock().await.contains_key("w1"));
+}
+
 /// A worker registered over a stream, its root parsed: its messages' sender and the
 /// master's stream to it.
 async fn parsed_worker(
@@ -3273,4 +3345,22 @@ async fn a_heartbeat_ack_carries_the_clusters_slow_equals(
         .await
         .unwrap();
     assert_eq!(next_ack(&mut stream).await.slow_equals_ms, expected_ms);
+}
+
+/// M5.2f: trigger messages are timed as their own part of a turn, the rest not.
+#[test]
+fn trigger_messages_are_told_apart() {
+    use worker_message::Message;
+    assert!(is_trigger_message(&Message::TriggerEvent(
+        pb::TriggerEvent::default()
+    )));
+    assert!(is_trigger_message(&Message::TriggerPoked(
+        pb::TriggerPoked::default()
+    )));
+    assert!(is_trigger_message(&Message::TriggerStopped(
+        pb::TriggerStopped::default()
+    )));
+    assert!(!is_trigger_message(&Message::Heartbeat(
+        pb::Heartbeat::default()
+    )));
 }

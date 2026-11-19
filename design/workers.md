@@ -477,7 +477,7 @@ Each is one line; the reader's page has the diagrams.
 - Masters, workers and the webserver report their memory and CPU (D463, `observability`; built M5.1h)
 - A round releases the core lock between its batches of assignments (D469, `assignment`; built M5.1c1)
 - The round's slow parts on due flags; what is read before the lock is only what the round alone writes (D506, `assignment`; planned (M5.2cB4))
-- A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster (D509, `assignment`; planned (M5.2e))
+- A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster (D509, `assignment`; built M5.2e)
 <!-- end of current -->
 
 ## Replaced

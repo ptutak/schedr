@@ -3541,6 +3541,69 @@ async fn a_poke_report_is_kept_and_a_call_that_went_well_clears_it() {
 }
 
 #[tokio::test]
+async fn a_heartbeats_poke_reports_are_kept_together_and_a_call_that_went_well_clears_them() {
+    // M5.2f: the pokes' reports ride in the heartbeat, stored in one transaction, as a
+    // `TriggerPoked` stores each; one of another run of the trigger changes nothing.
+    let (mut core, assign) = Box::pin(with_trigger()).await;
+    core.db
+        .strike_wait_step(("sync", "found"), 3, "h1", later(1))
+        .await
+        .unwrap();
+    let beat = |pokes: Vec<pb::TriggerPoked>| {
+        worker_message::Message::Heartbeat(pb::Heartbeat {
+            running_triggers: vec![assign.instance_id.clone()],
+            pokes,
+            ..pb::Heartbeat::default()
+        })
+    };
+    let poked = |instance: &str, error: &str, failures| pb::TriggerPoked {
+        dag_id: assign.dag_id.clone(),
+        instance_id: instance.to_owned(),
+        at: None,
+        error: error.to_owned(),
+        failures,
+    };
+    let told = core
+        .handle(
+            "w1",
+            beat(vec![
+                poked(&assign.instance_id, "ValueError: no", 2),
+                poked("another", "", 0),
+            ]),
+            later(2),
+        )
+        .await
+        .unwrap();
+    assert!(told.is_empty(), "its trigger runs there: {told:?}");
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.failures, 2);
+    assert_eq!(stored.last_error.as_deref(), Some("ValueError: no"));
+    assert_eq!(stored.last_poked_at, Some(later(2)));
+    assert!(
+        core.db
+            .wait_step_strikes("sync", "found")
+            .await
+            .unwrap()
+            .is_some(),
+        "a failed call keeps its strikes"
+    );
+    core.handle(
+        "w1",
+        beat(vec![poked(&assign.instance_id, "", 0)]),
+        later(3),
+    )
+    .await
+    .unwrap();
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!((stored.failures, stored.last_error), (0, None));
+    assert_eq!(stored.last_poked_at, Some(later(3)));
+    assert_eq!(
+        core.db.wait_step_strikes("sync", "found").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn a_trigger_message_wakes_the_trigger_loop_though_it_writes_nothing() {
     // Grok's review of M5.1f2: what a trigger message changes may be in memory only (a call
     // done, a trigger stopping and its slot freed): the trigger loop is told, not left to the

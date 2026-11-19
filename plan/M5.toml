@@ -409,16 +409,40 @@ scope = '''
 done_when = '''
 the design's decisions taken by the user; built, with the clock simulation and the cut scenarios 17-21 passing; scenario 1 measured against M5.2d's
 '''
-status = "planned"
+status = "done"
+done = 2026-11-19
 
 [[steps]]
 id = "M5.2f"
-title = "Many DAG triggers: a stress scenario, then their messages batched in the turn"
+title = "Many DAG triggers: a stress scenario, and poke reports in the heartbeat"
 scope = '''
-(the user, 2026-11-17; was M5.2cB2) first a stress scenario with many DAG triggers: a worker's watcher slots full of `@trigger.poke` triggers (each reporting `TriggerPoked` with every heartbeat) and event triggers firing steadily, measuring the lock time of trigger messages, events a second (an event to its run) and task throughput beside them. Then a turn's trigger messages (`TriggerEvent`, `TriggerPoked`, `TriggerStopped`) in one transaction, still handled on arrival: the back-pressure count and a trigger stopped or failed kept in memory across the batch, a failed batch redone one by one. Not chosen: the trigger messages in the round (decision 505's pattern), which would make each event wait for a round (the user: it slows events down)
+(the user, 2026-11-17; was M5.2cB2) a stress scenario with many DAG triggers: a worker's watcher slots full of `@trigger.poke` triggers and event triggers firing steadily, measuring the lock time of trigger messages, events a second (an event to its run) and task throughput beside them. What it found fixed (B268, B267): a worker's trigger messages no longer queued behind its results; a poke's reports ride the heartbeat (`Heartbeat.pokes`), stored in one statement. The events' batching split off to M5.2h (the user, 2026-11-19)
 '''
 done_when = '''
-the scenario in the suite, its numbers before and after the batching in the journal; skipped batching only by the user's decision, if the scenario shows trigger messages don't add up
+the scenario in the suite (24), its numbers in the journal
+'''
+status = "done"
+done = 2026-11-19
+
+[[steps]]
+id = "M5.2g"
+title = "Scenario 1 profiled: what each step and point of a round costs"
+scope = '''
+(the user, 2026-11-19; begun beside the bug fixes) every step of the master's round and every point in it timed before and after, and the round itself start to start, by its own clock (`SCHEDR_HIDDEN__MASTER__ROUND_TRACE`, `scripts/round_trace.py`; docs/03-guide/19-masters-round.md), scenario 1 run with it and its mean, median and p99 shown per step and point. Done so far: the trace and its points, one traced run (results 31 % of the time inside rounds, assign 22 %, commands 22 %, about 12 s of the commands part on no point, likely its lock waits), and from it a ready read limited to the workers' room, tried and dropped (its limit left runnable tasks unread behind blocked ones; reverted by hand, the journal). Left: a lock-wait point in the commands part; scenario 1 traced again as a baseline; the results part's per-run statements (about 35 ms a run touched: outputs, instances, the run's end) and the round's probe looked at; the findings to the user, each change their decision. To try with the trace (the user, 2026-11-19), on the columns `cleanup` and `wait_step` (migration 0003): the ready cleanups read on their own from their index for `assign_cleanups`, instead of found among every ready row; and the round's probe telling apart ready cleanups and ready wait steps, so a round reads the wait steps' extras (`switched_off_wait_steps`, `first_starts`) only when one is queued; and the ready read made narrow: every ready row still read, but only what picking needs (instance and run IDs, task, map index, ready time, the DAG version, `cleanup`, `wait_step`), the full rows (with their run's and version's) fetched only for the tasks picked, so a long backlog costs little per row; none of these limits the ready read (nothing left unread)
+'''
+done_when = '''
+every step and point of a round measured in scenario 1; the table of them on the round page; what to change next decided by the user
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2h"
+title = "Trigger events batched in one transaction"
+scope = '''
+(the user, 2026-11-19; was M5.2f's second half) after the scenario-1 profiling (M5.2g): the trigger messages arriving together (`TriggerEvent`, `TriggerPoked`, `TriggerStopped`) in one transaction instead of one each (scenario 24: 1,200 events held the lock 27.8 s, about 23 ms each, mostly a transaction's start and commit), still handled on arrival: the back-pressure count and a trigger stopped or failed kept in memory across the batch, a failed batch redone one by one, the dispatcher's snapshot widened to the trigger slots and the scheduler's active runs. Not chosen: the trigger messages in the round (decision 505's pattern), which would make each event wait for a round (the user: it slows events down)
+'''
+done_when = '''
+scenario 24's numbers before and after in the journal; stress 17-21 passing before the push
 '''
 status = "planned"
 

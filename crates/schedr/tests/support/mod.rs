@@ -259,6 +259,13 @@ impl Cluster {
                 command.env(name, value);
             }
         }
+        // The master's round trace (profiling), to the master only: the webserver's transactions
+        // would write to the same file.
+        if args.first() == Some(&"master")
+            && let Ok(path) = std::env::var("SCHEDR_HIDDEN__MASTER__ROUND_TRACE")
+        {
+            command.env("SCHEDR_HIDDEN__MASTER__ROUND_TRACE", path);
+        }
         if self.ca.is_some() {
             command
                 .env("SCHEDR_CONFIG__TLS__MODE", "app")
@@ -315,6 +322,38 @@ impl Cluster {
 
     fn start_listening(&mut self, name: &str, args: &[&str], env: &[(&str, &str)], ports: bool) {
         let role = if ports { args[0] } else { "" };
+        // A master started again on its kept port may find it taken for a moment, by another
+        // test's role handed it meanwhile (B257): started again, for up to about 5 s.
+        for _ in 0..20 {
+            let (log, log_from) = self.spawn_role(name, args, env);
+            let restarted = role == "master" && name == "master" && self.grpc_port.is_some();
+            if !(restarted && self.port_taken(&log, log_from)) {
+                break;
+            }
+            self.kill(name);
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let log = self.dir.path().join(format!("{name}.log"));
+        let log_from = self.roles.last().unwrap().log_from;
+        self.wait_bound(name, role, &log, log_from);
+    }
+
+    /// Whether a master restarted on its kept port logged that it can't listen there, rather
+    /// than that it listens.
+    fn port_taken(&self, log: &std::path::Path, from: usize) -> bool {
+        let mut taken = false;
+        self.wait("the restarted master to listen or not", || {
+            let text = std::fs::read_to_string(log).unwrap_or_default();
+            let text = &text[from.min(text.len())..];
+            taken = text.contains("can't listen on");
+            taken || text.contains("schedr master: gRPC on ")
+        });
+        taken
+    }
+
+    /// Starts `schedr <args>` as role `name`, its output in `<name>.log`: the log and where
+    /// this run's output starts in it.
+    fn spawn_role(&mut self, name: &str, args: &[&str], env: &[(&str, &str)]) -> (PathBuf, usize) {
         let log = self.dir.path().join(format!("{name}.log"));
         let file = if self.keep_logs {
             std::fs::OpenOptions::new()
@@ -339,10 +378,16 @@ impl Cluster {
             log: log.clone(),
             log_from,
         });
+        (log, log_from)
+    }
+
+    /// Waits for role `name`'s ops port, and its API or gRPC port by what it runs (`role`;
+    /// "" for the ops port only), in its log, and notes them.
+    fn wait_bound(&mut self, name: &str, role: &str, log: &std::path::Path, log_from: usize) {
         let bound = |marker: &str| {
             let mut found = None;
             self.wait(&format!("`{marker}` in the {name} log"), || {
-                let text = std::fs::read_to_string(&log).unwrap_or_default();
+                let text = std::fs::read_to_string(log).unwrap_or_default();
                 found = text[log_from.min(text.len())..]
                     .split(marker)
                     .nth(1)

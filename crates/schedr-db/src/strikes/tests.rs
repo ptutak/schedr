@@ -69,3 +69,17 @@ async fn a_limit_of_0_never_switches_off() {
     }
     assert_eq!(db.switched_off_wait_steps().await.unwrap(), vec![]);
 }
+
+#[tokio::test]
+async fn the_dags_with_strikes_are_found_among_those_asked_for() {
+    let db = migrated().await;
+    assert_eq!(
+        db.dags_with_strikes(&["etl", "other"]).await.unwrap().len(),
+        0
+    );
+    strike(&db, 3).await;
+    let found = db.dags_with_strikes(&["etl", "other"]).await.unwrap();
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), ["etl"]);
+    assert_eq!(db.dags_with_strikes(&["other"]).await.unwrap().len(), 0);
+    assert_eq!(db.dags_with_strikes(&[]).await.unwrap().len(), 0);
+}

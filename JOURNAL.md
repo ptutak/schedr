@@ -2245,3 +2245,90 @@ attempt being journaled when the deadline passed, and for an assignment received
 (both older than the queue: M5.2d's journal writer): a late stamp let them launch. Now whatever
 hadn't started when the master may have counted the worker lost never starts in that session:
 `Starting.expired`, set before the stamp counts, and no admission past the deadline.
+
+### 2026-11-19: B267 fixed: a refused Register no longer keeps its worker alive; a live worker without a stream registers again
+
+Both parts, the user's choice (A and B). A: `open_stream` no longer records an arrival for a
+`Register` before the core decides; a pending registration counts (`Arrivals::registering`, its
+guard dropped once decided), so a worker retrying against a refusal no longer renews its old
+stream's lease. B: a worker the core still counts live whose stream the service no longer holds
+(its end not handled yet, as behind B268's backlog) is disconnected under the lock and
+registered at once, instead of refused until it is counted lost. Tests:
+`a_refused_register_doesnt_keep_the_old_stream_of_its_worker_alive`,
+`a_worker_still_live_whose_stream_is_gone_registers_again_at_once` (both fail without the fix).
+
+### 2026-11-19: B268 fixed (M5.2f): a poke's reports go with the heartbeat, stored together
+
+The user's choice: fix it as M5.2f. A worker's trigger messages are no longer queued behind its
+results (`alone_served`); its pokes' reports ride its heartbeat (`Heartbeat.pokes`, field 9,
+protocol 2.2 still open), stored in one statement (`triggers_poked`, an `UPDATE ... FROM` a JSON
+list) with the trigger-failing notices in one transaction, and only the DAGs with strikes read
+for clearing (`dags_with_strikes`); a changed error state still goes at once as
+`TriggerPoked`. Scenario 24 after the fix: pokes only done in 21.6 s; with firing events it
+passes in 103 s, 1,200 events holding the lock 27.8 s in all (about 23 ms each). Open, the
+user's to decide: the events of a round in one transaction (the dispatcher's memory snapshot
+doesn't cover the trigger slots or the scheduler).
+
+### 2026-11-19: B264 fixed: statements outside a transaction run in one of their own on Postgres
+
+With prepared statements off, sqlx sends an unnamed statement in two syncs (Parse/Describe,
+then Bind/Execute), and PgBouncer in transaction mode may bind the second on another server
+connection, where another client's unnamed statement is: a panic decoding its row, or
+"unnamed prepared statement does not exist". Grok traced it (session `e9a35dd8`). Every
+statement the crate ran on the bare pool (the lease's, the schema's checksums, the change
+notifications' state and listener checks, `on_pool!` without kept statements) runs inside a
+transaction (`pg_alone`), started through `Starting` so a start cut short never goes back to the
+pool (B84; a Postgres test caught a first version using `pool.begin()`); the backend PID check
+is a simple query. Stress 6c (two pools × 4 tasks × 300 calls through PgBouncer) failed with
+1,192 panics before, passes after. B258 (the failover scenario's second master exiting) was a
+consequence: its first lease attempt hit the same error, so the schema wasn't there yet.
+
+### 2026-11-19: B266 fixed: SQLite writes wait for each other in schedr, and the database is in WAL mode
+
+`database is locked` came from writers waiting on SQLite's busy timeout (2 s in the stress
+roles) behind one another. Writes on SQLite now take the database's writer lock in schedr first
+(`sqlite_writer`, bounded by the query timeout) before `BEGIN IMMEDIATE`, in `in_tx!` and the
+scoped transactions. The user also chose WAL mode for a database file (not `:memory:`):
+readers don't wait for a writer, backups take the `-wal` and `-shm` files too, and the file must
+be on a local filesystem (10-deployment). Scenario 9b: 3 runs of 3 pass, 63.7-64.6 tasks/s.
+
+### 2026-11-19: B257 fixed: a test master restarted on its kept port tries again while the port is taken
+
+The roles tests' harness starts a restarted master again, up to 20 times 250 ms apart, while it
+logs "can't listen on" (`spawn_role`, `wait_bound`); test
+`a_master_restarted_on_its_kept_port_waits_for_it_to_be_free`.
+
+### 2026-11-19: A ready read limited to the workers' room, tried and dropped; the heartbeat's poke reports bounded
+
+From scenario 1's round trace (note 1), `ready_instances` read every ready row (about 700 a call,
+7.7 s of a 121 s run, before the lock). Tried, at the user's choice: a round's cap following the
+workers' room and 10 (`CAP_OVER_ROOM`) under a ceiling of 300, and the ready read limited to it,
+cleanups read apart (migration 0003). Three Codex reviews (sessions `01a1f3b4`, `01a1f3f5`,
+`01a1f41d`) each found real bugs in it, on rarer edges each time, every one coming with the
+limit: blocked tasks at a queue's head using the limit's rows, so runnable tasks behind them
+(another queue's, a wait step behind tasks waiting for a slot) went unread; then, read per
+queue, an idle queue, the ceiling, a switched-off wait step with no watcher slot, a conflicted
+DAG, more than 249 queues on SQLite, a statement still scanning the backlog. The old read has
+none of these: it reads every ready task and stops after the round's assignments, not after a
+number of rows, so a blocked task costs a visit, never an assignment, and nothing starves. The
+user's choice: reverted by hand to the state before it (the cap 50 again; no `CAP_OVER_ROOM`, no
+migration 0003); the results part, a larger share (31 %), comes first. Not chosen: fixing the
+third review's five and keeping it; the read made cheap instead (only what the picking needs
+from every ready row, the full rows for those picked), left open. Kept from it (the user): two
+columns of `task_instances`, `cleanup` and `wait_step`, each with an index of the queued rows,
+written as a run's instances are made (`create_instances_of`) and filled for unfinished runs by
+migration 0003 (`0003_cleanup_wait_steps.sql`); nothing reads them yet, "they might come in handy".
+
+Kept from those reviews, as they concern B268's fix, not the read: a heartbeat takes its pokes'
+reports while they fit in half the master's message limit (Codex: 500 failing pokes' errors
+together passed it, and the master ends the stream), the rest with the next (`within_budget`);
+each heartbeat starts after the last trigger it took (`start_after`), so the first triggers
+don't always fill the budget. From the third review: a report skipped for its size, a smaller
+later one taken, moved the cursor past it, so a large report could wait for good; the cursor now
+stops before the first report left out (`cursor_after`).
+
+### <a id="N1"></a>2026-11-19: Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (note 1)
+
+One traced run of scenario 1, every step and point of the master's round measured, and
+the register of the trace points to remove later: the tables are in `notes/N1.toml`
+(`details`), for M5.2g.

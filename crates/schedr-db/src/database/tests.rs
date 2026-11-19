@@ -457,3 +457,24 @@ async fn a_database_not_reachable_for_now_is_transient_a_wrong_setting_isnt() {
         .unwrap_err();
     assert!(!unsupported.is_transient(), "{unsupported}");
 }
+
+#[tokio::test]
+async fn a_sqlite_file_is_in_wal_mode_a_memory_one_is_not() {
+    // B266 (the user's choice, 2026-11-19): a writer appends to `-wal`, readers go on reading.
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", dir.path().join("schedr.db").display());
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(pool(&db))
+        .await
+        .unwrap();
+    assert_eq!(mode, "wal");
+    // In memory: no WAL (none to have).
+    let memory = Database::connect(MEMORY).await.unwrap();
+    let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(pool(&memory))
+        .await
+        .unwrap();
+    assert_eq!(mode, "memory");
+}

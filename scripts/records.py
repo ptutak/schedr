@@ -86,7 +86,8 @@ adds to a decision; listed in `DECISIONS.md` and under its decision on the desig
 
 A note, `notes/N<n>.toml`: the user's own, written only when the user asks for one; listed in
 `NOTES.md` and the latest in `STATUS.md`. Fields: `title`, `date`, `summary`, `history`
-(`JOURNAL.md#N<n>`). Both are numbered from 1 without gaps; each has its journal entry, headed
+(`JOURNAL.md#N<n>`), and optionally `details`, its full text in Markdown (tables, lists).
+Both are numbered from 1 without gaps; each has its journal entry, headed
 `### <a id="DN1"></a>2026-11-09: <title> (decision note 1; corrects D373)` (or `adds to D<n>`)
 and `### <a id="N1"></a>2026-11-20: <title> (note 1)`. Any other journal entry that isn't a
 decision is a plain dated heading.
@@ -325,6 +326,8 @@ class Note:
     date: datetime.date
     summary: str
     history: str
+    #: Its full text, in Markdown (optional).
+    details: str = ""
 
     @property
     def id(self) -> str:
@@ -685,13 +688,14 @@ def read_note(path: Path) -> Note:
         raise RecordError(f"{path.name}: a note's file is named `N<number>.toml`")
     name = path.name
     data = parse(path)
-    fields(name, data, {"title", "date", "summary", "history"}, set())
+    fields(name, data, {"title", "date", "summary", "history"}, {"details"})
     return Note(
         number=int(match[1]),
         title=text_field(name, data, "title"),
         date=date_field(name, data, "date", required=True) or datetime.date.min,
         summary=" ".join(text_field(name, data, "summary").split()),
         history=text_field(name, data, "history"),
+        details=str(data.get("details", "")),
     )
 
 
@@ -1111,7 +1115,7 @@ def render_notes(records: Records) -> str:
         generated("notes/"),
         "# Notes\n\n",
         "The user's own notes, written when the user asks for one: one line each; the file "
-        "`notes/N<n>.toml` has its summary, its `history` its JOURNAL.md entry.\n\n",
+        "`notes/N<n>.toml` has its summary and details, its `history` its JOURNAL.md entry.\n\n",
     ]
     if records.notes:
         parts.append("| # | Date | Title |\n|---|---|---|\n")

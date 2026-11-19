@@ -186,8 +186,9 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
 Sensors for one interpreter and set of root copies run as coroutines in a spawned,
 long-lived host. A new code set uses another host; each stops when its last wait step ends.
 They take watcher slots (`[watchers] slots`, 500 by default). With none free, a wait step stays
-`queued` and says why. A draining worker hands its pokes to other workers at once, using no
-retry. Full-control wait steps get the drain's grace time.
+`queued` and says why. A poke's calls are reported with the worker's heartbeat, all
+its pokes together (a changed error at once). A draining worker hands its pokes to other
+workers at once, using no retry. Full-control wait steps get the drain's grace time.
 
 The host imports each DAG file once and shares module globals. Its working directory is the
 worker's log directory; its environment is the allowed environment plus `pass_env`. Run-specific values come from `dag_ctx` and `task_ctx`; use absolute paths.

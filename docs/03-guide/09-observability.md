@@ -120,8 +120,9 @@ of messages, a registration, a parse result, a stream's end. `schedr_master_core
 is how long each waited for it: `turn`, `round`, `register`, `upload`, `stream` or `restore`.
 `schedr_master_turn_part_seconds{part}` is how long each part of a turn held it, and
 `schedr_master_turn_messages{part}` how many messages that part had: `started` (the turn's
-`Started`s, stored together), `finished` (its `Finished`s) and `rest` (heartbeats, warnings and
-the other messages). A task's `started_at` is when its worker started it: the worker sends its
+`Started`s, stored together), `finished` (its `Finished`s), `triggers` (each trigger message:
+an event, a poke's report, a trigger stopped) and `rest` (heartbeats, warnings and the other
+messages). A task's `started_at` is when its worker started it: the worker sends its
 start in the master's time as it estimates it (within half a round trip), and the master
 records that, never before the assignment nor after the message arrived.
 `schedr_master_start_recorded_seconds` is how long after the start the master recorded it, the

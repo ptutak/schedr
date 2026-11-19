@@ -308,6 +308,16 @@ impl Stress {
             }
         };
         let master_metrics = has(master).then(|| self.cluster.ops_get(master, "/metrics").1);
+        // `SCHEDR_STRESS_METRICS=<prefix>`: the master's whole metrics (and w01's below) kept for a
+        // profile, `<prefix>-<name>.prom` (M5.2e's profile of scenario 1).
+        let keep = |name: &str, metrics: &str| {
+            if let Ok(prefix) = std::env::var("SCHEDR_STRESS_METRICS") {
+                std::fs::write(format!("{prefix}-{name}.prom"), metrics).unwrap();
+            }
+        };
+        if let Some(metrics) = &master_metrics {
+            keep(master, metrics);
+        }
         if let Some(metrics) = &master_metrics {
             for by in ["turn", "round"] {
                 let labels = format!("by=\"{by}\"");
@@ -326,12 +336,19 @@ impl Stress {
                 "",
                 "started_recorded",
             );
-            // A turn handles only what doesn't move runs forward since M5.2cB: the rest.
+            // A turn handles only what doesn't move runs forward since M5.2cB: the rest, and
+            // trigger messages each alone (M5.2f).
             put(
                 metrics,
                 "schedr_master_turn_part_seconds",
                 "part=\"rest\"",
                 "turn_rest",
+            );
+            put(
+                metrics,
+                "schedr_master_turn_part_seconds",
+                "part=\"triggers\"",
+                "turn_triggers",
             );
             // Each part of a round (M5.1c): what a round holding the lock spends its time on.
             for part in [
@@ -350,7 +367,9 @@ impl Stress {
             }
         }
         let worker = if has("w01") {
-            Some(self.cluster.ops_get("w01", "/metrics").1)
+            let metrics = self.cluster.ops_get("w01", "/metrics").1;
+            keep("w01", &metrics);
+            Some(metrics)
         } else {
             master_metrics
         };

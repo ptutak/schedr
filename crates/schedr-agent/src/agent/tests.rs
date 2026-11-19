@@ -5810,3 +5810,80 @@ fn the_queue_check_skips_what_it_missed() {
         );
     });
 }
+
+#[test]
+fn a_heartbeats_poke_reports_stay_within_its_budget_the_rest_for_the_next() {
+    // Codex's review of M5.2f: 500 failing pokes' errors in one heartbeat could pass the
+    // master's message limit, which ends the stream.
+    assert_eq!(
+        super::within_budget(&[40, 40, 40], 100),
+        [true, true, false]
+    );
+    assert_eq!(
+        super::within_budget(&[40, 80, 50], 100),
+        [true, false, true]
+    );
+    assert_eq!(
+        super::within_budget(&[500, 10], 100),
+        [true, false],
+        "the first at least"
+    );
+    assert_eq!(super::within_budget(&[], 100), Vec::<bool>::new());
+}
+
+#[test]
+fn every_triggers_poke_report_gets_its_turn_in_the_heartbeats() {
+    // Codex's second review: the budget always went to the same first triggers, whose reports
+    // came again before each heartbeat; the last ones never went.
+    let ids = ["a", "b", "c", "d"];
+    let mut cursor: Option<String> = None;
+    let mut sent = std::collections::BTreeMap::<&str, u32>::new();
+    for _ in 0..4 {
+        let at = super::start_after(&ids, cursor.as_deref());
+        let order: Vec<&str> = ids[at..].iter().chain(&ids[..at]).copied().collect();
+        // Room for two of them, each report there again by the next heartbeat.
+        let taken = super::within_budget(&[60, 60, 60, 60], 120);
+        for (id, take) in order.iter().zip(taken) {
+            if take {
+                *sent.entry(id).or_default() += 1;
+                cursor = Some((*id).to_owned());
+            }
+        }
+    }
+    assert_eq!(sent.into_values().collect::<Vec<_>>(), [2, 2, 2, 2]);
+    assert_eq!(super::start_after(&ids, Some("b")), 2);
+    assert_eq!(super::start_after(&ids, Some("z")), 4);
+    assert_eq!(super::start_after(&ids, None), 0);
+}
+
+#[test]
+fn a_report_skipped_for_its_size_comes_first_in_the_next_heartbeat() {
+    // Codex's third review: sizes 58, 98, 58 against a budget of 116 sent `a` and `c` every
+    // time, the cursor past `b`, which never came first.
+    let ids = ["a", "b", "c"];
+    let sizes = std::collections::BTreeMap::from([("a", 58), ("b", 98), ("c", 58)]);
+    let mut cursor: Option<String> = None;
+    let mut sent = std::collections::BTreeMap::<&str, u32>::new();
+    for _ in 0..6 {
+        let at = super::start_after(&ids, cursor.as_deref());
+        let order: Vec<&str> = ids[at..].iter().chain(&ids[..at]).copied().collect();
+        let order_sizes: Vec<usize> = order.iter().map(|id| sizes[id]).collect();
+        let taken = super::within_budget(&order_sizes, 116);
+        for (id, take) in order.iter().zip(&taken) {
+            if *take {
+                *sent.entry(id).or_default() += 1;
+            }
+        }
+        cursor = super::cursor_after(&order, &taken).or(cursor);
+    }
+    assert!(sent.get("b").copied().unwrap_or(0) >= 2, "{sent:?}");
+    assert_eq!(
+        super::cursor_after(&["a", "b"], &[true, false]),
+        Some("a".to_owned())
+    );
+    assert_eq!(
+        super::cursor_after(&["a", "b"], &[true, true]),
+        Some("b".to_owned())
+    );
+    assert_eq!(super::cursor_after(&[], &[]), None);
+}

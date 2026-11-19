@@ -99,8 +99,8 @@ Protocol 1.0 closed it with a start deadline in master time: the assignment carr
 `start_by_ms`, the worker refused to start within two heartbeat intervals of it (`TOO_LATE`),
 and the master took the attempt back two intervals after it (decisions 442 and 450). That
 left a known limit: a `Started` held up on the way for longer than those four intervals
-arrived after the take-back, and the task could run on two workers. The simulator of the
-master's side found it happening (B240): the worker's messages cut one way, its `Started`
+arrived after the take-back, and the task could run on two workers. The
+[simulator](20-simulator.md)'s master side found it happening (B240): the worker's messages cut one way, its `Started`
 never arrived, and the master, losing the worker, took back an assignment that was running.
 
 The deadline guessed. Since protocol 2.0 the master knows instead: it takes an assignment
@@ -206,38 +206,15 @@ milliseconds of each other; it only matters when the worker's messages stop gett
 
 ## Checked by a simulator (decision 446)
 
-The worker's real `MasterTime` runs against a master on a virtual clock in a property test
-(`crates/schedr-agent/tests/clock_sim.rs`): rate drift up to 0.1 %, delays both ways up to
-5 s, answers lost, and stalls the boot clock missed. Heartbeats are also lost on their way to
-the master while its messages still arrive, naming the last worker message it received. At
-every event it checks that a worker not yet cut off is within a lease of when the master last
-heard it (so of the last stamp too). Removing the third bound above, or the drift allowance,
-makes it fail at once.
-
-The master's side runs in the same test (`clock_sim/master.rs`): the real master core over an
-in-memory database, and two workers, each with its own `MasterTime` on a drifting clock,
-connected by streams that delay messages, hold them up and break. Workers are cut off one way
-or both, or replaced by a new incarnation while the old process runs on. Masters restart, or are
-taken over while the deposed one still answers heartbeats. Its DAG has two tasks: one with a
-`cleanup_anywhere` cleanup, which a worker cut off stops, and an ordinary one, which it keeps
-running. The test checks three things:
-
-- no worker starts an attempt the master has ended;
-- no two processes of one task instance run at once, so no retry within a replaced
-  incarnation's hold and no moved cleanup beside the worker it left (the ordinary task may run
-  again only beside an attempt the master ended `lost`, at least once);
-- once the faults are over, every attempt and run has ended.
-
-Switching off the echo (taking back every unstarted assignment whose start wasn't heard), the
-replaced incarnation's hold or the cleanup's move wait makes it fail, each in scenarios aimed
-at it. It also replays the run that found B240.
-
-| Side | What it varies | What it checks |
-|---|---|---|
-| The worker's `MasterTime` on virtual clocks | Drift, delays, lost answers, stalls | A worker not cut off is within a lease of the last message the master heard |
-| The master core and two workers on one clock | Cuts, lags, replaced workers, restarts, takeovers | One process per task instance at a time; nothing started after the master ended it; all ended once the faults are over |
-
-A failure is reported with its smallest scenario.
+The rules on this page are checked by a deterministic simulator that runs the real code on
+virtual clocks. On the worker's side, `MasterTime` runs against drift up to 0.1 %, delays up to
+5 s, lost answers and stalls the boot clock missed. On the master's side, the real master core
+runs with two workers whose links are cut, slowed and broken, and whose processes and masters
+are replaced. It checks that no worker starts an attempt the master has ended, that no two
+processes of one task instance run at once, and that every attempt ends once the faults are
+over. Switching off the echo, the replaced incarnation's hold or the cleanup's move wait makes
+it fail. [The clock simulator](20-simulator.md) has the faults, the rules, how to run it and
+replay a failure, and its known limits.
 
 ## Watching it (decisions 448 and 449)
 

@@ -435,6 +435,10 @@ const HIDDEN_LIMITS: [&str; 36] = [
 /// The hidden waiting queue's factor (decision 509): a fraction from 0 to 4, not a whole number.
 const QUEUE_FACTOR: &str = "WORKER__QUEUE_FACTOR";
 
+/// The master's round trace, for profiling (the user, 2026-11-19): a file each round's timed
+/// points are written to (`schedr_db::trace`, which reads it). Not a timing nor a limit.
+const ROUND_TRACE: &str = "MASTER__ROUND_TRACE";
+
 /// The largest waiting queue's factor: four times the slots.
 const MOST_QUEUE_FACTOR_HUNDREDTHS: u32 = 400;
 
@@ -463,6 +467,10 @@ fn queue_factor(text: &str) -> Option<u32> {
 fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigError> {
     let mut limits = HiddenLimits::default();
     for (name, text) in env {
+        if name.strip_prefix(HIDDEN_PREFIX) == Some(ROUND_TRACE) {
+            limits.overridden.push(name.clone());
+            continue;
+        }
         if name.strip_prefix(HIDDEN_PREFIX) == Some(QUEUE_FACTOR) {
             limits.queue_factor_hundredths =
                 queue_factor(text).ok_or_else(|| ConfigError::BadHiddenTiming {
@@ -651,7 +659,11 @@ fn hidden_timings(env: &BTreeMap<String, String>) -> Result<Timings, ConfigError
         let Some(key) = name.strip_prefix(HIDDEN_PREFIX) else {
             continue;
         };
-        if HIDDEN_LIMITS.contains(&key) || key == QUEUE_FACTOR || RETIRED_TIMINGS.contains(&key) {
+        if HIDDEN_LIMITS.contains(&key)
+            || key == QUEUE_FACTOR
+            || key == ROUND_TRACE
+            || RETIRED_TIMINGS.contains(&key)
+        {
             continue;
         }
         let Some(timing) = timing_named(&mut timings, key) else {

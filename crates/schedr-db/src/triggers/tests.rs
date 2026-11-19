@@ -226,3 +226,54 @@ async fn events_are_listed_newest_first_a_page_at_a_time_ties_included() {
     assert_eq!(db.stored_event(dag.as_str(), "z").await.unwrap(), None);
     assert_eq!(db.queued_event_runs_of(dag.as_str()).await.unwrap(), 3);
 }
+
+#[tokio::test]
+async fn a_heartbeats_pokes_are_stored_together_each_on_its_own_run_of_the_trigger() {
+    // M5.2f: a heartbeat's pokes in one statement, as `trigger_poked` stores each.
+    let (db, dag, version) = with_dag().await;
+    db.trigger_assigned(
+        dag.as_str(),
+        "i1",
+        "w1",
+        &version,
+        "sha256:h1",
+        ts("2026-10-01T00:00:00Z"),
+    )
+    .await
+    .unwrap();
+    db.triggers_poked(&[
+        Poked {
+            dag_id: dag.as_str(),
+            instance_id: "i1",
+            at: ts("2026-10-01T00:01:00Z"),
+            error: Some("boom"),
+            failures: 2,
+        },
+        // An older run of the trigger: changes nothing.
+        Poked {
+            dag_id: dag.as_str(),
+            instance_id: "i0",
+            at: ts("2026-10-01T00:02:00Z"),
+            error: None,
+            failures: 0,
+        },
+    ])
+    .await
+    .unwrap();
+    let record = db.trigger(dag.as_str()).await.unwrap().unwrap();
+    assert_eq!(record.last_poked_at, Some(ts("2026-10-01T00:01:00Z")));
+    assert_eq!(record.last_error.as_deref(), Some("boom"));
+    assert_eq!(record.failures, 2);
+    db.triggers_poked(&[Poked {
+        dag_id: dag.as_str(),
+        instance_id: "i1",
+        at: ts("2026-10-01T00:03:00Z"),
+        error: None,
+        failures: 0,
+    }])
+    .await
+    .unwrap();
+    let record = db.trigger(dag.as_str()).await.unwrap().unwrap();
+    assert_eq!(record.last_poked_at, Some(ts("2026-10-01T00:03:00Z")));
+    assert_eq!((record.last_error, record.failures), (None, 0));
+}

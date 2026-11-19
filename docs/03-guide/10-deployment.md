@@ -213,7 +213,10 @@ one; on `-alpine`, the builder takes its packages from apk and looks for musl wh
 **The chart.** `charts/schedr/` with `mode: standalone`:
 
 - one replica (a StatefulSet) with a ReadWriteOnce volume on block storage for the data
-  directory (task logs, the worker's journal, and on SQLite the database);
+  directory (task logs, the worker's journal, and on SQLite the database). SQLite runs in
+  WAL mode: beside the database file are `-wal` (commits not yet copied into the file) and
+  `-shm`; back up all three together, or copy the file only while schedr is stopped. WAL
+  needs a local filesystem (block storage, an `emptyDir`), not a network share (NFS, SMB);
 - **the database**, one of three: SQLite on the volume (nothing set: the start);
   **`database.postgres`**, the host, port, database name and URL parameters in values and the
   user and password from a Secret (`existingSecret`, keys `userKey` / `passwordKey`), put

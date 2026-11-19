@@ -124,7 +124,11 @@ impl Database {
                     crate::query::query(CREATE_SQLITE).execute(pool).await?;
                 }
                 Pool::Postgres(pool) => {
-                    crate::query::query(CREATE_POSTGRES).execute(pool).await?;
+                    crate::query::pg_alone!(pool, |connection| {
+                        crate::query::query(CREATE_POSTGRES)
+                            .execute(connection)
+                            .await?
+                    });
                 }
             }
             Ok(())
@@ -195,14 +199,14 @@ impl Database {
                             .fetch_optional(pool)
                             .await?
                     }
-                    Pool::Postgres(pool) => {
+                    Pool::Postgres(pool) => crate::query::pg_alone!(pool, |connection| {
                         crate::query::query_scalar(RENEW_POSTGRES)
                             .bind(holder)
                             .bind(epoch)
                             .bind(millis(period))
-                            .fetch_optional(pool)
+                            .fetch_optional(connection)
                             .await?
-                    }
+                    }),
                 })
             })
             .await?;
@@ -223,11 +227,11 @@ impl Database {
                         .fetch_optional(pool)
                         .await?
                 }
-                Pool::Postgres(pool) => {
+                Pool::Postgres(pool) => crate::query::pg_alone!(pool, |connection| {
                     crate::query::query_scalar(HOLDER_POSTGRES)
-                        .fetch_optional(pool)
+                        .fetch_optional(connection)
                         .await?
-                }
+                }),
             })
         })
         .await
@@ -248,11 +252,11 @@ impl Database {
                         .fetch_optional(pool)
                         .await?
                 }
-                Pool::Postgres(pool) => {
+                Pool::Postgres(pool) => crate::query::pg_alone!(pool, |connection| {
                     crate::query::query_as(HELD_POSTGRES)
-                        .fetch_optional(pool)
+                        .fetch_optional(connection)
                         .await?
-                }
+                }),
             })
         })
         .await
@@ -274,10 +278,12 @@ impl Database {
                         .await?;
                 }
                 Pool::Postgres(pool) => {
-                    crate::query::query(RELEASE_POSTGRES)
-                        .bind(holder)
-                        .execute(pool)
-                        .await?;
+                    crate::query::pg_alone!(pool, |connection| {
+                        crate::query::query(RELEASE_POSTGRES)
+                            .bind(holder)
+                            .execute(connection)
+                            .await?
+                    });
                 }
             }
             Ok(())

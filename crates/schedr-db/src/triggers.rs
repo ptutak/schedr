@@ -59,6 +59,21 @@ fn stored_event((key, data, at, received_at): EventRow) -> Result<StoredEvent, D
     })
 }
 
+/// A poke's report, as [`Database::triggers_poked`] stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Poked<'a> {
+    /// Its DAG.
+    pub dag_id: &'a str,
+    /// The trigger's run it is of: another's changes nothing.
+    pub instance_id: &'a str,
+    /// When its call ended.
+    pub at: Timestamp,
+    /// Why its last call failed; `None` when it went well.
+    pub error: Option<&'a str>,
+    /// Its failures in a row.
+    pub failures: u32,
+}
+
 /// A DAG's trigger.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TriggerRecord {
@@ -419,6 +434,56 @@ impl Database {
             crate::query::query(sql(backend, SET))
                 .bind(db_time(now))
                 .bind(dag_id)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+
+    /// [`Self::trigger_poked`] for several pokes in one statement (M5.2f): a heartbeat's.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the statement fails.
+    pub async fn triggers_poked(&self, pokes: &[Poked<'_>]) -> Result<(), DbError> {
+        // Each poke a list `[dag, instance, at, error, failures]` of a JSON list, read as rows
+        // on each database.
+        const SQLITE: &str = "UPDATE trigger_progress SET last_poked_at = p.at, \
+            last_error = p.error, failures = p.failures \
+            FROM (SELECT json_extract(value, '$[0]') AS dag_id, \
+            json_extract(value, '$[1]') AS instance_id, json_extract(value, '$[2]') AS at, \
+            json_extract(value, '$[3]') AS error, json_extract(value, '$[4]') AS failures \
+            FROM json_each($1)) p \
+            WHERE trigger_progress.dag_id = p.dag_id AND trigger_progress.instance_id = p.instance_id";
+        const POSTGRES: &str = "UPDATE trigger_progress t SET last_poked_at = p.at, \
+            last_error = p.error, failures = p.failures \
+            FROM (SELECT value->>0 AS dag_id, value->>1 AS instance_id, \
+            (value->>2)::timestamptz AS at, value->>3 AS error, (value->>4)::integer AS failures \
+            FROM jsonb_array_elements($1::jsonb)) p \
+            WHERE t.dag_id = p.dag_id AND t.instance_id = p.instance_id";
+        if pokes.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<serde_json::Value> = pokes
+            .iter()
+            .map(|poke| {
+                serde_json::json!([
+                    poke.dag_id,
+                    poke.instance_id,
+                    db_time(poke.at),
+                    poke.error,
+                    i32::try_from(poke.failures).unwrap_or(i32::MAX),
+                ])
+            })
+            .collect();
+        let list = crate::query::to_json(&rows);
+        in_tx!(self, |tx, backend| {
+            let query = match backend {
+                crate::backend::Backend::Sqlite => SQLITE,
+                crate::backend::Backend::Postgres => POSTGRES,
+            };
+            crate::query::query(sql(backend, query))
+                .bind(&list)
                 .execute(&mut *tx)
                 .await?;
         });

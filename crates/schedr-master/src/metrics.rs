@@ -52,7 +52,8 @@ const TURN_PART: MetricDoc = MetricDoc {
     kind: MetricKind::Histogram,
     labels: &["part"],
     help: "How long each part of a worker's turn held the core lock (started: its `Started`s \
-        stored; finished: its `Finished`s; rest: heartbeats, warnings and the other messages)",
+        stored; finished: its `Finished`s; triggers: each trigger message; rest: heartbeats, warnings \
+        and the other messages)",
 };
 const ROUND_PART: MetricDoc = MetricDoc {
     name: "master_round_part_seconds",
