@@ -99,8 +99,8 @@ pub struct Timings {
     /// How long a peer has to complete the TLS handshake. Raise it for slow clients; lower it to
     /// drop stalled connections sooner.
     pub handshake_timeout: Duration,
-    /// How long a stopped process's output may take to reach its log (a process it started in a
-    /// session of its own can hold the pipes open).
+    /// How long a stopped or ended task's output may take to reach its log (a process it started
+    /// can hold the pipes open); then what is left of the task's process group is killed (B274).
     pub output_drain_timeout: Duration,
     /// How long a fork server may take to answer a request; then it is restarted, and the task
     /// spawned.

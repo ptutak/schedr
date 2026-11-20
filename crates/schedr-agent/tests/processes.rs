@@ -410,31 +410,58 @@ async fn a_program_that_doesnt_exist_fails_to_start() {
 }
 
 /// B274: a task whose leader exits while a child it started still holds its output ends all the
-/// same, its output read for at most the drain time; the child is left as it was.
+/// same, its output read for at most the drain time, and nothing it started outlives it (the
+/// user's option B), whether the child kept the output open or closed it.
 #[tokio::test]
-async fn a_task_ends_when_its_leader_exits_with_a_child_holding_its_output() {
-    let dir = TempDir::new().unwrap();
-    let pid_file = dir.path().join("child.pid");
-    let script = format!("sleep 60 & echo $! > {}; echo started", pid_file.display());
-    let mut spec = shell(dir.path(), &script, 1 << 20);
-    spec.output_drain = Duration::from_millis(300);
-    let ran = tokio::time::timeout(
-        Duration::from_secs(10),
-        schedr_agent::launch::run_command(&spec, None, NO_LIMITS, never(), |_| {}),
-    )
-    .await
-    .expect("the attempt ends, not waiting on the child's pipes")
-    .unwrap();
-    assert_eq!(ran.supervised.termination, Termination::Exited(0));
-    let (stdout, _) = ran.output.unwrap();
-    assert!(stdout.text().contains("started"), "{}", stdout.text());
-    let pid: i32 = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
+async fn a_task_ends_with_its_leader_and_takes_its_children_with_it() {
+    for (child, why) in [
+        ("sleep 60", "a child holding the output"),
+        ("sleep 60 >/dev/null 2>&1", "a child that closed the output"),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let pid_file = dir.path().join("child.pid");
+        let script = format!("{child} & echo $! > {}; echo started", pid_file.display());
+        let mut spec = shell(dir.path(), &script, 1 << 20);
+        spec.output_drain = Duration::from_millis(300);
+        let ran = tokio::time::timeout(
+            Duration::from_secs(10),
+            schedr_agent::launch::run_command(&spec, None, NO_LIMITS, never(), |_| {}),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{why}: the attempt ends"))
         .unwrap();
-    let _ = rustix::process::kill_process(
-        rustix::process::Pid::from_raw(pid).unwrap(),
-        rustix::process::Signal::KILL,
-    );
+        assert_eq!(ran.supervised.termination, Termination::Exited(0), "{why}");
+        let (stdout, _) = ran.output.unwrap();
+        assert!(
+            stdout.text().contains("started"),
+            "{why}: {}",
+            stdout.text()
+        );
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(pid).unwrap();
+        let mut gone = false;
+        for _ in 0..100 {
+            // Killed and reaped (by init, or this test process if it is a subreaper).
+            if rustix::process::test_kill_process(pid).is_err()
+                || std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_nonzero()))
+                    .is_ok_and(|stat| {
+                        stat.rsplit(')')
+                            .next()
+                            .is_some_and(|r| r.trim_start().starts_with('Z'))
+                    })
+            {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !gone {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+        assert!(gone, "{why}: the child is killed with its task");
+    }
 }

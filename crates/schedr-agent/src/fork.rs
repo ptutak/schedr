@@ -1003,12 +1003,13 @@ impl ForkedProcess {
         Ok((stdout, stderr))
     }
 
-    /// As [`Self::output`], waiting at most `drain` for both pipes to close (B274).
+    /// As [`OsProcess::finish`](crate::process::OsProcess::finish): its output read for at
+    /// most `drain`, then what is left of its group killed (B274).
     ///
     /// # Errors
     ///
     /// As [`Self::output`].
-    pub async fn output_within(
+    pub async fn finish(
         mut self,
         drain: std::time::Duration,
     ) -> io::Result<(TailBuffer, TailBuffer)> {
@@ -1016,7 +1017,7 @@ impl ForkedProcess {
         let (Some(stdout), Some(stderr)) = taken else {
             return Err(io::Error::other("the output was taken already"));
         };
-        crate::process::read_within((stdout, stderr), &self.stop_reading, drain).await
+        crate::process::finish_group(self.group, (stdout, stderr), &self.stop_reading, drain).await
     }
 }
 

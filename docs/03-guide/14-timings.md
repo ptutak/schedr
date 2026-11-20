@@ -153,7 +153,7 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WORKER__MASTER_SAMPLE_WINDOW` | 10 min | How far back a worker looks for its tightest reading of master time (decision 447); a longer window keeps an older sample, whose drift allowance grows with its age. |
 | `SCHEDR_HIDDEN__WORKER__CLOCK_SKEW_WARNING` | 2 s | How far the master's wall clock may differ from a worker's, beyond the round trip, before the worker warns, once a session (decision 449). Only for people: no deadline reads a wall clock. |
 | `SCHEDR_HIDDEN__WORKER__MEMORY_CHECK_INTERVAL` | 1 s | How often the watchdog samples each task's memory; budget enforcement depends on samples. |
-| `SCHEDR_HIDDEN__WORKER__OUTPUT_DRAIN_TIMEOUT` | 5 s | How long a stopped process's output may take to reach its log when another process holds its pipes open. |
+| `SCHEDR_HIDDEN__WORKER__OUTPUT_DRAIN_TIMEOUT` | 5 s | How long a stopped or ended task's output may take to reach its log when another process holds its pipes open; then what is left of the task is killed (B274). |
 | `SCHEDR_HIDDEN__WORKER__FORK_ANSWER_TIMEOUT` | 30 s | How long a fork server may take to answer; then it is restarted and the task spawned. |
 | `SCHEDR_HIDDEN__WORKER__FORK_BACKOFF_FIRST` | 1 s | First wait before restarting a fork server; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__WORKER__FORK_BACKOFF_MAX` | 5 min | Longest wait before restarting a fork server. |

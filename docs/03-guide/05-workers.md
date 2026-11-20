@@ -151,6 +151,10 @@ default. Give a private CA as the connection's `ca_cert` (PEM text).
    ([A command's context channel](#a-commands-context-channel)). Each starts in
    its own process group, so cancelling or killing reaches the whole
    task, and runs in its root's directory (Python) or its DAG file's directory (commands).
+   Nothing a task starts outlives it: once its main process exits, its output is read for at
+   most the drain time (5 s, `SCHEDR_HIDDEN__WORKER__OUTPUT_DRAIN_TIMEOUT`) and what is left of its group is
+   killed, so a `server &` it left behind neither runs on unwatched nor holds its slot (B274).
+   A service that must outlive a task runs outside schedr.
    stdout and stderr go to `<data_dir>/logs/<worker ID>/<attempt ID>.log`.
    The runner's first message is `hello`. The agent sends the task, and the runner answers
    `task_imported` (a message of no fields) once the DAG file is imported and the arguments

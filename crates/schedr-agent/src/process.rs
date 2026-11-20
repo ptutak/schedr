@@ -323,26 +323,29 @@ impl OsProcess {
         Ok((stdout, stderr))
     }
 
-    /// As [`Self::output`], waiting at most `drain` for both pipes to close; then what was read
-    /// (B274: a child the task left holding its output can't hold the attempt).
+    /// The end of a task whose leader exited: its output read for at most `drain`, then what
+    /// is left of its process group killed (B274, the user's option B: nothing outlives its
+    /// task, nor holds its slot by keeping its output open). What was read is kept.
     ///
     /// # Errors
     ///
     /// As [`Self::output`].
-    pub async fn output_within(
+    pub async fn finish(
         mut self,
         drain: std::time::Duration,
     ) -> io::Result<(TailBuffer, TailBuffer)> {
         let (Some(stdout), Some(stderr)) = (self.stdout.take(), self.stderr.take()) else {
             return Err(io::Error::other("the output was taken already"));
         };
-        read_within((stdout, stderr), &self.stop_reading, drain).await
+        finish_group(self.group, (stdout, stderr), &self.stop_reading, drain).await
     }
 }
 
-/// Both readers' tails, waiting at most `drain` for both to end at their pipe's end, then telling
-/// them to stop.
-pub(crate) async fn read_within(
+/// Both readers' tails, waiting at most `drain` for both to end at their pipe's end; then
+/// `group`, what is left of the task, killed, and readers still waiting told to stop (a process
+/// that left the group may still hold a pipe).
+pub(crate) async fn finish_group(
+    group: Pid,
     (mut stdout, mut stderr): (
         JoinHandle<io::Result<TailBuffer>>,
         JoinHandle<io::Result<TailBuffer>>,
@@ -354,6 +357,9 @@ pub(crate) async fn read_within(
     let deadline = tokio::time::Instant::now() + drain;
     let out = tokio::time::timeout_at(deadline, &mut stdout).await.ok();
     let err = tokio::time::timeout_at(deadline, &mut stderr).await.ok();
+    // Safe with the leader reaped: Linux never gives a new process an ID still in use as a
+    // group's, so this is the task's group or none (`ESRCH`, ignored).
+    let _ = kill_process_group(group, rustix::process::Signal::KILL);
     if out.is_none() || err.is_none() {
         stop.send_replace(true);
     }

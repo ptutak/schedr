@@ -218,15 +218,16 @@ pub enum TaskProcess {
 }
 
 impl TaskProcess {
-    /// As [`Self::output`], waiting at most `drain` for both pipes to close (B274).
+    /// The end of a task whose leader exited: its output read for at most `drain`, then what
+    /// is left of its group killed (B274).
     ///
     /// # Errors
     ///
     /// As [`Self::output`].
-    pub async fn output_within(self, drain: Duration) -> std::io::Result<(TailBuffer, TailBuffer)> {
+    pub async fn finish(self, drain: Duration) -> std::io::Result<(TailBuffer, TailBuffer)> {
         match self {
-            Self::Spawned(process) => process.output_within(drain).await,
-            Self::Forked(process) => process.output_within(drain).await,
+            Self::Spawned(process) => process.finish(drain).await,
+            Self::Forked(process) => process.finish(drain).await,
         }
     }
 
@@ -571,8 +572,8 @@ pub async fn run_python(
     };
     let supervised = supervised.map_err(LaunchError::Supervise)?;
     let ended = process.ended();
-    // A child it left may hold its output: read for the drain time at most (B274).
-    let _ = process.output_within(output_drain).await;
+    // Nothing it started outlives it, nor holds its output (B274).
+    let _ = process.finish(output_drain).await;
     Ok(Ran {
         supervised,
         runner_result,
@@ -633,10 +634,9 @@ pub async fn run_command(
         .await
         .map_err(LaunchError::Supervise)?;
     let ended = process.ended();
-    // A child it left may hold its output (`server &`): read for the drain time at most, so it
-    // can't hold the attempt and its slot (B274).
+    // Nothing it started (`server &`) outlives it, nor holds its output and its slot (B274).
     let output = process
-        .output_within(spec.output_drain)
+        .finish(spec.output_drain)
         .await
         .map_err(LaunchError::Supervise)?;
     Ok(Ran {

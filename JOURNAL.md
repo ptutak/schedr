@@ -2560,3 +2560,13 @@ plugins by config and discovery, cleanup with handles, the Python helper, the st
 crate, the dummy and `hello-plugin` side by side in `make standalone`, the guide page. Grok's
 review: eight findings, all fixed, two of them in released code (B274, B275). `make check`
 passed. Next: M5.2i4 (the protocol's specification), M5.2i2 (Kubernetes), M5.2j (bugs), R1.2.
+
+### 2026-11-20: B274, nothing outlives its task (the user's option B)
+
+B274's first fix let a task end while a child holding its output ran on, as a child that had
+closed its output always did: unwatched by a slot or the memory watchdog. The user chose B
+over leaving children running (A) or killing only those holding the output (C): once a task's
+leader exits, its output is read for at most the drain time, then what is left of its process
+group is killed. Nothing in the examples or tests relied on a child outliving its task. A
+service that must outlive one runs outside schedr. Changes released behaviour (1.1.0 left such
+children running).
