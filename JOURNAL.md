@@ -2691,3 +2691,14 @@ The user wants to present the Kubernetes extension: a kind cluster with the dash
 a simple Job whose pod logs into the attempt's log, metrics on the Extensions page. "Dashboard"
 read as the Kubernetes Dashboard (the plugin's links open the pod there). After M5.2i5 and
 M5.2i6, before M5.2i4 (the specification stays last).
+
+### 2026-11-20: declarations in the plugin's hello, `--describe` for discovery only (decision 513)
+
+Piece 1 had a worker ask every configured plugin `--describe` at its start for its metric
+declarations, reversing the rule that a configured plugin isn't run until a task needs it (a
+side agent's note: slower starts, plugin code run unasked, wrappers like M5.2i6's shell adapter
+unable to answer). The user asked why `--describe` is needed: only for discovery (a file name
+doesn't say an extension's name, versions and protocol). Chosen (D, "like for netconf yang"):
+declarations come in the plugin's `hello`, learned at its first attempt and kept per extension
+and version; config's win and are known from the start. Not chosen: asking configured plugins at
+start (A), config only (B), an opt-in `describe = true` (C).
