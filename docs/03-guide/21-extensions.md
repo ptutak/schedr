@@ -152,8 +152,9 @@ releases. A test in schedr's workspace reads each message both ways between it a
 own types (decision note 17).
 
 **The dummy extension** in `examples/extensions/dummy/` is a plugin whose payload says what to do
-(sleep, log, read a secret, register a handle, return, fail, hang). `make standalone`,
-`make standalone-separate-ui` and `make distributed` find it by discovery, and
+(sleep, log, read a secret, register a handle, return, fail, hang). `make standalone` and
+`make standalone-separate-ui` find it by discovery (`make distributed` runs a released schedr,
+1.1.0, without extensions), and
 `examples/extensions/dummy_extension.py` has a DAG for each case: a run with output, a secret, a
 cleanup after a failure, a timeout, a version no worker serves, and plugins in two languages side
 by side (the dummy and the Rust `hello-plugin`, which those targets build and configure by path).

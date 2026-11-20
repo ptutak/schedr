@@ -148,7 +148,8 @@ it: `[secret_storage.db] type = "db"` (or `SCHEDR_CONFIG__SECRET_STORAGE__DB__TY
 `[database] url` and `SCHEDR_SECRET_KEY` given to it. It then holds the database's credentials
 and the key, so any task on it can read every secret and the whole database; it warns about
 that when it starts. Use it to try a distributed setup without Vault (`make
-standalone-separate-ui` and `make distributed` do), not in production. Without asking, a
+standalone-separate-ui` does; `make distributed` runs a released schedr, 1.1.0, which hasn't
+it yet), not in production. Without asking, a
 worker never connects to the database.
 
 **Moving to Vault**, e.g. before moving from standalone to separate roles in production: `schedr secrets export --to DIR` requires a new or empty directory. It prints the

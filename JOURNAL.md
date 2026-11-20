@@ -2524,6 +2524,15 @@ what a plugin speaks and its own descriptor block, kept in step by a two-way con
 the workspace; the protocol (`schema/runner.schema.json`) is the contract, the crate one
 implementation of it as the Python helper is. Not chosen: A, publishing the two internal crates.
 
+### 2026-11-20: B273, `make distributed` broken by M5.2h6, fixed
+
+`make distributed` runs a released schedr (`DIST_VERSION`, 1.1.0), not this checkout. M5.2h6
+(pushed, `a94d09b8`) gave its workers the `db` secret storage, which a 1.1.0 worker refuses as
+standalone-only, so none started; M5.2i's `[extensions]` variables would have stopped them too
+("unknown field: found `extensions`"). Both checked against the installed 1.1.0. Taken out: the
+`db` opt-in comes back with DIST_VERSION 1.2.0 (R1.2); the extension demo stays out of
+`make distributed` (the user).
+
 ### 2026-11-20: M5.2i's review (Grok; Codex refused twice by its filter)
 
 Eight findings, each verified and fixed:

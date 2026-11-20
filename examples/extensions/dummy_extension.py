@@ -1,7 +1,7 @@
 """The dummy extension (decision 510) in DAGs, one for each thing it can show, and a Rust plugin.
 
 Its plugin, ``examples/extensions/dummy/schedr-ext-dummy``, is found by ``make standalone`` (and
-``standalone-separate-ui``, ``distributed``) through discovery: ``[extensions] discover = true``
+``standalone-separate-ui``) through discovery: ``[extensions] discover = true``
 with its folder on the worker's ``PATH``. Each task's payload is a list of steps for it.
 """
 

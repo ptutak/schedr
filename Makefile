@@ -264,11 +264,18 @@ STANDALONE_PREPARE = prepare() { \
 
 # The dummy extension (examples/extensions/dummy, decision 510) found by discovery: its folder
 # first on the workers' PATH (`uv run` puts the environment's python3 before it).
-EXT_ENV = SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$$PATH"
+# And the Rust example plugin (crates/schedr-extension/examples/hello-plugin.rs), configured by
+# path: two plugins in two languages, found two ways.
+HELLO_PLUGIN = $(abspath target/debug/examples/hello-plugin)
+EXT_ENV = SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$$PATH" \
+	SCHEDR_CONFIG__EXTENSIONS__HELLO__COMMAND='["$(HELLO_PLUGIN)"]' \
+	SCHEDR_CONFIG__EXTENSIONS__HELLO__VERSIONS='["1.0"]'
+
 
 standalone: SHELL := /bin/bash
 standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/); a secret key in .schedr/secret.key, the docs examples' secrets; the UI's Docs from site/ once `make docs` built it
 	cargo build -p schedr
+	cargo build -p schedr-extension --example hello-plugin
 	set -euo pipefail; $(STANDALONE_PREPARE); \
 	dir="$(abspath $(STANDALONE_DIR))"; prepare "$$dir"; \
 	SCHEDR_SECRET_KEY="$$(cat "$$dir/secret.key")" \
@@ -308,6 +315,7 @@ standalone-clean: ## Remove standalone's data (STANDALONE_DIR, .schedr/), its re
 standalone-separate-ui: SHELL := /bin/bash
 standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a standby master, a webserver, a worker; DAGS) and second (a standalone with no UI; DAGS2), and one `schedr ui` over both, on 8082
 	cargo build -p schedr
+	cargo build -p schedr-extension --example hello-plugin
 	$(STANDALONE_PREPARE); \
 	dir="$(abspath $(STANDALONE_DIR))/federation"; \
 	python="$$(uv run --no-sync python -c 'import sys; print(sys.executable)')"; \
@@ -396,6 +404,9 @@ DIST_PORT ?= 8300
 DIST_VERSION ?= 1.1.0
 DIST_PYTHON ?= 3.14
 DIST_ENV = $(abspath $(STANDALONE_DIR))/distributed-env/$(DIST_VERSION)
+# A released schedr (DIST_VERSION): what this checkout adds since isn't given to it. A 1.1.0
+# worker refuses a `db` secret storage and an `[extensions]` table (B273): the `db` opt-in comes
+# with DIST_VERSION 1.2.0 (R1.2); the extension demo stays out of it.
 distributed: PREPARE_BIN = $(DIST_ENV)/bin/schedr
 
 distributed: SHELL := /bin/bash
@@ -426,7 +437,6 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 		SCHEDR_CONFIG__OPS__PORT=$$((b + 93)) "$$bin" webserver ) & \
 	for i in $$(seq 1 $(DIST_WORKERS)); do \
 		( role SCHEDR_DAG_PATH="$(abspath $(DAGS))" SCHEDR_CONFIG__WORKER__ID=worker-$$i \
-			SCHEDR_CONFIG__SECRET_STORAGE__DB__TYPE=db SCHEDR_CONFIG__SECRET_STORAGE__DEFAULT=db \
 			SCHEDR_CONFIG__WORKER__SLOTS=$(DIST_SLOTS) \
 			SCHEDR_CONFIG__WORKER__MASTER_URL=http://127.0.0.1:$$((b + 70)) \
 			SCHEDR_CONFIG__WORKER__DATA_DIR="$$d/worker-$$i" \
@@ -435,7 +445,7 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
-			SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$(DIST_ENV)/bin:$$PATH" "$$bin" worker ) & \
+			PATH="$(DIST_ENV)/bin:$$PATH" "$$bin" worker ) & \
 	done; \
 	printf '[ui]\nbind = "%s"\nport = %s\ndocs_dir = "%s"\n\n[ops]\nbind = "127.0.0.1"\nport = %s\n\n[[ui.deployments]]\nname = "distributed"\nurl = "http://127.0.0.1:%s"\n' \
 		"$(LISTEN)" $$((b + 82)) "$(if $(wildcard site/index.html),$(abspath site))" $$((b + 92)) $$((b + 80)) > "$$d/ui.toml"; \
