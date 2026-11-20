@@ -2720,3 +2720,12 @@ downloads, the CLI and log shippers would see JSON where readable lines used to 
 chose a setting, JSON by default: `[worker] log_format = "json"` stores JSON lines, `"plain"`
 our readable form; the download offers "json" when the log was stored so, and "plain" always,
 JSON rendered readable. Not chosen: readable lines only, or JSON rendered only by our readers.
+
+### 2026-11-21: the extension page's layout: rows and cells; events panels (decision 513)
+
+The user: rows of a fixed height, numbered from 1 at the top, each `full`, or `left` and `right`
+(two cells), or `left`, `center` and `right` (three); a chart or a histogram in each cell. This
+replaces the width and titled sections. Asked "could we show logs in cells?": a log is its
+worker's file, read through its log server, so a cell could only read the latest attempts';
+the user chose `events` panels instead (the extension's own events and its attempts' latest
+phases, from the database), not log cells.
