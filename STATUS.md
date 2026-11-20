@@ -7,7 +7,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i2, M5.2i5, M5.2i4, M5.2j, R1.2.
+- **Then:** M5.2i5, M5.2i4, M5.2j, R1.2, M5.3a.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 7; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B270 (low/possible) (`BUGS.md`).
@@ -19,9 +19,9 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - DN16 (2026-11-20): decision 512's exception narrowed (corrects D512)
 - DN15 (2026-11-20): extensions only as their own process (corrects D510)
 - D512 (2026-11-20): one task's fault never fails another; M5.2i3 dropped
+- M5.2i2 (2026-11-20): A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real
 - M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker
 - M5.2h6 (2026-11-20): A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511)
-- M5.2h5 (2026-11-20): The CLI reads a command's decision back first after 50 ms
 
 ## In progress
 

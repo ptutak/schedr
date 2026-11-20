@@ -2601,3 +2601,27 @@ waits, capacity beyond slots, secret storages, event sources and output storage 
 The user: "M5.2i4 is the last i step, because we have to work out the protocol." M5.2i5 extends
 protocol 1 (decision 513), so the specification is finished after it: M5.2i4 back to planned,
 after M5.2i5; its page and schema of today (396e14de) stay as the first version.
+
+### 2026-11-20: M5.2i2 built, the Kubernetes plugin
+
+`examples/extensions/kubernetes/schedr-ext-kubernetes`: a Job per attempt, its handle registered
+before the Job is created, the pod's log streamed, `SCHEDR_OUTPUT:` as the output, a failure's
+reason, SIGTERM deleting the Job, the cleanup deleting each handle's Job. `scripts/kind-extension.sh`
+passed on kind: the log while running, success, failure, timeout, and a worker killed with its
+plugin whose Job the restarted standalone's cleanup deleted. Two bugs found on kind, not by the
+fake `kubectl`: `kubectl logs --pod-running-timeout` waits forever for a pod that already ended
+(the plugin now waits for the pod itself), and a `signal.signal` handler waits for the main thread
+to wake (now `loop.add_signal_handler`).
+
+### 2026-11-20: M5.2i2's review (Codex, gpt-6.1-sol)
+
+Nine findings, each verified and fixed: the pod got the namespace's API token (now
+`automountServiceAccountToken: false`); a broken log stream could make an earlier
+`SCHEDR_OUTPUT:` line the result (the output is now read from the ended pod); a string
+`command` was dropped, running the image's own (the payload's types checked first); the kind
+script's crash could kill another deployment's plugin (only its standalone's child now); the
+cleanup ignored its handle's namespace; a log line over 64 KiB failed the task; `kubectl`'s
+errors could block the stream; the script read a failed `kubectl` as no Jobs; the stop test left
+its fake `kubectl` running. A regression test for each; kind passed again. Also: the plugin's
+`from __future__ import annotations` dropped (the user asked why: Python 3.14 evaluates
+annotations lazily).

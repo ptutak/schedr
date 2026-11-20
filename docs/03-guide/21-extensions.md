@@ -161,3 +161,57 @@ own types (decision note 17).
 `examples/extensions/dummy_extension.py` has a DAG for each case: a run with output, a secret, a
 cleanup after a failure, a timeout, a version no worker serves, and plugins in two languages side
 by side (the dummy and the Rust `hello-plugin`, which those targets build and configure by path).
+
+## The Kubernetes plugin
+
+`examples/extensions/kubernetes/schedr-ext-kubernetes` runs each attempt as a Kubernetes Job,
+driving `kubectl`. It is short enough to read whole, and shows what a plugin should do:
+
+| | |
+|---|---|
+| The attempt | a Job named after the task, its run and its try, one pod, never restarted (`backoffLimit: 0`: schedr retries), with no API token (`automountServiceAccountToken: false`) |
+| The payload | each field's type checked before anything is created; an unknown field or a mistyped one fails the attempt |
+| Before creating it | registers the Job's name as a cleanup handle, so a worker lost right after still leaves it findable |
+| While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`) |
+| The output | the ended pod's last log line `SCHEDR_OUTPUT: <json>`, read once the Job succeeded, never from the stream; without it, `null`; a log that can't be read fails the attempt |
+| A failure | the pod's reason and exit code; a pod stuck on its image (`ErrImagePull`) fails at once |
+| A cancel, a timeout | SIGTERM: it deletes its Job, then exits |
+| The cleanup | deletes each handle's Job in the namespace the handle names, whatever the attempt's end, a lost worker's too |
+
+The payload:
+
+```python
+ExtensionTask(
+    "count",
+    name="kubernetes",
+    version="1.0",
+    payload={
+        "image": "busybox:1.36",
+        "command": ["sh", "-c", "echo 'SCHEDR_OUTPUT: {\"rows\": 3}'"],
+        "env": {"MODE": "fast"},
+        "secret_env": {"TOKEN": "etl/api#token"},   # a declared secret, as a variable
+        "resources": {"limits": {"memory": "64Mi"}},
+        "node_selector": {"pool": "batch"},
+    },
+    returns=dict[str, int],
+    secrets=[secrets["etl/api"]["token"]],
+    cleanup=True,
+)
+```
+
+A secret given as a variable is visible to anyone who can read the Job: that is for the
+example; a real plugin would put it in a Kubernetes Secret.
+
+On a worker, `kubectl` must work for the worker's user (its kubeconfig in `HOME`, or the pod's
+service account), allowed to create, get and delete Jobs and to get pods and their logs in the
+namespace:
+
+```toml
+[extensions.kubernetes]
+command = ["/opt/schedr/schedr-ext-kubernetes", "--namespace", "batch"]  # also --context, --kubeconfig
+versions = ["1.0"]
+```
+
+`scripts/kind-extension.sh` runs `examples/extensions/kubernetes_extension.py` on a local kind
+cluster: a pod's log while it runs, a success, a failure, a timeout, and a worker lost with its
+plugin, whose Job the cleanup finds by its handle.

@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""An extension's plugin that runs each attempt as a Kubernetes Job (M5.2i2), driving `kubectl`.
+
+A model for plugin authors: it registers a cleanup handle before it creates anything, streams
+the pod's log into the attempt's log, deletes its Job on a cancel or a timeout, and its cleanup
+deletes what a lost worker left behind. The payload:
+
+    {
+      "image": "busybox:1.36",                     the container's image (required)
+      "command": ["sh", "-c", "echo hi"],          its command (optional: the image's own)
+      "env": {"MODE": "fast"},                     plain variables
+      "secret_env": {"TOKEN": "spark/api#token"},  declared secrets, as variables
+      "resources": {"limits": {"memory": "256Mi"}},
+      "node_selector": {"pool": "batch"}
+    }
+
+The pod's last log line ``SCHEDR_OUTPUT: <json>`` is the task's output; without it, ``null``.
+A secret given as a variable is visible to anyone who can read the Job: a demonstration only;
+a real plugin would create a Kubernetes Secret.
+
+Configure it on a worker (``kubectl`` and its kubeconfig must work for the worker's user, with
+create, get, logs and delete on Jobs and pods in the namespace):
+
+    [extensions.kubernetes]
+    command = ["/path/to/schedr-ext-kubernetes", "--namespace", "batch", "--context", "kind-x"]
+    versions = ["1.0"]
+"""
+
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+from collections.abc import Mapping
+
+from schedr.extension import ExtensionChannel, ExtensionRequest, Run, main
+
+OUTPUT_PREFIX = "SCHEDR_OUTPUT: "
+# The pod never starts with these: the attempt fails at once instead of waiting for its timeout.
+STUCK = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError"}
+POLL = 1.0
+
+
+def obj(value: object) -> dict[str, object]:
+    """`value` if a JSON object, else an empty one: what `kubectl` printed, read defensively."""
+    return {str(k): v for k, v in value.items()} if isinstance(value, dict) else {}
+
+
+def items(value: object) -> list[object]:
+    """`value` if a JSON array, else an empty one."""
+    return list(value) if isinstance(value, list) else []
+
+
+class PodFailedError(Exception):
+    """The Job's pod failed: its reason and exit code."""
+
+
+class Kubectl:
+    """`kubectl` for one namespace and context."""
+
+    def __init__(self, namespace: str, context: str | None, kubeconfig: str | None) -> None:
+        """`kubectl` with these options on every command."""
+        self.namespace = namespace
+        self.options: list[str] = []
+        if context:
+            self.options += ["--context", context]
+        if kubeconfig:
+            self.options += ["--kubeconfig", kubeconfig]
+        self.base = ["kubectl", "-n", namespace, *self.options]
+
+    def in_namespace(self, namespace: str) -> Kubectl:
+        """The same `kubectl` in another namespace (a handle's)."""
+        other = Kubectl(namespace, None, None)
+        other.options = self.options
+        other.base = ["kubectl", "-n", namespace, *self.options]
+        return other
+
+    async def run(self, *args: str, stdin: str | None = None) -> str:
+        """Runs a command; its standard output, or `RuntimeError` with its error."""
+        process = await asyncio.create_subprocess_exec(
+            *self.base,
+            *args,
+            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, err = await process.communicate(stdin.encode() if stdin is not None else None)
+        if process.returncode != 0:
+            raise RuntimeError(f"kubectl {' '.join(args)}: {err.decode().strip()}")
+        return out.decode()
+
+    async def json(self, *args: str) -> dict[str, object]:
+        """A command's JSON output, an object."""
+        return obj(json.loads(await self.run(*args, "-o", "json")))
+
+    def delete_now(self, job: str) -> None:
+        """Deletes a Job and its pods, synchronously: what a signal handler can do."""
+        subprocess.run(
+            [*self.base, "delete", "job", job, "--ignore-not-found", "--wait=false"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+        )
+
+
+def job_name(request: ExtensionRequest) -> str:
+    """The attempt's Job: its task's ID and a hash of its DAG, run and try, DNS-safe."""
+    attempt = f"{request.dag_id}/{request.task_id}/{request.run.get('run_id')}"
+    digest = hashlib.sha256(f"{attempt}/{request.run.get('try_number')}".encode()).hexdigest()
+    slug = re.sub(r"[^a-z0-9-]+", "-", request.task_id.lower()).strip("-")[:30] or "task"
+    return f"schedr-{slug}-{digest[:12]}"
+
+
+def checked(payload: object) -> dict[str, object]:
+    """The payload, its fields' types checked before anything is created.
+
+    A mistyped field fails the attempt instead of being dropped: a string `command` would run
+    the image's own.
+    """
+    fields = obj(payload)
+    if not isinstance(payload, dict) or not isinstance(fields.get("image"), str):
+        raise ValueError('the payload is an object with an "image", a string')
+    if "command" in fields:
+        command = fields["command"]
+        if not isinstance(command, list) or not all(isinstance(c, str) for c in command):
+            raise ValueError('"command" is a list of strings')
+    for key in ("env", "secret_env", "resources", "node_selector"):
+        if key in fields and not isinstance(fields[key], dict):
+            raise ValueError(f'"{key}" is an object')
+    for key in ("env", "secret_env", "node_selector"):
+        if not all(isinstance(v, str) for v in obj(fields.get(key)).values()):
+            raise ValueError(f'"{key}"\'s values are strings')
+    unknown = set(fields) - {"image", "command", "env", "secret_env", "resources", "node_selector"}
+    if unknown:
+        raise ValueError(f"unknown payload fields: {sorted(unknown)}")
+    return fields
+
+
+def manifest(name: str, payload: Mapping[str, object], env: dict[str, str]) -> dict[str, object]:
+    """The Job: one pod, never restarted, never retried (schedr retries)."""
+    container: dict[str, object] = {
+        "name": "task",
+        "image": payload["image"],
+        "env": [{"name": k, "value": v} for k, v in env.items()],
+    }
+    if "command" in payload:
+        container["command"] = [str(part) for part in items(payload["command"])]
+    if "resources" in payload:
+        container["resources"] = payload["resources"]
+    pod: dict[str, object] = {
+        "restartPolicy": "Never",
+        # No API token in the pod: a task's image gets only what the task declared.
+        "automountServiceAccountToken": False,
+        "containers": [container],
+    }
+    if "node_selector" in payload:
+        pod["nodeSelector"] = payload["node_selector"]
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": name, "labels": {"app.kubernetes.io/managed-by": "schedr"}},
+        "spec": {"backoffLimit": 0, "template": {"spec": pod}},
+    }
+
+
+async def environment(payload: Mapping[str, object], channel: ExtensionChannel) -> dict[str, str]:
+    """The container's variables: the plain ones, then the declared secrets."""
+    env = {k: str(v) for k, v in obj(payload.get("env")).items()}
+    for variable, reference in obj(payload.get("secret_env")).items():
+        path, _, key = str(reference).partition("#")
+        env[str(variable)] = str(await channel.secret(path, key or None))
+    return env
+
+
+def stuck(pod: object) -> None:
+    """Raises `PodFailedError` for a pod that will never start (its image can't be pulled)."""
+    for container in items(obj(obj(pod).get("status")).get("containerStatuses")):
+        waiting = obj(obj(obj(container).get("state")).get("waiting"))
+        if waiting.get("reason") in STUCK:
+            raise PodFailedError(f"{waiting['reason']}: {waiting.get('message', '')}")
+
+
+async def started_pod(kubectl: Kubectl, job: str) -> str:
+    """The Job's pod, once it runs or has ended.
+
+    Waited for here: `kubectl logs` waits only for a pod to run, never for one that has ended.
+    """
+    while True:
+        pods = items((await kubectl.json("get", "pods", "-l", f"job-name={job}")).get("items"))
+        for pod in pods:
+            stuck(pod)
+            if obj(obj(pod).get("status")).get("phase") in ("Running", "Succeeded", "Failed"):
+                return str(obj(obj(pod).get("metadata")).get("name"))
+        if obj((await kubectl.json("get", "job", job)).get("status")).get("failed"):
+            raise PodFailedError("the Job failed before its pod started")
+        await asyncio.sleep(POLL)
+
+
+async def stream_logs(kubectl: Kubectl, pod: str) -> None:
+    """The pod's log into the attempt's as it comes, byte for byte (no line is too long).
+
+    Only a view: the output is read from the pod once it ended (`output`), so a stream that
+    breaks loses lines of the log, never the result.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *kubectl.base,
+        "logs",
+        "-f",
+        f"pod/{pod}",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    # Read beside the log: a full error pipe would stop `kubectl` and so the log.
+    errors = asyncio.create_task(process.stderr.read())
+    while chunk := await process.stdout.read(65536):
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+    error = (await errors).decode(errors="replace").strip()
+    if await process.wait() != 0:
+        print(f"kubectl logs stopped: {error}", file=sys.stderr, flush=True)
+
+
+async def output(kubectl: Kubectl, pod: str) -> object:
+    """The task's output: the ended pod's last log line `SCHEDR_OUTPUT: <json>`, else `None`.
+
+    Raises `RuntimeError` when the log can't be read: no output is guessed.
+    """
+    last = (await kubectl.run("logs", f"pod/{pod}", "--tail=1")).rstrip("\n")
+    if last.startswith(OUTPUT_PREFIX):
+        return json.loads(last[len(OUTPUT_PREFIX) :])
+    return None
+
+
+async def outcome(kubectl: Kubectl, job: str) -> None:
+    """Waits for the Job's end: returns on success, raises `PodFailedError` on failure."""
+    while True:
+        status = obj((await kubectl.json("get", "job", job)).get("status"))
+        if status.get("succeeded"):
+            return
+        pods = items((await kubectl.json("get", "pods", "-l", f"job-name={job}")).get("items"))
+        for pod in pods:
+            stuck(pod)
+            for container in items(obj(obj(pod).get("status")).get("containerStatuses")):
+                ended = obj(obj(obj(container).get("state")).get("terminated"))
+                if status.get("failed") and ended:
+                    raise PodFailedError(
+                        f"the pod ended {ended.get('reason', 'Error')} "
+                        f"with exit code {ended.get('exitCode')}"
+                    )
+        if status.get("failed"):
+            raise PodFailedError("the Job failed")
+        await asyncio.sleep(POLL)
+
+
+def make_run(kubectl: Kubectl) -> Run:
+    """The attempt: a Job created, its log streamed, its end taken as the task's."""
+
+    async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+        payload = checked(request.payload)
+        job = job_name(request)
+        env = await environment(payload, channel)
+        # Registered before the Job exists: a worker lost right after creating it leaves a
+        # handle its cleanup deletes the Job by.
+        await channel.add_handle("job", {"name": job, "namespace": kubectl.namespace})
+
+        def stopped() -> None:
+            # A cancel or a timeout: the Job goes with the attempt.
+            print(f"stopped: deleting job {job}", flush=True)
+            kubectl.delete_now(job)
+            os._exit(128 + signal.SIGTERM)
+
+        # Through the loop, which a signal wakes: a plain `signal.signal` handler waits for the
+        # main thread to wake, which a quiet pod's log may not do for minutes.
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stopped)
+        await kubectl.run("create", "-f", "-", stdin=json.dumps(manifest(job, payload, env)))
+        print(f"created job {job} in {kubectl.namespace}", flush=True)
+        pod = await started_pod(kubectl, job)
+        await stream_logs(kubectl, pod)
+        await outcome(kubectl, job)
+        return await output(kubectl, pod)
+
+    return run
+
+
+def make_cleanup(kubectl: Kubectl) -> Run:
+    """After each attempt: its Job deleted, whatever its end (a lost worker's too)."""
+
+    async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+        deleted = []
+        for handle in request.handles:
+            value = obj(handle.value)
+            name, namespace = value.get("name"), value.get("namespace")
+            if handle.type == "job" and isinstance(name, str):
+                # In the namespace the attempt created it in, which this worker's may not be
+                # (a cleanup moved to another worker).
+                where = kubectl.in_namespace(namespace) if isinstance(namespace, str) else kubectl
+                await where.run("delete", "job", name, "--ignore-not-found", "--wait=false")
+                print(f"deleted job {name} in {where.namespace}", flush=True)
+                deleted.append(name)
+        return {"deleted": deleted}
+
+    return cleanup
+
+
+def entry(argv: list[str]) -> int:
+    """Its options, then the helper's loop (`--describe` alone is the helper's)."""
+    if argv == ["--describe"]:
+        kubectl = Kubectl("default", None, None)
+    else:
+        parser = argparse.ArgumentParser(prog="schedr-ext-kubernetes")
+        parser.add_argument("--namespace", default="default")
+        parser.add_argument("--context")
+        parser.add_argument("--kubeconfig")
+        options = parser.parse_args(argv)
+        kubectl = Kubectl(options.namespace, options.context, options.kubeconfig)
+        argv = []
+    return main(
+        make_run(kubectl),
+        name="kubernetes",
+        versions=["1.0"],
+        cleanup=make_cleanup(kubectl),
+        argv=argv,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(entry(sys.argv[1:]))
