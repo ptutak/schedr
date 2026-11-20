@@ -4,6 +4,7 @@
 //! runs each task as its own process in a task slot (decision note 15), speaking the runner
 //! protocol over `SCHEDR_AGENT_FD`.
 
+use schedr_model::extension::{EventKind, ExtensionEvent};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -25,12 +26,16 @@ pub const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 const DESCRIBE_LIMIT: usize = 64 * 1024;
 
 /// A plugin: how to start it, and the versions of its extension it serves.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Plugin {
     /// The program, then its arguments.
     pub command: Vec<String>,
     /// The versions served, matched exactly.
     pub versions: BTreeSet<String>,
+    /// Its metrics and page from its config (decision 513); none: its hello's.
+    pub declarations: schedr_model::extension::Declarations,
+    /// The most series each of its metrics keeps.
+    pub max_series: u32,
 }
 
 /// A worker's plugins, by extension name.
@@ -186,14 +191,20 @@ pub async fn describe(program: &Path, path: &str) -> Result<Description, String>
 }
 
 /// The plugins a worker runs: `configured`, then, when `discover`, those found on `path` whose
-/// names aren't configured (configuration wins). Each plugin skipped is logged as a warning;
-/// the worker starts without it.
-pub async fn plugins(configured: Plugins, discover: bool, path: &str) -> Plugins {
+/// names aren't configured (configuration wins), and what happened to each found (DN19). Each
+/// plugin skipped is logged as a warning; the worker starts without it.
+pub async fn plugins(
+    configured: Plugins,
+    discover: bool,
+    path: &str,
+) -> (Plugins, Vec<ExtensionEvent>) {
     let mut plugins = configured;
+    let mut events = Vec::new();
     if !discover {
-        return plugins;
+        return (plugins, events);
     }
     for program in discoverable(path) {
+        let shown = program.display().to_string();
         match describe(&program, path).await {
             Ok(description) if plugins.contains_key(&description.name) => {
                 tracing::info!(
@@ -202,6 +213,12 @@ pub async fn plugins(configured: Plugins, discover: bool, path: &str) -> Plugins
                      not used",
                     description.name
                 );
+                events.push(ExtensionEvent::now(
+                    &description.name,
+                    None,
+                    EventKind::Skipped,
+                    &format!("{shown}: configured, or found earlier on PATH, so not used"),
+                ));
             }
             Ok(description) => {
                 tracing::info!(
@@ -210,19 +227,43 @@ pub async fn plugins(configured: Plugins, discover: bool, path: &str) -> Plugins
                     description.name,
                     description.versions
                 );
+                events.push(ExtensionEvent::now(
+                    &description.name,
+                    None,
+                    EventKind::Discovered,
+                    &format!("{shown}, versions {}", description.versions.join(", ")),
+                ));
                 plugins.insert(
                     description.name,
                     Plugin {
                         command: vec![program.to_string_lossy().into_owned()],
                         versions: description.versions.into_iter().collect(),
+                        // Its own come in its hello (decision 513).
+                        declarations: schedr_model::extension::Declarations::default(),
+                        max_series: schedr_model::extension::DEFAULT_MAX_SERIES,
                     },
                 );
             }
-            Err(why) => tracing::warn!(
-                program = %program.display(),
-                "an extension plugin skipped: {why}"
-            ),
+            Err(why) => {
+                tracing::warn!(
+                    program = %program.display(),
+                    "an extension plugin skipped: {why}"
+                );
+                // Named by its file: it said nothing of itself.
+                let name = program
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_prefix(DISCOVERED_PREFIX))
+                    .unwrap_or_default()
+                    .to_owned();
+                events.push(ExtensionEvent::now(
+                    &name,
+                    None,
+                    EventKind::Skipped,
+                    &format!("{shown}: {why}"),
+                ));
+            }
         }
     }
-    plugins
+    (plugins, events)
 }

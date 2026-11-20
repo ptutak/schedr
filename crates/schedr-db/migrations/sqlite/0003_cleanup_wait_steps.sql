@@ -24,3 +24,61 @@ WHERE run_id IN (SELECT id FROM runs WHERE state IN ('queued', 'running'))
             AND json_extract(task.value, '$.id') = task_instances.task_id
             AND json_extract(task.value, '$.kind') = 'sensor'
     );
+-- What a running attempt reported (decision 513): its statuses, each with its time, in order
+-- (at most 100: past it the oldest after the first goes), and its links by label (at most 10).
+CREATE TABLE attempt_statuses (
+    attempt_id  TEXT NOT NULL REFERENCES attempts (id) ON DELETE CASCADE,
+    seq         INTEGER NOT NULL CHECK (seq >= 0),
+    at          TEXT NOT NULL,
+    phase       TEXT NOT NULL,
+    message     TEXT,
+    progress    REAL CHECK (progress >= 0 AND progress <= 1),
+    -- The extension whose plugin reported it (DN19): its page lists its attempts' phases.
+    extension   TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (attempt_id, seq)
+);
+CREATE INDEX attempt_statuses_extension ON attempt_statuses (extension, at);
+CREATE TABLE attempt_links (
+    attempt_id  TEXT NOT NULL REFERENCES attempts (id) ON DELETE CASCADE,
+    label       TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    PRIMARY KEY (attempt_id, label)
+);
+-- The extensions workers ran (decision 513): each version's declarations (metrics, page) and
+-- series cap as a worker last sent them, and when it was last heard of; and their metrics'
+-- samples, one row a minute per worker and series (step 60: a counter's growth, a gauge's
+-- value, a histogram's new observations), rolled up per 15 minutes across workers (step 900,
+-- worker_id ''), kept as the processes' samples are.
+CREATE TABLE extension_versions (
+    name          TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    worker_id     TEXT NOT NULL,
+    declarations  TEXT NOT NULL,
+    max_series    INTEGER NOT NULL CHECK (max_series >= 1),
+    seen_at       TEXT NOT NULL,
+    PRIMARY KEY (name, version, worker_id)
+);
+CREATE TABLE extension_samples (
+    name       TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    worker_id  TEXT NOT NULL,
+    metric     TEXT NOT NULL,
+    labels     TEXT NOT NULL,
+    step_s     INTEGER NOT NULL,
+    at         TEXT NOT NULL,
+    data       TEXT NOT NULL,
+    PRIMARY KEY (name, step_s, at, version, worker_id, metric, labels)
+);
+-- What happened to each extension on its workers (DN19): discovered, skipped, refused, dropped;
+-- the newest 200 per extension kept.
+CREATE TABLE extension_events (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    worker_id  TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('discovered', 'skipped', 'refused', 'dropped')),
+    at         TEXT NOT NULL,
+    message    TEXT NOT NULL
+);
+CREATE INDEX extension_events_name ON extension_events (name, at);

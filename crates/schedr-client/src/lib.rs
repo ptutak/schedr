@@ -685,6 +685,61 @@ impl<T: Transport> Client<T> {
             .await
     }
 
+    /// `GET /api/v1/extensions`: the extensions workers ran (decision 513).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn extensions(&self) -> Result<schedr_api::extensions::ExtensionList, ClientError> {
+        self.call(Method::Get, "/api/v1/extensions".to_owned(), None)
+            .await
+    }
+
+    /// `GET /api/v1/extensions/{name}?worker=`: one extension, its metrics and page, its events
+    /// and attempts `worker`'s only when given (DN21).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn extension(
+        &self,
+        name: &str,
+        worker: Option<&str>,
+    ) -> Result<schedr_api::extensions::ExtensionView, ClientError> {
+        let worker = worker.map_or_else(String::new, |w| format!("?worker={}", path_segment(w)));
+        self.call(
+            Method::Get,
+            format!("/api/v1/extensions/{}{worker}", path_segment(name)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/extensions/{name}/metrics?range=&worker=`: its metrics over `range`, of
+    /// `worker` only when given (DN21).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn extension_metrics(
+        &self,
+        name: &str,
+        range: &str,
+        worker: Option<&str>,
+    ) -> Result<schedr_api::extensions::ExtensionMetrics, ClientError> {
+        let worker = worker.map_or_else(String::new, |w| format!("&worker={}", path_segment(w)));
+        self.call(
+            Method::Get,
+            format!(
+                "/api/v1/extensions/{}/metrics?range={}{worker}",
+                path_segment(name),
+                path_segment(range)
+            ),
+            None,
+        )
+        .await
+    }
+
     /// `GET /api/v1/triggers`: every DAG's trigger.
     ///
     /// # Errors
@@ -1231,6 +1286,28 @@ impl<T: Transport> Client<T> {
             None,
         )
         .await
+    }
+
+    /// `GET .../attempts/{try}/log.txt`: the attempt's whole log, masked line by line, as it
+    /// comes (Codex's review of M5.2i5: read in parts, a long line was cut).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the transport can't stream.
+    pub async fn instance_log_file(
+        &self,
+        run_id: &str,
+        (task_id, map_index): (&str, Option<u32>),
+        try_number: u32,
+    ) -> Result<Chunks, ClientError> {
+        self.transport
+            .open(format!(
+                "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log.txt{}",
+                path(run_id),
+                path(task_id),
+                instance(map_index, '?')
+            ))
+            .await
     }
 
     /// `POST /api/v1/dags/{dag}/pause` or `.../unpause`: the command.

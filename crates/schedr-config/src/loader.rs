@@ -397,7 +397,7 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 36] = [
+const HIDDEN_LIMITS: [&str; 40] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
     "MASTER__NOTIFICATION_BODY",
@@ -434,6 +434,10 @@ const HIDDEN_LIMITS: [&str; 36] = [
     "DATABASE__CHANGES_POLL_ROWS",
     "DATABASE__DAG_VERSIONS_CACHED",
     "TLS__HANDSHAKES_AT_ONCE",
+    "WORKER__EXTENSION_REPORTS_PER_SECOND",
+    "WORKER__EXTENSION_REPORTS_AT_ONCE",
+    "WORKER__EXTENSION_EVENTS_PENDING",
+    "MASTER__EXTENSION_EVENTS_KEPT",
 ];
 
 /// The hidden waiting queue's factor (decision 509): a fraction from 0 to 4, not a whole number.
@@ -511,6 +515,12 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             Some("WORKER__UNSENT_CONNECTION_ANSWERS") => &mut limits.unsent_connection_answers,
             Some("WORKER__TASK_CONNECTIONS_OPEN") => &mut limits.task_connections_open,
             Some("WORKER__WATCHER_LOG_BACKLOG") => &mut limits.watcher_log_backlog,
+            Some("WORKER__EXTENSION_REPORTS_PER_SECOND") => {
+                &mut limits.extension_reports_per_second
+            }
+            Some("WORKER__EXTENSION_REPORTS_AT_ONCE") => &mut limits.extension_reports_at_once,
+            Some("WORKER__EXTENSION_EVENTS_PENDING") => &mut limits.extension_events_pending,
+            Some("MASTER__EXTENSION_EVENTS_KEPT") => &mut limits.extension_events_kept,
             Some("WEBSERVER__EVENTS_BACKLOG") => &mut limits.webserver_events_backlog,
             Some("UI__EVENTS_BACKLOG") => &mut limits.ui_events_backlog,
             Some("WEBSERVER__AUTH_REMEMBERED_MAX") => &mut limits.auth_remembered_max,
@@ -572,6 +582,7 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "WORKER__DEREGISTER_WAIT" => &mut timings.deregister_wait,
         "WORKER__DRAIN_TICK" => &mut timings.drain_tick,
         "WORKER__QUEUE_CHECK_INTERVAL" => &mut timings.queue_check_interval,
+        "WORKER__EXTENSION_FIGURES_INTERVAL" => &mut timings.extension_figures_interval,
         "WORKER__DRAIN_ACK_WAIT" => &mut timings.drain_ack_wait,
         "WORKER__STOP_POLL" => &mut timings.stop_poll,
         "WORKER__CONNECTION_JOB_CANCEL_GRACE" => &mut timings.connection_job_cancel_grace,
@@ -847,6 +858,16 @@ fn check_extensions(section: &crate::config::ExtensionsSection) -> Result<(), Co
         for version in &plugin.versions {
             schedr_model::task::check_extension_version(version)
                 .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}] {error}")))?;
+        }
+        schedr_model::extension::check_declarations(&schedr_model::extension::Declarations {
+            metrics: plugin.metrics.clone(),
+            panels: plugin.panels.clone(),
+        })
+        .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}] {error}")))?;
+        if plugin.max_series == 0 {
+            return Err(ConfigError::Extensions(format!(
+                "[extensions.{name}] max_series: at least 1"
+            )));
         }
     }
     Ok(())

@@ -790,3 +790,89 @@ async fn attempts_are_read_and_ended_together() {
         Some(AttemptStatus::Failed)
     );
 }
+
+#[tokio::test]
+async fn an_attempts_reports_keep_the_first_and_latest_statuses_and_links_by_label() {
+    use crate::reports::{AttemptLink, AttemptStatus, MAX_LINKS, MAX_STATUSES};
+    let (db, _run_id) = with_run().await;
+    let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]
+        .instance_id
+        .clone();
+    let (attempt, _) = db
+        .assign_attempt(&instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    for n in 0..=MAX_STATUSES {
+        let status = AttemptStatus {
+            at: ts(NOW),
+            phase: format!("phase {n}"),
+            message: (n == 0).then(|| "first".to_owned()),
+            progress: (n == 1).then_some(0.5),
+        };
+        db.add_attempt_status(&attempt, "dummy", &status)
+            .await
+            .unwrap();
+    }
+    let link = |label: &str, url: &str| AttemptLink {
+        label: label.to_owned(),
+        url: url.to_owned(),
+    };
+    assert!(
+        db.set_attempt_link(&attempt, &link("Pod", "https://a"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        db.set_attempt_link(&attempt, &link("Pod", "https://b"))
+            .await
+            .unwrap()
+    );
+    for n in 1..MAX_LINKS {
+        assert!(
+            db.set_attempt_link(&attempt, &link(&format!("l{n}"), "https://x"))
+                .await
+                .unwrap()
+        );
+    }
+    assert!(
+        !db.set_attempt_link(&attempt, &link("one more", "https://x"))
+            .await
+            .unwrap()
+    );
+    let (statuses, links) = db.attempt_reports(&attempt).await.unwrap();
+    assert_eq!(statuses.len(), usize::try_from(MAX_STATUSES).unwrap());
+    assert_eq!(statuses[0].phase, "phase 0");
+    assert_eq!(statuses[0].message.as_deref(), Some("first"));
+    assert_eq!(statuses[1].phase, "phase 2", "the second oldest went");
+    assert_eq!(
+        statuses.last().unwrap().phase,
+        format!("phase {MAX_STATUSES}")
+    );
+    assert_eq!(links[0], link("Pod", "https://b"));
+    assert_eq!(links.len(), usize::try_from(MAX_LINKS).unwrap());
+    // DN19: its extension's page lists it with its latest phase; another extension's doesn't.
+    let listed = db.extension_attempts("dummy", None, 10).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].attempt_id, attempt);
+    assert_eq!(listed[0].status.phase, format!("phase {MAX_STATUSES}"));
+    assert_eq!(
+        (listed[0].try_number, listed[0].ended.as_deref()),
+        (1, None)
+    );
+    assert_eq!(db.extension_attempts("other", None, 10).await.unwrap(), []);
+    // DN21: a worker's tab lists only what it ran (agy's review of M5.2i5).
+    assert_eq!(
+        db.extension_attempts("dummy", Some("w1"), 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        db.extension_attempts("dummy", Some("w2"), 10)
+            .await
+            .unwrap(),
+        []
+    );
+}

@@ -4,6 +4,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+use schedr_model::extension::EventKind;
+
 use super::*;
 
 fn script(dir: &Path, name: &str, body: &str, mode: u32) -> PathBuf {
@@ -92,15 +94,32 @@ async fn a_plugin_is_asked_with_describe_and_one_failing_is_skipped() {
         Plugin {
             command: vec!["/opt/taken".to_owned()],
             versions: BTreeSet::from(["1".to_owned()]),
+            declarations: schedr_model::extension::Declarations::default(),
+            max_series: schedr_model::extension::DEFAULT_MAX_SERIES,
         },
     )]);
     assert_eq!(
         plugins(configured.clone(), false, &path).await,
-        configured,
+        (configured.clone(), Vec::new()),
         "no discovery unless asked"
     );
-    let found = plugins(configured, true, &path).await;
+    let (found, events) = plugins(configured, true, &path).await;
     assert_eq!(found.keys().collect::<Vec<_>>(), ["spark", "taken"]);
+    // What happened to each, for its extension's page (DN19): the broken one named by its file.
+    let mut happened: Vec<(&str, EventKind)> = events
+        .iter()
+        .map(|e| (e.extension.as_str(), e.kind))
+        .collect();
+    happened.sort();
+    assert_eq!(
+        happened,
+        [
+            ("broken", EventKind::Skipped),
+            ("spark", EventKind::Discovered),
+            ("taken", EventKind::Skipped)
+        ]
+    );
+    assert!(events.iter().all(|e| e.version.is_none() && e.at_ms > 0));
     assert_eq!(
         found["taken"].command,
         ["/opt/taken"],

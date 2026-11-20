@@ -3249,6 +3249,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "bcrypt",
+ "futures-util",
  "http-body-util",
  "jiff",
  "pretty_assertions",

@@ -1084,6 +1084,7 @@ async fn a_cancel_during_a_slow_secret_read_leaves_the_others_alone() {
         secrets: Some(std::sync::Arc::new(secrets)),
         handles: None,
         api: None,
+        reports: None,
     };
     let process = spec(
         &worker.setup,

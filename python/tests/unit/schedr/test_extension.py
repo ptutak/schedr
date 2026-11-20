@@ -1,7 +1,11 @@
 """The Python helper for extension plugins (decision 510): its handshake, request and answers."""
 
 import json
+import os
+import signal
 import socket
+import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -300,3 +304,145 @@ def test_a_refused_plugin_exits_and_a_wrong_message_is_a_protocol_error(
         welcomed(worker, message)
         assert ended() == 1
     assert "expected an extension task" in capsys.readouterr().err
+
+
+def test_a_plugin_reports_status_links_and_metrics_without_waiting() -> None:
+    """Decision 513: reports have no answer; each is a message of the protocol's schema."""
+
+    async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+        await channel.status("pulling image", "busybox", progress=0.25)
+        await channel.status("running")
+        await channel.link("Pod", "https://dash/pods/x")
+        await channel.metric("queue_seconds", 4.5)
+        await channel.metric("pods_started", 1, phase="Succeeded")
+        return "done"
+
+    with plugin(run) as (worker, ended):
+        welcomed(worker, request(None))
+        reports = [worker.receive() for _ in range(5)]
+        result = worker.receive()
+        assert ended() == 0
+    assert reports == [
+        {"type": "status", "phase": "pulling image", "message": "busybox", "progress": 0.25},
+        {"type": "status", "phase": "running"},
+        {"type": "link", "label": "Pod", "url": "https://dash/pods/x"},
+        {"type": "metrics", "points": [{"name": "queue_seconds", "value": 4.5}]},
+        {
+            "type": "metrics",
+            "points": [{"name": "pods_started", "value": 1, "labels": {"phase": "Succeeded"}}],
+        },
+    ]
+    assert result["type"] == "task_succeeded"
+
+
+def test_a_stopped_plugin_asks_why() -> None:
+    async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+        return list(await channel.stop_reason())
+
+    with plugin(run) as (worker, ended):
+        welcomed(worker, request(None))
+        assert worker.receive() == {"type": "stop_reason_get"}
+        worker.send({"type": "stop_reason", "reason": "drain", "grace_ms": 30000})
+        result = worker.receive()
+        assert ended() == 0
+    assert result["output"] == ["drain", 30.0]
+
+
+def test_the_hello_carries_the_declarations_and_describe_doesnt(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Decision 513: declared in the hello, as NETCONF's hello announces its models."""
+
+    async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+        return None
+
+    metrics = [{"name": "queue_seconds", "kind": "histogram", "help": "Queue", "buckets": [1, 5]}]
+    panels = [
+        {
+            "title": "Queue",
+            "metric": "queue_seconds",
+            "chart": "histogram",
+            "row": 1,
+            "cell": "full",
+        }
+    ]
+    assert (
+        main(run, name="k", versions=["1"], metrics=metrics, panels=panels, argv=["--describe"])
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "name": "k",
+        "versions": ["1"],
+        "protocol": PROTOCOL,
+    }
+    worker_end, plugin_end = socket.socketpair()
+    worker = CheckedChannel(worker_end)
+    env = {"SCHEDR_AGENT_FD": str(plugin_end.detach())}
+    thread = threading.Thread(
+        target=main,
+        args=(run,),
+        kwargs={
+            "name": "k",
+            "versions": ["1"],
+            "metrics": metrics,
+            "panels": panels,
+            "argv": [],
+            "environ": env,
+        },
+    )
+    thread.start()
+    try:
+        hello = worker.receive()
+        worker.send({"type": "refused", "reason": "enough"})
+    finally:
+        thread.join(10)
+        worker.close()
+    assert hello["metrics"] == metrics
+    assert hello["panels"] == panels
+
+
+_STOPPED_PLUGIN = """
+import asyncio, sys
+from schedr.extension import main
+
+async def run(request, channel):
+    print("waiting", flush=True)
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        reason, left = await channel.stop_reason()
+        print(f"stopped: {reason} {left:.0f}", flush=True)
+        raise
+
+sys.exit(main(run, name="dummy", versions=["1.0"]))
+"""
+
+
+def test_sigterm_cancels_the_plugins_coroutine_which_may_ask_why() -> None:
+    """Decision 513: SIGTERM is `CancelledError` at the plugin's `await`; it asks, then ends."""
+
+    worker_end, plugin_end = socket.socketpair()
+    worker = CheckedChannel(worker_end)
+    process = subprocess.Popen(
+        [sys.executable, "-c", _STOPPED_PLUGIN],
+        env={**os.environ, "SCHEDR_AGENT_FD": str(plugin_end.fileno())},
+        pass_fds=(plugin_end.fileno(),),
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    plugin_end.close()
+    try:
+        welcomed(worker, request(None))
+        assert process.stdout is not None
+        assert process.stdout.readline() == "waiting\n"
+        process.send_signal(signal.SIGTERM)
+        assert worker.receive() == {"type": "stop_reason_get"}
+        worker.send({"type": "stop_reason", "reason": "cancel", "grace_ms": 29000})
+        result = worker.receive()
+        assert process.wait(10) == 1
+        assert process.stdout.read() == "stopped: cancel 29\n"
+    finally:
+        process.kill()
+        worker.close()
+    assert result["type"] == "task_failed"
+    assert "SIGTERM" in json.dumps(result["error"])

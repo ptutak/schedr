@@ -15,7 +15,8 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jiff::Timestamp;
 use schedr_api::views::{
-    AllRunsQuery, AttemptView, CleanupView, CommandView, ResourceView, RunList, RunView, TaskView,
+    AllRunsQuery, AttemptStatusView, AttemptView, CleanupView, CommandView, ResourceView, RunList,
+    RunView, TaskView,
 };
 use schedr_client::{Client, ClientError, Transport, path_segment};
 use serde::Deserialize;
@@ -1965,6 +1966,32 @@ pub struct AttemptRow {
     pub error: String,
     /// The traceback, when there is one.
     pub traceback: String,
+    /// The statuses it reported, oldest first, each as its time and its text (decision 513).
+    pub statuses: Vec<(String, String)>,
+    /// The links it reported: label, URL (http or https).
+    pub links: Vec<(String, String)>,
+}
+
+impl AttemptRow {
+    /// Its latest status, as shown beside it.
+    #[must_use]
+    pub fn phase(&self) -> &str {
+        self.statuses.last().map_or("", |(_, text)| text.as_str())
+    }
+}
+
+/// A status as one line: its phase, its message, how far along.
+fn status_text(status: &AttemptStatusView) -> String {
+    use std::fmt::Write as _;
+    let mut text = status.phase.clone();
+    if let Some(message) = &status.message {
+        text.push_str(" · ");
+        text.push_str(message);
+    }
+    if let Some(progress) = status.progress {
+        let _ = write!(text, " · {:.0}%", progress * 100.0);
+    }
+    text
 }
 
 /// A try in the log tab's picker.
@@ -2017,6 +2044,10 @@ pub enum TabBody {
         tries: Vec<TryLink>,
         /// While it runs: its tail, where the log continues (23A).
         tail: Option<String>,
+        /// Its download, without its `format`.
+        download: String,
+        /// Whether it holds structured lines: then it downloads as stored (JSON) too.
+        structured: bool,
     },
     /// Why there is no log to show.
     NoLog(String),
@@ -2525,13 +2556,18 @@ async fn log_tab<T: Transport>(
     let html = if text.is_empty() && part.from > 0 && part.next >= part.size {
         LONG_LAST_LINE.to_owned()
     } else {
-        colours.push(text)
+        crate::log_lines::to_html(&mut colours, text)
     };
     let style = match colours.sgr() {
         sgr if sgr.is_empty() => String::new(),
         sgr => format!("&style={}", sgr.replace(';', "%3B")),
     };
     Ok(TabBody::Log {
+        // Offered as stored (JSON) only when it holds structured lines (decision 514).
+        structured: text
+            .lines()
+            .any(|l| schedr_model::log_line::LogLine::parse(l).is_some()),
+        download: format!("{panel_href}/log.txt?try={shown}{instance}"),
         html,
         cut: part.from > 0 || trimmed,
         size: bytes(part.size),
@@ -2550,6 +2586,108 @@ async fn log_tab<T: Transport>(
             )
         }),
     })
+}
+
+/// Which log to download, and how.
+#[derive(Debug, Deserialize)]
+pub struct LogDownloadQuery {
+    /// The try.
+    #[serde(rename = "try")]
+    try_number: u32,
+    /// The instance of a mapped task.
+    #[serde(default)]
+    map_index: Option<u32>,
+    /// `plain` (structured lines readable, the default) or `json` (as stored).
+    #[serde(default)]
+    format: Option<String>,
+}
+
+/// `GET /d/<deployment>/runs/<run>/tasks/<task>/log.txt?try=&format=`: a try's whole log
+/// (decision 514), read part by part as it is sent; `plain` renders its structured lines
+/// readable, `json` gives it as stored.
+pub async fn log_download<T: Transport + Send + Sync + 'static>(
+    State(ui): State<Arc<Ui<T>>>,
+    Path((deployment, run_id, task_id)): Path<(String, String, String)>,
+    query: Result<Query<LogDownloadQuery>, QueryRejection>,
+    headers: HeaderMap,
+) -> Response {
+    let page = Page::new(&headers, ui.docs_dir.is_some());
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(rejection) => return bad_request_page(&page, &rejection.body_text()),
+    };
+    let plain = match query.format.as_deref() {
+        None | Some("plain") => true,
+        Some("json") => false,
+        Some(other) => {
+            return bad_request_page(&page, &format!("`format` is plain or json, not `{other}`"));
+        }
+    };
+    let Some(index) = ui.deployments.iter().position(|d| d.name == deployment) else {
+        return no_deployment(&page, &deployment);
+    };
+    // The whole log, masked line by line by the webserver (Codex's review of M5.2i5: read in
+    // the view's parts, a line longer than one was cut). Not there: a page, not an empty file.
+    let file = ui.deployments[index]
+        .client
+        .instance_log_file(&run_id, (&task_id, query.map_index), query.try_number)
+        .await;
+    let chunks = match file {
+        Ok(chunks) => chunks,
+        Err(ClientError::Server {
+            status: 404 | 400,
+            message,
+        }) => return not_found_page(&page, &message),
+        Err(error) => return unavailable_page(&page, &deployment, &error),
+    };
+    let name = task_id_file_name(&format!("{task_id}-try{}", query.try_number));
+    // Whole characters, and with `plain` whole lines rendered (see `Download`).
+    let body = futures_util::stream::unfold(
+        (chunks, crate::log_lines::Download::new(plain), false),
+        |(mut chunks, mut download, done)| async move {
+            if done {
+                return None;
+            }
+            match chunks.next().await {
+                Some(Ok(bytes)) => {
+                    let text = download.take(&bytes, false);
+                    Some((Ok::<_, std::io::Error>(text), (chunks, download, false)))
+                }
+                Some(Err(error)) => Some((
+                    Err(std::io::Error::other(error.to_string())),
+                    (chunks, download, true),
+                )),
+                None => {
+                    let text = download.take(&[], true);
+                    Some((Ok(text), (chunks, download, true)))
+                }
+            }
+        },
+    );
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}.log\""),
+            ),
+        ],
+        axum::body::Body::from_stream(body),
+    )
+        .into_response()
+}
+
+/// A name for a downloaded file: its letters, digits, `-`, `_` and `.`, the rest as `_`.
+fn task_id_file_name(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// `GET /d/<deployment>/runs/<run>/tasks/<task>/output.json`: the whole output, to download.
@@ -2574,16 +2712,7 @@ pub async fn output_download<T: Transport>(
     match output {
         Ok(output) => {
             let body = serde_json::to_string_pretty(&output.value).unwrap_or_default();
-            let name: String = task_id
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || "-_.".contains(c) {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
+            let name = task_id_file_name(&task_id);
             (
                 [
                     (header::CONTENT_TYPE, "application/json".to_owned()),
@@ -2653,6 +2782,17 @@ fn attempt_row(page: &Page, deployment: &str, attempt: &AttemptView) -> AttemptR
                 .and_then(|s| s["traceback"].as_str())
                 .unwrap_or_default(),
         ),
+        statuses: attempt
+            .statuses
+            .iter()
+            .map(|s| (page.narrow_time(&s.at), status_text(s)))
+            .collect(),
+        links: attempt
+            .links
+            .iter()
+            .filter(|l| schedr_model::extension::link_url_allowed(&l.url))
+            .map(|l| (l.label.clone(), l.url.clone()))
+            .collect(),
     }
 }
 

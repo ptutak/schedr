@@ -226,7 +226,7 @@ pub enum OutputStream {
 pub const EXTENSION_PROTOCOL: u32 = 1;
 
 /// A message from the runner to the agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunnerMessage {
     /// The first message: who is speaking and what for.
@@ -240,6 +240,13 @@ pub enum RunnerMessage {
         /// none from the Python runner, which matches by `schedr_version`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         protocol: Option<u32>,
+        /// A plugin's metrics' declarations (`extension` mode, decision 513: as NETCONF's hello
+        /// announces its models); kept per extension and version unless its config has some.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        metrics: Vec<crate::extension::MetricDeclaration>,
+        /// A plugin's page's panels (`extension` mode).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        panels: Vec<crate::extension::Panel>,
     },
     /// The runner starts importing a file (the agent times each file).
     FileStarted {
@@ -314,6 +321,35 @@ pub enum RunnerMessage {
     HandleAdd {
         /// The handle.
         handle: CleanupHandle,
+    },
+    /// Where the task is now (decision 513): kept with the attempt, each with its time, and
+    /// shown on the task and its extension's page. No answer.
+    Status {
+        /// A short name for the phase, e.g. `pulling image`.
+        phase: String,
+        /// More about it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        /// How far along, 0 to 1, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        progress: Option<f64>,
+    },
+    /// A link to what the task started elsewhere (decision 513): a pod, a job's page. A second
+    /// with the same label replaces it. Only `http` and `https` URLs are kept. No answer.
+    Link {
+        /// What it links to.
+        label: String,
+        /// Its URL.
+        url: String,
+    },
+    /// Why the task is being stopped (decision 513), asked after SIGTERM: answered
+    /// [`AgentMessage::StopReason`]. The worker never sends an unasked message.
+    StopReasonGet,
+    /// Points of the extension's declared metrics (decision 513). No answer: one that doesn't
+    /// match a declaration is dropped with a warning.
+    Metrics {
+        /// The points.
+        points: Vec<crate::extension::MetricPoint>,
     },
     /// The task failed: an exception, or an output that can't be stored.
     TaskFailed {
@@ -737,6 +773,14 @@ pub enum AgentMessage {
     Connection {
         /// Each parameter's value, as stored JSON.
         values: std::collections::BTreeMap<String, serde_json::Value>,
+    },
+    /// The answer to [`RunnerMessage::StopReasonGet`] (decision 513): why the task is being
+    /// stopped, `None` while it isn't.
+    StopReason {
+        /// Why: cancel, timeout, drain, a lost master.
+        reason: Option<crate::extension::StopKind>,
+        /// How long until SIGKILL, in milliseconds (0 while it isn't stopping).
+        grace_ms: u64,
     },
     /// Why the connection a [`RunnerMessage::ConnectionGet`] asked for can't be opened.
     ConnectionFailed {

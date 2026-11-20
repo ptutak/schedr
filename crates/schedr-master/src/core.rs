@@ -783,6 +783,9 @@ pub struct MasterCore {
     scheduler: Scheduler,
     commander: Commander,
     connections: BTreeMap<String, Connection>,
+    /// The extensions' series stored this hour, across workers (decision 513): past a
+    /// metric's cap, a new one is stored as `other`.
+    series_seen: crate::figures::SeriesSeen,
     arrivals: Arrivals,
     metrics: MasterMetrics,
     /// Workers resumed whose follow-up (their parse jobs) failed: tried again each round, as
@@ -857,6 +860,7 @@ impl MasterCore {
                 .with_backfill_max_runs(settings.backfill_max_runs)
                 .with_commands_per_round(settings.rounds.commands),
             connections: BTreeMap::new(),
+            series_seen: crate::figures::SeriesSeen::default(),
             arrivals,
             metrics: MasterMetrics::default(),
             unresumed: BTreeSet::new(),
@@ -1432,6 +1436,134 @@ impl MasterCore {
         Ok(Vec::new())
     }
 
+    /// A worker's extension figures (decision 513): their declarations kept when sent, and
+    /// what they grew by added to the minute's samples, each metric within its series cap
+    /// across workers. For people, as usage is: a failed write is logged.
+    async fn heard_of_figures(&mut self, worker_id: &str, sent: &[Vec<u8>], now: Timestamp) {
+        let at = Timestamp::from_second(now.as_second().div_euclid(60) * 60).unwrap_or(now);
+        let mut samples = Vec::new();
+        for json in sent.iter().take(crate::figures::MAX_EXTENSIONS) {
+            let figures = match serde_json::from_slice(json)
+                .map_err(|e| e.to_string())
+                .and_then(crate::figures::checked)
+            {
+                Ok(figures) => figures,
+                Err(why) => {
+                    tracing::warn!(worker_id, "extension figures not kept: {why}");
+                    continue;
+                }
+            };
+            let declared = figures
+                .declarations
+                .as_ref()
+                .map(|d| (d, figures.max_series));
+            if let Err(error) = self
+                .db
+                .extension_seen(
+                    &figures.extension,
+                    &figures.version,
+                    worker_id,
+                    declared,
+                    now,
+                )
+                .await
+            {
+                tracing::warn!(worker_id, %error, "an extension's figures not kept");
+            }
+            let mut minute = crate::figures::minute_samples(&figures, worker_id, at);
+            let (hour, unloaded) = self.series_seen.unloaded(&minute, at);
+            for (name, metric) in unloaded {
+                match self.db.extension_series_since(&name, &metric, hour).await {
+                    Ok(stored) => self.series_seen.load((name, metric), stored),
+                    Err(error) => {
+                        tracing::warn!(worker_id, %error, "an extension's series not read");
+                    }
+                }
+            }
+            let dropped = self.series_seen.fold(&mut minute, figures.max_series, at);
+            if dropped > 0 {
+                tracing::warn!(
+                    worker_id,
+                    extension = figures.extension,
+                    "{dropped} series dropped: label names not the hour's"
+                );
+            }
+            samples.extend(minute);
+        }
+        if let Err(error) = self.db.add_extension_minutes(&samples).await {
+            tracing::warn!(worker_id, %error, "extension samples not written");
+        }
+    }
+
+    /// What happened to a worker's extensions (DN19): each event checked, its text cut, and
+    /// kept. For people, as figures are: a failed write is logged.
+    async fn heard_of_extension_events(&self, worker_id: &str, sent: &[Vec<u8>], now: Timestamp) {
+        let events = crate::figures::newest_events(sent, self.settings.worker_report.records, now);
+        let kept = self.settings.samples.events_kept;
+        if let Err(error) = self
+            .db
+            .insert_extension_events(worker_id, &events, kept)
+            .await
+        {
+            tracing::warn!(worker_id, %error, "extension events not kept");
+        }
+    }
+
+    /// A running attempt's status or link (decision 513), kept when the attempt is this
+    /// worker's and still open; bounded again here, as from any worker.
+    async fn attempt_reported(&self, worker_id: &str, reported: pb::AttemptReported) {
+        let attempt = match self.db.attempt(&reported.attempt_id).await {
+            Ok(Some(attempt)) if attempt.worker_id == worker_id && attempt.status.is_none() => {
+                attempt
+            }
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(worker_id, %error, "an attempt's report not kept");
+                return;
+            }
+        };
+        let cut = |text: String| -> String {
+            text.chars()
+                .take(schedr_model::extension::MAX_TEXT)
+                .collect()
+        };
+        let kept = match reported.report {
+            Some(pb::attempt_reported::Report::Status(status)) if !status.phase.is_empty() => {
+                let status = schedr_db::reports::AttemptStatus {
+                    at: Timestamp::from_millisecond(status.at_ms)
+                        .unwrap_or_else(|_| Timestamp::now()),
+                    phase: cut(status.phase),
+                    message: status.message.map(cut),
+                    progress: status
+                        .progress
+                        .filter(|p| !p.is_nan())
+                        .map(|p| p.clamp(0.0, 1.0)),
+                };
+                let extension = cut(reported.extension.clone());
+                self.db
+                    .add_attempt_status(&attempt.id, &extension, &status)
+                    .await
+            }
+            Some(pb::attempt_reported::Report::Link(link))
+                if !link.label.is_empty()
+                    && schedr_model::extension::link_url_allowed(&link.url) =>
+            {
+                let link = schedr_db::reports::AttemptLink {
+                    label: cut(link.label),
+                    url: link.url,
+                };
+                self.db
+                    .set_attempt_link(&attempt.id, &link)
+                    .await
+                    .map(|_| ())
+            }
+            _ => return,
+        };
+        if let Err(error) = kept {
+            tracing::warn!(worker_id, attempt_id = attempt.id, %error, "an attempt's report not kept");
+        }
+    }
+
     /// A worker's warnings recorded, as many and as long as kept (B183).
     async fn worker_warnings(&self, worker_id: &str, reported: pb::Warnings) {
         let limits = self.settings.worker_report;
@@ -1484,6 +1616,14 @@ impl MasterCore {
             }
             worker_message::Message::Heartbeat(beat) => {
                 self.heard_of_hosts(worker_id, beat.watcher_hosts).await;
+                if !beat.extension_figures_json.is_empty() {
+                    self.heard_of_figures(worker_id, &beat.extension_figures_json, now)
+                        .await;
+                }
+                if !beat.extension_events_json.is_empty() {
+                    self.heard_of_extension_events(worker_id, &beat.extension_events_json, now)
+                        .await;
+                }
                 if let Some(usage) = beat.usage {
                     self.heard_of_usage(worker_id, usage, now).await;
                 }
@@ -1553,6 +1693,11 @@ impl MasterCore {
             }
             worker_message::Message::HandlesAdded(added) => {
                 self.handles_added(worker_id, &added).await?
+            }
+            // For people, as warnings are: a failed write is logged (decision 513).
+            worker_message::Message::AttemptReported(reported) => {
+                self.attempt_reported(worker_id, reported).await;
+                Vec::new()
             }
             worker_message::Message::TaskEnded(ended) => {
                 self.task_ended(for_the_round(in_round, worker_id)?, worker_id, ended, now)

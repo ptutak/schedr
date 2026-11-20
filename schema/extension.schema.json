@@ -81,15 +81,51 @@
       ],
       "type": "object"
     },
+    "MetricPoint": {
+      "description": "One point of a declared metric.",
+      "properties": {
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Its labels' values.",
+          "type": "object"
+        },
+        "name": {
+          "description": "The declared metric.",
+          "type": "string"
+        },
+        "value": {
+          "description": "A counter's increase, a gauge's value, a histogram's observation.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
     "PluginMessage": {
       "description": "A message from the plugin to the worker.",
       "oneOf": [
         {
           "description": "The first message: in `extension` mode, naming the protocol.",
           "properties": {
+            "metrics": {
+              "description": "Its metrics' declarations, raw JSON (name, kind, help, unit, labels, buckets): the\nworker keeps them per extension and version, its config's winning.",
+              "items": true,
+              "type": "array"
+            },
             "mode": {
               "description": "Always `extension`.",
               "type": "string"
+            },
+            "panels": {
+              "description": "Its page's panels, raw JSON (title, metric, chart, width, section).",
+              "items": true,
+              "type": "array"
             },
             "protocol": {
               "description": "[`PROTOCOL`].",
@@ -224,6 +260,96 @@
           "type": "object"
         },
         {
+          "description": "Where the task is now (decision 513): kept with the attempt, with its time. No answer.",
+          "properties": {
+            "message": {
+              "description": "More about it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "description": "A short name for the phase, e.g. `pulling image`.",
+              "type": "string"
+            },
+            "progress": {
+              "description": "How far along, 0 to 1, when known.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A link to what the task started elsewhere; a second with the same label replaces it.\nOnly `http` and `https` URLs are kept. No answer.",
+          "properties": {
+            "label": {
+              "description": "What it links to.",
+              "type": "string"
+            },
+            "type": {
+              "const": "link",
+              "type": "string"
+            },
+            "url": {
+              "description": "Its URL.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the task is being stopped, asked after SIGTERM; answered\n[`WorkerMessage::StopReason`]. The worker never sends an unasked message.",
+          "properties": {
+            "type": {
+              "const": "stop_reason_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Points of the extension's declared metrics. No answer: one matching no declaration is\ndropped by the worker with a warning.",
+          "properties": {
+            "points": {
+              "description": "The points.",
+              "items": {
+                "$ref": "#/$defs/MetricPoint"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "metrics",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The task (or cleanup) failed.",
           "properties": {
             "error": {
@@ -309,6 +435,31 @@
         "max_output_size"
       ],
       "type": "object"
+    },
+    "StopKind": {
+      "description": "Why the worker stops a plugin.",
+      "oneOf": [
+        {
+          "const": "cancel",
+          "description": "A user cancelled the task.",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "description": "The task's timeout passed.",
+          "type": "string"
+        },
+        {
+          "const": "drain",
+          "description": "The worker drains: the task is retried elsewhere.",
+          "type": "string"
+        },
+        {
+          "const": "master_lost",
+          "description": "The worker lost the master: the task may run, or be cleaned up, elsewhere.",
+          "type": "string"
+        }
+      ]
     },
     "Task": {
       "additionalProperties": true,
@@ -475,6 +626,37 @@
             "type",
             "kind",
             "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to [`PluginMessage::StopReasonGet`]: why the task is being stopped, `None`\nwhile it isn't.",
+          "properties": {
+            "grace_ms": {
+              "description": "How long until SIGKILL, in milliseconds (0 while it isn't stopping).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StopKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Why: `cancel`, `timeout`, `drain`, `master_lost`."
+            },
+            "type": {
+              "const": "stop_reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grace_ms"
           ],
           "type": "object"
         },

@@ -62,6 +62,7 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
     shutil.copy(REPO / "examples" / "sync.py", dags / "sync.py")
     shutil.copy(Path(__file__).parent / "form_params.py", dags / "form_params.py")
     shutil.copy(Path(__file__).parent / "with_connections.py", dags / "with_connections.py")
+    shutil.copy(Path(__file__).parent / "log_levels.py", dags / "log_levels.py")
     binary = os.environ.get("SCHEDR_BIN", str(REPO / "target" / "debug" / "schedr"))
     log = work / "standalone.log"
     env = {
@@ -113,7 +114,13 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
             return state == "success"  # type: ignore[no-any-return]
 
         _wait("the run finished", finished, log)
-        yield {"url": server, "run": run, "dag": DAG_ID, "db": str(work / "schedr.db")}
+        yield {
+            "url": server,
+            "run": run,
+            "dag": DAG_ID,
+            "db": str(work / "schedr.db"),
+            "log": str(log),
+        }
     finally:
         process.terminate()
         process.wait(timeout=30)
@@ -130,5 +137,34 @@ def trigger(standalone: dict[str, str]) -> Callable[[str], None]:
             f"/api/v1/dags/{DAG_ID}/runs",
             {"planned_for": planned_for},
         )
+
+    return go
+
+
+@pytest.fixture
+def ran(standalone: dict[str, str]) -> Callable[[str], str]:
+    """Runs a DAG of the fixture's to its success through the API: the run's ID."""
+
+    def go(dag_id: str) -> str:
+        server, log = standalone["url"], Path(standalone["log"])
+        _wait(
+            f"{dag_id} listed",
+            lambda: any(d["dag_id"] == dag_id for d in _api(server, "GET", "/api/v1/dags")["dags"]),  # type: ignore[index]
+            log,
+        )
+        command = _api(server, "POST", f"/api/v1/dags/{dag_id}/runs", {})
+        command_id = command["command_id"]  # type: ignore[index]
+
+        def run_id() -> str | None:
+            result = _api(server, "GET", f"/api/v1/commands/{command_id}").get("result") or {}  # type: ignore[union-attr]
+            return result.get("run_id")  # type: ignore[no-any-return]
+
+        run = str(_wait(f"a run of {dag_id}", run_id, log))
+        _wait(
+            f"the run of {dag_id} succeeded",
+            lambda: _api(server, "GET", f"/api/v1/runs/{run}")["run"]["state"] == "success",  # type: ignore[index]
+            log,
+        )
+        return run
 
     return go

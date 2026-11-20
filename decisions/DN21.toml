@@ -1,0 +1,14 @@
+title = "The Extensions page in tabs, one per extension; inside, all workers and each worker"
+date = 2026-11-21
+by = "user"
+on = "D513"
+kind = "adds"
+summary = '''
+The Extensions page is one tab per extension (of a deployment), each holding that extension's
+page: its panels and what happened. Inside a tab, sub-tabs: "All workers", the figures summed over
+its workers and versions, for any range up to 30 days; and one per worker heard from in the last
+day, that worker's own minute figures, for ranges up to a day (the 15-minute rollups are summed
+over workers, so past a day only the sum exists). The metrics API takes `?worker=`. No schema
+change.
+'''
+history = "JOURNAL.md#DN21"

@@ -129,7 +129,7 @@ impl CleanupRecord {
 }
 
 /// An attempt, as shown.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AttemptRecord {
     /// Its ID.
     pub id: String,
@@ -165,6 +165,10 @@ pub struct AttemptRecord {
     pub cleanup: CleanupRecord,
     /// The run a `TriggerDagOperator`'s attempt started (no worker runs it).
     pub chained_run_id: Option<String>,
+    /// The statuses it reported, oldest first (decision 513).
+    pub statuses: Vec<crate::reports::AttemptStatus>,
+    /// The links it reported.
+    pub links: Vec<crate::reports::AttemptLink>,
 }
 
 type RunRow = (
@@ -727,13 +731,18 @@ impl Database {
         for (id, handle) in handles {
             by_attempt.entry(id).or_default().handles.push(handle);
         }
-        rows.into_iter()
+        let mut records = rows
+            .into_iter()
             .map(|row| {
                 let mut record = attempt_record(row)?;
                 record.cleanup = by_attempt.remove(&record.id).unwrap_or_default();
                 Ok(record)
             })
-            .collect()
+            .collect::<Result<Vec<_>, DbError>>()?;
+        for record in &mut records {
+            (record.statuses, record.links) = self.attempt_reports(&record.id).await?;
+        }
+        Ok(records)
     }
 }
 
@@ -827,5 +836,7 @@ fn attempt_record(row: AttemptRow) -> Result<AttemptRecord, DbError> {
         core_dumped,
         cleanup: CleanupRecord::default(),
         chained_run_id,
+        statuses: Vec::new(),
+        links: Vec::new(),
     })
 }

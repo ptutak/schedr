@@ -117,7 +117,7 @@ impl Range {
     }
 
     /// Its start, cut and end when it ends at `to`, reading where the rollups end from `db`.
-    async fn bounds(
+    pub(crate) async fn bounds(
         self,
         db: &schedr_db::Database,
         to: Timestamp,

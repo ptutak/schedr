@@ -1488,14 +1488,9 @@ pub async fn run_watcher(
     mut stop: Stops,
     spawned: impl FnOnce(i32),
 ) -> Result<Ran, LaunchError> {
-    let PythonTask {
-        mut request,
-        secrets,
-        handles,
-        events,
-        api,
-    } = task;
-    let parts = (secrets, handles, events, api);
+    // Its reports aren't taken: a wait step reports through its own channel.
+    let mut request = task.request;
+    let parts = (task.secrets, task.handles, task.events, task.api);
     let started = Instant::now();
     let deadline = limits
         .timeout

@@ -1433,32 +1433,25 @@ pub async fn list_attempts(
     }))
 }
 
-/// A part of an attempt's log, read from the worker that ran it; read on from `next` to follow
-/// a running task. 404 when the attempt has no log (yet), or the worker no longer has it; 503
-/// when the worker is gone or can't be reached.
-#[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log",
-    tag = "runs",
-    params(
-        ("run_id" = String, Path, description = "The run's ID"),
-        ("task_id" = String, Path, description = "The task's ID"),
-        ("try_number" = u32, Path, description = "The attempt's try number"),
-        LogQuery
-    ),
-    responses(
-        (status = 200, body = LogChunk),
-        (status = 404, body = ErrorBody),
-        (status = 503, body = ErrorBody)
-    ))]
-pub async fn get_log(
-    State(state): State<ApiState>,
-    Path((run_id, task_id, try_number)): Path<(String, String, u32)>,
-    query: Result<Query<LogQuery>, QueryRejection>,
-) -> ApiResult<LogChunk> {
+/// Where an attempt's log is: its ID, its worker, and the worker's log endpoint.
+pub(crate) struct LogPlace {
+    pub(crate) attempt_id: String,
+    pub(crate) worker_id: String,
+    pub(crate) endpoint: String,
+}
+
+/// The log of try `try_number` of `run_id`'s `task_id` (`map_index` its instance): where it
+/// is; not found, or unavailable, as [`get_log`] says.
+pub(crate) async fn log_source(
+    state: &ApiState,
+    (run_id, task_id): (&str, String),
+    try_number: u32,
+    map_index: Option<i32>,
+) -> Result<LogPlace, ApiError> {
     let task_id = TaskId::new(task_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
-    let run_id = known_run(&state, &run_id).await?.id;
-    let mapped = mapped_count(&state, &run_id, &task_id).await?;
-    let map_index = instance_of(mapped, &task_id, query.map_index, true)?;
+    let run_id = known_run(state, run_id).await?.id;
+    let mapped = mapped_count(state, &run_id, &task_id).await?;
+    let map_index = instance_of(mapped, &task_id, map_index, true)?;
     let attempt = state
         .db
         .instance_attempts(&run_id, &task_id, map_index)
@@ -1501,6 +1494,40 @@ pub async fn get_log(
             )));
         }
     };
+    Ok(LogPlace {
+        attempt_id,
+        worker_id,
+        endpoint,
+    })
+}
+
+/// A part of an attempt's log, read from the worker that ran it; read on from `next` to follow
+/// a running task. 404 when the attempt has no log (yet), or the worker no longer has it; 503
+/// when the worker is gone or can't be reached.
+#[utoipa::path(get, path = "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log",
+    tag = "runs",
+    params(
+        ("run_id" = String, Path, description = "The run's ID"),
+        ("task_id" = String, Path, description = "The task's ID"),
+        ("try_number" = u32, Path, description = "The attempt's try number"),
+        LogQuery
+    ),
+    responses(
+        (status = 200, body = LogChunk),
+        (status = 404, body = ErrorBody),
+        (status = 503, body = ErrorBody)
+    ))]
+pub async fn get_log(
+    State(state): State<ApiState>,
+    Path((run_id, task_id, try_number)): Path<(String, String, u32)>,
+    query: Result<Query<LogQuery>, QueryRejection>,
+) -> ApiResult<LogChunk> {
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let LogPlace {
+        attempt_id,
+        worker_id,
+        endpoint,
+    } = log_source(&state, (&run_id, task_id), try_number, query.map_index).await?;
     let from = query.from.unwrap_or(0);
     let limit = query.limit.unwrap_or(MAX_CHUNK).clamp(MIN_CHUNK, MAX_CHUNK);
     let answered = |answered: Option<&String>| match answered {

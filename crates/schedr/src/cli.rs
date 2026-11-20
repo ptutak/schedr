@@ -669,6 +669,18 @@ pub enum TaskCtxCommand {
         #[arg(long, value_name = "JSON")]
         data: Option<String>,
     },
+    /// Writes a structured log line to stderr (decision 514): shown in the Logs tab with its
+    /// level and fields, as a Python task's `logging` is.
+    Log {
+        /// What it says.
+        message: String,
+        /// `debug`, `info`, `warning`, `error` or `critical`.
+        #[arg(long, default_value = "info")]
+        level: String,
+        /// A field, `name=value`: a JSON value, or the text as it is. Repeatable.
+        #[arg(long = "field", value_name = "NAME=VALUE")]
+        fields: Vec<String>,
+    },
 }
 
 /// `schedr task-ctx events ...`: as `schedr events`, made as the task.

@@ -167,6 +167,7 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WORKER__ALIVE_INTERVAL` | 5 s | How often the agent's loop turns at least, even when quiet; it must stay shorter than the loop stall timeout, or a quiet agent looks stuck. |
 | `SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT` | 1 h | How long a stopping worker waits, at most, for the master to take its deregistration. Its drain's end bounds it too (a quarter of the report period before the grace period ends), and by default that end alone: a master stalled for a few seconds still takes it, and shows the worker offline. Shorter, a worker may leave before a stalled master reads it, and shows as disconnected, then lost. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_TICK` | 100 ms | How often a drain checks what is left. |
+| `SCHEDR_HIDDEN__WORKER__EXTENSION_FIGURES_INTERVAL` | 1 min | How often a worker sends its plugins' metric figures to the master, which keeps a sample a minute (decision 513). Shorter, nothing more is kept: figures within a minute already written wait for the next. |
 | `SCHEDR_HIDDEN__WORKER__QUEUE_CHECK_INTERVAL` | 1 s | How often a worker compares its waiting queue's oldest task with the cluster's slow-equals; each time it is older, one task goes back from the queue's tail (decision 509). Longer, a slow queue hands its work to idle workers more slowly. |
 | `SCHEDR_HIDDEN__WORKER__DRAIN_ACK_WAIT` | 5 s | How long a drained worker waits for the master to acknowledge its last results; never past half the report period before the grace period ends, left to deregister and exit. |
 | `SCHEDR_HIDDEN__WORKER__STOP_POLL` | 100 ms | How often a stopped task's process group is checked until it is gone. |
@@ -222,6 +223,7 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__MASTER__WORKER_REPORT_TEXT` | 4096 | The most characters of each text in them (a host's code, a warning's message); longer ones are cut. |
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |
+| `SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT` | 200 | The events the master keeps per extension, the newest: what its page's events panel can show. |
 | `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages from one worker taken in a turn. Its `Started`s and results are queued for the next round, which stores every worker's in one transaction (decision 505). |
 | `SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND` | 50 | The most assignments a round makes in a batch transaction. The rest wait for later rounds, the longest ready first. More starts a burst sooner and holds the core lock longer for that transaction. |
 | `SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND` | 50 | The most assignments a round takes back as never started. |
@@ -269,6 +271,9 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS` | 16 | The connections jobs' answers a worker keeps while no master listens; older ones are dropped and their jobs end as lost. |
 | `SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN` | 64 | The most context connections a command task may have open to its agent at once; one more is refused with a message. |
 | `SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG` | 16 | A wait step's messages waiting for its attempt before its host waits too: a step printing faster than its log is written slows down instead of filling memory. |
+| `SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_PER_SECOND` | 10 | The reports (statuses, links) an extension attempt sends a second: past them, its newest status waits for the attempt's end and a link is dropped, with one warning. Metric points aren't counted: only their figures travel, once a minute. |
+| `SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_AT_ONCE` | 50 | The reports an extension attempt sends at once after a quiet spell. |
+| `SCHEDR_HIDDEN__WORKER__EXTENSION_EVENTS_PENDING` | 100 | The extension events (a plugin discovered, skipped, refused, a point or figures dropped) a worker holds for its next heartbeat; past them the oldest go. The master takes at most `MASTER__WORKER_REPORT_RECORDS` of them a heartbeat. |
 
 ### TLS
 

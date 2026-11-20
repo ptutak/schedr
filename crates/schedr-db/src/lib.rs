@@ -10,6 +10,7 @@ pub mod changes;
 pub mod commands;
 pub mod dags;
 pub mod database;
+pub mod extension_samples;
 #[cfg(any(test, feature = "testing"))]
 mod faults;
 pub mod instances;
@@ -20,6 +21,7 @@ pub mod notifications;
 pub mod probe;
 mod query;
 pub mod reads;
+pub mod reports;
 pub mod retention;
 pub mod run_of;
 pub mod runs;

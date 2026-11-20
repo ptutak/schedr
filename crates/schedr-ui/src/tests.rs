@@ -691,6 +691,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
             "/runs",
             "/deployments",
             "/metrics",
+            "/extensions",
             "/workers",
             "/connections",
             "/import-errors",
@@ -706,6 +707,7 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
             "/runs",
             "/deployments",
             "/metrics",
+            "/extensions",
             "/workers",
             "/connections",
             "/import-errors"

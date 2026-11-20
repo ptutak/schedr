@@ -48,6 +48,7 @@ message WorkerMessage {
     TriggerPoked trigger_poked = 15;
     ApiCall api_call = 16;
     CleanupStart cleanup_start = 17;
+    AttemptReported attempt_reported = 18;
   }
   // Its number, and what the worker had read of the master's messages (B240): every message
   // carries it.
@@ -235,6 +236,15 @@ message Heartbeat {
   // in one transaction. One whose call changed how it goes (it failed, or works again) is sent
   // at once as a `TriggerPoked` instead, as an older worker sends each.
   repeated TriggerPoked pokes = 9;
+  // Its plugins' declared metrics (decision 513; protocol 2.2), each extension version's a
+  // schedr-model ExtensionFigures as JSON, at most once a minute: what its counters and
+  // histograms grew by since it last sent them (sent once), its gauges' values, each metric's
+  // kind and buckets; its declarations with a stream's first figures and when they change.
+  repeated bytes extension_figures_json = 10;
+  // What happened to its extensions since the last heartbeat (DN19; protocol 2.2), each a
+  // schedr-model ExtensionEvent as JSON, oldest first: discovered, skipped, refused, dropped.
+  // At most 100: the oldest go first. Sent once, lost with a heartbeat that isn't.
+  repeated bytes extension_events_json = 11;
 }
 
 // A schedr process's memory and CPU, and its container's (decision 463).
@@ -390,6 +400,35 @@ message Finished {
 // follows, with the same result and the cleanup's.
 message TaskEnded {
   Finished result = 1;
+}
+
+// What a running attempt reported (decision 513), already masked and bounded by the worker:
+// a status, kept with its time, or a link, replacing the one with its label. Since 2.2.
+message AttemptReported {
+  string attempt_id = 1;
+  oneof report {
+    StatusReport status = 2;
+    LinkReport link = 3;
+  }
+  // The extension and version whose plugin reported it (DN19): its page lists its attempts'
+  // latest phases.
+  string extension = 4;
+  string extension_version = 5;
+}
+
+message StatusReport {
+  // When the worker got it, in milliseconds since the Unix epoch.
+  int64 at_ms = 1;
+  string phase = 2;
+  optional string message = 3;
+  // 0 to 1.
+  optional double progress = 4;
+}
+
+message LinkReport {
+  string label = 1;
+  // http or https only.
+  string url = 2;
 }
 
 // Cleanup handles an attempt registered, already masked, for a cleanup on another worker

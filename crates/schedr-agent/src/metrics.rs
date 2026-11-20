@@ -439,6 +439,8 @@ pub struct AgentMetrics {
     pub fork: crate::fork::ForkMetrics,
     /// The wait step hosts'.
     pub watchers: WatcherMetrics,
+    /// What its plugins report of their declared metrics (decision 513).
+    pub extensions: crate::figures::Figures,
 }
 
 impl Default for AgentMetrics {
@@ -470,6 +472,7 @@ impl Default for AgentMetrics {
             log_swept_bytes: Counter::default(),
             fork: crate::fork::ForkMetrics::default(),
             watchers: WatcherMetrics::default(),
+            extensions: crate::figures::Figures::default(),
         }
     }
 }
@@ -538,6 +541,8 @@ impl AgentMetrics {
             self.fork.fallbacks.clone(),
         );
         self.watchers.register(r);
+        // Declared by each plugin: `schedr_extension_<extension>_<metric>`.
+        r.register_collector(Box::new(self.extensions.clone()));
     }
 
     /// Records how long a Python task started `method` took to start.

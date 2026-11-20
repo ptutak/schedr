@@ -36,6 +36,8 @@ pub enum Unit {
     Count,
     /// Milliseconds, shown as ms below a second, then seconds.
     Millis,
+    /// A number of no unit (an extension's ratio, a rate): three significant decimals at most.
+    Number,
 }
 
 impl Unit {
@@ -47,6 +49,7 @@ impl Unit {
             Self::Cores => format!("{value:.2} cores"),
             Self::Count => format!("{value:.0}"),
             Self::Millis => millis(value),
+            Self::Number => number(value),
         }
     }
 }
@@ -65,6 +68,18 @@ pub fn bytes(n: f64) -> String {
         format!("{value:.0} B")
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// `value` with at most three decimals, without trailing zeros: `3`, `0.25`, `1234.5`.
+#[must_use]
+pub fn number(value: f64) -> String {
+    let text = format!("{value:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" {
+        "0".to_owned()
+    } else {
+        text.to_owned()
     }
 }
 
@@ -173,7 +188,7 @@ fn y_axis(max: f64, unit: Unit) -> (f64, Vec<f64>) {
         }
         // Ticks in seconds from a second up: 0.5 s, 1 s, 1.5 s.
         Unit::Millis if max >= 1000.0 => (1000.0, max / 1000.0),
-        Unit::Cores | Unit::Count | Unit::Millis => (1.0, max),
+        Unit::Cores | Unit::Count | Unit::Millis | Unit::Number => (1.0, max),
     };
     let max = if max > 0.0 { max } else { 1.0 };
     let step = nice_step(max, 4.0);
@@ -251,7 +266,7 @@ pub fn draw(spec: &Spec) -> String {
     );
     axes(&mut svg, spec, &y_ticks, &x, &y);
     if let Some((label, points)) = &spec.band {
-        for run in runs(points, spec.step, |p| p.0) {
+        for run in runs(points, spec.step, 0, |p| p.0) {
             let d = area(
                 run.iter().map(|p| (x(p.0), y(p.2))),
                 run.iter().rev().map(|p| (x(p.0), y(p.1))),
@@ -275,7 +290,7 @@ pub fn draw(spec: &Spec) -> String {
         );
     }
     for line in &spec.lines {
-        for run in runs(&line.points, spec.step, |p| p.0) {
+        for run in runs(&line.points, spec.step, BRIDGE, |p| p.0) {
             let d = path(run.iter().map(|p| (x(p.0), y(p.1))));
             // A point alone: a dot, so it shows.
             if run.len() == 1 {
@@ -342,7 +357,7 @@ fn stacked_layers(
         stacked_bars(svg, spec, &layers, (x, y));
     } else {
         // A point alone between gaps has no area: a bar, so it shows (as a line's dot).
-        let lone: Vec<(i64, Vec<f64>)> = runs(&layers, spec.step, |p| p.0)
+        let lone: Vec<(i64, Vec<f64>)> = runs(&layers, spec.step, BRIDGE, |p| p.0)
             .into_iter()
             .filter(|run| run.len() == 1)
             .flat_map(|run| run.iter().cloned())
@@ -350,7 +365,7 @@ fn stacked_layers(
         stacked_bars(svg, spec, &lone, (x, y));
     }
     for (layer, line) in spec.stacked.iter().enumerate().filter(|_| !spec.bars) {
-        for run in runs(&layers, spec.step, |p| p.0)
+        for run in runs(&layers, spec.step, BRIDGE, |p| p.0)
             .into_iter()
             .filter(|run| run.len() > 1)
         {
@@ -605,6 +620,7 @@ fn axis_value(value: f64, unit: Unit) -> String {
             text.trim_end_matches('0').trim_end_matches('.').to_owned()
         }
         Unit::Count => format!("{value:.0}"),
+        Unit::Number => number(value),
         Unit::Millis if value < 1000.0 => format!("{value:.0} ms"),
         Unit::Millis => {
             let text = format!("{:.1}", value / 1000.0);
@@ -613,9 +629,21 @@ fn axis_value(value: f64, unit: Unit) -> String {
     }
 }
 
-/// `points` split where two are further apart than one and a half steps (no samples there).
-fn runs<P>(points: &[P], step: i64, at: impl Fn(&P) -> i64) -> Vec<&[P]> {
-    let gap = step + step / 2;
+/// The most steps in a row without a reading a line is drawn across, from the reading before to
+/// the one after: every line chart's lines and every sparkline, a general rule (the user,
+/// 2026-11-21: "is it possible to interpolate?", "this has to be a general rule", "the
+/// \"interpolation\" should be only for \"lines\" chart"). A job every few minutes, a counter
+/// growing only some minutes, a minute's figures sent twice in one minute and none in the next:
+/// each read as lone dots or a sawtooth. A longer gap stays one: nothing sent there. Stacked
+/// areas join the same way ("Maybe also for \"jobs by outcome\""); a band and bars (a bar per
+/// bucket, an empty one left empty) don't.
+pub const BRIDGE: i64 = 5;
+
+/// `points` split where more than `empty` steps in a row have none: [`BRIDGE`] for a line or a
+/// stacked area, 0 for a band. Two readings with `n` empty steps between them are `n + 1`
+/// steps apart (agy's review of M5.2i5: five empty steps broke a line).
+fn runs<P>(points: &[P], step: i64, empty: i64, at: impl Fn(&P) -> i64) -> Vec<&[P]> {
+    let gap = step * (empty + 1) + step / 2;
     points.chunk_by(|a, b| at(b) - at(a) <= gap).collect()
 }
 
@@ -721,7 +749,7 @@ pub fn sparkline(points: &[(i64, f64)], from: i64, to: i64, step: i64, title: &s
         escape(title),
         escape(title)
     );
-    for run in runs(points, step, |p| p.0) {
+    for run in runs(points, step, BRIDGE, |p| p.0) {
         let mut d = String::new();
         for (i, p) in run.iter().enumerate() {
             let _ = write!(
@@ -769,13 +797,41 @@ mod tests {
     }
 
     #[test]
+    fn a_line_is_drawn_across_a_few_empty_steps_and_broken_past_them() {
+        // The user, 2026-11-21: "is it possible to interpolate?", "this has to be a general
+        // rule": a job every other minute is one line; ten minutes with nothing break it.
+        let line = |points| Spec {
+            lines: vec![Line {
+                label: "steps".to_owned(),
+                slot: 1,
+                points,
+            }],
+            ..spec()
+        };
+        // Five empty steps (180 to 420) joined; six (120 to 420) not.
+        let joined = draw(&line(vec![(0, 1.0), (120, 1.0), (480, 1.0)]));
+        assert_eq!(
+            joined.matches("<path class=\"line s1\"").count(),
+            1,
+            "{joined}"
+        );
+        assert!(!joined.contains("class=\"dot s1\""), "{joined}");
+        let broken = draw(&line(vec![(0, 1.0), (60, 1.0), (480, 1.0), (540, 1.0)]));
+        assert_eq!(
+            broken.matches("<path class=\"line s1\"").count(),
+            2,
+            "{broken}"
+        );
+    }
+
+    #[test]
     fn a_stacked_point_alone_between_gaps_is_a_bar() {
-        // Samples three minutes apart on a minute's step: each point alone, no area.
+        // Samples ten minutes apart on a minute's step, past the BRIDGE: the first alone, a bar.
         let svg = draw(&Spec {
             stacked: vec![Line {
                 label: "tasks".to_owned(),
                 slot: 5,
-                points: vec![(0, 1024.0), (180, 2048.0), (240, 1024.0)],
+                points: vec![(0, 1024.0), (600, 2048.0), (660, 1024.0)],
             }],
             ..spec()
         });

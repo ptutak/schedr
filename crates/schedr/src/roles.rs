@@ -127,6 +127,7 @@ pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts
         deregister: config.timings.deregister_wait,
         drain_tick: config.timings.drain_tick,
         queue_check: config.timings.queue_check_interval,
+        figures: config.timings.extension_figures_interval,
         stop_poll: config.timings.stop_poll,
         connection_cancel_grace: config.timings.connection_job_cancel_grace,
         accept_retry: config.timings.accept_retry,
@@ -140,6 +141,9 @@ pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts
         unsent_connection_answers: config.limits.unsent_connection_answers,
         task_connections_open: config.limits.task_connections_open,
         watcher_log_backlog: config.limits.watcher_log_backlog,
+        extension_reports_per_second: config.limits.extension_reports_per_second,
+        extension_reports_at_once: config.limits.extension_reports_at_once,
+        extension_events_pending: config.limits.extension_events_pending,
     }
 }
 
@@ -281,6 +285,7 @@ pub fn master_settings(config: &Config) -> Settings {
             rollups_kept: config.timings.rollups_kept,
             rollup_grace: config.timings.sample_rollup_grace,
             node_heartbeat: config.timings.node_heartbeat,
+            events_kept: config.limits.extension_events_kept,
         },
         // Standalone sets it: its webserver is this process.
         with_webserver: false,
@@ -429,6 +434,7 @@ pub fn agent_settings(
         .unwrap_or_else(|| "localhost".to_owned());
     let memory = checked_memory(config, default_reserve)?;
     Ok(AgentSettings {
+        discovered: Vec::new(),
         queues: config.worker.queues.clone(),
         slots: config.worker.slots,
         queue_depth: queue_depth(config),
@@ -508,6 +514,12 @@ fn configured_plugins(config: &Config) -> schedr_agent::extensions::Plugins {
             let plugin = schedr_agent::extensions::Plugin {
                 command: plugin.command.clone(),
                 versions: plugin.versions.iter().cloned().collect(),
+                // Its config's, winning over its hello's (decision 513).
+                declarations: schedr_model::extension::Declarations {
+                    metrics: plugin.metrics.clone(),
+                    panels: plugin.panels.clone(),
+                },
+                max_series: plugin.max_series,
             };
             (name.clone(), plugin)
         })
@@ -522,8 +534,10 @@ pub async fn discover_plugins(
 ) {
     let configured = std::mem::take(&mut agent.setup.extensions);
     let path = env.get("PATH").map_or("", String::as_str);
-    agent.setup.extensions =
+    let (plugins, events) =
         schedr_agent::extensions::plugins(configured, config.extensions.discover, path).await;
+    agent.setup.extensions = plugins;
+    agent.discovered = events;
 }
 
 /// The DAG interpreter's fork server settings, when `fork_server = true`.
@@ -2243,6 +2257,9 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
     discover_plugins(&mut agent, &config, env).await;
     secure_logs(log_mode(&config), &agent.setup.log_dir)?;
+    schedr_agent::process::set_log_plain(
+        config.worker.log_format == schedr_config::config::TaskLogFormat::Plain,
+    );
     // Secrets go there as files: a folder another user made first is refused (decision 201).
     schedr_agent::connection_env::prepare(&agent.setup.connection_dir)
         .map_err(AppError::BadArgument)?;

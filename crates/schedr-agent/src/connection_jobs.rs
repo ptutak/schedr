@@ -172,6 +172,7 @@ pub fn test_spec(
         moved_cleanup: false,
         journal: None,
         handle_sink: None,
+        report_sink: None,
         api: None,
         cleanup_gate: None,
         cleanup_ask: None,

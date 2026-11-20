@@ -28,6 +28,11 @@ where
 fn what_a_plugin_sends_the_worker_reads_and_writes_back_the_same() {
     for message in [
         json!({"type": "hello", "schedr_version": "1.0.0", "mode": "extension", "protocol": 1}),
+        json!({"type": "hello", "schedr_version": "1.0.0", "mode": "extension", "protocol": 1,
+               "metrics": [{"name": "queue_seconds", "kind": "histogram", "help": "Queue",
+                            "unit": "seconds", "buckets": [1.0, 5.0]}],
+               "panels": [{"title": "Queue", "metric": "queue_seconds", "chart": "histogram",
+                           "row": 1, "cell": "full"}]}),
         json!({"type": "secret_get", "secret": {"path": "etl/api", "key": "token"}}),
         json!({"type": "secret_get", "secret": {"storage": "vault", "path": "etl/api"}}),
         json!({"type": "connection_get", "name": "warehouse"}),
@@ -36,6 +41,14 @@ fn what_a_plugin_sends_the_worker_reads_and_writes_back_the_same() {
                "idempotency_key": "k"}),
         json!({"type": "api_call", "method": "GET", "path": "/api/v1/dags"}),
         json!({"type": "task_succeeded", "output": {"rows": 3}, "outcome": "SUCCESS"}),
+        json!({"type": "status", "phase": "pulling image", "message": "busybox", "progress": 0.25}),
+        json!({"type": "status", "phase": "running"}),
+        json!({"type": "link", "label": "Pod", "url": "https://dash/pods/x"}),
+        json!({"type": "stop_reason_get"}),
+        json!({"type": "metrics", "points": [
+            {"name": "queue_seconds", "value": 4.5},
+            {"name": "pods_started", "labels": {"phase": "Succeeded"}, "value": 1.0}
+        ]}),
         json!({"type": "task_failed", "error": {"exception": "E", "message": "m", "traceback": ""},
                "kind": null}),
     ] {
@@ -78,6 +91,8 @@ fn what_the_worker_sends_a_plugin_reads_and_writes_back_the_same() {
         json!({"type": "connection", "values": {"url": "pg://x"}}),
         json!({"type": "connection_failed", "kind": "connection_denied", "message": "no"}),
         json!({"type": "handle_added"}),
+        json!({"type": "stop_reason", "reason": "drain", "grace_ms": 30000}),
+        json!({"type": "stop_reason", "reason": null, "grace_ms": 0}),
         json!({"type": "handle_refused", "message": "no cleanup"}),
         json!({"type": "api_answer", "status": 200, "body": [], "note": "masked"}),
     ] {

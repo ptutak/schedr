@@ -149,6 +149,9 @@ pub fn jittered(backoff: Duration, seed: u32) -> Duration {
 /// The agent's configuration.
 #[derive(Debug, Clone)]
 pub struct AgentSettings {
+    /// What happened to its extensions while their plugins were found (DN19): sent with its
+    /// first heartbeat.
+    pub discovered: Vec<schedr_model::extension::ExtensionEvent>,
     /// The worker's ID (stable across restarts).
     pub worker_id: String,
     /// The queues it serves (none: `default`).
@@ -205,6 +208,8 @@ pub type TaskEnded = Box<dyn FnOnce(pb::Finished) + Send>;
 struct Shared<'a> {
     secrets: &'a Arc<AttemptSecrets>,
     handles: &'a Arc<AttemptHandles>,
+    /// Its status and links (decision 513).
+    reports: &'a Arc<crate::reports::AttemptReports>,
     /// Set when a process starts.
     started: &'a AtomicBool,
     /// Told each process.
@@ -510,6 +515,21 @@ impl Executor for ProcessExecutor {
 }
 
 impl ProcessExecutor {
+    /// Where an extension task's metrics go (decision 513); none for any other task.
+    fn figured(&self, task: &schedr_model::Task) -> Option<crate::reports::Figured> {
+        let schedr_model::TaskKind::Extension { name, version, .. } = &task.kind else {
+            return None;
+        };
+        let plugin = self.setup.extensions.get(name)?;
+        Some(crate::reports::Figured {
+            figures: self.metrics.extensions.clone(),
+            extension: name.clone(),
+            version: version.clone(),
+            configured: plugin.declarations.clone(),
+            max_series: plugin.max_series,
+        })
+    }
+
     async fn run_attempt(
         &self,
         mut spec: AttemptSpec,
@@ -551,10 +571,23 @@ impl ProcessExecutor {
             handles = handles.forwarded(sink.clone());
         }
         let handles = Arc::new(handles);
+        let timeouts = &self.setup.timeouts;
+        let mut reports = crate::reports::AttemptReports::new(Arc::clone(&secrets.mask)).limited(
+            timeouts.extension_reports_per_second,
+            timeouts.extension_reports_at_once,
+        );
+        if let Some(sink) = &spec.report_sink {
+            reports = reports.forwarded(sink.clone());
+        }
+        if let Some(figured) = self.figured(&spec.task) {
+            reports = reports.figured(figured);
+        }
+        let reports = Arc::new(reports);
         let started = AtomicBool::new(false);
         let shared = Shared {
             secrets: &secrets,
             handles: &handles,
+            reports: &reports,
             started: &started,
             spawned: &spawned,
         };
@@ -574,7 +607,8 @@ impl ProcessExecutor {
                     handles.skip(from);
                 }
                 let rest = matches!(pass, Pass::From(_));
-                finished.cleanup = self.run_cleanup(&spec, cleanup, shared, rest).await;
+                // Boxed: a cleanup's future is large, and runs once per attempt.
+                finished.cleanup = Box::pin(self.run_cleanup(&spec, cleanup, shared, rest)).await;
             }
         }
         let log = self.setup.log_file(&spec.attempt_id);
@@ -704,15 +738,22 @@ impl ProcessExecutor {
         if let Some(from) = spec.cleanup_rest {
             handles.skip(from as usize);
         }
+        // A cleanup's own reports: its status and links are its run's, kept as an attempt's;
+        // its metrics its extension's.
+        let mut reports = crate::reports::AttemptReports::new(Arc::clone(&secrets.mask));
+        if let Some(figured) = self.figured(&spec.task) {
+            reports = reports.figured(figured);
+        }
+        let reports = Arc::new(reports);
         let started = AtomicBool::new(true);
         let shared = Shared {
             secrets: &secrets,
             handles: &handles,
+            reports: &reports,
             started: &started,
             spawned,
         };
-        self.run_cleanup(spec, &cleanup, shared, spec.cleanup_rest.is_some())
-            .await
+        Box::pin(self.run_cleanup(spec, &cleanup, shared, spec.cleanup_rest.is_some())).await
     }
 
     /// Runs the attempt's cleanup, in a fresh process each try, with the same budget and
@@ -920,6 +961,7 @@ impl ProcessExecutor {
         let Shared {
             secrets,
             handles,
+            reports,
             started,
             spawned: shared_spawned,
         } = shared;
@@ -961,6 +1003,7 @@ impl ProcessExecutor {
             handles: Some(Arc::clone(handles)),
             events: None,
             api: spec.api.clone(),
+            reports: Some(Arc::clone(reports)),
         };
         let ran = match plan {
             // In a process shared with other wait steps: no budget of its own (the host's).
@@ -1209,6 +1252,13 @@ enum Done {
         position: u32,
         handle: CleanupHandle,
     },
+    /// A status or link an attempt reported: on to the master (decision 513).
+    Report {
+        attempt_id: String,
+        /// Its extension and version.
+        of: (String, String),
+        report: crate::reports::Report,
+    },
     Attempt(pb::Finished),
     Trigger(TriggerDone),
     /// A task's API call: on to the master, its answer to `answer` (M4.11h).
@@ -1291,6 +1341,9 @@ struct WaitingCleanup {
 
 /// How many connections jobs' answers the agent keeps while no master listens.
 pub const UNSENT_ANSWERS: usize = 16;
+
+/// How often its plugins' figures go to the master.
+pub const FIGURES_EVERY: Duration = Duration::from_secs(60);
 
 /// The worker agent.
 #[derive(Debug)]
@@ -1421,6 +1474,8 @@ pub struct Agent<E> {
     registered: bool,
     /// The largest message the master accepts (from `Registered`; gRPC's default before).
     master_limit: usize,
+    /// When its plugins' figures were last sent (decision 513).
+    figures_at: std::sync::Mutex<Option<Instant>>,
     /// Shutdown requests so far (none in a session run without [`Agent::run`]).
     shutdown: Option<watch::Receiver<u32>>,
     /// The drain, once shutdown was asked for.
@@ -1567,6 +1622,7 @@ impl<E: Executor> Agent<E> {
             heartbeat: Duration::from_secs(10),
             registered: false,
             master_limit: GRPC_DEFAULT_LIMIT,
+            figures_at: std::sync::Mutex::new(None),
             shutdown: None,
             drain: None,
             beat: Beat::default(),
@@ -1578,6 +1634,18 @@ impl<E: Executor> Agent<E> {
     /// The agent recording its metrics in `metrics` (registered by the caller).
     #[must_use]
     pub fn with_metrics(mut self, metrics: AgentMetrics) -> Self {
+        // Those found at the start, and any the metrics replaced held already (`new` sets
+        // default ones first: the role's replace them).
+        let pending = self.metrics.extensions.take_events();
+        metrics
+            .extensions
+            .hold_at_most(self.settings.setup.timeouts.extension_events_pending);
+        for event in std::mem::take(&mut self.settings.discovered)
+            .into_iter()
+            .chain(pending)
+        {
+            metrics.extensions.event(event);
+        }
         metrics.slots.set(i64::from(self.settings.slots));
         metrics
             .watchers
@@ -2546,6 +2614,12 @@ impl<E: Executor> Agent<E> {
             Err(end) => return end,
         };
         self.send_state(&to_master);
+        // A new stream: the master has the figures' declarations again with the next ones.
+        self.metrics.extensions.connected();
+        *self
+            .figures_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let mut warnings_open = true;
         let mut heartbeat = heartbeat_timer(self.heartbeat);
         let mut watch = tokio::time::interval(self.settings.poll_interval);
@@ -2778,7 +2852,86 @@ impl<E: Executor> Agent<E> {
             usage,
             queue_head_age_ms: self.queue_head_age_ms(),
             pokes: Vec::new(),
+            extension_figures_json: self.extension_figures(),
+            extension_events_json: self.extension_events(),
         }))
+    }
+
+    /// Its extensions' events since the last heartbeat, oldest first, the newest that fit in a
+    /// quarter of the master's limit (agy's review of M5.2i5: with the hidden limit on held
+    /// events raised, one heartbeat could pass it); the older ones past it are dropped.
+    fn extension_events(&self) -> Vec<Vec<u8>> {
+        let mut budget = self.master_limit / 4;
+        let events = self.metrics.extensions.take_events();
+        let mut sent: Vec<Vec<u8>> = Vec::new();
+        for event in events.iter().rev() {
+            let Ok(json) = serde_json::to_vec(event) else {
+                continue;
+            };
+            if json.len() > budget {
+                break;
+            }
+            budget -= json.len();
+            sent.push(json);
+        }
+        if sent.len() < events.len() {
+            tracing::warn!(
+                "{} extension events dropped: past the heartbeat's room",
+                events.len() - sent.len()
+            );
+        }
+        sent.reverse();
+        sent
+    }
+
+    /// Its plugins' figures, once a minute (decision 513): the master keeps a minute's.
+    fn extension_figures(&self) -> Vec<Vec<u8>> {
+        let mut at = self
+            .figures_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if at.is_some_and(|then| then.elapsed() < self.settings.setup.timeouts.figures) {
+            return Vec::new();
+        }
+        *at = Some(Instant::now());
+        // Within a quarter of the master's limit (Codex's review of M5.2i5: allowed figures
+        // could pass it, and the master would end the stream): a version past it is dropped
+        // for this minute, said on its page.
+        let mut budget = self.master_limit / 4;
+        let mut sent = Vec::new();
+        for figures in self.metrics.extensions.take_figures() {
+            let Ok(json) = serde_json::to_vec(&figures) else {
+                continue;
+            };
+            if json.len() > budget {
+                if figures.declarations.is_some() {
+                    self.metrics
+                        .extensions
+                        .unsent(&figures.extension, &figures.version);
+                }
+                let why = format!(
+                    "a minute's figures dropped: {} bytes, past the heartbeat's {budget} left",
+                    json.len()
+                );
+                tracing::warn!(
+                    extension = figures.extension,
+                    version = figures.version,
+                    "{why}"
+                );
+                self.metrics
+                    .extensions
+                    .event(schedr_model::extension::ExtensionEvent::now(
+                        &figures.extension,
+                        Some(&figures.version),
+                        schedr_model::extension::EventKind::Dropped,
+                        &why,
+                    ));
+                continue;
+            }
+            budget -= json.len();
+            sent.push(json);
+        }
+        sent
     }
 
     /// How many assigned tasks past its slots it keeps waiting (decision 509).
@@ -3396,7 +3549,7 @@ impl<E: Executor> Agent<E> {
     ) {
         for prepared in ready {
             if matches!(prepared.planned, Err(NotRun::Rejected { .. })) {
-                self.after_journal(prepared, Ok(()), to_master, false).await;
+                Box::pin(self.after_journal(prepared, Ok(()), to_master, false)).await;
                 continue;
             }
             #[cfg(test)]
@@ -3408,8 +3561,7 @@ impl<E: Executor> Agent<E> {
             }
             if let Err(error) = self.keep_for_cleanup(&prepared).await {
                 let why = Some(self.disk_not_writable(&error));
-                self.after_journal(prepared, Err(why), to_master, false)
-                    .await;
+                Box::pin(self.after_journal(prepared, Err(why), to_master, false)).await;
                 continue;
             }
             let id = prepared.spec.attempt_id.clone();
@@ -3502,7 +3654,7 @@ impl<E: Executor> Agent<E> {
             (Ok(()), Some(reason)) => {
                 // A cleanup's attempt goes the usual way, stopped at once (a moved cleanup isn't:
                 // a cancel doesn't stop a per-task cleanup, decision 219).
-                self.after_journal(prepared, Ok(()), to_master, true).await;
+                Box::pin(self.after_journal(prepared, Ok(()), to_master, true)).await;
                 if let Some(stop) = self.running.get(&id) {
                     let _ = stop.send(reason);
                 }
@@ -3512,7 +3664,7 @@ impl<E: Executor> Agent<E> {
                 if outcome.is_err() {
                     self.drop_code(&id);
                 }
-                self.after_journal(prepared, outcome, to_master, true).await;
+                Box::pin(self.after_journal(prepared, outcome, to_master, true)).await;
             }
         }
         if let Some(sequence) = starting.sequence {
@@ -3674,6 +3826,7 @@ impl<E: Executor> Agent<E> {
             self.remember_code(&assign, &spec);
         }
         self.note_cleanup(&mut spec, &assign);
+        spec.report_sink = Some(self.report_sink(&spec.attempt_id, &spec.task));
         spec.api = Some(ApiCaller::of_attempt(&spec.attempt_id, self.api_send()));
         self.ask_for(&mut spec);
         if let Some(only) = &assign.cleanup_only
@@ -4372,6 +4525,29 @@ impl<E: Executor> Agent<E> {
         })
     }
 
+    /// Where an attempt's reports go: the loop, then the master (decision 513).
+    fn report_sink(
+        &self,
+        attempt_id: &str,
+        task: &schedr_model::Task,
+    ) -> crate::reports::ReportSink {
+        let done = self.done_tx.clone();
+        let attempt_id = attempt_id.to_owned();
+        let of = match &task.kind {
+            schedr_model::TaskKind::Extension { name, version, .. } => {
+                (name.clone(), version.clone())
+            }
+            _ => (String::new(), String::new()),
+        };
+        crate::reports::ReportSink(Arc::new(move |report| {
+            let _ = done.send(Done::Report {
+                attempt_id: attempt_id.clone(),
+                of: of.clone(),
+                report: report.clone(),
+            });
+        }))
+    }
+
     /// A task with a cleanup: its handles go to the journal, a drain leaves room for one try,
     /// and a timeout too long for the grace period is warned of, once per task (decision 250).
     fn note_cleanup(&mut self, spec: &mut AttemptSpec, assign: &pb::AssignTask) {
@@ -4851,6 +5027,15 @@ impl<E: Executor> Agent<E> {
             } => {
                 if let Some((to_master, _)) = link {
                     let _ = to_master.send(handles_message(attempt_id, position, &[handle]));
+                }
+            }
+            Done::Report {
+                attempt_id,
+                of,
+                report,
+            } => {
+                if let Some((to_master, _)) = link {
+                    let _ = to_master.send(report_message(attempt_id, of, &report));
                 }
             }
             Done::Attempt(finished) => {
@@ -5536,6 +5721,36 @@ fn handles_message(attempt_id: String, first: u32, handles: &[CleanupHandle]) ->
             .filter_map(|handle| serde_json::to_vec(handle).ok())
             .collect(),
     }))
+}
+
+/// An attempt's report, as the master hears of it (decision 513).
+fn report_message(
+    attempt_id: String,
+    (extension, extension_version): (String, String),
+    report: &crate::reports::Report,
+) -> pb::WorkerMessage {
+    let report = match report {
+        crate::reports::Report::Status(status) => {
+            pb::attempt_reported::Report::Status(pb::StatusReport {
+                at_ms: status.at.as_millisecond(),
+                phase: status.phase.clone(),
+                message: status.message.clone(),
+                progress: status.progress,
+            })
+        }
+        crate::reports::Report::Link(link) => pb::attempt_reported::Report::Link(pb::LinkReport {
+            label: link.label.clone(),
+            url: link.url.clone(),
+        }),
+    };
+    wrap(worker_message::Message::AttemptReported(
+        pb::AttemptReported {
+            attempt_id,
+            report: Some(report),
+            extension,
+            extension_version,
+        },
+    ))
 }
 
 /// A task's end, as the master hears of it.

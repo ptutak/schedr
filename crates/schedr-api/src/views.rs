@@ -442,7 +442,7 @@ pub struct ResourceView {
 }
 
 /// An attempt of a task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct AttemptView {
     /// Its ID.
     pub attempt_id: String,
@@ -487,6 +487,35 @@ pub struct AttemptView {
     /// The run a `TriggerDagOperator`'s attempt started (no worker runs it).
     #[serde(default)]
     pub chained_run_id: Option<String>,
+    /// The statuses it reported, oldest first (an extension task's phases; decision 513):
+    /// at most 100, the first and the latest kept.
+    #[serde(default)]
+    pub statuses: Vec<AttemptStatusView>,
+    /// The links it reported (a pod's page, a console), at most 10.
+    #[serde(default)]
+    pub links: Vec<AttemptLinkView>,
+}
+
+/// A status an attempt reported.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AttemptStatusView {
+    /// When its worker got it.
+    pub at: Timestamp,
+    /// Its phase.
+    pub phase: String,
+    /// More about it.
+    pub message: Option<String>,
+    /// How far along, 0 to 1.
+    pub progress: Option<f64>,
+}
+
+/// A link an attempt reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AttemptLinkView {
+    /// What it links to.
+    pub label: String,
+    /// Its URL, http or https.
+    pub url: String,
 }
 
 /// An attempt's cleanup.
@@ -586,6 +615,25 @@ impl From<&AttemptRecord> for AttemptView {
                     .collect(),
             }),
             chained_run_id: attempt.chained_run_id.clone(),
+            statuses: attempt
+                .statuses
+                .iter()
+                // Masked by pattern too, as handles are (agy's review of M5.2i5).
+                .map(|s| AttemptStatusView {
+                    at: s.at,
+                    phase: mask_text(&s.phase),
+                    message: s.message.as_deref().map(mask_text),
+                    progress: s.progress,
+                })
+                .collect(),
+            links: attempt
+                .links
+                .iter()
+                .map(|l| AttemptLinkView {
+                    label: mask_text(&l.label),
+                    url: mask_text(&l.url),
+                })
+                .collect(),
         }
     }
 }
@@ -601,7 +649,7 @@ fn shown_handle(stored: &str) -> serde_json::Value {
 }
 
 /// A task's attempts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct AttemptList {
     /// Oldest first.
     pub attempts: Vec<AttemptView>,

@@ -2781,6 +2781,18 @@ the `Notify` names. Chosen (A): "one EXTENSION_EVENT, no narrowing"; the body na
 extension and event, as `RUN_STARTED` carries its reason. Not chosen (B): narrowing by extension
 or event.
 
+### <a id="DN21"></a>2026-11-21: the Extensions page in tabs, all workers and each worker (decision note 21; adds to D513)
+
+The user, looking at the demo: "Extensions page should be tabs that switch between extensions and
+show extensions metrics inside. I'm wondering do we split metrics between workers or not?", then
+"If we do we should make sub-tabs with each worker showing it's own metrics for extensions, if
+not, then one tab per extension is enough" and "We could then have an "all" tab for all workers".
+The master keeps each worker's figures a minute each for a day; its 15-minute rollups are summed
+over workers. Chosen (A): sub-tabs, "All workers" up to 30 days and each worker for the last
+day, the API taking `?worker=`. Not chosen (B): rollups per worker too, 30 days for each (a worker
+column in the open migration; storage growing with workers, and pods that come and go leave
+many); (C) one tab per extension, summed only.
+
 ### 2026-11-21: an extension's long-running process, an idea (M5.2i9)
 
 A side agent's note answered a sidecar design (a local service in the worker's pod, thin plugins

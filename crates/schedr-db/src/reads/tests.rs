@@ -657,7 +657,11 @@ async fn migration_0003_marks_the_cleanups_and_wait_steps_of_unfinished_runs() {
     .await
     .unwrap();
     let migration = include_str!("../../migrations/sqlite/0003_cleanup_wait_steps.sql");
-    let backfill = &migration[migration.find("UPDATE").unwrap()..];
+    // The backfill: its UPDATEs, not the tables the migration creates after them.
+    let after = migration
+        .find("-- What a running attempt reported")
+        .unwrap_or(migration.len());
+    let backfill = &migration[migration.find("UPDATE").unwrap()..after];
     sqlx::raw_sql(sqlx::AssertSqlSafe(backfill))
         .execute(pool)
         .await

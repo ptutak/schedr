@@ -9,6 +9,8 @@ fn hello(version: &str) -> RunnerMessage {
         schedr_version: version.into(),
         mode: RunnerMode::Parse,
         protocol: None,
+        metrics: Vec::new(),
+        panels: Vec::new(),
     }
 }
 
@@ -98,8 +100,9 @@ async fn writing_an_oversize_message_is_rejected() {
 async fn a_runner_with_the_same_version_is_welcomed() {
     let (mut agent, mut runner) = duplex(1024);
     write_message(&mut runner, &hello("1.0.0")).await.unwrap();
-    let mode = accept_runner(&mut agent, "1.0.0").await.unwrap();
+    let (mode, declared) = accept_runner(&mut agent, "1.0.0").await.unwrap();
     assert_eq!(mode, RunnerMode::Parse);
+    assert_eq!(declared, Declared::default());
     let reply: AgentMessage = read_message(&mut runner).await.unwrap();
     assert_eq!(reply, AgentMessage::Welcome);
 }
@@ -166,13 +169,15 @@ async fn a_plugin_is_welcomed_by_its_protocol_whatever_its_version() {
         schedr_version: "7.3.1".into(),
         mode: RunnerMode::Extension,
         protocol,
+        metrics: Vec::new(),
+        panels: Vec::new(),
     };
     let (mut agent, mut runner) = duplex(1024);
     write_message(&mut runner, &plugin(Some(EXTENSION_PROTOCOL)))
         .await
         .unwrap();
     assert_eq!(
-        accept_runner(&mut agent, "1.0.0").await.unwrap(),
+        accept_runner(&mut agent, "1.0.0").await.unwrap().0,
         RunnerMode::Extension
     );
     let reply: AgentMessage = read_message(&mut runner).await.unwrap();
@@ -189,4 +194,30 @@ async fn a_plugin_is_welcomed_by_its_protocol_whatever_its_version() {
         };
         assert!(reason.contains(why), "{reason}");
     }
+}
+
+#[tokio::test]
+async fn a_plugins_hello_brings_its_declarations_and_bad_ones_are_dropped() {
+    let declared = |metrics: serde_json::Value| {
+        serde_json::from_value::<RunnerMessage>(serde_json::json!({
+            "type": "hello", "schedr_version": "1", "mode": "extension",
+            "protocol": EXTENSION_PROTOCOL, "metrics": metrics
+        }))
+        .unwrap()
+    };
+    let (mut agent, mut runner) = duplex(4096);
+    let good = serde_json::json!([{"name": "q", "kind": "gauge", "help": "Q"}]);
+    write_message(&mut runner, &declared(good)).await.unwrap();
+    let (_, declarations) = accept_runner(&mut agent, "1.0.0").await.unwrap();
+    assert_eq!(declarations.declarations.metrics[0].name, "q");
+    assert_eq!(declarations.dropped, None);
+    let (mut agent, mut runner) = duplex(4096);
+    let bad = serde_json::json!([{"name": "q", "kind": "histogram", "help": "Q"}]);
+    write_message(&mut runner, &declared(bad)).await.unwrap();
+    let (mode, declarations) = accept_runner(&mut agent, "1.0.0").await.unwrap();
+    assert_eq!(mode, RunnerMode::Extension, "welcomed all the same");
+    assert_eq!(declarations.declarations, Declarations::default());
+    // Why, for the extension's events (DN19).
+    let why = declarations.dropped.unwrap();
+    assert!(why.contains("bucket"), "{why}");
 }

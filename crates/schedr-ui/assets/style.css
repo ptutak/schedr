@@ -30,6 +30,9 @@
   --ansi-12: #3b7de0; --ansi-13: #b45ad1; --ansi-14: #179aa6; --ansi-15: #1d2127;
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
   --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+  --series-9: #0f8b8d; --series-10: #0891b2; --series-11: #4f46e5; --series-12: #c026d3;
+  --series-13: #9a5b2c; --series-14: #6b7d12; --series-15: #5b6b7f; --series-16: #b8860b;
+  --series-17: #e0603f; --series-18: #3a9bdc; --series-19: #8e4585; --series-20: #2fa37a;
   --chart-grid: #e8eaee; --chart-axis: #c3c7ce; --chart-band: rgba(95, 103, 115, 0.22);
   --chart-hover: rgba(31, 95, 191, 0.08);
   color-scheme: light;
@@ -61,6 +64,9 @@
   --ansi-12: #a6c8ff; --ansi-13: #e5bdf6; --ansi-14: #92e4ea; --ansi-15: #ffffff;
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
   --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9; --series-8: #e66767;
+  --series-9: #2bb3b5; --series-10: #22b8d6; --series-11: #8187f0; --series-12: #e05ee8;
+  --series-13: #c4885a; --series-14: #9db33a; --series-15: #93a3b6; --series-16: #e0b341;
+  --series-17: #f08a6c; --series-18: #6cb9ee; --series-19: #c27bb8; --series-20: #4fcf9e;
   --chart-grid: #2a2f37; --chart-axis: #4a515c; --chart-band: rgba(154, 163, 174, 0.22);
   --chart-hover: rgba(127, 176, 255, 0.10);
   color-scheme: dark;
@@ -285,6 +291,29 @@ pre.log, pre.output {
 pre.log .bold { font-weight: 700; } pre.log .faint { opacity: 0.7; }
 pre.log .italic { font-style: italic; } pre.log .underline { text-decoration: underline; }
 
+/* Structured log lines (decision 514): level, message and fields; the tab's level filter hides
+   the lines below the level chosen (the radios before the log). */
+pre.log .sl-time, pre.log .sl-name { color: var(--dim); }
+pre.log .sl-level { font-weight: 700; display: inline-block; min-width: 8ch; }
+pre.log .lv-debug .sl-level { color: var(--dim); }
+pre.log .lv-info .sl-level { color: var(--running); }
+pre.log .lv-warning .sl-level { color: var(--waiting); }
+pre.log .lv-error .sl-level, pre.log .lv-critical .sl-level { color: var(--failed); }
+pre.log .lv-error, pre.log .lv-critical { background: var(--failed-bg); }
+pre.log .sl-long { display: block; padding-left: 2ch; color: var(--dim); }
+/* The Logs tab's levels, each on or off (the user, 2026-11-21: "INFO, WARNING, ERROR is enough
+   ... checkboxes ... on/off for each option"): DEBUG goes with INFO, CRITICAL with ERROR; a plain
+   line, with no level, always shows. */
+.log-levels { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 6px; }
+.log-levels fieldset.levels { display: flex; gap: 14px; border: 0; margin: 0; padding: 0; font-size: 13px; font-weight: 600; }
+.log-levels fieldset.levels label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.log-levels .downloads { display: inline-flex; gap: 6px; }
+.button.small { padding: 3px 10px; font-size: 13px; }
+.button.secondary { background: transparent; color: var(--link, var(--text)); }
+.log-levels:has(.lv-show[value="info"]:not(:checked)) ~ pre.log :is(.lv-debug, .lv-info),
+.log-levels:has(.lv-show[value="warning"]:not(:checked)) ~ pre.log .lv-warning,
+.log-levels:has(.lv-show[value="error"]:not(:checked)) ~ pre.log :is(.lv-error, .lv-critical) { display: none; }
+
 /* Actions: a button opens its dialog; the commands it sends are listed above the page. */
 .actions { display: flex; gap: 8px; margin: 0 0 12px; }
 button.primary { background: var(--link); border-color: var(--link); color: var(--bg); }
@@ -472,7 +501,7 @@ table.list.dags td { overflow-wrap: anywhere; }
 .th-filters > span { white-space: nowrap; }
 .th-filters input[type=search] { flex: 1; min-width: 9em; max-width: 22em; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-weight: normal; }
 .th-filters fieldset { border: 0; padding: 0; margin: 0; }
-.th-filters legend.hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.th-filters legend.hidden, .log-levels legend.hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 /* A dropdown: a button like the switch's, opening a list of boxes downwards, one a line,
    scrolling past about 12. */
 .dropdown { position: relative; display: inline-block; font-weight: normal; }
@@ -502,6 +531,39 @@ table.list.dags td { overflow-wrap: anywhere; }
 .area.s1 { fill: var(--series-1); } .area.s2 { fill: var(--series-2); } .area.s3 { fill: var(--series-3); }
 .area.s4 { fill: var(--series-4); } .area.s5 { fill: var(--series-5); } .area.s6 { fill: var(--series-6); }
 .area.s7 { fill: var(--series-7); } .area.s8 { fill: var(--series-8); }
+/* An extension's page (decision 513): rows of a fixed height, one, two or three cells. */
+.ext-row { display: grid; gap: 16px; margin: 0 0 16px; }
+.ext-row.cells-2 { grid-template-columns: 1fr 1fr; }
+.ext-row.cells-3 { grid-template-columns: 1fr 1fr 1fr; }
+.ext-row.cells-2 .right, .ext-row.cells-3 .right { grid-column: -2; }
+.ext-row.cells-3 .center { grid-column: 2; }
+.ext-row.cells-3 .left, .ext-row.cells-2 .left { grid-column: 1; }
+/* A cell never scrolls (the user, 2026-11-21: "charts shouldn't have scroll, they should fit in
+   their block"): its chart takes the room its title and legend leave, drawn whole within it. */
+.ext-cell { min-width: 0; height: 300px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; }
+.ext-cell > h3, .ext-cell > .legend { flex: none; }
+.ext-cell > .chart-box { flex: 1 1 0; min-height: 0; margin-bottom: 0; display: flex; align-items: center; justify-content: center; }
+.ext-cell > .chart-box > svg.chart { width: 100%; height: 100%; }
+/* A list (a table or events panel) can be longer than any cell: it alone scrolls, in its box. */
+.ext-cell > .chart-box:has(> table) { display: block; overflow: auto; }
+.ext-cell h3 { margin: 0 0 4px; font-size: 14px; }
+.big-number { font-size: 40px; font-weight: 700; margin: 24px 0; }
+@media (max-width: 800px) { .ext-row.cells-2, .ext-row.cells-3 { grid-template-columns: 1fr; } .ext-row .right, .ext-row .center, .ext-row .left { grid-column: auto; } }
+/* A histogram's bars in their series' colour, all 20 slots (a slot without one drew black). */
+.chart.bars .bar.s1 { fill: var(--series-1); } .chart.bars .bar.s2 { fill: var(--series-2); } .chart.bars .bar.s3 { fill: var(--series-3); } .chart.bars .bar.s4 { fill: var(--series-4); } .chart.bars .bar.s5 { fill: var(--series-5); } .chart.bars .bar.s6 { fill: var(--series-6); } .chart.bars .bar.s7 { fill: var(--series-7); } .chart.bars .bar.s8 { fill: var(--series-8); } .chart.bars .bar.s9 { fill: var(--series-9); } .chart.bars .bar.s10 { fill: var(--series-10); } .chart.bars .bar.s11 { fill: var(--series-11); } .chart.bars .bar.s12 { fill: var(--series-12); } .chart.bars .bar.s13 { fill: var(--series-13); } .chart.bars .bar.s14 { fill: var(--series-14); } .chart.bars .bar.s15 { fill: var(--series-15); } .chart.bars .bar.s16 { fill: var(--series-16); } .chart.bars .bar.s17 { fill: var(--series-17); } .chart.bars .bar.s18 { fill: var(--series-18); } .chart.bars .bar.s19 { fill: var(--series-19); } .chart.bars .bar.s20 { fill: var(--series-20); }
+/* Slots 9 to 20: the rest of the 20 colours an extension's panel may name (decision 513). */
+.line.s9, .limit.s9 { stroke: var(--series-9); } .dot.s9, .swatch.s9 { fill: var(--series-9); background: var(--series-9); } .area.s9 { fill: var(--series-9); }
+.line.s10, .limit.s10 { stroke: var(--series-10); } .dot.s10, .swatch.s10 { fill: var(--series-10); background: var(--series-10); } .area.s10 { fill: var(--series-10); }
+.line.s11, .limit.s11 { stroke: var(--series-11); } .dot.s11, .swatch.s11 { fill: var(--series-11); background: var(--series-11); } .area.s11 { fill: var(--series-11); }
+.line.s12, .limit.s12 { stroke: var(--series-12); } .dot.s12, .swatch.s12 { fill: var(--series-12); background: var(--series-12); } .area.s12 { fill: var(--series-12); }
+.line.s13, .limit.s13 { stroke: var(--series-13); } .dot.s13, .swatch.s13 { fill: var(--series-13); background: var(--series-13); } .area.s13 { fill: var(--series-13); }
+.line.s14, .limit.s14 { stroke: var(--series-14); } .dot.s14, .swatch.s14 { fill: var(--series-14); background: var(--series-14); } .area.s14 { fill: var(--series-14); }
+.line.s15, .limit.s15 { stroke: var(--series-15); } .dot.s15, .swatch.s15 { fill: var(--series-15); background: var(--series-15); } .area.s15 { fill: var(--series-15); }
+.line.s16, .limit.s16 { stroke: var(--series-16); } .dot.s16, .swatch.s16 { fill: var(--series-16); background: var(--series-16); } .area.s16 { fill: var(--series-16); }
+.line.s17, .limit.s17 { stroke: var(--series-17); } .dot.s17, .swatch.s17 { fill: var(--series-17); background: var(--series-17); } .area.s17 { fill: var(--series-17); }
+.line.s18, .limit.s18 { stroke: var(--series-18); } .dot.s18, .swatch.s18 { fill: var(--series-18); background: var(--series-18); } .area.s18 { fill: var(--series-18); }
+.line.s19, .limit.s19 { stroke: var(--series-19); } .dot.s19, .swatch.s19 { fill: var(--series-19); background: var(--series-19); } .area.s19 { fill: var(--series-19); }
+.line.s20, .limit.s20 { stroke: var(--series-20); } .dot.s20, .swatch.s20 { fill: var(--series-20); background: var(--series-20); } .area.s20 { fill: var(--series-20); }
 .metrics-table td, .metrics-table th { white-space: nowrap; }
 .metrics-main { min-width: 0; }
 .metrics-table { grid-column: 1 / -1; }

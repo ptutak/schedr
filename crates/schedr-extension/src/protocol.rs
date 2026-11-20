@@ -27,6 +27,13 @@ pub enum PluginMessage {
         mode: String,
         /// [`PROTOCOL`].
         protocol: u32,
+        /// Its metrics' declarations, raw JSON (name, kind, help, unit, labels, buckets): the
+        /// worker keeps them per extension and version, its config's winning.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        metrics: Vec<Value>,
+        /// Its page's panels, raw JSON (title, metric, chart, width, section).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        panels: Vec<Value>,
     },
     /// A secret the task declared; answered [`WorkerMessage::Secret`] or
     /// [`WorkerMessage::SecretFailed`].
@@ -66,6 +73,34 @@ pub enum PluginMessage {
         output: Value,
         /// `SUCCESS`.
         outcome: String,
+    },
+    /// Where the task is now (decision 513): kept with the attempt, with its time. No answer.
+    Status {
+        /// A short name for the phase, e.g. `pulling image`.
+        phase: String,
+        /// More about it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        /// How far along, 0 to 1, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        progress: Option<f64>,
+    },
+    /// A link to what the task started elsewhere; a second with the same label replaces it.
+    /// Only `http` and `https` URLs are kept. No answer.
+    Link {
+        /// What it links to.
+        label: String,
+        /// Its URL.
+        url: String,
+    },
+    /// Why the task is being stopped, asked after SIGTERM; answered
+    /// [`WorkerMessage::StopReason`]. The worker never sends an unasked message.
+    StopReasonGet,
+    /// Points of the extension's declared metrics. No answer: one matching no declaration is
+    /// dropped by the worker with a warning.
+    Metrics {
+        /// The points.
+        points: Vec<MetricPoint>,
     },
     /// The task (or cleanup) failed.
     TaskFailed {
@@ -113,6 +148,14 @@ pub enum WorkerMessage {
         kind: String,
         /// What went wrong.
         message: String,
+    },
+    /// The answer to [`PluginMessage::StopReasonGet`]: why the task is being stopped, `None`
+    /// while it isn't.
+    StopReason {
+        /// Why: `cancel`, `timeout`, `drain`, `master_lost`.
+        reason: Option<StopKind>,
+        /// How long until SIGKILL, in milliseconds (0 while it isn't stopping).
+        grace_ms: u64,
     },
     /// The handle is registered.
     HandleAdded,
@@ -209,6 +252,34 @@ pub struct SecretValue {
     pub name: SecretName,
     /// Its value.
     pub value: Value,
+}
+
+/// One point of a declared metric.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MetricPoint {
+    /// The declared metric.
+    pub name: String,
+    /// Its labels' values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+    /// A counter's increase, a gauge's value, a histogram's observation.
+    pub value: f64,
+}
+
+/// Why the worker stops a plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum StopKind {
+    /// A user cancelled the task.
+    Cancel,
+    /// The task's timeout passed.
+    Timeout,
+    /// The worker drains: the task is retried elsewhere.
+    Drain,
+    /// The worker lost the master: the task may run, or be cleaned up, elsewhere.
+    MasterLost,
 }
 
 /// A cleanup handle.

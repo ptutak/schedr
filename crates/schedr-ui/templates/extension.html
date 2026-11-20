@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · Extensions · schedr{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ page.base }}/extensions">Extensions</a> · {{ deployment }}</p>
+<h1>Extensions</h1>
+<nav class="tabs ext-tabs" aria-label="Extensions">{% for (label, href, open) in tabs %}<a class="tab{% if *open %} open{% endif %}" href="{{ href }}"{% if *open %} aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
+<div class="metrics-choices">
+  {% if worker_tabs.len() > 1 %}<nav class="choices" aria-label="Workers">{% for (label, href, open) in worker_tabs %}<a href="{{ href }}"{% if *open %} class="current" aria-current="true"{% endif %}>{% if loop.first %}{{ label }}{% else %}<span class="mono">{{ label }}</span>{% endif %}</a>{% endfor %}</nav>{% endif %}
+  <nav class="choices" aria-label="Range">{% for (label, href, current) in ranges %}<a href="{{ href }}"{% if *current %} class="current" aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</nav>
+</div>
+{% if !worker.is_empty() %}<p class="dim">Worker <span class="mono">{{ worker }}</span>'s own figures, kept a day; past it only all workers' together.</p>{% endif %}
+{% if let Some(error) = error %}
+<div class="banner warning">Unavailable: {{ error }}</div>
+{% else %}
+{% for metric in folded %}
+<div class="banner">Metric <span class="mono">{{ metric }}</span> has more label combinations than its series cap: the smallest are shown together as <span class="mono">other</span>.</div>
+{% endfor %}
+{% if rows.is_empty() %}
+<p class="empty">{% if version.is_empty() %}No worker has run it: only what happened to its plugin is known.{% else %}Its plugin declares no metrics or panels.{% endif %}</p>
+{% if !events.is_empty() %}<h2>What happened</h2>
+<div class="chart-box">{{ events|safe }}</div>{% endif %}
+{% endif %}
+{% for row in rows %}
+<div class="ext-row cells-{{ row.cells_in_row }}">
+  {% for cell in row.cells %}
+  <section class="ext-cell {{ cell.place }}">
+    <h3>{{ cell.title }}</h3>
+    {% if !cell.legend.is_empty() %}<p class="legend chart-legend">{% for (slot, label) in cell.legend %}<span class="key"><span class="swatch s{{ slot }}"></span>{{ label }}</span>{% endfor %}</p>{% endif %}
+    <div class="chart-box">{{ cell.html|safe }}</div>
+  </section>
+  {% endfor %}
+</div>
+{% endfor %}
+{% if worker.is_empty() %}
+<h2>Workers</h2>
+<table class="list">
+  <thead><tr><th>Worker</th><th>Version</th><th>Last heard</th></tr></thead>
+  <tbody>{% for (id, version, seen) in workers %}<tr><td class="mono">{{ id }}</td><td>{{ version }}</td><td class="time">{{ seen }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+{% endif %}
+{% endblock %}

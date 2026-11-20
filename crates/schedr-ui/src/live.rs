@@ -447,7 +447,7 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
     let mut colours = ansi::Converter::resume(&query.style);
     let (html, next) = match part {
         Ok(part) => {
-            let html = colours.push(&part.content);
+            let html = crate::log_lines::to_html(&mut colours, &part.content);
             // Bytes of an escape sequence cut at the part's end: read again with the rest.
             let from = part
                 .next

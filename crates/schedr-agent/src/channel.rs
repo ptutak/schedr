@@ -163,12 +163,14 @@ impl<R: AsyncRead + Unpin> Messages<R> {
 pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     agent_version: &str,
-) -> Result<RunnerMode, ChannelError> {
+) -> Result<(RunnerMode, Declared), ChannelError> {
     let message: RunnerMessage = read_message(stream).await?;
     let RunnerMessage::Hello {
         schedr_version,
         mode,
         protocol,
+        metrics,
+        panels,
     } = message
     else {
         return Err(ChannelError::Unexpected {
@@ -194,8 +196,34 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
         return Err(ChannelError::Refused(reason));
     }
     write_message(stream, &AgentMessage::Welcome).await?;
-    Ok(mode)
+    // A plugin's declarations (decision 513): ones that can't be used are dropped, not its task.
+    let declarations = Declarations { metrics, panels };
+    if let Err(why) = schedr_model::extension::check_declarations(&declarations) {
+        tracing::warn!("a plugin's declarations not used: {why}");
+        let dropped = Declared {
+            declarations: Declarations::default(),
+            dropped: Some(why.clone()),
+        };
+        return Ok((mode, dropped));
+    }
+    let declared = Declared {
+        declarations,
+        dropped: None,
+    };
+    Ok((mode, declared))
 }
+
+/// What a runner's `hello` declared, and why it was dropped when it couldn't be used.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Declared {
+    /// Its declarations: empty when dropped.
+    pub declarations: Declarations,
+    /// Why they were dropped; none: used.
+    pub dropped: Option<String>,
+}
+
+/// What a plugin's `hello` declared of its metrics and its page.
+pub use schedr_model::extension::Declarations;
 
 /// A plugin's `hello` names the protocol this worker speaks ([`EXTENSION_PROTOCOL`]).
 fn check_plugin_protocol(protocol: Option<u32>) -> Result<(), String> {

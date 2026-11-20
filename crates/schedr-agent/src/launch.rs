@@ -96,7 +96,7 @@ pub async fn start_runner(
 ) -> Result<Runner, LaunchError> {
     let (process, mut stream, starting) = spawn_runner(spec, spawned).await?;
     match handshake(&mut stream, mode, spec.start_timeout, None).await {
-        Handshake::Said(Ok(())) => Ok(Runner {
+        Handshake::Said(Ok(_)) => Ok(Runner {
             process,
             stream,
             hello_after: starting.elapsed(),
@@ -139,8 +139,9 @@ async fn spawn_runner(
 
 /// How a runner's handshake ended.
 enum Handshake {
-    /// It said hello in `mode` (`Ok`), or didn't in time, or said something else.
-    Said(Result<(), LaunchError>),
+    /// It said hello in `mode` with what it declared (`Ok`), or didn't in time, or said
+    /// something else.
+    Said(Result<crate::channel::Declared, LaunchError>),
     /// A reason to stop the attempt came first (B56): its cancel, or its deadline passing.
     Stopped(StopReason),
 }
@@ -156,8 +157,8 @@ async fn handshake(
 ) -> Handshake {
     let hello = async {
         match tokio::time::timeout(timeout, accept_runner(stream, AGENT_VERSION)).await {
-            Ok(Ok(said)) if said == mode => Ok(()),
-            Ok(Ok(said)) => Err(LaunchError::WrongMode {
+            Ok(Ok((said, declared))) if said == mode => Ok(declared),
+            Ok(Ok((said, _))) => Err(LaunchError::WrongMode {
                 expected: mode,
                 got: said,
             }),
@@ -276,8 +277,8 @@ impl Process for TaskProcess {
 
 /// A task's runner as its start left it.
 enum Start {
-    /// It said hello: its process, its socket, and how long it took.
-    Ready(TaskProcess, UnixStream, Duration),
+    /// It said hello: its process, its socket, how long it took, and what it declared.
+    Ready(TaskProcess, UnixStream, Duration, crate::channel::Declared),
     /// A reason to stop the attempt came first (B56): the process still runs, for
     /// `supervise` to stop.
     Stopped(TaskProcess, StopReason),
@@ -330,7 +331,9 @@ async fn start_task_runner(
         (TaskProcess::Spawned(process), stream)
     };
     let error = match handshake(&mut stream, mode, spec.start_timeout, stops).await {
-        Handshake::Said(Ok(())) => return Ok(Start::Ready(process, stream, starting.elapsed())),
+        Handshake::Said(Ok(declared)) => {
+            return Ok(Start::Ready(process, stream, starting.elapsed(), declared));
+        }
         Handshake::Stopped(reason) => return Ok(Start::Stopped(process, reason)),
         Handshake::Said(Err(error)) => error,
     };
@@ -354,6 +357,8 @@ pub struct PythonTask {
     pub events: Option<crate::watchers::EventSink>,
     /// What it calls schedr's REST API with; none: it can't.
     pub api: Option<crate::api::ApiCaller>,
+    /// Where its status and links are kept (decision 513); none: they are dropped.
+    pub reports: Option<Arc<crate::reports::AttemptReports>>,
 }
 
 impl From<TaskRequest> for PythonTask {
@@ -364,6 +369,7 @@ impl From<TaskRequest> for PythonTask {
             handles: None,
             events: None,
             api: None,
+            reports: None,
         }
     }
 }
@@ -374,10 +380,11 @@ impl From<TaskRequest> for PythonTask {
 async fn task_conversation(
     stream: &mut UnixStream,
     request: TaskRequest,
-    (secrets, handles, api): (
+    (secrets, handles, api, reports): (
         Option<&AttemptSecrets>,
         Option<&AttemptHandles>,
         Option<&crate::api::ApiCaller>,
+        Option<&crate::reports::AttemptReports>,
     ),
 ) -> (Option<RunnerMessage>, Option<Duration>) {
     let request = if matches!(request.task.kind, schedr_model::TaskKind::Extension { .. }) {
@@ -444,6 +451,26 @@ async fn task_conversation(
                     return (None, import);
                 }
             }
+            Ok(
+                report @ (RunnerMessage::Status { .. }
+                | RunnerMessage::Link { .. }
+                | RunnerMessage::Metrics { .. }),
+            ) => keep_report(reports, report),
+            // Answered in turn, as any request (decision 513): what supervision wrote when it
+            // sent SIGTERM, and the grace left.
+            Ok(RunnerMessage::StopReasonGet) => {
+                let (reason, left) = reports.map_or(
+                    (None, Duration::ZERO),
+                    crate::reports::AttemptReports::stop_reason,
+                );
+                let answer = AgentMessage::StopReason {
+                    reason,
+                    grace_ms: u64::try_from(left.as_millis()).unwrap_or(u64::MAX),
+                };
+                if write_message(stream, &answer).await.is_err() {
+                    return (None, import);
+                }
+            }
             Ok(message) => return (Some(message), import),
             Err(_) => {
                 // A message over the limit, or one that can't be read: the channel is closed
@@ -453,6 +480,30 @@ async fn task_conversation(
                 return (None, import);
             }
         }
+    }
+}
+
+/// Keeps a report (decision 513), which has no answer; a refused one is said in the worker's
+/// log. Metrics come in piece 3 of M5.2i5.
+fn keep_report(reports: Option<&crate::reports::AttemptReports>, report: RunnerMessage) {
+    let Some(reports) = reports else {
+        return;
+    };
+    let kept = match report {
+        RunnerMessage::Status {
+            phase,
+            message,
+            progress,
+        } => reports.status(&phase, message.as_deref(), progress),
+        RunnerMessage::Link { label, url } => reports.link(&label, &url),
+        RunnerMessage::Metrics { points } => {
+            reports.metrics(&points);
+            Ok(())
+        }
+        _ => Ok(()),
+    };
+    if let Err(why) = kept {
+        tracing::warn!("a report not kept: {why}");
     }
 }
 
@@ -481,6 +532,10 @@ fn runner_mode<'a>(
 ///
 /// [`LaunchError`] if the runner can't be started or supervised; a runner that dies or sends
 /// nothing still gives a [`Ran`] (without a result).
+#[expect(
+    clippy::too_many_lines,
+    reason = "an attempt's one path from its start to its result, read best whole"
+)]
 pub async fn run_python(
     process: &ProcessSpec,
     task: impl Into<PythonTask>,
@@ -497,6 +552,7 @@ pub async fn run_python(
         handles,
         events: _,
         api,
+        reports,
     } = task.into();
     let started = Instant::now();
     // The remaining timeout includes the runner's start (B56, B160).
@@ -510,8 +566,23 @@ pub async fn run_python(
     let preload = settings.preload;
     let stops = Some((&mut stop, deadline));
     let start = start_task_runner(process, mode, forks, preload, hold, stops, spawned);
-    let (mut process, mut stream, hello_after) = match start.await? {
-        Start::Ready(process, stream, hello_after) => (process, stream, hello_after),
+    let start = match start.await {
+        Err(LaunchError::Channel(ChannelError::Refused(why))) => {
+            // An extension's events (DN19): its plugin speaks another protocol.
+            if let Some(reports) = &reports {
+                reports.refused(&why);
+            }
+            return Err(LaunchError::Channel(ChannelError::Refused(why)));
+        }
+        start => start?,
+    };
+    let (mut process, mut stream, hello_after) = match start {
+        Start::Ready(process, stream, hello_after, declared) => {
+            if let Some(reports) = &reports {
+                reports.declared(declared);
+            }
+            (process, stream, hello_after)
+        }
         // Cancelled or timed out before its hello: stopped as a running task is, the reason
         // given back for `supervise` to take first; no request was sent, so no result.
         Start::NotStarted(reason) => {
@@ -552,11 +623,20 @@ pub async fn run_python(
     };
     let forked = matches!(process, TaskProcess::Forked(_));
     // Sent while supervised: a runner that doesn't read is stopped on time all the same (B56).
-    let answers = (secrets.as_deref(), handles.as_deref(), api.as_ref());
+    let answers = (
+        secrets.as_deref(),
+        handles.as_deref(),
+        api.as_ref(),
+        reports.as_deref(),
+    );
     let result = task_conversation(&mut stream, request, answers);
     let ((runner_result, import), supervised) = {
         // Boxed: the attempt's future stays small.
         let mut result = Box::pin(result);
+        let stop = match reports.as_deref() {
+            Some(reports) => stop.noted(reports.stop_note()),
+            None => stop,
+        };
         let mut supervised = Box::pin(supervise(&mut process, limits, stop));
         // Once the process has ended, its result is in the socket already: a conversation still
         // waiting (on a slow secret storage) is given up after a moment, not awaited.
@@ -574,6 +654,9 @@ pub async fn run_python(
     let ended = process.ended();
     // Nothing it started outlives it, nor holds its output (B274).
     let _ = process.finish(output_drain).await;
+    if let Some(reports) = &reports {
+        reports.flush();
+    }
     Ok(Ran {
         supervised,
         runner_result,
@@ -750,7 +833,7 @@ impl ParseRunner for ProcessParseRunner {
         )
         .await;
         let (process, stream) = match started {
-            Ok(Start::Ready(process, stream, _)) => (process, stream),
+            Ok(Start::Ready(process, stream, ..)) => (process, stream),
             // Without stops, the handshake isn't cut short.
             Ok(Start::Stopped(..) | Start::NotStarted(_)) => {
                 unreachable!("a parse runner's start has no stops")

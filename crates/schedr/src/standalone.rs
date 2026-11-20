@@ -83,6 +83,8 @@ pub struct Standalone {
     pub data_dir: PathBuf,
     /// The mode of its worker's logs (`[worker] log_mode`, B182).
     pub log_mode: u32,
+    /// Whether structured log lines are stored readable (`[worker] log_format`, decision 514).
+    pub log_format: schedr_config::config::TaskLogFormat,
     /// The database (`[database] url`, else SQLite in the data directory).
     pub database_url: String,
     /// The master's gRPC address.
@@ -199,6 +201,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         lease_period: config.timings.lease_period,
         retention: log_retention(config),
         log_mode: crate::roles::log_mode(config),
+        log_format: config.worker.log_format,
         master: schedr_master::core::Settings {
             // Its webserver is this process: sampled with the master (decision 464).
             with_webserver: true,
@@ -324,6 +327,9 @@ pub async fn run(
     schedr_agent::connection_env::prepare(&setup.agent.setup.connection_dir)
         .map_err(AppError::BadArgument)?;
     crate::roles::secure_logs(setup.log_mode, &setup.agent.setup.log_dir)?;
+    schedr_agent::process::set_log_plain(
+        setup.log_format == schedr_config::config::TaskLogFormat::Plain,
+    );
     let ([grpc, http, logs, ops], addresses) = bind(&setup).await?;
     let auth = standalone_auth(&setup, addresses.http)?;
     listening(addresses);

@@ -7,7 +7,7 @@ with its folder on the worker's ``PATH``. Each task's payload is a list of steps
 
 from datetime import timedelta
 
-from schedr import Dag, ExtensionTask, secrets, task
+from schedr import Cron, Dag, ExtensionTask, secrets, task
 
 with Dag("extension_runs", description="An extension task whose output a Python task reads."):
     job = ExtensionTask(
@@ -81,3 +81,15 @@ with Dag(
         return f"{greeting['greeting']}: {rows['rows']} rows"
 
     together(counted.output, greeted.output)
+
+with Dag(
+    "extension_metrics",
+    description="Made-up work every 2 minutes: what fills the dummy's Extensions page.",
+    trigger=Cron("*/2 * * * *"),
+):
+    ExtensionTask(
+        "simulated",
+        name="dummy",
+        version="1.0",
+        payload=[{"metric": ["steps", 1, {"step": "simulate"}]}, {"simulate": 8}],
+    )

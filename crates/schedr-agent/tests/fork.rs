@@ -958,6 +958,7 @@ async fn a_forked_task_registers_handles_and_its_forked_cleanup_gets_them() {
         secrets: None,
         handles: Some(Arc::clone(&handles)),
         api: None,
+        reports: None,
     };
     let mut hold = None;
     let ran = run_python(

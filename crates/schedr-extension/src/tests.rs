@@ -60,6 +60,8 @@ fn a_task_asks_the_worker_and_ends_with_its_output() {
             schedr_version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: "extension".to_owned(),
             protocol: PROTOCOL,
+            metrics: Vec::new(),
+            panels: Vec::new(),
         }
     );
     write_agent(&mut worker, &WorkerMessage::Welcome);
@@ -176,5 +178,15 @@ fn the_workers_socket_is_copied_and_its_original_sealed() {
     assert_eq!(
         crate::socket::inherited(2).err(),
         Some(crate::socket::SocketError::Reserved(2))
+    );
+}
+
+#[test]
+fn a_log_line_is_the_structured_format() {
+    let line = log_line(Level::Warning, "pod pending", &[("node", json!("n1"))]);
+    let parsed: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        parsed,
+        json!({"schedr_log": 1, "level": "warning", "message": "pod pending", "fields": {"node": "n1"}})
     );
 }

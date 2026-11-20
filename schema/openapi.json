@@ -1,6 +1,24 @@
 {
   "components": {
     "schemas": {
+      "AttemptLinkView": {
+        "description": "A link an attempt reported.",
+        "properties": {
+          "label": {
+            "description": "What it links to.",
+            "type": "string"
+          },
+          "url": {
+            "description": "Its URL, http or https.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
       "AttemptList": {
         "description": "A task's attempts.",
         "properties": {
@@ -101,6 +119,40 @@
         ],
         "type": "object"
       },
+      "AttemptStatusView": {
+        "description": "A status an attempt reported.",
+        "properties": {
+          "at": {
+            "description": "When its worker got it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "message": {
+            "description": "More about it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "description": "Its phase.",
+            "type": "string"
+          },
+          "progress": {
+            "description": "How far along, 0 to 1.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "phase"
+        ],
+        "type": "object"
+      },
       "AttemptView": {
         "description": "An attempt of a task.",
         "properties": {
@@ -174,6 +226,13 @@
               "null"
             ]
           },
+          "links": {
+            "description": "The links it reported (a pod's page, a console), at most 10.",
+            "items": {
+              "$ref": "#/components/schemas/AttemptLinkView"
+            },
+            "type": "array"
+          },
           "peak_memory_bytes": {
             "description": "The peak memory of its processes, sampled by the worker (about once a second); none\nwhen it wasn't measured.",
             "format": "int64",
@@ -204,6 +263,13 @@
               "string",
               "null"
             ]
+          },
+          "statuses": {
+            "description": "The statuses it reported, oldest first (an extension task's phases; decision 513):\nat most 100, the first and the latest kept.",
+            "items": {
+              "$ref": "#/components/schemas/AttemptStatusView"
+            },
+            "type": "array"
           },
           "try_number": {
             "description": "Its try number.",
@@ -894,6 +960,399 @@
           "key",
           "data",
           "received_at"
+        ],
+        "type": "object"
+      },
+      "ExtensionAttemptView": {
+        "description": "One of an extension's attempts and the latest phase it reported (DN19).",
+        "properties": {
+          "at": {
+            "description": "When it reported it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "dag_id": {
+            "description": "Its DAG.",
+            "type": "string"
+          },
+          "ended": {
+            "description": "How it ended; none while it runs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "map_index": {
+            "description": "Its map index; none for a task that isn't mapped.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "More about it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "description": "Its latest phase.",
+            "type": "string"
+          },
+          "progress": {
+            "description": "How far along, 0 to 1.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "Its run.",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "Its task.",
+            "type": "string"
+          },
+          "try_number": {
+            "description": "Its try.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "dag_id",
+          "run_id",
+          "task_id",
+          "try_number",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "ExtensionEventView": {
+        "description": "What happened to an extension on a worker (DN19).",
+        "properties": {
+          "at": {
+            "description": "When.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`discovered`, `skipped`, `refused` or `dropped`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What about it.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The extension's version; empty when not known.",
+            "type": "string"
+          },
+          "worker_id": {
+            "description": "The worker.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "worker_id",
+          "version",
+          "kind",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ExtensionList": {
+        "description": "The extensions workers ran.",
+        "properties": {
+          "extensions": {
+            "description": "By name.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSummaryView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "extensions"
+        ],
+        "type": "object"
+      },
+      "ExtensionMetricView": {
+        "description": "One metric over the range.",
+        "properties": {
+          "buckets": {
+            "description": "A histogram's buckets' upper bounds.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "folded": {
+            "description": "Whether series past the cap were folded into `other`.",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "`counter`, `gauge` or `histogram`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "series": {
+            "description": "Its series, at most the extension's `max_series` and one `other`.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSeriesView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "series",
+          "folded"
+        ],
+        "type": "object"
+      },
+      "ExtensionMetrics": {
+        "description": "An extension's metrics over a range, summed over its workers and versions.",
+        "properties": {
+          "bucket_s": {
+            "description": "A bucket's width, in seconds.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from": {
+            "description": "The range's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "metrics": {
+            "description": "Each declared metric.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionMetricView"
+            },
+            "type": "array"
+          },
+          "range": {
+            "description": "The range: `1h`, `24h`, `7d` or `30d`.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Its end.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range",
+          "bucket_s",
+          "from",
+          "to",
+          "metrics"
+        ],
+        "type": "object"
+      },
+      "ExtensionPointView": {
+        "description": "One bucket of a series.",
+        "properties": {
+          "at": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "counts": {
+            "description": "A histogram's new observations per bucket, the last past its last bound.",
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "peak": {
+            "description": "A gauge's highest; none for the other kinds.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sum": {
+            "description": "A histogram's observations' sum.",
+            "format": "double",
+            "type": "number"
+          },
+          "value": {
+            "description": "A counter's growth in it, or a gauge's average; 0 for a histogram.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "value",
+          "sum"
+        ],
+        "type": "object"
+      },
+      "ExtensionSeriesView": {
+        "description": "One series of a metric over the range.",
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Its labels' values (all `other` for the series past the cap).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "points": {
+            "description": "Its buckets with samples, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionPointView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "labels",
+          "points"
+        ],
+        "type": "object"
+      },
+      "ExtensionSummaryView": {
+        "description": "An extension, in the list.",
+        "properties": {
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "seen_at": {
+            "description": "When a worker last sent its figures.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "versions": {
+            "description": "The versions workers ran, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workers": {
+            "description": "The workers that ran it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "versions",
+          "workers",
+          "seen_at"
+        ],
+        "type": "object"
+      },
+      "ExtensionView": {
+        "description": "An extension: where it runs, its metrics and its page.",
+        "properties": {
+          "attempts": {
+            "description": "Its attempts with a phase, newest first, at most [`LISTED`]: each one's latest.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionAttemptView"
+            },
+            "type": "array"
+          },
+          "events": {
+            "description": "What happened to it on its workers, newest first, at most [`LISTED`] (DN19).",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionEventView"
+            },
+            "type": "array"
+          },
+          "max_series": {
+            "description": "The most series each metric keeps.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metrics": {
+            "description": "Its metrics' declarations (name, kind, help, unit, labels, buckets).",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "Its name.",
+            "type": "string"
+          },
+          "panels": {
+            "description": "Its page's panels, each in its row and cell: the declared ones, then a `full` row for\neach metric none shows.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The version its metrics and page are read from: the one last heard of.",
+            "type": "string"
+          },
+          "workers": {
+            "description": "Each version on each worker.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionWorkerView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "workers",
+          "version",
+          "metrics",
+          "panels",
+          "max_series"
+        ],
+        "type": "object"
+      },
+      "ExtensionWorkerView": {
+        "description": "One version of an extension on one worker.",
+        "properties": {
+          "seen_at": {
+            "description": "When it last sent its figures.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "version": {
+            "description": "Its version.",
+            "type": "string"
+          },
+          "worker_id": {
+            "description": "The worker.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "worker_id",
+          "seen_at"
         ],
         "type": "object"
       },
@@ -4245,6 +4704,151 @@
         ]
       }
     },
+    "/api/v1/extensions": {
+      "get": {
+        "operationId": "list_extensions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The extensions workers ran, with their versions and workers.",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
+    "/api/v1/extensions/{name}": {
+      "get": {
+        "operationId": "get_extension",
+        "parameters": [
+          {
+            "description": "The extension",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One worker's events and attempts only (DN21), its newest [`LISTED`]; all workers' when\nabsent. Its workers are all listed either way.",
+            "in": "query",
+            "name": "worker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "An extension: its versions on its workers, and its metrics and page as its newest version\ndeclares them.",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
+    "/api/v1/extensions/{name}/metrics": {
+      "get": {
+        "operationId": "extension_metrics",
+        "parameters": [
+          {
+            "description": "The extension",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`1h`, `24h` (the default), `7d` or `30d`.",
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One worker's figures only (DN21), for `1h` or `24h`: the master keeps each worker's a\nminute each for a day, and sums them over the workers past it. All workers' when absent.",
+            "in": "query",
+            "name": "worker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionMetrics"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "An extension's metrics over a range, in buckets, summed over its workers and versions (or of\none worker, `worker`, up to a day: DN21); at most its `max_series` series a metric, the\nsmallest past it folded into `other`.",
+        "tags": [
+          "workers"
+        ]
+      }
+    },
     "/api/v1/import-errors": {
       "get": {
         "operationId": "list_import_errors",
@@ -4917,6 +5521,108 @@
           }
         },
         "summary": "A part of an attempt's log, read from the worker that ran it; read on from `next` to follow\na running task. 404 when the attempt has no log (yet), or the worker no longer has it; 503\nwhen the worker is gone or can't be reached.",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log.txt": {
+      "get": {
+        "description": "# Errors\n\n[`ApiError`]: no such attempt, no log (yet), or its worker gone or unreachable.",
+        "operationId": "download_log",
+        "parameters": [
+          {
+            "description": "The run's ID",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The task's ID",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The attempt's try number",
+            "in": "path",
+            "name": "try_number",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The first byte wanted (0 by default): the `next` of the previous part, to follow a log.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many bytes (1 MiB by default; between 4 bytes, one character, and that).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The instance of a mapped task, from 0 (required for one).",
+            "in": "query",
+            "name": "map_index",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "`GET /api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log.txt`: the attempt's\nwhole log as it is now, masked line by line, as text. Not found or unavailable as its parts\nare; a worker failing midway ends the file early.",
         "tags": [
           "runs"
         ]

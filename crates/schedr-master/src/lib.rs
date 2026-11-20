@@ -12,6 +12,7 @@ pub mod dispatch;
 pub mod execution;
 #[cfg(test)]
 mod faults;
+pub mod figures;
 pub mod fire_times;
 pub mod lease;
 pub mod limits;

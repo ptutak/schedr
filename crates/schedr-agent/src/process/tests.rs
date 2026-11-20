@@ -222,3 +222,30 @@ async fn a_process_dropped_unreaped_takes_its_whole_group_with_it() {
     }
     assert!(gone, "the child outlived its dropped leader");
 }
+
+#[test]
+fn plain_storage_renders_structured_lines_split_anywhere_and_passes_the_rest() {
+    let line =
+        r#"{"schedr_log":1,"level":"info","message":"pod scheduled","fields":{"node":"n1"}}"#;
+    let text = format!("plain\n{line}\nlast");
+    let mut plainer = Plainer::default();
+    let mut out = Vec::new();
+    // Split into small reads, a structured line cut through its middle.
+    for chunk in text.as_bytes().chunks(7) {
+        out.extend(plainer.push(chunk));
+    }
+    out.extend(plainer.finish());
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "plain\nINFO     pod scheduled  node=n1\nlast"
+    );
+}
+
+#[test]
+fn a_line_too_long_to_hold_is_written_as_it_comes() {
+    let mut plainer = Plainer::default();
+    let long = vec![b'x'; STRUCTURED_LINE_MAX + 10];
+    let first = plainer.push(&long);
+    assert_eq!(first.len(), long.len(), "passed on, not held");
+    assert_eq!(plainer.push(b"yy\nnext\n"), b"yy\nnext\n");
+}

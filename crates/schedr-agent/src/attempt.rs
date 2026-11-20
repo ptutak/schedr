@@ -166,6 +166,8 @@ pub struct AttemptSpec {
     pub journal: Option<crate::journal::Journal>,
     /// Told each handle, to send it on to the master; `None` keeps them here.
     pub handle_sink: Option<crate::handles::HandleSink>,
+    /// Told each status and link it reports, to send on to the master (decision 513).
+    pub report_sink: Option<crate::reports::ReportSink>,
     /// What it calls schedr's REST API with (`schedr.api`, M4.11h); `None`: it can't.
     pub api: Option<crate::api::ApiCaller>,
     /// Passed between the task's end and its cleanup, with `cleanup_anywhere` (decision 253).
@@ -286,6 +288,7 @@ impl AttemptSpec {
             moved_cleanup: assign.cleanup_only.is_some(),
             journal: None,
             handle_sink: None,
+            report_sink: None,
             api: None,
             cleanup_gate: None,
             cleanup_ask: None,
@@ -407,6 +410,8 @@ pub struct WorkerTimeouts {
     pub drain_tick: Duration,
     /// How often the waiting queue's head is compared with the slow-equals (decision 509).
     pub queue_check: Duration,
+    /// How often its plugins' figures go to the master (decision 513).
+    pub figures: Duration,
     /// How often a stopped process's group is looked at (`stop_poll`).
     pub stop_poll: Duration,
     /// How long a connection test's process gets from SIGTERM to SIGKILL
@@ -441,6 +446,12 @@ pub struct WorkerTimeouts {
     /// A wait step's messages waiting for its attempt before its host waits too
     /// (`WATCHER_LOG_BACKLOG`).
     pub watcher_log_backlog: usize,
+    /// The reports an extension attempt sends a second (`EXTENSION_REPORTS_PER_SECOND`).
+    pub extension_reports_per_second: usize,
+    /// The reports it sends at once (`EXTENSION_REPORTS_AT_ONCE`).
+    pub extension_reports_at_once: usize,
+    /// The extension events held for the next heartbeat (`EXTENSION_EVENTS_PENDING`).
+    pub extension_events_pending: usize,
 }
 
 impl Default for WorkerTimeouts {
@@ -470,6 +481,7 @@ impl Default for WorkerTimeouts {
             deregister: crate::agent::DEREGISTER_WAIT,
             drain_tick: crate::agent::DRAIN_TICK,
             queue_check: crate::agent::QUEUE_CHECK,
+            figures: crate::agent::FIGURES_EVERY,
             stop_poll: crate::supervise::STOP_POLL,
             connection_cancel_grace: crate::connection_jobs::CANCEL_GRACE,
             accept_retry: Duration::from_millis(100),
@@ -483,12 +495,15 @@ impl Default for WorkerTimeouts {
             unsent_connection_answers: crate::agent::UNSENT_ANSWERS,
             task_connections_open: crate::ctx::MAX_CONNECTIONS,
             watcher_log_backlog: crate::watchers::ROUTE_MESSAGES,
+            extension_reports_per_second: crate::reports::REPORTS_PER_SECOND,
+            extension_reports_at_once: crate::reports::REPORTS_AT_ONCE,
+            extension_events_pending: schedr_model::extension::MAX_PENDING_EVENTS,
         }
     }
 }
 
 /// What the worker knows to run tasks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerSetup {
     /// The DAG roots, by name.
     pub roots: BTreeMap<String, PathBuf>,

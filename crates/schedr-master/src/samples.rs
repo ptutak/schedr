@@ -32,6 +32,9 @@ pub struct SampleSettings {
     /// How often a master writes its row (`MASTER__NODE_HEARTBEAT`, 10 s): one heard from
     /// within three of them is sampled.
     pub node_heartbeat: Duration,
+    /// The extension events kept per extension, the newest (`MASTER__EXTENSION_EVENTS_KEPT`,
+    /// 200; DN19).
+    pub events_kept: usize,
 }
 
 impl Default for SampleSettings {
@@ -42,6 +45,7 @@ impl Default for SampleSettings {
             rollups_kept: Duration::from_hours(24 * 30),
             rollup_grace: ROLL_GRACE.unsigned_abs(),
             node_heartbeat: Duration::from_secs(10),
+            events_kept: schedr_model::extension::KEPT_EVENTS,
         }
     }
 }
@@ -59,8 +63,9 @@ fn floor(at: Timestamp, step: u32) -> Timestamp {
     Timestamp::from_second(seconds).unwrap_or(at)
 }
 
-/// What a pass did, for the statement bound (decision 464): 3 a minute, 7 when a window
-/// closes (its read and insert, then the two deletes), more at a new sampler's first pass,
+/// What a pass did, for the statement bound (decision 464): 3 a minute, 10 when a window
+/// closes (its read and insert, the extensions' read (decision 513), then the four
+/// deletes; 11 when the extensions have samples to insert), more at a new sampler's first pass,
 /// which rolls every window not rolled yet.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pass {
@@ -269,7 +274,14 @@ impl Sampler {
                 .await?;
             db.delete_old_samples(ROLLUP, keep(settings.rollups_kept))
                 .await?;
-            pass.statements += 2;
+            db.delete_old_extension_samples(MINUTE, keep(settings.minutes_kept))
+                .await?;
+            db.delete_old_extension_samples(ROLLUP, keep(settings.rollups_kept))
+                .await?;
+            // An extension's events (DN19) as long as its rolled-up samples.
+            db.delete_old_extension_events(keep(settings.rollups_kept))
+                .await?;
+            pass.statements += 5;
             self.prune = false;
         }
         Ok(pass)
@@ -282,13 +294,21 @@ async fn roll_up(db: &Database, from: Timestamp) -> Result<(u64, u32), DbError> 
     let to = from
         .checked_add(SignedDuration::from_secs(i64::from(ROLLUP)))
         .unwrap_or(from);
+    // The extensions' metrics' window too (decision 513), across workers.
+    let extension_minutes = db.extension_samples(None, MINUTE, from, to).await?;
+    let extensions = crate::figures::rolled_up(&extension_minutes, from);
+    db.insert_extension_samples(&extensions).await?;
+    let statements = if extensions.is_empty() { 1 } else { 2 };
     let minutes = db.samples(MINUTE, from, to).await?;
     let rolled = rolled_up(&minutes, from);
     if rolled.is_empty() {
-        return Ok((0, 1));
+        return Ok((0, 1 + statements));
     }
     db.insert_samples(&rolled).await?;
-    Ok((u64::try_from(rolled.len()).unwrap_or(u64::MAX), 2))
+    Ok((
+        u64::try_from(rolled.len()).unwrap_or(u64::MAX),
+        2 + statements,
+    ))
 }
 
 /// `minutes` (by process, then time) as one rollup per process at `at`: memory's averages

@@ -37,6 +37,13 @@
         <td>{{ attempt.memory }}</td>
         <td class="lines">{{ attempt.started_at }}</td>
       </tr>
+      {% if !attempt.statuses.is_empty() || !attempt.links.is_empty() %}
+      <tr class="report-row"><td></td><td colspan="5">
+        {% if !attempt.statuses.is_empty() %}<span class="dim">Status:</span> <span class="phase">{{ attempt.phase() }}</span>{% endif %}
+        {% for (label, url) in attempt.links %} <a class="report-link" href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ label }}</a>{% endfor %}
+        {% if attempt.statuses.len() > 1 %}<details><summary>Status history ({{ attempt.statuses.len() }})</summary><table class="list statuses"><tbody>{% for (at, text) in attempt.statuses %}<tr><td class="lines">{{ at }}</td><td>{{ text }}</td></tr>{% endfor %}</tbody></table></details>{% endif %}
+      </td></tr>
+      {% endif %}
       {% if !attempt.error.is_empty() %}
       <tr class="error-row"><td></td><td colspan="5">
         <span class="error">{{ attempt.error }}</span>
@@ -55,9 +62,17 @@
   <p class="empty">No output (yet).</p>
 {% when TabBody::OutputDeleted %}
   <p class="empty">Output deleted by retention.</p>
-{% when TabBody::Log with { html, cut, size, running, tries, tail } %}
+{% when TabBody::Log with { html, cut, size, running, tries, tail, download, structured } %}
   <p class="tries">Try {% for t in tries %}<a class="try{% if t.open %} open{% endif %}" href="{{ t.href }}" hx-get="{{ t.panel }}" hx-target="#task-panel" hx-sync="#task-panel:replace" hx-push-url="{{ t.href }}">{{ t.number }}</a>{% endfor %} · {{ size }}{% if running %} · still running{% endif %}</p>
   {% if cut %}<p class="dim">Only its end is shown (its last lines, about 256 KiB).</p>{% endif %}
+  <div class="log-levels">
+    <fieldset class="levels"><legend class="hidden">Lines shown, by level</legend>
+      <label><input type="checkbox" class="lv-show" value="info" checked> INFO</label>
+      <label><input type="checkbox" class="lv-show" value="warning" checked> WARNING</label>
+      <label><input type="checkbox" class="lv-show" value="error" checked> ERROR</label>
+    </fieldset>
+    <span class="downloads"><a class="button small" href="{{ download }}&format=plain" download title="The whole log, structured lines as readable text">Download log</a>{% if structured %}<a class="button small secondary" href="{{ download }}&format=json" download title="The whole log, structured lines as the JSON stored">as JSON</a>{% endif %}</span>
+  </div>
   <pre class="log">{{ html|safe }}{% if let Some(tail) = tail %}{{ tail|safe }}{% endif %}</pre>
 {% when TabBody::NoLog(why) %}
   <p class="empty">No log to show: {{ why }}</p>

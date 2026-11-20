@@ -783,6 +783,38 @@
         },
         {
           "additionalProperties": false,
+          "description": "The answer to [`RunnerMessage::StopReasonGet`] (decision 513): why the task is being\nstopped, `None` while it isn't.",
+          "properties": {
+            "grace_ms": {
+              "description": "How long until SIGKILL, in milliseconds (0 while it isn't stopping).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StopKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Why: cancel, timeout, drain, a lost master."
+            },
+            "type": {
+              "const": "stop_reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grace_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Why the connection a [`RunnerMessage::ConnectionGet`] asked for can't be opened.",
           "properties": {
             "kind": {
@@ -884,6 +916,31 @@
         }
       ]
     },
+    "Cell": {
+      "description": "The cell of a row a panel takes: a row is one cell (`full`), two (`left`, `right`) or three\n(`left`, `center`, `right`); its cells say which.",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "The whole row.",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "description": "The left one.",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "The middle one of three.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "The right one.",
+          "type": "string"
+        }
+      ]
+    },
     "ChannelRef": {
       "description": "A channel: one the server configuration defines (named by a string in Python), or one the\nDAG defines itself (an object).",
       "oneOf": [
@@ -940,6 +997,56 @@
             "url"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "ChartKind": {
+      "description": "How a panel draws its metric: schedr's chart kinds, in schedr's style.",
+      "oneOf": [
+        {
+          "const": "line",
+          "description": "A gauge's value over time, a line per series.",
+          "type": "string"
+        },
+        {
+          "const": "rate",
+          "description": "A counter's (or a histogram's count's) growth per second over time.",
+          "type": "string"
+        },
+        {
+          "const": "stacked",
+          "description": "As `line` or `rate`, the series stacked.",
+          "type": "string"
+        },
+        {
+          "const": "histogram",
+          "description": "A histogram's distribution over the range, its buckets as bars.",
+          "type": "string"
+        },
+        {
+          "const": "quantiles",
+          "description": "A histogram's quantiles over time, a line each.",
+          "type": "string"
+        },
+        {
+          "const": "number",
+          "description": "One number: a gauge's latest, a counter's growth over the range.",
+          "type": "string"
+        },
+        {
+          "const": "table",
+          "description": "A table of the latest value by label.",
+          "type": "string"
+        },
+        {
+          "const": "bars",
+          "description": "A bar per bucket, the series stacked in it: a counter's growth or a histogram's count of\nobservations in it, a gauge's value; an empty bucket left empty (the user, 2026-11-21:\n\"if the user wants to see \\\"breaks\\\" he chooses a different type of chart\", DN24).",
+          "type": "string"
+        },
+        {
+          "const": "events",
+          "description": "No metric: the extension's own events (plugins discovered, skipped or refused per\nworker) and its attempts' latest phases.",
+          "type": "string"
         }
       ]
     },
@@ -1020,6 +1127,111 @@
         {
           "const": "extension",
           "description": "An extension task's: its plugin run again with the attempt's handles\n(`extension_cleanup`, decision 510).",
+          "type": "string"
+        }
+      ]
+    },
+    "Color": {
+      "description": "The colours a panel or a series may name (decision 513): schedr's own, each with a light\nand a dark variant made for its mode; their slot is the stylesheet's `--series-<slot>`.",
+      "oneOf": [
+        {
+          "const": "blue",
+          "description": "Slot 1.",
+          "type": "string"
+        },
+        {
+          "const": "orange",
+          "description": "Slot 2.",
+          "type": "string"
+        },
+        {
+          "const": "green",
+          "description": "Slot 3.",
+          "type": "string"
+        },
+        {
+          "const": "amber",
+          "description": "Slot 4.",
+          "type": "string"
+        },
+        {
+          "const": "pink",
+          "description": "Slot 5.",
+          "type": "string"
+        },
+        {
+          "const": "forest",
+          "description": "Slot 6.",
+          "type": "string"
+        },
+        {
+          "const": "violet",
+          "description": "Slot 7.",
+          "type": "string"
+        },
+        {
+          "const": "red",
+          "description": "Slot 8.",
+          "type": "string"
+        },
+        {
+          "const": "teal",
+          "description": "Slot 9.",
+          "type": "string"
+        },
+        {
+          "const": "cyan",
+          "description": "Slot 10.",
+          "type": "string"
+        },
+        {
+          "const": "indigo",
+          "description": "Slot 11.",
+          "type": "string"
+        },
+        {
+          "const": "magenta",
+          "description": "Slot 12.",
+          "type": "string"
+        },
+        {
+          "const": "brown",
+          "description": "Slot 13.",
+          "type": "string"
+        },
+        {
+          "const": "olive",
+          "description": "Slot 14.",
+          "type": "string"
+        },
+        {
+          "const": "slate",
+          "description": "Slot 15.",
+          "type": "string"
+        },
+        {
+          "const": "gold",
+          "description": "Slot 16.",
+          "type": "string"
+        },
+        {
+          "const": "coral",
+          "description": "Slot 17.",
+          "type": "string"
+        },
+        {
+          "const": "sky",
+          "description": "Slot 18.",
+          "type": "string"
+        },
+        {
+          "const": "plum",
+          "description": "Slot 19.",
+          "type": "string"
+        },
+        {
+          "const": "mint",
+          "description": "Slot 20.",
           "type": "string"
         }
       ]
@@ -1558,6 +1770,30 @@
       ],
       "type": "object"
     },
+    "LabelDeclaration": {
+      "additionalProperties": false,
+      "description": "A label a metric's points carry.",
+      "properties": {
+        "name": {
+          "description": "Its name.",
+          "type": "string"
+        },
+        "values": {
+          "description": "The values it may take; any other counts as [`OTHER`]. `None`: any, up to the series cap.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "Mapped": {
       "additionalProperties": false,
       "description": "One mapped argument of `.expand(...)`: its name and the list it maps over.",
@@ -1576,6 +1812,122 @@
         "value"
       ],
       "type": "object"
+    },
+    "MetricDeclaration": {
+      "additionalProperties": false,
+      "description": "One metric a plugin reports.",
+      "properties": {
+        "buckets": {
+          "description": "A histogram's buckets' upper bounds, increasing (a last `+Inf` is implied).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "help": {
+          "description": "What it measures, one sentence.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MetricKind",
+          "description": "Its kind."
+        },
+        "labels": {
+          "description": "Its labels.",
+          "items": {
+            "$ref": "#/$defs/LabelDeclaration"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Its name: lowercase letters, digits and `_`, starting with a letter.",
+          "type": "string"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit",
+          "default": "count",
+          "description": "Its unit."
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "help"
+      ],
+      "type": "object"
+    },
+    "MetricKind": {
+      "description": "A metric's kind.",
+      "oneOf": [
+        {
+          "const": "counter",
+          "description": "Only grows; a point adds its value (at least 0).",
+          "type": "string"
+        },
+        {
+          "const": "gauge",
+          "description": "Goes up and down; a point sets it.",
+          "type": "string"
+        },
+        {
+          "const": "histogram",
+          "description": "A distribution; a point is one observation, counted in its declared buckets.",
+          "type": "string"
+        }
+      ]
+    },
+    "MetricPoint": {
+      "additionalProperties": false,
+      "description": "One point a plugin reports.",
+      "properties": {
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Its labels' values.",
+          "type": "object"
+        },
+        "name": {
+          "description": "The declared metric.",
+          "type": "string"
+        },
+        "value": {
+          "description": "A counter's increase, a gauge's value, a histogram's observation.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "MetricUnit": {
+      "description": "What a metric measures, for its axis and its numbers.",
+      "oneOf": [
+        {
+          "const": "count",
+          "description": "A plain number.",
+          "type": "string"
+        },
+        {
+          "const": "seconds",
+          "description": "Seconds.",
+          "type": "string"
+        },
+        {
+          "const": "bytes",
+          "description": "Bytes.",
+          "type": "string"
+        },
+        {
+          "const": "ratio",
+          "description": "A fraction, 0 to 1 (shown as a percentage).",
+          "type": "string"
+        }
+      ]
     },
     "NotifyEntry": {
       "additionalProperties": false,
@@ -1682,6 +2034,70 @@
           "type": "string"
         }
       ]
+    },
+    "Panel": {
+      "additionalProperties": false,
+      "description": "One panel of an extension's page: a chart in one cell of one row.",
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/Cell",
+          "description": "Its cell in the row."
+        },
+        "chart": {
+          "$ref": "#/$defs/ChartKind",
+          "description": "How."
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its colour (its first series'); none: schedr's, in order."
+        },
+        "colors": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Color"
+          },
+          "description": "Its series' colours by a label's value (`{\"Running\": \"green\", \"Failed\": \"red\"}`).",
+          "type": "object"
+        },
+        "metric": {
+          "description": "The metric it draws; none for an `events` panel.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantiles": {
+          "description": "A `quantiles` chart's quantiles, each between 0 and 1 (default 0.5, 0.95, 0.99).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "row": {
+          "description": "Its row, from 1 at the top; rows have a fixed height.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "title": {
+          "description": "Its title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "chart",
+        "row",
+        "cell"
+      ],
+      "type": "object"
     },
     "Params": {
       "additionalProperties": false,
@@ -2317,9 +2733,23 @@
           "additionalProperties": false,
           "description": "The first message: who is speaking and what for.",
           "properties": {
+            "metrics": {
+              "description": "A plugin's metrics' declarations (`extension` mode, decision 513: as NETCONF's hello\nannounces its models); kept per extension and version unless its config has some.",
+              "items": {
+                "$ref": "#/$defs/MetricDeclaration"
+              },
+              "type": "array"
+            },
             "mode": {
               "$ref": "#/$defs/RunnerMode",
               "description": "The mode the runner was started in."
+            },
+            "panels": {
+              "description": "A plugin's page's panels (`extension` mode).",
+              "items": {
+                "$ref": "#/$defs/Panel"
+              },
+              "type": "array"
             },
             "protocol": {
               "description": "The protocol version a plugin speaks (`extension` mode, [`EXTENSION_PROTOCOL`]);\nnone from the Python runner, which matches by `schedr_version`.",
@@ -2575,6 +3005,100 @@
           "required": [
             "type",
             "handle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Where the task is now (decision 513): kept with the attempt, each with its time, and\nshown on the task and its extension's page. No answer.",
+          "properties": {
+            "message": {
+              "description": "More about it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "description": "A short name for the phase, e.g. `pulling image`.",
+              "type": "string"
+            },
+            "progress": {
+              "description": "How far along, 0 to 1, when known.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A link to what the task started elsewhere (decision 513): a pod, a job's page. A second\nwith the same label replaces it. Only `http` and `https` URLs are kept. No answer.",
+          "properties": {
+            "label": {
+              "description": "What it links to.",
+              "type": "string"
+            },
+            "type": {
+              "const": "link",
+              "type": "string"
+            },
+            "url": {
+              "description": "Its URL.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why the task is being stopped (decision 513), asked after SIGTERM: answered\n[`AgentMessage::StopReason`]. The worker never sends an unasked message.",
+          "properties": {
+            "type": {
+              "const": "stop_reason_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Points of the extension's declared metrics (decision 513). No answer: one that doesn't\nmatch a declaration is dropped with a warning.",
+          "properties": {
+            "points": {
+              "description": "The points.",
+              "items": {
+                "$ref": "#/$defs/MetricPoint"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "metrics",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "points"
           ],
           "type": "object"
         },
@@ -3261,6 +3785,31 @@
         "param"
       ],
       "type": "object"
+    },
+    "StopKind": {
+      "description": "Why the worker stops a plugin (sent in `stop` with SIGTERM; a memory kill has no grace and\nno message).",
+      "oneOf": [
+        {
+          "const": "cancel",
+          "description": "A user cancelled the task.",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "description": "The task's timeout passed.",
+          "type": "string"
+        },
+        {
+          "const": "drain",
+          "description": "The worker drains: the task is retried elsewhere.",
+          "type": "string"
+        },
+        {
+          "const": "master_lost",
+          "description": "The worker lost the master: the task may be run (or cleaned up) elsewhere.",
+          "type": "string"
+        }
+      ]
     },
     "Task": {
       "description": "A task of a DAG.",

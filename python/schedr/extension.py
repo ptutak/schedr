@@ -27,8 +27,10 @@ each ``schedr-ext-*`` on its ``PATH``.
 """
 
 import asyncio
+import contextlib
 import json
 import os
+import signal
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -36,6 +38,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
 from schedr._serialization import CodecError, check_size
+from schedr.log import install as install_structured_logging
 from schedr.runner.main import FD_ENV
 from schedr.runner.parse import import_error
 from schedr.runner.protocol import Channel, ProtocolError, from_fd
@@ -207,6 +210,69 @@ class ExtensionChannel:
         # The worker's `connection` answer: its values by parameter, JSON.
         return cast("dict[str, Json]", answer["values"])
 
+    async def _tell(self, message: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._channel.send, message)
+
+    async def status(
+        self, phase: str, message: str | None = None, *, progress: float | None = None
+    ) -> None:
+        """Says where the task is now: kept with the attempt with its time, shown on the task.
+
+        No answer: the worker keeps it, masked; a progress outside 0 to 1 is clamped.
+
+        Args:
+            phase: A short name for the phase, e.g. ``"pulling image"``.
+            message: More about it.
+            progress: How far along, 0 to 1, when known.
+        """
+        report: dict[str, Any] = {"type": "status", "phase": phase}
+        if message is not None:
+            report["message"] = message
+        if progress is not None:
+            report["progress"] = progress
+        await self._tell(report)
+
+    async def link(self, label: str, url: str) -> None:
+        """Links to what the task started elsewhere (a pod, a job's page), shown on the task.
+
+        A second link with the same label replaces it; only ``http`` and ``https`` are kept.
+
+        Args:
+            label: What it links to.
+            url: Its URL.
+        """
+        await self._tell({"type": "link", "label": label, "url": url})
+
+    async def metric(self, name: str, value: float, **labels: str) -> None:
+        """Reports one point of a declared metric (``main(..., metrics=...)``).
+
+        A counter adds ``value``, a gauge is set to it, a histogram observes it. A point that
+        matches no declaration is dropped by the worker with a warning.
+
+        Args:
+            name: The metric.
+            value: The value.
+            **labels: Its labels' values.
+        """
+        point: dict[str, Any] = {"name": name, "value": value}
+        if labels:
+            point["labels"] = labels
+        await self._tell({"type": "metrics", "points": [point]})
+
+    async def stop_reason(self) -> tuple[str | None, float]:
+        """Why the task is being stopped, asked after SIGTERM: the reason and the seconds left.
+
+        The reason is ``"cancel"``, ``"timeout"``, ``"drain"`` or ``"master_lost"``; ``None``
+        while the task isn't being stopped. SIGKILL comes once the seconds are up.
+
+        Returns:
+            The reason, and the grace left in seconds.
+        """
+        answer = await self._ask({"type": "stop_reason_get"})
+        if answer["type"] != "stop_reason":
+            raise ExtensionError("unexpected", f"expected `stop_reason`, got `{answer['type']}`")
+        return answer.get("reason"), int(answer.get("grace_ms", 0)) / 1000
+
     async def add_handle(self, handle_type: str, value: Json) -> None:
         """Registers what the cleanup needs, made by this attempt (a job's ID, a pod's name).
 
@@ -266,6 +332,8 @@ def main(
     name: str,
     versions: Sequence[str],
     cleanup: Run | None = None,
+    metrics: Sequence[Mapping[str, Json]] = (),
+    panels: Sequence[Mapping[str, Json]] = (),
     argv: Sequence[str] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> int:
@@ -278,6 +346,11 @@ def main(
         versions: The versions it serves.
         cleanup: The cleanup, called with the handles the attempt registered (``None``: the
             extension has none; a cleanup request then fails).
+        metrics: Its metrics' declarations (name, kind, help, unit, labels, buckets), sent in
+            its hello; a worker's ``[extensions.<name>] metrics`` wins over them.
+        panels: Its page's panels (title, metric, chart, row from 1 at the top, cell: ``full``,
+            ``left``, ``center`` or ``right``), sent in its hello; a metric none shows gets a
+            ``full`` row of its own below them.
         argv: The arguments (``sys.argv[1:]`` by default).
         environ: The environment (``os.environ`` by default).
 
@@ -297,7 +370,14 @@ def main(
         return _EXIT_USAGE
     channel = from_fd(int(value))
     try:
-        return _serve(channel, run, cleanup)
+        declared: dict[str, Json] = {}
+        if metrics:
+            declared["metrics"] = [dict(m) for m in metrics]
+        if panels:
+            declared["panels"] = [dict(p) for p in panels]
+        # Its `logging` as structured lines (decision 514), unless it configures its own.
+        install_structured_logging()
+        return _serve(channel, run, cleanup, declared)
     except ProtocolError as e:
         print(f"worker channel: {e}", file=sys.stderr)
         return _EXIT_FAILED
@@ -305,15 +385,16 @@ def main(
         channel.close()
 
 
-def _serve(channel: Channel, run: Run, cleanup: Run | None) -> int:
-    channel.send(
-        {
-            "type": "hello",
-            "schedr_version": _plugin_version(),
-            "mode": "extension",
-            "protocol": PROTOCOL,
-        }
-    )
+def _serve(channel: Channel, run: Run, cleanup: Run | None, declared: Mapping[str, Json]) -> int:
+    hello: dict[str, Json] = {
+        "type": "hello",
+        "schedr_version": _plugin_version(),
+        "mode": "extension",
+        "protocol": PROTOCOL,
+    }
+    # Its declarations in its hello (decision 513), as NETCONF's hello announces its models.
+    hello.update(declared)
+    channel.send(hello)
     reply = channel.receive()
     if reply["type"] == "refused":
         print(f"the worker refused the plugin: {reply.get('reason', '')}", file=sys.stderr)
@@ -340,6 +421,10 @@ def _result(
         call = cleanup
     try:
         output = asyncio.run(_called(call, request, channel))
+    except asyncio.CancelledError:
+        # SIGTERM (decision 513): the worker ends the attempt with its own reason.
+        stopped = RuntimeError("stopped by the worker (SIGTERM)")
+        return {"type": "task_failed", "error": import_error(stopped), "kind": None}
     except Exception as e:  # the plugin's own failure
         return {"type": "task_failed", "error": import_error(e), "kind": None}
     try:
@@ -353,4 +438,12 @@ def _result(
 
 
 async def _called(call: Run, request: ExtensionRequest, channel: ExtensionChannel) -> object:
+    # SIGTERM cancels the plugin's coroutine (decision 513): `asyncio.CancelledError` at the
+    # `await` it waits on, where it may ask `stop_reason()` and undo what it started. A plugin
+    # installing its own handler replaces this one.
+    task = asyncio.current_task()
+    if task is not None:
+        # Not on the main thread (a test running `main` in a thread): no handler.
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
     return await call(request, channel)

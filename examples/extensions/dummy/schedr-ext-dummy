@@ -7,17 +7,117 @@ The payload is a list of steps, done in order; the output is what the last ``ret
     {"log": "text"}                    print a line to the attempt's log
     {"secret": ["path", "key"]}        read a declared secret (its length is logged, never it)
     {"handle": {"id": "job-1"}}        register a cleanup handle of type ``job``
+    {"status": ["phase", 0.5]}         report a status (its phase, how far along), shown on the task
+    {"link": ["Pod", "https://..."]}   report a link, shown on the task
+    {"metric": ["steps", 1, {"step": "log"}]}  report a point of a declared metric (below)
     {"return": {"rows": 3}}            the task's output
     {"fail": "why"}                    fail the attempt
-    {"hang": true}                     wait until cancelled or timed out
+    {"hang": true}                     wait until stopped, then print why (``stop_reason``)
+    {"simulate": 5}                    five rounds of made-up work, each reported in every metric
+                                       below and logged as a structured line: what fills its page
+
+Its own lines go through ``logging``, structured (decision 514): the Logs tab shows their level.
 
 Configure it on a worker as ``[extensions.dummy] command = ["/path/to/schedr-ext-dummy"]`` and
 ``versions = ["1.0"]``, or put it on ``PATH`` with ``[extensions] discover = true``.
 """
 
 import asyncio
+import logging
+import random
+from collections.abc import Awaitable, Callable
 
 from schedr.extension import ExtensionChannel, ExtensionRequest, main
+
+
+async def _secret(channel: ExtensionChannel, value: object) -> None:
+    path, key = value
+    secret = await channel.secret(path, key)
+    print(f"secret {path}#{key}: {len(str(secret))} characters", flush=True)
+
+
+async def _handle(channel: ExtensionChannel, value: object) -> None:
+    await channel.add_handle("job", value)
+    print(f"handle registered: {value}", flush=True)
+
+
+async def _status(channel: ExtensionChannel, value: object) -> None:
+    phase, progress = value
+    await channel.status(phase, progress=progress)
+
+
+async def _link(channel: ExtensionChannel, value: object) -> None:
+    label, url = value
+    await channel.link(label, url)
+
+
+async def _metric(channel: ExtensionChannel, value: object) -> None:
+    name, number, labels = value
+    await channel.metric(name, float(number), **labels)
+
+
+async def _hang(channel: ExtensionChannel, value: object) -> None:
+    del value
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        # Stopped (SIGTERM): why, and how long until SIGKILL (decision 513).
+        reason, left = await channel.stop_reason()
+        print(f"stopped: {reason}, {left:.0f} s left", flush=True)
+        raise
+
+
+async def _sleep(channel: ExtensionChannel, value: object) -> None:
+    del channel
+    await asyncio.sleep(float(value))
+
+
+async def _log(channel: ExtensionChannel, value: object) -> None:
+    del channel
+    print(value, flush=True)
+
+
+REGIONS = ("eu", "us", "asia")
+log = logging.getLogger("schedr-ext-dummy")
+
+
+async def _simulate(channel: ExtensionChannel, value: object) -> None:
+    """`value` rounds of made-up jobs: each round's queues, a job slept, its outcome."""
+    rounds = int(str(value))
+    for i in range(rounds):
+        await channel.status("simulating", f"round {i + 1} of {rounds}", progress=i / rounds)
+        for region in REGIONS:
+            await channel.metric("queue_depth", float(random.randint(0, 40)), region=region)
+        await channel.metric("in_flight", float(random.randint(1, 8)))
+        took = min(random.lognormvariate(-0.7, 0.8), 3.0)
+        await asyncio.sleep(took)
+        await channel.metric("sleep_seconds", took)
+        await channel.metric("bytes_read", float(random.randint(10_000, 5_000_000)))
+        outcome = random.choices(["succeeded", "retried", "failed"], [8, 2, 1])[0]
+        await channel.metric("jobs", 1, outcome=outcome)
+        level = {"succeeded": logging.INFO, "retried": logging.WARNING}.get(outcome, logging.ERROR)
+        log.log(level, "job %s", outcome, extra={"round": i + 1, "seconds": round(took, 3)})
+    await channel.metric("in_flight", 0.0)
+    await channel.status("done", f"{rounds} rounds", progress=1.0)
+
+
+async def _fail(channel: ExtensionChannel, value: object) -> None:
+    del channel
+    raise RuntimeError(str(value))
+
+
+STEPS: dict[str, Callable[[ExtensionChannel, object], Awaitable[None]]] = {
+    "sleep": _sleep,
+    "log": _log,
+    "secret": _secret,
+    "handle": _handle,
+    "status": _status,
+    "link": _link,
+    "metric": _metric,
+    "fail": _fail,
+    "hang": _hang,
+    "simulate": _simulate,
+}
 
 
 async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
@@ -28,23 +128,10 @@ async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
         if not isinstance(step, dict) or len(step) != 1:
             raise ValueError(f"a step is an object of one key, got {step!r}")
         ((what, value),) = step.items()
-        if what == "sleep":
-            await asyncio.sleep(float(value))
-        elif what == "log":
-            print(value, flush=True)
-        elif what == "secret":
-            path, key = value
-            secret = await channel.secret(path, key)
-            print(f"secret {path}#{key}: {len(str(secret))} characters", flush=True)
-        elif what == "handle":
-            await channel.add_handle("job", value)
-            print(f"handle registered: {value}", flush=True)
-        elif what == "return":
+        if what == "return":
             output = value
-        elif what == "fail":
-            raise RuntimeError(str(value))
-        elif what == "hang":
-            await asyncio.Event().wait()
+        elif what in STEPS:
+            await STEPS[what](channel, value)
         else:
             raise ValueError(f"unknown step `{what}`")
     return output
@@ -58,5 +145,83 @@ async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> objec
     return None
 
 
+# Its metrics (decision 513), declared in its hello. `simulate` reports all of them.
+METRICS = [
+    {
+        "name": "steps",
+        "kind": "counter",
+        "help": "Steps done, by step",
+        "labels": [{"name": "step"}],
+    },
+    {
+        "name": "sleep_seconds",
+        "kind": "histogram",
+        "help": "How long a sleep step slept",
+        "unit": "seconds",
+        "buckets": [0.1, 0.25, 0.5, 1, 2, 5, 10],
+    },
+    {
+        "name": "jobs",
+        "kind": "counter",
+        "help": "Made-up jobs ended, by outcome",
+        "labels": [{"name": "outcome", "values": ["succeeded", "retried", "failed"]}],
+    },
+    {"name": "in_flight", "kind": "gauge", "help": "Made-up jobs running now"},
+    {
+        "name": "queue_depth",
+        "kind": "gauge",
+        "help": "Made-up jobs waiting, by region",
+        "labels": [{"name": "region", "values": list(REGIONS)}],
+    },
+    # No panel shows it: the page gives it a row of its own below the panels.
+    {
+        "name": "bytes_read",
+        "kind": "counter",
+        "help": "Bytes the made-up jobs read",
+        "unit": "bytes",
+    },
+]
+# Its page: four rows of one, two or three cells, each kind of chart, in colours it names.
+PANELS = [
+    {"title": "In flight", "metric": "in_flight", "chart": "number", "row": 1, "cell": "left"},
+    {"title": "Steps", "metric": "steps", "chart": "rate", "row": 1, "cell": "center"},
+    {
+        "title": "Jobs by outcome",
+        "metric": "jobs",
+        "chart": "stacked",
+        "row": 1,
+        "cell": "right",
+        "colors": {"succeeded": "green", "retried": "amber", "failed": "red"},
+    },
+    {
+        "title": "Sleeps",
+        "metric": "sleep_seconds",
+        "chart": "histogram",
+        "row": 2,
+        "cell": "left",
+        "color": "teal",
+    },
+    {
+        "title": "Sleep quantiles",
+        "metric": "sleep_seconds",
+        "chart": "quantiles",
+        "row": 2,
+        "cell": "right",
+        "quantiles": [0.5, 0.9, 0.99],
+    },
+    {
+        "title": "Queue depth",
+        "metric": "queue_depth",
+        "chart": "line",
+        "row": 3,
+        "cell": "left",
+        "colors": {"eu": "indigo", "us": "coral", "asia": "mint"},
+    },
+    {"title": "Queues now", "metric": "queue_depth", "chart": "table", "row": 3, "cell": "right"},
+    {"title": "Events", "chart": "events", "row": 4, "cell": "full"},
+]
+
 if __name__ == "__main__":
-    raise SystemExit(main(run, name="dummy", versions=["1.0"], cleanup=cleanup))
+    raise SystemExit(
+        main(run, name="dummy", versions=["1.0"], cleanup=cleanup, metrics=METRICS, panels=PANELS)
+    )

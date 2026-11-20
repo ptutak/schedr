@@ -59,6 +59,7 @@ from schedr.context import (
     running,
 )
 from schedr.event_triggers import Event, event_data_hint, event_for_run
+from schedr.log import install as install_structured_logging
 from schedr.outcomes import (
     FIRST_OF_VALUE,
     TIMED_OUT_NAME,
@@ -1318,6 +1319,8 @@ def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
         The exit code: 0 if the task succeeded, 1 otherwise.
     """
     extend_sys_path(request["sys_path"])
+    # Its `logging` as structured lines (decision 514), unless it configures its own.
+    install_structured_logging()
     # The agent times the start from it: the interpreter's, then the DAG file's import.
     result = execute(
         request,

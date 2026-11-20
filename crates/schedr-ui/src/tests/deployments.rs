@@ -387,12 +387,13 @@ async fn the_ui_and_webserver_panels_say_how_the_ui_reaches_each_deployment() {
     assert!(!html.contains("location.replace"));
     // In the navigation, in its place; the Config page and each deployment's page are gone.
     assert_eq!(
-        texts(&html, "header nav a")[..7],
+        texts(&html, "header nav a")[..8],
         [
             "DAGs",
             "Runs",
             "Deployments",
             "Metrics",
+            "Extensions",
             "Workers",
             "Connections",
             "Import errors"

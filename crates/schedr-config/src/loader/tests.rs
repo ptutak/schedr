@@ -833,8 +833,10 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
     // the Runs page's `UI__SLOW_READ` and `UI__SLOW_READ_WAIT` (decision 500); 122 with
     // `MASTER__TASK_ROUND_GAP` (M5.2cB4); 124 with the waiting queue's
     // `WORKER__QUEUE_CHECK_INTERVAL` and `WORKER__QUEUE_FACTOR`, 126 with the master's
-    // `MASTER__SLOW_EQUALS_FLOOR` and `MASTER__SLOW_EQUALS_FACTOR` (decision 509).
-    assert_eq!(names.len(), 126, "{names:?}");
+    // `MASTER__SLOW_EQUALS_FLOOR` and `MASTER__SLOW_EQUALS_FACTOR` (decision 509); 127 with
+    // `WORKER__EXTENSION_FIGURES_INTERVAL` (decision 513); 131 with the extension reports'
+    // rate and burst and the events held and kept (D493, M5.2i5).
+    assert_eq!(names.len(), 131, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         // The lease at least four heartbeats (B226); the Metrics buckets final and the minute
@@ -1345,7 +1347,7 @@ fn decision_493s_hidden_timings_each_set_their_own() {
 
 /// Decision 493's limits, each set by its variable.
 #[test]
-#[expect(clippy::too_many_lines, reason = "a row for each of the 30 limits")]
+#[expect(clippy::too_many_lines, reason = "a row for each of the 40 limits")]
 fn decision_493s_hidden_limits_each_set_their_own() {
     let given = [
         ("SCHEDR_HIDDEN__WEBSERVER__METRICS_CACHE_KEYS", "7"),
@@ -1381,6 +1383,10 @@ fn decision_493s_hidden_limits_each_set_their_own() {
         ("SCHEDR_HIDDEN__DATABASE__CHANGES_POLL_ROWS", "34"),
         ("SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED", "35"),
         ("SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE", "36"),
+        ("SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_PER_SECOND", "37"),
+        ("SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_AT_ONCE", "38"),
+        ("SCHEDR_HIDDEN__WORKER__EXTENSION_EVENTS_PENDING", "39"),
+        ("SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT", "40"),
     ];
     let config = load(None, &env(&given), &[]).unwrap();
     let set = [
@@ -1503,6 +1509,22 @@ fn decision_493s_hidden_limits_each_set_their_own() {
         (
             "SCHEDR_HIDDEN__TLS__HANDSHAKES_AT_ONCE",
             config.limits.tls_handshakes_at_once,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_PER_SECOND",
+            config.limits.extension_reports_per_second,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_AT_ONCE",
+            config.limits.extension_reports_at_once,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__EXTENSION_EVENTS_PENDING",
+            config.limits.extension_events_pending,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT",
+            config.limits.extension_events_kept,
         ),
     ];
     for ((name, text), (named, value)) in given.iter().zip(set) {
@@ -1649,6 +1671,15 @@ fn a_bad_extension_table_is_refused_naming_it() {
         (
             "[extensions.spark]\ncommand = [\"bin/plugin\"]\nversions = [\"1\"]\n",
             "an absolute path",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1\"]\n\
+             [[extensions.spark.metrics]]\nname = \"q\"\nkind = \"histogram\"\nhelp = \"Q\"\n",
+            "buckets",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1\"]\nmax_series = 0\n",
+            "max_series",
         ),
         (
             "[extensions.spark]\ncommand = [\"/x\"]\nversions = []\n",

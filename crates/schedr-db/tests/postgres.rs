@@ -3389,3 +3389,121 @@ async fn a_heartbeats_pokes_are_stored_together_on_postgres() {
     let record = db.trigger("sync").await.unwrap().unwrap();
     assert_eq!((record.last_error, record.failures), (None, 0));
 }
+
+#[tokio::test]
+async fn an_attempts_statuses_and_links_are_read_back_with_it() {
+    use schedr_db::reports::{AttemptLink, AttemptStatus};
+    use schedr_model::extension::{EventKind, ExtensionEvent, KEPT_EVENTS};
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let status = AttemptStatus {
+        at: ts("2026-11-21T10:00:03.112Z"),
+        phase: "pulling".to_owned(),
+        message: Some("image".to_owned()),
+        progress: Some(0.25),
+    };
+    db.add_attempt_status(&attempt_id, "dummy", &status)
+        .await
+        .unwrap();
+    let link = AttemptLink {
+        label: "Pod".to_owned(),
+        url: "https://dash/pods/a".to_owned(),
+    };
+    assert!(db.set_attempt_link(&attempt_id, &link).await.unwrap());
+    let attempts = db.task_attempts(&run_id, &id("extract")).await.unwrap();
+    assert_eq!(
+        (attempts[0].statuses.clone(), attempts[0].links.clone()),
+        (vec![status.clone()], vec![link])
+    );
+    // DN19: its extension's attempts, with its latest phase.
+    let listed = db.extension_attempts("dummy", None, 10).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        db.extension_attempts("dummy", Some("nobody"), 10)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(listed[0].attempt_id, attempt_id);
+    assert_eq!(listed[0].status, status);
+    assert_eq!(
+        (listed[0].task_id.as_str(), listed[0].map_index),
+        ("extract", -1)
+    );
+    // And its events, the oldest past the cap trimmed, newest first.
+    let at = ts(NOW).as_millisecond();
+    let events: Vec<ExtensionEvent> = (0..KEPT_EVENTS + 2)
+        .map(|n| ExtensionEvent {
+            at_ms: at + i64::try_from(n).unwrap(),
+            extension: "dummy".to_owned(),
+            version: None,
+            kind: EventKind::Refused,
+            message: format!("e{n}"),
+        })
+        .collect();
+    db.insert_extension_events("w1", &events, schedr_model::extension::KEPT_EVENTS)
+        .await
+        .unwrap();
+    let kept = db.extension_events("dummy", None, 1000).await.unwrap();
+    assert_eq!(
+        db.extension_events("dummy", Some("nobody"), 1000)
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(kept.len(), KEPT_EVENTS);
+    assert_eq!(kept[0].message, format!("e{}", KEPT_EVENTS + 1));
+    assert_eq!(kept[0].version, "");
+}
+
+#[tokio::test]
+async fn extension_versions_and_samples_are_kept_and_read_back() {
+    use schedr_db::extension_samples::{ExtensionSample, SampleData};
+    let db = fresh().await;
+    let declarations = schedr_model::extension::Declarations::default();
+    db.extension_seen("k", "1.0", "w1", Some((&declarations, 50)), ts(NOW))
+        .await
+        .unwrap();
+    db.extension_seen("k", "1.0", "w1", None, ts(NOW))
+        .await
+        .unwrap();
+    let versions = db.extension_versions().await.unwrap();
+    assert_eq!((versions.len(), versions[0].max_series), (1, 50));
+    let sample = ExtensionSample {
+        name: "k".to_owned(),
+        version: "1.0".to_owned(),
+        worker_id: "w1".to_owned(),
+        metric: "m".to_owned(),
+        labels: [("a".to_owned(), "b".to_owned())].into(),
+        step_s: 60,
+        at: ts(NOW),
+        data: SampleData::Gauge {
+            avg: 1.5,
+            peak: 2.0,
+            minutes: 1,
+        },
+    };
+    db.insert_extension_samples(&[sample.clone(), sample.clone()])
+        .await
+        .unwrap();
+    let later = ts(NOW)
+        .checked_add(jiff::SignedDuration::from_mins(1))
+        .unwrap();
+    let read = db
+        .extension_samples(Some("k"), 60, ts(NOW), later)
+        .await
+        .unwrap();
+    assert_eq!(read, [sample]);
+    let all = db
+        .extension_samples(None, 60, ts(NOW), later)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(db.delete_old_extension_samples(60, later).await.unwrap(), 1);
+}

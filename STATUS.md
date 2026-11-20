@@ -10,15 +10,15 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Then:** M5.2i5, M5.2i6, M5.2i7, M5.2i8, M5.2i9.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 7; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B270 (low/possible) (`BUGS.md`).
+- **Open bugs:** 8; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B276 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN21 (2026-11-21): the Extensions page in tabs, all workers and each worker (adds to D513)
 - DN20 (2026-11-21): one EXTENSION_EVENT (corrects D515)
 - DN19 (2026-11-21): what an events panel lists (adds to D513)
 - DN18 (2026-11-21): one RUN_STARTED with a reason (corrects D515)
 - D514 (2026-11-20): logs through stdout and stderr, one structured format
-- D513 (2026-11-20): plugins observed and controlled as tasks are
 - M5.2i2 (2026-11-20): A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real
 - M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker
 - M5.2h6 (2026-11-20): A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511)

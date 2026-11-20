@@ -69,6 +69,9 @@ executable on its `PATH` what it is, running it with `--describe`. A plugin answ
 line, `{"name": "spark", "versions": ["1.0"], "protocol": 1}`. One that fails, prints something
 else, speaks another protocol or takes over 5 seconds is skipped with a warning, and the worker
 starts without it. A plugin configured by name wins over one discovered with the same name.
+What discovery found and skipped is on the Extensions page too: a plugin skipped there, never
+run, is listed by the name its file gives (`schedr-ext-broken` as `broken`), its page showing
+why.
 
 The worker announces what it has when it registers (`Register.extensions`). Routing stays by
 queue: give the plugin's workers a queue of their own (`[worker] queues`) and the package's tasks
@@ -104,11 +107,179 @@ It speaks the [runner protocol](15-protocol.md) over the socket the worker hands
 2. the worker sends `extension_task`: the task (its `name`, `version`, `payload`), its run, the
    secrets it declared and the worker fetched;
 3. while it works, the plugin may ask what a Python task may: `secret_get`, `connection_get`,
-   `handle_add`, `api_call`, each answered before the next;
+   `handle_add`, `api_call`, and `stop_reason_get`, each answered before the next; and it may
+   report, with no answer, its `status`, its `link`s and its `metrics`;
 4. it ends with `task_succeeded` (its output) or `task_failed` (an error).
 
 [The plugin protocol](22-plugin-protocol.md) says all of it precisely, for a plugin in any
 language, with the JSON Schema of its messages.
+
+## Reporting
+
+A plugin says more of its work than a task's log can (decision 513), with messages the worker
+doesn't answer:
+
+| Message | Shown |
+|---|---|
+| `status`: a phase (`pulling`, `running`), a message, a progress from 0 to 1 | on the task's attempts, the latest beside it and every one with its time (the first and the latest 100 kept) |
+| `link`: a label and an `http` or `https` URL | on the task's attempts, beside its phase: a pod's page, a console (at most 10, one per label) |
+| `metrics`: points of its declared metrics | on the worker's `/metrics` and the extension's page |
+
+Each is masked as the attempt's output is: a secret it read doesn't show. An attempt sends at
+most 10 reports a second, 50 at once after a quiet spell: past that its newest status is held
+and sent when it ends, a link is dropped with a warning, and a metric point is kept on the
+worker as usual (only its figures travel, once a minute).
+
+**Metrics** are declared in the plugin's `hello` (as NETCONF's hello announces its models), or in
+the worker's `[extensions.<name>]` config, which wins: each a `name`, a `kind` (`counter`, `gauge`
+or `histogram`, with its `buckets`), a `help`, a `unit` and its `labels`, a label perhaps with the
+`values` it may take. A counter's point adds to it, a gauge's sets it, a histogram's is an
+observation. A point matching no declaration is dropped, with one warning.
+
+```python
+METRICS = [
+    {"name": "pods_started", "kind": "counter", "help": "Pods started",
+     "labels": [{"name": "namespace"}]},
+    {"name": "queue_seconds", "kind": "histogram", "help": "Time to a running pod",
+     "unit": "seconds", "buckets": [1, 5, 30, 120]},
+]
+
+async def run(request, channel):
+    await channel.status("pulling", progress=0.1)
+    await channel.link("Pod", f"https://dashboard/pods/{pod}")
+    await channel.metric("pods_started", 1, namespace="batch")
+    ...
+
+main(run, name="kubernetes", versions=["1.0"], metrics=METRICS)
+```
+
+The worker serves them as `schedr_extension_<extension>_<metric>`, labelled with the
+`extension_version` too, and sends them to the master once a minute: a counter's growth, a
+gauge's value and a histogram's new observations are kept a minute each for a day, and per 15
+minutes, summed over the workers, for 30 days, as the processes' samples are.
+`GET /api/v1/extensions/<name>/metrics?range=1h` reads them, summed over the workers;
+`&worker=<id>` gives one worker's own, for `1h` or `24h` only (they are kept a day). A metric keeps at most
+`[extensions.<name>] max_series` series (100) an hour, counted over all the workers and kept
+across a master's takeover: a new label combination past it, or a value outside its declared
+`values`, counts as `other`, and the page says the series was folded. A heartbeat carries at most
+a quarter of what the master accepts in a message: a version's figures past that are left out
+for the minute, with an event saying so.
+
+**Its page** is declared with them (`panels=`): each panel a `title`, the `metric` it draws, a
+`chart` (`line`, `rate`, `stacked`, `bars`, `histogram`, `quantiles`, `number`, `table`, or `events`,
+which draws no metric but the extension's own events (discovered, skipped, refused, a metric
+point or figures dropped), newest first, and its attempts' latest phases, each linking to its
+attempt), its `row`
+(from 1 at the top, rows of one height) and its `cell` in the row: `full`, or `left` and `right`,
+or `left`, `center` and `right`. A metric no panel draws gets a `full` row of its own below them.
+Nothing of style is declared: the page draws in schedr's.
+
+A chart's lines (`line`, `rate`, `quantiles`, and `stacked` areas) run from one reading to the
+next across up to five empty buckets, so a job every few minutes reads as a line; past that the
+line breaks, nothing having been sent. A counter's line so reads at its busy minutes' level. To
+see each bucket as it was, empty ones left empty, a panel takes `bars`: a bar per bucket, the
+series stacked in it (a counter's growth, a histogram's observations, a gauge's value).
+
+The UI's **Extensions** shows each extension in a tab of its own, beside the deployment's others
+(with several deployments, choose one first). Inside a tab, **All workers** draws the page summed
+over its workers, for 1 hour up to 30 days; beside it, a tab for each worker heard from in the
+last day draws that worker's own figures and events, for 1 hour or a day.
+
+## Being stopped
+
+A plugin is stopped as any task is: `SIGTERM` to its process group, then `SIGKILL` once the
+grace is over. The grace is the master's `cancel_grace` (30 s) for a cancel or a timeout, and the
+worker's `drain_terminate_period` when a draining worker interrupts it. The worker sends no
+message of its own: a plugin that wants to know why it is being stopped asks, after the signal,
+with `stop_reason_get`. The answer is one of
+
+| Reason | When |
+|---|---|
+| `cancel` | someone cancelled the task or its run |
+| `timeout` | the task ran past its `timeout` |
+| `drain` | its worker is shutting down; the task will be retried elsewhere |
+| `master_lost` | its worker has heard nothing from the master for its lease: the task is `lost`, and its cleanup may run on another worker |
+
+with the milliseconds left before `SIGKILL`. Asked before any signal, the reason is `null`. A
+memory kill has no grace and no question: `SIGKILL` at once.
+
+What a plugin does with it is its own: a Job deleted on `cancel` and `drain` (it will run again
+elsewhere), left to finish on `timeout` if that is cheaper, and nothing on `master_lost` (its
+cleanup runs from the handles it registered). It has the grace left, and should use less: what it
+hasn't finished by then is killed with it. Everything it started should be in its process group,
+or registered as a handle for the cleanup.
+
+**In Python**, `schedr.extension` turns `SIGTERM` into a cancellation of the plugin's coroutine:
+`asyncio.CancelledError` is raised at the `await` it is waiting on.
+
+```python
+import asyncio
+
+from schedr.extension import ExtensionChannel, ExtensionRequest, main
+
+async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+    job = submit(request.payload)
+    try:
+        return await wait_for(job)
+    except asyncio.CancelledError:
+        reason, seconds_left = await channel.stop_reason()
+        if reason in ("cancel", "drain"):
+            await asyncio.wait_for(delete(job), timeout=max(seconds_left - 1, 0))
+        raise
+```
+
+Re-raised, the attempt ends with the worker's reason (`cancelled`, `timed_out`, ...).
+
+**In Rust**, a plugin installs its own handler (the `signal-hook` crate, for instance) setting a
+flag its loop looks at, then asks:
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+fn run(&mut self, request: &Request, channel: &mut Channel) -> Result<Value, String> {
+    let stopping = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&stopping))
+        .map_err(|e| e.to_string())?;
+    let job = submit(&request.payload)?;
+    while !finished(&job)? {
+        if stopping.load(Ordering::Relaxed) {
+            let (reason, left) = channel.stop_reason().map_err(|e| e.to_string())?;
+            if matches!(reason, Some(StopKind::Cancel | StopKind::Drain)) {
+                delete(&job, left)?;
+            }
+            return Err(format!("stopped: {reason:?}"));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    Ok(result(&job)?)
+}
+```
+
+**In Go**, with no helper: `signal.Notify` on `SIGTERM`, then the question on the socket in
+`SCHEDR_AGENT_FD`, framed as every message is (a 4-byte big-endian length, then JSON):
+
+```go
+stop := make(chan os.Signal, 1)
+signal.Notify(stop, syscall.SIGTERM)
+select {
+case result := <-done:
+    send(conn, map[string]any{"type": "task_succeeded", "output": result, "outcome": "SUCCESS"})
+case <-stop:
+    send(conn, map[string]any{"type": "stop_reason_get"})
+    var answer struct {
+        Reason  *string `json:"reason"`
+        GraceMs int64   `json:"grace_ms"`
+    }
+    receive(conn, &answer)
+    if answer.Reason != nil && (*answer.Reason == "cancel" || *answer.Reason == "drain") {
+        deleteJob(job, time.Duration(answer.GraceMs)*time.Millisecond)
+    }
+    os.Exit(143)
+}
+```
+
+A shell plugin's way comes with `schedr extension shell` (M5.2i6).
 
 ## Cleanup
 
@@ -172,10 +343,11 @@ driving `kubectl`. It is short enough to read whole, and shows what a plugin sho
 | The attempt | a Job named after the task, its run and its try, one pod, never restarted (`backoffLimit: 0`: schedr retries), with no API token (`automountServiceAccountToken: false`) |
 | The payload | each field's type checked before anything is created; an unknown field or a mistyped one fails the attempt |
 | Before creating it | registers the Job's name as a cleanup handle, so a worker lost right after still leaves it findable |
-| While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`) |
+| While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`); its own lines through `logging`, structured; its phases (`creating`, `pending`, `running`, `succeeded` or `failed`) and, with `--dashboard <address>`, links to its Job and pod in the Kubernetes Dashboard |
+| Its metrics | `jobs_started` by namespace, `jobs_ended` by outcome, `pods_running` (as the cluster counts schedr's), `start_seconds` (to a running pod) and `job_seconds`, with a page of six panels declared in its hello |
 | The output | the ended pod's last log line `SCHEDR_OUTPUT: <json>`, read once the Job succeeded, never from the stream; without it, `null`; a log that can't be read fails the attempt |
 | A failure | the pod's reason and exit code; a pod stuck on its image (`ErrImagePull`) fails at once |
-| A cancel, a timeout | SIGTERM: it deletes its Job, then exits |
+| Being stopped | SIGTERM: it asks why; on a cancel, a timeout or a drain it deletes its Job, on a lost master it leaves it to the cleanup |
 | The cleanup | deletes each handle's Job in the namespace the handle names, whatever the attempt's end, a lost worker's too |
 
 The payload:

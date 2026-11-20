@@ -276,7 +276,7 @@ fn process_chart(
         Unit::Bytes => Some(p.memory_avg as f64),
         Unit::Cores => p.cpu_avg,
         // Not a process's: the attempt charts draw their own.
-        Unit::Count | Unit::Millis => None,
+        Unit::Count | Unit::Millis | Unit::Number => None,
     };
     let mut lines = Vec::new();
     let mut limits = Vec::new();

@@ -663,3 +663,29 @@ fn a_query_value_is_percent_encoded() {
     assert_eq!(super::query_value("foo#bar/x:y"), "foo%23bar%2Fx%3Ay");
     assert_eq!(super::query_value("a-b_c.d~e"), "a-b_c.d~e");
 }
+
+#[test]
+fn a_log_line_is_structured_with_typed_fields_and_refuses_what_it_cant_be() {
+    let at: jiff::Timestamp = "2026-11-21T10:00:03.112Z".parse().unwrap();
+    let fields = [
+        "rows=3".to_owned(),
+        "table=sales".to_owned(),
+        "ok=true".to_owned(),
+    ];
+    let line = structured_line("loaded", "warn", &fields, at).unwrap();
+    let parsed = schedr_model::log_line::LogLine::parse(&line).unwrap();
+    assert_eq!(parsed.level, schedr_model::log_line::Level::Warning);
+    assert_eq!(parsed.fields["rows"], serde_json::json!(3));
+    assert_eq!(parsed.fields["table"], serde_json::json!("sales"));
+    assert_eq!(parsed.time.as_deref(), Some("2026-11-21T10:00:03.112Z"));
+    assert!(
+        structured_line("x", "loud", &[], at)
+            .unwrap_err()
+            .contains("--level")
+    );
+    assert!(
+        structured_line("x", "info", &["bare".to_owned()], at)
+            .unwrap_err()
+            .contains("name=value")
+    );
+}

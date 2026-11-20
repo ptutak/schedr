@@ -60,6 +60,8 @@ class Channel:
         """
         self._sock = sock
         self._asking = threading.Lock()
+        # One message's bytes at a time: a report sent beside a request can't split it.
+        self._sending = threading.Lock()
 
     def ask(self, message: dict[str, Any]) -> dict[str, Any]:
         """Sends a request and receives its answer, one request at a time on this channel.
@@ -94,7 +96,8 @@ class Channel:
             raise ProtocolError(
                 f"message of {len(data)} bytes is over the limit of {MAX_MESSAGE_SIZE} bytes"
             )
-        self._sock.sendall(len(data).to_bytes(_HEADER, "big") + data)
+        with self._sending:
+            self._sock.sendall(len(data).to_bytes(_HEADER, "big") + data)
 
     def receive(self) -> dict[str, Any]:
         """Receives one message.

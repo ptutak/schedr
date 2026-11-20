@@ -135,6 +135,8 @@ pub struct Timings {
     /// How often a worker compares its waiting queue's head with the cluster's slow-equals,
     /// giving back one task each time it is older (decision 509).
     pub queue_check_interval: Duration,
+    /// How often a worker sends its plugins' metric figures to the master (decision 513).
+    pub extension_figures_interval: Duration,
     /// How long a drained worker waits for the master to acknowledge its last results; never
     /// past half the report period before the grace period ends, left to deregister and exit.
     pub drain_ack_wait: Duration,
@@ -304,6 +306,7 @@ impl Default for Timings {
             deregister_wait: Duration::from_hours(1),
             drain_tick: Duration::from_millis(100),
             queue_check_interval: Duration::from_secs(1),
+            extension_figures_interval: Duration::from_mins(1),
             drain_ack_wait: Duration::from_secs(5),
             stop_poll: Duration::from_millis(100),
             connection_job_cancel_grace: Duration::from_secs(5),
@@ -453,7 +456,7 @@ impl Default for SensorsSection {
 }
 
 /// The whole configuration, after loading and validation.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// `[dags]`: where DAG files are and how they are parsed.
@@ -619,6 +622,16 @@ pub struct HiddenLimits {
     pub task_connections_open: usize,
     /// The messages of a wait step waiting for its attempt before its host waits too. (`WORKER__WATCHER_LOG_BACKLOG`)
     pub watcher_log_backlog: usize,
+    /// The reports an extension attempt sends a second (decision 513): past them, its newest
+    /// status waits for its end and a link is dropped. (`WORKER__EXTENSION_REPORTS_PER_SECOND`)
+    pub extension_reports_per_second: usize,
+    /// The reports it sends at once after a quiet spell. (`WORKER__EXTENSION_REPORTS_AT_ONCE`)
+    pub extension_reports_at_once: usize,
+    /// The extension events (DN19) a worker holds for its next heartbeat: past them, the oldest
+    /// go. (`WORKER__EXTENSION_EVENTS_PENDING`)
+    pub extension_events_pending: usize,
+    /// The events the master keeps per extension, the newest. (`MASTER__EXTENSION_EVENTS_KEPT`)
+    pub extension_events_kept: usize,
     /// The changes a slow event stream may fall behind by before it gets `refresh`. (`WEBSERVER__EVENTS_BACKLOG`)
     pub webserver_events_backlog: usize,
     /// The changes a slow browser may fall behind by before it gets `refresh`. (`UI__EVENTS_BACKLOG`)
@@ -671,6 +684,10 @@ impl Default for HiddenLimits {
             unsent_connection_answers: 16,
             task_connections_open: 64,
             watcher_log_backlog: 16,
+            extension_reports_per_second: 10,
+            extension_reports_at_once: 50,
+            extension_events_pending: 100,
+            extension_events_kept: 200,
             webserver_events_backlog: 1024,
             ui_events_backlog: 1024,
             auth_remembered_max: 1000,
@@ -1473,6 +1490,16 @@ pub enum AuthMode {
     /// HTTP Basic against `users_file`.
     Basic,
 }
+/// How a worker stores its tasks' structured log lines (`[worker] log_format`, decision 514).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskLogFormat {
+    /// Each as the JSON line its task wrote.
+    #[default]
+    Json,
+    /// Each as schedr's readable line.
+    Plain,
+}
 
 /// `[worker]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -1557,6 +1584,11 @@ pub struct WorkerSection {
     /// one in the worker's group. At most `"0644"`, and the owner always reads and writes.
     #[serde(deserialize_with = "deserialize_mode_text")]
     pub log_mode: String,
+    /// How a task's structured log lines (decision 514) are stored in its log: `"json"` (the
+    /// default), each the JSON line its task wrote, for a log shipper to read; `"plain"`, each
+    /// as schedr's readable line (time, level, message, fields). The UI shows both alike, and a
+    /// log stored as JSON downloads either way.
+    pub log_format: TaskLogFormat,
     /// Each task's memory budget; when not set, (the pod's limit − 10 %) ÷ slots.
     #[serde(
         deserialize_with = "deserialize_optional_size",
@@ -1648,6 +1680,7 @@ impl Default for WorkerSection {
             log_retention: Duration::from_hours(24 * 30),
             log_max_size: None,
             log_mode: "0600".to_owned(),
+            log_format: TaskLogFormat::Json,
             memory_budget: None,
             memory_reserve: None,
             runner_start_timeout: Duration::from_secs(30),
@@ -1766,7 +1799,7 @@ impl Default for TlsSection {
 
 /// `[extensions]`: the plugins that run a worker's extension tasks (decision 510), each a table
 /// named by its extension (`[extensions.spark]`), beside the section's own `discover`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
 pub struct ExtensionsSection {
     /// Also offer each `schedr-ext-*` executable on `PATH`, as its `--describe` says (a plugin
@@ -1780,7 +1813,7 @@ pub struct ExtensionsSection {
 
 /// `[extensions.<name>]`: the plugin that runs an extension's tasks, as its own process in a
 /// task slot.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExtensionPlugin {
     /// The plugin's program and its arguments, each one argument (never a shell string): the
@@ -1788,6 +1821,19 @@ pub struct ExtensionPlugin {
     pub command: Vec<String>,
     /// The versions of the extension it serves, matched exactly against a task's.
     pub versions: Vec<String>,
+    /// Its metrics' declarations (decision 513); set, they win over its hello's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metrics: Vec<schedr_model::extension::MetricDeclaration>,
+    /// Its page's panels; set, they win over its hello's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panels: Vec<schedr_model::extension::Panel>,
+    /// The most series each of its metrics keeps before new ones are folded into `other`.
+    #[serde(default = "default_max_series")]
+    pub max_series: u32,
+}
+
+const fn default_max_series() -> u32 {
+    schedr_model::extension::DEFAULT_MAX_SERIES
 }
 
 /// `[secret_storage]`: where a worker's tasks get their secrets (only workers fetch them; see

@@ -1391,6 +1391,10 @@ fn the_hidden_settings_reach_the_roles() {
         ("SCHEDR_HIDDEN__WORKER__UNSENT_CONNECTION_ANSWERS", "46"),
         ("SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN", "47"),
         ("SCHEDR_HIDDEN__WORKER__WATCHER_LOG_BACKLOG", "48"),
+        ("SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_PER_SECOND", "50"),
+        ("SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_AT_ONCE", "51"),
+        ("SCHEDR_HIDDEN__WORKER__EXTENSION_EVENTS_PENDING", "52"),
+        ("SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT", "53"),
         ("SCHEDR_HIDDEN__MASTER__SAMPLE_INTERVAL", "49s"),
     ];
     let env: BTreeMap<String, String> = vars
@@ -1483,6 +1487,15 @@ fn the_hidden_settings_reach_the_roles() {
         ),
         ([41, 42], [43, 44], [45, 46], [47, 48])
     );
+    assert_eq!(
+        [
+            w.extension_reports_per_second,
+            w.extension_reports_at_once,
+            w.extension_events_pending
+        ],
+        [50, 51, 52]
+    );
+    assert_eq!(master.samples.events_kept, 53);
 }
 
 /// The review of M5.1q: a shutdown ends the wait for the database even while a try hangs

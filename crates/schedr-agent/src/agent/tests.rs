@@ -277,6 +277,7 @@ async fn world_timed(
         .unwrap();
     let client = Arc::new(Mutex::new(Some(MasterClient::new(channel))));
     let settings = AgentSettings {
+        discovered: Vec::new(),
         watcher_slots: 2,
         worker_id: "w1".to_owned(),
         queues: vec![],
@@ -918,6 +919,7 @@ async fn against_master(
         .await
         .unwrap();
     let settings = AgentSettings {
+        discovered: Vec::new(),
         watcher_slots: 2,
         worker_id: "w1".to_owned(),
         queues: vec![],
@@ -997,6 +999,7 @@ fn kinds(messages: &[pb::WorkerMessage]) -> Vec<&'static str> {
             worker_message::Message::HandlesAdded(_) => Some("handles"),
             worker_message::Message::ApiCall(_) => Some("api call"),
             worker_message::Message::CleanupStart(_) => Some("cleanup start"),
+            worker_message::Message::AttemptReported(_) => Some("reported"),
             worker_message::Message::Rejected(r) => {
                 Some(match pb::RejectReason::try_from(r.reason) {
                     Ok(pb::RejectReason::NoFreeSlot) => "rejected: no slot",
@@ -1553,6 +1556,7 @@ async fn an_attempt_assigned_again_is_ignored() {
 async fn what_ends_while_the_master_is_away_is_journalled() {
     let dir = TempDir::new().unwrap();
     let settings = AgentSettings {
+        discovered: Vec::new(),
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
@@ -1813,6 +1817,7 @@ async fn a_draining_agent_rejects_assignments_and_says_so_again_after_a_reconnec
 fn a_second_shutdown_request_interrupts_at_once() {
     let settings_dir = TempDir::new().unwrap();
     let settings = AgentSettings {
+        discovered: Vec::new(),
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
@@ -1866,6 +1871,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
 async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
     let dir = TempDir::new().unwrap();
     let settings = AgentSettings {
+        discovered: Vec::new(),
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
@@ -3215,6 +3221,7 @@ async fn a_start_sweeps_connection_files_but_those_of_attempts_still_running() {
 
 fn offline_agent(dir: &Path) -> Agent<Fake> {
     let settings = AgentSettings {
+        discovered: Vec::new(),
         worker_id: "w1".to_owned(),
         queues: vec![],
         slots: 1,
@@ -5895,4 +5902,67 @@ fn a_report_skipped_for_its_size_comes_first_in_the_next_heartbeat() {
         Some("b".to_owned())
     );
     assert_eq!(super::cursor_after(&[], &[]), None);
+}
+
+/// Codex's review of M5.2i5: allowed figures could pass the master's limit, and it would end
+/// the stream. A version past the heartbeat's budget is dropped for the minute, said as an
+/// event; one that fits is sent.
+#[tokio::test]
+async fn figures_past_the_heartbeats_budget_are_dropped_and_said() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.master_limit = 4096;
+    let declarations: schedr_model::extension::Declarations = serde_json::from_value(
+        serde_json::json!({"metrics": [{"name": "m", "kind": "counter", "help": "M",
+                                        "labels": [{"name": "pod"}]}]}),
+    )
+    .unwrap();
+    let figures = &agent.metrics.extensions;
+    figures.declare("wide", "1", declarations.clone(), 100);
+    figures.declare("narrow", "1", declarations, 100);
+    for n in 0..50 {
+        let point = schedr_model::extension::MetricPoint {
+            name: "m".to_owned(),
+            labels: [("pod".to_owned(), format!("{n:0>100}"))].into(),
+            value: 1.0,
+        };
+        figures.observe("wide", "1", &point).unwrap();
+    }
+    let sent = agent.extension_figures();
+    let names: Vec<String> = sent
+        .iter()
+        .map(|json| {
+            serde_json::from_slice::<serde_json::Value>(json).unwrap()["extension"].to_string()
+        })
+        .collect();
+    assert_eq!(names, ["\"narrow\""]);
+    let events = agent.metrics.extensions.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        (events[0].extension.as_str(), events[0].kind),
+        ("wide", schedr_model::extension::EventKind::Dropped)
+    );
+}
+
+/// DN19: what discovery found goes in the first heartbeat, though `new` gives the agent
+/// default metrics before the role's replace them (the events were lost with them).
+#[tokio::test]
+async fn discoverys_events_reach_the_first_heartbeat() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.discovered = vec![schedr_model::extension::ExtensionEvent::now(
+        "broken",
+        None,
+        schedr_model::extension::EventKind::Skipped,
+        "its --describe ended with exit status: 3",
+    )];
+    // As `new` does with defaults, then the role with its own.
+    let agent = agent
+        .with_metrics(AgentMetrics::default())
+        .with_metrics(AgentMetrics::default());
+    let beat = agent.heartbeat_message();
+    let Some(worker_message::Message::Heartbeat(heartbeat)) = beat.message else {
+        panic!("a heartbeat");
+    };
+    assert_eq!(heartbeat.extension_events_json.len(), 1);
 }

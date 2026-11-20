@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """An extension's plugin that runs each attempt as a Kubernetes Job (M5.2i2), driving `kubectl`.
 
-A model for plugin authors: it registers a cleanup handle before it creates anything, streams
-the pod's log into the attempt's log, deletes its Job on a cancel or a timeout, and its cleanup
-deletes what a lost worker left behind. The payload:
+A model for plugin authors: it registers a cleanup handle before it creates anything, reports
+its phases, links to its Job and pod in the Kubernetes Dashboard (``--dashboard``), declares and
+reports its metrics and page (decision 513), streams the pod's log into the attempt's log, asks
+why when it is stopped and deletes its Job unless the master was lost, and its cleanup deletes
+what a lost worker left behind. Its own lines are ``logging``'s, structured (decision 514). The
+payload:
 
     {
       "image": "busybox:1.36",                     the container's image (required)
@@ -28,13 +31,14 @@ create, get, logs and delete on Jobs and pods in the namespace):
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
-import os
+import logging
 import re
-import signal
 import subprocess
 import sys
+import time
 from collections.abc import Mapping
 
 from schedr.extension import ExtensionChannel, ExtensionRequest, Run, main
@@ -257,8 +261,103 @@ async def outcome(kubectl: Kubectl, job: str) -> None:
         await asyncio.sleep(POLL)
 
 
-def make_run(kubectl: Kubectl) -> Run:
+# Its metrics and page (decision 513), declared in its hello: the page shows these panels, a
+# metric no panel shows in a row of its own below them.
+METRICS = [
+    {
+        "name": "jobs_started",
+        "kind": "counter",
+        "help": "Jobs created",
+        "labels": [{"name": "namespace"}],
+    },
+    {
+        "name": "jobs_ended",
+        "kind": "counter",
+        "help": "Jobs ended, by outcome",
+        "labels": [{"name": "outcome", "values": ["succeeded", "failed", "stopped"]}],
+    },
+    {"name": "pods_running", "kind": "gauge", "help": "schedr's pods running in the namespace"},
+    {
+        "name": "start_seconds",
+        "kind": "histogram",
+        "help": "From a Job created to its pod running",
+        "unit": "seconds",
+        "buckets": [1, 2, 5, 10, 30, 60, 120],
+    },
+    {
+        "name": "job_seconds",
+        "kind": "histogram",
+        "help": "How long a Job's pod ran",
+        "unit": "seconds",
+        "buckets": [1, 5, 15, 60, 300, 900, 3600],
+    },
+]
+PANELS = [
+    {
+        "title": "Pods running",
+        "metric": "pods_running",
+        "chart": "number",
+        "row": 1,
+        "cell": "left",
+    },
+    {
+        "title": "Jobs started",
+        "metric": "jobs_started",
+        "chart": "rate",
+        "row": 1,
+        "cell": "center",
+    },
+    {
+        "title": "Jobs ended",
+        "metric": "jobs_ended",
+        "chart": "stacked",
+        "row": 1,
+        "cell": "right",
+        "colors": {"succeeded": "green", "failed": "red", "stopped": "amber"},
+    },
+    {
+        "title": "Time to a running pod",
+        "metric": "start_seconds",
+        "chart": "histogram",
+        "row": 2,
+        "cell": "left",
+        "color": "teal",
+    },
+    {
+        "title": "Job duration",
+        "metric": "job_seconds",
+        "chart": "quantiles",
+        "row": 2,
+        "cell": "right",
+    },
+    {"title": "Workers", "chart": "events", "row": 3, "cell": "full"},
+]
+
+log = logging.getLogger("schedr-ext-kubernetes")
+
+
+async def running_pods(kubectl: Kubectl, channel: ExtensionChannel) -> None:
+    """The gauge: schedr's pods running in the namespace now, as the cluster says."""
+    with contextlib.suppress(RuntimeError, ValueError):
+        pods = await kubectl.json(
+            "get",
+            "pods",
+            "-l",
+            "app.kubernetes.io/managed-by=schedr",
+            "--field-selector=status.phase=Running",
+        )
+        await channel.metric("pods_running", float(len(items(pods.get("items")))))
+
+
+def make_run(kubectl: Kubectl, dashboard: str | None) -> Run:
     """The attempt: a Job created, its log streamed, its end taken as the task's."""
+
+    def links_for(kind: str, name: str) -> str | None:
+        # The Kubernetes Dashboard's page of a Job or a pod, when its address is given.
+        if dashboard is None:
+            return None
+        ns = kubectl.namespace
+        return f"{dashboard.rstrip('/')}/#/{kind}/{ns}/{name}?namespace={ns}"
 
     async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
         payload = checked(request.payload)
@@ -267,22 +366,45 @@ def make_run(kubectl: Kubectl) -> Run:
         # Registered before the Job exists: a worker lost right after creating it leaves a
         # handle its cleanup deletes the Job by.
         await channel.add_handle("job", {"name": job, "namespace": kubectl.namespace})
-
-        def stopped() -> None:
-            # A cancel or a timeout: the Job goes with the attempt.
-            print(f"stopped: deleting job {job}", flush=True)
-            kubectl.delete_now(job)
-            os._exit(128 + signal.SIGTERM)
-
-        # Through the loop, which a signal wakes: a plain `signal.signal` handler waits for the
-        # main thread to wake, which a quiet pod's log may not do for minutes.
-        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stopped)
-        await kubectl.run("create", "-f", "-", stdin=json.dumps(manifest(job, payload, env)))
-        print(f"created job {job} in {kubectl.namespace}", flush=True)
-        pod = await started_pod(kubectl, job)
-        await stream_logs(kubectl, pod)
-        await outcome(kubectl, job)
-        return await output(kubectl, pod)
+        await channel.status("creating", f"job {job}", progress=0.0)
+        try:
+            await kubectl.run("create", "-f", "-", stdin=json.dumps(manifest(job, payload, env)))
+            created = time.monotonic()
+            log.info("created job %s", job, extra={"namespace": kubectl.namespace})
+            await channel.metric("jobs_started", 1, namespace=kubectl.namespace)
+            if (url := links_for("job", job)) is not None:
+                await channel.link("Job", url)
+            await channel.status("pending", "waiting for its pod", progress=0.1)
+            pod = await started_pod(kubectl, job)
+            started = time.monotonic()
+            await channel.metric("start_seconds", started - created)
+            await channel.status("running", f"pod {pod}", progress=0.5)
+            if (url := links_for("pod", pod)) is not None:
+                await channel.link("Pod", url)
+            await running_pods(kubectl, channel)
+            await stream_logs(kubectl, pod)
+            try:
+                await outcome(kubectl, job)
+            except PodFailedError:
+                await channel.metric("jobs_ended", 1, outcome="failed")
+                await channel.status("failed", progress=1.0)
+                raise
+            await channel.metric("job_seconds", time.monotonic() - started)
+            await channel.metric("jobs_ended", 1, outcome="succeeded")
+            await channel.status("succeeded", progress=1.0)
+            await running_pods(kubectl, channel)
+            return await output(kubectl, pod)
+        except asyncio.CancelledError:
+            # SIGTERM (decision 513): asked why. A cancel, a timeout or a drain: the Job goes
+            # with the attempt (a drained one runs again elsewhere). A lost master: left to the
+            # cleanup, which runs from the handle wherever the attempt's cleanup goes.
+            reason, left = await channel.stop_reason()
+            log.warning("stopped: %s", reason, extra={"grace_seconds": round(left, 1)})
+            if reason != "master_lost":
+                kubectl.delete_now(job)
+                log.info("deleted job %s", job)
+            await channel.metric("jobs_ended", 1, outcome="stopped")
+            raise
 
     return run
 
@@ -309,6 +431,7 @@ def make_cleanup(kubectl: Kubectl) -> Run:
 
 def entry(argv: list[str]) -> int:
     """Its options, then the helper's loop (`--describe` alone is the helper's)."""
+    dashboard = None
     if argv == ["--describe"]:
         kubectl = Kubectl("default", None, None)
     else:
@@ -316,14 +439,18 @@ def entry(argv: list[str]) -> int:
         parser.add_argument("--namespace", default="default")
         parser.add_argument("--context")
         parser.add_argument("--kubeconfig")
+        parser.add_argument("--dashboard", help="the Kubernetes Dashboard's address, for links")
         options = parser.parse_args(argv)
         kubectl = Kubectl(options.namespace, options.context, options.kubeconfig)
+        dashboard = options.dashboard
         argv = []
     return main(
-        make_run(kubectl),
+        make_run(kubectl, dashboard),
         name="kubernetes",
         versions=["1.0"],
         cleanup=make_cleanup(kubectl),
+        metrics=METRICS,
+        panels=PANELS,
         argv=argv,
     )
 

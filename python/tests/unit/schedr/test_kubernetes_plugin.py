@@ -120,6 +120,10 @@ def request(payload: object, cleanup: list[dict[str, Any]] | None = None) -> dic
     return message
 
 
+# What a plugin tells the worker without waiting for an answer.
+REPORTS = {"status", "link", "metrics"}
+
+
 def serve(
     message: dict[str, Any], on_message: Any = None, argv: list[str] | None = None
 ) -> list[dict[str, Any]]:
@@ -143,7 +147,9 @@ def serve(
                     return
                 if on_message is not None:
                     on_message(got)
-                channel.send({"type": "handle_added"})
+                # Reports have no answer (decision 513); requests have theirs.
+                if got["type"] not in REPORTS:
+                    channel.send({"type": "handle_added"})
         except BaseException as e:  # reported on the test's thread
             failures.append(e)
         finally:
@@ -178,7 +184,8 @@ def test_an_attempt_is_a_job_its_log_streamed_and_its_last_line_the_output(
     created_before_handle: list[bool] = []
 
     def handle_added(message: dict[str, Any]) -> None:
-        created_before_handle.append(any("create" in c["args"] for c in calls(kubectl)))
+        if message["type"] == "handle_add":
+            created_before_handle.append(any("create" in c["args"] for c in calls(kubectl)))
 
     payload = {
         "image": "busybox:1.36",
@@ -195,6 +202,11 @@ def test_an_attempt_is_a_job_its_log_streamed_and_its_last_line_the_output(
     assert job.startswith("schedr-report-job-")
     assert len(job) <= 63  # a DNS label
     assert created_before_handle == [False], "the handle comes before the Job"
+    # Decision 513: its phases and its metrics, as the page declares them.
+    phases = [m["phase"] for m in sent if m["type"] == "status"]
+    assert phases == ["creating", "pending", "running", "succeeded"]
+    reported = {p["name"] for m in sent if m["type"] == "metrics" for p in m["points"]}
+    assert {"jobs_started", "start_seconds", "job_seconds", "jobs_ended"} <= reported
     (create,) = (c for c in calls(kubectl) if "create" in c["args"])
     assert create["args"] == ["-n", "batch", "create", "-f", "-"]
     job_manifest = json.loads(create["stdin"])
@@ -263,8 +275,9 @@ def test_the_cleanup_deletes_each_jobs_handle(kubectl: Path) -> None:
     assert [d[d.index("job") + 1] for d in deletes] == ["schedr-a-1", "schedr-a-2"]
 
 
-def test_a_stopped_attempt_deletes_its_job(kubectl: Path) -> None:
-    """SIGTERM (a cancel, a timeout) while the pod runs: the Job is deleted, the plugin exits."""
+def stop(kubectl: Path, reason: str) -> tuple[list[dict[str, Any]], int]:
+    """A running attempt sent SIGTERM, the worker answering its question with `reason`: what
+    the plugin sent after its handle, and its exit code."""
     scenario(kubectl, logs=["started"], logs_hang=60, pods=[pod("Running")])
     worker_end, plugin_end = socket.socketpair()
     worker = Channel(worker_end)
@@ -277,6 +290,7 @@ def test_a_stopped_attempt_deletes_its_job(kubectl: Path) -> None:
         start_new_session=True,
     )
     plugin_end.close()
+    sent: list[dict[str, Any]] = []
     try:
         assert worker.receive()["type"] == "hello"
         worker.send({"type": "welcome"})
@@ -288,16 +302,40 @@ def test_a_stopped_attempt_deletes_its_job(kubectl: Path) -> None:
             assert time.monotonic() < deadline, calls(kubectl)
             time.sleep(0.05)
         process.send_signal(signal.SIGTERM)
-        assert process.wait(10) == 128 + signal.SIGTERM
+        while True:
+            got = worker.receive()
+            sent.append(got)
+            if got["type"] == "stop_reason_get":
+                worker.send({"type": "stop_reason", "reason": reason, "grace_ms": 29000})
+            if got["type"] in ("task_succeeded", "task_failed"):
+                break
+        code = process.wait(10)
     finally:
         # As the worker does once a task ends (B274): its fake `kubectl logs` too.
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
         process.wait()
         worker.close()
+    return sent, code
+
+
+def test_a_stopped_attempt_asks_why_and_deletes_its_job(kubectl: Path) -> None:
+    """SIGTERM (a cancel, a timeout, a drain) while the pod runs: asked, the Job deleted."""
+    sent, code = stop(kubectl, "cancel")
+    assert code == 1
+    assert "stop_reason_get" in [m["type"] for m in sent]
+    ended = [m for m in sent if m["type"] == "metrics"][-1]["points"][0]
+    assert ended == {"name": "jobs_ended", "value": 1.0, "labels": {"outcome": "stopped"}}
     deletes = [c["args"] for c in calls(kubectl) if "delete" in c["args"]]
     assert len(deletes) == 1
     assert deletes[0][deletes[0].index("job") + 1].startswith("schedr-report-job-")
+
+
+def test_a_lost_master_leaves_the_job_to_the_cleanup(kubectl: Path) -> None:
+    """Its cleanup runs from the handle, wherever the attempt's cleanup goes."""
+    _, code = stop(kubectl, "master_lost")
+    assert code == 1
+    assert [c for c in calls(kubectl) if "delete" in c["args"]] == []
 
 
 def test_describe_names_the_extension(capsys: pytest.CaptureFixture[str]) -> None:

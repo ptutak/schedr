@@ -15,6 +15,8 @@ pub mod auth;
 pub mod docs;
 pub mod error;
 pub mod events;
+pub mod extensions;
+pub mod log_download;
 pub mod logs;
 pub mod metrics;
 pub mod named_events;
@@ -63,6 +65,7 @@ pub use state::ApiState;
         routes::cancel_run,
         routes::list_attempts,
         routes::get_log,
+        log_download::download_log,
         routes::get_output,
         routes::cancel_task,
         routes::retry_task,
@@ -70,6 +73,9 @@ pub use state::ApiState;
         routes::list_workers,
         routes::get_deployment,
         series::list_samples,
+        extensions::list_extensions,
+        extensions::get_extension,
+        extensions::extension_metrics,
         series::memory_totals,
         task_flow::task_flow,
         attempt_memory::task_memory,
@@ -168,6 +174,12 @@ fn connection_routes() -> Router<ApiState> {
 fn metrics_routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/metrics/samples", get(series::list_samples))
+        .route("/api/v1/extensions", get(extensions::list_extensions))
+        .route("/api/v1/extensions/{name}", get(extensions::get_extension))
+        .route(
+            "/api/v1/extensions/{name}/metrics",
+            get(extensions::extension_metrics),
+        )
         .route("/api/v1/metrics/memory", get(series::memory_totals))
         .route("/api/v1/metrics/tasks", get(task_flow::task_flow))
         .route(
@@ -263,6 +275,10 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log",
             get(routes::get_log),
+        )
+        .route(
+            "/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{try_number}/log.txt",
+            get(log_download::download_log),
         )
         .route(
             "/api/v1/runs/{run_id}/tasks/{task_id}/cancel",

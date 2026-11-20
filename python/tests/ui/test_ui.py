@@ -65,6 +65,39 @@ def test_a_tasks_panel_opens_beside_the_graph_without_leaving_the_page(
     assert page.evaluate("window.notReloaded") is True
 
 
+def test_each_level_is_shown_or_hidden_and_leaves_no_gap(
+    page: Page, standalone: dict[str, str], ran: Callable[[str], str]
+) -> None:
+    # Decision 514: filterable by level. A hidden line took its own line but left its newline
+    # behind (the user, 2026-11-21: "logs page doesn't look right"); then "INFO, WARNING, ERROR
+    # is enough ... checkboxes ... on/off for each option": DEBUG goes with INFO.
+    run = ran("log_levels")
+    page.goto(f"{standalone['url']}/d/default/runs/{run}?task=levels&tab=logs")
+    panel = page.locator("#task-panel")
+    log = panel.locator("pre.log")
+    expect(log).to_contain_text("a debug line")
+    expect(log.locator(".sl")).to_have_count(4)
+    panel.get_by_label("INFO").uncheck()
+    expect(log.locator(".lv-debug")).to_be_hidden()
+    expect(log.locator(".lv-info")).to_be_hidden()
+    expect(log.locator(".lv-warning")).to_be_visible()
+    shown = log.inner_text()
+    assert "a debug line" not in shown, repr(shown)
+    assert "a warning line" in shown, repr(shown)
+    assert "a plain line\n" in shown, repr(shown)
+    assert "\n\n" not in shown.strip("\n"), repr(shown)
+    # Each on its own: warnings off too, errors still shown; a plain line always.
+    panel.get_by_label("WARNING").uncheck()
+    expect(log.locator(".lv-warning")).to_be_hidden()
+    expect(log.locator(".lv-error")).to_be_visible()
+    expect(log).to_contain_text("a plain line")
+    panel.get_by_label("INFO").check()
+    expect(log.locator(".lv-debug")).to_be_visible()
+    expect(log.locator(".lv-warning")).to_be_hidden()
+    expect(panel.get_by_role("link", name="Download log")).to_be_visible()
+    expect(panel.get_by_role("link", name="as JSON")).to_be_visible()
+
+
 def test_a_running_log_is_read_part_by_part_without_holding_a_connection(
     page: Page, standalone: dict[str, str]
 ) -> None:
@@ -538,7 +571,7 @@ def test_the_dags_list_filters_as_one_types_and_ticks(
     # in the table's header, swapped in by htmx while the name field keeps its focus.
     page.goto(f"{standalone['url']}/?trigger=")
     rows = page.locator("table.dags tbody td:first-child a")
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(4)
     page.evaluate("window.notReloaded = true")
     search = page.get_by_label("Filter DAGs by name")
     search.fill("CONN")
@@ -549,22 +582,22 @@ def test_the_dags_list_filters_as_one_types_and_ticks(
     expect(rows).to_have_text(["with_connections"])
     expect(search).to_have_value("CONNECTIONS")
     search.fill("")
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(4)
     # Boxes in a dropdown: ticked, then applied when it closes (a click outside).
     kind = page.locator("details#dag-kind-menu")
     kind.locator("summary").click()
     kind.get_by_label("Manual", exact=False).check()
-    expect(rows).to_have_count(3)
+    expect(rows).to_have_count(4)
     page.locator("h1").click()
-    expect(rows).to_have_text(["form_params", "with_connections"])
+    expect(rows).to_have_text(["form_params", "log_levels", "with_connections"])
     expect(kind.locator("summary")).to_have_text("Kind (1)")
     # The DAG title sorts Z to A, keeping the filters; again, A to Z.
     page.locator("table.dags th a.sort").click()
-    expect(rows).to_have_text(["with_connections", "form_params"])
+    expect(rows).to_have_text(["with_connections", "log_levels", "form_params"])
     expect(page).to_have_url(re.compile(r"order=desc"))
     expect(kind.locator("summary")).to_have_text("Kind (1)")
     page.locator("table.dags th a.sort").click()
-    expect(rows).to_have_text(["form_params", "with_connections"])
+    expect(rows).to_have_text(["form_params", "log_levels", "with_connections"])
     # `SCHEDR_UI_SCREENSHOTS=<dir>`: the list with the dropdown open, in light and dark.
     folder = os.environ.get("SCHEDR_UI_SCREENSHOTS")
     if folder:
@@ -573,7 +606,7 @@ def test_the_dags_list_filters_as_one_types_and_ticks(
             kind.locator("summary").click()
             page.locator("table.dags").screenshot(path=str(Path(folder) / f"dags-{scheme}.png"))
             page.locator("h1").click()
-            expect(rows).to_have_text(["form_params", "with_connections"])
+            expect(rows).to_have_text(["form_params", "log_levels", "with_connections"])
             page.locator("details#dag-switch-menu summary").click()
             page.locator("table.dags").screenshot(
                 path=str(Path(folder) / f"dags-switch-{scheme}.png")

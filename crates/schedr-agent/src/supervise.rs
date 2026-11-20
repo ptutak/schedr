@@ -72,6 +72,37 @@ pub struct Stops {
     sender: StopSender,
     /// A reason taken already and given back: the next one.
     first: Option<StopReason>,
+    /// Where the reason being acted on is written, for the task to ask (decision 513).
+    note: Option<StopNote>,
+}
+
+/// Why an attempt is being stopped and when its SIGKILL comes, written when its SIGTERM is
+/// sent: a plugin asks it with `stop_reason_get` (decision 513). Cheap to clone; clones share it.
+#[derive(Debug, Clone, Default)]
+pub struct StopNote(std::sync::Arc<std::sync::Mutex<Option<(StopReason, tokio::time::Instant)>>>);
+
+impl StopNote {
+    pub(crate) fn set(&self, reason: StopReason, kill_at: tokio::time::Instant) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((reason, kill_at));
+    }
+
+    /// The reason, and the grace left before SIGKILL; none while it isn't being stopped.
+    #[must_use]
+    pub fn read(&self) -> Option<(StopReason, Duration)> {
+        let noted = *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        noted.map(|(reason, kill_at)| {
+            (
+                reason,
+                kill_at.saturating_duration_since(tokio::time::Instant::now()),
+            )
+        })
+    }
 }
 
 /// Sends an attempt its reasons to stop (cheap to clone).
@@ -88,8 +119,22 @@ impl Stops {
                 reasons,
                 sender,
                 first: None,
+                note: None,
             },
         )
+    }
+
+    /// The same, the reason acted on written to `note`.
+    #[must_use]
+    pub fn noted(mut self, note: StopNote) -> Self {
+        self.note = Some(note);
+        self
+    }
+
+    fn note(&self, reason: StopReason, kill_at: tokio::time::Instant) {
+        if let Some(note) = &self.note {
+            note.set(reason, kill_at);
+        }
     }
 
     /// Another sender to this channel (the memory watchdog's).
@@ -168,6 +213,7 @@ pub async fn supervise<P: Process>(
         limits.grace
     };
     let mut kill_at = tokio::time::Instant::now() + grace;
+    stops.note(reason, kill_at);
     // Until it ends or the grace is over, a later reason can only hurry the SIGKILL: a
     // drain's interrupt to at most `interrupt_grace` from now (B9), the memory watchdog to
     // now. The status stays the first reason's.
@@ -178,6 +224,7 @@ pub async fn supervise<P: Process>(
                 StopReason::Interrupted => {
                     let hurried = tokio::time::Instant::now() + limits.interrupt_grace;
                     kill_at = kill_at.min(hurried);
+                    stops.note(reason, kill_at);
                 }
                 StopReason::OomKilled => break,
                 StopReason::TimedOut | StopReason::Cancelled | StopReason::CutOff => {}

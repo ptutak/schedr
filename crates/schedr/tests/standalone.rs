@@ -134,13 +134,14 @@ impl Standalone {
             // A URL with a password is a secret: from the environment, never the file.
             command.env("SCHEDR_CONFIG__DATABASE__URL", url);
         }
+        // The test's own PATH, when it gives one (a plugin to discover), wins.
+        command.env("PATH", std::env::var("PATH").unwrap_or_default());
         command.envs(more_env.iter().copied());
         let child = command
             .arg("--config")
             .arg(dir.path().join("config.toml"))
             .args(["standalone", "--migrate"])
             .args(extra)
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", dir.path())
             .env("SCHEDR_DAG_PATH", &dag_path)
             .env("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", "100ms")
@@ -3549,7 +3550,13 @@ with Dag("extended"):
         "job",
         name="dummy",
         version="1.0",
-        payload=[{"log": "the dummy plugin runs"}, {"return": {"rows": 3}}],
+        payload=[
+            {"log": "the dummy plugin runs"},
+            {"status": ["pulling", 0.25]},
+            {"link": ["Pod", "https://dash.example/pods/job-1"]},
+            {"status": ["running", None]},
+            {"return": {"rows": 3}},
+        ],
         returns=dict[str, int],
     )
     rows(job.output)
@@ -3576,6 +3583,23 @@ with Dag("unserved"):
         .get(&format!("/api/v1/runs/{run}/tasks/job/output"))
         .unwrap();
     assert_eq!(output["value"], serde_json::json!({"rows": 3}), "{output}");
+    // Decision 513: its statuses and links, with the attempt.
+    let attempts = standalone
+        .get(&format!("/api/v1/runs/{run}/tasks/job/attempts"))
+        .unwrap();
+    let attempt = &attempts["attempts"][0];
+    let phases: Vec<&str> = attempt["statuses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["phase"].as_str().unwrap())
+        .collect();
+    assert_eq!(phases, ["pulling", "running"], "{attempt}");
+    assert_eq!(attempt["statuses"][0]["progress"], 0.25, "{attempt}");
+    assert_eq!(
+        attempt["links"],
+        serde_json::json!([{"label": "Pod", "url": "https://dash.example/pods/job-1"}])
+    );
     let logs = logs(standalone.dir.path());
     assert!(logs.contains("the dummy plugin runs\n"), "{logs}");
     assert!(logs.contains("rows: 3\n"), "{logs}");
@@ -3592,6 +3616,434 @@ with Dag("unserved"):
     assert_eq!(job["try_number"], 0, "a rejection is no try: {job}");
 }
 
+/// Decision 514: a Python task's `logging` is structured with no change to its code, as is
+/// `schedr task-ctx log`; the Logs tab shows the lines with their level, and the log downloads
+/// readable or as stored.
+#[test]
+fn a_tasks_logging_is_structured_shown_with_its_level_and_downloaded_both_ways() {
+    const DAG: &str = r#"
+import logging
+
+from schedr import Dag, task
+
+log = logging.getLogger("etl.load")
+
+
+@task
+def load() -> None:
+    print("a plain line")
+    log.info("loaded %d rows", 3, extra={"table": "sales"})
+    log.debug("not at INFO")
+
+
+@task
+def big() -> None:
+    log.info("big", extra={"blob": "x" * (2 << 20)})
+
+
+with Dag("logged"):
+    load()
+    big()
+"#;
+    let standalone = Standalone::start(&[("logged.py", DAG)], None);
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"logged".to_owned())
+    });
+    let run = standalone.trigger("logged");
+    standalone.wait_for_state(&run, "success");
+    let (_, log, _) = standalone.cli(&["tasks", "logs", &run, "load", "--try", "1"]);
+    assert!(log.contains("a plain line\n"), "{log}");
+    let structured = log
+        .lines()
+        .find_map(schedr_model::log_line::LogLine::parse)
+        .unwrap_or_else(|| panic!("no structured line: {log}"));
+    assert_eq!(structured.message, "loaded 3 rows");
+    assert_eq!(structured.fields["table"], "sales");
+    assert_eq!(structured.fields["logger"], "etl.load");
+    assert!(!log.contains("not at INFO"), "{log}");
+    let panel = standalone
+        .page(&format!("/d/default/runs/{run}?task=load&tab=logs"))
+        .unwrap();
+    assert!(panel.contains("<span class=\"sl lv-info\">"), "{panel}");
+    assert!(
+        panel.contains("format=json"),
+        "a JSON download is offered: {panel}"
+    );
+    let plain = standalone
+        .page(&format!(
+            "/d/default/runs/{run}/tasks/load/log.txt?try=1&format=plain"
+        ))
+        .unwrap();
+    assert!(
+        plain.contains("INFO     loaded 3 rows  logger=etl.load  table=sales"),
+        "{plain}"
+    );
+    let json = standalone
+        .page(&format!(
+            "/d/default/runs/{run}/tasks/load/log.txt?try=1&format=json"
+        ))
+        .unwrap();
+    assert_eq!(json, log, "as stored");
+    // A line longer than the view's parts, whole both ways (Codex's review of M5.2i5: cut).
+    let download = |format: &str| {
+        standalone
+            .page(&format!(
+                "/d/default/runs/{run}/tasks/big/log.txt?try=1&format={format}"
+            ))
+            .unwrap()
+    };
+    let (json, plain) = (download("json"), download("plain"));
+    let big = json
+        .lines()
+        .filter_map(schedr_model::log_line::LogLine::parse)
+        .find(|line| line.message == "big")
+        .expect("the big line");
+    assert_eq!(big.fields["blob"].as_str().map(str::len), Some(2 << 20));
+    let blob = "x".repeat(2 << 20);
+    assert!(
+        plain.contains(&format!("blob={blob}")),
+        "the plain one whole too"
+    );
+}
+
+/// Decision 514: with `[worker] log_format = "plain"`, a structured line is stored readable, and
+/// `schedr task-ctx log` writes one from a command task.
+#[test]
+fn a_plain_log_format_stores_structured_lines_readable() {
+    const DAG: &str = r#"
+from schedr import CommandOperator, Dag
+
+with Dag("plainly"):
+    CommandOperator("say", [SCHEDR, "task-ctx", "log", "copied", "--level", "warning", "--field", "rows=3"])
+"#;
+    let dag = DAG.replace("SCHEDR", &format!("{BINARY:?}"));
+    let standalone = Standalone::start_configured(
+        &[("plainly.py", &dag)],
+        None,
+        &[],
+        "",
+        &[("SCHEDR_CONFIG__WORKER__LOG_FORMAT", "plain")],
+    );
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"plainly".to_owned())
+    });
+    let run = standalone.trigger("plainly");
+    standalone.wait_for_state(&run, "success");
+    let (_, log, err) = standalone.cli(&["tasks", "logs", &run, "say", "--try", "1"]);
+    assert!(log.contains("WARNING  copied  rows=3"), "{log}{err}");
+    assert!(!log.contains("schedr_log"), "stored readable: {log}");
+}
+
+/// Decision 513: a plugin's metrics, declared in its hello, are on the worker's `/metrics` and
+/// reach the master: the Extensions API has its declarations, page and a minute's samples.
+/// DN19: the dropped point an event of the extension, and the attempt's latest phase, both on
+/// its view for its events panel.
+fn a_dropped_point_and_the_phase_are_on_its_page(standalone: &Standalone) {
+    let mut seen = serde_json::Value::Null;
+    standalone.wait("the dropped point's event", || {
+        seen = standalone
+            .get("/api/v1/extensions/dummy")
+            .unwrap_or_default();
+        seen["events"].as_array().is_some_and(|e| !e.is_empty())
+    });
+    let (events, attempts) = (&seen["events"], &seen["attempts"]);
+    assert_eq!(events[0]["kind"], "dropped", "{events}");
+    assert!(
+        events[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("metric `undeclared` isn't declared"),
+        "{events}"
+    );
+    assert_eq!(attempts[0]["phase"], "measuring", "{attempts}");
+    assert_eq!(attempts[0]["dag_id"], "measured", "{attempts}");
+}
+
+#[test]
+fn a_plugins_declared_metrics_are_served_and_sampled() {
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask
+
+with Dag("measured"):
+    ExtensionTask(
+        "job",
+        name="dummy",
+        version="1.0",
+        payload=[
+            {"metric": ["steps", 1, {"step": "log"}]},
+            {"metric": ["steps", 2, {"step": "log"}]},
+            {"metric": ["sleep_seconds", 0.5, {}]},
+            {"metric": ["undeclared", 1, {}]},
+            {"status": ["measuring", 0.5]},
+        ],
+    )
+"#;
+    let standalone = Standalone::start_configured(
+        &[("measured.py", DAG)],
+        None,
+        &[],
+        &dummy_plugin(),
+        &[("SCHEDR_HIDDEN__WORKER__EXTENSION_FIGURES_INTERVAL", "1s")],
+    );
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"measured".to_owned())
+    });
+    let run = standalone.trigger("measured");
+    standalone.wait_for_state(&run, "success");
+    let log = standalone.log();
+    let ops = log
+        .split("ops on http://")
+        .nth(1)
+        .and_then(|rest| rest.split([',', ' ', '\n']).next())
+        .unwrap()
+        .replacen("0.0.0.0:", "127.0.0.1:", 1);
+    let metrics = || {
+        let output = Command::new("curl")
+            .args(["-s", &format!("http://{ops}/metrics")])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let served = metrics();
+    assert!(
+        served.contains(
+            "schedr_extension_dummy_steps_total{step=\"log\",extension_version=\"1.0\"} 3"
+        ),
+        "{served}"
+    );
+    assert!(
+        served.contains("schedr_extension_dummy_sleep_seconds_count"),
+        "{served}"
+    );
+    standalone.wait("the extension to be listed", || {
+        standalone
+            .get("/api/v1/extensions")
+            .is_some_and(|list| list["extensions"][0]["name"] == "dummy")
+    });
+    let extension = standalone.get("/api/v1/extensions/dummy").unwrap();
+    let panels: Vec<(&str, u64, &str)> = extension["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            (
+                p["title"].as_str().unwrap(),
+                p["row"].as_u64().unwrap(),
+                p["cell"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        panels,
+        [
+            ("In flight", 1, "left"),
+            ("Steps", 1, "center"),
+            ("Jobs by outcome", 1, "right"),
+            ("Sleeps", 2, "left"),
+            ("Sleep quantiles", 2, "right"),
+            ("Queue depth", 3, "left"),
+            ("Queues now", 3, "right"),
+            ("Events", 4, "full"),
+            // No panel shows `bytes_read`: a row of its own below them, titled by its help.
+            ("Bytes the made-up jobs read", 5, "full"),
+        ],
+        "{extension}"
+    );
+    assert!(
+        log.contains("a metric point dropped: metric `undeclared` isn't declared"),
+        "{log}"
+    );
+    a_dropped_point_and_the_phase_are_on_its_page(&standalone);
+    the_first_figures_are_sampled(&standalone);
+    one_workers_figures_are_its_own_and_kept_a_day(&standalone);
+}
+
+/// DN21: `?worker=` gives that worker's figures (the only one's: all of them), another's none,
+/// and a range past a day is refused; the page shows the extension in a tab, the worker in a
+/// sub-tab, and a worker's longer range as its last day.
+fn one_workers_figures_are_its_own_and_kept_a_day(standalone: &Standalone) {
+    let extension = standalone.get("/api/v1/extensions/dummy").unwrap();
+    let worker = extension["workers"][0]["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let all = standalone
+        .get("/api/v1/extensions/dummy/metrics?range=1h")
+        .unwrap();
+    let mine = standalone
+        .get(&format!(
+            "/api/v1/extensions/dummy/metrics?range=1h&worker={worker}"
+        ))
+        .unwrap();
+    // Read twice, a minute's figures may have come between: the steps' series, one each (agy's
+    // review of M5.2i5: none would pass too).
+    assert!(
+        mine["metrics"][0]["series"]
+            .as_array()
+            .is_some_and(|s| !s.is_empty()),
+        "{mine}"
+    );
+    assert_eq!(
+        mine["metrics"][0]["series"].as_array().map(Vec::len),
+        all["metrics"][0]["series"].as_array().map(Vec::len),
+        "{mine}\n{all}"
+    );
+    // Its events and attempts: its own, another's none (agy's review of M5.2i5: a worker's tab
+    // showed every worker's attempts).
+    let its = standalone
+        .get(&format!("/api/v1/extensions/dummy?worker={worker}"))
+        .unwrap();
+    assert!(
+        its["attempts"].as_array().is_some_and(|a| !a.is_empty()),
+        "{its}"
+    );
+    let nobodys = standalone
+        .get("/api/v1/extensions/dummy?worker=nobody")
+        .unwrap();
+    assert_eq!(
+        (&nobodys["attempts"], &nobodys["events"]),
+        (&serde_json::json!([]), &serde_json::json!([])),
+        "{nobodys}"
+    );
+    assert_eq!(nobodys["workers"], its["workers"], "its workers all listed");
+    let other = standalone
+        .get("/api/v1/extensions/dummy/metrics?range=1h&worker=nobody")
+        .unwrap();
+    assert_eq!(
+        other["metrics"][0]["series"],
+        serde_json::json!([]),
+        "{other}"
+    );
+    assert!(
+        standalone
+            .get(&format!(
+                "/api/v1/extensions/dummy/metrics?range=7d&worker={worker}"
+            ))
+            .is_none(),
+        "a worker's figures past a day are refused"
+    );
+    let page = standalone
+        .page(&format!(
+            "/d/default/extensions/dummy?range=7d&worker={worker}"
+        ))
+        .unwrap();
+    assert!(page.contains("class=\"tab open\""), "{page}");
+    assert!(page.contains(">All workers</a>"), "{page}");
+    assert!(
+        page.contains(&format!(
+            "class=\"current\" aria-current=\"true\"><span class=\"mono\">{worker}</span>"
+        )),
+        "{page}"
+    );
+    assert!(
+        !page.contains(">7d</a>"),
+        "a worker's ranges stop at a day: {page}"
+    );
+    // The list goes to the first extension's tab.
+    let output = Command::new("curl")
+        .args([
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code} %{redirect_url}",
+            &format!("{}/extensions", standalone.api),
+        ])
+        .output()
+        .unwrap();
+    let answer = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        answer.starts_with("303 ") && answer.contains("/d/default/extensions/"),
+        "{answer}"
+    );
+}
+
+/// A worker's first figures count whole (Codex's review of M5.2i5: they were a baseline, lost):
+/// the three steps and the sleep reach the samples.
+fn the_first_figures_are_sampled(standalone: &Standalone) {
+    let mut sampled = serde_json::Value::Null;
+    standalone.wait("the steps sampled", || {
+        sampled = standalone
+            .get("/api/v1/extensions/dummy/metrics?range=1h")
+            .unwrap_or_default();
+        let grown: f64 = sampled["metrics"][0]["series"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|s| s["points"].as_array().cloned().unwrap_or_default())
+            .filter_map(|p| p["value"].as_f64())
+            .sum();
+        grown >= 3.0
+    });
+    assert_eq!(sampled["metrics"][0]["name"], "steps", "{sampled}");
+    assert_eq!(sampled["bucket_s"], 60, "{sampled}");
+    let sleeps = &sampled["metrics"][1];
+    assert_eq!(sleeps["name"], "sleep_seconds", "{sampled}");
+    assert_eq!(
+        sleeps["series"][0]["points"][0]["counts"]
+            .as_array()
+            .map(|c| c.iter().filter_map(serde_json::Value::as_u64).sum::<u64>()),
+        Some(1),
+        "{sampled}"
+    );
+}
+
+/// DN19 and Codex's second review of M5.2i5: a plugin skipped at discovery (its `--describe`
+/// fails) is known by its event: listed, its page found, the event on it.
+#[test]
+fn a_plugin_skipped_at_discovery_is_listed_and_its_event_shown() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let plugins = tempfile::TempDir::new().unwrap();
+    let broken = plugins.path().join("schedr-ext-broken");
+    std::fs::write(&broken, "#!/bin/sh\nexit 3\n").unwrap();
+    std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        plugins.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let standalone = Standalone::start_configured(
+        &[],
+        None,
+        &[],
+        "",
+        &[
+            ("SCHEDR_CONFIG__EXTENSIONS__DISCOVER", "true"),
+            ("PATH", &path),
+        ],
+    );
+    standalone.wait("the skipped plugin listed", || {
+        standalone
+            .get("/api/v1/extensions")
+            .is_some_and(|list| list["extensions"].to_string().contains("\"broken\""))
+    });
+    let extension = standalone.get("/api/v1/extensions/broken").unwrap();
+    assert_eq!(extension["version"], "", "{extension}");
+    assert_eq!(extension["events"][0]["kind"], "skipped", "{extension}");
+    // agy's review of M5.2i5: its workers are its events' (none were listed), and the list stays
+    // by name with it in it.
+    assert_eq!(
+        extension["workers"][0]["worker_id"], extension["events"][0]["worker_id"],
+        "{extension}"
+    );
+    let names: Vec<String> = standalone.get("/api/v1/extensions").unwrap()["extensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap().to_owned())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    let metrics = standalone
+        .get("/api/v1/extensions/broken/metrics?range=1h")
+        .unwrap();
+    assert_eq!(metrics["metrics"], serde_json::json!([]), "{metrics}");
+    let page = standalone.page("/d/default/extensions/broken").unwrap();
+    assert!(page.contains("What happened"), "{page}");
+    assert!(page.contains("schedr-ext-broken"), "{page}");
+}
+
 /// M5.2i: a plugin is supervised as the Python runner is: one that hangs is stopped at the task's
 /// timeout, and one that fails fails the attempt with its error.
 #[test]
@@ -3602,8 +4054,10 @@ from datetime import timedelta
 from schedr import Dag, ExtensionTask
 
 with Dag("hangs"):
+    # Past the plugin's start under load: a SIGTERM before its handler exists ends it at once,
+    # with nothing to say (`make check` once took over 2 s).
     ExtensionTask(
-        "job", name="dummy", version="1.0", payload={"hang": True}, timeout=timedelta(seconds=2)
+        "job", name="dummy", version="1.0", payload={"hang": True}, timeout=timedelta(seconds=10)
     )
 
 with Dag("fails"):
@@ -3634,6 +4088,18 @@ with Dag("fails"):
         hung_attempts.contains("timed_out") || hung_attempts.contains("timeout"),
         "{hung_attempts}"
     );
+    // Decision 513: SIGTERM reached it as a cancellation, and it asked why: a timeout, with
+    // the grace (`cancel_grace`, 30 s) left.
+    let (_, log, err) = standalone.cli(&["tasks", "logs", &hangs, "job", "--try", "1"]);
+    assert!(log.contains("stopped: timeout, "), "{log}{err}");
+    // It was let finish within its grace: no SIGKILL, so the attempt ended at once.
+    let stopped_left: u64 = log
+        .split("stopped: timeout, ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|seconds| seconds.parse().ok())
+        .unwrap_or(0);
+    assert!(stopped_left > 10, "{log}");
 }
 
 /// M5.2i: an extension task's cleanup runs its plugin again after the attempt, whatever its end,

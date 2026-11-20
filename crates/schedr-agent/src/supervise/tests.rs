@@ -348,3 +348,33 @@ async fn an_interrupt_after_the_leader_ended_gets_its_grace_from_its_arrival() {
         Duration::from_millis(50) + LIMITS.interrupt_grace
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_reason_and_the_grace_left_are_noted_at_sigterm_and_a_drain_shortens_them() {
+    // Decision 513: what `stop_reason_get` answers. Nothing before the SIGTERM; cancelled at
+    // 5 s, 30 s of grace; a drain at 10 s brings the SIGKILL to 13 s, the reason still cancel.
+    let note = StopNote::default();
+    let (sender, stops) = Stops::new();
+    let stops = stops.noted(note.clone());
+    let supervising = tokio::spawn(async move {
+        let mut fake = Fake::new(None);
+        supervise(&mut fake, LIMITS, stops).await.unwrap()
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(note.read(), None);
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    sender.send(StopReason::Cancelled).unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        note.read(),
+        Some((StopReason::Cancelled, Duration::from_secs(29)))
+    );
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    sender.send(StopReason::Interrupted).unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        note.read(),
+        Some((StopReason::Cancelled, Duration::from_secs(2)))
+    );
+    assert!(supervising.await.unwrap().killed);
+}

@@ -57,6 +57,35 @@ pub fn run_dag_ctx(
         .map_err(|e| format!("can't write output: {e}"))
 }
 
+/// `schedr task-ctx log`'s line (decision 514): its level checked, each `name=value` field a
+/// JSON value when it reads as one, its text otherwise.
+///
+/// # Errors
+///
+/// An unknown level, or a field without `=`.
+pub fn structured_line(
+    message: &str,
+    level: &str,
+    fields: &[String],
+    now: jiff::Timestamp,
+) -> Result<String, String> {
+    use schedr_model::log_line::{Level, LogLine};
+    let level = Level::parse(level).ok_or_else(|| {
+        format!("`--level {level}`: one of debug, info, warning, error and critical")
+    })?;
+    let mut line = LogLine::new(level, message);
+    for field in fields {
+        let (name, value) = field
+            .split_once('=')
+            .ok_or_else(|| format!("`--field {field}`: a field is `name=value`"))?;
+        let value = serde_json::from_str(value)
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_owned()));
+        line.fields.insert(name.to_owned(), value);
+    }
+    line.time = Some(now.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+    Ok(line.json())
+}
+
 /// Runs a `schedr task-ctx` command; the error is the message for stderr.
 ///
 /// # Errors
@@ -89,6 +118,14 @@ pub fn run_task_ctx(
         }
         TaskCtxCommand::Events { command } => {
             run_task_ctx_events(command, env, version, (out, err))
+        }
+        TaskCtxCommand::Log {
+            message,
+            level,
+            fields,
+        } => {
+            let line = structured_line(message, level, fields, jiff::Timestamp::now())?;
+            writeln!(err, "{line}").map_err(|e| format!("can't write the line: {e}"))
         }
         TaskCtxCommand::Notify {
             channel,

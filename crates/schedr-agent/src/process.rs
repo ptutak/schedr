@@ -173,6 +173,80 @@ pub fn set_log_mode(mode: u32) {
     LOG_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether the worker stores its tasks' structured log lines readable (`[worker] log_format =
+/// "plain"`, decision 514): set once when it starts; as written (JSON) until then.
+static LOG_PLAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Sets how the worker stores structured log lines: readable (`plain`) or as written.
+pub fn set_log_plain(plain: bool) {
+    LOG_PLAIN.store(plain, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The most of one line held to see whether it is a structured one: a longer line is written
+/// as it comes.
+const STRUCTURED_LINE_MAX: usize = 256 * 1024;
+
+/// Turns a stream's structured lines into their readable form (`log_format = "plain"`), holding
+/// an unfinished line until its end; every other line passes as it is.
+#[derive(Debug, Default)]
+pub(crate) struct Plainer {
+    held: Vec<u8>,
+    /// A line too long to hold, being passed on until its end.
+    passing: bool,
+}
+
+impl Plainer {
+    /// What `bytes` give the log now.
+    pub(crate) fn push(&mut self, mut bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(bytes.len());
+        while !bytes.is_empty() {
+            let end = bytes.iter().position(|b| *b == b'\n');
+            let (part, rest, ended) = match end {
+                Some(i) => (&bytes[..=i], &bytes[i + 1..], true),
+                None => (bytes, &[][..], false),
+            };
+            bytes = rest;
+            if self.passing {
+                out.extend_from_slice(part);
+                self.passing = !ended;
+                continue;
+            }
+            self.held.extend_from_slice(part);
+            if ended {
+                let line = std::mem::take(&mut self.held);
+                out.extend(rendered_line(&line));
+            } else if self.held.len() > STRUCTURED_LINE_MAX {
+                out.append(&mut self.held);
+                self.passing = true;
+            }
+        }
+        out
+    }
+
+    /// The rest, at the stream's end.
+    pub(crate) fn finish(&mut self) -> Vec<u8> {
+        let line = std::mem::take(&mut self.held);
+        rendered_line(&line)
+    }
+}
+
+/// One line (with its end of line, if it has one) in its readable form, when structured.
+fn rendered_line(line: &[u8]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return line.to_vec();
+    };
+    match schedr_model::log_line::LogLine::parse(text) {
+        Some(parsed) => {
+            let mut out = parsed.plain().into_bytes();
+            if line.ends_with(b"\n") {
+                out.push(b'\n');
+            }
+            out
+        }
+        None => line.to_vec(),
+    }
+}
+
 /// Readies the worker's log directory for `mode` (B182), at its start: made if missing, its own
 /// mode the log mode's readers' (0700 for 0600, 0750 for 0640, 0755 for 0644), and every log
 /// already in it given `mode`, so those written before (an upgrade, a looser mode then) aren't
@@ -271,6 +345,9 @@ pub(crate) async fn collect(
     let mut tail = TailBuffer::new(limit);
     let mut chunk = vec![0; 64 * 1024];
     let mut stream = mask.0.as_deref().map(MaskSet::stream);
+    let mut plainer = LOG_PLAIN
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .then(Plainer::default);
     loop {
         // Told to stop (B274): ended as at the pipe's end, with what it has.
         let n = tokio::select! {
@@ -280,7 +357,15 @@ pub(crate) async fn collect(
         };
         if n == 0 {
             if let Some(stream) = &mut stream {
-                let rest = stream.finish();
+                let mut rest = stream.finish();
+                if let Some(plainer) = &mut plainer {
+                    rest = plainer.push(&rest);
+                }
+                tail.push(&rest);
+                log.lock().await.write_all(&rest).await?;
+            }
+            if let Some(plainer) = &mut plainer {
+                let rest = plainer.finish();
                 tail.push(&rest);
                 log.lock().await.write_all(&rest).await?;
             }
@@ -290,13 +375,18 @@ pub(crate) async fn collect(
             return Ok(tail);
         }
         let masked;
-        let bytes = match &mut stream {
+        let mut bytes = match &mut stream {
             Some(stream) => {
                 masked = stream.push(&chunk[..n]);
                 masked.as_slice()
             }
             None => &chunk[..n],
         };
+        let readable;
+        if let Some(plainer) = &mut plainer {
+            readable = plainer.push(bytes);
+            bytes = readable.as_slice();
+        }
         tail.push(bytes);
         log.lock().await.write_all(bytes).await?;
     }

@@ -152,6 +152,8 @@ fn runs_tasks_attempts_and_commands_use_model_names() {
         core_dumped: true,
         cleanup: schedr_db::reads::CleanupRecord::default(),
         chained_run_id: None,
+        statuses: Vec::new(),
+        links: Vec::new(),
     });
     assert_eq!(
         serde_json::to_value(attempt.usage).unwrap(),
@@ -213,6 +215,28 @@ fn an_attempts_cleanup_shows_its_result_and_handles() {
             {"unreadable": "{broken"}
         ]})
     );
+}
+
+#[test]
+fn an_attempts_statuses_and_links_are_masked_by_pattern() {
+    // agy's review of M5.2i5: the agent masks only the secrets the attempt read.
+    let view = AttemptView::from(&AttemptRecord {
+        statuses: vec![schedr_db::reports::AttemptStatus {
+            at: ts("2026-10-21T08:01:00Z"),
+            phase: "connecting postgres://u:pw@db/x".to_owned(),
+            message: Some("password=hunter2".to_owned()),
+            progress: None,
+        }],
+        links: vec![schedr_db::reports::AttemptLink {
+            label: "Job".to_owned(),
+            url: "https://u:pw@dash/job".to_owned(),
+        }],
+        ..sample_attempt()
+    });
+    let shown = serde_json::to_string(&view).unwrap();
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert!(!shown.contains(":pw@"), "{shown}");
+    assert!(shown.contains("postgres://u:****@db/x"), "{shown}");
 }
 
 #[test]
@@ -294,5 +318,7 @@ fn sample_attempt() -> AttemptRecord {
         core_dumped: false,
         cleanup: schedr_db::reads::CleanupRecord::default(),
         chained_run_id: None,
+        statuses: Vec::new(),
+        links: Vec::new(),
     }
 }

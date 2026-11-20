@@ -192,7 +192,7 @@ fn a_rollup_takes_every_role_its_window_saw_and_rounds_its_averages() {
 }
 
 #[tokio::test]
-async fn a_pass_makes_three_statements_and_seven_when_a_window_closed() {
+async fn a_pass_makes_three_statements_and_eleven_when_a_window_closed() {
     // Decision 464's bound: two reads and an insert a minute; the window's read and insert and
     // two deletes once one closes.
     let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -238,13 +238,15 @@ async fn a_pass_makes_three_statements_and_seven_when_a_window_closed() {
         .pass(&db, &settings, ts("2026-11-14T10:15:10Z"), None)
         .await
         .unwrap();
-    assert_eq!((early.statements, early.rolled), (6, 0));
+    // With the extensions' window read, their two deletes (decision 513) and their events'
+    // (DN19).
+    assert_eq!((early.statements, early.rolled), (10, 0));
     heartbeat("2026-11-14T10:17:05Z").await;
     let closing = sampler
         .pass(&db, &settings, ts("2026-11-14T10:17:10Z"), None)
         .await
         .unwrap();
-    assert_eq!((closing.statements, closing.rolled), (7, 1));
+    assert_eq!((closing.statements, closing.rolled), (11, 1));
     let minutes = db
         .samples(
             MINUTE,
@@ -352,8 +354,8 @@ async fn a_new_leader_rolls_every_window_the_last_one_missed_before_deleting() {
         .unwrap();
     assert_eq!(
         next.statements,
-        2 + 1 + 2,
-        "two reads, the window's read (empty), two deletes"
+        2 + 2 + 5,
+        "two reads, the window's reads (empty), five deletes"
     );
 }
 

@@ -63,7 +63,10 @@ k delete jobs -l app.kubernetes.io/managed-by=schedr --ignore-not-found >/dev/nu
 
 mkdir -p "$WORK/dags"
 cp "$ROOT/examples/extensions/kubernetes_extension.py" "$WORK/dags/"
-export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__COMMAND="[\"$PLUGIN\", \"--namespace\", \"$NAMESPACE\", \"--context\", \"$CONTEXT\"]"
+# The Dashboard's address only names the links (decision 513): none needs to answer here.
+export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__COMMAND="[\"$PLUGIN\", \"--namespace\", \"$NAMESPACE\", \"--context\", \"$CONTEXT\", \"--dashboard\", \"https://dashboard.example\"]"
+# Its metrics' figures sent at once, not once a minute.
+export SCHEDR_HIDDEN__WORKER__EXTENSION_FIGURES_INTERVAL=2s
 export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__VERSIONS='["1.0"]'
 
 start_standalone() {
@@ -141,6 +144,25 @@ logs | grep -q "token is " || fail "the secret didn't reach the pod"
 wait_no_jobs 60
 echo "ok: streamed while running, succeeded, its Job deleted"
 
+say "pod_runs: its phases and links on the attempt, its metrics and page (decision 513)"
+run=$("$SCHEDR" runs list pod_runs --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["runs"][0]["run_id"])')
+reported=$(curl -s "http://127.0.0.1:8080/api/v1/runs/$run/tasks/count/attempts" | python3 -c '
+import json, sys
+a = json.load(sys.stdin)["attempts"][0]
+print(" ".join(s["phase"] for s in a["statuses"]), "|", " ".join(l["label"] for l in a["links"]))')
+[ "$reported" = "creating pending running succeeded | Job Pod" ] || fail "pod_runs's reports: $reported"
+for _ in $(seq 1 30); do
+    panels=$(curl -s http://127.0.0.1:8080/api/v1/extensions/kubernetes \
+        | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("panels", [])))' 2>/dev/null || true)
+    [ "$panels" = 6 ] && break
+    sleep 1
+done
+[ "$panels" = 6 ] || fail "the extension's page has $panels panels, not 6"
+ops=$(grep -o 'ops on http://[0-9.:]*' "$WORK/standalone.log" | tail -1 | sed 's|ops on ||; s|0.0.0.0|127.0.0.1|')
+curl -s "$ops/metrics" | grep -q '^schedr_extension_kubernetes_jobs_started_total{namespace="'"$NAMESPACE"'"' \
+    || fail "the worker's /metrics has no jobs_started"
+echo "ok: phases and links on the attempt, six panels, jobs_started on /metrics"
+
 say "pod_fails: the pod's reason"
 "$SCHEDR" runs trigger pod_fails >/dev/null
 wait_run pod_fails failed 180
@@ -154,7 +176,8 @@ echo "ok: failed with exit code 3, its Job deleted"
 say "pod_timeout: the Job deleted when the task times out"
 "$SCHEDR" runs trigger pod_timeout >/dev/null
 wait_run pod_timeout failed 120
-logs | grep -q "stopped: deleting job" || fail "the plugin didn't delete its Job on the timeout"
+logs | grep -q '"message":"stopped: timeout"' || fail "the plugin wasn't told it timed out"
+logs | grep -q '"message":"deleted job ' || fail "the plugin didn't delete its Job on the timeout"
 wait_no_jobs 60
 echo "ok: timed out, its Job deleted"
 

@@ -46,8 +46,8 @@ pub mod protocol;
 pub mod socket;
 
 pub use protocol::{
-    ErrorSummary, ExtensionTask, Handle, MAX_MESSAGE_SIZE, PROTOCOL, PluginMessage, SecretName,
-    WorkerMessage,
+    ErrorSummary, ExtensionTask, Handle, MAX_MESSAGE_SIZE, MetricPoint, PROTOCOL, PluginMessage,
+    SecretName, StopKind, WorkerMessage,
 };
 pub use serde_json::{Value, json};
 
@@ -136,6 +136,14 @@ pub trait Plugin {
 
     /// The versions it serves.
     fn versions(&self) -> Vec<String>;
+
+    /// Its metrics' declarations (name, kind, help, unit, labels, buckets) and its page's panels
+    /// (title, metric, chart, row from 1, cell `full`, `left`, `center` or `right`), sent in its
+    /// hello: `{"metrics": [...], "panels":
+    /// [...]}`. None by default; a worker's `[extensions.<name>]` config wins over them.
+    fn declarations(&self) -> Value {
+        Value::Null
+    }
 
     /// The task: returns its output (JSON), or why it failed.
     ///
@@ -263,6 +271,73 @@ impl Channel {
         }
     }
 
+    /// Says where the task is now (decision 513): kept with the attempt, with its time. No
+    /// answer; a progress outside 0 to 1 is clamped by the worker.
+    ///
+    /// # Errors
+    ///
+    /// The channel's.
+    pub fn status(
+        &mut self,
+        phase: &str,
+        message: Option<&str>,
+        progress: Option<f64>,
+    ) -> Result<(), Error> {
+        self.send(&PluginMessage::Status {
+            phase: phase.to_owned(),
+            message: message.map(ToOwned::to_owned),
+            progress,
+        })
+    }
+
+    /// Links to what the task started elsewhere; a second link with the same label replaces
+    /// it, and only `http` and `https` are kept. No answer.
+    ///
+    /// # Errors
+    ///
+    /// The channel's.
+    pub fn link(&mut self, label: &str, url: &str) -> Result<(), Error> {
+        self.send(&PluginMessage::Link {
+            label: label.to_owned(),
+            url: url.to_owned(),
+        })
+    }
+
+    /// Reports one point of a declared metric: a counter adds `value`, a gauge is set to it, a
+    /// histogram observes it. No answer; one matching no declaration is dropped by the worker.
+    ///
+    /// # Errors
+    ///
+    /// The channel's.
+    pub fn metric(&mut self, name: &str, value: f64, labels: &[(&str, &str)]) -> Result<(), Error> {
+        let point = MetricPoint {
+            name: name.to_owned(),
+            labels: labels
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            value,
+        };
+        self.send(&PluginMessage::Metrics {
+            points: vec![point],
+        })
+    }
+
+    /// Why the task is being stopped, asked after SIGTERM (decision 513): the reason
+    /// (`None` while it isn't being stopped) and the time left before SIGKILL.
+    ///
+    /// # Errors
+    ///
+    /// The channel's.
+    pub fn stop_reason(&mut self) -> Result<(Option<StopKind>, std::time::Duration), Error> {
+        match self.ask(&PluginMessage::StopReasonGet)? {
+            WorkerMessage::StopReason { reason, grace_ms } => {
+                Ok((reason, std::time::Duration::from_millis(grace_ms)))
+            }
+            other => Err(unexpected("stop_reason", &other)),
+        }
+    }
+
     /// A call to schedr's REST API, made by the master as the task: its status and body.
     ///
     /// # Errors
@@ -328,6 +403,48 @@ pub fn read(stream: &mut impl Read) -> Result<WorkerMessage, Error> {
     stream.read_exact(&mut body)?;
     Ok(serde_json::from_slice(&body)?)
 }
+/// A structured log line's level (decision 514).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    /// Detail for debugging.
+    Debug,
+    /// What happens.
+    Info,
+    /// Something to look at.
+    Warning,
+    /// Something failed.
+    Error,
+    /// The task can't go on.
+    Critical,
+}
+
+/// The structured log line (decision 514) for `message` at `level` with `fields`: one JSON
+/// object, shown in the Logs tab with its level and fields. Without an end of line.
+#[must_use]
+pub fn log_line(level: Level, message: &str, fields: &[(&str, Value)]) -> String {
+    let level = match level {
+        Level::Debug => "debug",
+        Level::Info => "info",
+        Level::Warning => "warning",
+        Level::Error => "error",
+        Level::Critical => "critical",
+    };
+    let mut line = serde_json::json!({"schedr_log": 1, "level": level, "message": message});
+    if !fields.is_empty() {
+        line["fields"] = Value::Object(
+            fields
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.clone()))
+                .collect(),
+        );
+    }
+    line.to_string()
+}
+
+/// Writes a structured log line to stderr, which goes to the attempt's log (decision 514).
+pub fn log(level: Level, message: &str, fields: &[(&str, Value)]) {
+    eprintln!("{}", log_line(level, message, fields));
+}
 
 /// Runs `plugin`: answers `--describe`, or the one request the worker sends over
 /// `SCHEDR_AGENT_FD`. Call it first thing in `main`, before starting threads.
@@ -375,18 +492,30 @@ pub fn run_main(mut plugin: impl Plugin, args: &[String], fd: Option<&str>) -> u
     }
 }
 
+/// `declarations`' list under `key` (`metrics` or `panels`), for the hello.
+fn declared(declarations: &Value, key: &str) -> Vec<Value> {
+    declarations
+        .get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// The handshake and the one request over `stream`: whether the task succeeded.
 ///
 /// # Errors
 ///
 /// [`Error::Refused`] when the worker refused the plugin, or the channel's error.
 pub fn serve(plugin: &mut impl Plugin, mut stream: UnixStream) -> Result<bool, Error> {
+    let declarations = plugin.declarations();
     write(
         &mut stream,
         &PluginMessage::Hello {
             schedr_version: env!("CARGO_PKG_VERSION").to_owned(),
             mode: "extension".to_owned(),
             protocol: PROTOCOL,
+            metrics: declared(&declarations, "metrics"),
+            panels: declared(&declarations, "panels"),
         },
     )?;
     match read(&mut stream)? {

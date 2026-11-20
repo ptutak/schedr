@@ -23,9 +23,11 @@ mod connections;
 mod dag_filters;
 pub mod deployments;
 mod docs;
+mod extensions;
 pub mod graph;
 mod imports;
 pub mod live;
+mod log_lines;
 mod metrics;
 pub mod page;
 mod pages;
@@ -144,8 +146,17 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
             "/d/{deployment}/runs/{run}/tasks/{task}/output.json",
             get(runs::output_download::<T>),
         )
+        .route(
+            "/d/{deployment}/runs/{run}/tasks/{task}/log.txt",
+            get(runs::log_download::<T>),
+        )
         .route("/deployments", get(deployments::list::<T>))
         .route("/metrics", get(metrics::page::<T>))
+        .route("/extensions", get(extensions::list::<T>))
+        .route(
+            "/d/{deployment}/extensions/{name}",
+            get(extensions::page::<T>),
+        )
         .route("/metrics/chart", get(metrics::node_chart::<T>))
         .route("/workers", get(workers::list::<T>))
         .route("/connections", get(connections::list::<T>))
