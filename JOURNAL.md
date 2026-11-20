@@ -2712,3 +2712,11 @@ output with `schedr task-ctx extension output set` (the user's name for it; not 
 `ProcessResult`, not a last stdout line); the Extensions page and its API as proposed (not a
 section of the Metrics page); the Dashboard through Helm, "as long as you point the right
 cluster context" (not the plain manifest).
+
+### 2026-11-21: how structured lines are stored (decision 514)
+
+A side agent's note: with Python tasks' logging structured automatically, raw log files,
+downloads, the CLI and log shippers would see JSON where readable lines used to be. The user
+chose a setting, JSON by default: `[worker] log_format = "json"` stores JSON lines, `"plain"`
+our readable form; the download offers "json" when the log was stored so, and "plain" always,
+JSON rendered readable. Not chosen: readable lines only, or JSON rendered only by our readers.
