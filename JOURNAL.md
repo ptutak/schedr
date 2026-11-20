@@ -2579,3 +2579,25 @@ and how the worker judges it, stopping, compatibility. Each rule read from the w
 `schema/extension.schema.json`, generated from `schedr-extension`'s types (`schemars` behind the
 crate's off-by-default `schema` feature, so a plugin's build stays as it was) and checked by
 `make schema-check`; the Python helper's tests check every message either way against it.
+
+### <a id="D513"></a>2026-11-20: plugins observed and controlled as tasks are (decision 513)
+
+The user: "plugins should enable capabilities normally hard to achieve ... they need to provide
+the same quality of observability and control as other tasks, they should be shown on metrics and
+recognize normal task controlling mechanisms, and extensions should provide an API for that";
+"in the UI we could have a dedicated page for all extensions with their specific metrics shown";
+"we can extend the extensions protocol as much as we want in this step, nothing is released yet";
+"the Kubernetes plugin is an excellent playground to get all things right".
+
+Chosen: the metrics travel "as we do with workers and tasks today" (the heartbeat, minute samples,
+rollups), not Prometheus only; counters, gauges and histograms with declared buckets, each
+declared, not free-form with a cap (bounded labels); a `stop` message with SIGTERM at once, not
+the message first and SIGTERM later (a plugin not reading still stops); before R1.2 as M5.2i5,
+not after as protocol 2. Also from the same talk, not planned: freeing a slot while a plugin
+waits, capacity beyond slots, secret storages, event sources and output storage as plugins.
+
+### 2026-11-20: M5.2i4 reopened, the last of the M5.2i steps
+
+The user: "M5.2i4 is the last i step, because we have to work out the protocol." M5.2i5 extends
+protocol 1 (decision 513), so the specification is finished after it: M5.2i4 back to planned,
+after M5.2i5; its page and schema of today (396e14de) stay as the first version.

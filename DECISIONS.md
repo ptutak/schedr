@@ -55,6 +55,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D513 | 2026-11-20 | user | planned (M5.2i5) | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |
 | D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |
 | D511 | 2026-11-20 | user | built M5.2h6 | secrets | A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly |
 | D510 | 2026-11-20 | user | built M5.2i | task-processes | Extensions: a task kind run by a plugin executable the open worker supervises |
@@ -991,6 +992,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-processes
 
+- D513: Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page
 - D510: Extensions: a task kind run by a plugin executable the open worker supervises
 - D385: A worker's interpreters serve all its roots
 - D213: Attempt timeouts include secret and connection reads

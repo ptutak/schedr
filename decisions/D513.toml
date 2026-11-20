@@ -1,0 +1,20 @@
+title = "Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page"
+date = 2026-11-20
+by = "user"
+status = "active"
+topic = "task-processes"
+also = ["observability", "ui-cli", "protocol"]
+section = "Extensions"
+summary = '''
+A plugin gets the observability and control of a task, and more, through protocol 1 (unreleased:
+extended freely): a `status` message (phase, message, progress) and `links` (label, URL) shown on
+the task and the Extensions page; its own metrics, counters, gauges and histograms with
+declared buckets, each declared (name, kind, help, label names) in `--describe` or config,
+undeclared ones dropped with a warning; carried as workers' and tasks' figures are today (the
+heartbeat, minute samples, 15-minute rollups), charted on a UI page for all extensions and on the
+worker's Prometheus `/metrics`; and a `stop` message (its reason: cancel, timeout, drain, a lost
+master; its grace) sent with SIGTERM, SIGKILL after the grace. Before R1.2 (M5.2i5); the
+Kubernetes plugin uses every part.
+'''
+history = "JOURNAL.md#D513"
+step = "M5.2i5"

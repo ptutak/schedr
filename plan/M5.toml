@@ -532,6 +532,28 @@ a DAG's task run as a pod on kind end to end: logs while running, success and fa
 status = "planned"
 
 [[steps]]
+id = "M5.2i5"
+title = "Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page"
+scope = '''
+(the user, 2026-11-20: "they need to provide the same quality of observability and control as other tasks ... extensions should provide an API for that"; "a dedicated page for all extensions with their specific metrics"; "the Kubernetes plugin is an excellent playground") decision 513, all in protocol 1 (unreleased): the plugin's `status` (phase, message, progress) and `links` (label, URL), kept with the attempt, shown on the task's panel and the API; its declared metrics (counters, gauges, histograms with buckets; name, kind, help, label names in `--describe` or `[extensions.<name>] metrics`), reported by message, undeclared ones dropped with a warning, aggregated by the worker per extension and carried as workers' and tasks' figures are (the heartbeat, the master's minute samples and 15-minute rollups), on the worker's Prometheus `/metrics` too; a `stop` message (reason: cancel, timeout, drain, lost master; grace) sent with SIGTERM, SIGKILL after the grace; a UI page for all extensions: each one's workers and versions, its attempts (running, ended, how soon started, how long), its declared metrics charted like the Metrics page. Both helpers, the crate, the schema and the protocol page follow; the Kubernetes plugin uses each part (phases Pending, pulling, running; the pod as a link; queue time and duration as histograms; a drain left to finish, a cancel deleting the Job)
+'''
+done_when = '''
+the Kubernetes plugin on kind shows its phases, links and metrics on the task and the Extensions page, and its stop reasons change what it does; the helpers, crate, schema and protocol page agree; tests for each message and for the samples' path
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2i4"
+title = "The plugin protocol's specification, and a schema of just its messages"
+scope = '''
+(the user, 2026-11-20: "some kind of specification for how the extension communicates, or different SDKs for different languages, if needed") a page for plugin authors in any language, precise enough to implement from: the transport (the Unix stream in `SCHEDR_AGENT_FD`, made close-on-exec; each message a 4-byte big-endian length, then UTF-8 JSON, at most 64 MiB), the handshake (`hello` in `extension` mode with `protocol`, `welcome` or `refused`), the one `extension_task` (with `cleanup` for the cleanup), asking one request at a time (`secret_get`, `connection_get`, `handle_add`, `api_call` and their answers), the end (`task_succeeded` or `task_failed`, exit codes, `SIGTERM` and the grace), `--describe` (one JSON line within 5 s), and compatibility (unknown fields ignored; new message types only with a protocol bump); `schema/extension.schema.json` of only those messages, generated from `schedr-extension`'s types and checked by `make schema-check`. More SDKs only when someone asks; a conformance check (`schedr extension check <plugin>`, playing the worker against any plugin) noted as an idea, the user's to take up Last of the M5.2i steps (the user, 2026-11-20: the protocol is worked out first): a first version, the page and the schema of protocol 1 as M5.2i built it, written 2026-11-20 (commit 396e14de); finished once M5.2i5 has extended the protocol (status, links, metrics, stop).
+'''
+done_when = '''
+the page, linked from the guide's Extensions page; the schema generated and checked; the Python helper and the Rust crate agreeing with it (the crate's two-way test, a test of the helper's messages against the schema)
+'''
+status = "planned"
+
+[[steps]]
 id = "M5.2i3"
 title = "Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks"
 scope = '''
@@ -541,18 +563,6 @@ done_when = '''
 discussed with the user; built, changed or dropped by their word
 '''
 status = "dropped"
-
-[[steps]]
-id = "M5.2i4"
-title = "The plugin protocol's specification, and a schema of just its messages"
-scope = '''
-(the user, 2026-11-20: "some kind of specification for how the extension communicates, or different SDKs for different languages, if needed") a page for plugin authors in any language, precise enough to implement from: the transport (the Unix stream in `SCHEDR_AGENT_FD`, made close-on-exec; each message a 4-byte big-endian length, then UTF-8 JSON, at most 64 MiB), the handshake (`hello` in `extension` mode with `protocol`, `welcome` or `refused`), the one `extension_task` (with `cleanup` for the cleanup), asking one request at a time (`secret_get`, `connection_get`, `handle_add`, `api_call` and their answers), the end (`task_succeeded` or `task_failed`, exit codes, `SIGTERM` and the grace), `--describe` (one JSON line within 5 s), and compatibility (unknown fields ignored; new message types only with a protocol bump); `schema/extension.schema.json` of only those messages, generated from `schedr-extension`'s types and checked by `make schema-check`. More SDKs only when someone asks; a conformance check (`schedr extension check <plugin>`, playing the worker against any plugin) noted as an idea, the user's to take up
-'''
-done_when = '''
-the page, linked from the guide's Extensions page; the schema generated and checked; the Python helper and the Rust crate agreeing with it (the crate's two-way test, a test of the helper's messages against the schema)
-'''
-status = "done"
-done = 2026-11-20
 
 [[steps]]
 id = "M5.2j"
