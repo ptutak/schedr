@@ -245,14 +245,14 @@ STANDALONE_SECRETS := "etl/db password=s3cret-db-password" "etl/api token=s3cret
 	"tenants/acme api_key=s3cret-acme-key" "greenhouse/devices token=s3cret-device-token"
 # `prepare DIR`, a shell function for a standalone whose SQLite database is DIR/schedr.db: a
 # secret key made once in DIR/secret.key (`SCHEDR_SECRET_KEY`), and STANDALONE_SECRETS set
-# where missing (listed, never decrypted: one written under another key is kept). A new database is migrated first to hold them; one there already is migrated
-# by `standalone --migrate`.
+# where missing (listed, never decrypted: one written under another key is kept). The database is migrated first, new or not: one left from an older version
+# would refuse the secrets' listing before `standalone --migrate` is reached.
 PREPARE_BIN = target/debug/schedr
 STANDALONE_PREPARE = prepare() { \
 	local key="$$1/secret.key" url="sqlite://$$1/schedr.db" entry path pair; \
 	mkdir -p "$$1"; \
 	if [ ! -s "$$key" ]; then (umask 077; $(PREPARE_BIN) secrets new-key > "$$key"); fi; \
-	[ -e "$$1/schedr.db" ] || SCHEDR_CONFIG__DATABASE__URL="$$url" $(PREPARE_BIN) db migrate; \
+	SCHEDR_CONFIG__DATABASE__URL="$$url" $(PREPARE_BIN) db migrate; \
 	stored="$$(SCHEDR_CONFIG__DATABASE__URL="$$url" $(PREPARE_BIN) secrets list | cut -f1,2)"; \
 	for entry in $(STANDALONE_SECRETS); do \
 		path=$${entry%% *}; pair=$${entry\#* }; \
@@ -455,8 +455,8 @@ showcase:        ## Play the greenhouse showcase against `make standalone DAGS=e
 	for dag in $(SHOWCASE_DAG_IDS); do target/debug/schedr dags unpause $$dag >/dev/null || exit 1; done
 	uv run --no-sync python examples/showcase/simulate.py --schedr target/debug/schedr demo
 
-# The connections demo (examples/demo, decisions 202-205): the base image (built once, `make
-# image`), the demo image FROM it, every password and key generated into the demo's volumes,
+# The connections demo (examples/demo, decisions 202-205): the base image (the latest
+# release's, pulled), the demo image FROM it, every password and key generated into the demo's volumes,
 # then compose: the servers, `dev` and `prod`, and `schedr ui` on http://127.0.0.1:8082.
 # `make demo-down` stops it; `make demo-clean` also drops the generated passwords and keys.
 DEMO_IMAGE ?= localhost/schedr-demo:latest
@@ -468,15 +468,18 @@ DEMO_COMPOSE = $(COMPOSE) -f examples/demo/compose.yaml
 DEMO_VOLUMES := schedr-demo-dev schedr-demo-prod schedr-demo-servers schedr-demo-ssh-users \
 	schedr-demo-ssh-host
 
-# The base image: there already, else pulled when IMAGE names a registry
-# (`IMAGE=ghcr.io/ptutak/schedr:<version>`), else built from this checkout (`make image`,
-# which needs Rust and uv).
-demo-image:      ## Build the connections demo's image (on the base image: there, pulled, or built)
-	$(CONTAINER) image inspect $(IMAGE) >/dev/null 2>&1 || case "$(IMAGE)" in \
-		*.*/*) $(CONTAINER) pull $(IMAGE) ;; \
-		*) $(MAKE) image ;; \
+# The base image: the latest release's from ghcr.io (the user, 2026-11-20: the demos run what
+# was released), pulled when not there; `DEMO_BASE=$(IMAGE)` (no registry in its name) builds it
+# from this checkout instead (`make image`, which needs Rust and uv). The release is the newest
+# tag without `rc`, else this checkout's version.
+DEMO_RELEASE ?= $(or $(shell git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | grep -v rc | head -1 | sed 's/^v//'),$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1))
+DEMO_BASE ?= ghcr.io/ptutak/schedr:$(DEMO_RELEASE)
+demo-image:      ## Build the connections demo's image (on the latest release's image, pulled; DEMO_BASE to change it)
+	case "$(DEMO_BASE)" in \
+		*.*/*) $(CONTAINER) image inspect $(DEMO_BASE) >/dev/null 2>&1 || $(CONTAINER) pull $(DEMO_BASE) ;; \
+		*) $(MAKE) image IMAGE=$(DEMO_BASE) ;; \
 	esac
-	$(CONTAINER) build --build-arg SCHEDR=$(IMAGE) -t $(DEMO_IMAGE) examples/demo
+	$(CONTAINER) build --build-arg SCHEDR=$(DEMO_BASE) -t $(DEMO_IMAGE) examples/demo
 	for volume in $(DEMO_VOLUMES); do \
 		$(CONTAINER) volume inspect $$volume >/dev/null 2>&1 || $(CONTAINER) volume create $$volume >/dev/null; \
 	done

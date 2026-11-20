@@ -68,7 +68,7 @@ services:
 
   dev:
     image: ${DEMO_IMAGE:-localhost/schedr-demo:latest}
-    entrypoint: [/sbin/tini, --, schedr-demo-start]
+    entrypoint: [tini, --, schedr-demo-start]
     environment:
       <<: *no-proxy
       DEMO_ENV: dev
@@ -79,7 +79,7 @@ services:
 
   prod:
     image: ${DEMO_IMAGE:-localhost/schedr-demo:latest}
-    entrypoint: [/sbin/tini, --, schedr-demo-start]
+    entrypoint: [tini, --, schedr-demo-start]
     environment:
       <<: *no-proxy
       DEMO_ENV: prod

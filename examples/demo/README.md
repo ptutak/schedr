@@ -50,7 +50,7 @@ never `prod`'s or the servers' administrator password. They stay until `make dem
   (`?sslmode=require`, unchecked). A real deployment keeps the default, `verify-full`.
 - **No authentication on the API:** the deployments' APIs are reachable only on the
   demo's network, and the UI on your machine's loopback.
-- **The base image is built here** (`make image`, the first time, which needs Rust and uv):
-  the demo needs schedr's current code, newer than any release. Once a release has
-  connections, `make demo IMAGE=ghcr.io/ptutak/schedr:<version>` pulls it instead, and
-  only podman (or Docker) and its compose are needed.
+- **The base image is the latest release's,** pulled from `ghcr.io/ptutak/schedr`, so only
+  podman (or Docker) and its compose are needed. `make demo DEMO_BASE=schedr:<version>`
+  builds it from this checkout instead (`make image`, which needs Rust and uv), to try code
+  not released yet.
