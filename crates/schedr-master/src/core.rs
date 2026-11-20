@@ -36,6 +36,7 @@ use crate::scheduler::{Scheduler, SchedulerError};
 pub mod round;
 pub mod task_api;
 pub(crate) mod triggers;
+pub(crate) use triggers::TriggersFailed;
 
 #[cfg(test)]
 mod tests;

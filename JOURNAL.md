@@ -2355,3 +2355,23 @@ cache of committed state; Postgres functions; a pipeline; DAG owners in one lead
 the authority ruled out, as are masters with leases of their own); assessed with the user: not
 worth a rework now, the master's ~75 a second is far past what real tasks need of it. Also
 logged: B270 (the gauge refresh counts every run in history, in the master's loop).
+
+### 2026-11-20: M5.2h built: a turn's trigger messages in one transaction, the lock time a quarter less
+
+A worker's trigger messages (`TriggerEvent`, `TriggerPoked`, `TriggerStopped`) that come one
+after another in its turn are handled together, in their order, in one fenced transaction
+(`MasterCore::handle_triggers`): each as it is alone, what one reads seeing what the ones before
+it wrote (the bookmark, the queued runs counted for back-pressure, a trigger stopped). The
+dispatcher's memory and the triggers stopping are copied first and put back if it fails, a lost
+commit answer recounting the concurrency counts as the results do (the user's choice: the
+snapshot widened); trigger events are counted once stored (staged, as attempt ends are). A failed
+group is handled one by one as before; handling one again after a commit that stored is what a
+worker sending it again already causes (an event is stored once, by its bookmark). A turn carries
+about 1.3 trigger messages on average, so a single one goes through the same transaction too: its
+writes were each their own. Scenario 24, three runs of each in turn: the lock held by trigger
+messages 26.7-28.1 s to 20.2-20.8 s (a handling about 21 ms: each message's own reads and writes,
+not the transaction's start and commit), all done 91.4-95.7 s to 85.4-86.3 s, events a second
+16.0-18.7 to 22.0-22.6, tasks a second 19.1-19.8 to 21.2-21.4; an event's way to its task's start
+unchanged (about 35 s at the median, queued behind the load). Not chosen: the trigger messages in
+the round (each event would wait for a round, the user); the deltas applied after the commit
+(plan, M5.2h).

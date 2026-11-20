@@ -152,6 +152,15 @@ fn backoff(failures: u32, first: Duration, most: Duration) -> Duration {
 /// How many runs one pass starts for a DAG started by `RunOf`; the rest wait for the next.
 pub const RUNS_OF_A_PASS: u32 = 50;
 
+/// How [`MasterCore::handle_triggers`] failed.
+#[derive(Debug)]
+pub(crate) enum TriggersFailed {
+    /// Rolled back: the messages, to handle one by one.
+    Again(Vec<worker_message::Message>),
+    /// The commit's answer lost: it may have stored; the stream ends.
+    Unknown(CoreError),
+}
+
 impl MasterCore {
     /// Stops the triggers that should not run where they are, and starts those that should run
     /// and don't.
@@ -526,11 +535,11 @@ impl MasterCore {
                 self.db
                     .set_trigger_stopped(&record.dag_id, Some((STOPPED_BACK_PRESSURE, "")))
                     .await?;
-                self.metrics.trigger_back_pressure_stops.inc();
+                self.metrics.trigger_back_pressure_stop();
             }
             Keep::Idle => {
                 self.db.trigger_idle_restart(&record.dag_id, now).await?;
-                self.metrics.trigger_idle_restarts.inc();
+                self.metrics.trigger_idle_restart();
             }
             Keep::Yes | Keep::Stop | Keep::Forget => {}
         }
@@ -765,6 +774,67 @@ impl MasterCore {
             schedr_config::masked::mask_data(output);
         }
         Ok(result)
+    }
+
+    /// A worker's trigger messages that came one after another in its turn (M5.2h), in one
+    /// transaction: each handled as [`Self::handle`] handles it alone, in their order, one lease
+    /// check and one commit for all; what one reads sees what the ones before it wrote (a
+    /// trigger's bookmark, its queued runs, a trigger stopped). What they change in memory (the
+    /// watcher slots, the triggers stopping) is copied first and put back if it fails, trigger
+    /// events counted only once it is stored (the user, 2026-11-20: the snapshot widened).
+    ///
+    /// # Errors
+    ///
+    /// [`TriggersFailed::Again`]: rolled back (any message's error, the lease, the commit
+    /// refused), memory put back and nothing of them counted: the caller handles them one by one,
+    /// which decides each one's fate as before. [`TriggersFailed::Unknown`]: the commit's answer
+    /// was lost, so it may have stored: memory stays as they changed it and what they counted is
+    /// counted, as one message alone failing so did, and the stream ends; the worker registers
+    /// again (its triggers counted afresh) and sends what wasn't acknowledged, which finds what
+    /// stored (an event is stored once, by its bookmark; a stop already handled is no more
+    /// stopping). Put back and handled again, a stored stop would count its strike twice and
+    /// keep its slot (Codex's review of M5.2h).
+    pub(crate) async fn handle_triggers(
+        &mut self,
+        worker_id: &str,
+        messages: Vec<worker_message::Message>,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, TriggersFailed> {
+        self.heard_from(worker_id, now).await;
+        let db = self.db.clone();
+        let (memory, stopping) = (self.dispatcher.memory(), self.stopping_triggers.clone());
+        let again = messages.clone();
+        self.metrics.stage();
+        let handled = Box::pin(db.atomically(async {
+            let mut out = Vec::new();
+            for message in messages {
+                out.extend(self.trigger_message(worker_id, message, now).await?);
+            }
+            Ok::<_, CoreError>(out)
+        }))
+        .await;
+        match handled {
+            Ok(out) => {
+                self.metrics.count_staged();
+                Ok(out)
+            }
+            Err(error @ CoreError::Db(DbError::CommitUnknown)) => {
+                self.metrics.count_staged();
+                Err(TriggersFailed::Unknown(error))
+            }
+            Err(error) => {
+                self.metrics.drop_staged();
+                self.dispatcher.restore(memory);
+                self.stopping_triggers = stopping;
+                tracing::warn!(
+                    worker_id,
+                    %error,
+                    messages = again.len(),
+                    "a turn's trigger messages failed together: handled one by one"
+                );
+                Err(TriggersFailed::Again(again))
+            }
+        }
     }
 
     /// What a worker says of a trigger.

@@ -1179,7 +1179,7 @@ impl Hub {
     ) -> TurnEnd {
         let mut results = Vec::new();
         let mut after = Vec::new();
-        let mut messages = turn.into_iter();
+        let mut messages = turn.into_iter().peekable();
         loop {
             let barrier = match messages.next() {
                 Some(message) if is_result(&message) => {
@@ -1209,13 +1209,22 @@ impl Hub {
                 }
             }
             let end = match barrier {
+                // The trigger messages that follow it, up to the first other one, with it: one
+                // transaction for them all (M5.2h).
+                Some(message) if trigger => {
+                    let mut group = vec![message];
+                    while let Some(next) = messages.next_if(is_trigger_message) {
+                        group.push(next);
+                    }
+                    let count = group.len();
+                    let (end, took) =
+                        Box::pin(self.triggers_served(worker_id, stream, group)).await;
+                    self.metrics.turn_part_done("triggers", count, took);
+                    Some(end)
+                }
                 Some(message) => {
                     let (end, took) = self.alone_served(worker_id, stream, message).await;
-                    if trigger {
-                        self.metrics.turn_part_done("triggers", 1, took);
-                    } else {
-                        held += took;
-                    }
+                    held += took;
                     Some(end)
                 }
                 None => None,
@@ -1576,6 +1585,52 @@ impl Hub {
             TurnEnd::Unhandled
         };
         (end, took)
+    }
+
+    /// A worker's trigger messages that came one after another (M5.2h), one or more: one
+    /// transaction for them all under the core's lock ([`MasterCore::handle_triggers`]), where
+    /// a message's writes were each their own; when that fails, each on its own as before
+    /// ([`Self::alone_served`]). Like any trigger message, they don't wait behind the worker's
+    /// results (B268).
+    async fn triggers_served(
+        &self,
+        worker_id: &str,
+        stream: &Outbound,
+        group: Vec<worker_message::Message>,
+    ) -> (TurnEnd, std::time::Duration) {
+        let Some(mut core) = self.served_core(worker_id, stream).await else {
+            return (TurnEnd::Dropped, std::time::Duration::ZERO);
+        };
+        let began = std::time::Instant::now();
+        let handled = core.handle_triggers(worker_id, group, (self.clock)()).await;
+        let mut took = began.elapsed();
+        drop(core);
+        let group = match handled {
+            Ok(outgoing) => {
+                self.sent(outgoing, false).await;
+                return (TurnEnd::Goes, took);
+            }
+            Err(crate::core::TriggersFailed::Again(group)) => group,
+            Err(crate::core::TriggersFailed::Unknown(error)) => {
+                // As one message alone failing so: not sent again on this stream, so the
+                // worker registers again and sends what wasn't acknowledged.
+                tracing::error!(
+                    worker_id,
+                    %error,
+                    "a turn's trigger messages may not be stored: its stream is ended, so the \
+                     worker registers again"
+                );
+                return (TurnEnd::Unhandled, took);
+            }
+        };
+        for message in group {
+            let (end, one) = self.alone_served(worker_id, stream, message).await;
+            took += one;
+            if !matches!(end, TurnEnd::Goes) {
+                return (end, took);
+            }
+        }
+        (TurnEnd::Goes, took)
     }
 
     /// Delivers what a transaction of a turn sends, waking a round if it stored a `Finished`.

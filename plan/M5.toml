@@ -440,12 +440,13 @@ done = 2026-11-20
 id = "M5.2h"
 title = "Trigger events batched in one transaction"
 scope = '''
-(the user, 2026-11-19; was M5.2f's second half) after the scenario-1 profiling (M5.2g): the trigger messages arriving together (`TriggerEvent`, `TriggerPoked`, `TriggerStopped`) in one transaction instead of one each (scenario 24: 1,200 events held the lock 27.8 s, about 23 ms each, mostly a transaction's start and commit), still handled on arrival: the back-pressure count and a trigger stopped or failed kept in memory across the batch, a failed batch redone one by one, the dispatcher's snapshot widened to the trigger slots and the scheduler's active runs (the user, 2026-11-20: A, the snapshot widened, as the rest of the master does; not chosen: B, memory changed only after the commit from the batch's deltas, every trigger handler split into deciding and applying; C, deltas for the new batch path only, a second pattern beside the snapshots). Not chosen: the trigger messages in the round (decision 505's pattern), which would make each event wait for a round (the user: it slows events down)
+(the user, 2026-11-19; was M5.2f's second half) after the scenario-1 profiling (M5.2g): the trigger messages arriving together (`TriggerEvent`, `TriggerPoked`, `TriggerStopped`) in one transaction instead of one each (scenario 24: 1,200 events held the lock 27.8 s, about 23 ms each, mostly a transaction's start and commit), still handled on arrival: the back-pressure count and a trigger stopped or failed kept in memory across the batch, a failed batch redone one by one, the dispatcher's snapshot widened to the trigger slots and the scheduler's active runs (the user, 2026-11-20: A, the snapshot widened, as the rest of the master does; not chosen: B, memory changed only after the commit from the batch's deltas, every trigger handler split into deciding and applying; C, deltas for the new batch path only, a second pattern beside the snapshots). Not chosen: the trigger messages in the round (decision 505's pattern), which would make each event wait for a round (the user: it slows events down). Done (2026-11-20): `MasterCore::handle_triggers`, a single trigger message in the same transaction too (a turn carries about 1.3); a lost commit answer ends the stream as one message alone did (Codex's review); scenario 24, three runs each: the trigger lock 26.7-28.1 s to 20.2-20.8 s, events a second 16.0-18.7 to 22.0-22.6 (the journal)
 '''
 done_when = '''
 scenario 24's numbers before and after in the journal; stress 17-21 passing before the push
 '''
-status = "planned"
+status = "done"
+done = 2026-11-20
 
 [[steps]]
 id = "M5.2i"

@@ -259,7 +259,7 @@ The metrics (`/metrics` on the master's ops port; the stress report's `round_*` 
 | `schedr_master_tick_duration_seconds` | A whole round, wall time: the parts, the waits for the lock between them, the reads before the lock, the probe, delivery. |
 | `schedr_master_round_part_seconds{part}` | Each part's time under the lock (`results`, `commands`, `scheduler`, `prepare`, `expire`, `assign`, `rest`; `triggers` is the trigger loop's). |
 | `schedr_master_core_lock_wait_seconds{by}` | The waits for the lock: `round`, `turn`, `register`, `triggers`, `stream`, `upload`, `restore`. |
-| `schedr_master_turn_part_seconds{part}` | A worker's turn under the lock: `rest` (heartbeats, warnings), `triggers` (each trigger message). |
+| `schedr_master_turn_part_seconds{part}` | A worker's turn under the lock: `rest` (heartbeats, warnings), `triggers` (each run of trigger messages, one transaction). |
 
 The round's time not in any part is the off-lock work: the results' and assign's reads before
 the lock, the probe, delivery, and the waits for the lock.

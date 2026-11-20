@@ -325,10 +325,13 @@ that are already waiting are taken together, up to 80 in one turn
 A turn doesn't handle what moves a task, and so its run, forward: its `Started`, `Finished`,
 `TaskEnded`, `Rejected` and `Deregister` go into a queue for the next round, which the turn wakes
 (decision 505). Only the round moves runs forward, so what it reads stays true until it writes.
-Heartbeats and warnings are handled at once, under the lock. Any other message (`Draining`, a code
-report, a trigger's) is handled alone after what came before it, also under the lock; a worker
-whose earlier messages still wait for the round has it queued behind them, so its messages keep
-their order. Each time it takes the lock, a turn checks that its stream is still the worker's.
+Heartbeats and warnings are handled at once, under the lock. A trigger's messages (`TriggerEvent`,
+`TriggerPoked`, `TriggerStopped`) that come one after another are handled together, in their
+order, in one transaction (one lease check, one commit), each as it would be alone; if that
+fails, they are handled one by one. They don't wait behind the worker's results. Any other
+message (`Draining`, a code report) is handled alone after what came before it, also under the
+lock; a worker whose earlier messages still wait for the round has it queued behind them, so its
+messages keep their order. Each time it takes the lock, a turn checks that its stream is still the worker's.
 
 The round handles the queue first, before any other part: every worker's `Started`s and
 `Finished`s in one transaction (one lease check, one commit), each worker's `Started`s before its

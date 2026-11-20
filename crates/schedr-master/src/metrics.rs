@@ -692,8 +692,27 @@ impl MasterMetrics {
         }
     }
 
-    /// Counts an event from a trigger: whether it started a run.
+    /// Counts a trigger stopped for back-pressure (held while staging).
+    pub fn trigger_back_pressure_stop(&self) {
+        if self.held(|| Staged::TriggerBackPressureStop) {
+            return;
+        }
+        self.trigger_back_pressure_stops.inc();
+    }
+
+    /// Counts a trigger restarted for being idle (held while staging).
+    pub fn trigger_idle_restart(&self) {
+        if self.held(|| Staged::TriggerIdleRestart) {
+            return;
+        }
+        self.trigger_idle_restarts.inc();
+    }
+
+    /// Counts an event from a trigger: whether it started a run (held while staging).
     pub fn trigger_event(&self, new: bool) {
+        if self.held(|| Staged::TriggerEvent(new)) {
+            return;
+        }
         self.trigger_events
             .get_or_create(&EventResultLabels {
                 result: if new { "new" } else { "repeat" }.to_owned(),
@@ -811,10 +830,17 @@ enum Staged {
     AttemptEnded(String),
     RunFinished(String, String),
     RunLateFailed(String, String),
+    /// A trigger's event, new or a repeat (M5.2h: a turn's trigger messages are one
+    /// transaction, handled again one by one when it rolls back).
+    TriggerEvent(bool),
+    /// A trigger stopped for back-pressure (Codex's review of M5.2h).
+    TriggerBackPressureStop,
+    /// A trigger restarted for being idle.
+    TriggerIdleRestart,
 }
 
 impl MasterMetrics {
-    /// From now on attempt ends and run results are held instead of counted, until
+    /// From now on attempt ends, run results and trigger events are held instead of counted, until
     /// [`Self::count_staged`] counts them (the transaction committed) or [`Self::drop_staged`]
     /// drops them (it rolled back, and its messages will be handled again: M4B.3, so no
     /// result is counted twice).
@@ -837,6 +863,9 @@ impl MasterMetrics {
                 Staged::AttemptEnded(status) => self.attempt_ended(&status),
                 Staged::RunFinished(dag_id, result) => self.run_finished(&dag_id, &result),
                 Staged::RunLateFailed(dag_id, reason) => self.run_late_failed(&dag_id, &reason),
+                Staged::TriggerEvent(new) => self.trigger_event(new),
+                Staged::TriggerBackPressureStop => self.trigger_back_pressure_stop(),
+                Staged::TriggerIdleRestart => self.trigger_idle_restart(),
             }
         }
     }

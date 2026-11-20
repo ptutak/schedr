@@ -3065,6 +3065,76 @@ async fn a_new_key_queues_a_run_and_a_repeat_only_moves_the_bookmark() {
 }
 
 #[tokio::test]
+async fn a_turns_trigger_messages_together_store_what_each_would_alone() {
+    // M5.2h: the same events as above in one transaction: each acknowledged, a run for each
+    // new key, the bookmark at the last.
+    let (mut core, assign) = Box::pin(with_trigger()).await;
+    let messages = [(1, "a"), (2, "b"), (3, "a")]
+        .into_iter()
+        .map(|(seq, key)| found(&assign, seq, key))
+        .collect();
+    let answer = core
+        .handle_triggers("w1", messages, later(2))
+        .await
+        .unwrap();
+    let acks: Vec<u64> = answer
+        .iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::TriggerEventAck(ack) => Some(ack.seq),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(acks, [1, 2, 3]);
+    let runs = core
+        .db
+        .queued_runs(&DagId::new("sync").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.bookmark.as_deref(), Some("a"));
+}
+
+#[tokio::test]
+async fn trigger_messages_together_that_fail_store_nothing_and_come_back() {
+    // M5.2h: the second event's run refused: nothing of the first stays, both are handed back
+    // for one by one, and each then stores as it would alone.
+    let (mut core, assign) = Box::pin(with_trigger()).await;
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool().clone() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_second_run BEFORE INSERT ON runs \
+         WHEN (SELECT COUNT(*) FROM runs WHERE dag_id = 'sync') >= 1 \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let slots = core.dispatcher.worker("w1").unwrap().wait_steps.clone();
+    let messages = vec![found(&assign, 1, "a"), found(&assign, 2, "b")];
+    let Err(super::TriggersFailed::Again(back)) =
+        core.handle_triggers("w1", messages.clone(), later(2)).await
+    else {
+        panic!("a group rolled back is handed back");
+    };
+    assert_eq!(back, messages);
+    let dag = DagId::new("sync").unwrap();
+    assert_eq!(core.db.queued_runs(&dag).await.unwrap(), []);
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.bookmark, None);
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps, slots);
+    sqlx::query("DROP TRIGGER refuse_second_run")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for message in back {
+        core.handle_in_round("w1", message, later(2)).await.unwrap();
+    }
+    assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn what_an_old_instance_found_is_acknowledged_and_not_stored() {
     let (mut core, mut assign) = Box::pin(with_trigger()).await;
     assign.instance_id = "someone-else".to_owned();
@@ -3731,6 +3801,43 @@ async fn a_trigger_told_to_stop_keeps_its_slot_and_its_strike_counts() {
 }
 
 #[tokio::test]
+async fn a_stop_stored_whose_commit_answer_is_lost_is_not_handled_twice() {
+    // Codex's review of M5.2h: the trigger messages' transaction stores a struck stop and its
+    // answer is lost. Memory stays as it changed (the slot free, the stop no longer awaited) and
+    // the stream ends; the worker's resend then counts no second strike and frees no slot again.
+    let (mut core, assign) = Box::pin(with_trigger()).await;
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, true).await.unwrap();
+    core.tick(later(2)).await.unwrap();
+    let mut stopped = stopped_with(&assign, "", true);
+    let worker_message::Message::TriggerStopped(one) = &mut stopped else {
+        unreachable!()
+    };
+    one.code_hash = String::new();
+    core.db.lose_commit_answer();
+    let failed = core
+        .handle_triggers("w1", vec![stopped.clone()], later(3))
+        .await;
+    assert!(matches!(failed, Err(super::TriggersFailed::Unknown(_))));
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
+    let db = core.db.clone();
+    let strikes = || {
+        let db = db.clone();
+        async move {
+            db.wait_step_strikes("sync", "found")
+                .await
+                .unwrap()
+                .unwrap()
+                .strikes
+        }
+    };
+    assert_eq!(strikes().await, 1);
+    core.handle_in_round("w1", stopped, later(4)).await.unwrap();
+    assert_eq!(strikes().await, 1, "the resend counts no second strike");
+    assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
+}
+
+#[tokio::test]
 async fn events_past_the_queue_limit_stop_the_trigger_at_once() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
@@ -3768,6 +3875,56 @@ async fn events_past_the_queue_limit_stop_the_trigger_at_once() {
         message(&answer[0]),
         master_message::Message::CancelTrigger(_)
     ));
+    assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 2);
+    let stored = core.db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(stored.bookmark.as_deref(), Some("b"));
+    assert_eq!(stored.stopped_why.as_deref(), Some("back_pressure"));
+}
+
+#[tokio::test]
+async fn events_together_past_the_queue_limit_stop_the_trigger_where_alone_they_would() {
+    // M5.2h: in one transaction the third event sees the two runs the first two queued.
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let settings = Settings {
+        max_queued_events: 2,
+        ..Settings::default()
+    };
+    let mut core = MasterCore::new(db, settings);
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    core.upload(upload_of(&job.parse_job_id, &event_file()), ts(NOW))
+        .await
+        .unwrap();
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, false).await.unwrap();
+    let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
+    let messages = [(1, "a"), (2, "b"), (3, "c")]
+        .into_iter()
+        .map(|(seq, key)| found(&assign, seq, key))
+        .collect();
+    let answer = core
+        .handle_triggers("w1", messages, later(2))
+        .await
+        .unwrap();
+    let acks: Vec<u64> = answer
+        .iter()
+        .filter_map(|o| match message(o) {
+            master_message::Message::TriggerEventAck(ack) => Some(ack.seq),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(acks, [1, 2]);
+    assert!(
+        answer
+            .iter()
+            .any(|o| matches!(message(o), master_message::Message::CancelTrigger(_)))
+    );
     assert_eq!(core.db.queued_runs(&dag).await.unwrap().len(), 2);
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     assert_eq!(stored.bookmark.as_deref(), Some("b"));
