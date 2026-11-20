@@ -2438,10 +2438,16 @@ ranges (exact versions, predictable); an opaque byte payload with an untyped out
 on by default; only the schema for authors (the Python helper and a Rust crate, the types being
 `schedr-model`'s already). Beside it: a Python dummy whose payload says what to do, to watch
 how one behaves, and M5.2i2, a Kubernetes plugin in Python driving `kubectl`, the first real
-one (the user). Running a plugin in a watcher slot, for a remote job that only waits (an idea from ChatGPT):
-the hole is designed so it stays possible (the user), not built now. The contract is the
-messages, not the process; a plugin's `runs_in` (`process` now, `watcher` reserved) says where
-it runs and so which slot it takes; the Python helper's API is a coroutine either form can run.
-A plugin in a host would share its loop and process (the host's loop-lag rule against one that
-blocks; Python only), which is why it is a later choice, made with a target such as hundreds of
-pods a worker.
+one (the user). Running a plugin in a watcher slot, for a remote job that only waits (an idea from ChatGPT),
+built beside the process form (the user: both capabilities, the package choosing its slot). The
+watcher form reuses the wait steps' path (the master's watcher slots, the host's coroutine,
+cancel, loop lag, logs, a lost host), its new part the host importing the plugin and the master
+counting an extension's slot; the process form reuses the runner's launch path, its new part a
+plugin executable's handshake. The contract is the messages, so one Python plugin runs either
+way. A plugin in a host shares its loop and process (Python only, the loop-lag rule against
+one that blocks): the package's choice, for remote jobs that only wait. Is it more than a
+`@sensor` wrapping the job? Yes, by the cleanup: a wait step has no `cleanup=` and no handles
+(decision 323: its `finally`), so a host killed or a worker lost leaves its remote job behind;
+an extension registers handles in either form and its plugin is run again as a cleanup with
+them after any end (`extension_cleanup`, always a process, so it doesn't depend on the host that
+may have died). Which is why the watcher form stays (the user).
