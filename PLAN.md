@@ -266,7 +266,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2h | Trigger events batched in one transaction | done 2026-11-20 |  |
 | M5.2h2 | Several events in flight per trigger, so a backlog fills a turn's transaction | done 2026-11-20 |  |
 | M5.2h3 | A turn's events of one trigger stored set-based: about 7 statements a trigger, not 7 an event | done 2026-11-20 |  |
-| M5.2h4 | The narrow ready read restored (dce6d093), measured on CI | planned |  |
+| M5.2h4 | The narrow ready read restored (dce6d093), measured on CI | done 2026-11-20 |  |
 | M5.2h5 | The CLI reads a command's decision back first after 50 ms | done 2026-11-20 |  |
 | M5.2h6 | A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511) | done 2026-11-20 | D511 |
 | M5.2i | A hole for closed-source extensions: an opaque task kind run by a closed worker | planned | D510 |

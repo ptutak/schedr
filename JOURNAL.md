@@ -2484,3 +2484,21 @@ bookmarks), and decision 510's `watcher` form runs an extension there. The user'
 stay, as they are just `@sensor` and `@trigger`, our API; whoever builds a lifecycle on them does
 so on their own, and we neither build one nor show an example. Not chosen: decision 510 losing its
 `watcher` form (extensions always a process); isolating watcher hosts per DAG.
+
+### 2026-11-20: M5.2h4 measured on CI: neutral, kept
+
+The narrow ready read (M5.2h4) on CI, Stress on `64ac6261`. The first run failed scenario 14 (its
+round ratio 2.47, the limit 2) with every scenario 25-40 % down, the Python ones too (13: 14.0 to
+10.1 tasks/s), which nothing in M5.2h2-h5 touches: a slow runner. The user's rerun passed:
+
+| Scenario | `a03ef792` | `64ac6261`, run 1 | `64ac6261`, rerun |
+|---|---|---|---|
+| 01 throughput, tasks/s | 111.3 | 74.7 | 107.5 |
+| 06 PgBouncer throughput | 104.1 | 73.1 | 103.1 |
+| 09b standalone SQLite, 32 slots | 90.9 | 54.6 | 86.3 |
+| 13 Python tasks, forked | 96.0 | 60.5 | 96.4 |
+| 14 quiet DAGs, round ratio | 1.1 | 2.5 | 1.1 |
+| 24 triggers, events/s | 29.8 | 98.7 | 99.4 |
+
+The narrow read neither gains nor loses beyond the runners' spread; kept, as it reads less. A
+CI comparison wants two runs of each side when one looks off.

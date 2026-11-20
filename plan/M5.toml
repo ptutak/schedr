@@ -476,12 +476,13 @@ done = 2026-11-20
 id = "M5.2h4"
 title = "The narrow ready read restored (dce6d093), measured on CI"
 scope = '''
-(the user, 2026-11-20, after CI's stress run on a03ef792 reached 111 tasks/s in scenario 1, 74 before M5.2g, where this machine measured about +10 %: a change that makes the database do less may gain more on CI) M5.2g's piece 1, set aside as no gain here (the ready read's fetch 3.38 s against 3.44 in scenario 1): the ready read joining only the runs, a version's code from the cache. Cherry-picked from `dce6d093` (still in the reflog) once M5.2h2 and M5.2h3 are closed; one conflict, `crates/schedr-db/src/lib.rs`'s exports (M5.2g's `stored_time`). Then measured on CI: the Stress workflow, filter `01_throughput`, three runs on its branch and three on main in turn (pushing the branch the user's word); kept if it wins clearly, else set aside again with the numbers in the journal Cherry-picked and resolved (2026-11-20); CI's measurement after the push left.
+(the user, 2026-11-20, after CI's stress run on a03ef792 reached 111 tasks/s in scenario 1, 74 before M5.2g, where this machine measured about +10 %: a change that makes the database do less may gain more on CI) M5.2g's piece 1, set aside as no gain here (the ready read's fetch 3.38 s against 3.44 in scenario 1): the ready read joining only the runs, a version's code from the cache. Cherry-picked from `dce6d093` (still in the reflog) once M5.2h2 and M5.2h3 are closed; one conflict, `crates/schedr-db/src/lib.rs`'s exports (M5.2g's `stored_time`). Then measured on CI: the Stress workflow, filter `01_throughput`, three runs on its branch and three on main in turn (pushing the branch the user's word); kept if it wins clearly, else set aside again with the numbers in the journal Cherry-picked and resolved (2026-11-20); CI's measurement after the push left. Measured on CI (2026-11-20, 64ac6261): the first Stress run was a slow runner (every scenario 25-40 % down, the Python ones too, which this read doesn't touch); its rerun: scenario 1 107.5 tasks/s against 111.3 before it, PgBouncer 103.1 against 104.1, Python forked 96.4 against 96.0: no gain and no loss beyond the runners' spread. Kept.
 '''
 done_when = '''
 cherry-picked and resolved, `make check` passing; the CI numbers in the journal; kept or set aside by the user's word
 '''
-status = "planned"
+status = "done"
+done = 2026-11-20
 
 [[steps]]
 id = "M5.2h5"
