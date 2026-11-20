@@ -2702,3 +2702,13 @@ doesn't say an extension's name, versions and protocol). Chosen (D, "like for ne
 declarations come in the plugin's `hello`, learned at its first attempt and kept per extension
 and version; config's win and are known from the start. Not chosen: asking configured plugins at
 start (A), config only (B), an opt-in `describe = true` (C).
+
+### 2026-11-21: decisions ahead of M5.2i5 to M5.2i4, run unattended
+
+The user: "continue until end of i", and "do a review after every small i-number step" (one
+review each for M5.2i5, M5.2i6, M5.2i7 and M5.2i4). Asked first: the Python runner installs the
+structured log handler on the root logger automatically (not opt-in); a shell plugin sets its
+output with `schedr task-ctx extension output set` (the user's name for it; not a
+`ProcessResult`, not a last stdout line); the Extensions page and its API as proposed (not a
+section of the Metrics page); the Dashboard through Helm, "as long as you point the right
+cluster context" (not the plain manifest).
