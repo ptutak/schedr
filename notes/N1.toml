@@ -17,9 +17,218 @@ Every step and point of the round (`scripts/round_trace.py`): a point's count, i
 and 99th percentile a call in milliseconds, and its total over the run in seconds. A point inside
 a loop is timed each time; `tx.begin` and `tx.commit` are a transaction's start (the wait for a
 connection included) and its `COMMIT` under the part it runs in, `own_tx.*` those of a write in
-a transaction of its own; `probe` under a part is a probe taken again there.
+a transaction of its own; `probe` under a part is a probe taken again there. Run 2 (below) repeats it on an idle machine; run 3 (first) measures M5.2g's changes.
 
-#### The round (its own clock; start to start apart)
+### Run 3: M5.2g's changes against their base, three pairs interleaved (2026-11-20)
+
+Scenario 1, release, traced, the base (`3acd91dc`: run 2's code with the ready read's fetch
+timed apart) and the final code (`63f7f09b`) run in turn, base then final, three times: runs
+of one code vary by up to 25 tasks/s on this machine (its load reaches 13-19 during a run), so
+one run against one can't show a few seconds. "Busy" is the time in rounds longer than 20 ms:
+during the task window the rounds run back to back, so it is the master's serial time.
+
+| Run | Tasks/s | Slot cycle | Busy rounds | Busy ms a task | results | assign | commands | prepare | scheduler |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| base 1 | 78.3 | 0.409 s | 33.3 s | 13.3 | 12.70 | 9.56 | 5.54 | 2.12 | 1.68 |
+| final 1 | 75.8 | 0.422 s | 34.6 s | 13.8 | 13.18 | 9.35 | 5.35 | 2.51 | 1.68 |
+| base 2 | 69.1 | 0.463 s | 39.0 s | 15.6 | 13.58 | 10.52 | 4.68 | 2.67 | 3.48 |
+| final 2 | 73.1 | 0.438 s | 35.9 s | 14.4 | 11.56 | 11.13 | 5.55 | 2.72 | 1.55 |
+| base 3 | 66.6 | 0.481 s | 39.7 s | 15.9 | 14.17 | 11.44 | 6.13 | 2.41 | 2.20 |
+| final 3 | 77.8 | 0.411 s | 33.8 s | 13.5 | 10.44 | 10.99 | 3.65 | 2.41 | 2.72 |
+
+The parts' columns are their totals in seconds over the whole trace. The medians: base 69.1
+tasks/s (66.6-78.3) and 15.6 ms of busy round a task, final 75.8 (73.1-77.8) and 13.8 ms: about
+10 % more, steadier, the best base run inside the final's range. The shares of busy time: results
+36.2 % to 33.7 %, assign 28.2 % to 30.2 %, commands 14.7 % to 13.9 %.
+
+The changes measured: a results batch's runs written together (outputs, instances' changes and
+ends in one statement each, `runs_finished`); its runs and instances read in one statement;
+assign's held DAGs and versions in one; the scheduler's overview in one (was three); a manual
+run's context in one (was three). Tried and dropped: the ready read joining only `runs` (its
+fetch 3.38 s against 3.44, no gain). Why statements: in the round page's measured run
+(`docs/03-guide/19-masters-round.md`, 2026-11-19) the master used 18 % of a core and Postgres
+ran its statements 3.6 ms a task of 13.1, so most of a round waits on round trips.
+
+### Run 2 (M2): an idle machine, the commands part's lock waits timed
+
+`make stress STRESS=01_throughput STRESS_RELEASE=1` with `SCHEDR_HIDDEN__MASTER__ROUND_TRACE`
+set, at `785922df` (the round's cap 50, the ready read with no LIMIT, as in run 1), the machine
+idle (load 0.35): 2,501 tasks in 50.4 s, **75.0 tasks/s** (run 1: 36.4 on a loaded machine), the
+slot cycle 0.43 s (0.88). The lock waits of the commands part (`lock_wait.pending`, `.apply`,
+`.done`) are new since run 1: its 12 s on no point there were waits, and they mostly went with
+the load (1.5 s here).
+
+#### Each step's share (run 2 against run 1)
+
+| Step | Run 2 total s | Share of the run | Run 1 total s | Share | Most of it, run 2 |
+|---|---:|---:|---:|---:|---|
+| results | 12.17 | 24 % | 27.13 | 22 % | `batch` 8.6 (a run's writes 4.4: `advance.store` 2.5, `store_outputs` 1.5; `started` 1.8; `end_attempts` 1.2); `read_before_lock` 3.2 |
+| assign | 11.21 | 22 % | 18.86 | 16 % | `ready_instances` 5.7 (the largest single point: ~860 ready rows read a round, `pick_one` 100,956 calls); `assign_each_tx` 3.8 (`claim_attempts` 2.0) |
+| commands | 4.48 | 9 % | 18.76 | 15 % | `apply_one` 2.8 (101 commands); `lock_wait.pending` 1.5 |
+| probe (each round) | 3.16 | 6 % | 7.16 | 6 % | one statement a round, 13 ms median |
+| prepare | 2.14 | 4 % | 5.37 | 4 % | `prepare_runs.run` 2.0 (101 runs) |
+| scheduler | 1.82 | 4 % | 7.27 | 6 % | `overview_and_active_dags` 1.6 |
+| expire | 0.40 | 1 % | 1.34 | 1 % | |
+| rest | 0.13 | 0 % | 1.04 | 1 % | |
+| between rounds (start to start − start to end) | 14.58 | 29 % | 34.01 | 28 % | the round gap and the wait for work |
+| the run, start to start | 50.14 | | 121.06 | | |
+
+Results and assign stay the two largest, about a quarter each; inside them, `ready_instances`
+(reading every ready row each round) and a finished run's own writes (`advance.store`,
+`store_outputs`, one statement each a run) lead.
+
+#### Every step and point
+
+##### The round (its own clock; start to start apart)
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `round/probe_and_triggers_due` | 199 | 15.880 | 13.461 | 61.178 | 3.160 |
+| `round/start_to_end` | 199 | 178.667 | 167.479 | 1536.394 | 35.555 |
+| `round/start_to_start` | 198 | 253.228 | 200.132 | 1550.940 | 50.139 |
+
+##### Step 1: results
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `results/whole` | 199 | 61.154 | 65.127 | 328.216 | 12.170 |
+| `results/read_before_lock.attempts_by_ids` | 115 | 11.097 | 10.455 | 29.292 | 1.276 |
+| `results/read_before_lock.runs_tasks` | 115 | 17.092 | 15.835 | 39.102 | 1.966 |
+| `results/read_before_lock` | 115 | 28.220 | 26.092 | 55.726 | 3.245 |
+| `results/lock_wait` | 115 | 0.157 | 0.005 | 6.330 | 0.018 |
+| `results/tx.begin` | 118 | 5.276 | 3.654 | 21.071 | 0.623 |
+| `results/batch.started.attempts_by_ids` | 113 | 8.494 | 7.321 | 24.227 | 0.960 |
+| `results/batch.started.mark_started_many` | 226 | 3.526 | 0.003 | 22.119 | 0.797 |
+| `results/batch.started` | 113 | 15.670 | 13.422 | 37.188 | 1.771 |
+| `results/tx.commit` | 118 | 4.479 | 2.867 | 15.827 | 0.529 |
+| `results/batch` | 115 | 75.078 | 56.880 | 257.773 | 8.634 |
+| `results/under_lock` | 115 | 77.225 | 57.000 | 266.800 | 8.881 |
+| `results/deliver` | 115 | 0.132 | 0.047 | 0.174 | 0.015 |
+| `results/batch.finished.batch_attempts` | 114 | 0.602 | 0.065 | 7.963 | 0.069 |
+| `results/batch.finished.end_attempts` | 114 | 10.683 | 8.261 | 31.829 | 1.218 |
+| `results/batch.finished.run.store_outputs` | 306 | 4.841 | 3.826 | 20.424 | 1.481 |
+| `results/advance.chosen_of` | 306 | 0.002 | 0.002 | 0.006 | 0.001 |
+| `results/advance.settle_all` | 306 | 0.035 | 0.009 | 0.251 | 0.011 |
+| `results/advance.store` | 306 | 8.197 | 6.502 | 31.516 | 2.508 |
+| `results/batch.finished.run.advance` | 306 | 9.281 | 7.827 | 32.007 | 2.840 |
+| `results/batch.finished.run.stop` | 306 | 0.000 | 0.000 | 0.001 | 0.000 |
+| `results/batch.finished.run` | 306 | 14.301 | 12.083 | 49.781 | 4.376 |
+| `results/batch.finished` | 114 | 50.111 | 33.274 | 228.712 | 5.713 |
+| `results/advance.finish_run` | 101 | 2.606 | 2.036 | 8.750 | 0.263 |
+| `results/batch.finished.run.read_run` | 4 | 6.954 | 6.311 | 8.480 | 0.028 |
+| `results/alone` | 3 | 73.793 | 62.581 | 108.465 | 0.221 |
+
+##### Step 2: commands
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `commands/lock_wait.pending` | 144 | 10.679 | 0.005 | 39.298 | 1.538 |
+| `commands/pending` | 144 | 0.355 | 0.011 | 11.961 | 0.051 |
+| `commands/deliver` | 389 | 0.002 | 0.001 | 0.004 | 0.001 |
+| `commands/lock_wait.done` | 144 | 0.110 | 0.001 | 0.004 | 0.016 |
+| `commands/done` | 144 | 0.003 | 0.003 | 0.006 | 0.000 |
+| `commands/whole` | 144 | 31.120 | 0.031 | 715.034 | 4.481 |
+| `commands/lock_wait.apply` | 101 | 0.498 | 0.003 | 11.255 | 0.050 |
+| `commands/tx.begin` | 101 | 2.649 | 2.072 | 7.458 | 0.268 |
+| `commands/tx.commit` | 101 | 4.306 | 2.902 | 19.106 | 0.435 |
+| `commands/apply_one` | 101 | 27.948 | 20.920 | 63.485 | 2.823 |
+
+##### Step 3: scheduler
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `scheduler/lock_wait` | 199 | 0.133 | 0.001 | 6.283 | 0.027 |
+| `scheduler/dags_with_queued_runs` | 199 | 0.003 | 0.001 | 0.052 | 0.001 |
+| `scheduler/scheduled_due` | 199 | 1.130 | 0.001 | 23.450 | 0.225 |
+| `scheduler/next_fires` | 1 | 4.290 | 4.290 | 4.290 | 0.004 |
+| `scheduler/overview_and_active_dags` | 91 | 17.035 | 9.817 | 360.272 | 1.550 |
+| `scheduler/under_lock` | 199 | 8.981 | 0.022 | 58.305 | 1.787 |
+| `scheduler/deliver` | 199 | 0.002 | 0.002 | 0.004 | 0.000 |
+| `scheduler/whole` | 199 | 9.120 | 0.032 | 58.316 | 1.815 |
+| `scheduler/probe` | 19 | 11.818 | 9.929 | 27.316 | 0.225 |
+| `scheduler/dag.start_queued` | 303 | 0.001 | 0.000 | 0.003 | 0.000 |
+
+##### Step 4: prepare
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `prepare/lock_wait` | 199 | 0.085 | 0.001 | 8.003 | 0.017 |
+| `prepare/take_back_found` | 199 | 0.001 | 0.001 | 0.002 | 0.000 |
+| `prepare/prepare_runs.newly_running` | 199 | 0.222 | 0.001 | 8.146 | 0.044 |
+| `prepare/prepare_runs` | 199 | 10.513 | 0.004 | 550.813 | 2.092 |
+| `prepare/queue_due_retries.due_retries` | 199 | 0.140 | 0.000 | 9.721 | 0.028 |
+| `prepare/queue_due_retries` | 199 | 0.141 | 0.002 | 9.725 | 0.028 |
+| `prepare/under_lock` | 199 | 10.666 | 0.014 | 550.834 | 2.123 |
+| `prepare/deliver` | 199 | 0.001 | 0.000 | 0.004 | 0.000 |
+| `prepare/whole` | 199 | 10.755 | 0.018 | 550.850 | 2.140 |
+| `prepare/probe` | 3 | 9.249 | 9.711 | 13.233 | 0.028 |
+| `prepare/tx.begin` | 101 | 3.244 | 1.963 | 12.614 | 0.328 |
+| `prepare/tx.commit` | 101 | 4.573 | 2.803 | 19.907 | 0.462 |
+| `prepare/prepare_runs.run` | 101 | 20.268 | 12.009 | 77.993 | 2.047 |
+
+##### Step 5: expire (slow rounds)
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `expire/lock_wait` | 142 | 0.756 | 0.001 | 16.413 | 0.107 |
+| `expire/expire_unstarted.reads` | 142 | 2.057 | 1.743 | 14.458 | 0.292 |
+| `expire/expire_unstarted` | 142 | 2.071 | 1.754 | 14.487 | 0.294 |
+| `expire/end_replaced` | 142 | 0.004 | 0.003 | 0.006 | 0.001 |
+| `expire/under_lock` | 142 | 2.081 | 1.762 | 14.503 | 0.295 |
+| `expire/deliver` | 142 | 0.001 | 0.001 | 0.005 | 0.000 |
+| `expire/whole` | 142 | 2.841 | 1.795 | 16.454 | 0.403 |
+
+##### Step 6: assign
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `assign/read_before_lock.ready_instances` | 199 | 28.438 | 13.881 | 122.473 | 5.659 |
+| `assign/read_before_lock` | 199 | 32.259 | 17.815 | 155.727 | 6.419 |
+| `assign/lock_wait` | 199 | 0.017 | 0.004 | 0.171 | 0.003 |
+| `assign/fail_waiting_users` | 199 | 0.005 | 0.004 | 0.063 | 0.001 |
+| `assign/assign_cleanups` | 199 | 0.007 | 0.005 | 0.071 | 0.001 |
+| `assign/wind_down_removed` | 199 | 0.001 | 0.001 | 0.016 | 0.000 |
+| `assign/unless_held` | 199 | 0.051 | 0.027 | 0.335 | 0.010 |
+| `assign/chained_into` | 199 | 0.004 | 0.004 | 0.011 | 0.001 |
+| `assign/wait_for_runs` | 199 | 0.002 | 0.002 | 0.003 | 0.000 |
+| `assign/under_lock` | 199 | 23.987 | 26.608 | 111.620 | 4.773 |
+| `assign/deliver` | 199 | 0.050 | 0.037 | 0.378 | 0.010 |
+| `assign/whole` | 199 | 56.322 | 49.131 | 246.498 | 11.208 |
+| `assign/read_before_lock.upstream_and_wait_steps` | 117 | 6.355 | 4.626 | 29.332 | 0.744 |
+| `assign/held_dags` | 117 | 2.141 | 1.715 | 11.919 | 0.250 |
+| `assign/active_dag_versions` | 117 | 3.146 | 2.159 | 13.401 | 0.368 |
+| `assign/read_limits` | 117 | 0.100 | 0.040 | 0.325 | 0.012 |
+| `assign/tx.begin` | 117 | 2.981 | 2.171 | 17.532 | 0.349 |
+| `assign/assign_each.pick_one` | 100956 | 0.005 | 0.002 | 0.020 | 0.497 |
+| `assign/assign_each.picks` | 117 | 5.336 | 3.922 | 25.216 | 0.624 |
+| `assign/assign_each.claim_attempts` | 114 | 17.698 | 15.347 | 42.168 | 2.018 |
+| `assign/assign_each.build_one` | 2504 | 0.018 | 0.011 | 0.108 | 0.046 |
+| `assign/assign_each.build_all` | 117 | 0.419 | 0.388 | 1.105 | 0.049 |
+| `assign/assign_each.set_queued_reasons` | 117 | 2.393 | 0.019 | 21.528 | 0.280 |
+| `assign/tx.commit` | 117 | 3.916 | 2.841 | 13.931 | 0.458 |
+| `assign/assign_each_tx` | 117 | 32.704 | 27.296 | 88.751 | 3.826 |
+
+##### Step 7: rest (slow rounds)
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `rest/lock_wait` | 142 | 0.924 | 0.003 | 16.632 | 0.131 |
+| `rest/parse_jobs_expire` | 142 | 0.002 | 0.002 | 0.004 | 0.000 |
+| `rest/under_lock` | 142 | 0.010 | 0.009 | 0.050 | 0.001 |
+| `rest/deliver` | 142 | 0.001 | 0.000 | 0.003 | 0.000 |
+| `rest/whole` | 142 | 0.939 | 0.015 | 16.658 | 0.133 |
+
+##### Outside a round's part (workers' turns, the trigger loop, the lease)
+
+| Point | Count | Mean ms | Median ms | p99 ms | Total s |
+|---|---:|---:|---:|---:|---:|
+| `other/own_tx.begin` | 157 | 3.170 | 2.172 | 14.739 | 0.498 |
+| `other/own_tx.commit` | 157 | 4.775 | 3.152 | 26.120 | 0.750 |
+| `other/probe` | 199 | 15.869 | 13.446 | 61.166 | 3.158 |
+
+### Run 1: a loaded machine
+
+##### The round (its own clock; start to start apart)
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -27,7 +236,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `round/start_to_end` | 346 | 251.614 | 28.835 | 2630.912 | 87.058 |
 | `round/start_to_start` | 345 | 350.910 | 201.534 | 2695.759 | 121.064 |
 
-#### Step 1: results
+##### Step 1: results
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -60,7 +269,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `results/own_tx.begin` | 2 | 17.671 | 9.062 | 26.280 | 0.035 |
 | `results/own_tx.commit` | 2 | 29.261 | 14.786 | 43.737 | 0.059 |
 
-#### Step 2: commands
+##### Step 2: commands
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -71,7 +280,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `commands/tx.commit` | 101 | 8.861 | 5.286 | 41.236 | 0.895 |
 | `commands/apply_one` | 101 | 67.516 | 43.576 | 263.626 | 6.819 |
 
-#### Step 3: scheduler
+##### Step 3: scheduler
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -86,7 +295,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `scheduler/probe` | 76 | 27.911 | 16.487 | 225.438 | 2.121 |
 | `scheduler/dag.start_queued` | 303 | 0.001 | 0.000 | 0.004 | 0.000 |
 
-#### Step 4: prepare
+##### Step 4: prepare
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -104,7 +313,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `prepare/tx.commit` | 101 | 10.655 | 6.105 | 51.301 | 1.076 |
 | `prepare/prepare_runs.run` | 101 | 42.198 | 33.135 | 105.545 | 4.262 |
 
-#### Step 5: expire (slow rounds)
+##### Step 5: expire (slow rounds)
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -116,7 +325,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `expire/deliver` | 268 | 0.002 | 0.001 | 0.005 | 0.000 |
 | `expire/whole` | 268 | 4.983 | 0.028 | 52.112 | 1.335 |
 
-#### Step 6: assign
+##### Step 6: assign
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -147,7 +356,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `assign/tx.commit` | 119 | 9.350 | 4.791 | 108.063 | 1.113 |
 | `assign/assign_each_tx` | 119 | 57.639 | 42.124 | 267.139 | 6.859 |
 
-#### Step 7: rest (slow rounds)
+##### Step 7: rest (slow rounds)
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -157,7 +366,7 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 | `rest/deliver` | 268 | 0.001 | 0.001 | 0.003 | 0.000 |
 | `rest/whole` | 268 | 3.879 | 0.017 | 53.793 | 1.040 |
 
-#### Outside a round's part (workers' turns, the trigger loop, the lease)
+##### Outside a round's part (workers' turns, the trigger loop, the lease)
 
 | Point | Count | Mean ms | Median ms | p99 ms | Total s |
 |---|---:|---:|---:|---:|---:|
@@ -167,19 +376,26 @@ a transaction of its own; `probe` under a part is a probe taken again there.
 
 #### The trace points in the code, to remove once M5.2g is done
 
-Lines as written; each is a `schedr_db::trace::` call (`grep -rn "schedr_db::trace::" crates`
-finds them all).
+**Where it is kept:** the trace whole at `78af92f3` (and in `785922df` with M5.2f); its removal
+prepared as commit `dec855c1` on branch `trace-removal` (every point below, the module, the
+script and its test, the loader's `ROUND_TRACE`, the test support's pass-through; against
+`ce101532` only the fixes are left). To remove it once M5.2g's changes are measured: `git
+cherry-pick dec855c1` on `main`, resolving where the code moved, then `grep -rnE
+"(schedr_db|crate)::trace::" crates` empty.
+
+Lines at `785922df`; each is a `schedr_db::trace::` (or, in schedr-db, `crate::trace::`) call:
+`grep -rnE "(schedr_db|crate)::trace::" crates` finds them all.
 
 | File | Line, call, point |
 |---|---|
 | `crates/schedr-db/src/probe.rs` | 174 `point` `probe` |
 | `crates/schedr-db/src/query.rs` | 233 `point` `own_tx.begin`; 241 `point` `own_tx.commit` |
 | `crates/schedr-db/src/scope.rs` | 113 `timed_point`; 137 `point` `tx.commit` |
-| `crates/schedr-master/src/dispatch.rs` | 173 `point` `read_before_lock.attempts_by_ids`; 181 `point` `read_before_lock.runs_tasks`; 238 `point` `read_before_lock.ready_instances`; 259 `point` `read_before_lock.upstream_and_wait_steps`; 1308 `point` `take_back_found`; 1312 `point` `prepare_runs`; 1315 `point` `queue_due_retries`; 1332 `point` `expire_unstarted`; 1335 `point` `end_replaced`; 1447 `point` `fail_waiting_users`; 1453 `point` `assign_cleanups`; 1457 `point` `wind_down_removed`; 1477 `point` `held_dags`; 1481 `point` `unless_held`; 1492 `point` `chained_into`; 1498 `point` `wait_for_runs`; 1511 `point` `active_dag_versions`; 1515 `point` `read_limits`; 1518 `point` `assign_each_tx`; 2142 `point` `assign_each.picks`; 2145 `point` `assign_each.past_the_cap`; 2150 `point` `assign_each.pick_one`; 2169 `point` `assign_each.claim_attempts`; 2188 `point` `assign_each.upstream_again`; 2192 `point` `assign_each.build_all`; 2194 `point` `assign_each.build_one`; 2209 `point` `assign_each.set_queued_reasons`; 2595 `point` `batch.started.attempts_by_ids`; 2627 `point` `batch.started.mark_started_many`; 2924 `point` `batch.finished.end_attempts`; 2940 `point` `batch.finished.run`; 2951 `point` `batch.finished.run.stop`; 2998 `point` `batch.finished.batch_attempts`; 3025 `point` `batch.finished.uncommon_alone`; 3476 `point` `expire_unstarted.reads`; 3512 `point` `expire_unstarted.one` |
-| `crates/schedr-master/src/service.rs` | 606 `span` `round/probe_and_triggers_due`; 620 `in_part` `results`; 621 `point` `whole`; 630 `in_part` `commands`; 631 `point` `whole`; 643 `in_part` `part.name(`; 644 `point` `whole`; 650 `point` `read_before_lock`; 657 `point` `lock_wait`; 667 `point` `under_lock`; 671 `point` `deliver`; 693 `point` `pending`; 704 `point` `apply_one`; 720 `point` `done`; 1021 `on`; 1024 `record` `round/start_to_start`; 1027 `span` `round/start_to_end`; 1040 `flush`; 1362 `point` `read_before_lock`; 1372 `point` `lock_wait`; 1375 `point` `under_lock`; 1456 `point` `deliver`; 1478 `point` `batch`; 1525 `point` `alone` |
-| `crates/schedr-master/src/core.rs` | 1920 `point` `parse_jobs_expire`; 1938 `point` `worker_lost`; 2162 `point` `batch.started`; 2166 `point` `batch.finished` |
+| `crates/schedr-master/src/core.rs` | 1916 `point` `parse_jobs_expire`; 1934 `point` `worker_lost`; 2158 `point` `batch.started`; 2162 `point` `batch.finished` |
+| `crates/schedr-master/src/dispatch.rs` | 173 `point` `read_before_lock.attempts_by_ids`; 181 `point` `read_before_lock.runs_tasks`; 221 `point` `read_before_lock.ready_instances`; 242 `point` `read_before_lock.upstream_and_wait_steps`; 1234 `point` `take_back_found`; 1238 `point` `prepare_runs`; 1241 `point` `queue_due_retries`; 1258 `point` `expire_unstarted`; 1261 `point` `end_replaced`; 1327 `point` `fail_waiting_users`; 1333 `point` `assign_cleanups`; 1337 `point` `wind_down_removed`; 1356 `point` `held_dags`; 1360 `point` `unless_held`; 1371 `point` `chained_into`; 1377 `point` `wait_for_runs`; 1390 `point` `active_dag_versions`; 1394 `point` `read_limits`; 1397 `point` `assign_each_tx`; 2014 `point` `assign_each.picks`; 2017 `point` `assign_each.past_the_cap`; 2022 `point` `assign_each.pick_one`; 2041 `point` `assign_each.claim_attempts`; 2060 `point` `assign_each.upstream_again`; 2064 `point` `assign_each.build_all`; 2066 `point` `assign_each.build_one`; 2081 `point` `assign_each.set_queued_reasons`; 2466 `point` `batch.started.attempts_by_ids`; 2498 `point` `batch.started.mark_started_many`; 2795 `point` `batch.finished.end_attempts`; 2811 `point` `batch.finished.run`; 2822 `point` `batch.finished.run.stop`; 2869 `point` `batch.finished.batch_attempts`; 2896 `point` `batch.finished.uncommon_alone`; 3347 `point` `expire_unstarted.reads`; 3383 `point` `expire_unstarted.one` |
+| `crates/schedr-master/src/execution.rs` | 375 `point` `prepare_runs.newly_running`; 387 `point` `prepare_runs.run`; 464 `point` `batch.finished.run.read_run`; 499 `point` `batch.finished.run.store_outputs`; 502 `point` `batch.finished.run.advance`; 651 `point` `queue_due_retries.due_retries`; 661 `point` `queue_due_retries.one`; 1068 `point` `advance.chosen_of`; 1093 `point` `advance.settle_all`; 1098 `point` `advance.store`; 1104 `point` `advance.finish_run` |
 | `crates/schedr-master/src/scheduler.rs` | 255 `point` `dags_with_queued_runs`; 262 `point` `scheduled_due`; 300 `point` `next_fires`; 305 `point` `overview_and_active_dags`; 330 `point` `next_fires_of`; 362 `point` `dag.create_due`; 371 `point` `dag.start_queued`; 390 `point` `dag.set_next_fire` |
-| `crates/schedr-master/src/execution.rs` | 375 `point` `prepare_runs.newly_running`; 387 `point` `prepare_runs.run`; 470 `point` `batch.finished.run.read_run`; 505 `point` `batch.finished.run.store_outputs`; 508 `point` `batch.finished.run.advance`; 657 `point` `queue_due_retries.due_retries`; 667 `point` `queue_due_retries.one`; 1074 `point` `advance.chosen_of`; 1099 `point` `advance.settle_all`; 1104 `point` `advance.store`; 1110 `point` `advance.finish_run` |
+| `crates/schedr-master/src/service.rs` | 595 `span` `round/probe_and_triggers_due`; 609 `in_part` `results`; 610 `point` `whole`; 619 `in_part` `commands`; 620 `point` `whole`; 632 `in_part`; 633 `point` `whole`; 639 `point` `read_before_lock`; 644 `point` `lock_wait`; 650 `point` `under_lock`; 654 `point` `deliver`; 674 `point` `lock_wait.pending`; 678 `point` `pending`; 684 `point` `deliver`; 690 `point` `lock_wait.apply`; 694 `point` `apply_one`; 702 `point` `deliver`; 711 `point` `lock_wait.done`; 715 `point` `done`; 720 `point` `deliver`; 1019 `on`; 1022 `record` `round/start_to_start`; 1025 `span` `round/start_to_end`; 1038 `flush`; 1360 `point` `read_before_lock`; 1370 `point` `lock_wait`; 1373 `point` `under_lock`; 1454 `point` `deliver`; 1476 `point` `batch`; 1523 `point` `alone` |
 
 Beside the points, the trace also put in:
 

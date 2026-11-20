@@ -361,6 +361,17 @@ async fn runs_are_created_counted_queued_and_read() {
     );
     assert_eq!(db.active_dags_of(&[&sync()]).await.unwrap().len(), 1);
     assert_eq!(db.active_dags_of(&[&other]).await.unwrap(), []);
+    // A manual run's context in one statement (M5.2g), as the three reads above give it.
+    assert_eq!(
+        db.trigger_context(&sync(), ts("2026-10-21T08:00:00Z"))
+            .await
+            .unwrap(),
+        (Some(ts("2026-10-21T07:00:00.5Z")), 1, waiting.clone())
+    );
+    // The held DAGs and the current versions in one statement (M5.2g).
+    let (held, versions) = db.held_and_versions().await.unwrap();
+    assert_eq!(held, std::collections::BTreeMap::new());
+    assert_eq!(versions, db.active_dag_versions().await.unwrap());
     db.start_run(&queued, ts(NOW)).await.unwrap();
     assert_eq!(db.running_count(&sync()).await.unwrap(), 2);
 

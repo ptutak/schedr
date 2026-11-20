@@ -142,8 +142,6 @@ pub struct Hub {
     /// let start), Prepare and Assign. None: due (at the start, leading again, after a failed
     /// round).
     slow_last: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
-    /// When the last round started, for the round's trace (profiling).
-    round_started: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// The Commands part is due at once: a command was announced.
     commands_due: Arc<AtomicBool>,
     /// The messages that wait for a worker before it is taken for one that stopped reading.
@@ -225,7 +223,6 @@ impl Hub {
             assignments_per_round: core.assignments_per_round(),
             results: Arc::default(),
             slow_last: Arc::default(),
-            round_started: Arc::default(),
             commands_due: Arc::new(AtomicBool::new(true)),
             stream_buffer: core.settings().worker_stream_buffer.max(1),
             timings: core.settings().timings,
@@ -592,7 +589,6 @@ impl Hub {
         let (result, stale) = Box::pin(self.db.in_round_noting((self.clock)(), ahead, async {
             // The trigger pass is the trigger loop's (decision 486): woken when a trigger's
             // stored moment has come, or its last pass failed.
-            let probe = schedr_db::trace::span("round/probe_and_triggers_due");
             if self
                 .triggers_failed
                 .swap(false, std::sync::atomic::Ordering::SeqCst)
@@ -603,24 +599,15 @@ impl Hub {
             {
                 self.triggers_due.notify_one();
             }
-            drop(probe);
             // The workers' results first: their runs moved forward here (M5.2cB), before any
             // other part (M5.2cB4).
-            schedr_db::trace::in_part("results", async {
-                let _whole = schedr_db::trace::point("whole");
-                Box::pin(self.round_results((self.clock)())).await
-            })
-            .await?;
+            Box::pin(self.round_results((self.clock)())).await?;
             for part in RoundPart::ALL {
                 match part {
                     RoundPart::Triggers => continue,
                     RoundPart::Commands => {
                         if commands {
-                            Box::pin(schedr_db::trace::in_part("commands", async {
-                                let _whole = schedr_db::trace::point("whole");
-                                self.commands().await
-                            }))
-                            .await?;
+                            self.commands().await?;
                         }
                         continue;
                     }
@@ -629,34 +616,23 @@ impl Hub {
                     }
                     _ => {}
                 }
-                Box::pin(schedr_db::trace::in_part(part.name(), async {
-                    let _whole = schedr_db::trace::point("whole");
-                    let mut outgoing = Vec::new();
-                    let now = (self.clock)();
-                    // The assign part's reads before the core lock (M5.2cA, decision 501): under
-                    // it only what the batch decides is checked again, and claimed.
-                    let reads = if part == RoundPart::Assign {
-                        let _read = schedr_db::trace::point("read_before_lock");
-                        Some(AssignReads::read(&self.db, now, self.assignments_per_round).await?)
-                    } else {
-                        None
-                    };
-                    let waited = schedr_db::trace::point("lock_wait");
-                    let mut core = self.core_for("round").await;
-                    drop(waited);
-                    if let Some(reads) = reads {
-                        core.give_assign_reads(reads);
-                    }
-                    let held = schedr_db::trace::point("under_lock");
-                    let result = core.round_part(part, now, &mut outgoing).await;
-                    drop(held);
-                    drop(core);
-                    let delivered = schedr_db::trace::point("deliver");
-                    self.deliver(outgoing).await;
-                    drop(delivered);
-                    result
-                }))
-                .await?;
+                let mut outgoing = Vec::new();
+                let now = (self.clock)();
+                // The assign part's reads before the core lock (M5.2cA, decision 501): under
+                // it only what the batch decides is checked again, and claimed.
+                let reads = if part == RoundPart::Assign {
+                    Some(AssignReads::read(&self.db, now, self.assignments_per_round).await?)
+                } else {
+                    None
+                };
+                let mut core = self.core_for("round").await;
+                if let Some(reads) = reads {
+                    core.give_assign_reads(reads);
+                }
+                let result = core.round_part(part, now, &mut outgoing).await;
+                drop(core);
+                self.deliver(outgoing).await;
+                result?;
             }
             Ok(())
         }))
@@ -671,55 +647,37 @@ impl Hub {
         let mut held = std::time::Duration::ZERO;
         let mut outgoing = Vec::new();
         let pending = {
-            let waited = schedr_db::trace::point("lock_wait.pending");
             let mut core = self.core_for("round").await;
-            drop(waited);
             let began = std::time::Instant::now();
-            let _read = schedr_db::trace::point("pending");
             let pending = core.commands_to_apply(&mut outgoing, (self.clock)()).await;
             held += began.elapsed();
             pending
         };
-        {
-            let _delivered = schedr_db::trace::point("deliver");
-            self.deliver(std::mem::take(&mut outgoing)).await;
-        }
+        self.deliver(std::mem::take(&mut outgoing)).await;
         let mut failed = Ok(());
         for command in pending? {
             let applied = {
-                let waited = schedr_db::trace::point("lock_wait.apply");
                 let mut core = self.core_for("round").await;
-                drop(waited);
                 let began = std::time::Instant::now();
-                let _apply = schedr_db::trace::point("apply_one");
                 let applied = core
                     .apply_command(command, &mut outgoing, (self.clock)())
                     .await;
                 held += began.elapsed();
                 applied
             };
-            {
-                let _delivered = schedr_db::trace::point("deliver");
-                self.deliver(std::mem::take(&mut outgoing)).await;
-            }
+            self.deliver(std::mem::take(&mut outgoing)).await;
             if applied.is_err() {
                 failed = applied;
                 break;
             }
         }
         {
-            let waited = schedr_db::trace::point("lock_wait.done");
             let mut core = self.core_for("round").await;
-            drop(waited);
             let began = std::time::Instant::now();
-            let _done = schedr_db::trace::point("done");
             core.commands_done(&mut outgoing, (self.clock)()).await;
             held += began.elapsed();
         }
-        {
-            let _delivered = schedr_db::trace::point("deliver");
-            self.deliver(outgoing).await;
-        }
+        self.deliver(outgoing).await;
         self.metrics
             .round_part_done(RoundPart::Commands.name(), held);
         failed
@@ -1014,15 +972,6 @@ impl Hub {
     /// A round, its duration observed.
     async fn timed_tick(&self, ahead: Duration) {
         let started = std::time::Instant::now();
-        // The round's trace (profiling): from this round's start to the last one's start, taken
-        // as it starts; and the round itself.
-        if schedr_db::trace::on() {
-            let mut last = lock_slow(&self.round_started);
-            if let Some(last) = last.replace(started) {
-                schedr_db::trace::record("round/start_to_start", started.duration_since(last));
-            }
-        }
-        let whole = schedr_db::trace::span("round/start_to_end");
         match self.tick_ahead(ahead).await {
             Ok(()) => self.problems.clear(ProblemKind::Round),
             Err(error) => {
@@ -1034,8 +983,6 @@ impl Hub {
         self.metrics
             .tick_duration
             .observe(started.elapsed().as_secs_f64());
-        drop(whole);
-        schedr_db::trace::flush();
     }
 
     /// Renews `leadership` every third of its period, pausing the master when its last
@@ -1333,10 +1280,6 @@ impl Hub {
     /// any other message is handled alone after the ones before it. One from a replaced
     /// stream, or a worker taken for lost, changes nothing (B44): the worker sends it again.
     /// What they send goes out after the lock.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the round's trace points (profiling)"
-    )]
     async fn round_results(&self, now: Timestamp) -> Result<(), CoreError> {
         if self.queued_results().is_empty() {
             return Ok(());
@@ -1357,7 +1300,6 @@ impl Hub {
         // A failed read changes nothing: the batch reads under the lock instead (Codex's
         // review of M5.2c: a message the read fails on, a malformed ID, would else stop every
         // round before it is taken off the queue).
-        let read = schedr_db::trace::point("read_before_lock");
         let reads = match crate::dispatch::ResultsReads::read(&self.db, &ids).await {
             Ok(reads) => reads,
             Err(error) => {
@@ -1365,12 +1307,8 @@ impl Hub {
                 crate::dispatch::ResultsReads::default()
             }
         };
-        drop(read);
         // Taken under the lock: a turn finds a worker's results still queued, or handled.
-        let waited = schedr_db::trace::point("lock_wait");
         let mut core = self.core_for("round").await;
-        drop(waited);
-        let held = schedr_db::trace::point("under_lock");
         core.give_results_reads(reads);
         let mut queued: VecDeque<QueuedResult> = std::mem::take(&mut *self.queued_results()).into();
         let began = std::time::Instant::now();
@@ -1441,7 +1379,6 @@ impl Hub {
         Box::pin(self.results_batch(&mut core, batch, now, &mut handling)).await;
         core.drop_results_reads();
         self.metrics.round_part_done("results", began.elapsed());
-        drop(held);
         if !handling.back.is_empty() {
             // What a failed batch left unhandled: first in the next round, which is woken.
             let mut queue = self.queued_results();
@@ -1451,7 +1388,6 @@ impl Hub {
             self.finished.notify_one();
         }
         drop(core);
-        let _delivered = schedr_db::trace::point("deliver");
         self.deliver(handling.outgoing).await;
         Ok(())
     }
@@ -1473,10 +1409,7 @@ impl Hub {
             .into_iter()
             .map(|s| ((s.worker_id.clone(), s.stream), (s.worker_id, s.group)))
             .unzip();
-        let batch_point = schedr_db::trace::point("batch");
-        let handled = core.handle_results(groups, now).await;
-        drop(batch_point);
-        let failed = match handled {
+        let failed = match core.handle_results(groups, now).await {
             Ok(out) => {
                 handling.outgoing.extend(out);
                 return;
@@ -1520,7 +1453,6 @@ impl Hub {
             return;
         }
         handling.alone_left -= 1;
-        let _alone = schedr_db::trace::point("alone");
         // What was read before the lock is no longer true once this writes (Codex's review of
         // M5.2c: a `Deregister` before a batch of the same run's results).
         core.drop_results_reads();

@@ -37,17 +37,91 @@ fn among(column: &str, count: usize) -> String {
     format!(" AND {column} IN ({})", wanted.join(", "))
 }
 
-/// Each DAG's latest scheduled run, of `count` DAGs (every DAG when 0), `NULL` for none: one
-/// index lookup per DAG, not its whole scheduled history (`MAX ... GROUP BY` read every
-/// scheduled run of each DAG every round, B120). The `NULL`s are left to the caller: a filter
-/// on the lookup's value ran it a second time (B130).
-fn last_scheduled_query(count: usize) -> String {
-    let among = among("d.dag_id", count);
+/// The run overview's statement, of `count` DAGs (every DAG when 0): see
+/// [`Database::run_overview_of`].
+fn overview_query(count: usize) -> String {
+    let among = among("dag_id", count);
+    let among_d = among.replace(" AND dag_id IN", " AND d.dag_id IN");
     format!(
-        "SELECT d.dag_id, {{ts<}}(SELECT MAX(r.planned_for) FROM runs r \
-          WHERE r.kind = 'scheduled' AND r.dag_id = d.dag_id){{>ts}} \
-         FROM dags d WHERE TRUE{among}"
+        "SELECT 0, dag_id, COUNT(*), CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
+         CAST(NULL AS TEXT), CAST(NULL AS TEXT) FROM runs \
+         WHERE state = 'running'{among} GROUP BY dag_id \
+         UNION ALL \
+         SELECT 1, d.dag_id, CAST(NULL AS BIGINT), {{ts<}}(SELECT MAX(r.planned_for) \
+         FROM runs r WHERE r.kind = 'scheduled' AND r.dag_id = d.dag_id){{>ts}}, \
+         CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT) \
+         FROM dags d WHERE TRUE{among_d} \
+         UNION ALL \
+         SELECT 2, dag_id, CAST(NULL AS BIGINT), id{{text}}, kind, \
+         {{ts<}}triggered_at{{>ts}}, {{ts<}}planned_for{{>ts}} FROM runs \
+         WHERE state = 'queued'{among}"
     )
+}
+
+/// A row of [`overview_query`]: its part (0 a running count, 1 a last scheduled run, 2 a
+/// queued run, 3 a trigger's nearest earlier run), the DAG, then the part's values.
+type OverviewRow = (
+    i32,
+    String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// Adds [`overview_query`]'s rows to `overview`, the queued runs oldest first; returns part 3's
+/// value, if any.
+fn fold_overview(
+    overview: &mut RunOverview,
+    rows: Vec<OverviewRow>,
+) -> Result<Option<String>, DbError> {
+    let missing = |what: &'static str| DbError::InvalidData {
+        what,
+        reason: "missing from the overview's row".to_owned(),
+    };
+    let mut touched: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut nearest = None;
+    for (part, dag, count, a, b, c, d) in rows {
+        match part {
+            0 => {
+                let count = count.ok_or_else(|| missing("runs.count"))?;
+                overview
+                    .running
+                    .insert(dag, u32::try_from(count).unwrap_or(u32::MAX));
+            }
+            3 => nearest = a,
+            1 => {
+                // A DAG without a scheduled run has none.
+                let Some(at) = a else { continue };
+                overview
+                    .last_scheduled
+                    .insert(dag, parse_time("runs.planned_for", &at)?);
+            }
+            _ => {
+                let id = a.ok_or_else(|| missing("runs.id"))?;
+                let kind = b.ok_or_else(|| missing("runs.kind"))?;
+                let triggered_at = c.ok_or_else(|| missing("runs.triggered_at"))?;
+                let planned_for = d.ok_or_else(|| missing("runs.planned_for"))?;
+                touched.insert(dag.clone());
+                overview.queued.entry(dag).or_default().push(QueuedRun {
+                    id,
+                    kind: from_name("runs.kind", kind)?,
+                    triggered_at: parse_time("runs.triggered_at", &triggered_at)?,
+                    planned_for: parse_time("runs.planned_for", &planned_for)?,
+                });
+            }
+        }
+    }
+    // Oldest first within each DAG, as the separate read ordered them: each queue sorted once.
+    for dag in touched {
+        if let Some(queued) = overview.queued.get_mut(&dag) {
+            queued.sort_by(|x, y| {
+                (x.triggered_at, x.planned_for, &x.id).cmp(&(y.triggered_at, y.planned_for, &y.id))
+            });
+        }
+    }
+    Ok(nearest)
 }
 
 pub(crate) fn dag_id_of(text: String) -> Result<DagId, DbError> {
@@ -420,58 +494,58 @@ impl Database {
         overview: &mut RunOverview,
         dags: &[&DagId],
     ) -> Result<(), DbError> {
-        type Rows = (
-            Vec<(String, i64)>,
-            Vec<(String, Option<String>)>,
-            Vec<(String, String, String, String, String)>,
-        );
-        let among = among("dag_id", dags.len());
-        let running = format!(
-            "SELECT dag_id, COUNT(*) FROM runs WHERE state = 'running'{among} GROUP BY dag_id"
-        );
-        let last = last_scheduled_query(dags.len());
-        let queued = format!(
-            "SELECT dag_id, id{{text}}, kind, {{ts<}}triggered_at{{>ts}}, \
-             {{ts<}}planned_for{{>ts}} FROM runs \
-             WHERE state = 'queued'{among} ORDER BY dag_id, triggered_at, planned_for, id"
-        );
-        // One connection, one time limit, for all three.
-        let (running, last, queued): Rows = on_pool!(self, |pool, backend| {
-            let mut running_query = crate::query::query_as(sql_text(backend, &running));
-            let mut last_query = crate::query::query_as(sql_text(backend, &last));
-            let mut queued_query = crate::query::query_as(sql_text(backend, &queued));
+        // One statement for the three (M5.2g, Codex's rank 1), each row tagged with its part:
+        // 0 a DAG's running count, 1 its last scheduled run, 2 a queued run. The DAGs' `$n`
+        // are the same in each part. The last scheduled run is one index lookup per DAG, not its
+        // whole scheduled history (`MAX ... GROUP BY` read every scheduled run of each DAG every
+        // round, B120); its `NULL`s are left to the code below: a filter on the lookup's value
+        // ran it a second time (B130).
+        let text = overview_query(dags.len());
+        let rows: Vec<OverviewRow> = on_pool!(self, |pool, backend| {
+            let mut query = crate::query::query_as(sql_text(backend, &text));
             for dag in dags {
-                running_query = running_query.bind(dag.as_str());
-                last_query = last_query.bind(dag.as_str());
-                queued_query = queued_query.bind(dag.as_str());
+                query = query.bind(dag.as_str());
             }
-            (
-                running_query.fetch_all(&mut *pool).await?,
-                last_query.fetch_all(&mut *pool).await?,
-                queued_query.fetch_all(&mut *pool).await?,
-            )
+            query.fetch_all(&mut *pool).await?
         });
-        for (dag, count) in running {
-            overview
-                .running
-                .insert(dag, u32::try_from(count).unwrap_or(u32::MAX));
-        }
-        for (dag, at) in last {
-            // A DAG without a scheduled run has none.
-            let Some(at) = at else { continue };
-            overview
-                .last_scheduled
-                .insert(dag, parse_time("runs.planned_for", &at)?);
-        }
-        for (dag, id, kind, triggered_at, planned_for) in queued {
-            overview.queued.entry(dag).or_default().push(QueuedRun {
-                id,
-                kind: from_name("runs.kind", kind)?,
-                triggered_at: parse_time("runs.triggered_at", &triggered_at)?,
-                planned_for: parse_time("runs.planned_for", &planned_for)?,
-            });
-        }
+        fold_overview(overview, rows)?;
         Ok(())
+    }
+
+    /// What a manual run of `dag_id` planned for `before` is decided on (M5.2g, Codex's
+    /// rank 4), in one statement read before the run is stored: the nearest earlier run's
+    /// `planned_for`, the DAG's running count and its queued runs, oldest first. Read under the
+    /// core lock in the command's transaction, nothing else writes the DAG's runs meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a stored value doesn't read.
+    pub async fn trigger_context(
+        &self,
+        dag_id: &DagId,
+        before: Timestamp,
+    ) -> Result<(Option<Timestamp>, u32, Vec<QueuedRun>), DbError> {
+        let text = format!(
+            "{} UNION ALL SELECT 3, CAST($1 AS TEXT), CAST(NULL AS BIGINT), \
+             {{ts<}}(SELECT MAX(planned_for) FROM runs WHERE dag_id = $1 \
+             AND planned_for < $2{{ts}}){{>ts}}, CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
+             CAST(NULL AS TEXT)",
+            overview_query(1)
+        );
+        let rows: Vec<OverviewRow> = on_pool!(self, |pool, backend| {
+            crate::query::query_as(sql_text(backend, &text))
+                .bind(dag_id.as_str())
+                .bind(db_time(before))
+                .fetch_all(&mut *pool)
+                .await?
+        });
+        let mut overview = RunOverview::default();
+        let nearest = fold_overview(&mut overview, rows)?
+            .map(|at| parse_time("runs.planned_for", &at))
+            .transpose()?;
+        let running = overview.running.remove(dag_id.as_str()).unwrap_or(0);
+        let queued = overview.queued.remove(dag_id.as_str()).unwrap_or_default();
+        Ok((nearest, running, queued))
     }
 
     /// The DAG's runs not finished (`queued` or `running`), oldest first.
@@ -583,6 +657,37 @@ impl Database {
         rows.into_iter()
             .map(|(dag, version)| Ok((dag_id_of(dag)?, version)))
             .collect()
+    }
+
+    /// [`Database::held_dags`] and [`Self::active_dag_versions`] in one statement (M5.2g, Codex's
+    /// rank 1): the held DAGs (removed: `true`; an ID conflict: `false`), and the current
+    /// versions of the others.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a DAG ID doesn't read.
+    pub async fn held_and_versions(
+        &self,
+    ) -> Result<(BTreeMap<String, bool>, Vec<(DagId, String)>), DbError> {
+        const BOTH: &str = "SELECT dag_id, removed_at IS NOT NULL, conflict IS NOT NULL, \
+            current_version_id{text} FROM dags \
+            WHERE removed_at IS NOT NULL OR conflict IS NOT NULL OR current_version_id IS NOT NULL \
+            ORDER BY dag_id";
+        let rows: Vec<(String, bool, bool, Option<String>)> = on_pool!(self, |pool, backend| {
+            crate::query::query_as(sql(backend, BOTH))
+                .fetch_all(pool)
+                .await?
+        });
+        let mut held = BTreeMap::new();
+        let mut versions = Vec::new();
+        for (dag, removed, conflict, version) in rows {
+            if removed || conflict {
+                held.insert(dag, removed);
+            } else if let Some(version) = version {
+                versions.push((dag_id_of(dag)?, version));
+            }
+        }
+        Ok((held, versions))
     }
 
     /// As [`Self::active_dags`], for `dags` only: those of them that can run.

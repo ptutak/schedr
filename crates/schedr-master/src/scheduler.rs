@@ -251,18 +251,10 @@ impl Scheduler {
         let mut due = Vec::new();
         let mut stored = HashMap::new();
         if self.quiet().enabled() {
-            let queued = {
-                let _read = schedr_db::trace::point("dags_with_queued_runs");
-                self.db.dags_with_queued_runs().await?
-            };
-            for dag in queued {
+            for dag in self.db.dags_with_queued_runs().await? {
                 due.push((dag, WakeReason::RunQueued));
             }
-            let scheduled = {
-                let _read = schedr_db::trace::point("scheduled_due");
-                self.db.scheduled_due(now).await?
-            };
-            for (dag, at) in scheduled {
+            for (dag, at) in self.db.scheduled_due(now).await? {
                 let reason = if at.is_some() {
                     WakeReason::Timer
                 } else {
@@ -296,13 +288,9 @@ impl Scheduler {
                 self.quiet().round_done(&visit, &HashSet::new());
                 return Ok(pass);
             }
-            Visit::All => {
-                let _read = schedr_db::trace::point("next_fires");
-                stored = self.db.next_fires().await?;
-            }
+            Visit::All => stored = self.db.next_fires().await?,
             Visit::Some(_) => {}
         }
-        let read = schedr_db::trace::point("overview_and_active_dags");
         // The DAGs' runs at once: a round costs a few queries, not three per DAG (B12), and
         // reads only the DAGs it visits.
         let (overview, active_dags) = match &visit {
@@ -325,9 +313,7 @@ impl Scheduler {
             .map(|a| &a.dag.id)
             .filter(|id| !stored.contains_key(*id))
             .collect();
-        drop(read);
         if !unread.is_empty() {
-            let _read = schedr_db::trace::point("next_fires_of");
             stored.extend(self.db.next_fires_of(&unread).await?);
         }
         let mut seen = HashSet::with_capacity(active_dags.len());
@@ -359,7 +345,6 @@ impl Scheduler {
             let held = active.held.as_ref();
             if !active.paused && held.is_none() {
                 let last = overview.last_scheduled(&active.dag.id);
-                let _create = schedr_db::trace::point("dag.create_due");
                 (waiting, skipped) = self
                     .create_due(&mut pass, &active, &plan, last, &mut running, now)
                     .await?;
@@ -368,7 +353,6 @@ impl Scheduler {
                 self.passed(&active.dag.id);
             }
             if held.is_none() {
-                let _start = schedr_db::trace::point("dag.start_queued");
                 pass.started
                     .extend(self.start_queued(queued, &plan, running, now).await?);
             }
@@ -387,7 +371,6 @@ impl Scheduler {
                     plan.next_fire_after(now).unwrap_or(NO_FIRE)
                 };
                 if stored.get(&active.dag.id) != Some(&Some(next)) {
-                    let _write = schedr_db::trace::point("dag.set_next_fire");
                     self.db.set_next_fire(&active.dag.id, next).await?;
                 }
             }
@@ -590,7 +573,10 @@ impl Scheduler {
             limits: self.plan_limits,
         };
         let planned_for = manual_planned_for(requested, now);
-        let nearest = self.db.nearest_earlier_run(dag_id, planned_for).await?;
+        // The nearest earlier run, the running count and the queue in one read before the run
+        // is stored (M5.2g, Codex's rank 4): under the core lock, in the command's
+        // transaction, nothing else writes the DAG's runs until the start below.
+        let (nearest, running, mut queued) = self.db.trigger_context(dag_id, planned_for).await?;
         let times = plan.manual_times(requested, now, nearest)?;
         let params = run_params(&active, params)?;
         let mut new = new_run(&active, kind, times, now, user, &params);
@@ -601,9 +587,20 @@ impl Scheduler {
         // Only scheduled runs are unique per `planned_for`: a manual one is stored unless a
         // run with its given ID is there already, and then that one is it.
         let run_id = run_id.map_or_else(|| uuid::Uuid::now_v7().to_string(), str::to_owned);
-        self.db.insert_run_as(&run_id, &new).await?;
-        let running = self.db.running_count(dag_id).await?;
-        let queued = self.db.queued_runs(dag_id).await?;
+        // Stored now, it joins the queue read above, in that read's order; one there already
+        // (the command applied again) is in that read as it is.
+        if self.db.insert_run_as(&run_id, &new).await?.is_some() {
+            // At the precision stored, as the queue's other runs were read (Codex's review).
+            queued.push(QueuedRun {
+                id: run_id.clone(),
+                kind: new.kind,
+                triggered_at: schedr_db::stored_time(new.triggered_at),
+                planned_for: schedr_db::stored_time(new.planned_for),
+            });
+            queued.sort_by(|x, y| {
+                (x.triggered_at, x.planned_for, &x.id).cmp(&(y.triggered_at, y.planned_for, &y.id))
+            });
+        }
         self.start_queued(&queued, &plan, running, now).await?;
         Ok(created(&active, run_id, kind, times))
     }

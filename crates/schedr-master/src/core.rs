@@ -1913,10 +1913,8 @@ impl MasterCore {
         outgoing: &mut Vec<Outgoing>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
-        let parse = schedr_db::trace::point("parse_jobs_expire");
         let expired = self.discovery.jobs_mut().expire(now);
         outgoing.extend(expired.into_iter().map(assign_parse));
-        drop(parse);
         let lease =
             SignedDuration::try_from(self.settings.lease_timeout).unwrap_or(SignedDuration::MAX);
         let steady = (self.steady)(now);
@@ -1931,7 +1929,6 @@ impl MasterCore {
             .map(|(id, _)| id.clone())
             .collect();
         for worker_id in lost {
-            let _lost = schedr_db::trace::point("worker_lost");
             self.forget(in_round, &worker_id, WorkerState::Lost, now, outgoing)
                 .await?;
         }
@@ -2155,11 +2152,9 @@ impl MasterCore {
             .collect();
         let handled = Box::pin(db.atomically(async {
             if !started.is_empty() {
-                let _started = schedr_db::trace::point("batch.started");
                 out.extend(dispatcher.started_batch(&started, now).await?);
             }
             if !finished.is_empty() {
-                let _finished = schedr_db::trace::point("batch.finished");
                 out.extend(dispatcher.finished_batch(in_round, &finished, now).await?);
             }
             Ok::<_, DispatchError>(())

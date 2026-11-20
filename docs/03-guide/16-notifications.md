@@ -92,7 +92,9 @@ The HTTP client uses `HTTPS_PROXY` and `NO_PROXY` where configured. Under Istio
 
 The notification is stored in the outbox in the same transaction as its event. The
 leading master delivers it and retries failures. A receiver may get a duplicate after
-a failure or failover, so it must be able to handle the same message again. A successful delivery deletes the row. For
+a failure or failover, so it must be able to handle the same message again. Order isn't
+guaranteed: a retried message comes after later ones, and the runs whose results the master
+stores together queue their task notifications before their run notifications. A successful delivery deletes the row. For
 webhooks, a 4xx response other than 408 or 429 is logged, counted and dropped immediately. 408, 429,
 5xx, connection errors and timeouts are retried with a doubling wait up to a maximum, until
 `give_up_after`; then the row is logged, counted and dropped. For SMTP, a permanent refusal

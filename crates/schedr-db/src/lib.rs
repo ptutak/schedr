@@ -30,11 +30,10 @@ pub mod status;
 pub mod strikes;
 pub mod task_flow;
 pub mod task_memory;
-pub mod trace;
 pub mod triggers;
 pub mod workers;
 
 pub use backend::{Backend, UnsupportedUrl, database_place, redact_password};
 pub use database::{Database, DbError, Pool};
-pub use query::db_time;
+pub use query::{db_time, stored_time};
 pub use status::SchemaStatus;

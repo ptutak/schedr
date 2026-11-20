@@ -248,6 +248,44 @@ async fn manual_runs_of_a_paused_dag_run_and_wait_for_a_place() {
     assert_eq!(db.queued_runs(&sync()).await.unwrap(), []);
 }
 
+#[tokio::test]
+async fn a_manual_run_joins_the_queue_at_the_precision_stored() {
+    // Codex's review of M5.2g: the new run goes into the queue read before it was stored, its
+    // times as a read gives them back (microseconds). Queued A and new B triggered in the same
+    // microsecond, B planned earlier: B starts first, as when the queue was read after B.
+    let (scheduler, db) = scheduler_with(dag(&json!({}))).await;
+    let running = scheduler
+        .trigger(&sync(), None, "anna", ts("2026-10-21T07:00:00Z"))
+        .await
+        .unwrap();
+    let a = scheduler
+        .trigger(&sync(), None, "anna", ts("2026-10-21T08:00:00.123456Z"))
+        .await
+        .unwrap();
+    execute(
+        &db,
+        "UPDATE runs SET state = 'success' WHERE state = 'running'",
+    )
+    .await;
+    // B: triggered later within the same microsecond, for a moment before A's.
+    let b = scheduler
+        .trigger(
+            &sync(),
+            Some(ts("2026-10-21T07:30:00Z")),
+            "anna",
+            ts("2026-10-21T08:00:00.123456789Z"),
+        )
+        .await
+        .unwrap();
+    let state = |id: String| {
+        let db = db.clone();
+        async move { db.run_record(&id).await.unwrap().unwrap().state }
+    };
+    assert_eq!(state(running.run_id).await, RunState::Success);
+    assert_eq!(state(b.run_id).await, RunState::Running);
+    assert_eq!(state(a.run_id).await, RunState::Queued);
+}
+
 /// Makes a parse of `hash` whose `a.py` (the DAG's file) fails with `exception`, or loads,
 /// `etl`'s current parse.
 async fn current_parse(db: &Database, hash: &str, exception: Option<&str>) {

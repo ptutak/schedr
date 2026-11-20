@@ -171,7 +171,6 @@ impl Database {
     ///
     /// [`DbError`] if the statement fails.
     pub async fn probe(&self, now: Timestamp) -> Result<Probe, DbError> {
-        let _probe = crate::trace::point("probe");
         let found: Vec<bool> = on_pool!(self, |pool, backend| {
             let row = crate::query::query(sql_text(backend, statement()))
                 .bind(db_time(now))

@@ -230,15 +230,12 @@ macro_rules! in_tx {
                 }
                 $crate::database::Pool::Postgres(pool) => {
                     let $backend = $crate::backend::Backend::Postgres;
-                    let begin = $crate::trace::point("own_tx.begin");
                     let mut starting = $crate::query::Starting::new(pool.acquire().await?);
                     let mut $tx = starting
                         .begin(db.begin_postgres())
                         .await
                         .map_err($crate::database::DbError::from_begin)?;
-                    drop(begin);
                     let done = $body;
-                    let _commit = $crate::trace::point("own_tx.commit");
                     $tx.commit().await?;
                     done
                 }
@@ -357,6 +354,13 @@ pub(crate) fn sql_text(backend: Backend, query: &str) -> AssertSqlSafe<String> {
 #[must_use]
 pub fn db_time(t: Timestamp) -> String {
     t.strftime(TIME_FORMAT).to_string()
+}
+
+/// `t` at the precision it is stored with ([`db_time`]: microseconds, the rest cut), as a read
+/// gives it back.
+#[must_use]
+pub fn stored_time(t: Timestamp) -> Timestamp {
+    db_time(t).parse().unwrap_or(t)
 }
 
 /// A stored time read back.

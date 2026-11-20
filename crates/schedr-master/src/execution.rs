@@ -138,6 +138,22 @@ pub struct Recorded {
     pub stops: Vec<(TaskId, i32)>,
 }
 
+/// A run's results for [`Execution::runs_finished`]: its ID, each result's task, map index and
+/// result, and the run if read before the core lock.
+pub type RunResults<'a> = (
+    &'a str,
+    Vec<(&'a TaskId, i32, &'a AttemptResult)>,
+    Option<RunTasks>,
+);
+
+/// What [`Execution::runs_finished`] holds until its runs have all moved forward: each run's
+/// instances' changes, and the runs that ended (with their DAG, for the metrics and the wake).
+#[derive(Debug, Default)]
+struct Held {
+    updates: Vec<(String, Vec<InstanceUpdate>)>,
+    ends: Vec<(String, schedr_model::DagId, RunState)>,
+}
+
 /// One result's change to its instance ([`Execution::result_update`]).
 struct Planned {
     update: InstanceUpdate,
@@ -371,11 +387,7 @@ impl Execution {
     ) -> Result<Vec<String>, ExecutionError> {
         let mut prepared = Vec::new();
         let mut created = 0;
-        let newly = {
-            let _read = schedr_db::trace::point("prepare_runs.newly_running");
-            self.db.newly_running().await?
-        };
-        for run in newly {
+        for run in self.db.newly_running().await? {
             // At most so many instances a round (a run is never split, and one is always
             // made): many runs starting at once go over a few rounds (B18).
             let tasks = run.dag.tasks.len();
@@ -384,7 +396,6 @@ impl Execution {
             }
             created += tasks;
             // Whole or not at all (B79): a run is found again only while it has no task rows.
-            let _run = schedr_db::trace::point("prepare_runs.run");
             Box::pin(self.db.atomically(self.prepare(&run, now))).await?;
             prepared.push(run.run_id);
         }
@@ -451,61 +462,147 @@ impl Execution {
     /// [`ExecutionError`] for an unknown run or task, or a database failure.
     pub async fn attempts_finished(
         &self,
-        _: &InRound,
+        in_round: &InRound,
         run_id: &str,
         results: &[(&TaskId, i32, &AttemptResult)],
         read: Option<RunTasks>,
         now: Timestamp,
     ) -> Result<Recorded, ExecutionError> {
-        // The run as read before the core lock (M5.2cB3), true until this writes; else now.
-        let mut run = if let Some(run) = read {
-            run
-        } else {
-            let _read = schedr_db::trace::point("batch.finished.run.read_run");
-            self.run(run_id).await?
-        };
-        let mut updates = Vec::with_capacity(results.len());
-        let mut outputs: Vec<(String, String, serde_json::Value)> = Vec::new();
-        let mut state_now = None;
-        for &(task_id, map_index, result) in results {
-            if updates
-                .iter()
-                .any(|u: &InstanceUpdate| &u.task_id == task_id && u.map_index == map_index)
-            {
-                continue;
-            }
-            let Some(planned) = self
-                .result_update(run_id, &mut run, (task_id, map_index), result, now)
-                .await?
-            else {
-                continue;
-            };
-            state_now = Some(planned.update.state);
-            outputs.extend(planned.output);
-            updates.push(planned.update);
+        let mut recorded = self
+            .runs_finished(in_round, vec![(run_id, results.to_vec(), read)], now)
+            .await?;
+        Ok(recorded.pop().unwrap_or(Recorded {
+            state: None,
+            run_result: None,
+            stops: Vec::new(),
+        }))
+    }
+
+    /// Records how several runs' attempts ended, as [`Self::attempts_finished`] does one run's,
+    /// with their writes together (M5.2g): every run's outputs in one statement, before any run
+    /// moves forward (a `@branch`'s or a `first_of`'s reads its own run's), then each run moved
+    /// forward with its instances' changes and its end held, those stored together once all have
+    /// (one statement each, where it was one a run), all in one transaction. A run whose DAG sends notifications stores
+    /// what is held first and ends at once, as before: its notification reads its run's tasks and
+    /// its DAG's earlier runs. The runs are independent: none reads another's held writes. Returns
+    /// each run's [`Recorded`], in the order given.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError`] for an unknown run or task, or a database failure: nothing is stored
+    /// then if the caller's transaction rolls back (the round's does).
+    pub async fn runs_finished(
+        &self,
+        _: &InRound,
+        runs: Vec<RunResults<'_>>,
+        now: Timestamp,
+    ) -> Result<Vec<Recorded>, ExecutionError> {
+        // One transaction (the round's, joined): a run's created instances and its held
+        // changes stored together or not at all, as one run's `store` did.
+        Box::pin(self.db.atomically(self.runs_finished_in(runs, now))).await
+    }
+
+    async fn runs_finished_in(
+        &self,
+        runs: Vec<RunResults<'_>>,
+        now: Timestamp,
+    ) -> Result<Vec<Recorded>, ExecutionError> {
+        // Every run together, those whose DAG notifies too: each run's task notification is
+        // queued before its run's, but across runs the batch's task notifications come first
+        // (Codex's review; the user, 2026-11-20: delivery order isn't guaranteed, retries
+        // reorder it anyway, docs/03-guide/16-notifications.md).
+        self.batch_finished(runs, now).await
+    }
+
+    /// [`Self::runs_finished`]'s work for runs taken together.
+    async fn batch_finished(
+        &self,
+        runs: Vec<RunResults<'_>>,
+        now: Timestamp,
+    ) -> Result<Vec<Recorded>, ExecutionError> {
+        if runs.is_empty() {
+            return Ok(Vec::new());
         }
-        if updates.is_empty() {
-            return Ok(Recorded {
-                state: None,
-                run_result: None,
-                stops: Vec::new(),
-            });
+        let mut planned = Vec::with_capacity(runs.len());
+        let mut outputs: Vec<(String, String, serde_json::Value)> = Vec::new();
+        for (run_id, results, read) in runs {
+            // The run as read before the core lock (M5.2cB3), true until this writes; else now.
+            let mut run = if let Some(run) = read {
+                run
+            } else {
+                self.run(run_id).await?
+            };
+            let mut updates = Vec::with_capacity(results.len());
+            let mut state_now = None;
+            for &(task_id, map_index, result) in &results {
+                if updates
+                    .iter()
+                    .any(|u: &InstanceUpdate| &u.task_id == task_id && u.map_index == map_index)
+                {
+                    continue;
+                }
+                let Some(one) = self
+                    .result_update(run_id, &mut run, (task_id, map_index), result, now)
+                    .await?
+                else {
+                    continue;
+                };
+                state_now = Some(one.update.state);
+                outputs.extend(one.output);
+                updates.push(one.update);
+            }
+            planned.push((run_id, run, updates, state_now));
         }
         if !outputs.is_empty() {
             let rows: Vec<(&str, &str, &serde_json::Value)> = outputs
                 .iter()
                 .map(|(id, outcome, value)| (id.as_str(), outcome.as_str(), value))
                 .collect();
-            let _write = schedr_db::trace::point("batch.finished.run.store_outputs");
             self.db.store_outputs(&rows).await?;
         }
-        let _advance = schedr_db::trace::point("batch.finished.run.advance");
-        let (run_result, stops) = self.advance(run_id, &run, updates, now).await?;
-        Ok(Recorded {
-            state: state_now,
-            run_result,
-            stops,
-        })
+        let mut held = Held::default();
+        let mut recorded = Vec::with_capacity(planned.len());
+        for (run_id, run, updates, state_now) in planned {
+            if updates.is_empty() {
+                recorded.push(Recorded {
+                    state: None,
+                    run_result: None,
+                    stops: Vec::new(),
+                });
+                continue;
+            }
+            let (run_result, stops) = self
+                .advance_in(run_id, &run, updates, now, Some(&mut held))
+                .await?;
+            recorded.push(Recorded {
+                state: state_now,
+                run_result,
+                stops,
+            });
+        }
+        self.store_held(&mut held, now).await?;
+        Ok(recorded)
+    }
+
+    /// Stores what [`Self::runs_finished`] held: the instances' changes, then the runs' ends.
+    async fn store_held(&self, held: &mut Held, now: Timestamp) -> Result<(), ExecutionError> {
+        let updates = std::mem::take(&mut held.updates);
+        let ends = std::mem::take(&mut held.ends);
+        let runs: Vec<(&str, &[InstanceUpdate])> = updates
+            .iter()
+            .map(|(run_id, updates)| (run_id.as_str(), updates.as_slice()))
+            .collect();
+        self.db.update_instances_of_runs(&runs, now).await?;
+        let rows: Vec<(&str, RunState)> = ends
+            .iter()
+            .map(|(run_id, _, result)| (run_id.as_str(), *result))
+            .collect();
+        self.db.finish_runs(&rows, now).await?;
+        for (_, dag_id, result) in &ends {
+            self.metrics.run_finished(dag_id.as_str(), result);
+            self.wakes.wake(dag_id, WakeReason::RunEnded);
+        }
+        Ok(())
     }
 
     /// What one result changes of its instance: its update, and its output to store; `None`
@@ -647,10 +744,7 @@ impl Execution {
         _: &InRound,
         now: Timestamp,
     ) -> Result<usize, ExecutionError> {
-        let mut due = {
-            let _read = schedr_db::trace::point("queue_due_retries.due_retries");
-            self.db.due_retries(now).await?
-        };
+        let mut due = self.db.due_retries(now).await?;
         // At most so many a round, the earliest due first; the rest in the next ones (B18).
         due.truncate(self.rounds.retries);
         for (run_id, task_id, map_index) in &due {
@@ -658,7 +752,6 @@ impl Execution {
                 ready_at: Some(now),
                 ..update(task_id, *map_index, TaskInstanceState::Queued)
             };
-            let _write = schedr_db::trace::point("queue_due_retries.one");
             self.db.update_instances(run_id, &[queued], now).await?;
         }
         Ok(due.len())
@@ -1064,10 +1157,20 @@ impl Execution {
         first: Vec<InstanceUpdate>,
         now: Timestamp,
     ) -> Result<(Option<RunState>, Vec<(TaskId, i32)>), ExecutionError> {
-        let chosen = {
-            let _read = schedr_db::trace::point("advance.chosen_of");
-            self.chosen_of(run_id, run, &first).await?
-        };
+        self.advance_in(run_id, run, first, now, None).await
+    }
+
+    /// As [`Self::advance`], its instances' changes and its end put in `held` when given
+    /// ([`Self::runs_finished`]).
+    async fn advance_in(
+        &self,
+        run_id: &str,
+        run: &RunTasks,
+        first: Vec<InstanceUpdate>,
+        now: Timestamp,
+        mut held: Option<&mut Held>,
+    ) -> Result<(Option<RunState>, Vec<(TaskId, i32)>), ExecutionError> {
+        let chosen = self.chosen_of(run_id, run, &first).await?;
         let mut progress = progress_of(run).with_chosen(chosen);
         let before = progress.snapshot();
         for change in &first {
@@ -1089,20 +1192,31 @@ impl Execution {
             .filter(|u| u.map_index == -1 && u.state == TaskInstanceState::Success)
             .map(|u| u.task_id.clone())
             .collect();
-        {
-            let _settle = schedr_db::trace::point("advance.settle_all");
-            self.settle_all(run_id, &run.dag, &mut progress, &ending)
-                .await?;
-        }
-        let stops = {
-            let _store = schedr_db::trace::point("advance.store");
-            self.store(run_id, &mut progress, &before, first, now)
-                .await?
-        };
+        self.settle_all(run_id, &run.dag, &mut progress, &ending)
+            .await?;
+        let stops = self
+            .store_in(
+                run_id,
+                &mut progress,
+                &before,
+                first,
+                now,
+                held.as_deref_mut(),
+            )
+            .await?;
         let result = progress.result();
         if let Some(result) = result {
-            let _finish = schedr_db::trace::point("advance.finish_run");
-            self.finish(run_id, &run.dag, result, now).await?;
+            match held {
+                Some(held) if run.dag.notify.is_empty() => {
+                    held.ends
+                        .push((run_id.to_owned(), run.dag.id.clone(), result));
+                }
+                Some(held) => {
+                    self.store_held(held, now).await?;
+                    self.finish(run_id, &run.dag, result, now).await?;
+                }
+                None => self.finish(run_id, &run.dag, result, now).await?,
+            }
         }
         Ok((result, stops))
     }
@@ -1231,7 +1345,21 @@ impl Execution {
         first: Vec<InstanceUpdate>,
         now: Timestamp,
     ) -> Result<Vec<(TaskId, i32)>, ExecutionError> {
-        let writes = self.write_changes(run_id, progress, before, first, now);
+        self.store_in(run_id, progress, before, first, now, None)
+            .await
+    }
+
+    /// As [`Self::store`], the instances' changes put in `held` when given.
+    async fn store_in(
+        &self,
+        run_id: &str,
+        progress: &mut RunProgress<'_>,
+        before: &Snapshot,
+        first: Vec<InstanceUpdate>,
+        now: Timestamp,
+        held: Option<&mut Held>,
+    ) -> Result<Vec<(TaskId, i32)>, ExecutionError> {
+        let writes = self.write_changes(run_id, progress, before, first, now, held);
         Box::pin(self.db.atomically(writes)).await
     }
 
@@ -1329,6 +1457,7 @@ impl Execution {
         before: &Snapshot,
         first: Vec<InstanceUpdate>,
         now: Timestamp,
+        held: Option<&mut Held>,
     ) -> Result<Vec<(TaskId, i32)>, ExecutionError> {
         let changes = progress.changes_since(before);
         if !changes.created.is_empty() {
@@ -1357,7 +1486,13 @@ impl Execution {
             }
             updates.push(next);
         }
-        self.db.update_instances(run_id, &updates, now).await?;
+        // Held, the changes are stored after the instances' cancels below: they set apart
+        // columns (`cancel_requested_at`), so either order stores the same.
+        if let Some(held) = held {
+            held.updates.push((run_id.to_owned(), updates));
+        } else {
+            self.db.update_instances(run_id, &updates, now).await?;
+        }
         let mut stops = Vec::new();
         for (task_id, index) in progress.take_stops() {
             let map_index = i32::try_from(index).unwrap_or(i32::MAX);

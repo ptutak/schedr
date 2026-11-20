@@ -65,7 +65,8 @@ Nothing queued: nothing done.
 Before the lock (`ResultsReads::read`, dispatch.rs):
 
 1. `attempts_by_ids`: one SELECT of every queued attempt (attempts JOIN task_instances).
-2. `runs_tasks`: one read of their runs (each run's instances and DAG), for the batch.
+2. `runs_tasks`: one SELECT of their runs joined to their instances (each run's DAG from a
+   cache), for the batch.
 
 Under the lock, one pass over the queue in arrival order:
 
@@ -86,13 +87,18 @@ Under the lock, one pass over the queue in arrival order:
      - wait steps' strikes cleared (`clear_wait_steps`), or counted (`count_strike`), only
        for wait steps;
      - `end_attempts`: one UPDATE of `attempts` for all of them;
-     - per **run** touched (`attempts_finished`, execution.rs): the run from the reads before
-       the lock (or `run`: 2 SELECTs); `store_outputs`, one INSERT ... ON CONFLICT into
-       `outputs`; `advance`: `chosen_of` (an `outputs_of` read only for branches),
-       `settle_all` (in memory; reads only to expand a mapped task or settle a `first_of`),
-       `store` (`write_changes`: `update_instances`, one UPDATE ... FROM VALUES of
-       `task_instances` per 500 rows, and `create_instances` for expansions), and when the run
-       ended `finish` (`finish_run`, plus notifications only if the DAG has channels);
+     - the batch's **runs together** (`runs_finished`, execution.rs, one transaction, the
+       round's joined): each run from the reads before the lock (or `run`: 2 SELECTs) and
+       its results planned; every run's outputs in one `store_outputs` (an INSERT ... ON
+       CONFLICT into `outputs`), before any run moves forward; then per run `advance`:
+       `chosen_of` (an `outputs_of` read only for branches), `settle_all` (in memory; reads
+       only to expand a mapped task or settle a `first_of`), its expansions created at once
+       (`create_instances_of`) and its instances' changes and its end **held**; then the
+       held changes in one `update_instances_of_runs` (an UPDATE ... FROM VALUES of
+       `task_instances` per 500 rows, every run's) and the ended runs in one `finish_runs`.
+       A run whose DAG has notification channels stores what is held and ends at once
+       (`finish_run` and its notifications), as they read its tasks and its DAG's earlier
+       runs;
      - stops for what a failure cancels (`stop`: an `open_attempts` read, only when there are
        some).
      A result that isn't the common case goes through `finished` alone, in its place.
@@ -113,8 +119,10 @@ The lock is taken for each command on its own (decision 483).
    `commands` (skipped by the probe when none is pending).
 2. Per command, `apply_command`: **one transaction each** (`apply_one`): a trigger, a
    cancel, a pause, a drain, a backfill, and its follow-ups (a drain's or resume's parse jobs
-   moved). A `runs trigger` command inserts its run (`INSERT INTO runs`) and marks the
-   command decided.
+   moved). A `runs trigger` command reads its DAG (`active_dags_of`), then its context in one
+   SELECT (`trigger_context`: the nearest earlier run, the running count and the queued
+   runs), inserts its run (`INSERT INTO runs`), starts what `max_active_runs` lets
+   (`start_queued`, the new run in the queue read before) and marks the command decided.
 3. `commands_done`: overdue connection jobs marked lost; resumes whose follow-up failed tried
    again.
 
@@ -124,8 +132,8 @@ The lock is taken for each command on its own (decision 483).
 2. `scheduled_due`: one SELECT of `dag_triggers` due by now (probe: `Scheduled`).
 3. In memory, which DAGs to visit (quiet DAGs): **none due, nothing more is read** (the idle
    path). The term's first round visits all: `next_fires`, every `dag_triggers` row.
-4. For the visited DAGs: `run_overview_of` (3 SELECTs: running by DAG, last scheduled, queued
-   runs) and `active_dags_of` (a SELECT of `dags` and `dag_triggers`, `current_import_errors`,
+4. For the visited DAGs: `run_overview_of` (one SELECT, a UNION ALL of the running counts,
+   the last scheduled runs and the queued runs) and `active_dags_of` (a SELECT of `dags` and `dag_triggers`, `current_import_errors`,
    and each DAG's version from a cache, read on a miss), per 500 DAGs.
 5. Per visited DAG:
    - due fire times in memory; only if any: `covered_times` (a SELECT of `runs`), then per run
@@ -200,10 +208,11 @@ Under the lock (`assign_round`):
    `assign_cleanup` (own transaction) and its message built (its inputs read).
 6. `wind_down_removed` (probe: `RemovedDagsRuns`): runs of removed DAGs cancelled.
 7. Nothing ready: done here, no transaction.
-8. `held_dags` (a SELECT of `dags`; no probe); chained tasks (`TriggerDagOperator`) started
+8. `held_and_versions` (one SELECT of `dags`, no probe: the DAGs held, and the others'
+   current versions for step 9); chained tasks (`TriggerDagOperator`) started
    (own transaction each, then `chained_attempts`, probe: `ChainedAttempts`); wait steps
    waiting for a run or an event (`wait_for_runs`: reads and writes per wait step).
-9. `active_dag_versions` (a SELECT of `dags`, no probe); the concurrency counts
+9. The concurrency limits from those versions; the counts
    (`active_attempts`) only the first time, then kept in memory.
 10. **One transaction** for the round's assignments (`assign_each`):
     - per ready task, in memory: the DAG's version and limits (`held_back`), a worker picked
@@ -232,25 +241,14 @@ Under the lock (`assign_round`):
 
 ## The round's trace
 
-For profiling, `SCHEDR_HIDDEN__MASTER__ROUND_TRACE=<file>` on the master writes one line per
-timed point, `<part>/<point>\t<nanoseconds>` (`crates/schedr-db/src/trace.rs`), flushed at
-each round's end; unset, a point costs one check of a flag read once. The stress tests pass it
-to the master only. The points:
+M5.2g timed every step and point of the round with a trace of its own
+(`SCHEDR_HIDDEN__MASTER__ROUND_TRACE`), removed once measured: its tables, two runs of
+scenario 1 with each point's count, mean, median, p99 and total, are in note N1
+(`notes/N1.toml`).
 
-| Name | Is |
-|---|---|
-| `round/start_to_start` | From a round's start to the next one's, taken as each starts: what a round costs, the gaps between rounds included. |
-| `round/start_to_end` | A round alone. |
-| `round/probe_and_triggers_due` | Step 0, the round's first probe. |
-| `<part>/whole` | A part, its reads before the lock, lock wait, work and delivery. |
-| `<part>/read_before_lock`, `lock_wait`, `under_lock`, `deliver` | Its pieces. |
-| `<part>/<point>` | A point inside a part, named after its function (`assign/assign_each.claim_attempts`, `results/batch.finished.end_attempts`); one inside a loop is timed each time. |
-| `<part>/tx.begin`, `tx.commit` | A transaction's start (the connection's wait included) and its `COMMIT`, under the part it runs in; `own_tx.*` a write's own transaction. |
-| `<part>/probe` | A probe taken again in that part (a time-bounded read past the round's). |
-| `other/...` | Outside a round's part: a worker's turn, the trigger loop, the lease. |
-
-`scripts/round_trace.py FILE` reads such a file and gives each name's count, mean,
-median, 99th percentile and total.
+The trace is there for M5.2g's profiling only: its removal is prepared as commit `dec855c1`
+(branch `trace-removal`), to cherry-pick once M5.2g's changes are measured; note N1 keeps its
+tables and the register of its points.
 
 ## What a round's numbers mean
 

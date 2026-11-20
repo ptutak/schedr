@@ -110,11 +110,9 @@ impl Database {
         if current(self).is_some() {
             return work.await;
         }
-        let scoped = crate::trace::timed_point(
-            "tx.begin",
-            self.limited(self.query_timeout(), self.begin_scope()),
-        )
-        .await?;
+        let scoped = self
+            .limited(self.query_timeout(), self.begin_scope())
+            .await?;
         let scope = Scope {
             database: self.identity().clone(),
             connection: Arc::new(tokio::sync::Mutex::new(scoped)),
@@ -134,7 +132,6 @@ impl Database {
             return Err(DbError::CommitUnknown.into());
         }
         if result.is_ok() {
-            let _commit = crate::trace::point("tx.commit");
             self.limited(self.query_timeout(), async {
                 Ok(scoped.end("COMMIT").await?)
             })

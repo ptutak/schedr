@@ -259,13 +259,6 @@ impl Cluster {
                 command.env(name, value);
             }
         }
-        // The master's round trace (profiling), to the master only: the webserver's transactions
-        // would write to the same file.
-        if args.first() == Some(&"master")
-            && let Ok(path) = std::env::var("SCHEDR_HIDDEN__MASTER__ROUND_TRACE")
-        {
-            command.env("SCHEDR_HIDDEN__MASTER__ROUND_TRACE", path);
-        }
         if self.ca.is_some() {
             command
                 .env("SCHEDR_CONFIG__TLS__MODE", "app")

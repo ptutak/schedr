@@ -2332,3 +2332,26 @@ stops before the first report left out (`cursor_after`).
 One traced run of scenario 1, every step and point of the master's round measured, and
 the register of the trace points to remove later: the tables are in `notes/N1.toml`
 (`details`), for M5.2g.
+
+### 2026-11-20: M5.2g built and measured: fewer statements a round, about 10 % more in scenario 1
+
+From run 2's trace (note N1) and two Codex reviews (the round's hot parts; the master's
+architecture against the guarantees), five changes, each a statement or a few fewer a round,
+no guarantee touched: a results batch's runs written together (`runs_finished`: every run's
+outputs in one statement before any run moves forward, the instances' changes and the ends held
+and stored in one statement each, all in the round's transaction; a run whose DAG notifies
+stores what is held and ends at once, as its notification reads its tasks and earlier runs); a
+batch's runs and instances read in one statement (was two); assign's held DAGs and current
+versions in one (was two, both under the lock); the scheduler's run overview in one UNION ALL
+(was three; the B120/B130 plan test reads it); a manual run's nearest earlier run, running count
+and queue read in one before it is stored (was three after), the run added to the queue in
+memory. Tried and dropped: the ready read joining only `runs`, a version's code from the cache
+(no gain: its fetch 3.38 s against 3.44). Measured: three interleaved pairs against the base
+(runs of one code vary by up to 25 tasks/s here), 69.1 to 75.8 tasks/s at the median, 15.6 to
+13.8 ms of serial round a task (note N1, run 3). CI's stress run reaches the same ~74 on its own
+machine: the round's serial time per task, not the machine, sets scenario 1's rate. Codex's
+architecture review ranked what would raise it further (one ordered writer, set based, with a
+cache of committed state; Postgres functions; a pipeline; DAG owners in one leader; memory as
+the authority ruled out, as are masters with leases of their own); assessed with the user: not
+worth a rework now, the master's ~75 a second is far past what real tasks need of it. Also
+logged: B270 (the gauge refresh counts every run in history, in the master's loop).

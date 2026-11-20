@@ -262,6 +262,49 @@ async fn queued_runs_wait_until_started() {
 }
 
 #[tokio::test]
+async fn a_triggers_context_is_what_the_separate_reads_give() {
+    // M5.2g (Codex's rank 4): the nearest earlier run, the running count and the queue in one
+    // statement, as `nearest_earlier_run`, `running_count` and `queued_runs` read them.
+    let (db, version) = with_dag().await;
+    let id = sync();
+    for (kind, state, at) in [
+        (RunKind::Backfill, RunState::Queued, "2026-10-16T03:00:00Z"),
+        (RunKind::Manual, RunState::Queued, "2026-10-15T03:00:00Z"),
+        (
+            RunKind::Scheduled,
+            RunState::Running,
+            "2026-10-14T03:00:00Z",
+        ),
+    ] {
+        db.insert_run(&run(&id, &version, kind, state, at))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    for before in [
+        "2026-10-21T00:00:00Z",
+        "2026-10-15T03:00:00Z",
+        "2026-10-14T03:00:00Z",
+    ] {
+        let (nearest, running, queued) = db.trigger_context(&id, ts(before)).await.unwrap();
+        assert_eq!(
+            nearest,
+            db.nearest_earlier_run(&id, ts(before)).await.unwrap(),
+            "{before}"
+        );
+        assert_eq!(running, db.running_count(&id).await.unwrap());
+        assert_eq!(queued, db.queued_runs(&id).await.unwrap());
+    }
+    // A DAG with no runs: nothing of each.
+    let other = DagId::new("other").unwrap();
+    let (nearest, running, queued) = db
+        .trigger_context(&other, ts("2026-10-21T00:00:00Z"))
+        .await
+        .unwrap();
+    assert_eq!((nearest, running, queued.len()), (None, 0, 0));
+}
+
+#[tokio::test]
 async fn stored_values_that_dont_read_are_errors() {
     let (db, version) = with_dag().await;
     let id = sync();
@@ -518,10 +561,7 @@ async fn the_latest_scheduled_run_is_one_index_lookup_per_dag() {
         unreachable!("the tests' database is SQLite")
     };
     for count in [0, 2] {
-        let query = sql_text(
-            crate::backend::Backend::Sqlite,
-            &last_scheduled_query(count),
-        );
+        let query = sql_text(crate::backend::Backend::Sqlite, &overview_query(count));
         let steps: Vec<(i64, String)> =
             sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN {}", query.0)))
                 .bind("a")

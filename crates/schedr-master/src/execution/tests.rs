@@ -193,6 +193,115 @@ async fn a_run_of_empty_tasks_finishes_when_prepared() {
     );
 }
 
+fn sorted(mut rows: Vec<(String, TaskInstanceState)>) -> Vec<(String, TaskInstanceState)> {
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+
+/// A second run of the stored DAG's version, planned an hour after the first.
+async fn second_run(db: &Database) -> String {
+    let version_id = db.active_dags().await.unwrap()[0].version_id.clone();
+    db.insert_run(&NewRun {
+        params: &schedr_db::runs::NO_PARAMS,
+        event: None,
+        dag_id: &DagId::new("sync").unwrap(),
+        dag_version_id: &version_id,
+        kind: RunKind::Manual,
+        state: RunState::Running,
+        planned_for: ts("2026-10-21T09:00:00Z"),
+        since: ts("2026-10-21T09:00:00Z"),
+        triggered_at: ts(NOW),
+        triggered_by: "anna",
+        parent_run_id: None,
+        backfill_id: None,
+    })
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+#[tokio::test]
+async fn runs_finished_together_each_move_forward_as_alone() {
+    // M5.2g: one run's `extract` and another's `load` in one batch; their writes held and
+    // stored together: the first run's `load` queued, the second run ended, both outputs kept.
+    let (execution, db, first) = with_run(chain(), RunState::Running).await;
+    let second = second_run(&db).await;
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    let rows = |n: i64| AttemptResult {
+        output: Some(json!({"rows": n})),
+        ..ended(AttemptStatus::Success)
+    };
+    start(&db, &second, "extract").await;
+    execution
+        .attempt_finished(
+            &InRound::for_tests(),
+            &second,
+            &id("extract"),
+            -1,
+            &rows(1),
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    start(&db, &first, "extract").await;
+    start(&db, &second, "load").await;
+    let (extract, load) = (id("extract"), id("load"));
+    let (one, two) = (rows(3), rows(5));
+    let recorded = execution
+        .runs_finished(
+            &InRound::for_tests(),
+            vec![
+                (first.as_str(), vec![(&extract, -1, &one)], None),
+                (second.as_str(), vec![(&load, -1, &two)], None),
+            ],
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded,
+        [
+            Recorded {
+                state: Some(S::Success),
+                run_result: None,
+                stops: vec![],
+            },
+            Recorded {
+                state: Some(S::Success),
+                run_result: Some(RunState::Success),
+                stops: vec![],
+            },
+        ]
+    );
+    assert_eq!(
+        sorted(states(&db, &first).await),
+        sorted(expected(&[
+            ("start", S::Success),
+            ("extract", S::Success),
+            ("load", S::Queued)
+        ]))
+    );
+    assert_eq!(
+        sorted(states(&db, &second).await),
+        sorted(expected(&[
+            ("start", S::Success),
+            ("extract", S::Success),
+            ("load", S::Success)
+        ]))
+    );
+    assert_eq!(run_state(&db, &first).await, RunState::Running);
+    assert_eq!(run_state(&db, &second).await, RunState::Success);
+    for (run_id, task, value) in [(&first, &extract, 3), (&second, &load, 5)] {
+        assert_eq!(
+            db.outputs_of(run_id, &[task]).await.unwrap().get(task),
+            Some(&json!({"rows": value}))
+        );
+    }
+}
+
 #[tokio::test]
 async fn successes_move_the_run_forward_and_finish_it() {
     let (execution, db, run_id) = with_run(chain(), RunState::Running).await;
@@ -2276,6 +2385,62 @@ async fn a_pure_cancel_tells_only_the_channels_that_chose_it() {
         .map(|(c, e, _)| (c, e))
         .collect();
     assert_eq!(events, [("relay".to_owned(), "RUN_CANCELLED".to_owned())]);
+}
+
+#[tokio::test]
+async fn runs_finished_together_keep_each_runs_notifications_in_their_order() {
+    // Codex's review of M5.2g: two runs' last tasks failing in one batch queue each run's task
+    // failure before its run failure; across the runs the task failures come first (delivery
+    // order isn't guaranteed: docs/03-guide/16-notifications.md).
+    let mut dag = notifying_chain();
+    dag.notify = serde_json::from_value(json!([
+        {"channel": {"kind": "webhook", "name": "relay", "url": "https://relay/x"},
+         "events": ["TASK_FAILED", "RUN_FAILED"]}
+    ]))
+    .unwrap();
+    let (mut execution, db, first) = with_run(dag, RunState::Running).await;
+    let second = second_run(&db).await;
+    execution.set_notifications(ops_notifications());
+    execution
+        .prepare_runs(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    for run in [&first, &second] {
+        start(&db, run, "extract").await;
+        execution
+            .attempt_finished(
+                &InRound::for_tests(),
+                run,
+                &id("extract"),
+                -1,
+                &ended(AttemptStatus::Success),
+                ts(NOW),
+            )
+            .await
+            .unwrap();
+        start(&db, run, "load").await;
+    }
+    let (load, failed) = (id("load"), ended(AttemptStatus::Failed));
+    execution
+        .runs_finished(
+            &InRound::for_tests(),
+            vec![
+                (first.as_str(), vec![(&load, -1, &failed)], None),
+                (second.as_str(), vec![(&load, -1, &failed)], None),
+            ],
+            ts(NOW),
+        )
+        .await
+        .unwrap();
+    let all = queued(&db).await;
+    for run in [&first, &second] {
+        let events: Vec<&str> = all
+            .iter()
+            .filter(|(_, _, body)| body.to_string().contains(run.as_str()))
+            .map(|(_, e, _)| e.as_str())
+            .collect();
+        assert_eq!(events, ["TASK_FAILED", "RUN_FAILED"], "{run}");
+    }
 }
 
 #[tokio::test]

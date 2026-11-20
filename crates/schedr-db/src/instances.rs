@@ -143,22 +143,6 @@ type InstanceRow = (
 /// A run's row with its ID first (see [`RunRow`]).
 type RunsRow = (String, String, bool, String, String);
 
-/// An instance's row with its run's ID first.
-type RunInstanceRow = (
-    String,
-    String,
-    String,
-    String,
-    i32,
-    i32,
-    Option<String>,
-    bool,
-    Option<String>,
-    i32,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
 /// A run's state, whether it is being cancelled, its DAG version and its parse's version.
 type RunRow = (String, bool, String, String);
 
@@ -342,47 +326,80 @@ impl Database {
         }))
     }
 
-    /// Several runs with their task instances, as [`Self::run_tasks`] reads one, in two
-    /// statements for all of them (M5.2cB4): a run not found is left out.
+    /// Several runs with their task instances, as [`Self::run_tasks`] reads one, in one
+    /// statement for all of them (M5.2cB4; M5.2g: the runs joined to their instances, where it
+    /// was two): a run not found is left out.
     ///
     /// # Errors
     ///
-    /// [`DbError`] if a statement fails or a row can't be read.
+    /// [`DbError`] if the statement fails or a row can't be read.
     pub async fn runs_tasks(
         &self,
         run_ids: &[&str],
     ) -> Result<BTreeMap<String, RunTasks>, DbError> {
-        const RUNS: &str = "SELECT r.id{text}, r.state, r.cancel_requested_at IS NOT NULL, \
-            v.id{text}, p.schedr_version FROM runs r JOIN dag_versions v ON v.id = r.dag_version_id \
+        // A run with no instances yet comes once, its instance's columns NULL.
+        const JOINED: &str = "SELECT r.id{text}, r.state, r.cancel_requested_at IS NOT NULL, \
+            v.id{text}, p.schedr_version, t.id{text}, t.task_id, t.state, t.try_number, \
+            t.retries_used, {ts<}t.ready_at{>ts}, t.cancel_requested_at IS NOT NULL, t.outcome, \
+            t.map_index, t.reason, t.map_sizes{text}, t.cleanup_result FROM runs r \
+            JOIN dag_versions v ON v.id = r.dag_version_id \
             JOIN parse_results p ON p.id = v.parse_result_id \
-            WHERE r.id IN (SELECT value{uuid} FROM {json_each}($1{json}))";
-        const INSTANCES: &str = "SELECT run_id{text}, id{text}, task_id, state, try_number, \
-            retries_used, {ts<}ready_at{>ts}, cancel_requested_at IS NOT NULL, outcome, map_index, \
-            reason, map_sizes{text}, cleanup_result FROM task_instances \
-            WHERE run_id IN (SELECT value{uuid} FROM {json_each}($1{json})) \
-            ORDER BY run_id, task_id, map_index";
+            LEFT JOIN task_instances t ON t.run_id = r.id \
+            WHERE r.id IN (SELECT value{uuid} FROM {json_each}($1{json})) \
+            ORDER BY r.id, t.task_id, t.map_index";
         let mut found = BTreeMap::new();
         if run_ids.is_empty() {
             return Ok(found);
         }
         let list = crate::query::to_json(&run_ids);
-        let (runs, rows): (Vec<RunsRow>, Vec<RunInstanceRow>) = on_pool!(self, |pool, backend| {
-            let runs = crate::query::query_as(sql(backend, RUNS))
+        // Wider than sqlx's tuples go (16): read by position.
+        let rows: Vec<(RunsRow, Option<InstanceRow>)> = on_pool!(self, |pool, backend| {
+            use sqlx::Row as _;
+            let rows = crate::query::query(sql(backend, JOINED))
                 .bind(&list)
                 .fetch_all(&mut *pool)
                 .await?;
-            let rows = crate::query::query_as(sql(backend, INSTANCES))
-                .bind(&list)
-                .fetch_all(&mut *pool)
-                .await?;
-            (runs, rows)
+            let mut read = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let run: RunsRow = (
+                    row.try_get(0)?,
+                    row.try_get(1)?,
+                    row.try_get(2)?,
+                    row.try_get(3)?,
+                    row.try_get(4)?,
+                );
+                let instance: Option<String> = row.try_get(5)?;
+                let instance = match instance {
+                    None => None,
+                    Some(id) => Some((
+                        id,
+                        row.try_get(6)?,
+                        row.try_get(7)?,
+                        row.try_get(8)?,
+                        row.try_get(9)?,
+                        row.try_get(10)?,
+                        row.try_get(11)?,
+                        row.try_get(12)?,
+                        row.try_get(13)?,
+                        row.try_get(14)?,
+                        row.try_get(15)?,
+                        row.try_get(16)?,
+                    )),
+                };
+                read.push((run, instance));
+            }
+            read
         });
+        let mut runs: Vec<RunsRow> = Vec::new();
         let mut instances: BTreeMap<String, Vec<StoredInstance>> = BTreeMap::new();
-        for (run_id, a, b, c, d, e, f, g, h, i, j, k, l) in rows {
-            instances
-                .entry(run_id)
-                .or_default()
-                .push(instance((a, b, c, d, e, f, g, h, i, j, k, l))?);
+        for (run, row) in rows {
+            if runs.last().is_none_or(|last| last.0 != run.0) {
+                runs.push(run.clone());
+            }
+            let list = instances.entry(run.0).or_default();
+            if let Some(row) = row {
+                list.push(instance(row)?);
+            }
         }
         for (run_id, state, cancel_requested, version_id, parse_version) in runs {
             let dag = self.dag_version(&version_id).await?;
@@ -438,27 +455,48 @@ impl Database {
         updates: &[InstanceUpdate],
         now: Timestamp,
     ) -> Result<(), DbError> {
-        let updates = merged(updates);
-        // Each row a microsecond after the one before, in the order given: what ended in one
-        // write keeps that order (`ended_in_order`, a `first_of` decided later; M4B.4).
-        let times: Vec<String> = (0..updates.len())
-            .map(|k| {
+        self.update_instances_of_runs(&[(run_id, updates)], now)
+            .await
+    }
+
+    /// Stores changes to several runs' task instances, all or none, as
+    /// [`Self::update_instances`] does each run's (M5.2g: a results batch's runs in one
+    /// statement, where it was one a run).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn update_instances_of_runs(
+        &self,
+        runs: &[(&str, &[InstanceUpdate])],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        // Each run's rows a microsecond after the one before, in the order given: what ended in
+        // one write keeps that order (`ended_in_order`, a `first_of` decided later; M4B.4).
+        let mut rows: Vec<(&str, &InstanceUpdate, i32, String)> = Vec::new();
+        for &(run_id, updates) in runs {
+            for (k, (one, retries)) in merged(updates).into_iter().enumerate() {
                 let step = jiff::SignedDuration::from_micros(i64::try_from(k).unwrap_or(i64::MAX));
-                db_time(now.checked_add(step).unwrap_or(now))
-            })
-            .collect();
+                rows.push((
+                    run_id,
+                    one,
+                    retries,
+                    db_time(now.checked_add(step).unwrap_or(now)),
+                ));
+            }
+        }
+        if rows.is_empty() {
+            return Ok(());
+        }
         // Many rows a statement, joined to a list of values (a finished task in a wide DAG
         // changes many at once, B18); `columnN` names the list's columns on both backends.
         in_tx!(self, |tx, backend| {
-            for (chunk, times) in updates
-                .chunks(UPDATES_PER_STATEMENT)
-                .zip(times.chunks(UPDATES_PER_STATEMENT))
-            {
-                let rows: Vec<String> = (0..chunk.len())
+            for chunk in rows.chunks(UPDATES_PER_STATEMENT) {
+                let values: Vec<String> = (0..chunk.len())
                     .map(|i| {
-                        let n = 1 + i * 9;
+                        let n = i * 10;
                         format!(
-                            "(${}, ${}, ${}, ${}{{ts}}, ${}, ${}, ${}, ${}{{json}}, ${}{{ts}})",
+                            "(${}{{uuid}}, ${}, ${}, ${}, ${}{{ts}}, ${}, ${}, ${}, ${}{{json}}, ${}{{ts}})",
                             n + 1,
                             n + 2,
                             n + 3,
@@ -467,25 +505,27 @@ impl Database {
                             n + 6,
                             n + 7,
                             n + 8,
-                            n + 9
+                            n + 9,
+                            n + 10
                         )
                     })
                     .collect();
                 let text = format!(
-                    "UPDATE task_instances AS t SET state = v.column3, ready_at = v.column4, \
-                     outcome = v.column5, retries_used = t.retries_used + v.column6, \
-                     reason = COALESCE(v.column7, t.reason), \
-                     map_sizes = COALESCE(v.column8, t.map_sizes), updated_at = v.column9, \
-                     ended_at = CASE WHEN v.column3 IN ('success', 'failed', 'upstream_failed', \
-                         'skipped', 'cancelled') THEN v.column9 END \
+                    "UPDATE task_instances AS t SET state = v.column4, ready_at = v.column5, \
+                     outcome = v.column6, retries_used = t.retries_used + v.column7, \
+                     reason = COALESCE(v.column8, t.reason), \
+                     map_sizes = COALESCE(v.column9, t.map_sizes), updated_at = v.column10, \
+                     ended_at = CASE WHEN v.column4 IN ('success', 'failed', 'upstream_failed', \
+                         'skipped', 'cancelled') THEN v.column10 END \
                      FROM (VALUES {}) AS v \
-                     WHERE t.run_id = $1{{uuid}} AND t.task_id = v.column1 \
-                     AND t.map_index = v.column2",
-                    rows.join(", ")
+                     WHERE t.run_id = v.column1 AND t.task_id = v.column2 \
+                     AND t.map_index = v.column3",
+                    values.join(", ")
                 );
-                let mut update = crate::query::query(sql_text(backend, &text)).bind(run_id);
-                for ((one, retries), at) in chunk.iter().zip(times) {
+                let mut update = crate::query::query(sql_text(backend, &text));
+                for (run_id, one, retries, at) in chunk {
                     update = update
+                        .bind(*run_id)
                         .bind(one.task_id.as_str())
                         .bind(one.map_index)
                         .bind(one.state.to_string())
@@ -563,6 +603,41 @@ impl Database {
                 .bind(run_id)
                 .execute(&mut *tx)
                 .await?;
+        });
+        Ok(())
+    }
+
+    /// Records several runs' results, as [`Self::finish_run`] does each (M5.2g: a results
+    /// batch's ended runs in one statement).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn finish_runs(
+        &self,
+        runs: &[(&str, RunState)],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        if runs.is_empty() {
+            return Ok(());
+        }
+        let now = db_time(now);
+        in_tx!(self, |tx, backend| {
+            for chunk in runs.chunks(UPDATES_PER_STATEMENT) {
+                let values: Vec<String> = (0..chunk.len())
+                    .map(|i| format!("(${}{{uuid}}, ${})", 2 + i * 2, 3 + i * 2))
+                    .collect();
+                let text = format!(
+                    "UPDATE runs AS r SET state = v.column2, ended_at = $1{{ts}} \
+                     FROM (VALUES {}) AS v WHERE r.id = v.column1",
+                    values.join(", ")
+                );
+                let mut update = crate::query::query(sql_text(backend, &text)).bind(&now);
+                for (run_id, state) in chunk {
+                    update = update.bind(*run_id).bind(state.to_string());
+                }
+                update.execute(&mut *tx).await?;
+            }
         });
         Ok(())
     }
