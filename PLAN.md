@@ -271,7 +271,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2h6 | A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511) | done 2026-11-20 | D511 |
 | M5.2i | A hole for closed-source extensions: an opaque task kind run by a closed worker | done 2026-11-20 | D510 |
 | M5.2i2 | A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real | done 2026-11-20 |  |
-| M5.2i5 | Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page | planned | D513 |
+| M5.2i5 | Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page | planned | D513, D514 |
+| M5.2i6 | Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx` | planned |  |
 | M5.2i4 | The plugin protocol's specification, and a schema of just its messages | planned |  |
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
 | M5.2j | The bugs found and left before 1.2.0 fixed | planned |  |

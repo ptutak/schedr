@@ -55,6 +55,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D514 | 2026-11-20 | user | planned (M5.2i5) | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |
 | D513 | 2026-11-20 | user | planned (M5.2i5) | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |
 | D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |
 | D511 | 2026-11-20 | user | built M5.2h6 | secrets | A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly |
@@ -988,6 +989,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-logs
 
+- D514: Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page
 - D23: The live log tail reads the worker range endpoint
 
 ### task-processes

@@ -2625,3 +2625,53 @@ errors could block the stream; the script read a failed `kubectl` as no Jobs; th
 its fake `kubectl` running. A regression test for each; kind passed again. Also: the plugin's
 `from __future__ import annotations` dropped (the user asked why: Python 3.14 evaluates
 annotations lazily).
+
+### 2026-11-20: decision 513's details settled
+
+The user accepted: metrics labelled by the extension's own labels only, not the DAG and task
+(per-task figures are the attempts'; those labels would multiply the series); declarations in
+`--describe` and config, config winning, as for versions; a status history of phases with their
+times, not only the latest; a drain deletes the Kubernetes plugin's Job and the task is retried
+elsewhere (leaving it would need re-attaching, not planned). Links: whole URLs from the plugin
+("it's more flexible"), not config templates filled by the worker; the UI shows only http(s).
+
+### 2026-11-20: M5.2i6 planned, shell plugins
+
+The user asked what a shell extension would be and what I recommend: not a separate
+`schedr-ext-shell` program, nor shell framing JSON, but a mode of the `schedr` binary
+(`schedr extension shell -- <script>`), which already speaks the protocol and serves
+`schedr task-ctx` for command tasks. It differs from a command task in who owns the script (the
+workers' operators, not the DAG's author) and in its name and versions, offered only where
+installed; not in the cleanup (the user: "we do have cleanup for scripts though": a command
+task registers handles with `schedr task-ctx cleanup add`, which the adapter reuses as is). M5.2i5's new `task-ctx` commands (status, links, metrics)
+then serve command tasks as well. Order: M5.2i2, M5.2i5, M5.2i6, then M5.2i4, the specification,
+last. "looks good, add it as i6".
+
+### 2026-11-20: the extensions' pages settled (decision 513)
+
+The user: "extensions should have their own page in the UI which will show authors metrics as
+they see fit"; "we define everything that we can, we leave as small amount to define as
+possible, so no styles etc. ... we could allow some layout configuration"; both metric paths
+("I think we need both"). Panels declared from our chart kinds, a little layout, a default
+panel per metric; per-kind aggregation for the stored samples.
+
+### <a id="D514"></a>2026-11-20: logs through stdout and stderr, one structured format (decision 514)
+
+The user asked for a logs entrypoint, then whether to force stdout and stderr, then whether to
+provide a log API: "take a step back and say what do you recommend". Chosen: stdout and stderr
+only, with one structured JSON line format of ours for every task kind now (not plugins only
+first), written by the helpers and `schedr task-ctx log`; no log messages in the protocol (lines
+out of order between pipe and socket, masking and the log server rebuilt, a crashed plugin's
+log lost); no stdout/stderr split stored; big logs as links; an extension's own events on its
+page. Not chosen: a protocol `log` message, a plugin serving remote logs, per-extension log
+storage. "agreed".
+
+### 2026-11-20: plugin metrics' series bounded (decision 513)
+
+A side agent's note: declared label names don't bound their values (a pod-name label makes a
+series per pod, a stored row each minute). Chosen (A): a cap per metric, `max_series` (100),
+applied by the worker and by the master across workers and on `/metrics`, past it folded into an
+`other` series so totals and rates stay right; optional allowed values per label. Not chosen:
+every label's values listed by the author (too rigid for a namespace or a queue), a cap that
+drops (counts lost, rates wrong). Also corrected: "one row per metric per minute" holds only per
+series.
