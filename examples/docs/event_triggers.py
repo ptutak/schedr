@@ -6,6 +6,7 @@ starts no run.
 """
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from datetime import timedelta
@@ -21,7 +22,13 @@ class Arrived(Data):
     size: int
 
 
-def _names(folder: Path, after: str | None) -> list[str]:
+log = logging.getLogger(__name__)
+
+
+def _names(folder: Path, after: str | None) -> list[str] | None:
+    """The names after `after`, or None while the folder is missing (no files yet)."""
+    if not folder.is_dir():
+        return None
     return sorted(name for name in os.listdir(folder) if after is None or name > after)
 
 
@@ -29,8 +36,16 @@ def _names(folder: Path, after: str | None) -> list[str]:
 async def new_files(after: str | None, folder: str) -> AsyncIterator[Event[Arrived]]:
     """Yields each file not seen yet, in name order, and looks again every few seconds."""
     place = Path(folder)
+    missing = False
     while True:
         names = await asyncio.to_thread(_names, place, after)
+        if names is None:
+            if not missing:
+                log.warning("%s is missing: waiting for it to be created", place)
+            missing = True
+            names = []
+        else:
+            missing = False
         for name in names:
             yield Event(name, Arrived(str(place / name), (place / name).stat().st_size))
             after = name
@@ -56,7 +71,7 @@ with Dag(
 async def batch_files(after: str | None, folder: str) -> list[Event[Arrived]]:
     """Looks for files in name order without consuming them."""
     place = Path(folder)
-    names = await asyncio.to_thread(_names, place, after)
+    names = await asyncio.to_thread(_names, place, after) or []
     return [
         Event(name, Arrived(str(place / name), (place / name).stat().st_size)) for name in names
     ]

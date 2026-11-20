@@ -43,6 +43,13 @@ are kept, in plain text, in the container engine's volumes (`schedr-demo-dev`,
 `-prod`, `-servers`, `-ssh-users`, `-ssh-host`), one per reader: `dev` mounts only its own,
 never `prod`'s or the servers' administrator password. They stay until `make demo-clean`.
 
+Three more files are copies of the documentation's examples, to show the rest of schedr:
+[`dags/schedules.py`](dags/schedules.py) (cron, daily in a time zone, every hour, once, manual),
+[`dags/sensors.py`](dags/sensors.py) (wait steps; one polls the deployment's own API) and
+[`dags/event_triggers.py`](dags/event_triggers.py) (a run for each file arriving in
+`/tmp/schedr-incoming`; unpause `event_triggers`, then drop a file there:
+`podman compose -f examples/demo/compose.yaml exec dev sh -c 'mkdir -p /tmp/schedr-incoming && date > /tmp/schedr-incoming/a.txt'`).
+
 ## Not like production
 
 - **No TLS to the databases:** Postgres and Mongo have none here (`?sslmode=disable`,
