@@ -16,6 +16,7 @@ pub const MAX_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 
 /// A message from the plugin to the worker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PluginMessage {
     /// The first message: in `extension` mode, naming the protocol.
@@ -77,6 +78,7 @@ pub enum PluginMessage {
 
 /// A message from the worker to the plugin.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerMessage {
     /// The handshake succeeded.
@@ -133,6 +135,7 @@ pub enum WorkerMessage {
 
 /// An `extension_task` request: what a plugin needs of it, the rest raw.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExtensionTask {
     /// The DAG's ID.
     pub dag_id: String,
@@ -153,6 +156,7 @@ pub struct ExtensionTask {
 
 /// The task of an [`ExtensionTask`]: its kind `extension`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Task {
     /// The task's ID.
     pub id: String,
@@ -174,6 +178,7 @@ pub struct Task {
 
 /// A task's settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Settings {
     /// The most its output may take, in bytes.
     pub max_output_size: u64,
@@ -184,6 +189,7 @@ pub struct Settings {
 
 /// A secret's name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SecretName {
     /// The storage; `None` for the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -197,6 +203,7 @@ pub struct SecretName {
 
 /// A secret the worker fetched for the attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SecretValue {
     /// Which.
     pub name: SecretName,
@@ -206,6 +213,7 @@ pub struct SecretValue {
 
 /// A cleanup handle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Handle {
     /// Its type's name.
     pub handle_type: String,
@@ -215,6 +223,7 @@ pub struct Handle {
 
 /// Why a task failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ErrorSummary {
     /// The error's type, e.g. `ExtensionError`.
     pub exception: String,
@@ -222,4 +231,24 @@ pub struct ErrorSummary {
     pub message: String,
     /// Where, if known.
     pub traceback: String,
+}
+
+/// Any message on a plugin's channel, either way: what `schema/extension.schema.json` describes
+/// (M5.2i4). Only for the schema.
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[expect(dead_code, reason = "only its schema is used")]
+enum ChannelMessage {
+    /// From the plugin.
+    Plugin(PluginMessage),
+    /// From the worker.
+    Worker(WorkerMessage),
+}
+
+/// The JSON Schema of the plugin protocol's messages, either way (M5.2i4).
+#[cfg(feature = "schema")]
+#[must_use]
+pub fn schema() -> schemars::Schema {
+    schemars::schema_for!(ChannelMessage)
 }

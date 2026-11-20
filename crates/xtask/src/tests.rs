@@ -20,7 +20,7 @@ fn render_json_is_pretty_with_a_trailing_newline() {
 #[test]
 fn schema_files_contain_the_schemas_and_the_openapi_description() {
     let files = schema_files();
-    assert_eq!(files.len(), 4);
+    assert_eq!(files.len(), 5);
     assert_eq!(files[0].path, Path::new("schema").join("dag.schema.json"));
     assert_eq!(
         files[1].path,
@@ -38,8 +38,17 @@ fn schema_files_contain_the_schemas_and_the_openapi_description() {
         ctx,
         serde_json::to_value(schedr_model::schema::ctx_schema()).unwrap()
     );
-    assert_eq!(files[3].path, Path::new("schema").join("openapi.json"));
-    let openapi: serde_json::Value = serde_json::from_str(&files[3].contents).unwrap();
+    assert_eq!(
+        files[3].path,
+        Path::new("schema").join("extension.schema.json")
+    );
+    let extension: serde_json::Value = serde_json::from_str(&files[3].contents).unwrap();
+    assert_eq!(
+        extension,
+        serde_json::to_value(schedr_extension::protocol::schema()).unwrap()
+    );
+    assert_eq!(files[4].path, Path::new("schema").join("openapi.json"));
+    let openapi: serde_json::Value = serde_json::from_str(&files[4].contents).unwrap();
     assert_eq!(openapi, schedr_api::openapi_json());
 }
 

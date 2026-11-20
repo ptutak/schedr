@@ -551,7 +551,8 @@ scope = '''
 done_when = '''
 the page, linked from the guide's Extensions page; the schema generated and checked; the Python helper and the Rust crate agreeing with it (the crate's two-way test, a test of the helper's messages against the schema)
 '''
-status = "planned"
+status = "done"
+done = 2026-11-20
 
 [[steps]]
 id = "M5.2j"

@@ -14,6 +14,7 @@ schedr.workspace = true
 schedr-agent.workspace = true
 schedr-api.workspace = true
 schedr-config.workspace = true
+schedr-extension = { workspace = true, features = ["schema"] }
 schedr-master.workspace = true
 schedr-model.workspace = true
 schemars.workspace = true

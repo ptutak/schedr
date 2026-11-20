@@ -14,6 +14,12 @@ rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Only for the `schema` feature: schedr's own build writes schema/extension.schema.json from
+# these types (M5.2i4); a plugin's build doesn't need it.
+schemars = { workspace = true, optional = true }
+
+[features]
+schema = ["dep:schemars"]
 
 [dev-dependencies]
 pretty_assertions.workspace = true

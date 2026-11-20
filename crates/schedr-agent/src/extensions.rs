@@ -124,7 +124,7 @@ fn is_executable(file: &Path) -> bool {
 }
 
 /// Asks `program` for its description: `--describe`, with only `PATH` in its environment, at
-/// most [`DESCRIBE_TIMEOUT`], its standard output read up to [`DESCRIBE_LIMIT`]. It runs in a
+/// most [`DESCRIBE_TIMEOUT`], its standard output read up to 64 KiB. It runs in a
 /// process group of its own, killed afterwards, so nothing it started outlives the question
 /// (Grok's review of M5.2i).
 ///

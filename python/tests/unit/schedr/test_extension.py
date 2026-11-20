@@ -5,9 +5,11 @@ import socket
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from schedr.extension import (
     PROTOCOL,
@@ -18,6 +20,31 @@ from schedr.extension import (
     main,
 )
 from schedr.runner.protocol import Channel
+
+# The plugin protocol's schema (M5.2i4), generated from the Rust crate's types: what the helper
+# sends and what this test sends as the worker are both checked against it.
+_SCHEMA = json.loads((Path(__file__).parents[4] / "schema" / "extension.schema.json").read_text())
+
+
+def _validator(side: str) -> Draft202012Validator:
+    return Draft202012Validator({"$ref": f"#/$defs/{side}", "$defs": _SCHEMA["$defs"]})
+
+
+_FROM_PLUGIN = _validator("PluginMessage")
+_FROM_WORKER = _validator("WorkerMessage")
+
+
+class CheckedChannel(Channel):
+    """The worker's end, every message either way checked against the protocol's schema."""
+
+    def send(self, message: dict[str, Any]) -> None:
+        _FROM_WORKER.validate(message)
+        super().send(message)
+
+    def receive(self) -> dict[str, Any]:
+        message = super().receive()
+        _FROM_PLUGIN.validate(message)
+        return message
 
 
 def request(payload: object, cleanup: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -50,7 +77,7 @@ def plugin(
 ) -> Iterator[tuple[Channel, Callable[[], int]]]:
     """A plugin started on one end of a socket pair; the test is the worker on the other."""
     worker_end, plugin_end = socket.socketpair()
-    worker = Channel(worker_end)
+    worker = CheckedChannel(worker_end)
     exit_code: list[int] = []
     thread = threading.Thread(
         target=lambda: exit_code.append(
@@ -259,12 +286,12 @@ def test_a_refused_plugin_exits_and_a_wrong_message_is_a_protocol_error(
     with plugin(run) as (worker, ended):
         worker.receive()
         worker.send({"type": "welcome"})
-        worker.send({"type": "task"})
+        Channel.send(worker, {"type": "task"})  # off the protocol on purpose: unchecked
         assert ended() == 1
     assert "expected `extension_task`, got `task`" in capsys.readouterr().err
     with plugin(run) as (worker, ended):
         worker.receive()
-        worker.send({"type": "parse"})
+        Channel.send(worker, {"type": "parse"})  # off the protocol on purpose: unchecked
         assert ended() == 1
     assert "expected `welcome`" in capsys.readouterr().err
     with plugin(run) as (worker, ended):

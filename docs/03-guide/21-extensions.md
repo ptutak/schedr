@@ -107,6 +107,9 @@ It speaks the [runner protocol](15-protocol.md) over the socket the worker hands
    `handle_add`, `api_call`, each answered before the next;
 4. it ends with `task_succeeded` (its output) or `task_failed` (an error).
 
+[The plugin protocol](22-plugin-protocol.md) says all of it precisely, for a plugin in any
+language, with the JSON Schema of its messages.
+
 ## Cleanup
 
 With `cleanup=True`, the plugin registers **handles** while it runs: what its cleanup needs that

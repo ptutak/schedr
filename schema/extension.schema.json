@@ -1,0 +1,560 @@
+{
+  "$defs": {
+    "ErrorSummary": {
+      "description": "Why a task failed.",
+      "properties": {
+        "exception": {
+          "description": "The error's type, e.g. `ExtensionError`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "What went wrong.",
+          "type": "string"
+        },
+        "traceback": {
+          "description": "Where, if known.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exception",
+        "message",
+        "traceback"
+      ],
+      "type": "object"
+    },
+    "ExtensionTask": {
+      "additionalProperties": true,
+      "description": "An `extension_task` request: what a plugin needs of it, the rest raw.",
+      "properties": {
+        "cleanup": {
+          "description": "Set for a cleanup: the handles the attempt registered, in order.",
+          "items": {
+            "$ref": "#/$defs/Handle"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dag_id": {
+          "description": "The DAG's ID.",
+          "type": "string"
+        },
+        "run": {
+          "description": "The run's information (`run_id`, `try_number`, `planned_for`, ...)."
+        },
+        "secrets": {
+          "default": [],
+          "description": "The secrets the worker fetched for it.",
+          "items": {
+            "$ref": "#/$defs/SecretValue"
+          },
+          "type": "array"
+        },
+        "task": {
+          "$ref": "#/$defs/Task",
+          "description": "The task."
+        }
+      },
+      "required": [
+        "dag_id",
+        "task",
+        "run"
+      ],
+      "type": "object"
+    },
+    "Handle": {
+      "description": "A cleanup handle.",
+      "properties": {
+        "handle_type": {
+          "description": "Its type's name.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Its value, JSON."
+        }
+      },
+      "required": [
+        "handle_type",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PluginMessage": {
+      "description": "A message from the plugin to the worker.",
+      "oneOf": [
+        {
+          "description": "The first message: in `extension` mode, naming the protocol.",
+          "properties": {
+            "mode": {
+              "description": "Always `extension`.",
+              "type": "string"
+            },
+            "protocol": {
+              "description": "[`PROTOCOL`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schedr_version": {
+              "description": "The plugin's own version, not checked.",
+              "type": "string"
+            },
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "schedr_version",
+            "mode",
+            "protocol"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A secret the task declared; answered [`WorkerMessage::Secret`] or\n[`WorkerMessage::SecretFailed`].",
+          "properties": {
+            "secret": {
+              "$ref": "#/$defs/SecretName",
+              "description": "Which secret."
+            },
+            "type": {
+              "const": "secret_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A connection the task declared; answered [`WorkerMessage::Connection`] or\n[`WorkerMessage::ConnectionFailed`].",
+          "properties": {
+            "name": {
+              "description": "The connection's name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A cleanup handle; answered [`WorkerMessage::HandleAdded`] or\n[`WorkerMessage::HandleRefused`].",
+          "properties": {
+            "handle": {
+              "$ref": "#/$defs/Handle",
+              "description": "The handle."
+            },
+            "type": {
+              "const": "handle_add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "handle"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A call to schedr's REST API, made by the master as the task; answered\n[`WorkerMessage::ApiAnswer`].",
+          "properties": {
+            "body": {
+              "description": "The JSON body, if any."
+            },
+            "idempotency_key": {
+              "description": "Its `Idempotency-Key`, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "method": {
+              "description": "`GET`, `POST`, ...",
+              "type": "string"
+            },
+            "path": {
+              "description": "The path and its query.",
+              "type": "string"
+            },
+            "type": {
+              "const": "api_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "method",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The task (or cleanup) succeeded with this output.",
+          "properties": {
+            "outcome": {
+              "description": "`SUCCESS`.",
+              "type": "string"
+            },
+            "output": {
+              "description": "The output, JSON."
+            },
+            "type": {
+              "const": "task_succeeded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "output",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The task (or cleanup) failed.",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/ErrorSummary",
+              "description": "What went wrong."
+            },
+            "kind": {
+              "description": "A failure schedr recognises (`output_too_large`); `None` for the plugin's own.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "task_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SecretName": {
+      "description": "A secret's name.",
+      "properties": {
+        "key": {
+          "description": "The key; `None` for the whole secret.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The path.",
+          "type": "string"
+        },
+        "storage": {
+          "description": "The storage; `None` for the default.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "SecretValue": {
+      "description": "A secret the worker fetched for the attempt.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/SecretName",
+          "description": "Which."
+        },
+        "value": {
+          "description": "Its value."
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Settings": {
+      "additionalProperties": true,
+      "description": "A task's settings.",
+      "properties": {
+        "max_output_size": {
+          "description": "The most its output may take, in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_output_size"
+      ],
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": true,
+      "description": "The task of an [`ExtensionTask`]: its kind `extension`.",
+      "properties": {
+        "id": {
+          "description": "The task's ID.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`extension`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The extension's name.",
+          "type": "string"
+        },
+        "payload": {
+          "default": null,
+          "description": "What it asks the plugin to do."
+        },
+        "settings": {
+          "$ref": "#/$defs/Settings",
+          "description": "Its settings: `max_output_size` read here, the rest raw."
+        },
+        "version": {
+          "description": "The version it is written for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "version",
+        "settings"
+      ],
+      "type": "object"
+    },
+    "WorkerMessage": {
+      "description": "A message from the worker to the plugin.",
+      "oneOf": [
+        {
+          "description": "The handshake succeeded.",
+          "properties": {
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The handshake failed; the plugin exits.",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/ExtensionTask",
+          "description": "The attempt: the task, or its cleanup (`cleanup` set).",
+          "properties": {
+            "type": {
+              "const": "extension_task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A secret's value.",
+          "properties": {
+            "type": {
+              "const": "secret",
+              "type": "string"
+            },
+            "value": {
+              "description": "A key's value, or a whole secret's object."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why a secret can't be read.",
+          "properties": {
+            "kind": {
+              "description": "`secret_unavailable`, `secret_denied`, `secret_not_found`.",
+              "type": "string"
+            },
+            "message": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "secret_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A connection's values.",
+          "properties": {
+            "type": {
+              "const": "connection",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": true,
+              "description": "By parameter.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why a connection can't be opened.",
+          "properties": {
+            "kind": {
+              "description": "Its kind.",
+              "type": "string"
+            },
+            "message": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "connection_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The handle is registered.",
+          "properties": {
+            "type": {
+              "const": "handle_added",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the handle isn't registered.",
+          "properties": {
+            "message": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "handle_refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What the API answered.",
+          "properties": {
+            "body": {
+              "description": "The JSON body."
+            },
+            "note": {
+              "description": "What the task is told of its request, printed to its log.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "description": "The HTTP status.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "api_answer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "body"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/PluginMessage",
+      "description": "From the plugin."
+    },
+    {
+      "$ref": "#/$defs/WorkerMessage",
+      "description": "From the worker."
+    }
+  ],
+  "description": "Any message on a plugin's channel, either way: what `schema/extension.schema.json` describes\n(M5.2i4). Only for the schema.",
+  "title": "ChannelMessage"
+}

@@ -2570,3 +2570,12 @@ leader exits, its output is read for at most the drain time, then what is left o
 group is killed. Nothing in the examples or tests relied on a child outliving its task. A
 service that must outlive one runs outside schedr. Changes released behaviour (1.1.0 left such
 children running).
+
+### 2026-11-20: M5.2i4 done, the plugin protocol's specification
+
+`docs/03-guide/22-plugin-protocol.md`, linked from the Extensions page: `--describe`, the start
+(the socket, close-on-exec), framing, handshake, request, the requests one at a time, the end
+and how the worker judges it, stopping, compatibility. Each rule read from the worker's code.
+`schema/extension.schema.json`, generated from `schedr-extension`'s types (`schemars` behind the
+crate's off-by-default `schema` feature, so a plugin's build stays as it was) and checked by
+`make schema-check`; the Python helper's tests check every message either way against it.
