@@ -12,8 +12,10 @@ the task and the Extensions page; its own metrics, counters, gauges and histogra
 declared buckets, each declared (name, kind, help, label names) in `--describe` or config,
 undeclared ones dropped with a warning; carried as workers' and tasks' figures are today (the
 heartbeat, minute samples, 15-minute rollups), charted on a UI page for all extensions and on the
-worker's Prometheus `/metrics`; and a `stop` message (its reason: cancel, timeout, drain, a lost
-master; its grace) sent with SIGTERM, SIGKILL after the grace. Before R1.2 (M5.2i5); the
+worker's Prometheus `/metrics`; and stop reasons kept within strict turns: SIGTERM to the
+plugin's process group as for any task, SIGKILL after the grace, and a plugin wanting the reason
+asks `stop_reason_get`, answered with it (cancel, timeout, drain, a lost master) and the grace
+left; the worker never sends an unasked message. Before R1.2 (M5.2i5); the
 Kubernetes plugin uses every part. Settled: metrics carry the extension's own labels only (no
 DAG or task ID); declared in `--describe` and config, config winning; status kept as a history of
 phases with their times; links sent whole by the plugin (its own options give base addresses),

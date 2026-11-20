@@ -2675,3 +2675,19 @@ applied by the worker and by the master across workers and on `/metrics`, past i
 every label's values listed by the author (too rigid for a namespace or a queue), a cap that
 drops (counts lost, rates wrong). Also corrected: "one row per metric per minute" holds only per
 series.
+
+### 2026-11-20: stop reasons asked, not sent (decision 513)
+
+A side agent's note: a `stop` message sent when the worker decides can reach a plugin waiting for
+another answer, so every plugin, hand-written ones too, would have to expect it on every read.
+Chosen (C, "seems fine for me"): the worker never sends an unasked message; SIGTERM to the
+plugin's process group stays the signal, and a plugin wanting the reason asks `stop_reason_get`.
+Not chosen: `stop` at any time (A), or only between requests (B, still read before a later
+answer). The user: "we need to put it into extension guide with examples how to do it properly".
+
+### 2026-11-20: M5.2i7 planned, `make demo-kind`
+
+The user wants to present the Kubernetes extension: a kind cluster with the dashboard installed,
+a simple Job whose pod logs into the attempt's log, metrics on the Extensions page. "Dashboard"
+read as the Kubernetes Dashboard (the plugin's links open the pod there). After M5.2i5 and
+M5.2i6, before M5.2i4 (the specification stays last).
