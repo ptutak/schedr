@@ -239,6 +239,15 @@ I still talk only to you. Below, "a colleague" is either; where they differ, it 
 cost much higher than expected), it doesn't silently become "stable": stop, switch to argue
 mode for that point, and bring it to me.
 
+**Thinking together** (a third, lighter mode): sometimes I just wonder aloud ("what might be the
+bottleneck here?", "could X have an impact too?", "we don't decide here, we just think"). Then:
+- Think with me: what fits the facts, what doesn't, what would tell them apart, and what you
+  would check, with evidence you already have or can read cheaply. Verify facts you state.
+- Don't start work, open a step, write records or ask me to decide because of it. Offer the
+  next check in one line at most, and only do it if I say so.
+- Keep the work in hand going alongside: a wondering is not a stop.
+- When it does lead somewhere, I'll say so ("add it as a step", "do it").
+
 ## Design habits I value
 
 - Neutral names in the core; terms from other tools or products only in their compatibility
