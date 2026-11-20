@@ -99,7 +99,9 @@ unmasked_prefixes = ["variables/"]      # values under these aren't masked
   variables split there). Environment variables lowercase it, so a storage configured only
   through them has a lowercase name.
 - **Only workers use it** (and standalone, which has one). Each worker reports its storage
-  names, and the master refuses a DAG naming one that the worker which parsed it lacks.
+  names and its default, and the master refuses a DAG naming one that the worker which parsed
+  it lacks, or reading `secrets[...]` without a storage where it has no default. A worker
+  without a default says so when it starts.
 - **`unmasked_prefixes`** marks parts of a storage as settings, not credentials: values under
   them are not masked (a bucket name would otherwise be `****` on every log line). Each ends
   with `/`. Keep nothing secret there.
@@ -137,12 +139,19 @@ schema must be up to date. In Kubernetes, run them with `kubectl exec` in the po
 `set`, `get` and `export` need `SCHEDR_SECRET_KEY`; `list` and `delete` don't. The API and the
 UI never show a value.
 
-For a local try, `make standalone` and `make standalone-separate-ui` keep a key in each
-standalone's data folder as `secret.key` and set the documentation examples' secrets where
-missing. They reuse the key and leave existing secret keys in place.
+For a local try, `make standalone`, `make standalone-separate-ui` and `make distributed` keep a
+key in each setup's data folder as `secret.key` and set the documentation examples' secrets
+where missing. They reuse the key and leave existing secret keys in place.
 
-**Moving to Vault**, e.g. before moving from standalone to separate roles (workers have no
-database, so they can't read `db`): `schedr secrets export --to DIR` requires a new or empty directory. It prints the
+**On a worker (unsafe; for a lab).** A worker of separate roles may read `db` too, by asking for
+it: `[secret_storage.db] type = "db"` (or `SCHEDR_CONFIG__SECRET_STORAGE__DB__TYPE=db`), with
+`[database] url` and `SCHEDR_SECRET_KEY` given to it. It then holds the database's credentials
+and the key, so any task on it can read every secret and the whole database; it warns about
+that when it starts. Use it to try a distributed setup without Vault (`make
+standalone-separate-ui` and `make distributed` do), not in production. Without asking, a
+worker never connects to the database.
+
+**Moving to Vault**, e.g. before moving from standalone to separate roles in production: `schedr secrets export --to DIR` requires a new or empty directory. It prints the
 number of secrets exported and the next steps, without their values. Then load each file with `vault kv put secret/<path> @DIR/<path>.json`,
 configure the Vault storage as the default, and delete `DIR`.
 

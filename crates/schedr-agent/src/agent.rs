@@ -1828,6 +1828,7 @@ impl<E: Executor> Agent<E> {
             log_endpoint: self.settings.log_endpoint.clone(),
             roots,
             secret_storages: self.settings.secrets.names(),
+            default_secret_storage: self.settings.secrets.reported_default(),
             journal: self.journal_entries(),
             process_id: self.settings.node.process_id.clone(),
             config_json: self.settings.node.config_json.clone(),

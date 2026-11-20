@@ -1544,3 +1544,22 @@ async fn a_webserver_stops_on_a_schema_read_that_wont_work() {
     .expect("stopped, not waiting");
     assert!(matches!(waited, Err(AppError::Db(_))), "{waited:?}");
 }
+
+#[test]
+fn a_worker_connects_for_the_db_storage_only_when_it_asks_for_it() {
+    // Decision 511: the opt-in, as the local setups give it through the environment.
+    let load = |pairs: &[(&str, &str)]| {
+        schedr_config::loader::load(None, &env(pairs), &[])
+            .unwrap()
+            .secret_storage
+    };
+    assert!(!wants_db_storage(&load(&[])));
+    assert!(wants_db_storage(&load(&[(
+        "SCHEDR_CONFIG__SECRET_STORAGE__DB__TYPE",
+        "db"
+    )])));
+    assert!(wants_db_storage(&load(&[(
+        "SCHEDR_CONFIG__SECRET_STORAGE__MINE__TYPE",
+        "db"
+    )])));
+}

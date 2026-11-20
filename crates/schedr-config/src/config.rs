@@ -1794,8 +1794,9 @@ impl Default for SecretStorageSection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretStorageType {
-    /// The `secrets` table of schedr's database, encrypted under `SCHEDR_SECRET_KEY`
-    /// (standalone only).
+    /// The `secrets` table of schedr's database, encrypted under `SCHEDR_SECRET_KEY`:
+    /// standalone's, or on a worker given `[database] url` and the key (unsafe, for a lab:
+    /// any task on it can read every secret; decision 511).
     Db,
     /// Vault's KV v2 (`HashiCorp` Vault).
     Vault,

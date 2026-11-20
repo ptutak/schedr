@@ -589,6 +589,7 @@ fn register(
         log_endpoint: "127.0.0.1:8081".to_owned(),
         roots: vec![root()],
         secret_storages: vec![],
+        default_secret_storage: None,
         journal,
         process_id: format!("p-{incarnation}"),
         config_json: r#"{"worker":{"slots":4}}"#.to_owned(),

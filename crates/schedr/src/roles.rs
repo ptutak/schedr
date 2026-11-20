@@ -1364,6 +1364,16 @@ pub async fn run_worker(
     }
 }
 
+/// Whether a worker's configuration asks for the `db` secret storage (decision 511): a storage
+/// of that type, or `db` as the default.
+fn wants_db_storage(section: &schedr_config::config::SecretStorageSection) -> bool {
+    section
+        .storages
+        .values()
+        .any(|s| s.kind == schedr_config::config::SecretStorageType::Db)
+        || section.default.as_deref() == Some(schedr_config::loader::DB_STORAGE)
+}
+
 /// Connects to the database of the master or the webserver, whatever its schema:
 /// `[database] url` is required, SQLite is for one host (it warns).
 ///
@@ -2205,12 +2215,35 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     // Secrets go there as files: a folder another user made first is refused (decision 201).
     schedr_agent::connection_env::prepare(&agent.setup.connection_dir)
         .map_err(AppError::BadArgument)?;
-    // No database here: never the `db` storage.
+    // A database only for the `db` storage, and only when asked for it (decision 511): any
+    // task here can then reach it, so it is said loudly.
+    let secrets_db = if wants_db_storage(&config.secret_storage) {
+        let db = connect_database(&config, "worker").await?;
+        tracing::warn!(
+            "schedr worker: the `db` secret storage (decision 511): this worker holds the \
+             database's credentials and the secret key, so any task on it can read every secret \
+             and the database; use Vault in production"
+        );
+        Some(db)
+    } else {
+        None
+    };
     agent.secrets = std::sync::Arc::new(
         crate::secret_storage::SecretPlan::new(&config.secret_storage, env)
             .renewing(&config.timings)
-            .stores(None)?,
+            .stores(secrets_db.as_ref())?,
     );
+    if agent
+        .secrets
+        .reported_default()
+        .is_some_and(|name| name.is_empty())
+    {
+        tracing::warn!(
+            "schedr worker: no default secret storage: a DAG reading `secrets[...]` without a \
+             storage is refused when this worker parses it; configure Vault (`[secret_storage]`), \
+             or the `db` storage with `[database] url` and `SCHEDR_SECRET_KEY` (decision 511)"
+        );
+    }
     let _lock = lock_journal(&agent)?;
     let address = SocketAddr::new(config.worker.log_bind, config.worker.log_port);
     let log_listener = listen(address).await?;

@@ -346,7 +346,9 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 		--master $$((main + 72)):$$((main + 90)) --master $$((main + 71)):$$((main + 91)) & \
 	( role SCHEDR_CONFIG__WEBSERVER__PORT=$$((main + 80)) SCHEDR_CONFIG__WEBSERVER__BIND=$(LISTEN) \
 		SCHEDR_CONFIG__OPS__PORT=$$((main + 93)) target/debug/schedr webserver ) & \
+	: "the worker reads the examples' secrets from the database: unsafe outside a try (decision 511)"; \
 	( role SCHEDR_DAG_PATH="$(abspath $(DAGS))" SCHEDR_CONFIG__WORKER__ID=main-worker \
+		SCHEDR_CONFIG__SECRET_STORAGE__DB__TYPE=db SCHEDR_CONFIG__SECRET_STORAGE__DEFAULT=db \
 		SCHEDR_CONFIG__WORKER__SLOTS=$(WORKER_SLOTS) \
 		SCHEDR_CONFIG__WORKER__MASTER_URL=http://127.0.0.1:$$((main + 70)) \
 		SCHEDR_CONFIG__WORKER__DATA_DIR="$$m/worker" \
@@ -420,6 +422,7 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 		SCHEDR_CONFIG__OPS__PORT=$$((b + 93)) "$$bin" webserver ) & \
 	for i in $$(seq 1 $(DIST_WORKERS)); do \
 		( role SCHEDR_DAG_PATH="$(abspath $(DAGS))" SCHEDR_CONFIG__WORKER__ID=worker-$$i \
+			SCHEDR_CONFIG__SECRET_STORAGE__DB__TYPE=db SCHEDR_CONFIG__SECRET_STORAGE__DEFAULT=db \
 			SCHEDR_CONFIG__WORKER__SLOTS=$(DIST_SLOTS) \
 			SCHEDR_CONFIG__WORKER__MASTER_URL=http://127.0.0.1:$$((b + 70)) \
 			SCHEDR_CONFIG__WORKER__DATA_DIR="$$d/worker-$$i" \

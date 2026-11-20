@@ -778,8 +778,41 @@ fn secrets_where_they_belong_pass() {
         dag_problems(&dag, "etl", "sync.py", MASTER),
         Vec::<String>::new()
     );
-    let storages = BTreeSet::from(["other".to_owned()]);
+    let storages = named(&["other"], None);
     assert_eq!(storage_problems(&dag, &storages), Vec::<String>::new());
+}
+
+/// A worker's storages: `names`, and whether one is the default (`None`: not reported).
+fn named(names: &[&str], has_default: Option<bool>) -> WorkerStorages {
+    WorkerStorages {
+        names: names.iter().map(|&n| n.to_owned()).collect(),
+        has_default,
+    }
+}
+
+#[test]
+fn reading_the_default_storage_is_refused_where_the_worker_has_none() {
+    // Decision 511: refused when parsed, where every task failed at run time.
+    let load = task(
+        "load",
+        &json!({"a": {"ref": secret(None, "etl/api", Some("token"))}}),
+    );
+    let dag = dag_with(&json!({"tasks": [load], "edges": []}));
+    let refused = storage_problems(&dag, &named(&[], Some(false)));
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0].contains("the worker that parsed it has none"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        storage_problems(&dag, &named(&["db"], Some(true))),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        storage_problems(&dag, &named(&[], None)),
+        Vec::<String>::new(),
+        "an older worker doesn't say: not checked"
+    );
 }
 
 #[test]
@@ -835,7 +868,7 @@ fn a_storage_the_worker_lacks_is_refused_once_per_task() {
     load["secrets"] = json!([{"kind": "prefix", "storage": "old", "prefix": "x/"}]);
     let dag = dag_with(&json!({"tasks": [load], "edges": []}));
     assert_eq!(
-        storage_problems(&dag, &BTreeSet::from(["db".to_owned()])),
+        storage_problems(&dag, &named(&["db"], None)),
         [
             "task `load`: no secret storage `vault` on the worker that parsed it (configured: \
              `db`; `[secret_storage.vault]` in the workers' configuration)",
@@ -843,7 +876,7 @@ fn a_storage_the_worker_lacks_is_refused_once_per_task() {
              `db`; `[secret_storage.old]` in the workers' configuration)",
         ]
     );
-    let none = storage_problems(&dag, &BTreeSet::new());
+    let none = storage_problems(&dag, &named(&[], None));
     assert!(none[0].contains("(configured: none;"), "{none:?}");
 }
 
@@ -854,7 +887,7 @@ fn a_parse_is_checked_against_the_workers_storages() {
         &json!({"a": {"ref": secret(Some("vault"), "a", Some("k"))}}),
     );
     let dag = dag_with(&json!({"tasks": [load], "edges": []}));
-    let storages = BTreeSet::new();
+    let storages = named(&[], None);
     let checks = Checks {
         secret_storages: Some(&storages),
         ..Checks::new(MASTER, LIMIT)

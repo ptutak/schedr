@@ -182,8 +182,8 @@ fn vault(
 
 fn standalone_only(what: &str) -> AppError {
     AppError::BadArgument(format!(
-        "{what}: the `db` secret storage is standalone's only (a worker has no database \
-         connection, and secrets never pass through the master); use Vault, and move the \
-         secrets there with `schedr secrets export`"
+        "{what}: the `db` secret storage needs a database: standalone's, or `[database] url` \
+         on a worker (any task on it can then read every secret, decision 511); for production \
+         use Vault, and move the secrets there with `schedr secrets export`"
     ))
 }

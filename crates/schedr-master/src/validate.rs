@@ -854,12 +854,51 @@ fn value_templates(value: &Value) -> Vec<&Template> {
     }
 }
 
-/// The secret storages a DAG names that the worker that parsed it hasn't configured (the
-/// default one, unnamed, isn't checked).
+/// A worker's secret storages, as its `Register` says: their names, and whether one is the
+/// default (`None` from an older worker: not checked).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkerStorages {
+    /// The configured storages.
+    pub names: BTreeSet<String>,
+    /// Whether `secrets[...]` without a storage can be read there.
+    pub has_default: Option<bool>,
+}
+
+impl WorkerStorages {
+    /// What `register` says.
+    #[must_use]
+    pub fn of(register: &schedr_proto::pb::Register) -> Self {
+        Self {
+            names: register.secret_storages.iter().cloned().collect(),
+            has_default: register
+                .default_secret_storage
+                .as_ref()
+                .map(|name| !name.is_empty()),
+        }
+    }
+}
+
+/// The secret storages a DAG names that the worker that parsed it hasn't configured, and, where
+/// it has no default storage, the secrets it reads from the default (decision 511: refused when
+/// parsed, not failing each task at run time).
 #[must_use]
-pub fn storage_problems(dag: &Dag, storages: &BTreeSet<String>) -> Vec<String> {
+pub fn storage_problems(dag: &Dag, worker: &WorkerStorages) -> Vec<String> {
+    let storages = &worker.names;
     let mut problems = Vec::new();
     for task in &dag.tasks {
+        let reads_default = task
+            .secret_references()
+            .into_iter()
+            .any(|name| name.storage.is_none())
+            || task.secrets.iter().any(|decl| decl.storage().is_none());
+        if reads_default && worker.has_default == Some(false) {
+            problems.push(format!(
+                "task `{}`: it reads secrets from the default storage, and the worker that \
+                 parsed it has none (`[secret_storage]` in the workers' configuration: Vault, or \
+                 `db` with the database and the key, decision 511)",
+                task.id
+            ));
+        }
         let named = task
             .secret_references()
             .into_iter()
@@ -1460,9 +1499,10 @@ pub struct Checks<'a> {
     pub master: SchedrVersion,
     /// The master's message limit: a task whose output can't fit it is refused (B33).
     pub max_message_size: usize,
-    /// The secret storages of the worker that parsed them: a DAG naming another is refused;
-    /// none when unknown (not checked).
-    pub secret_storages: Option<&'a BTreeSet<String>>,
+    /// The secret storages of the worker that parsed them: a DAG naming another is refused, or
+    /// reading the default one where it has none (decision 511); none when unknown (not
+    /// checked).
+    pub secret_storages: Option<&'a WorkerStorages>,
     /// The master's notification settings: a DAG's `notify=` is checked against them; none
     /// when unknown (not checked).
     pub notifications: Option<&'a crate::notifications::Notifications>,

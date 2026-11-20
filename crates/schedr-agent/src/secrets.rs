@@ -336,6 +336,16 @@ impl SecretStores {
         self.storages.keys().cloned().collect()
     }
 
+    /// The default storage's name, as `Register` reports it (decision 511): empty when there is
+    /// none; `None` for a test run, which answers for any.
+    #[must_use]
+    pub fn reported_default(&self) -> Option<String> {
+        if self.any_name {
+            return None;
+        }
+        Some(self.default.clone().unwrap_or_default())
+    }
+
     /// The storage `name` comes from, with its configured name.
     pub(crate) fn storage_of(&self, name: &SecretName) -> Result<(&str, &Storage), SecretError> {
         let wanted = match (&name.storage, self.any_name) {

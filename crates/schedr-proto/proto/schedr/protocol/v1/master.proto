@@ -201,6 +201,10 @@ message Register {
   // decision 509; protocol 2.2): the master queues no more there. 0, none (an older worker, or
   // `[worker] queue = false`).
   uint32 queue_depth = 15;
+  // The default of `secret_storages`, read by `secrets[...]` without a storage (decision 511;
+  // protocol 2.2): empty when it has none, a DAG reading one then refused; unset from an older
+  // worker or a test run (not checked).
+  optional string default_secret_storage = 16;
 }
 
 message Heartbeat {

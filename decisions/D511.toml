@@ -1,0 +1,19 @@
+title = "A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly"
+date = 2026-11-20
+by = "user"
+status = "active"
+topic = "secrets"
+also = ["workers", "configuration"]
+section = "Storage and keys"
+summary = '''
+(A) A worker without a default secret storage says so at startup, and validation refuses a DAG
+reading `secrets[...]` (no storage named) that the worker which parsed it can't serve, saying to
+configure Vault: no task fails at run time for it. (B) A worker given `[database] url` and
+`SCHEDR_SECRET_KEY` may use the `db` storage, opted in as on a standalone
+(`[secret_storage.db] type = "db"`); at startup it warns that it holds the database's
+credentials and the secret key, readable by any task on it, and to use Vault in production.
+Without the opt-in a worker never connects to the database. `make standalone-separate-ui` and
+`make distributed` opt in.
+'''
+history = "JOURNAL.md#D511"
+step = "M5.2h6"

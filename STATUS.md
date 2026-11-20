@@ -7,21 +7,21 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2h4, M5.2i, M5.2i2, M5.2i3, M5.2j.
+- **Then:** M5.2h4, M5.2i, M5.2i2, M5.2j, R1.2.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 6; first: B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B270 (low/possible), B39 (low/possible) (`BUGS.md`).
+- **Open bugs:** 7; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B270 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D512 (2026-11-20): one task's fault never fails another; M5.2i3 dropped
+- D511 (2026-11-20): a worker's `db` secret storage by opt-in, warned; no silent missing storage
 - D510 (2026-11-20): extensions, a task kind run by a plugin the open worker supervises
 - N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g)
 - DN14 (2026-11-19): A start is refused at the master-time deadline too, for every task (adds to D281)
-- DN13 (2026-11-18): M5.2e built: two of decision 509's small choices changed (corrects D509)
-- D509 (2026-11-18): the worker's waiting queue, settled for building
+- M5.2h6 (2026-11-20): A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511)
 - M5.2h5 (2026-11-20): The CLI reads a command's decision back first after 50 ms
 - M5.2h3 (2026-11-20): A turn's events of one trigger stored set-based: about 7 statements a trigger, not 7 an event
-- M5.2h2 (2026-11-20): Several events in flight per trigger, so a backlog fills a turn's transaction
 
 ## In progress
 

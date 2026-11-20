@@ -52,6 +52,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |
+| D511 | 2026-11-20 | user | built M5.2h6 | secrets | A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly |
 | D510 | 2026-11-20 | user | planned (M5.2i) | task-processes | Extensions: a task kind run by a plugin executable the open worker supervises |
 | D509 | 2026-11-18 | user | built M5.2e | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
 | D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
@@ -919,6 +921,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### secrets
 
+- D511: A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly
 - D178: secrets= accepts strings and placeholders
 - D177: schedr.text marks a t-string as a string for Python tasks
 - D176: Secrets are typed as their values
@@ -1094,6 +1097,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### workers
 
+- D512: One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them
 - D507: A worker's journal writes beside its loop; a start in flight holds its assignment unreported
 - D505: Only the round moves runs forward: turns queue a worker's starts and results for it
 - D501: The master's core lock is released during database calls

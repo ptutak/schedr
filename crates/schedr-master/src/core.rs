@@ -484,7 +484,7 @@ struct Connection {
     live: bool,
     /// The secret storages it has configured (`Register`): a DAG it parses that names another
     /// is refused. None until it registers with this master (restored from the database).
-    secret_storages: Option<BTreeSet<String>>,
+    secret_storages: Option<crate::validate::WorkerStorages>,
     /// What its wait step hosts looked like when last written to the registry.
     watcher_hosts: Vec<pb::WatcherHost>,
     /// When what it uses was last written to the registry (decision 463).
@@ -1174,7 +1174,7 @@ impl MasterCore {
                 heard: (self.steady)(now),
                 persisted: now,
                 live: true,
-                secret_storages: Some(register.secret_storages.iter().cloned().collect()),
+                secret_storages: Some(crate::validate::WorkerStorages::of(register)),
                 watcher_hosts: Vec::new(),
                 usage_at: None,
             },

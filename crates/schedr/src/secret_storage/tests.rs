@@ -85,7 +85,8 @@ async fn the_only_storage_configured_is_the_default_and_db_stays_reachable() {
 }
 
 #[test]
-fn a_worker_never_has_the_db_storage() {
+fn a_worker_without_a_database_never_has_the_db_storage() {
+    // Decision 511: given a database it may (`roles.rs`, opted in); without, never.
     let env = BTreeMap::new();
     let none = SecretPlan::new(&SecretStorageSection::default(), &env)
         .stores(None)
@@ -98,7 +99,7 @@ fn a_worker_never_has_the_db_storage() {
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("[secret_storage.db]: the `db` secret storage is standalone's only"),
+        error.contains("[secret_storage.db]: the `db` secret storage needs a database"),
         "{error}"
     );
     let section = SecretStorageSection {

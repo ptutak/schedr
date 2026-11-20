@@ -47,7 +47,7 @@ pub struct ParseUpload {
     /// Its files.
     pub files: Vec<ParsedFile>,
     /// The secret storages the worker has configured; none when unknown (nothing checked).
-    pub secret_storages: Option<BTreeSet<String>>,
+    pub secret_storages: Option<crate::validate::WorkerStorages>,
 }
 
 /// The master's view of DAG discovery.

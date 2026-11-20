@@ -2451,3 +2451,36 @@ one that blocks): the package's choice, for remote jobs that only wait. Is it mo
 an extension registers handles in either form and its plugin is run again as a cleanup with
 them after any end (`extension_cleanup`, always a process, so it doesn't depend on the host that
 may have died). Which is why the watcher form stays (the user).
+
+### <a id="D511"></a>2026-11-20: a worker's `db` secret storage by opt-in, warned; no silent missing storage (decision 511)
+
+Found showing `make standalone-separate-ui`: its separate worker had no secret storage (the `db`
+storage is standalone-only, the archived design of 2026-10-23: workers have no database URL and a
+secret never passes through the master), so every example DAG reading a secret failed at run time
+with `secret_not_found`, though the target stores the examples' secrets in that database and
+passes the worker its URL and key. Two things were wrong: a worker with no default storage
+started silently, and nothing let a deployment that wants standalone-like secrets in separate
+roles have them (the user: standalones and separate roles may both run in production with the
+`db` storage). The user's choice, A and B: a missing default storage is refused at validation
+and said at startup; a worker given the database and the key may opt in to `db`, warned that any
+task on it can then read every secret and the database. It reverses the archived rule only for
+those who opt in. Not chosen: the master forwarding the ciphertext it can't read (it would sit
+on the secrets' path; the user: the master shouldn't touch secrets); a `files` storage of
+mounted secrets (secrets managed outside schedr); a dev Vault in the local targets only (the
+setups would work, production wouldn't gain); blocking alone or allowing alone.
+
+Built the same day (M5.2h6): a worker reports its default storage (`Register`, field 16,
+protocol 2.2; unset from an older worker, then not checked), and the gap is B271: such DAGs were
+accepted and every task failed at run time. `secrets_demo` succeeded on `standalone-separate-ui`'s
+separate worker, which warned at start.
+
+### <a id="D512"></a>2026-11-20: one task's fault never fails another; M5.2i3 dropped (decision 512)
+
+Talking over M5.2i3 (`@async_extension`), the user asked whether ordinary tasks should run async
+in a shared loop too, then ruled both out as a rule: "if one async task fails... all of them
+suddenly fail, we cannot do that". Raised against it: watcher hosts already share a process
+among sensors and triggers (a segfault or OOM ends them all, then they retry or resume from their
+bookmarks), and decision 510's `watcher` form runs an extension there. The user's answer: those
+stay, as they are just `@sensor` and `@trigger`, our API; whoever builds a lifecycle on them does
+so on their own, and we neither build one nor show an example. Not chosen: decision 510 losing its
+`watcher` form (extensions always a process); isolating watcher hosts per DAG.
