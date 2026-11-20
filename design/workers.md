@@ -478,6 +478,7 @@ Each is one line; the reader's page has the diagrams.
 - A round releases the core lock between its batches of assignments (D469, `assignment`; built M5.1c1)
 - The round's slow parts on due flags; what is read before the lock is only what the round alone writes (D506, `assignment`; planned (M5.2cB4))
 - A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster (D509, `assignment`; built M5.2e)
+- Extensions: a task kind run by a plugin executable the open worker supervises (D510, `task-processes`; planned (M5.2i))
 <!-- end of current -->
 
 ## Replaced

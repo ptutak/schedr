@@ -29,6 +29,18 @@ class Asking(Protocol):
         ...
 
 
+class Telling(Asking, Protocol):
+    """A watcher's channel, which also tells what a trigger found (M5.2h2)."""
+
+    async def tell_event(self, message: dict[str, Any], in_flight: int) -> None:
+        """Sends an event, then waits while ``in_flight`` of its events aren't stored yet."""
+        ...
+
+    async def all_stored(self) -> None:
+        """Waits until every event it sent is stored: before telling how its trigger ended."""
+        ...
+
+
 class ProtocolError(Exception):
     """The other side closed the connection or sent something that isn't a valid message."""
 

@@ -12,7 +12,7 @@ use jiff::Timestamp;
 use schedr_model::{AttemptStatus, CleanupResult, Dag, DagId, RunKind, TaskId, TaskInstanceState};
 use uuid::Uuid;
 
-use crate::database::{Database, DbError};
+use crate::database::{Database, DbError, VersionCode};
 use crate::query::{db_time, from_json, from_name, in_tx, on_pool, parse_time, sql, sql_text};
 
 /// The rows of open assignments not started yet, whenever and wherever (the read's cutoff and
@@ -57,9 +57,12 @@ macro_rules! chained_from {
 pub(crate) use chained_from;
 
 /// The rows queued for assignment at `$1`: the read's `FROM ... WHERE` and its probe check's (decision 485).
+/// Only `runs` is joined (M5.2g): a run's version and that version's parse always exist
+/// (foreign keys, enforced on both databases), so joining them filtered nothing; what was read
+/// of them comes from the cache ([`Database::version_code`]).
 macro_rules! ready_from {
     () => {
-        "FROM task_instances t JOIN runs r ON r.id = t.run_id JOIN dag_versions v ON v.id = r.dag_version_id JOIN parse_results p ON p.id = v.parse_result_id WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND (t.look_at IS NULL OR t.look_at <= $1{ts}) AND r.state = 'running' AND t.cancel_requested_at IS NULL"
+        "FROM task_instances t JOIN runs r ON r.id = t.run_id WHERE t.state = 'queued' AND t.ready_at <= $1{ts} AND (t.look_at IS NULL OR t.look_at <= $1{ts}) AND r.state = 'running' AND t.cancel_requested_at IS NULL"
     };
 }
 pub(crate) use ready_from;
@@ -299,9 +302,7 @@ type ReadyRow = (
     String,
     String,
     String,
-    String,
     Option<String>,
-    String,
     i32,
     bool,
 );
@@ -366,8 +367,8 @@ impl Database {
     pub async fn ready_instances(&self, now: Timestamp) -> Result<Vec<ReadyInstance>, DbError> {
         const READY: &str = concat!(
             "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
-            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
-            t.queued_reason, p.schedr_version, t.map_index, r.cancel_requested_at IS NOT NULL ",
+            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, \
+            t.queued_reason, t.map_index, r.cancel_requested_at IS NOT NULL ",
             ready_from!(),
             " ORDER BY t.ready_at, t.id"
         );
@@ -384,8 +385,9 @@ impl Database {
         // definition along, once per ready task (B13).
         let mut ready_list = Vec::with_capacity(rows.len());
         for row in rows {
-            let run_cancelling = row.12;
+            let run_cancelling = row.10;
             let dag = self.dag_version(&row.7).await?;
+            let code = self.version_code(&row.7).await?;
             let cleanup = dag
                 .resource_of_cleanup(&task_id_of(row.2.clone())?)
                 .is_some();
@@ -393,7 +395,7 @@ impl Database {
             if run_cancelling && !cleanup {
                 continue;
             }
-            ready_list.push((cleanup, ready(row, dag)?));
+            ready_list.push((cleanup, ready(row, dag, &code)?));
         }
         // Cleanups first, a paid cluster going before queued work (decision 225); the sort is
         // stable, so the oldest first among each.
@@ -1173,12 +1175,10 @@ impl Database {
         now: Timestamp,
     ) -> Result<Vec<(String, ReadyInstance)>, DbError> {
         const WAITING: &str = "SELECT t.id{text}, r.id{text}, t.task_id, t.try_number, r.kind, \
-            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, p.content_hash, \
-            t.queued_reason, p.schedr_version, t.map_index, r.cancel_requested_at IS NOT NULL \
+            {ts<}r.planned_for{>ts}, {ts<}r.since{>ts}, r.dag_version_id{text}, \
+            t.queued_reason, t.map_index, r.cancel_requested_at IS NOT NULL \
             FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
             JOIN runs r ON r.id = t.run_id \
-            JOIN dag_versions v ON v.id = r.dag_version_id \
-            JOIN parse_results p ON p.id = v.parse_result_id \
             WHERE a.status IS NULL AND a.worker_id IS NULL AND a.chained_run_id IS NULL \
             AND a.cleanup_not_before <= $1{ts} \
             ORDER BY a.assigned_at, a.id";
@@ -1206,7 +1206,8 @@ impl Database {
         let mut waiting = Vec::with_capacity(rows.len());
         for row in rows {
             let dag = self.dag_version(&row.7).await?;
-            let instance = ready(row, dag)?;
+            let code = self.version_code(&row.7).await?;
+            let instance = ready(row, dag, &code)?;
             if let Some((attempt, _)) = ids.iter().find(|(_, i)| *i == instance.instance_id) {
                 waiting.push((attempt.clone(), instance));
             }
@@ -1969,7 +1970,7 @@ fn task_id_of(text: String) -> Result<TaskId, DbError> {
     })
 }
 
-fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
+fn ready(row: ReadyRow, dag: Arc<Dag>, code: &VersionCode) -> Result<ReadyInstance, DbError> {
     let (
         instance_id,
         run_id,
@@ -1979,9 +1980,7 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         planned_for,
         since,
         version_id,
-        content_hash,
         queued_reason,
-        parse_version,
         map_index,
         _,
     ) = row;
@@ -1995,9 +1994,9 @@ fn ready(row: ReadyRow, dag: Arc<Dag>) -> Result<ReadyInstance, DbError> {
         since: parse_time("runs.since", &since)?,
         dag,
         version_id,
-        content_hash,
+        content_hash: code.content_hash.clone(),
         queued_reason,
-        parse_version,
+        parse_version: code.parse_version.clone(),
         map_index,
     })
 }

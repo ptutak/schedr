@@ -328,7 +328,11 @@ A turn doesn't handle what moves a task, and so its run, forward: its `Started`,
 Heartbeats and warnings are handled at once, under the lock. A trigger's messages (`TriggerEvent`,
 `TriggerPoked`, `TriggerStopped`) that come one after another are handled together, in their
 order, in one transaction (one lease check, one commit), each as it would be alone; if that
-fails, they are handled one by one. They don't wait behind the worker's results. Any other
+fails, they are handled one by one. Among them, one trigger's events are stored together: its
+row, its DAG, its queued runs and the keys already seen read once, then the events, their new
+runs and the bookmark written in a few statements, whatever their number; any other trigger
+message first stores the events before it. A batched poke's events and a `wait_for` trigger's
+go one by one. They don't wait behind the worker's results. Any other
 message (`Draining`, a code report) is handled alone after what came before it, also under the
 lock; a worker whose earlier messages still wait for the round has it queued behind them, so its
 messages keep their order. Each time it takes the lock, a turn checks that its stream is still the worker's.

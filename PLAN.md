@@ -264,7 +264,13 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2f | Many DAG triggers: a stress scenario, and poke reports in the heartbeat | done 2026-11-19 |  |
 | M5.2g | Scenario 1 profiled: what each step and point of a round costs | done 2026-11-20 |  |
 | M5.2h | Trigger events batched in one transaction | done 2026-11-20 |  |
-| M5.2i | A hole for closed-source extensions: an opaque task kind run by a closed worker | planned |  |
+| M5.2h2 | Several events in flight per trigger, so a backlog fills a turn's transaction | done 2026-11-20 |  |
+| M5.2h3 | A turn's events of one trigger stored set-based: about 7 statements a trigger, not 7 an event | done 2026-11-20 |  |
+| M5.2h4 | The narrow ready read restored (dce6d093), measured on CI | planned |  |
+| M5.2h5 | The CLI reads a command's decision back first after 50 ms | done 2026-11-20 |  |
+| M5.2i | A hole for closed-source extensions: an opaque task kind run by a closed worker | planned | D510 |
+| M5.2i2 | A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real | planned |  |
+| M5.2j | The bugs found and left before 1.2.0 fixed | planned |  |
 | R1.2 | Release 1.2.0 | planned |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |

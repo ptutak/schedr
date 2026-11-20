@@ -192,6 +192,26 @@ async fn waiting_reads_the_command_back_until_it_is_decided() {
     assert_eq!(api.transport().seen().len(), 2);
 }
 
+#[tokio::test(start_paused = true)]
+async fn waiting_reads_back_first_soon_then_ever_less_often_up_to_the_poll() {
+    // M5.2h5: the first read after `FIRST_POLL`, doubling to the poll interval, where every
+    // read waited the whole interval (the master usually decides within 0.3 s).
+    let answers = (0..6)
+        .map(|_| (200, command("pending")))
+        .chain([(200, command("applied"))]);
+    let api = Client::new(
+        Scripted::new(answers.collect()),
+        POLL_INTERVAL,
+        WAIT_TIMEOUT,
+    );
+    let pending: CommandView = serde_json::from_value(command("pending")).unwrap();
+    let began = tokio::time::Instant::now();
+    api.wait(pending).await.unwrap();
+    // 50 + 100 + 200 + 400 + 500 + 500 + 500 ms: seven reads.
+    assert_eq!(began.elapsed(), Duration::from_millis(2250));
+    assert_eq!(api.transport().seen().len(), 7);
+}
+
 #[tokio::test]
 async fn a_rejection_and_a_timeout_are_errors() {
     let rejected: CommandView = serde_json::from_value(command("rejected")).unwrap();

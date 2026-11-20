@@ -97,11 +97,19 @@ class Event[T = None]:
             raise TypeError(f"event `{self.key}`: `at` must be time-zone aware, got {self.at}")
 
 
+MAX_IN_FLIGHT = 100
+"""The most ``in_flight`` takes (the master's validation says the same)."""
+
+
 class TriggerOptions(typing.TypedDict, total=False):
     """What ``@trigger`` and ``@trigger.poke`` take besides the function."""
 
     secrets: SecretsArg
     connections: ConnectionsArg
+    in_flight: int
+    """How many of its events may be on their way to the master, not yet stored: 16 by
+    default, 1 to 100. A source that consumes what it reads (a queue it pops) loses up to this
+    many if its worker is lost; 1 keeps that to one."""
 
 
 def event_data_hint(annotation: object, where: str) -> object:
@@ -268,6 +276,7 @@ class TriggerFunction[**P, R]:
         self.fn = fn
         self.task_id: str = getattr(fn, "__name__", "trigger")
         self._every = every
+        self.in_flight = options.get("in_flight")
         self.batch = batch
         self.wait_for = wait_for
         self.run_retries = run_retries
@@ -281,10 +290,25 @@ class TriggerFunction[**P, R]:
             self.timeout_ms = call_limit_ms(
                 DEFAULT_CALL_TIMEOUT if timeout is None else timeout, where
             )
+            if self.in_flight is not None:
+                raise TypeError(
+                    f"{where}: `in_flight` is for a trigger without `wait_for=`, which tells one "
+                    "event a call"
+                )
             self._init_waiting(fn, where, options)
             return
         if run_retries is not None:
             raise TypeError(f"{where}: `run_retries` is for a trigger with `wait_for=`")
+        in_flight = self.in_flight
+        if in_flight is not None and (
+            isinstance(in_flight, bool)
+            or not isinstance(in_flight, int)
+            or not 1 <= in_flight <= MAX_IN_FLIGHT
+        ):
+            raise TypeError(
+                f"{where}: `in_flight` is a whole number from 1 to {MAX_IN_FLIGHT}, "
+                f"got {in_flight!r}"
+            )
         if every is None and not inspect.isasyncgenfunction(fn):
             raise TypeError(
                 f"{where} must be an async generator (`async def` with `yield`): it shares its "
@@ -442,6 +466,7 @@ class TriggerFunction[**P, R]:
                 None, None, None, self.run_param, self.timeout_ms, event_name=wait_for.name
             ),
             batch_ms=self.batch_ms,
+            in_flight=self.in_flight,
         )
         settings = TaskSettings(timeout_ms=None)
         if queue is not None:
@@ -577,7 +602,8 @@ class _Trigger:
             timeout: With ``wait_for``, how long one call may take, 10 minutes by default; one
                 over it is cancelled and fails as a raise does. A call blocking the event loop
                 (``time.sleep``) is ended by the host's 30-second rule instead.
-            **options: ``secrets`` and ``connections``, as for ``@task``.
+            **options: ``secrets`` and ``connections``, as for ``@task``; ``in_flight``, how
+                many events may be on their way to the master (16 by default, 1 to 100).
 
         Returns:
             The trigger, or a decorator making one.

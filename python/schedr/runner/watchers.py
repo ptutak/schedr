@@ -252,6 +252,10 @@ class WatcherChannel:
         self.go: asyncio.Future[int | None] | None = None
         self.grace = 30.0
         """How long a call it stops has to end: the host's cancel grace."""
+        self._unstored = 0
+        """Its trigger's events sent and not yet stored by the master (M5.2h2)."""
+        self._stored = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def send(self, message: dict[str, Any]) -> None:
         """Sends one message of this watcher.
@@ -260,6 +264,39 @@ class WatcherChannel:
             message: A JSON object with a ``type``.
         """
         self._host.send({"type": "watcher_message", "watcher": self.watcher, "message": message})
+
+    async def tell_event(self, message: dict[str, Any], in_flight: int) -> None:
+        """Sends what its trigger found, then waits while ``in_flight`` of them aren't stored.
+
+        The next is sent as soon as there is room: up to ``in_flight`` on their way to the
+        master at once (M5.2h2); with 1, each is stored before the trigger goes on, as an
+        ``ask`` was. In this loop: ``event_stored`` comes back on the reader's thread.
+
+        Args:
+            message: The ``trigger_event``.
+            in_flight: How many may wait to be stored.
+        """
+        self._loop = asyncio.get_running_loop()
+        self._unstored += 1
+        self.send(message)
+        while self._unstored >= in_flight:
+            self._stored.clear()
+            await self._stored.wait()
+
+    async def all_stored(self) -> None:
+        """Waits until the master has stored every event its trigger sent.
+
+        Before its end is told (Codex's review of M5.2h2): told first, the agent would drop
+        them unsent after a reconnect.
+        """
+        while self._unstored > 0:
+            self._stored.clear()
+            await self._stored.wait()
+
+    def event_stored(self) -> None:
+        """The master has one of its trigger's events: room for the next (in its loop)."""
+        self._unstored = max(self._unstored - 1, 0)
+        self._stored.set()
 
     def ask(self, message: dict[str, Any]) -> dict[str, Any]:
         """Sends a request and waits for its answer, holding what called it.
@@ -475,8 +512,14 @@ class _Host:
     def answer(self, watcher: int, message: dict[str, Any]) -> None:
         """An answer for a watcher, on the reader's thread; one already ended is ignored."""
         found = self._watchers.get(watcher)
-        if found is not None:
-            found[0].answers.put(message)
+        if found is None:
+            return
+        own = found[0]
+        # Not an answer to an `ask`: room for its trigger's next event (M5.2h2).
+        if message.get("type") == "event_stored" and own._loop is not None:
+            own._loop.call_soon_threadsafe(own.event_stored)
+            return
+        own.answers.put(message)
 
 
 async def _stopped_children(own: WatcherChannel) -> None:

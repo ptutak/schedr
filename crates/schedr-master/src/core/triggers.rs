@@ -807,8 +807,27 @@ impl MasterCore {
         self.metrics.stage();
         let handled = Box::pin(db.atomically(async {
             let mut out = Vec::new();
+            // A stretch of events: each trigger's stored together (M5.2h3), in the order its
+            // first came; any other message stores what came before it first.
+            // By DAG and instance both: `trigger_events` reads one DAG for them all (Codex's
+            // review of M5.2h3: a worker naming two for one instance).
+            let mut events: Vec<((String, String), Vec<pb::TriggerEvent>)> = Vec::new();
             for message in messages {
+                if let worker_message::Message::TriggerEvent(event) = message {
+                    let of_one = (event.dag_id.clone(), event.instance_id.clone());
+                    match events.iter_mut().find(|(one, _)| *one == of_one) {
+                        Some((_, of)) => of.push(event),
+                        None => events.push((of_one, vec![event])),
+                    }
+                    continue;
+                }
+                for (_, of) in std::mem::take(&mut events) {
+                    out.extend(Box::pin(self.trigger_events(worker_id, of, now)).await?);
+                }
                 out.extend(self.trigger_message(worker_id, message, now).await?);
+            }
+            for (_, of) in events {
+                out.extend(Box::pin(self.trigger_events(worker_id, of, now)).await?);
             }
             Ok::<_, CoreError>(out)
         }))
@@ -861,6 +880,112 @@ impl MasterCore {
         }
     }
 
+    /// One trigger instance's events that came together (M5.2h3), handled as
+    /// [`Self::trigger_event`] would one after another, in a few statements for them all: the
+    /// trigger, its DAG and its queued runs read once, the keys seen read once, the events,
+    /// their runs and the bookmark written together. The queue's limit is counted on as runs are
+    /// queued: the event reaching it stops the trigger, unacknowledged, those before it stored
+    /// and those after acknowledged unstored (the trigger is no longer theirs), as one by one; an
+    /// event that can't be one fails the trigger the same way. A batched poke's and a
+    /// `wait_for` trigger's go one by one.
+    async fn trigger_events(
+        &mut self,
+        worker_id: &str,
+        mut events: Vec<pb::TriggerEvent>,
+        now: Timestamp,
+    ) -> Result<Vec<Outgoing>, CoreError> {
+        self.dispatcher.trigger_wake().notify_one();
+        if events.len() == 1 {
+            let event = events.remove(0);
+            return Box::pin(self.trigger_event(worker_id, event, now)).await;
+        }
+        let acks = |events: &[pb::TriggerEvent]| -> Vec<Outgoing> {
+            events.iter().map(|e| event_ack(worker_id, e)).collect()
+        };
+        let (dag_name, instance) = (events[0].dag_id.clone(), events[0].instance_id.clone());
+        let record = self.db.trigger(&dag_name).await?;
+        let Some(record) = record.filter(|r| holds(r, worker_id, &instance)) else {
+            return Ok(acks(&events));
+        };
+        let Ok(dag_id) = DagId::new(&dag_name) else {
+            return Ok(acks(&events));
+        };
+        let dag = self.db.active_dags_of(&[&dag_id]).await?.into_iter().next();
+        let Some(dag) = dag.filter(|d| record.dag_version_id.as_ref() == Some(&d.version_id))
+        else {
+            return Ok(acks(&events));
+        };
+        let batched = matches!(
+            &dag.dag.trigger,
+            Trigger::Event { task, .. }
+                if matches!(task.kind, TaskKind::Sensor { batch_ms: Some(_), .. })
+        );
+        if batched || waits_for(&dag.dag).is_some() {
+            let mut out = Vec::new();
+            for event in events {
+                out.extend(Box::pin(self.trigger_event(worker_id, event, now)).await?);
+            }
+            return Ok(out);
+        }
+        let queued = self.db.queued_event_runs_of(&dag_name).await?;
+        let keys: Vec<&str> = events.iter().map(|e| e.key.as_str()).collect();
+        let seen = self.db.seen_event_keys(&dag_name, &keys).await?;
+        // Up to where they are stored, and why it ends there, if it does.
+        let mut found = Vec::new();
+        let mut new_keys = BTreeSet::new();
+        let mut cut = None;
+        for (i, event) in events.iter().enumerate() {
+            if self.too_many_queued(queued + i64::try_from(new_keys.len()).unwrap_or(i64::MAX)) {
+                cut = Some((i, None));
+                break;
+            }
+            match event_of(event, &dag) {
+                Ok(one) => {
+                    let new = !seen.contains(&one.key) && new_keys.insert(one.key.clone());
+                    found.push((one, new));
+                }
+                Err(why) => {
+                    cut = Some((i, Some(why)));
+                    break;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if !found.is_empty() {
+            let started = self
+                .scheduler
+                .event_runs(&dag, &found, record.last_planned_for, now)
+                .await?;
+            for started in &started {
+                self.metrics.trigger_event(started.is_some());
+            }
+            if let Trigger::Event { task, .. } = &dag.dag.trigger {
+                self.db.clear_wait_step(&dag_name, task.id.as_str()).await?;
+            }
+            out.extend(acks(&events[..found.len()]));
+        }
+        let Some((at, why)) = cut else {
+            return Ok(out);
+        };
+        match why {
+            None => {
+                // Not stored and not acknowledged: it comes again from the source.
+                self.stop_trigger(&record, Keep::BackPressure, now, &mut out)
+                    .await?;
+            }
+            Some(why) => {
+                // A stored event cleared the failures, as one by one.
+                let failures = if found.is_empty() { record.failures } else { 0 };
+                self.trigger_failed(&dag_name, &instance, failures, &why, now)
+                    .await?;
+                out.push(cancel_trigger(worker_id, &instance));
+            }
+        }
+        // Behind it: the trigger is no longer theirs, acknowledged unstored as an old one's.
+        out.extend(acks(&events[at + 1..]));
+        Ok(out)
+    }
+
     /// A trigger found something: stored at most once, and acknowledged only then, so what the
     /// master never got is sent again. What isn't the running trigger's on this worker, or is of
     /// an older version than the DAG's, is acknowledged without being stored: the one that takes
@@ -871,18 +996,7 @@ impl MasterCore {
         event: pb::TriggerEvent,
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
-        let ack = Outgoing {
-            worker_id: worker_id.to_owned(),
-            message: pb::MasterMessage {
-                message: Some(master_message::Message::TriggerEventAck(
-                    pb::TriggerEventAck {
-                        instance_id: event.instance_id.clone(),
-                        seq: event.seq,
-                    },
-                )),
-                clock: None,
-            },
-        };
+        let ack = event_ack(worker_id, &event);
         let record = self.db.trigger(&event.dag_id).await?;
         let Some(record) = record.filter(|r| holds(r, worker_id, &event.instance_id)) else {
             return Ok(vec![ack]);
@@ -1576,6 +1690,22 @@ fn fit_error(why: &str) -> String {
 }
 
 /// Tells a worker to stop a trigger.
+/// What tells a worker an event of its trigger is done with: stored, or not to be.
+fn event_ack(worker_id: &str, event: &pb::TriggerEvent) -> Outgoing {
+    Outgoing {
+        worker_id: worker_id.to_owned(),
+        message: pb::MasterMessage {
+            message: Some(master_message::Message::TriggerEventAck(
+                pb::TriggerEventAck {
+                    instance_id: event.instance_id.clone(),
+                    seq: event.seq,
+                },
+            )),
+            clock: None,
+        },
+    }
+}
+
 fn cancel_trigger(worker_id: &str, instance: &str) -> Outgoing {
     Outgoing {
         worker_id: worker_id.to_owned(),

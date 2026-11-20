@@ -260,6 +260,7 @@ fn event_problems(dag: &Dag, problems: &mut Vec<String>) {
     {
         batch_problems(id, *mode, *batch, problems);
     }
+    in_flight_problems(id, task, problems);
     trigger_wait_for_problems(
         dag,
         task,
@@ -590,6 +591,32 @@ fn batch_in_a_step(task: &Task) -> Option<String> {
             task.id
         )
     })
+}
+
+/// What an `@trigger(in_flight=...)` (M5.2h2) can't be: outside 1 to
+/// [`schedr_model::task::MAX_IN_FLIGHT`], or on a trigger with `wait_for`, which tells one event a
+/// call.
+fn in_flight_problems(id: &TaskId, task: &Task, problems: &mut Vec<String>) {
+    let TaskKind::Sensor {
+        in_flight: Some(in_flight),
+        wait_for,
+        ..
+    } = &task.kind
+    else {
+        return;
+    };
+    if !(1..=schedr_model::task::MAX_IN_FLIGHT).contains(in_flight) {
+        problems.push(format!(
+            "trigger `{id}`: `in_flight` is 1 to {}, got {in_flight}",
+            schedr_model::task::MAX_IN_FLIGHT
+        ));
+    }
+    if wait_for.is_some() {
+        problems.push(format!(
+            "trigger `{id}`: `in_flight` is for a trigger without `wait_for`: that one tells \
+             one event a call"
+        ));
+    }
 }
 
 /// What an `@trigger.poke(batch=...)` (decision 352) can't be: anything but a poke, or a window

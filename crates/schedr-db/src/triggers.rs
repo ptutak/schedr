@@ -1,12 +1,23 @@
 //! Event-triggered DAGs' triggers and what they found (M4.11b): each new key starts a run, and the
 //! last key acted on is the bookmark a trigger starts again from.
 
+use std::collections::BTreeSet;
+
 use jiff::Timestamp;
 use schedr_model::RunEvent;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, in_tx, on_pool, optional_time, sql, to_json};
+use crate::query::{db_time, in_tx, on_pool, optional_time, sql, sql_text, to_json};
 use crate::runs::NewRun;
+
+/// A trigger's bookmark moved to the key acted on, its failures cleared, the last run's moment
+/// kept unless a run was made (`$3`): [`Database::store_event`]'s and [`Database::store_events`]'.
+const BOOKMARK: &str = "INSERT INTO trigger_progress \
+    (dag_id, bookmark, last_planned_for, failures, last_event_at) \
+    VALUES ($1, $2, $3{ts}, 0, $4{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
+    bookmark = excluded.bookmark, failures = 0, last_error = NULL, \
+    last_event_at = excluded.last_event_at, \
+    last_planned_for = COALESCE(excluded.last_planned_for, trigger_progress.last_planned_for)";
 
 /// The rows of queued event runs: the read's `FROM ... WHERE` and its probe check's (decision 485).
 macro_rules! queued_event_from {
@@ -294,12 +305,6 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const EVENT: &str = "INSERT INTO events (dag_id, key, data, at, received_at) \
             VALUES ($1, $2, $3{json}, $4{ts}, $5{ts}) ON CONFLICT (dag_id, key) DO NOTHING";
-        const BOOKMARK: &str = "INSERT INTO trigger_progress \
-            (dag_id, bookmark, last_planned_for, failures, last_event_at) \
-            VALUES ($1, $2, $3{ts}, 0, $4{ts}) ON CONFLICT (dag_id) DO UPDATE SET \
-            bookmark = excluded.bookmark, failures = 0, last_error = NULL, \
-            last_event_at = excluded.last_event_at, \
-            last_planned_for = COALESCE(excluded.last_planned_for, trigger_progress.last_planned_for)";
         let dag_id = run.dag_id.as_str();
         Box::pin(self.atomically(async {
             let new = in_tx!(self, |tx, backend| {
@@ -326,6 +331,118 @@ impl Database {
                     .await?;
             });
             Ok(new.then(|| run_id.to_owned()))
+        }))
+        .await
+    }
+
+    /// Which of `keys` the DAG has an event for already (M5.2h3): its new ones are the others.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if the query fails.
+    pub async fn seen_event_keys(
+        &self,
+        dag_id: &str,
+        keys: &[&str],
+    ) -> Result<BTreeSet<String>, DbError> {
+        const KEYS_PER_STATEMENT: usize = 500;
+        let mut seen = BTreeSet::new();
+        for chunk in keys.chunks(KEYS_PER_STATEMENT) {
+            let list: Vec<String> = (2..chunk.len() + 2).map(|n| format!("${n}")).collect();
+            let text = format!(
+                "SELECT key FROM events WHERE dag_id = $1 AND key IN ({})",
+                list.join(", ")
+            );
+            let found: Vec<String> = on_pool!(self, |pool, backend| {
+                let mut query =
+                    crate::query::query_scalar::<_, String>(sql_text(backend, &text)).bind(dag_id);
+                for key in chunk {
+                    query = query.bind(*key);
+                }
+                query.fetch_all(pool).await?
+            });
+            seen.extend(found);
+        }
+        Ok(seen)
+    }
+
+    /// [`Self::store_event`] for a trigger's events in order (M5.2h3), in a few statements:
+    /// each event (a repeat's kept as first stored), the runs of the new keys (`runs`, the
+    /// caller's from [`Self::seen_event_keys`]), and the last key as the bookmark, with the
+    /// last run's moment.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::InvalidData`] when the events stored as new aren't the runs' (a key the caller
+    /// took for new was seen meanwhile): the caller rolls back; [`DbError::Sqlx`] if a statement
+    /// fails.
+    pub async fn store_events(
+        &self,
+        dag_id: &str,
+        events: &[&RunEvent],
+        runs: &[(&str, &NewRun<'_>)],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const EVENTS_PER_STATEMENT: usize = 500;
+        let Some(last) = events.last() else {
+            return Ok(());
+        };
+        let received_at = db_time(now);
+        Box::pin(self.atomically(async {
+            let mut new = 0;
+            for chunk in events.chunks(EVENTS_PER_STATEMENT) {
+                let values: Vec<String> = (0..chunk.len())
+                    .map(|i| {
+                        let n = i * 5;
+                        format!(
+                            "(${}, ${}, ${}{{json}}, ${}{{ts}}, ${}{{ts}})",
+                            n + 1,
+                            n + 2,
+                            n + 3,
+                            n + 4,
+                            n + 5
+                        )
+                    })
+                    .collect();
+                let text = format!(
+                    "INSERT INTO events (dag_id, key, data, at, received_at) VALUES {} \
+                     ON CONFLICT (dag_id, key) DO NOTHING",
+                    values.join(", ")
+                );
+                new += in_tx!(self, |tx, backend| {
+                    let mut insert = crate::query::query(sql_text(backend, &text));
+                    for event in chunk {
+                        insert = insert
+                            .bind(dag_id)
+                            .bind(&event.key)
+                            .bind(to_json(&event.data))
+                            .bind(event.at.map(db_time))
+                            .bind(&received_at);
+                    }
+                    insert.execute(&mut *tx).await?.rows_affected()
+                });
+            }
+            if new != runs.len() as u64 {
+                return Err(DbError::InvalidData {
+                    what: "events.key",
+                    reason: format!(
+                        "{new} of a trigger's events stored as new, {} runs for them",
+                        runs.len()
+                    ),
+                });
+            }
+            self.insert_runs_as(runs).await?;
+            let planned_for = runs.last().map(|(_, run)| db_time(run.planned_for));
+            in_tx!(self, |tx, backend| {
+                crate::query::query(sql(backend, BOOKMARK))
+                    .bind(dag_id)
+                    .bind(&last.key)
+                    .bind(planned_for)
+                    .bind(&received_at)
+                    .execute(&mut *tx)
+                    .await?;
+            });
+            Ok(())
         }))
         .await
     }

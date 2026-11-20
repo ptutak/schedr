@@ -267,6 +267,14 @@ impl SensorWaitFor {
     }
 }
 
+/// How many of a trigger's events may be on their way to the master by default (M5.2h2, the
+/// user, 2026-11-20): one stored is acknowledged while the next are sent.
+pub const DEFAULT_IN_FLIGHT: u32 = 16;
+
+/// The most `@trigger(in_flight=...)` takes: the agent holds each until stored, up to the
+/// trigger's `max_output_size` each.
+pub const MAX_IN_FLIGHT: u32 = 100;
+
 /// The kind of a task and what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -303,6 +311,11 @@ pub enum TaskKind {
         /// gathered for this many milliseconds from the first item, then sent as one event.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         batch_ms: Option<u64>,
+        /// `@trigger(in_flight=...)` (M5.2h2): how many of its events may be on their way to the
+        /// master, not yet stored; `None`: [`DEFAULT_IN_FLIGHT`]. 1 is a source that consumes
+        /// what it reads: at most one event lost if its worker is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        in_flight: Option<u32>,
     },
     /// `first_of` / `at_least` (decision 347): ended by the master, no process and no slot, as
     /// soon as enough of its upstream edges are taken. Its output is `{"$value": ..., "winner":

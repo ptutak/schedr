@@ -1329,6 +1329,28 @@ fn a_batch_is_a_trigger_poke_s() {
     );
 }
 
+#[test]
+fn in_flight_is_1_to_100_for_a_trigger_without_wait_for() {
+    let trigger = |in_flight: Json| {
+        problems(&json!({ "trigger": {
+            "kind": "event",
+            "task": {
+                "id": "found", "kind": "sensor", "mode": "loop", "arguments": {},
+                "in_flight": in_flight,
+                "settings": {
+                    "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                    "queue": "default", "max_output_size": 1_048_576
+                },
+                "output_type": {"type": "none"}
+            }
+        }}))
+    };
+    assert_eq!(trigger(json!(1)), Vec::<String>::new());
+    assert_eq!(trigger(json!(100)), Vec::<String>::new());
+    assert!(trigger(json!(0))[0].contains("`in_flight` is 1 to 100, got 0"));
+    assert!(trigger(json!(101))[0].contains("got 101"));
+}
+
 /// `start`, a `TriggerDagOperator` of `orders`, with `fields` over it.
 fn starting(fields: &Json) -> Json {
     let mut start = task("start", &json!({}));

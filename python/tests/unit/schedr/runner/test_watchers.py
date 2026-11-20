@@ -95,6 +95,62 @@ def test_an_answer_goes_to_who_asked_and_one_for_a_watcher_gone_is_dropped() -> 
     assert answers == [{"type": "secret", "value": "its own"}]
 
 
+def test_a_triggers_events_go_on_while_fewer_than_in_flight_wait_to_be_stored() -> None:
+    # M5.2h2: with 2 in flight the first is sent and the trigger goes on; the second waits
+    # until one is stored (the reader thread's `event_stored`, not an answer to an `ask`).
+    host, agent = _host()
+    own = watchers.WatcherChannel(host, 3)
+    host._watchers[3] = (own, None)
+
+    async def tell() -> list[str]:
+        done: list[str] = []
+        await own.tell_event({"type": "trigger_event", "key": "a"}, 2)
+        done.append("a")
+        second = asyncio.ensure_future(own.tell_event({"type": "trigger_event", "key": "b"}, 2))
+        await asyncio.sleep(0.05)
+        assert not second.done(), "two on their way: it waits"
+        await asyncio.to_thread(host.answer, 3, {"type": "event_stored"})
+        await asyncio.wait_for(second, 5)
+        done.append("b")
+        assert own.answers.empty(), "room made, not an answer"
+        return done
+
+    assert asyncio.run(tell()) == ["a", "b"]
+    assert [_next_of_a_step(agent)["message"]["key"] for _ in range(2)] == ["a", "b"]
+
+
+def test_a_triggers_end_waits_until_every_event_it_sent_is_stored() -> None:
+    # Codex's review of M5.2h2: told ended with an event unstored, the agent drops it unsent.
+    host, _agent = _host()
+    own = watchers.WatcherChannel(host, 3)
+    host._watchers[3] = (own, None)
+
+    async def end() -> None:
+        await own.tell_event({"type": "trigger_event", "key": "a"}, 16)
+        ending = asyncio.ensure_future(own.all_stored())
+        await asyncio.sleep(0.05)
+        assert not ending.done(), "one still on its way"
+        await asyncio.to_thread(host.answer, 3, {"type": "event_stored"})
+        await asyncio.wait_for(ending, 5)
+
+    asyncio.run(end())
+
+
+def test_with_one_in_flight_a_trigger_goes_on_once_its_event_is_stored() -> None:
+    host, _agent = _host()
+    own = watchers.WatcherChannel(host, 3)
+    host._watchers[3] = (own, None)
+
+    async def tell() -> None:
+        first = asyncio.ensure_future(own.tell_event({"type": "trigger_event", "key": "a"}, 1))
+        await asyncio.sleep(0.05)
+        assert not first.done(), "as an `ask` was: stored first"
+        await asyncio.to_thread(host.answer, 3, {"type": "event_stored"})
+        await asyncio.wait_for(first, 5)
+
+    asyncio.run(tell())
+
+
 def test_a_dag_file_is_imported_once_but_again_after_failing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -110,6 +110,15 @@ one, inspect all events and let `schedr` deduplicate their keys. Delivery is **a
 an event may be sent again after a reconnect. Make downstream effects safe to repeat too,
 including when someone runs an event again by hand.
 
+An `@trigger` goes on while its events are on their way: up to `in_flight` of them (16 by
+default, 1 to 100) may wait to be stored, so a trigger with many events ready sends them without
+waiting for each. Each event is stored in the order yielded. If its worker is lost, the events
+not yet stored are lost with it, and the trigger finds them again from its bookmark when it
+starts again. A source that consumes what it reads (a queue it pops from) can't find them
+again: give it `@trigger(in_flight=1)`, and each `yield` returns only once its event is stored,
+so at most one is lost. Events sent behind one that stops the trigger (back pressure, a failure)
+aren't stored either, and are found again the same way.
+
 ## The run
 
 A new event creates a run of kind `event`. Tasks read `dag_ctx.event.key`, `.data` and

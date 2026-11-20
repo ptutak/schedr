@@ -37,6 +37,11 @@ pub const CLIENT_VERSION_HEADER: &str = "schedr-client-version";
 /// How often [`Client::wait`] reads a command back.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// The first wait for a command's decision, doubled up to the poll interval: the master
+/// usually decides within a round, about 0.3 s, so a fixed 500 ms made most commands wait for
+/// nothing (scenario 24, M5.2h2).
+pub const FIRST_POLL: Duration = Duration::from_millis(50);
+
 /// How long [`Client::wait`] waits for the master's decision.
 pub const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -1574,6 +1579,7 @@ impl<T: Transport> Client<T> {
     pub async fn wait(&self, command: CommandView) -> Result<CommandView, ClientError> {
         let deadline = tokio::time::Instant::now() + self.timeout;
         let mut current = command;
+        let mut delay = FIRST_POLL.min(self.poll);
         loop {
             match current.status.as_str() {
                 "applied" => return Ok(current),
@@ -1587,7 +1593,8 @@ impl<T: Transport> Client<T> {
                     command_id: current.command_id,
                 });
             }
-            tokio::time::sleep(self.poll).await;
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2).min(self.poll);
             current = self
                 .call(
                     Method::Get,

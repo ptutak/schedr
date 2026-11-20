@@ -52,6 +52,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D510 | 2026-11-20 | user | planned (M5.2i) | task-processes | Extensions: a task kind run by a plugin executable the open worker supervises |
 | D509 | 2026-11-18 | user | built M5.2e | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
 | D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
 | D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |
@@ -984,6 +985,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-processes
 
+- D510: Extensions: a task kind run by a plugin executable the open worker supervises
 - D385: A worker's interpreters serve all its roots
 - D213: Attempt timeouts include secret and connection reads
 - D116: A task's timeout counts from its launch

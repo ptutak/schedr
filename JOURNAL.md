@@ -2375,3 +2375,73 @@ not the transaction's start and commit), all done 91.4-95.7 s to 85.4-86.3 s, ev
 unchanged (about 35 s at the median, queued behind the load). Not chosen: the trigger messages in
 the round (each event would wait for a round, the user); the deltas applied after the commit
 (plan, M5.2h).
+
+### 2026-11-20: M5.2h2, M5.2h3 and M5.2h4 built: a trigger's backlog fills a turn, its events stored together, the narrow read back
+
+**M5.2h2.** A trigger had one event in flight: the runner's `yield` waited for the master's
+acknowledgement, so a trigger with events ready sent them a round trip apart and M5.2h's group
+stayed at about 1.3 messages. Now up to `in_flight` (16 by default, 1 to 100,
+`@trigger(in_flight=N)`) may wait to be stored; with 1 each `yield` returns once its event is
+stored, as before (the user: 16 by default, 1 to opt out for a source that consumes what it reads;
+events behind one that stops the trigger acknowledged unstored and found again from the
+bookmark). Only the runner changed (`WatcherChannel.tell_event`, `event_stored` making room
+instead of answering an `ask`); the agent already kept several by sequence. Batching comes from
+the load, with no timer: a turn takes whatever is queued, so a busy master gets larger groups.
+
+**M5.2h3.** In a turn's transaction, one trigger instance's events are stored together: its row,
+DAG and queued count read once, the keys seen read once, then the events, their new runs and the
+bookmark in a few statements (about 7 a trigger where it was about 7 an event). Kept as one by
+one, each checked by a differential test (the same events together and alone, every row and
+answer compared): the order, each run's window chained in memory, the queue's limit counted on,
+a data fault, repeats, failures cleared.
+
+**Codex's review of h2-h4** (`gpt-6.1-sol`, high; session 01a1f84a) found two, both fixed with
+tests: a trigger ending with events in flight lost them if the stream broke (the runner now waits
+until all are stored before telling the end); a turn's events grouped by instance only were
+stored under the first one's DAG (grouped by DAG and instance).
+
+**Scenario 24 measured wrong, then right.** Offering 100 events a second (was 20), it showed 28.7
+events a second before h2 and about 35 after, h3 adding nothing. Each trigger's own pace was 4.9
+of 5 a second: the harness switched its 220 DAGs on 16 CLI calls at a time, a contiguous chunk
+each, so the 20 firing ones were unpaused one after another over 32 s and the first-to-last span
+stretched. Switched on together (the pokes first): **78.7 events a second**, about 7 events a turn
+(210 groups for 1,500), the trigger lock 12 s where it was 20. The base wasn't run again on the
+fixed scenario (the user: the increase is accepted as seen). An unpause took 0.3 s on the master
+at the median, 3.1 s at most while 200 triggers started; a CLI call about 0.67 s, its polling 500
+ms a step.
+
+**M5.2h4.** M5.2g's narrow ready read, set aside here as no gain (the fetch 3.38 s against 3.44),
+cherry-picked back from `dce6d093` to be measured on CI, where scenario 1 had reached 111 tasks a
+second (74 before M5.2g; this machine about +10 %): the user, CI may gain where this machine
+doesn't. One conflict (lib.rs's exports).
+
+Beside them: the connections demo runs the latest release's image (`ghcr.io/ptutak/schedr:1.1.0`;
+its compose called `/sbin/tini`, which only the Alpine image has, so it had failed on any glibc
+image); `make standalone` migrates a local database from an older version before using it.
+
+### <a id="D510"></a>2026-11-20: extensions, a task kind run by a plugin the open worker supervises (decision 510)
+
+M5.2i's hole for closed-source extensions, the user's choices one by one. A closed package of
+Python functions needs nothing (`@task` on the open worker); an extension kind is for what the
+open runner can't run (another runtime, a remote service, a cluster). Where its code runs was
+the decision: a closed worker, a fork of `schedr-agent` serving its own queue, would put the
+unit of extension at the worker, which then has to follow every release of a large agent and its
+protocol; a plugin executable started by the open worker puts it at a process, which the worker
+already supervises well (the runner, commands), and keeps slots, retries, timeouts, cancels and
+logs schedr's. The plugin speaks the runner protocol, so secrets, connections, API calls and
+handles come for free and its schema is published; a handshake versions it, as it becomes a
+contract for plugins. Discovery on `PATH` is opt-in: it runs binaries at start. Routing stays
+by queue; the reject reason joins the existing path (each eligible worker tried once, then
+unschedulable). Not chosen: a closed worker (A); Python `@task` only (B); both a closed worker
+and plugins (D); capabilities not announced (a wrong worker found only at run time); semver
+ranges (exact versions, predictable); an opaque byte payload with an untyped output; discovery
+on by default; only the schema for authors (the Python helper and a Rust crate, the types being
+`schedr-model`'s already). Beside it: a Python dummy whose payload says what to do, to watch
+how one behaves, and M5.2i2, a Kubernetes plugin in Python driving `kubectl`, the first real
+one (the user). Running a plugin in a watcher slot, for a remote job that only waits (an idea from ChatGPT):
+the hole is designed so it stays possible (the user), not built now. The contract is the
+messages, not the process; a plugin's `runs_in` (`process` now, `watcher` reserved) says where
+it runs and so which slot it takes; the Python helper's API is a coroutine either form can run.
+A plugin in a host would share its loop and process (the host's loop-lag rule against one that
+blocks; Python only), which is why it is a later choice, made with a target such as hundreds of
+pods a worker.

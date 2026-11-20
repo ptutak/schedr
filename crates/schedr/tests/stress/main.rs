@@ -2095,9 +2095,95 @@ with Dag("{id}", trigger=ticks()):
     )
 }
 
+/// The count in the environment variable `name`, or `default`.
+fn count_from_env(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .map_or(default, |v| v.parse().unwrap())
+}
+
+/// Each trigger's own pace and how far apart they began (M5.2h2): a span stretched by triggers
+/// starting late isn't a slow event path.
+fn trigger_paces(db: &crate::check::Db, report: &mut Report) {
+    let firsts = db.floats(&format!(
+        "SELECT MIN({}) FROM events GROUP BY dag_id",
+        db.epoch("received_at")
+    ));
+    let spread = firsts.iter().copied().fold(f64::NAN, f64::max)
+        - firsts.iter().copied().fold(f64::NAN, f64::min);
+    report.set("trigger_start_spread_s", spread);
+    let rates = db.floats(&format!(
+        "SELECT (COUNT(*) - 1) / NULLIF(MAX({e}) - MIN({e}), 0) FROM events \
+         GROUP BY dag_id HAVING COUNT(*) > 1",
+        e = db.epoch("received_at")
+    ));
+    report.set("trigger_rate_p50", quantile(&rates, 0.5));
+    // Where the spread is: the master giving the triggers to workers, or each one's way from
+    // there to its first event (its watcher host, its DAG file imported).
+    let assigned = db.floats(&format!(
+        "SELECT {} FROM trigger_progress p WHERE p.started_at IS NOT NULL \
+         AND EXISTS (SELECT 1 FROM events e WHERE e.dag_id = p.dag_id)",
+        db.epoch("p.started_at")
+    ));
+    report.set(
+        "trigger_assign_spread_s",
+        assigned.iter().copied().fold(f64::NAN, f64::max)
+            - assigned.iter().copied().fold(f64::NAN, f64::min),
+    );
+    let to_first = db.floats(&format!(
+        "SELECT MIN({}) - {} FROM events e JOIN trigger_progress p ON p.dag_id = e.dag_id \
+         WHERE p.started_at IS NOT NULL GROUP BY e.dag_id, p.started_at",
+        db.epoch("e.received_at"),
+        db.epoch("p.started_at")
+    ));
+    report.set("trigger_assign_to_event_p50_s", quantile(&to_first, 0.5));
+    // How long the master took to apply each `dags unpause` (the CLI waits for it, polling).
+    let decided = db.floats(&format!(
+        "SELECT {} - {} FROM commands WHERE kind = 'unpause_dag' AND decided_at IS NOT NULL",
+        db.epoch("decided_at"),
+        db.epoch("requested_at")
+    ));
+    report.set("unpause_decided_p50_s", quantile(&decided, 0.5));
+    report.set(
+        "unpause_decided_max_s",
+        decided.iter().copied().fold(f64::NAN, f64::max),
+    );
+    report.set(
+        "trigger_assign_to_event_max_s",
+        to_first.iter().copied().fold(f64::NAN, f64::max),
+    );
+}
+
+/// Scenario 24's triggers switched on: the pokes first, then the firing ones all at once, so
+/// they fire together (one after another, 16 at a time, spread their starts over 30 s); each
+/// stage timed.
+fn switch_on(stress: &Stress, idle: &[String], fires: &[String], report: &mut Report) {
+    let unpausing = std::time::Instant::now();
+    stress.trigger(idle, 0);
+    report.set("unpause_idle_s", unpausing.elapsed().as_secs_f64());
+    let unpausing = std::time::Instant::now();
+    stress.trigger_together(fires, 0);
+    report.set("unpause_firing_s", unpausing.elapsed().as_secs_f64());
+}
+
+/// How often each of `firing` triggers fires, and how many events, for 100 events a second in
+/// all over `lasting`.
+fn firing_pace(firing: usize, lasting: Duration) -> (f64, usize) {
+    #[expect(clippy::cast_precision_loss, reason = "a few dozen triggers")]
+    let every = firing.max(1) as f64 / 100.0;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a few thousand events"
+    )]
+    let events_each = (lasting.as_secs_f64() / every).round() as usize;
+    (every, events_each)
+}
+
 /// Scenario 24 (M5.2f): many DAG triggers beside a task load. Idle `@trigger.poke`s fill the
 /// watcher slots, each reporting `TriggerPoked` with every heartbeat; `@trigger`s fire steadily,
-/// each event a run of one task; scenario 1's kind of DAGs run beside them. It measures how long
+/// together offering 100 events a second (M5.2h2: more than one event in flight a trigger
+/// lets out; was 20), each event a run of one task; scenario 1's kind of DAGs run beside them. It measures how long
 /// trigger messages hold the master's lock, events a second, an event's way to its run and to
 /// its task's start, and the tasks a second of it all. `SCHEDR_STRESS_POKES` and
 /// `SCHEDR_STRESS_FIRING` set the counts (0: none of that kind), for a comparison.
@@ -2106,33 +2192,31 @@ fn stress_24_many_triggers() {
     let mut stress = Stress::new(Some(postgres_database()));
     let size = stress.size;
     let mut report = Report::new("24_many_triggers");
-    let from_env = |name: &str, default: usize| {
-        std::env::var(name)
-            .ok()
-            .map_or(default, |v| v.parse().unwrap())
-    };
-    let pokes = from_env("SCHEDR_STRESS_POKES", size.n(100, 500));
-    let firing = from_env("SCHEDR_STRESS_FIRING", size.n(10, 50));
-    let events_each = size.n(30, 120);
-    let every = 0.5;
+    let pokes = count_from_env("SCHEDR_STRESS_POKES", size.n(100, 500));
+    let firing = count_from_env("SCHEDR_STRESS_FIRING", size.n(10, 50));
+    let (every, events_each) = firing_pace(
+        firing,
+        size.time(Duration::from_secs(15), Duration::from_secs(60)),
+    );
     let work = crate::check::marked(&stress.marks, "sleep 0.1");
-    let mut triggered = Vec::new();
+    let mut idle = Vec::new();
     for i in 1..=pokes {
         let id = format!("idle{i:04}");
         stress.write_dag(&id, &idle_poke_dag(&id));
-        triggered.push(id);
+        idle.push(id);
     }
+    let mut fires = Vec::new();
     for i in 1..=firing {
         let id = format!("fires{i:04}");
         stress.write_dag(&id, &firing_dag(&id, events_each, every, &work));
-        triggered.push(id);
+        fires.push(id);
     }
     let load = command_dags(&stress, "load", size.n(25, 500), 10, "sleep 0.1", 0);
     stress.start_core("master", &[]);
     stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
-    stress.wait_for_dags(triggered.len() + load.len(), 10 * MINUTE);
+    stress.wait_for_dags(idle.len() + fires.len() + load.len(), 10 * MINUTE);
     let started = std::time::Instant::now();
-    stress.trigger(&triggered, 0);
+    switch_on(&stress, &idle, &fires, &mut report);
     stress.trigger(&load, 1);
     let runs = firing * events_each + load.len();
     stress.wait_for_runs(runs, size.time(20 * MINUTE, 90 * MINUTE), |_| {});
@@ -2178,6 +2262,7 @@ fn stress_24_many_triggers() {
         db.epoch("received_at"),
         db.epoch("received_at")
     ));
+    trigger_paces(db, &mut report);
     let events = db.count("SELECT COUNT(*) FROM events");
     #[expect(clippy::cast_precision_loss, reason = "a few thousand events")]
     report.set(

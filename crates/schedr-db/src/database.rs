@@ -147,11 +147,24 @@ impl Default for Notifications {
 /// DAG's ready tasks, every active DAG); each brought and parsed its whole definition (B13).
 /// Cleared when it holds its most versions ([`DagCache::MAX`] by default,
 /// `SCHEDR_HIDDEN__DATABASE__DAG_VERSIONS_CACHED`): the current ones come back at once.
+/// Beside each definition, what the ready read used to join for (M5.2g): the version's
+/// [`VersionCode`], kept under the same bound.
 #[derive(Debug)]
 pub(crate) struct DagCache(
     std::sync::Mutex<std::collections::HashMap<String, Arc<schedr_model::Dag>>>,
     usize,
+    std::sync::Mutex<std::collections::HashMap<String, Arc<VersionCode>>>,
 );
+
+/// The code a DAG version was parsed from, as a ready task is sent with it: never changing
+/// once the version is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionCode {
+    /// The content hash of the code (the worker reports what it actually ran).
+    pub content_hash: String,
+    /// The schedr version of the parse: workers older than this don't get its tasks.
+    pub parse_version: String,
+}
 
 impl Default for DagCache {
     fn default() -> Self {
@@ -165,7 +178,11 @@ impl DagCache {
 
     /// An empty cache keeping at most `most` versions.
     pub(crate) fn keeping(most: usize) -> Self {
-        Self(std::sync::Mutex::default(), most.max(1))
+        Self(
+            std::sync::Mutex::default(),
+            most.max(1),
+            std::sync::Mutex::default(),
+        )
     }
 
     pub(crate) fn get(&self, version_id: &str) -> Option<Arc<schedr_model::Dag>> {
@@ -178,6 +195,26 @@ impl DagCache {
             map.clear();
         }
         map.insert(version_id.to_owned(), dag);
+    }
+
+    pub(crate) fn code(&self, version_id: &str) -> Option<Arc<VersionCode>> {
+        self.codes().get(version_id).cloned()
+    }
+
+    pub(crate) fn insert_code(&self, version_id: &str, code: Arc<VersionCode>) {
+        let mut codes = self.codes();
+        if codes.len() >= self.1 {
+            codes.clear();
+        }
+        codes.insert(version_id.to_owned(), code);
+    }
+
+    fn codes(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, Arc<VersionCode>>> {
+        self.2
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn map(
@@ -616,6 +653,36 @@ impl Database {
         )?);
         self.dags.insert(version_id, dag.clone());
         Ok(dag)
+    }
+
+    /// The code DAG version `version_id` was parsed from, read once (the cache's, as
+    /// [`Self::dag_version`]).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or there is no such version.
+    pub async fn version_code(&self, version_id: &str) -> Result<Arc<VersionCode>, DbError> {
+        const CODE: &str = "SELECT p.content_hash, p.schedr_version FROM dag_versions v \
+            JOIN parse_results p ON p.id = v.parse_result_id WHERE v.id = $1{uuid}";
+        if let Some(code) = self.dags.code(version_id) {
+            return Ok(code);
+        }
+        let row: Option<(String, String)> = crate::query::on_pool!(self, |pool, backend| {
+            crate::query::query_as(crate::query::sql(backend, CODE))
+                .bind(version_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        let (content_hash, parse_version) = row.ok_or_else(|| DbError::InvalidData {
+            what: "dag_versions.id",
+            reason: format!("no DAG version `{version_id}`"),
+        })?;
+        let code = Arc::new(VersionCode {
+            content_hash,
+            parse_version,
+        });
+        self.dags.insert_code(version_id, code.clone());
+        Ok(code)
     }
 
     /// This database with notifications of new commands `on` or off (`[database]

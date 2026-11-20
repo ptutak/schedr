@@ -645,6 +645,59 @@ impl Scheduler {
         Ok(stored)
     }
 
+    /// [`Self::event_run`] for a trigger's events in order (M5.2h3), stored together: `events`
+    /// with whether each is new (its key not seen, nor earlier here); each new one's run has the
+    /// window from the previous new one's moment (the first's from `since`), as one by one,
+    /// where each moves the bookmark's moment. Gives each event's run ID, `None` for a repeat.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::event_run`].
+    pub async fn event_runs(
+        &self,
+        active: &ActiveDag,
+        events: &[(schedr_model::RunEvent, bool)],
+        mut since: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<Vec<Option<String>>, SchedulerError> {
+        let params = run_params(active, None)?;
+        let mut ids = Vec::with_capacity(events.len());
+        let mut runs = Vec::new();
+        for (event, new) in events {
+            if !new {
+                ids.push(None);
+                continue;
+            }
+            let planned_for = event.at.unwrap_or(now);
+            let times = RunTimes {
+                planned_for,
+                since: since
+                    .filter(|since| *since <= planned_for)
+                    .unwrap_or(planned_for),
+            };
+            since = Some(planned_for);
+            let mut run = new_run(active, RunKind::Event, times, now, EVENT_USER, &params);
+            run.state = RunState::Queued;
+            run.event = Some(event);
+            if active.dag.trigger.is_run_of() {
+                run.parent_run_id = Some(&event.key);
+            }
+            let run_id = uuid::Uuid::now_v7().to_string();
+            ids.push(Some(run_id.clone()));
+            runs.push((run_id, run));
+        }
+        let found: Vec<&schedr_model::RunEvent> = events.iter().map(|(event, _)| event).collect();
+        let runs: Vec<(&str, &NewRun<'_>)> =
+            runs.iter().map(|(id, run)| (id.as_str(), run)).collect();
+        self.db
+            .store_events(active.dag.id.as_str(), &found, &runs, now)
+            .await?;
+        if !runs.is_empty() {
+            self.wakes.wake(&active.dag.id, WakeReason::RunQueued);
+        }
+        Ok(ids)
+    }
+
     /// Stores a batch a trigger found (decision 352): each item an event, a run for the new ones
     /// only (B188), as [`Self::event_run`] does for one. Gives the run's ID, `None` when every
     /// item was seen before.

@@ -67,7 +67,7 @@ from schedr.outcomes import (
     outcome_enum,
 )
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
-from schedr.runner.protocol import Asking, Channel
+from schedr.runner.protocol import Asking, Channel, Telling
 from schedr.sensors import NOT_YET, NOT_YET_OUTCOME, output_hint
 
 if TYPE_CHECKING:
@@ -186,6 +186,11 @@ def _label(name: Mapping[str, Any]) -> str:
     return SecretRef(
         name["path"], name.get("key"), name.get("storage"), name.get("default")
     ).label()
+
+
+DEFAULT_IN_FLIGHT = 16
+"""A trigger's events on their way to the master at once, unless it says (M5.2h2; the model's
+``DEFAULT_IN_FLIGHT``)."""
 
 
 def secret_reader(channel: Asking) -> SecretReader:
@@ -758,7 +763,7 @@ def _begin(
 
 
 async def execute_trigger(
-    request: Mapping[str, Any], channel: Asking, entries: EntriesOf
+    request: Mapping[str, Any], channel: Telling, entries: EntriesOf
 ) -> dict[str, Any]:
     """Runs a trigger in the watcher host's loop, until it is stopped or it fails.
 
@@ -783,6 +788,7 @@ async def execute_trigger(
     from schedr.runner.waiting import Batch, run_trigger  # noqa: PLC0415
 
     limit: int = request["task"]["settings"]["max_output_size"]
+    in_flight: int = request["task"].get("in_flight") or DEFAULT_IN_FLIGHT
     if request["task"].get("wait_for") is not None:
         return await _called_for_run(request, begun, channel, limit)
     hint = event_data_hint(begun.hints.get("return"), f"@trigger `{request['task']['id']}`")
@@ -800,21 +806,24 @@ async def execute_trigger(
                 begun.arguments,
                 request["task"],
                 request["trigger"].get("after"),
-                lambda event: _tell_event(channel, event, hint, limit),
+                lambda event: _tell_event(channel, event, hint, limit, in_flight),
                 lambda error: channel.send({"type": "trigger_poked", "error": error}),
                 batch,
             )
     except CodecError as error:
+        await channel.all_stored()
         return failure(error, "event_refused", f"an event's data: {error.reason}")
     except Exception as error:  # an author's error is the trigger's status
+        await channel.all_stored()
         return _raised(error)
+    await channel.all_stored()
     return failure(
         RuntimeError("its generator returned: a trigger must keep yielding"), "trigger_returned"
     )
 
 
 async def _called_for_run(
-    request: Mapping[str, Any], begun: _Begun, channel: Asking, limit: int
+    request: Mapping[str, Any], begun: _Begun, channel: Telling, limit: int
 ) -> dict[str, Any]:
     """An ``@trigger(wait_for=...)``'s one call, for the run it was given (decision 353).
 
@@ -895,8 +904,12 @@ def _numbers(data: object) -> int:
     return count
 
 
-async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: int) -> None:
-    """Tells the agent what a trigger found, and waits until the master has it.
+async def _tell_event(
+    channel: Telling, event: Event[Any], hint: object, limit: int, in_flight: int = 1
+) -> None:
+    """Tells the agent what a trigger found; waits while ``in_flight`` aren't stored (M5.2h2).
+
+    With 1 (the default here), it returns once the master has it.
 
     Raises:
         CodecError: For data that can't be stored, or is over ``limit`` bytes.
@@ -909,8 +922,8 @@ async def _tell_event(channel: Asking, event: Event[Any], hint: object, limit: i
     message = {"type": "trigger_event", "key": event.key, "data": data}
     if event.at is not None:
         message["at"] = event.at.isoformat()
-    # In a thread: the master may take long, and the others on this loop go on.
-    await asyncio.to_thread(channel.ask, message)
+    # Waiting in the loop: the others on it go on.
+    await channel.tell_event(message, in_flight)
 
 
 def _raised(error: BaseException) -> dict[str, Any]:

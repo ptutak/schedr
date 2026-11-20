@@ -125,6 +125,12 @@ class _NeverAsked:
     def send(self, message: dict[str, object]) -> None:
         raise AssertionError(f"sent {message}")
 
+    async def tell_event(self, message: dict[str, object], in_flight: int) -> None:
+        raise AssertionError(f"told {message}, {in_flight} in flight")
+
+    async def all_stored(self) -> None:
+        raise AssertionError("waited for events never told")
+
 
 def _define(starts: Trigger, body: Callable[[], object]) -> None:
     with Dag("d", trigger=starts):
@@ -384,3 +390,27 @@ def test_a_plain_trigger_poke_annotated_as_returning_a_coroutine_is_a_trigger() 
         return found(after)
 
     assert [e.key for e in run_trigger_for_test(wraps_it, after="a")] == ["az"]
+
+
+def test_in_flight_is_in_the_trigger_s_task_and_is_checked() -> None:
+    # M5.2h2: up to `in_flight` events on their way to the master; 16 when not said.
+    @trigger(in_flight=1)
+    async def one_at_a_time(after: str | None) -> AsyncIterator[Event[int]]:
+        yield Event("a", 1)
+
+    with Dag("d", trigger=one_at_a_time()) as dag:
+
+        @task
+        def reads(key: str) -> str:
+            return key
+
+        reads(dag_ctx.event.key)
+    shown = dag.model.to_json()
+    assert shown["trigger"]["task"]["in_flight"] == 1  # type: ignore[index]
+    assert "in_flight" not in _defined()["trigger"]["task"]  # type: ignore[index, operator]
+    for wrong in (0, 101, True, 2.0):
+        with pytest.raises(TypeError, match="`in_flight` is a whole number from 1 to 100"):
+
+            @trigger(in_flight=wrong)  # type: ignore[arg-type]
+            async def wrongly(after: str | None) -> AsyncIterator[Event[int]]:
+                yield Event("a", 1)

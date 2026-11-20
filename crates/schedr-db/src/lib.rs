@@ -34,6 +34,6 @@ pub mod triggers;
 pub mod workers;
 
 pub use backend::{Backend, UnsupportedUrl, database_place, redact_password};
-pub use database::{Database, DbError, Pool};
+pub use database::{Database, DbError, Pool, VersionCode};
 pub use query::{db_time, stored_time};
 pub use status::SchemaStatus;

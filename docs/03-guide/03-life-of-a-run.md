@@ -52,7 +52,7 @@ the third try, the CLI says the command **may have arrived**. Check `schedr runs
 before trying again: a new invocation sends a new key. If no try could connect at all, the
 CLI says the command wasn't sent.
 
-The CLI then reads the command back every 0.5 s, for up to 30 s, until the master has decided.
+The CLI then reads the command back, first after 50 ms and then less often, every 0.5 s at most, for up to 30 s, until the master has decided.
 
 ## 2. The master wakes up
 

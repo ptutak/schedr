@@ -357,6 +357,73 @@ impl Database {
         Ok((inserted == 1).then(|| id.to_owned()))
     }
 
+    /// [`Self::insert_run_as`] for many runs, a few statements for them all (M5.2h3); how many
+    /// were stored (a run whose ID is taken isn't).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails.
+    pub async fn insert_runs_as(&self, runs: &[(&str, &NewRun<'_>)]) -> Result<u64, DbError> {
+        const RUNS_PER_STATEMENT: usize = 200;
+        let mut inserted = 0;
+        for chunk in runs.chunks(RUNS_PER_STATEMENT) {
+            let values: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let n = i * 14;
+                    format!(
+                        "(${}{{uuid}}, ${}, ${}{{uuid}}, ${}, ${}, ${}{{ts}}, ${}{{ts}}, ${}{{ts}}, \
+                         ${}, ${}{{ts}}, ${}{{json}}, ${}{{json}}, ${}{{uuid}}, ${}{{uuid}})",
+                        n + 1,
+                        n + 2,
+                        n + 3,
+                        n + 4,
+                        n + 5,
+                        n + 6,
+                        n + 7,
+                        n + 8,
+                        n + 9,
+                        n + 10,
+                        n + 11,
+                        n + 12,
+                        n + 13,
+                        n + 14
+                    )
+                })
+                .collect();
+            let text = format!(
+                "INSERT INTO runs \
+                 (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
+                  triggered_by, started_at, params, event, parent_run_id, backfill_id) \
+                 VALUES {} ON CONFLICT DO NOTHING",
+                values.join(", ")
+            );
+            inserted += in_tx!(self, |tx, backend| {
+                let mut insert = crate::query::query(sql_text(backend, &text));
+                for (id, run) in chunk {
+                    let started_at =
+                        (run.state == RunState::Running).then(|| db_time(run.triggered_at));
+                    insert = insert
+                        .bind(*id)
+                        .bind(run.dag_id.as_str())
+                        .bind(run.dag_version_id)
+                        .bind(run.kind.to_string())
+                        .bind(run.state.to_string())
+                        .bind(db_time(run.planned_for))
+                        .bind(db_time(run.since))
+                        .bind(db_time(run.triggered_at))
+                        .bind(run.triggered_by)
+                        .bind(started_at)
+                        .bind(run.params.to_string())
+                        .bind(run.event.map(crate::query::to_json))
+                        .bind(run.parent_run_id)
+                        .bind(run.backfill_id);
+                }
+                insert.execute(&mut *tx).await?.rows_affected()
+            });
+        }
+        Ok(inserted)
+    }
+
     /// A run's parameters, as stored JSON (decision 138); `None` for an unknown run.
     ///
     /// # Errors

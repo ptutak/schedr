@@ -242,6 +242,8 @@ class SensorKind:
         wait_for: ``@sensor(wait_for=RunOf(...))``: the run it is called for (decision 353).
         batch_ms: ``@trigger.poke(batch=...)``: what its pokes return is gathered this long from
             the first item, then sent as one event (decision 352).
+        in_flight: ``@trigger(in_flight=...)``: how many of its events may be on their way to
+            the master; ``None``: 16.
     """
 
     arguments: Mapping[str, Value] = field(default_factory=dict)
@@ -250,6 +252,7 @@ class SensorKind:
     max_wait_ms: int | None = None
     wait_for: SensorWaitFor | None = None
     batch_ms: int | None = None
+    in_flight: int | None = None
 
     def references(self) -> list[Reference]:
         """The arguments' references.
@@ -277,6 +280,8 @@ class SensorKind:
             result["wait_for"] = self.wait_for.to_json()
         if self.batch_ms is not None:
             result["batch_ms"] = self.batch_ms
+        if self.in_flight is not None:
+            result["in_flight"] = self.in_flight
         return result
 
 

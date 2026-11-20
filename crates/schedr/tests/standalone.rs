@@ -2415,6 +2415,49 @@ with Dag("ingest", trigger=found(first=10)):
     );
 }
 
+/// M5.2h2: a trigger with more events ready than `in_flight` goes on as each is stored: every
+/// one starts its run, in order, its bookmark the last.
+#[test]
+fn a_trigger_with_more_events_than_in_flight_gets_them_all_stored() {
+    const DAG: &str = r#"
+import asyncio
+from collections.abc import AsyncIterator
+
+from schedr import Dag, Event, dag_ctx, task, trigger
+
+
+@trigger(in_flight=2)
+async def backlog(after: str | None) -> AsyncIterator[Event[int]]:
+    for n in range(8):
+        yield Event(f"e{n}", n)
+    await asyncio.sleep(3600)
+
+
+@task
+def seen(key: str) -> str:
+    print(f"seen {key}")
+    return key
+
+
+with Dag("backlog", trigger=backlog()):
+    seen(dag_ctx.event.key)
+"#;
+    let standalone = Standalone::start(&[("backlog.py", DAG)], None);
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"backlog".to_owned())
+    });
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "backlog"]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait("a run for each of the 8 events, done", || {
+        let runs = standalone.runs("backlog");
+        runs.len() == 8 && runs.iter().all(|run| run["state"] == "success")
+    });
+    let logs = logs(standalone.dir.path());
+    for n in 0..8 {
+        assert!(logs.contains(&format!("seen e{n}\n")), "e{n}: {logs}");
+    }
+}
+
 /// M4.11b: a poke that raises keeps its bookmark and goes on, a generator that returned stays
 /// stopped, and one that keeps blocking is switched off.
 #[test]

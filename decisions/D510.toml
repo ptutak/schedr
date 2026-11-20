@@ -1,0 +1,32 @@
+title = "Extensions: a task kind run by a plugin executable the open worker supervises"
+date = 2026-11-20
+by = "user"
+status = "active"
+topic = "task-processes"
+also = ["workers", "protocol", "python-api"]
+section = "Extensions"
+summary = '''
+`TaskKind::Extension { name, version, payload }`: a JSON payload under the DAG's limits, its
+output typed as for any task, stored and sent untouched; on the master an ordinary slotted task.
+The open worker runs it with a plugin executable it starts and supervises as it does the Python
+runner (timeout, cancel by SIGTERM then SIGKILL after the grace, the memory watchdog, stdout and
+stderr into the log, the `SCHEDR_*` variables); no fork of the worker. A worker knows its
+plugins from its config (a path and the versions each serves) and, opt-in (`[extensions]
+discover = true`), from each `schedr-ext-*` on `PATH` run with `--describe`, config winning;
+`Register.extensions` announces them (protocol 2.2), validation warns when none offers a DAG's
+extension and version (matched exactly), and a worker without it rejects the task
+(`REJECT_REASON_EXTENSION_UNDEFINED`, no try), the master trying another and ending it
+unschedulable once each has. Routing stays by queue. The plugin speaks the runner protocol over
+the inherited `SCHEDR_AGENT_FD`: a handshake naming its protocol version first (one the worker
+doesn't speak refused), then `extension_task`; it may ask what the Python runner may (the
+secrets and connections it declared, API calls, handles) and ends with `task_succeeded` or
+`task_failed`. The contract is those messages, not the process (the user: room for a plugin
+inside a watcher host): a plugin's config has `runs_in` (`process`, built now; `watcher`
+reserved: a Python module in a watcher host's loop, the same messages through the host's
+channel, a watcher slot instead of a task slot), and the Python helper's API is a coroutine
+(`async def run(request, channel)`), run in its own process by the helper's `main` or, later,
+in a host. For authors: `schedr.extension` (Python) and a published Rust crate of the
+protocol's types and loop; an example plugin, a Python dummy, a worker test.
+'''
+history = "JOURNAL.md#D510"
+step = "M5.2i"

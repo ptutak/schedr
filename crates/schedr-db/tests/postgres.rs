@@ -2484,6 +2484,77 @@ async fn a_cleanups_end_and_result_are_stored() {
 }
 
 #[tokio::test]
+async fn a_trigger_s_events_are_stored_together_with_the_new_keys_runs() {
+    // M5.2h3 on Postgres: the keys seen read in one, the events (a repeat inside them too) and
+    // the new keys' runs inserted multi-row, the bookmark at the last key.
+    let (db, version) = with_dag().await;
+    db.trigger_assigned(
+        "sync",
+        "01a00000-0000-7000-8000-000000000001",
+        "w1",
+        &version,
+        "h1",
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let event = |key: &str| schedr_model::RunEvent {
+        key: key.to_owned(),
+        data: serde_json::json!({"key": key}),
+        at: Some(ts(NOW)),
+    };
+    let (a, b, c) = (event("a"), event("b"), event("c"));
+    let mut first = run(&version, RunKind::Event, RunState::Queued, NOW);
+    first.event = Some(&a);
+    db.store_event("01a00000-0000-7000-8000-000000000002", &first, &a)
+        .await
+        .unwrap();
+    let seen = db.seen_event_keys("sync", &["a", "b", "c"]).await.unwrap();
+    assert_eq!(seen.into_iter().collect::<Vec<_>>(), ["a"]);
+    let (mut run_b, mut run_c) = (first.clone(), first.clone());
+    run_b.event = Some(&b);
+    run_c.event = Some(&c);
+    let (id_b, id_c) = (
+        "01a00000-0000-7000-8000-000000000003",
+        "01a00000-0000-7000-8000-000000000004",
+    );
+    db.store_events(
+        "sync",
+        &[&a, &b, &b, &c],
+        &[(id_b, &run_b), (id_c, &run_c)],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(db.run_event(id_b).await.unwrap(), Some(b.clone()));
+    assert_eq!(db.run_event(id_c).await.unwrap(), Some(c.clone()));
+    let record = db.trigger("sync").await.unwrap().unwrap();
+    assert_eq!(record.bookmark.as_deref(), Some("c"));
+    // A key taken for new that was seen: refused, nothing of it stored.
+    let mut run_d = first.clone();
+    let d = event("d");
+    run_d.event = Some(&d);
+    assert!(
+        db.store_events(
+            "sync",
+            &[&c, &d],
+            &[
+                ("01a00000-0000-7000-8000-000000000005", &run_c),
+                ("01a00000-0000-7000-8000-000000000006", &run_d)
+            ],
+            ts(NOW),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        db.seen_event_keys("sync", &["d"]).await.unwrap().len(),
+        0,
+        "rolled back"
+    );
+}
+
+#[tokio::test]
 async fn a_trigger_s_events_and_bookmark_are_stored() {
     let (db, version) = with_dag().await;
     db.trigger_assigned(

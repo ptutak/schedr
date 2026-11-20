@@ -155,6 +155,16 @@ impl Stress {
     /// no switch, and runs by hand either way) and triggers each `runs` times, many CLI calls at
     /// once.
     pub fn trigger(&self, dags: &[String], runs: usize) {
+        self.trigger_on(dags, runs, 16);
+    }
+
+    /// [`Self::trigger`] with a thread for each call, so they are all switched on at once
+    /// (scenario 24: 16 threads unpaused its firing triggers over 30 s, one chunk at a time).
+    pub fn trigger_together(&self, dags: &[String], runs: usize) {
+        self.trigger_on(dags, runs, dags.len().max(1));
+    }
+
+    fn trigger_on(&self, dags: &[String], runs: usize, threads: usize) {
         let call = ["dags", "list", "--json"].map(str::to_owned);
         let (code, out, err) = cli(&self.cluster.api, &call);
         assert_eq!(code, 0, "{out}{err}");
@@ -171,13 +181,13 @@ impl Stress {
             .filter(|d| paused.contains(&d.as_str()))
             .map(|d| vec!["dags".to_owned(), "unpause".to_owned(), d.clone()])
             .collect();
-        self.expect_ok(&cli_many(&self.cluster.api, unpause, 16));
+        self.expect_ok(&cli_many(&self.cluster.api, unpause, threads));
         let triggers = dags
             .iter()
             .flat_map(|d| std::iter::repeat_n(d, runs))
             .map(|d| vec!["runs".to_owned(), "trigger".to_owned(), d.clone()])
             .collect();
-        self.expect_ok(&cli_many(&self.cluster.api, triggers, 16));
+        self.expect_ok(&cli_many(&self.cluster.api, triggers, threads));
     }
 
     /// Fails on the first call that didn't succeed, with the roles' logs.

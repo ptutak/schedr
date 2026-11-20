@@ -3883,7 +3883,9 @@ async fn events_past_the_queue_limit_stop_the_trigger_at_once() {
 
 #[tokio::test]
 async fn events_together_past_the_queue_limit_stop_the_trigger_where_alone_they_would() {
-    // M5.2h: in one transaction the third event sees the two runs the first two queued.
+    // M5.2h: in one transaction the third event sees the two runs the first two queued. M5.2h2:
+    // the fourth, sent behind it before the stop was known, is acknowledged and not stored: the
+    // restarted trigger finds it again from its bookmark.
     let db = Database::connect("sqlite::memory:").await.unwrap();
     db.migrate().await.unwrap();
     let settings = Settings {
@@ -3904,7 +3906,7 @@ async fn events_together_past_the_queue_limit_stop_the_trigger_where_alone_they_
     let dag = DagId::new("sync").unwrap();
     core.db.set_paused(&dag, false).await.unwrap();
     let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
-    let messages = [(1, "a"), (2, "b"), (3, "c")]
+    let messages = [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
         .into_iter()
         .map(|(seq, key)| found(&assign, seq, key))
         .collect();
@@ -3919,7 +3921,7 @@ async fn events_together_past_the_queue_limit_stop_the_trigger_where_alone_they_
             _ => None,
         })
         .collect();
-    assert_eq!(acks, [1, 2]);
+    assert_eq!(acks, [1, 2, 4]);
     assert!(
         answer
             .iter()
@@ -3929,6 +3931,204 @@ async fn events_together_past_the_queue_limit_stop_the_trigger_where_alone_they_
     let stored = core.db.trigger("sync").await.unwrap().unwrap();
     assert_eq!(stored.bookmark.as_deref(), Some("b"));
     assert_eq!(stored.stopped_why.as_deref(), Some("back_pressure"));
+}
+
+/// A trigger's DAG as [`with_trigger`] gives it, with at most `max_queued` queued event runs.
+async fn trigger_with_limit(max_queued: u32) -> (MasterCore, pb::AssignTrigger) {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let settings = Settings {
+        max_queued_events: max_queued,
+        ..Settings::default()
+    };
+    let mut core = MasterCore::new(db, settings);
+    let (_, outgoing) = core
+        .register(&register("w1", "i1", vec![]), ts(NOW))
+        .await
+        .unwrap();
+    let master_message::Message::AssignParse(job) = message(&outgoing[0]) else {
+        panic!("expected AssignParse")
+    };
+    core.upload(upload_of(&job.parse_job_id, &event_file()), ts(NOW))
+        .await
+        .unwrap();
+    let dag = DagId::new("sync").unwrap();
+    core.db.set_paused(&dag, false).await.unwrap();
+    let assign = assign_of(&core.tick(later(1)).await.unwrap()).unwrap();
+    (core, assign)
+}
+
+/// What a trigger's events left: the runs (kind, state, moment, window, key), the events
+/// (key, data, moment) and the trigger's row, without what is random (IDs).
+async fn trigger_state(core: &MasterCore) -> Vec<String> {
+    let schedr_db::Pool::Sqlite(pool) = core.db.pool().clone() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    let mut state: Vec<String> = sqlx::query_as::<_, (String, String, String, String, String)>(
+        "SELECT kind, state, planned_for, since, json_extract(event, '$.key') FROM runs \
+         ORDER BY json_extract(event, '$.key')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|run| format!("run {run:?}"))
+    .collect();
+    state.extend(
+        sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT key, data, at FROM events ORDER BY key",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| format!("event {event:?}")),
+    );
+    let record = core.db.trigger("sync").await.unwrap().unwrap();
+    state.push(format!(
+        "trigger bookmark {:?} planned {:?} failures {} stopped {:?} error {:?} held {}",
+        record.bookmark,
+        record.last_planned_for,
+        record.failures,
+        record.stopped_why,
+        record.last_error,
+        record.instance_id.is_some()
+    ));
+    state
+}
+
+/// What the master answered, by kind: acknowledgements by sequence, the rest by name.
+fn answered(outgoing: &[Outgoing]) -> Vec<String> {
+    outgoing
+        .iter()
+        .map(|o| match message(o) {
+            master_message::Message::TriggerEventAck(ack) => format!("ack {}", ack.seq),
+            other => format!("{other:?}").split('(').next().unwrap().to_owned(),
+        })
+        .collect()
+}
+
+/// An event found at `at` seconds past [`NOW`] (`None`: no moment of its own).
+fn found_at(assign: &pb::AssignTrigger, seq: u64, key: &str, at: Option<i64>) -> pb::TriggerEvent {
+    let worker_message::Message::TriggerEvent(mut event) = found(assign, seq, key) else {
+        unreachable!()
+    };
+    event.at = at.map(|s| prost_types::Timestamp {
+        seconds: later(s).as_second(),
+        nanos: 0,
+    });
+    event
+}
+
+/// M5.2h3: `events` stored together leave what they leave one by one, answered alike.
+async fn together_as_alone(max_queued: u32, events: &[(&str, Option<i64>)]) {
+    let (mut together, assign) = Box::pin(trigger_with_limit(max_queued)).await;
+    let (mut alone, assign_alone) = Box::pin(trigger_with_limit(max_queued)).await;
+    let of = |assign: &pb::AssignTrigger| -> Vec<worker_message::Message> {
+        events
+            .iter()
+            .zip(1..)
+            .map(|((key, at), seq)| {
+                worker_message::Message::TriggerEvent(found_at(assign, seq, key, *at))
+            })
+            .collect()
+    };
+    let batch = together
+        .handle_triggers("w1", of(&assign), later(2))
+        .await
+        .unwrap();
+    let mut one_by_one = Vec::new();
+    for message in of(&assign_alone) {
+        one_by_one.extend(
+            alone
+                .handle_in_round("w1", message, later(2))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(answered(&batch), answered(&one_by_one), "{events:?}");
+    assert_eq!(
+        trigger_state(&together).await,
+        trigger_state(&alone).await,
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_instances_events_naming_two_dags_are_stored_as_one_by_one() {
+    // Codex's review of M5.2h3: grouped by instance only, both were taken for the first's DAG.
+    for wrong_first in [false, true] {
+        let (mut together, assign) = Box::pin(trigger_with_limit(0)).await;
+        let (mut alone, assign_alone) = Box::pin(trigger_with_limit(0)).await;
+        let of = |assign: &pb::AssignTrigger| {
+            let right = found_at(assign, 1, "a", None);
+            let mut wrong = found_at(assign, 2, "b", None);
+            wrong.dag_id = "absent".to_owned();
+            let mut both = vec![right, wrong];
+            if wrong_first {
+                both.reverse();
+            }
+            both.into_iter()
+                .map(worker_message::Message::TriggerEvent)
+                .collect::<Vec<_>>()
+        };
+        together
+            .handle_triggers("w1", of(&assign), later(2))
+            .await
+            .unwrap();
+        for message in of(&assign_alone) {
+            alone
+                .handle_in_round("w1", message, later(2))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            trigger_state(&together).await,
+            trigger_state(&alone).await,
+            "wrong first: {wrong_first}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_triggers_events_stored_together_leave_what_one_by_one_leaves() {
+    // New keys, a repeat (also within the batch), moments out of order (each run's window from
+    // the previous new one's), none at all.
+    Box::pin(together_as_alone(
+        0,
+        &[
+            ("a", Some(10)),
+            ("b", Some(20)),
+            ("a", Some(30)),
+            ("c", Some(15)),
+        ],
+    ))
+    .await;
+    Box::pin(together_as_alone(
+        0,
+        &[("a", None), ("b", None), ("b", None)],
+    ))
+    .await;
+    // The queue's limit reached partway: those after it acknowledged, not stored.
+    Box::pin(together_as_alone(
+        2,
+        &[
+            ("a", Some(1)),
+            ("a", Some(2)),
+            ("b", Some(3)),
+            ("c", Some(4)),
+            ("d", Some(5)),
+        ],
+    ))
+    .await;
+    Box::pin(together_as_alone(1, &[("a", None), ("b", None)])).await;
+    // An event that can't be one (no key) partway, and first.
+    Box::pin(together_as_alone(
+        0,
+        &[("a", Some(1)), ("", Some(2)), ("b", Some(3))],
+    ))
+    .await;
+    Box::pin(together_as_alone(0, &[("", None), ("a", None)])).await;
 }
 
 /// [`dag_file`] with `sync` started by runs of `orders` (`run_of`), and `orders` beside it.

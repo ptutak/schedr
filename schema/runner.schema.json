@@ -3211,6 +3211,15 @@
                 "null"
               ]
             },
+            "in_flight": {
+              "description": "`@trigger(in_flight=...)` (M5.2h2): how many of its events may be on their way to the\nmaster, not yet stored; `None`: [`DEFAULT_IN_FLIGHT`]. 1 is a source that consumes\nwhat it reads: at most one event lost if its worker is.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "kind": {
               "const": "sensor",
               "type": "string"
