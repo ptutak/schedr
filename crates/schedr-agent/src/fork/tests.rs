@@ -126,6 +126,7 @@ async fn a_wait_cut_short_mid_message_reads_the_rest_when_called_again() {
         usage: Ended::default(),
         stdout: None,
         stderr: None,
+        stop_reading: tokio::sync::watch::channel(false).0,
     };
     let mut frame = Vec::new();
     crate::channel::write_message(

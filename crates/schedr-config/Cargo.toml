@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+schedr-model.workspace = true
 figment.workspace = true
 schemars.workspace = true
 serde.workspace = true

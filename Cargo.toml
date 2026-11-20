@@ -12,6 +12,7 @@ authors = ["Piotr Tutak <p.tutak@outlook.com>"]
 [workspace.dependencies]
 schedr = { path = "crates/schedr" }
 schedr-fd = { path = "crates/schedr-fd" }
+schedr-extension = { path = "crates/schedr-extension" }
 schedr-model = { path = "crates/schedr-model" }
 schedr-proto = { path = "crates/schedr-proto" }
 schedr-config = { path = "crates/schedr-config" }

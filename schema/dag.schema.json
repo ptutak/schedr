@@ -191,6 +191,11 @@
             "script"
           ],
           "type": "object"
+        },
+        {
+          "const": "extension",
+          "description": "An extension task's: its plugin run again with the attempt's handles\n(`extension_cleanup`, decision 510).",
+          "type": "string"
         }
       ]
     },
@@ -1493,6 +1498,33 @@
           },
           "required": [
             "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An extension's task (decision 510): run by the plugin a worker configured for `name` at\nexactly `version`, in its own process and a task slot (decision note 15). Its payload is\nstored and sent untouched; a worker without the plugin rejects it, no try counted.",
+          "properties": {
+            "kind": {
+              "const": "extension",
+              "type": "string"
+            },
+            "name": {
+              "description": "The extension's name, as the workers' `[extensions.<name>]`.",
+              "type": "string"
+            },
+            "payload": {
+              "default": null,
+              "description": "What the plugin is asked to do: any JSON, under the DAG's limits."
+            },
+            "version": {
+              "description": "The version it is written for, matched exactly.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "version"
           ],
           "type": "object"
         }

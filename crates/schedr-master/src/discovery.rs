@@ -48,6 +48,8 @@ pub struct ParseUpload {
     pub files: Vec<ParsedFile>,
     /// The secret storages the worker has configured; none when unknown (nothing checked).
     pub secret_storages: Option<crate::validate::WorkerStorages>,
+    /// The extensions the connected workers offer, by name and version; none when unknown.
+    pub extensions: Option<BTreeSet<(String, String)>>,
 }
 
 /// The master's view of DAG discovery.
@@ -518,6 +520,7 @@ impl Discovery {
                 max_message_size: self.max_message_size,
                 secret_storages: upload.secret_storages.as_ref(),
                 notifications: Some(&self.notifications),
+                extensions: upload.extensions.as_ref(),
             },
         );
         let key = &upload.key;

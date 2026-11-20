@@ -408,3 +408,33 @@ async fn a_program_that_doesnt_exist_fails_to_start() {
     spec.program = dir.path().join("no-such-program");
     assert!(spawn(&spec).await.is_err());
 }
+
+/// B274: a task whose leader exits while a child it started still holds its output ends all the
+/// same, its output read for at most the drain time; the child is left as it was.
+#[tokio::test]
+async fn a_task_ends_when_its_leader_exits_with_a_child_holding_its_output() {
+    let dir = TempDir::new().unwrap();
+    let pid_file = dir.path().join("child.pid");
+    let script = format!("sleep 60 & echo $! > {}; echo started", pid_file.display());
+    let mut spec = shell(dir.path(), &script, 1 << 20);
+    spec.output_drain = Duration::from_millis(300);
+    let ran = tokio::time::timeout(
+        Duration::from_secs(10),
+        schedr_agent::launch::run_command(&spec, None, NO_LIMITS, never(), |_| {}),
+    )
+    .await
+    .expect("the attempt ends, not waiting on the child's pipes")
+    .unwrap();
+    assert_eq!(ran.supervised.termination, Termination::Exited(0));
+    let (stdout, _) = ran.output.unwrap();
+    assert!(stdout.text().contains("started"), "{}", stdout.text());
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let _ = rustix::process::kill_process(
+        rustix::process::Pid::from_raw(pid).unwrap(),
+        rustix::process::Signal::KILL,
+    );
+}

@@ -4,7 +4,8 @@
 //! `schedr-model`, `runner`). Generic over any byte stream, so it is tested in memory.
 
 use schedr_model::runner::{
-    AgentMessage, MAX_MESSAGE_SIZE, RunnerMessage, RunnerMode, check_runner_version,
+    AgentMessage, EXTENSION_PROTOCOL, MAX_MESSAGE_SIZE, RunnerMessage, RunnerMode,
+    check_runner_version,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -167,6 +168,7 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
     let RunnerMessage::Hello {
         schedr_version,
         mode,
+        protocol,
     } = message
     else {
         return Err(ChannelError::Unexpected {
@@ -174,7 +176,14 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
             got: describe(&message),
         });
     };
-    if let Err(reason) = check_runner_version(agent_version, &schedr_version) {
+    // A plugin is any program, of any version: it matches by the protocol it speaks
+    // (decision 510); the Python runner by schedr's own version.
+    let checked = if mode == RunnerMode::Extension {
+        check_plugin_protocol(protocol)
+    } else {
+        check_runner_version(agent_version, &schedr_version)
+    };
+    if let Err(reason) = checked {
         write_message(
             stream,
             &AgentMessage::Refused {
@@ -186,6 +195,20 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
     }
     write_message(stream, &AgentMessage::Welcome).await?;
     Ok(mode)
+}
+
+/// A plugin's `hello` names the protocol this worker speaks ([`EXTENSION_PROTOCOL`]).
+fn check_plugin_protocol(protocol: Option<u32>) -> Result<(), String> {
+    match protocol {
+        Some(EXTENSION_PROTOCOL) => Ok(()),
+        Some(other) => Err(format!(
+            "the plugin speaks runner protocol {other}, this worker {EXTENSION_PROTOCOL}: use a \
+             plugin built for it"
+        )),
+        None => Err(format!(
+            "the plugin's hello names no protocol: say `\"protocol\": {EXTENSION_PROTOCOL}`"
+        )),
+    }
 }
 
 /// The `type` of a runner message, for messages.

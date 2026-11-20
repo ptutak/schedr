@@ -1607,3 +1607,100 @@ fn a_tasks_memory_budget_is_its_own_processs_at_least_16_mib_and_a_hard_cap_need
         "{sensor:?}"
     );
 }
+
+/// An extension task (decision 510), as the SDK writes it.
+fn extension_task(id: &str, name: &str, version: &str, payload: &Json) -> Json {
+    let mut task = task(id, &json!({}));
+    let object = task.as_object_mut().unwrap();
+    object.remove("arguments");
+    object.insert("kind".into(), json!("extension"));
+    object.insert("name".into(), json!(name));
+    object.insert("version".into(), json!(version));
+    object.insert("payload".into(), payload.clone());
+    task
+}
+
+#[test]
+fn an_extension_task_is_checked_for_its_name_version_and_payload() {
+    let good = extension_task("spark", "spark", "1.0", &json!({"job": "daily"}));
+    let dag = dag_with(&json!({"tasks": [good], "edges": []}));
+    assert_eq!(
+        dag_problems(&dag, "etl", "sync.py", MASTER),
+        Vec::<String>::new()
+    );
+    let big = "x".repeat(schedr_model::task::MAX_EXTENSION_PAYLOAD);
+    let bad = [
+        extension_task("a", "Bad name", "1.0", &json!({})),
+        extension_task("b", "discover", "1.0", &json!({})),
+        extension_task("c", "spark", "", &json!({})),
+        extension_task("d", "spark", "1 0", &json!({})),
+        extension_task("e", "spark", "1.0", &json!({"blob": big})),
+    ];
+    let dag = dag_with(&json!({"tasks": bad, "edges": []}));
+    let problems = dag_problems(&dag, "etl", "sync.py", MASTER);
+    for (task, what) in [
+        ("a", "a name is 1 to 64"),
+        ("b", "is a key of `[extensions]`"),
+        ("c", "its version ``"),
+        ("d", "its version `1 0`"),
+        ("e", "over the 1 MiB"),
+    ] {
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains(&format!("task `{task}`")) && p.contains(what)),
+            "{task}: {problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn an_extension_tasks_cleanup_is_its_plugins_and_only_its() {
+    let mut ext = extension_task("spark", "spark", "1.0", &json!({}));
+    ext["cleanup"] = json!({"run": "python", "retries": 0, "retry_delay_ms": 0});
+    let mut python = task("load", &json!({}));
+    python["cleanup"] = json!({"run": "extension", "retries": 0, "retry_delay_ms": 0});
+    let dag = dag_with(&json!({"tasks": [ext, python], "edges": []}));
+    let problems = dag_problems(&dag, "etl", "sync.py", MASTER);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("task `spark`: an extension task's cleanup is its plugin's")),
+        "{problems:#?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("task `load`: an `extension` cleanup belongs")),
+        "{problems:#?}"
+    );
+    let mut ext = extension_task("spark", "spark", "1.0", &json!({}));
+    ext["cleanup"] = json!({"run": "extension", "retries": 0, "retry_delay_ms": 0});
+    let dag = dag_with(&json!({"tasks": [ext], "edges": []}));
+    assert_eq!(
+        dag_problems(&dag, "etl", "sync.py", MASTER),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_extension_no_connected_worker_offers_is_warned_about_not_refused() {
+    let ext = extension_task("spark", "spark", "1.1", &json!({}));
+    let dag = dag_with(&json!({"tasks": [ext], "edges": []}));
+    let offered = BTreeSet::from([("spark".to_owned(), "1.0".to_owned())]);
+    let checks = Checks {
+        extensions: Some(&offered),
+        ..Checks::new(MASTER, LIMIT)
+    };
+    let files = validate_files("etl", vec![file("sync.py", vec![dag.clone()])], &checks);
+    assert_eq!(files[0].dags.len(), 1, "kept: a worker may connect later");
+    assert_eq!(files[0].warnings.len(), 1, "{:?}", files[0].warnings);
+    assert!(files[0].warnings[0].contains("no connected worker offers extension `spark` 1.1"));
+    let offered = BTreeSet::from([("spark".to_owned(), "1.1".to_owned())]);
+    let checks = Checks {
+        extensions: Some(&offered),
+        ..Checks::new(MASTER, LIMIT)
+    };
+    let files = validate_files("etl", vec![file("sync.py", vec![dag])], &checks);
+    assert_eq!(files[0].warnings, Vec::<String>::new());
+}

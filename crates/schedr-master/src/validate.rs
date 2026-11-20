@@ -37,7 +37,10 @@ fn memory_problem(task: &schedr_model::Task) -> Option<String> {
     let settings = &task.settings;
     let own = matches!(
         task.kind,
-        TaskKind::Python { .. } | TaskKind::Command { .. } | TaskKind::Script { .. }
+        TaskKind::Python { .. }
+            | TaskKind::Command { .. }
+            | TaskKind::Script { .. }
+            | TaskKind::Extension { .. }
     );
     if !own && (settings.memory_bytes.is_some() || settings.hard_memory_limit) {
         return Some(
@@ -309,7 +312,8 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         )),
         (TaskKind::Python { .. }, CleanupRun::Python)
         | (TaskKind::Command { .. }, CleanupRun::Command(_))
-        | (TaskKind::Script { .. }, CleanupRun::Script { .. }) => None,
+        | (TaskKind::Script { .. }, CleanupRun::Script { .. })
+        | (TaskKind::Extension { .. }, CleanupRun::Extension) => None,
         (TaskKind::Python { .. }, CleanupRun::Command(_) | CleanupRun::Script { .. }) => Some(
             format!("task `{id}`: a Python task's cleanup is a function, not a command"),
         ),
@@ -327,6 +331,12 @@ fn cleanup_problem(task: &Task) -> Option<String> {
         }
         (TaskKind::TriggerDag { .. }, _) => Some(format!(
             "task `{id}`: a TriggerDagOperator has nothing to clean up"
+        )),
+        (TaskKind::Extension { .. }, _) => Some(format!(
+            "task `{id}`: an extension task's cleanup is its plugin's (`extension`)"
+        )),
+        (_, CleanupRun::Extension) => Some(format!(
+            "task `{id}`: an `extension` cleanup belongs to an extension task"
         )),
         (TaskKind::Script { .. }, _) => {
             Some(format!("task `{id}`: a script's cleanup is a script"))
@@ -486,6 +496,11 @@ fn kind_problems<'a>(task: &'a Task, problems: &mut Vec<String>) -> Vec<&'a Temp
             problems,
         ),
         TaskKind::Empty | TaskKind::FirstOf { .. } => {}
+        TaskKind::Extension {
+            name,
+            version,
+            payload,
+        } => extension_problems(id, name, version, payload, problems),
     }
     in_text
 }
@@ -875,6 +890,31 @@ impl WorkerStorages {
                 .as_ref()
                 .map(|name| !name.is_empty()),
         }
+    }
+}
+
+/// An extension task's name, version and payload (decision 510): a name as `[extensions.<name>]`
+/// takes, a version of printable text, a payload under the size a connection may hold (it travels
+/// with each attempt).
+fn extension_problems(
+    id: &TaskId,
+    name: &str,
+    version: &str,
+    payload: &serde_json::Value,
+    problems: &mut Vec<String>,
+) {
+    if let Err(error) = schedr_model::task::check_extension_name(name) {
+        problems.push(format!("task `{id}`: extension `{name}`: {error}"));
+    }
+    if let Err(error) = schedr_model::task::check_extension_version(version) {
+        problems.push(format!("task `{id}`: extension `{name}`: its {error}"));
+    }
+    let size = serde_json::to_vec(payload).map_or(usize::MAX, |json| json.len());
+    if size > schedr_model::task::MAX_EXTENSION_PAYLOAD {
+        problems.push(format!(
+            "task `{id}`: extension `{name}`: its payload takes {size} bytes, over the 1 MiB it \
+             may hold (it travels with each attempt); give bigger data to the plugin another way"
+        ));
     }
 }
 
@@ -1506,6 +1546,10 @@ pub struct Checks<'a> {
     /// The master's notification settings: a DAG's `notify=` is checked against them; none
     /// when unknown (not checked).
     pub notifications: Option<&'a crate::notifications::Notifications>,
+    /// The extensions the connected workers offer, by name and version (decision 510): a DAG
+    /// asking for one none offers is warned about, not refused (one may connect later); none
+    /// when unknown (not checked).
+    pub extensions: Option<&'a BTreeSet<(String, String)>>,
 }
 
 impl Checks<'_> {
@@ -1517,6 +1561,7 @@ impl Checks<'_> {
             max_message_size,
             secret_storages: None,
             notifications: None,
+            extensions: None,
         }
     }
 }
@@ -1640,7 +1685,8 @@ pub fn output_problems(dag: &Dag, max_message_size: usize) -> Vec<String> {
                     return None;
                 }
                 TaskKind::Command { .. } | TaskKind::Script { .. } => 2,
-                TaskKind::Python { .. } | TaskKind::Sensor { .. } => 1,
+                // A plugin's typed output, as a Python task's (decision 510).
+                TaskKind::Python { .. } | TaskKind::Sensor { .. } | TaskKind::Extension { .. } => 1,
             };
             let size = task.settings.max_output_size;
             let needed = size.saturating_mul(streams).saturating_add(RESULT_OVERHEAD);
@@ -1727,8 +1773,41 @@ fn validate_file(root: &str, mut file: ParsedFile, checks: &Checks<'_>) -> Parse
             message: problems.join("\n"),
             traceback: String::new(),
         });
+    } else if let Some(offered) = checks.extensions {
+        let warnings: Vec<String> = file
+            .dags
+            .iter()
+            .flat_map(|dag| extension_warnings(dag, offered))
+            .collect();
+        // A parse's warnings aren't stored: said in the master's log, where an operator looks
+        // for why a task waits; the task itself ends `unschedulable` once each worker said no.
+        for warning in &warnings {
+            tracing::warn!(file = %file.path, "{warning}");
+        }
+        file.warnings.extend(warnings);
     }
     file
+}
+
+/// The extension tasks of `dag` no connected worker offers at their version (decision 510).
+#[must_use]
+pub fn extension_warnings(dag: &Dag, offered: &BTreeSet<(String, String)>) -> Vec<String> {
+    dag.tasks
+        .iter()
+        .filter_map(|task| match &task.kind {
+            TaskKind::Extension { name, version, .. }
+                if !offered.contains(&(name.clone(), version.clone())) =>
+            {
+                Some(format!(
+                    "DAG `{}`: task `{}`: no connected worker offers extension `{name}` \
+                     {version} ([extensions.{name}] on a worker of its queue): it waits until one \
+                     does",
+                    dag.id, task.id
+                ))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn inside_root(path: &str) -> bool {

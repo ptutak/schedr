@@ -3,30 +3,29 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-19)
+## Now (2026-11-20)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i, M5.2i2, M5.2j, R1.2, M5.3a.
+- **Then:** M5.2i2, M5.2i4, M5.2j, R1.2, M5.3a.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 7; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B270 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN17 (2026-11-20): the Rust plugin crate stands on its own (adds to D510)
+- DN16 (2026-11-20): decision 512's exception narrowed (corrects D512)
+- DN15 (2026-11-20): extensions only as their own process (corrects D510)
 - D512 (2026-11-20): one task's fault never fails another; M5.2i3 dropped
 - D511 (2026-11-20): a worker's `db` secret storage by opt-in, warned; no silent missing storage
-- D510 (2026-11-20): extensions, a task kind run by a plugin the open worker supervises
-- N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g)
-- DN14 (2026-11-19): A start is refused at the master-time deadline too, for every task (adds to D281)
+- M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker
 - M5.2h6 (2026-11-20): A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511)
 - M5.2h5 (2026-11-20): The CLI reads a command's decision back first after 50 ms
-- M5.2h4 (2026-11-20): The narrow ready read restored (dce6d093), measured on CI
 
 ## In progress
 
-- M5.2e done and pushed (23f0b6d8, ce101532: the queue, DN14, Codex's two review rounds). Its profile (scenario 1, release, 2026-11-19): 81 tasks a second; the round loop busy all the time (32.7 s of rounds in a 31 s window, ~13 ms a task: results 3.9, assign 1.8, commands 1.4, prepare 0.7, scheduler 0.7, off the lock 4.6); the master at 18% of one core, Postgres's statements 9.1 s in all: the round waits, mostly on round trips; workers 1.8 cores, 1.5 of it system time (cause not measured: no perf/strace here). SQLite 9b: 48-64 a second, B266 logged.
-- M5.2f prep, uncommitted: scenario 24 (`stress_24_many_triggers`), the `triggers` turn part, `SCHEDR_STRESS_METRICS`. Its runs found B267 (critical: refused registrations keep a worker live, the cluster stuck) and B268 (high, suspected: trigger messages behind results); without triggers 62.5 a second. Waits for the user: what next (B267/B268 before the batching, by the bug rule).
+- M5.2i done locally (extensions: decision 510, notes 15-17; Grok's review, eight findings fixed, B274 and B275 among them; make check passed), squashed per point, not pushed: waits for the user's acceptance.
 
 ## Waiting for the user
 
@@ -44,8 +43,8 @@ Nothing.
 
 ## Colleagues
 
-Codex at 63% of its week after M5.2e's reviews (2026-11-19; resets Sat 21 Nov 23:45). Grok on B261 (2026-11-18). Usage logs in the skills' `USAGE.md`.
+Codex refused M5.2i's review twice (its cyber filter); Grok reviewed it (~3% of its week, 2026-11-20). Grok's worktree schedr-codex-m5.2i to remove at the push.
 
 Resume this session with:
 
-claude --resume d97b91b3-700a-492f-b226-1e8f6e6ea11b
+claude --resume 4e0d63dd-fd58-4f9c-9aeb-589a35746903

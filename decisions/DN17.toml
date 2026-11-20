@@ -1,0 +1,15 @@
+title = "The Rust plugin crate stands on its own: no internal crate published with it"
+date = 2026-11-20
+by = "user"
+on = "D510"
+kind = "adds"
+summary = '''
+`schedr-extension` defines only the messages a plugin speaks (hello, welcome or refused, a slim
+extension_task with the rest as raw JSON, secret_get, connection_get, handle_add, api_call and
+their answers, task_succeeded, task_failed) and holds its own small unsafe block for the
+inherited socket (close-on-exec on the original too), so publishing it publishes neither
+`schedr-model` nor `schedr-fd`. A workspace test converts each message both ways between its
+types and `schedr-model`'s: a protocol change the crate misses fails `make check`. Its version
+follows the protocol (1.x for protocol 1), not schedr's releases.
+'''
+history = "JOURNAL.md#DN17"

@@ -92,6 +92,9 @@ pub enum ConfigError {
     /// (the message names the table).
     #[error("{0}")]
     SecretStorage(String),
+    /// An `[extensions.<name>]` table is invalid (the message names it).
+    #[error("{0}")]
+    Extensions(String),
     /// `[backfill] max_runs` is zero.
     #[error("[backfill] max_runs must be at least 1")]
     NoBackfillRuns,
@@ -252,6 +255,7 @@ pub fn load(
     }
     check_not_zero(&config)?;
     check_secret_storage(&config.secret_storage)?;
+    check_extensions(&config.extensions)?;
     for name in config.secret_storage.storages.keys() {
         // As every credential: from the environment, never the file.
         if from_file(&figment, &format!("secret_storage.{name}.token")) {
@@ -820,6 +824,34 @@ fn check_storage_fields(
 
 /// `[secret_storage]`'s names and `default`. Which storages a role may have (`db` in
 /// standalone only) is the role's to check.
+/// Each plugin's name, command and versions (decision 510).
+fn check_extensions(section: &crate::config::ExtensionsSection) -> Result<(), ConfigError> {
+    for (name, plugin) in &section.plugins {
+        schedr_model::task::check_extension_name(name)
+            .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}]: {error}")))?;
+        // A relative path would be found from the attempt's working directory, the DAG root,
+        // which holds the DAG author's files (Grok's review of M5.2i): absolute, or a bare name
+        // found on `PATH`.
+        let program = plugin.command.first().map_or("", String::as_str);
+        if program.is_empty() || (program.contains('/') && !program.starts_with('/')) {
+            return Err(ConfigError::Extensions(format!(
+                "[extensions.{name}] command: the plugin's program, an absolute path or a name \
+                 found on PATH, then its arguments, e.g. [\"/opt/acme/schedr-ext-{name}\"]"
+            )));
+        }
+        if plugin.versions.is_empty() {
+            return Err(ConfigError::Extensions(format!(
+                "[extensions.{name}] versions: the versions it serves, e.g. [\"1.0\"]"
+            )));
+        }
+        for version in &plugin.versions {
+            schedr_model::task::check_extension_version(version)
+                .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}] {error}")))?;
+        }
+    }
+    Ok(())
+}
+
 fn check_secret_storage(section: &crate::config::SecretStorageSection) -> Result<(), ConfigError> {
     for name in section.storages.keys() {
         let valid = !name.is_empty()

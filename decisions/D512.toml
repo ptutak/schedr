@@ -8,9 +8,9 @@ section = "Isolation"
 summary = '''
 schedr runs no work of its own design where one fault ends unrelated tasks: no `@async_extension`
 (one controller coroutine serving an extension's tasks, M5.2i3, dropped) and no mode running
-ordinary tasks in a shared event loop; each task keeps its own process. Wait steps (`@sensor`,
-`@trigger`) keep sharing a watcher host, as does decision 510's `watcher` form, since they are
-that public API: an author may build a long-lived lifecycle on them, but schedr builds none and
+ordinary tasks in a shared event loop, nor decision 510's `watcher` form for extensions (decision
+note 16); each task keeps its own process. Wait steps (`@sensor`, `@trigger`) keep sharing a
+watcher host, since they are that public API: an author may build a long-lived lifecycle on them, but schedr builds none and
 shows no example of one; sensors and triggers are not meant for it.
 '''
 history = "JOURNAL.md#D512"

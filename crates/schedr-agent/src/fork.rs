@@ -839,6 +839,7 @@ async fn fork_on(
     let limit = spec.max_output_size;
     let stdout = pipe::Receiver::from_owned_fd(OwnedFd::from(stdout)).map_err(io)?;
     let stderr = pipe::Receiver::from_owned_fd(OwnedFd::from(stderr)).map_err(io)?;
+    let (stop_reading, _) = tokio::sync::watch::channel(false);
     Ok(Forked {
         process: ForkedProcess {
             group,
@@ -850,8 +851,16 @@ async fn fork_on(
                 Arc::clone(&log),
                 limit,
                 spec.mask.clone(),
+                stop_reading.subscribe(),
             ))),
-            stderr: Some(tokio::spawn(collect(stderr, log, limit, spec.mask.clone()))),
+            stderr: Some(tokio::spawn(collect(
+                stderr,
+                log,
+                limit,
+                spec.mask.clone(),
+                stop_reading.subscribe(),
+            ))),
+            stop_reading,
         },
         stream: tokio_stream(ours).map_err(io)?,
         hold,
@@ -968,6 +977,8 @@ pub struct ForkedProcess {
     /// Taken by [`ForkedProcess::output`].
     stdout: Option<JoinHandle<io::Result<TailBuffer>>>,
     stderr: Option<JoinHandle<io::Result<TailBuffer>>>,
+    /// Tells the readers to end with what they have (B274).
+    stop_reading: tokio::sync::watch::Sender<bool>,
 }
 
 impl ForkedProcess {
@@ -990,6 +1001,22 @@ impl ForkedProcess {
         let stdout = stdout.await.map_err(io::Error::other)??;
         let stderr = stderr.await.map_err(io::Error::other)??;
         Ok((stdout, stderr))
+    }
+
+    /// As [`Self::output`], waiting at most `drain` for both pipes to close (B274).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::output`].
+    pub async fn output_within(
+        mut self,
+        drain: std::time::Duration,
+    ) -> io::Result<(TailBuffer, TailBuffer)> {
+        let taken = (self.stdout.take(), self.stderr.take());
+        let (Some(stdout), Some(stderr)) = taken else {
+            return Err(io::Error::other("the output was taken already"));
+        };
+        crate::process::read_within((stdout, stderr), &self.stop_reading, drain).await
     }
 }
 

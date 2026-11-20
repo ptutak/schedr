@@ -8,6 +8,7 @@ fn hello_is_tagged_by_type() {
     let message = RunnerMessage::Hello {
         schedr_version: "1.0.0".into(),
         mode: RunnerMode::Parse,
+        protocol: None,
     };
     let expected = json!({"type": "hello", "schedr_version": "1.0.0", "mode": "parse"});
     assert_eq!(serde_json::to_value(&message).unwrap(), expected);

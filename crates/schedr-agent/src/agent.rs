@@ -744,7 +744,9 @@ impl ProcessExecutor {
             (TaskKind::Script { .. }, CleanupRun::Script { .. }) => {
                 use_cleanup_script(&mut spec.task);
             }
-            (TaskKind::Python { .. }, CleanupRun::Python) => {
+            // An extension's plugin is run again, told its handles (decision 510).
+            (TaskKind::Python { .. }, CleanupRun::Python)
+            | (TaskKind::Extension { .. }, CleanupRun::Extension) => {
                 spec.cleanup_handles = Some(shared.handles.list());
             }
             // Refused when the DAG is stored; run as it is, it would run the task again.
@@ -1829,6 +1831,7 @@ impl<E: Executor> Agent<E> {
             roots,
             secret_storages: self.settings.secrets.names(),
             default_secret_storage: self.settings.secrets.reported_default(),
+            extensions: crate::extensions::offers(&self.settings.setup.extensions),
             journal: self.journal_entries(),
             process_id: self.settings.node.process_id.clone(),
             config_json: self.settings.node.config_json.clone(),

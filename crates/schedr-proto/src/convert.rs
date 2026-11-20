@@ -301,6 +301,7 @@ pub fn reject_reaction(reason: i32) -> Result<RejectReaction, ConversionError> {
             RejectReaction::CodeNotThereYet
         }
         R::InterpreterUndefined
+        | R::ExtensionUndefined
         | R::ScriptRootUnknown
         | R::MemoryBudgetTooLarge
         | R::DiskNotWritable

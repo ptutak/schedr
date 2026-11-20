@@ -1,0 +1,35 @@
+[package]
+name = "schedr-extension"
+description = "Write a schedr extension's plugin in Rust: the messages a plugin speaks and its loop (decision 510)."
+# The protocol's version, not schedr's (decision note 17): 1.x speaks protocol 1.
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Only published crates: it stands on its own (decision note 17).
+[dependencies]
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+# The conversion test against the worker's own types (path only: not needed to publish).
+schedr-model.workspace = true
+
+# The workspace's lints, but `unsafe_code` denied instead of forbidden: the one block taking the
+# worker's socket is allowed by an `#[expect]` at its site, as in schedr-fd (decision 147).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"

@@ -44,6 +44,7 @@ fn upload(hash: &str, files: Vec<(&str, Vec<Dag>)>) -> ParseUpload {
         worker_id: "w1".to_owned(),
         key: key(hash),
         secret_storages: None,
+        extensions: None,
         files: files
             .into_iter()
             .map(|(path, dags)| ParsedFile {

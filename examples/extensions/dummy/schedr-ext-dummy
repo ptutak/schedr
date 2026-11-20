@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""A dummy extension's plugin (decision 510): its payload says what to do, to see how one behaves.
+
+The payload is a list of steps, done in order; the output is what the last ``return`` gives:
+
+    {"sleep": 2}                       sleep two seconds
+    {"log": "text"}                    print a line to the attempt's log
+    {"secret": ["path", "key"]}        read a declared secret (its length is logged, never it)
+    {"handle": {"id": "job-1"}}        register a cleanup handle of type ``job``
+    {"return": {"rows": 3}}            the task's output
+    {"fail": "why"}                    fail the attempt
+    {"hang": true}                     wait until cancelled or timed out
+
+Configure it on a worker as ``[extensions.dummy] command = ["/path/to/schedr-ext-dummy"]`` and
+``versions = ["1.0"]``, or put it on ``PATH`` with ``[extensions] discover = true``.
+"""
+
+import asyncio
+
+from schedr.extension import ExtensionChannel, ExtensionRequest, main
+
+
+async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+    """Does the payload's steps."""
+    output: object = None
+    steps = request.payload if isinstance(request.payload, list) else [request.payload]
+    for step in steps:
+        if not isinstance(step, dict) or len(step) != 1:
+            raise ValueError(f"a step is an object of one key, got {step!r}")
+        ((what, value),) = step.items()
+        if what == "sleep":
+            await asyncio.sleep(float(value))
+        elif what == "log":
+            print(value, flush=True)
+        elif what == "secret":
+            path, key = value
+            secret = await channel.secret(path, key)
+            print(f"secret {path}#{key}: {len(str(secret))} characters", flush=True)
+        elif what == "handle":
+            await channel.add_handle("job", value)
+            print(f"handle registered: {value}", flush=True)
+        elif what == "return":
+            output = value
+        elif what == "fail":
+            raise RuntimeError(str(value))
+        elif what == "hang":
+            await asyncio.Event().wait()
+        else:
+            raise ValueError(f"unknown step `{what}`")
+    return output
+
+
+async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+    """Prints the handles it was given: what a real cleanup would undo."""
+    del channel
+    for handle in request.handles:
+        print(f"cleaning up {handle.type}: {handle.value}", flush=True)
+    return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(run, name="dummy", versions=["1.0"], cleanup=cleanup))

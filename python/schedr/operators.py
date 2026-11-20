@@ -7,7 +7,9 @@ archive/PROJECT.md, Native API: no custom operators).
 """
 
 import dataclasses
+import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -22,6 +24,7 @@ from schedr._model import (
     DeclaredTemplate,
     EdgeKind,
     EmptyKind,
+    ExtensionKind,
     ResourceRole,
     ScalarType,
     ScriptKind,
@@ -34,11 +37,12 @@ from schedr._model import (
     registry,
 )
 from schedr._secrets import SecretsArg
+from schedr._serialization.describe import describe
 from schedr._templates import is_tstring, shell_text
 from schedr.connections import ConnectionBase, ConnectionsArg, declared_connections
 from schedr.outcomes import DefaultOutcome, Done, Outcome, RunIf, for_command, from_declaration
 from schedr.tasks import Output
-from schedr.types import ProcessResult
+from schedr.types import Json, ProcessResult
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -779,6 +783,143 @@ class ScriptOperator[E: Outcome = DefaultOutcome](_ProcessOperator[E]):
         )
         self._task_id = task_id
         self._dag = builder
+
+
+_EXTENSION_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
+
+
+class ExtensionTask[T = Json](Operator):
+    """A task an extension runs (decision 510): a worker's plugin for ``name`` at ``version``.
+
+    The building block of an extension package: its decorators or operators make one, with the
+    payload its plugin reads. The task goes to ``queue`` like any other, where a worker with that
+    plugin (``[extensions.<name>]``) runs it in a task slot, as its own process; a worker without
+    it gives it back, and the master tries another (no try counted). The master warns, when it
+    reads the DAG, if no connected worker offers the extension at that version.
+
+    Args:
+        task_id: The task's ID.
+        name: The extension's name: 1 to 64 letters, digits, ``_`` and ``-``, starting with a
+            letter.
+        version: The version of the extension the payload is written for, matched exactly.
+        payload: What the plugin is asked to do: any JSON value (at most 1 MiB), stored and sent
+            as it is. It takes no references: give the plugin upstream data through its own
+            channel, or read it in the plugin with the API.
+        returns: The type of what the plugin returns, checked as a ``@task``'s return value
+            (default ``Json``).
+        retries: How many times a failed attempt is retried.
+        retry_delay: The delay before each retry.
+        timeout: The attempt's timeout.
+        queue: The queue the task goes to: one served by workers with the plugin.
+        max_output_size: The output size limit in bytes.
+        run_if: When it runs, from its upstream edges (default ``RunIf.NONE_FAILED``).
+        max_active: At most this many running at once, across all runs (``None``: no limit).
+        memory: Its own memory budget (bytes or a size such as ``"2GiB"``), as ``@task``'s.
+        hard_memory_limit: Also cap the plugin hard at ``memory``, as ``@task``'s.
+        secrets: The secrets the plugin may read, as a ``@task``'s ``secrets=``.
+        connections: The connections it may open, each the ``@connection`` function or its name.
+        cleanup: Whether the plugin is run again after each attempt, whatever its end, with the
+            handles the attempt registered (``extension_cleanup``).
+        cleanup_timeout: How long one try of the cleanup may run.
+        cleanup_retries: How many times a failed cleanup is retried (default 3).
+        cleanup_retry_delay: The delay before each cleanup retry (default 30 seconds).
+        cleanup_anywhere: Whether the cleanup may run on another worker when this one is lost.
+        cleanup_handles: The handle types the attempt may register; default: any.
+        uses: The resources it needs (decision 259).
+
+    Raises:
+        RuntimeError: Outside ``with Dag(...)``.
+        TypeError: For a payload that isn't JSON, or a ``cleanup_*`` option without
+            ``cleanup=True``.
+        ValueError: For an invalid name or version.
+    """
+
+    def __init__(  # noqa: PLR0913 (the task's options, by keyword)
+        self,
+        task_id: str,
+        *,
+        name: str,
+        version: str,
+        payload: Json = None,
+        returns: type[T] | None = None,
+        retries: int | None = None,
+        retry_delay: timedelta | None = None,
+        timeout: timedelta | None = None,
+        queue: str | None = None,
+        max_output_size: int | None = None,
+        run_if: RunIf | None = None,
+        max_active: int | None = None,
+        memory: int | str | None = None,
+        hard_memory_limit: bool | None = None,
+        secrets: SecretsArg = None,
+        connections: ConnectionsArg = None,
+        cleanup: bool = False,
+        cleanup_timeout: timedelta | None = None,
+        cleanup_retries: int | None = None,
+        cleanup_retry_delay: timedelta | None = None,
+        cleanup_anywhere: bool | None = None,
+        cleanup_handles: Sequence[str] | None = None,
+        uses: Sequence[object] | None = None,
+    ) -> None:
+        """Records the extension task in the DAG being defined."""
+        builder = _build.require_active("ExtensionTask")
+        task_id = builder.qualified(task_id)
+        where = f"task `{task_id}`"
+        if not isinstance(name, str) or not _EXTENSION_NAME.fullmatch(name) or "__" in name:
+            raise ValueError(
+                f"{where}: extension name {name!r} must be 1 to 64 letters, digits, `_` and `-`, "
+                "starting with a letter, without `__`"
+            )
+        if name.lower() == "discover":
+            raise ValueError(f"{where}: `discover` is a key of `[extensions]`, not a name")
+        # The master's rule: 1 to 64 characters, none whitespace nor a control character.
+        if (
+            not isinstance(version, str)
+            or not 0 < len(version) <= 64  # noqa: PLR2004 (the documented limit)
+            or any(c.isspace() or unicodedata.category(c) == "Cc" for c in version)
+        ):
+            raise ValueError(
+                f"{where}: version {version!r} must be 1 to 64 characters, without spaces"
+            )
+        try:
+            json.dumps(payload, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise TypeError(f"{where}: the payload must be JSON: {error}") from error
+        if not cleanup and cleanup_handles is not None:
+            raise TypeError(f"{where}: `cleanup_handles` without `cleanup=True`")
+        handles = None if cleanup_handles is None else tuple(cleanup_handles)
+        options = _build.TaskOptions(
+            retries,
+            retry_delay,
+            timeout,
+            queue,
+            max_output_size,
+            run_if=run_if,
+            max_active=max_active,
+            memory=_build.memory_size(memory, where),
+            hard_memory_limit=hard_memory_limit,
+            cleanup_timeout=cleanup_timeout,
+            cleanup_retries=cleanup_retries,
+            cleanup_retry_delay=cleanup_retry_delay,
+            cleanup_anywhere=cleanup_anywhere,
+            uses=None if uses is None else tuple(uses),
+            secrets=_secrets.declared(secrets, where),
+            connections=declared_connections(connections, where),
+        )
+        builder.add_task(
+            task_id,
+            ExtensionKind(name, version, payload),
+            describe(Json if returns is None else returns),
+            options,
+            cleanup=_build.CleanupWanted(handles=handles, extension=True) if cleanup else None,
+        )
+        self._task_id = task_id
+        self._dag = builder
+
+    @property
+    def output(self) -> T:
+        """What the plugin returned: a reference, read by type checkers as its value."""
+        return Output[T](self._task_id, dag=self._dag)  # type: ignore[return-value]
 
 
 class EmptyOperator(Operator):

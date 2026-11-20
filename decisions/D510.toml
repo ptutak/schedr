@@ -20,17 +20,12 @@ unschedulable once each has. Routing stays by queue. The plugin speaks the runne
 the inherited `SCHEDR_AGENT_FD`: a handshake naming its protocol version first (one the worker
 doesn't speak refused), then `extension_task`; it may ask what the Python runner may (the
 secrets and connections it declared, API calls, handles) and ends with `task_succeeded` or
-`task_failed`. The contract is those messages, not the process, and both forms are built (the user): the
-package declares its slot, `task` or `watcher`, which `Register.extensions` carries. A task-slot
-plugin is its own process (any language); a watcher-slot one is a Python module the watcher host
-imports (an entry point), run like a wait step: a watcher slot, the same messages through the
-host's channel, cancelled as a coroutine, the host's loop-lag rule against one that blocks. The
-Python helper's API is a coroutine (`async def run(request, channel)`), the same code either
-way: its `main` runs it in a process. Either form registers handles as it runs (from its
-process or the host's channel), and after any end of the attempt, a lost worker's too, the
-worker runs the plugin's cleanup with them (`extension_cleanup`), always as a process, as a
-Python task's cleanup: what a `@sensor` can't (no `cleanup=`, no handles, decision 323), which is
-why the watcher form stays beside it (the user). For authors: `schedr.extension` (Python) and a published Rust crate of the
+`task_failed`. The contract is those messages: a plugin is its own process (any language), counted in a task
+slot (decision note 15: no watcher-slot form, as decision 512 rules out work sharing a process).
+The Python helper's API is a coroutine (`async def run(request, channel)`) its `main` runs in a
+process. A plugin registers handles as it runs, and after any end of the attempt, a lost
+worker's too, the worker runs the plugin's cleanup with them (`extension_cleanup`), as a Python
+task's cleanup: what a `@sensor` can't (no `cleanup=`, no handles, decision 323). For authors: `schedr.extension` (Python) and a published Rust crate of the
 protocol's types and loop; an example plugin, a Python dummy, a worker test.
 '''
 history = "JOURNAL.md#D510"

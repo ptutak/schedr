@@ -33,6 +33,9 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN17 | 2026-11-20 | user | adds to D510 | The Rust plugin crate stands on its own: no internal crate published with it |
+| DN16 | 2026-11-20 | user | corrects D512 | Decision 512's exception narrowed: only wait steps share a watcher host |
+| DN15 | 2026-11-20 | user | corrects D510 | Extensions run only as their own process: no watcher-slot form |
 | DN14 | 2026-11-19 | claude | adds to D281 | A start is refused at the master-time deadline too, for every task |
 | DN13 | 2026-11-18 | claude | corrects D509 | M5.2e built: two of decision 509's small choices changed |
 | DN12 | 2026-11-18 | user | adds to D160 | The macOS wheel is built only on a release's tag |
@@ -54,7 +57,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 |---|---|---|---|---|---|
 | D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |
 | D511 | 2026-11-20 | user | built M5.2h6 | secrets | A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly |
-| D510 | 2026-11-20 | user | planned (M5.2i) | task-processes | Extensions: a task kind run by a plugin executable the open worker supervises |
+| D510 | 2026-11-20 | user | built M5.2i | task-processes | Extensions: a task kind run by a plugin executable the open worker supervises |
 | D509 | 2026-11-18 | user | built M5.2e | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
 | D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
 | D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |

@@ -586,6 +586,42 @@ class EmptyKind:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionKind:
+    """An extension's task (decision 510): run by a worker's plugin for ``name`` at ``version``.
+
+    Attributes:
+        name: The extension's name, as the workers' ``[extensions.<name>]``.
+        version: The version it is written for, matched exactly.
+        payload: What the plugin is asked to do: any JSON, stored and sent untouched.
+    """
+
+    name: str
+    version: str
+    payload: object = None
+
+    def references(self) -> list[Reference]:
+        """An extension's payload is plain JSON: no references.
+
+        Returns:
+            An empty list.
+        """
+        return []
+
+    def to_json(self) -> dict[str, Any]:
+        """The kind as DAG JSON.
+
+        Returns:
+            ``{"kind": "extension", "name": ..., "version": ..., "payload": ...}``.
+        """
+        return {
+            "kind": "extension",
+            "name": self.name,
+            "version": self.version,
+            "payload": self.payload,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DeclaredTemplate:
     """An argument or variable as a ``schedr.toml`` declares it, in DAG JSON already.
 
@@ -678,6 +714,7 @@ type TaskKind = (
     | WaitForKind
     | WaitForEventKind
     | TriggerDagKind
+    | ExtensionKind
 )
 """Any task kind."""
 
@@ -791,6 +828,7 @@ class TaskCleanup:
             ``handles`` parameter would never see them).
         anywhere: Whether it may run on another worker when its own is lost.
         script: The script it runs, instead of a command or the function.
+        extension: An extension task's: its plugin run again with the handles (decision 510).
     """
 
     line: CommandLine | None = None
@@ -800,6 +838,7 @@ class TaskCleanup:
     handles: tuple[str, ...] | None = None
     anywhere: bool = False
     script: CleanupScript | None = None
+    extension: bool = False
 
     def references(self) -> list[Reference]:
         """The references of its command line.
@@ -815,10 +854,11 @@ class TaskCleanup:
         """The cleanup as DAG JSON.
 
         Returns:
-            Its ``run`` (``"python"``, ``{"command": ...}`` or ``{"script": ...}``), ``retries``
-            and ``retry_delay_ms``, with ``timeout_ms`` and ``handles`` when set.
+            Its ``run`` (``"python"``, ``"extension"``, ``{"command": ...}`` or
+            ``{"script": ...}``), ``retries`` and ``retry_delay_ms``, with ``timeout_ms`` and
+            ``handles`` when set.
         """
-        run: str | dict[str, Any] = "python"
+        run: str | dict[str, Any] = "extension" if self.extension else "python"
         if self.script is not None:
             run = {"script": self.script.to_json()}
         elif self.line is not None:

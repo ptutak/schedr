@@ -1,0 +1,12 @@
+title = "Extensions run only as their own process: no watcher-slot form"
+date = 2026-11-20
+by = "user"
+on = "D510"
+kind = "corrects"
+summary = '''
+Decision 510's second form, a Python module the watcher host imports and runs like a wait step in
+a watcher slot, is dropped: an extension is always a plugin process in a task slot, so a fault in
+one ends no other task (decision 512). An extension that mostly waits can still be written as a
+`@sensor` in a Python package, which is the public API. `Register.extensions` carries no slot.
+'''
+history = "JOURNAL.md#DN15"

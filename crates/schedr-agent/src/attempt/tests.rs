@@ -100,6 +100,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         memory: crate::memory::MemoryWatch::default(),
         timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
+        extensions: crate::extensions::Plugins::new(),
     };
     (dir, setup)
 }

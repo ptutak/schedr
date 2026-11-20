@@ -2485,6 +2485,18 @@ stay, as they are just `@sensor` and `@trigger`, our API; whoever builds a lifec
 so on their own, and we neither build one nor show an example. Not chosen: decision 510 losing its
 `watcher` form (extensions always a process); isolating watcher hosts per DAG.
 
+### <a id="DN15"></a>2026-11-20: extensions only as their own process (decision note 15; corrects D510)
+
+Planning M5.2i, the user asked what a worker's watcher slot is. Explained: a coroutine in a shared
+watcher host, where a crash or OOM ends every wait step in it, which is what decision 512 rules
+out, kept for decision 510's `watcher` form only as an exception. The user chose B: no
+watcher-slot form; an extension is always a plugin process in a task slot, and one that mostly
+waits can be a `@sensor` in a Python package. Not chosen: A, keeping the watcher form.
+
+### <a id="DN16"></a>2026-11-20: decision 512's exception narrowed (decision note 16; corrects D512)
+
+With decision note 15, only wait steps share a watcher host.
+
 ### 2026-11-20: M5.2h4 measured on CI: neutral, kept
 
 The narrow ready read (M5.2h4) on CI, Stress on `64ac6261`. The first run failed scenario 14 (its
@@ -2502,3 +2514,40 @@ round ratio 2.47, the limit 2) with every scenario 25-40 % down, the Python ones
 
 The narrow read neither gains nor loses beyond the runners' spread; kept, as it reads less. A
 CI comparison wants two runs of each side when one looks off.
+
+### <a id="DN17"></a>2026-11-20: the Rust plugin crate stands on its own (decision note 17; adds to D510)
+
+A side agent noted that publishing `schedr-extension` at R1.2 would publish `schedr-model` and
+`schedr-fd` with it, making the whole DAG model public API (crates.io crates depend only on
+published crates). Claude's suggestion, the user's choice B: the crate carries its own copy of
+what a plugin speaks and its own descriptor block, kept in step by a two-way conversion test in
+the workspace; the protocol (`schema/runner.schema.json`) is the contract, the crate one
+implementation of it as the Python helper is. Not chosen: A, publishing the two internal crates.
+
+### 2026-11-20: M5.2i's review (Grok; Codex refused twice by its filter)
+
+Eight findings, each verified and fixed:
+
+1. A Rust plugin's original socket stayed inheritable: fixed with DN17 (the crate seals it).
+2. A relative plugin `command` ran from the DAG root: refused at load; absolute or a bare
+   `PATH` name.
+3. **B274** (released code): a task whose leader exits while a child holds its stdout or stderr
+   held its slot until the child closed them; `run_command`'s and the Python path's clean-exit
+   drains now wait at most `output_drain`, keeping what was read.
+4. **B275** (released code): a message announced over 64 MiB left the channel open, the writer
+   blocked, the slot held when no timeout was set; the channel is now shut down both ways on a
+   failed read.
+5. `--describe` ran outside a process group of its own: its children now die with it.
+6. `--describe`'s 64 KiB limit applied after buffering everything: it now stops reading there.
+7. Discovered versions skipped the version rule: one rule (`check_extension_version`,
+   counted in characters) for tasks, config, discovery and the SDK.
+8. Three docstrings corrected (cleanup with no handles, `"extension"` cleanup run,
+   `schedr_version` not logged).
+
+### 2026-11-20: M5.2i done
+
+Extensions (decision 510, notes 15-17): the `extension` task kind and its checks, workers'
+plugins by config and discovery, cleanup with handles, the Python helper, the standalone Rust
+crate, the dummy and `hello-plugin` side by side in `make standalone`, the guide page. Grok's
+review: eight findings, all fixed, two of them in released code (B274, B275). `make check`
+passed. Next: M5.2i4 (the protocol's specification), M5.2i2 (Kubernetes), M5.2j (bugs), R1.2.

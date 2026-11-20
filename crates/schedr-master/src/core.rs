@@ -485,6 +485,9 @@ struct Connection {
     /// The secret storages it has configured (`Register`): a DAG it parses that names another
     /// is refused. None until it registers with this master (restored from the database).
     secret_storages: Option<crate::validate::WorkerStorages>,
+    /// The extensions it offers, by name and version (`Register.extensions`, decision 510);
+    /// empty until it registers with this master.
+    extensions: BTreeSet<(String, String)>,
     /// What its wait step hosts looked like when last written to the registry.
     watcher_hosts: Vec<pb::WatcherHost>,
     /// When what it uses was last written to the registry (decision 463).
@@ -996,6 +999,7 @@ impl MasterCore {
                     persisted: now,
                     live: false,
                     secret_storages: None,
+                    extensions: BTreeSet::new(),
                     watcher_hosts: Vec::new(),
                     usage_at: None,
                 },
@@ -1175,6 +1179,7 @@ impl MasterCore {
                 persisted: now,
                 live: true,
                 secret_storages: Some(crate::validate::WorkerStorages::of(register)),
+                extensions: offered_extensions(register),
                 watcher_hosts: Vec::new(),
                 usage_at: None,
             },
@@ -1977,6 +1982,15 @@ impl MasterCore {
                         .connections
                         .get(&result.worker_id)
                         .and_then(|c| c.secret_storages.clone()),
+                    // What the live workers offer: one connecting later is told of by its
+                    // own parse (decision 510).
+                    extensions: Some(
+                        self.connections
+                            .values()
+                            .filter(|c| c.live)
+                            .flat_map(|c| c.extensions.iter().cloned())
+                            .collect(),
+                    ),
                 },
                 now,
             )
@@ -2705,4 +2719,18 @@ fn for_the_round<'a>(
         worker_id: worker_id.to_owned(),
         reason: "a message the master's round handles, not a turn".to_owned(),
     })
+}
+
+/// The extensions `register` offers, by name and version (decision 510).
+fn offered_extensions(register: &pb::Register) -> BTreeSet<(String, String)> {
+    register
+        .extensions
+        .iter()
+        .flat_map(|offer| {
+            offer
+                .versions
+                .iter()
+                .map(|version| (offer.name.clone(), version.clone()))
+        })
+        .collect()
 }

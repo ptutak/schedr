@@ -79,6 +79,7 @@ fn unknown_run_kinds_are_errors() {
 #[case(pb::RejectReason::Draining, RejectReaction::Temporary)]
 #[case(pb::RejectReason::Withdrawn, RejectReaction::Temporary)]
 #[case(pb::RejectReason::InterpreterUndefined, RejectReaction::WorkerSpecific)]
+#[case(pb::RejectReason::ExtensionUndefined, RejectReaction::WorkerSpecific)]
 #[case(pb::RejectReason::ScriptRootUnknown, RejectReaction::WorkerSpecific)]
 #[case(
     pb::RejectReason::ScriptReferenceNotFound,

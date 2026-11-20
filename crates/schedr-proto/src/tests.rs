@@ -12,6 +12,10 @@ fn messages_encode_and_decode() {
             watcher_slots: 500,
             queue_depth: 4,
             default_secret_storage: Some("vault".into()),
+            extensions: vec![pb::ExtensionOffer {
+                name: "spark".into(),
+                versions: vec!["1.0".into()],
+            }],
             worker_id: "worker-1".into(),
             incarnation_id: "0192c4e1-7a3b-7c00-8000-000000000000".into(),
             protocol: Some(super::PROTOCOL_VERSION),

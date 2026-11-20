@@ -517,6 +517,8 @@ pub struct WorkerSetup {
     pub timeouts: WorkerTimeouts,
     /// The DAG interpreter's fork servers, when it has `fork_server = true`.
     pub fork_server: Option<crate::fork::ForkConfig>,
+    /// The plugins it runs extension tasks with, by extension (decision 510).
+    pub extensions: crate::extensions::Plugins,
 }
 
 impl WorkerSetup {
@@ -560,7 +562,8 @@ impl WorkerSetup {
 /// How to run an attempt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Plan {
-    /// A Python task: start the runner in task mode and send it this request.
+    /// A Python task: start the runner in task mode and send it this request. An extension
+    /// task too (decision 510): its plugin in `extension` mode, sent `extension_task`.
     Python {
         /// The runner process (interpreter, `-m schedr.runner task`, environment, log).
         process: ProcessSpec,
@@ -723,37 +726,7 @@ fn plan_kind(
                     output_drain: setup.timeouts.output_drain,
                     barrier: None,
                 },
-                request: Box::new(TaskRequest {
-                    dag_file: DagFile {
-                        root: spec.dag_root.clone(),
-                        root_dir: root_dir.to_string_lossy().into_owned(),
-                        path: spec.dag_path.clone(),
-                    },
-                    dag_id: spec.run.dag_id.clone(),
-                    task: spec.task.clone(),
-                    inputs: spec.inputs.clone(),
-                    outcomes: spec.outcomes.clone(),
-                    run: spec.run.clone(),
-                    sys_path: setup.sys_path_at(
-                        &spec
-                            .root_copies
-                            .clone()
-                            .into_iter()
-                            .chain([(spec.dag_root.clone(), root_dir.to_path_buf())])
-                            .collect(),
-                    ),
-                    secrets: spec
-                        .secrets
-                        .iter()
-                        .map(|(name, value)| SecretValue {
-                            name: name.clone(),
-                            value: value.clone(),
-                        })
-                        .collect(),
-                    connection_test: spec.connection_test.clone(),
-                    trigger: spec.trigger.as_ref().map(|(start, _)| start.clone()),
-                    cleanup: spec.cleanup_handles.clone(),
-                }),
+                request: Box::new(task_request(spec, setup, root_dir)),
             })
         }
         TaskKind::Command { command, env, .. } => {
@@ -792,11 +765,108 @@ fn plan_kind(
                 .to_owned(),
         }),
         TaskKind::Script { .. } => plan_script(spec, setup, root_dir, &vars),
+        TaskKind::Extension { name, version, .. } => {
+            plan_extension(spec, setup, root_dir, (name, version))
+        }
     }
 }
 
 /// A script task's process (decision 293): its interpreter running the script from its
 /// script root's copy.
+/// The request a Python runner, or an extension's plugin, gets for `spec`.
+fn task_request(spec: &AttemptSpec, setup: &WorkerSetup, root_dir: &Path) -> TaskRequest {
+    TaskRequest {
+        dag_file: DagFile {
+            root: spec.dag_root.clone(),
+            root_dir: root_dir.to_string_lossy().into_owned(),
+            path: spec.dag_path.clone(),
+        },
+        dag_id: spec.run.dag_id.clone(),
+        task: spec.task.clone(),
+        inputs: spec.inputs.clone(),
+        outcomes: spec.outcomes.clone(),
+        run: spec.run.clone(),
+        sys_path: setup.sys_path_at(
+            &spec
+                .root_copies
+                .clone()
+                .into_iter()
+                .chain([(spec.dag_root.clone(), root_dir.to_path_buf())])
+                .collect(),
+        ),
+        secrets: spec
+            .secrets
+            .iter()
+            .map(|(name, value)| SecretValue {
+                name: name.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+        connection_test: spec.connection_test.clone(),
+        trigger: spec.trigger.as_ref().map(|(start, _)| start.clone()),
+        cleanup: spec.cleanup_handles.clone(),
+    }
+}
+
+/// An extension task's plan (decision 510): its plugin as its own process, given the request a
+/// Python task gets, with the same environment; rejected (no try) where this worker has no
+/// plugin serving the extension at that exact version.
+fn plan_extension(
+    spec: &AttemptSpec,
+    setup: &WorkerSetup,
+    root_dir: &Path,
+    (name, version): (&str, &str),
+) -> Result<Plan, NotRun> {
+    let plugin = setup.extensions.get(name).ok_or_else(|| NotRun::Rejected {
+        reason: pb::RejectReason::ExtensionUndefined,
+        detail: format!("extension `{name}` has no plugin on this worker ([extensions.{name}])"),
+    })?;
+    if !plugin.versions.contains(version) {
+        return Err(NotRun::Rejected {
+            reason: pb::RejectReason::ExtensionUndefined,
+            detail: format!(
+                "extension `{name}` {version}: this worker's plugin serves {}",
+                plugin
+                    .versions
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+    }
+    let (program, args) = plugin
+        .command
+        .split_first()
+        .ok_or_else(|| NotRun::Rejected {
+            reason: pb::RejectReason::ExtensionUndefined,
+            detail: format!("extension `{name}`: its plugin has no command"),
+        })?;
+    let env = task_environment(
+        &setup.agent_env,
+        &setup.pass_env,
+        &BTreeMap::new(),
+        &run_vars(spec),
+    )
+    .map_err(|e| failed(RENDER_FAILED, &e))?;
+    Ok(Plan::Python {
+        process: ProcessSpec {
+            program: PathBuf::from(program),
+            args: args.to_vec(),
+            env,
+            working_dir: root_dir.to_path_buf(),
+            log_file: setup.log_file(&spec.attempt_id),
+            max_output_size: usize::try_from(spec.task.settings.max_output_size)
+                .unwrap_or(usize::MAX),
+            mask: spec.mask.clone(),
+            start_timeout: setup.timeouts.runner_start,
+            output_drain: setup.timeouts.output_drain,
+            barrier: None,
+        },
+        request: Box::new(task_request(spec, setup, root_dir)),
+    })
+}
+
 fn plan_script(
     spec: &AttemptSpec,
     setup: &WorkerSetup,

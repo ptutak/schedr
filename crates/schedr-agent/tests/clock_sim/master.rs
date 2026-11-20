@@ -590,6 +590,7 @@ fn register(
         roots: vec![root()],
         secret_storages: vec![],
         default_secret_storage: None,
+        extensions: vec![],
         journal,
         process_id: format!("p-{incarnation}"),
         config_json: r#"{"worker":{"slots":4}}"#.to_owned(),

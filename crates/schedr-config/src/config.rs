@@ -500,6 +500,9 @@ pub struct Config {
     pub tls: TlsSection,
     /// `[secret_storage]`: where a worker's tasks get their secrets (workers only).
     pub secret_storage: SecretStorageSection,
+    /// `[extensions]`: the plugins a worker runs extension tasks with (workers only, decision
+    /// 510).
+    pub extensions: ExtensionsSection,
     /// The DAG roots, resolved from `dags.path` and `dags.roots` when loading.
     #[serde(skip)]
     pub dag_roots: Vec<Root>,
@@ -1759,6 +1762,32 @@ impl Default for TlsSection {
             reload_interval: Duration::from_secs(30),
         }
     }
+}
+
+/// `[extensions]`: the plugins that run a worker's extension tasks (decision 510), each a table
+/// named by its extension (`[extensions.spark]`), beside the section's own `discover`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(default)]
+pub struct ExtensionsSection {
+    /// Also offer each `schedr-ext-*` executable on `PATH`, as its `--describe` says (a plugin
+    /// configured here wins for its name). Off by default: what a worker runs is what its
+    /// configuration names.
+    pub discover: bool,
+    /// The plugins, by extension name.
+    #[serde(flatten)]
+    pub plugins: BTreeMap<String, ExtensionPlugin>,
+}
+
+/// `[extensions.<name>]`: the plugin that runs an extension's tasks, as its own process in a
+/// task slot.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionPlugin {
+    /// The plugin's program and its arguments, each one argument (never a shell string): the
+    /// first an absolute path, or a name found on `PATH`.
+    pub command: Vec<String>,
+    /// The versions of the extension it serves, matched exactly against a task's.
+    pub versions: Vec<String>,
 }
 
 /// `[secret_storage]`: where a worker's tasks get their secrets (only workers fetch them; see

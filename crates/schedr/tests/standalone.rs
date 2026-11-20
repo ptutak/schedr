@@ -3515,3 +3515,267 @@ with Dag(\"pipeline\"):
         "SCHEDR_DAG_PATH's DAG isn't there"
     );
 }
+
+/// The dummy extension's plugin (examples/extensions/dummy), run by the test's Python.
+fn dummy_plugin() -> String {
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/dummy/schedr-ext-dummy")
+        .canonicalize()
+        .unwrap();
+    format!(
+        "\n[extensions.dummy]\ncommand = [\"{}\", \"{}\"]\nversions = [\"1.0\"]\n",
+        python(),
+        plugin.display()
+    )
+}
+
+/// M5.2i (decision 510): an extension task runs in its plugin, its lines in the attempt's log and
+/// its output a downstream task's input; one asking for a version no worker serves is given back
+/// by the worker, no try counted, and ends unschedulable.
+#[test]
+fn an_extension_task_runs_in_its_plugin_and_one_no_worker_serves_is_unschedulable() {
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask, task
+
+
+@task
+def rows(found: dict[str, int]) -> int:
+    print(f"rows: {found['rows']}")
+    return found["rows"]
+
+
+with Dag("extended"):
+    job = ExtensionTask(
+        "job",
+        name="dummy",
+        version="1.0",
+        payload=[{"log": "the dummy plugin runs"}, {"return": {"rows": 3}}],
+        returns=dict[str, int],
+    )
+    rows(job.output)
+
+with Dag("unserved"):
+    ExtensionTask("job", name="dummy", version="9.9", payload={"return": 1})
+"#;
+    let standalone =
+        Standalone::start_configured(&[("extended.py", DAG)], None, &[], &dummy_plugin(), &[]);
+    standalone.wait("the DAGs to be found", || {
+        let ids = standalone.dag_ids();
+        ids.contains(&"extended".to_owned()) && ids.contains(&"unserved".to_owned())
+    });
+    let run = standalone.trigger("extended");
+    let done = standalone.wait_for_state(&run, "success");
+    assert_eq!(
+        task_states(&done),
+        [
+            ("job".to_owned(), "success".to_owned()),
+            ("rows".to_owned(), "success".to_owned())
+        ]
+    );
+    let output = standalone
+        .get(&format!("/api/v1/runs/{run}/tasks/job/output"))
+        .unwrap();
+    assert_eq!(output["value"], serde_json::json!({"rows": 3}), "{output}");
+    let logs = logs(standalone.dir.path());
+    assert!(logs.contains("the dummy plugin runs\n"), "{logs}");
+    assert!(logs.contains("rows: 3\n"), "{logs}");
+    let log = standalone.log();
+    assert!(
+        log.contains("no connected worker offers extension `dummy` 9.9"),
+        "the master warns: {log}"
+    );
+    let run = standalone.trigger("unserved");
+    standalone.wait("the unserved task to be unschedulable", || {
+        task_states(&standalone.run(&run)) == [("job".to_owned(), "unschedulable".to_owned())]
+    });
+    let job = &standalone.run(&run)["tasks"][0];
+    assert_eq!(job["try_number"], 0, "a rejection is no try: {job}");
+}
+
+/// M5.2i: a plugin is supervised as the Python runner is: one that hangs is stopped at the task's
+/// timeout, and one that fails fails the attempt with its error.
+#[test]
+fn an_extension_plugin_that_hangs_is_timed_out_and_one_that_fails_fails() {
+    const DAG: &str = r#"
+from datetime import timedelta
+
+from schedr import Dag, ExtensionTask
+
+with Dag("hangs"):
+    ExtensionTask(
+        "job", name="dummy", version="1.0", payload={"hang": True}, timeout=timedelta(seconds=2)
+    )
+
+with Dag("fails"):
+    ExtensionTask("job", name="dummy", version="1.0", payload={"fail": "the cluster said no"})
+"#;
+    let standalone =
+        Standalone::start_configured(&[("extended.py", DAG)], None, &[], &dummy_plugin(), &[]);
+    standalone.wait("the DAGs to be found", || {
+        let ids = standalone.dag_ids();
+        ids.contains(&"hangs".to_owned()) && ids.contains(&"fails".to_owned())
+    });
+    let hangs = standalone.trigger("hangs");
+    let fails = standalone.trigger("fails");
+    let hung = standalone.wait_for_state(&hangs, "failed");
+    let job = &hung["tasks"][0];
+    assert_eq!(job["state"], "failed", "{job}");
+    standalone.wait_for_state(&fails, "failed");
+    let attempts = standalone
+        .get(&format!("/api/v1/runs/{fails}/tasks/job/attempts"))
+        .unwrap();
+    let text = attempts.to_string();
+    assert!(text.contains("the cluster said no"), "{text}");
+    let hung_attempts = standalone
+        .get(&format!("/api/v1/runs/{hangs}/tasks/job/attempts"))
+        .unwrap()
+        .to_string();
+    assert!(
+        hung_attempts.contains("timed_out") || hung_attempts.contains("timeout"),
+        "{hung_attempts}"
+    );
+}
+
+/// M5.2i: an extension task's cleanup runs its plugin again after the attempt, whatever its end,
+/// with the handles it registered, in order.
+#[test]
+fn an_extension_tasks_cleanup_runs_its_plugin_again_with_its_handles() {
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask
+
+with Dag("cleaned"):
+    ExtensionTask(
+        "job",
+        name="dummy",
+        version="1.0",
+        payload=[{"handle": {"id": "job-1"}}, {"handle": {"id": "job-2"}}, {"fail": "midway"}],
+        cleanup=True,
+    )
+"#;
+    let standalone =
+        Standalone::start_configured(&[("cleaned.py", DAG)], None, &[], &dummy_plugin(), &[]);
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"cleaned".to_owned())
+    });
+    let run = standalone.trigger("cleaned");
+    standalone.wait_for_state(&run, "failed");
+    standalone.wait("the cleanup to have run", || {
+        logs(standalone.dir.path()).contains("cleaning up job: {'id': 'job-2'}")
+    });
+    let logs = logs(standalone.dir.path());
+    let first = logs.find("cleaning up job: {'id': 'job-1'}").expect(&logs);
+    let second = logs.find("cleaning up job: {'id': 'job-2'}").expect(&logs);
+    assert!(first < second, "in registration order: {logs}");
+}
+
+/// The Rust example plugin (crates/schedr-extension/examples/hello-plugin.rs), built into this
+/// workspace's target (cargo builds a crate's examples only for its own tests).
+fn hello_plugin() -> String {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let status = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "-q",
+            "-p",
+            "schedr-extension",
+            "--example",
+            "hello-plugin",
+        ])
+        .current_dir(&workspace)
+        .status()
+        .unwrap();
+    assert!(status.success(), "the example plugin builds");
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| workspace.join("target"), PathBuf::from);
+    let plugin = target
+        .join("debug/examples/hello-plugin")
+        .canonicalize()
+        .unwrap();
+    format!(
+        "\n[extensions.hello]\ncommand = [\"{}\"]\nversions = [\"1.0\"]\n",
+        plugin.display()
+    )
+}
+
+/// M5.2i: plugins in two languages in one DAG, the Python dummy and the Rust example, their
+/// outputs read by one Python task.
+#[test]
+fn plugins_in_python_and_rust_run_side_by_side() {
+    let dag = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/extensions/dummy_extension.py"),
+    )
+    .unwrap();
+    let config = format!("{}{}", dummy_plugin(), hello_plugin());
+    let standalone =
+        Standalone::start_configured(&[("dummy_extension.py", &dag)], None, &[], &config, &[]);
+    standalone.wait("the DAG to be found", || {
+        standalone
+            .dag_ids()
+            .contains(&"extension_two_languages".to_owned())
+    });
+    let run = standalone.trigger("extension_two_languages");
+    let done = standalone.wait_for_state(&run, "success");
+    assert_eq!(task_states(&done).len(), 3, "{done}");
+    let output = standalone
+        .get(&format!("/api/v1/runs/{run}/tasks/together/output"))
+        .unwrap();
+    assert_eq!(output["value"], "hello, schedr: 3 rows", "{output}");
+    let logs = logs(standalone.dir.path());
+    assert!(
+        logs.contains("hello, schedr\n"),
+        "the Rust plugin's own line: {logs}"
+    );
+}
+
+/// B275: a plugin announcing a message over the protocol's limit is cut off: its channel closed,
+/// its write fails, and the attempt ends, even with no timeout.
+#[test]
+fn a_plugin_announcing_a_message_over_the_limit_is_cut_off() {
+    const PLUGIN: &str = r#"
+import json, os, socket, sys
+
+sock = socket.socket(fileno=int(os.environ["SCHEDR_AGENT_FD"]))
+
+def send(message):
+    data = json.dumps(message).encode()
+    sock.sendall(len(data).to_bytes(4, "big") + data)
+
+def receive():
+    size = int.from_bytes(sock.recv(4, socket.MSG_WAITALL), "big")
+    return json.loads(sock.recv(size, socket.MSG_WAITALL))
+
+send({"type": "hello", "schedr_version": "0", "mode": "extension", "protocol": 1})
+receive()
+receive()
+sock.sendall((64 * 1024 * 1024 + 1).to_bytes(4, "big"))
+try:
+    while True:
+        sock.sendall(b"x" * 65536)
+except OSError as error:
+    print(f"cut off: {error}", flush=True)
+    sys.exit(1)
+"#;
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask
+
+with Dag("oversized"):
+    ExtensionTask("job", name="loud", version="1.0", payload=None)
+"#;
+    let dir = TempDir::new().unwrap();
+    let plugin = dir.path().join("loud.py");
+    std::fs::write(&plugin, PLUGIN).unwrap();
+    let config = format!(
+        "\n[extensions.loud]\ncommand = [\"{}\", \"{}\"]\nversions = [\"1.0\"]\n",
+        python(),
+        plugin.display()
+    );
+    let standalone =
+        Standalone::start_configured(&[("oversized.py", DAG)], None, &[], &config, &[]);
+    standalone.wait("the DAG to be found", || {
+        standalone.dag_ids().contains(&"oversized".to_owned())
+    });
+    let run = standalone.trigger("oversized");
+    standalone.wait_for_state(&run, "failed");
+    let logs = logs(standalone.dir.path());
+    assert!(logs.contains("cut off:"), "{logs}");
+}

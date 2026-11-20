@@ -23,7 +23,7 @@ from schedr.first_of import at_least, first_of
 from schedr.groups import Group, group
 from schedr.named_events import EventNamed
 from schedr.notify import Notify, WebhookChannel
-from schedr.operators import CommandOperator, EmptyOperator, ScriptOperator
+from schedr.operators import CommandOperator, EmptyOperator, ExtensionTask, ScriptOperator
 from schedr.outcomes import (
     DagHint,
     Data,
@@ -69,6 +69,7 @@ __all__ = [
     "EventNamed",
     "EventTrigger",
     "Every",
+    "ExtensionTask",
     "Failed",
     "GiB",
     "Group",

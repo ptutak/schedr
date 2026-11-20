@@ -25,7 +25,9 @@ sequenceDiagram
     end
 ```
 
-`Register` carries the worker's identity, roots, journal, slots and running trigger IDs.
+`Register` carries the worker's identity, roots, journal, slots and running trigger IDs, its
+secret storages and default storage, and the extensions its plugins serve (protocol 2.2; see
+[Extensions](21-extensions.md)).
 `Registered` returns the timings, journal decisions, message size limit and script uses.
 A `Heartbeat` reports free slots, running attempts, triggers and usage, and how long its
 waiting queue's oldest task has waited (`queue_head_age_ms`, protocol 2.2); the `HeartbeatAck`
@@ -123,6 +125,10 @@ sequenceDiagram
     M->>M: Return task to waiting or try another worker, no retry used
     Note over M: Code wait: 10 min default for missing eligible code, then task is unschedulable
 ```
+
+A worker missing what the task needs, such as an interpreter or an extension's plugin at its
+exact version (`EXTENSION_UNDEFINED`), gives it back for another worker; once every eligible
+worker has, the task is `unschedulable`.
 
 ## An assignment never started
 

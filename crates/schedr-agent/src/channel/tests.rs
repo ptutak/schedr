@@ -8,6 +8,7 @@ fn hello(version: &str) -> RunnerMessage {
     RunnerMessage::Hello {
         schedr_version: version.into(),
         mode: RunnerMode::Parse,
+        protocol: None,
     }
 }
 
@@ -157,4 +158,35 @@ fn a_float_reads_back_exactly() {
         }
     }
     assert_eq!(changed, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_plugin_is_welcomed_by_its_protocol_whatever_its_version() {
+    let plugin = |protocol| RunnerMessage::Hello {
+        schedr_version: "7.3.1".into(),
+        mode: RunnerMode::Extension,
+        protocol,
+    };
+    let (mut agent, mut runner) = duplex(1024);
+    write_message(&mut runner, &plugin(Some(EXTENSION_PROTOCOL)))
+        .await
+        .unwrap();
+    assert_eq!(
+        accept_runner(&mut agent, "1.0.0").await.unwrap(),
+        RunnerMode::Extension
+    );
+    let reply: AgentMessage = read_message(&mut runner).await.unwrap();
+    assert_eq!(reply, AgentMessage::Welcome);
+    for (protocol, why) in [
+        (Some(EXTENSION_PROTOCOL + 1), "speaks runner protocol 2"),
+        (None, "names no protocol"),
+    ] {
+        let (mut agent, mut runner) = duplex(1024);
+        write_message(&mut runner, &plugin(protocol)).await.unwrap();
+        let err = accept_runner(&mut agent, "1.0.0").await.unwrap_err();
+        let ChannelError::Refused(reason) = &err else {
+            panic!("expected Refused, got {err:?}")
+        };
+        assert!(reason.contains(why), "{reason}");
+    }
 }

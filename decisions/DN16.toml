@@ -1,0 +1,10 @@
+title = "Decision 512's exception narrowed: only wait steps share a watcher host"
+date = 2026-11-20
+by = "user"
+on = "D512"
+kind = "corrects"
+summary = '''
+Decision 512 kept decision 510's `watcher` form beside wait steps; the user dropped it the same
+day (decision note 15), so only `@sensor` and `@trigger` share a watcher host.
+'''
+history = "JOURNAL.md#DN16"

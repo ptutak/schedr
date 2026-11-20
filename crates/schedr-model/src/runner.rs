@@ -52,6 +52,9 @@ pub enum RunnerMode {
     ForkServer,
     /// Run the wait steps of one code set as coroutines, long-lived (decision 320).
     Watchers,
+    /// An extension's plugin, running one of its tasks (decision 510): sent
+    /// [`AgentMessage::ExtensionTask`].
+    Extension,
 }
 
 /// A structured error summary: why a DAG file couldn't be imported, or why a task failed.
@@ -218,16 +221,25 @@ pub enum OutputStream {
     Stderr,
 }
 
+/// The runner protocol version an extension's plugin speaks (decision 510): it says it in its
+/// `hello` and its `--describe`, and a worker refuses another.
+pub const EXTENSION_PROTOCOL: u32 = 1;
+
 /// A message from the runner to the agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunnerMessage {
     /// The first message: who is speaking and what for.
     Hello {
-        /// The installed `schedr` package version; it must equal the agent's.
+        /// The installed `schedr` package version; it must equal the agent's. A plugin's own
+        /// version, not checked (`extension` mode).
         schedr_version: String,
         /// The mode the runner was started in.
         mode: RunnerMode,
+        /// The protocol version a plugin speaks (`extension` mode, [`EXTENSION_PROTOCOL`]);
+        /// none from the Python runner, which matches by `schedr_version`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<u32>,
     },
     /// The runner starts importing a file (the agent times each file).
     FileStarted {
@@ -635,6 +647,9 @@ pub enum AgentMessage {
     Parse(ParseRequest),
     /// A task attempt.
     Task(Box<TaskRequest>),
+    /// An extension task's attempt, to its plugin (decision 510): its kind is `extension`, its
+    /// payload in `task`. With `cleanup` set, the plugin's cleanup with those handles instead.
+    ExtensionTask(Box<TaskRequest>),
     /// The fork server's preload list (its mode's request).
     ForkServer(ForkServerRequest),
     /// A watcher host's code set (its mode's request).

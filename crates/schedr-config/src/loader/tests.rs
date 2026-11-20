@@ -1600,3 +1600,72 @@ fn hidden_values_at_their_ceiling_load() {
     ];
     assert!(load(None, &env(&vars), &[]).is_ok());
 }
+
+#[test]
+fn extensions_are_tables_by_name_beside_discover() {
+    let toml = r#"
+[extensions]
+discover = true
+
+[extensions.spark]
+command = ["/opt/acme/schedr-ext-spark", "--quiet"]
+versions = ["1.0", "1.1"]
+"#;
+    let config = load(
+        Some(file(toml)),
+        &env(&[
+            ("SCHEDR_CONFIG__EXTENSIONS__K8S__COMMAND", "[\"/opt/k8s\"]"),
+            ("SCHEDR_CONFIG__EXTENSIONS__K8S__VERSIONS", "[\"2\"]"),
+        ]),
+        &[],
+    )
+    .unwrap();
+    let section = &config.extensions;
+    assert!(section.discover);
+    assert_eq!(section.plugins.keys().collect::<Vec<_>>(), ["k8s", "spark"]);
+    assert_eq!(
+        section.plugins["spark"].command,
+        ["/opt/acme/schedr-ext-spark", "--quiet"]
+    );
+    assert_eq!(section.plugins["k8s"].versions, ["2"]);
+    assert!(!load(None, &env(&[]), &[]).unwrap().extensions.discover);
+}
+
+#[test]
+fn a_bad_extension_table_is_refused_naming_it() {
+    for (toml, why) in [
+        (
+            "[extensions.\"a b\"]\ncommand = [\"/x\"]\nversions = [\"1\"]\n",
+            "a name is",
+        ),
+        (
+            "[extensions.spark]\ncommand = []\nversions = [\"1\"]\n",
+            "command",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"./plugin\"]\nversions = [\"1\"]\n",
+            "an absolute path",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"bin/plugin\"]\nversions = [\"1\"]\n",
+            "an absolute path",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"/x\"]\nversions = []\n",
+            "versions",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1 0\"]\n",
+            "without spaces",
+        ),
+        (
+            "[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1\"]\nslot = \"task\"\n",
+            "slot",
+        ),
+    ] {
+        let error = load(Some(file(toml)), &env(&[]), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(why), "{toml}: {error}");
+    }
+}

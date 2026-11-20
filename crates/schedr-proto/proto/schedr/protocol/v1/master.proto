@@ -205,6 +205,15 @@ message Register {
   // protocol 2.2): empty when it has none, a DAG reading one then refused; unset from an older
   // worker or a test run (not checked).
   optional string default_secret_storage = 16;
+  // The extensions it runs, each with the versions its plugin serves (decision 510; protocol
+  // 2.2): a DAG asking for one no worker offers is warned about. None from an older worker.
+  repeated ExtensionOffer extensions = 17;
+}
+
+// An extension a worker's plugin serves (`[extensions.<name>]`, or found by discovery).
+message ExtensionOffer {
+  string name = 1;
+  repeated string versions = 2;
 }
 
 message Heartbeat {
@@ -324,6 +333,9 @@ enum RejectReason {
   // Given back from its waiting queue, never started there: slower than the cluster
   // (decision 509; protocol 2.2), a drain, or the session's end. Ready again, no retry used.
   REJECT_REASON_WITHDRAWN = 12;
+  // No plugin for the task's extension at its exact version on this worker (decision 510;
+  // protocol 2.2): another worker is tried, the task unschedulable once each has said so.
+  REJECT_REASON_EXTENSION_UNDEFINED = 13;
 }
 
 message Rejected {

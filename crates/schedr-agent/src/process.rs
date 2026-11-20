@@ -63,6 +63,8 @@ pub struct OsProcess {
     /// Its output's collectors, taken by [`Self::output`].
     stdout: Option<JoinHandle<io::Result<TailBuffer>>>,
     stderr: Option<JoinHandle<io::Result<TailBuffer>>>,
+    /// Tells the readers to end with what they have (B274: [`Self::output_within`]).
+    stop_reading: tokio::sync::watch::Sender<bool>,
     ended: Ended,
     /// Whether its zombie was read already (`wait` may be called again).
     read: bool,
@@ -136,6 +138,7 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
         .stderr
         .take()
         .ok_or_else(|| io::Error::other("no stderr pipe"))?;
+    let (stop_reading, _) = tokio::sync::watch::channel(false);
     Ok(OsProcess {
         ended: Ended::default(),
         read: false,
@@ -147,13 +150,16 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
             Arc::clone(&log),
             spec.max_output_size,
             spec.mask.clone(),
+            stop_reading.subscribe(),
         ))),
         stderr: Some(tokio::spawn(collect(
             stderr,
             log,
             spec.max_output_size,
             spec.mask.clone(),
+            stop_reading.subscribe(),
         ))),
+        stop_reading,
     })
 }
 
@@ -260,12 +266,18 @@ pub(crate) async fn collect(
     log: SharedLog,
     limit: usize,
     mask: Mask,
+    mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> io::Result<TailBuffer> {
     let mut tail = TailBuffer::new(limit);
     let mut chunk = vec![0; 64 * 1024];
     let mut stream = mask.0.as_deref().map(MaskSet::stream);
     loop {
-        let n = pipe.read(&mut chunk).await?;
+        // Told to stop (B274): ended as at the pipe's end, with what it has.
+        let n = tokio::select! {
+            biased;
+            read = pipe.read(&mut chunk) => read?,
+            _ = stop.wait_for(|stop| *stop) => 0,
+        };
         if n == 0 {
             if let Some(stream) = &mut stream {
                 let rest = stream.finish();
@@ -310,6 +322,53 @@ impl OsProcess {
         let stderr = stderr.await.map_err(io::Error::other)??;
         Ok((stdout, stderr))
     }
+
+    /// As [`Self::output`], waiting at most `drain` for both pipes to close; then what was read
+    /// (B274: a child the task left holding its output can't hold the attempt).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::output`].
+    pub async fn output_within(
+        mut self,
+        drain: std::time::Duration,
+    ) -> io::Result<(TailBuffer, TailBuffer)> {
+        let (Some(stdout), Some(stderr)) = (self.stdout.take(), self.stderr.take()) else {
+            return Err(io::Error::other("the output was taken already"));
+        };
+        read_within((stdout, stderr), &self.stop_reading, drain).await
+    }
+}
+
+/// Both readers' tails, waiting at most `drain` for both to end at their pipe's end, then telling
+/// them to stop.
+pub(crate) async fn read_within(
+    (mut stdout, mut stderr): (
+        JoinHandle<io::Result<TailBuffer>>,
+        JoinHandle<io::Result<TailBuffer>>,
+    ),
+    stop: &tokio::sync::watch::Sender<bool>,
+    drain: std::time::Duration,
+) -> io::Result<(TailBuffer, TailBuffer)> {
+    // Each handle awaited to its end once: a result read within the drain is kept.
+    let deadline = tokio::time::Instant::now() + drain;
+    let out = tokio::time::timeout_at(deadline, &mut stdout).await.ok();
+    let err = tokio::time::timeout_at(deadline, &mut stderr).await.ok();
+    if out.is_none() || err.is_none() {
+        stop.send_replace(true);
+    }
+    let out = match out {
+        Some(out) => out,
+        None => stdout.await,
+    };
+    let err = match err {
+        Some(err) => err,
+        None => stderr.await,
+    };
+    Ok((
+        out.map_err(io::Error::other)??,
+        err.map_err(io::Error::other)??,
+    ))
 }
 
 /// Whether a process of `group` still runs. A zombie (ended, not yet reaped) doesn't: a forked

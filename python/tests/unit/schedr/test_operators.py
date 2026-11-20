@@ -10,6 +10,7 @@ from schedr import (
     Dag,
     DefaultOutcome,
     EmptyOperator,
+    ExtensionTask,
     Outcome,
     Resource,
     ScriptOperator,
@@ -26,10 +27,12 @@ from schedr._model import (
     DagCtxRef,
     EdgeKind,
     EmptyKind,
+    ExtensionKind,
     OutputRef,
     ScalarType,
     SecretRef,
     ShellCommand,
+    TaskCleanup,
     Template,
     TemplateRef,
     registry,
@@ -557,3 +560,45 @@ def test_a_resource_has_one_of_the_three_cleanups() -> None:
     for build in (script_then_command, command_then_script, function_then_script):
         with pytest.raises(TypeError, match=r"resource `r` has a cleanup already"):
             _resource_tasks(_DECLARED, build)
+
+
+def test_an_extension_task(validate: Validate) -> None:
+    with Dag("d"):
+        op = ExtensionTask(
+            "spark",
+            name="spark",
+            version="1.0",
+            payload={"job": "daily", "days": [1, 2]},
+            returns=dict[str, int],
+            queue="spark",
+            cleanup=True,
+            cleanup_handles=["job"],
+        )
+    task = only_dag().tasks[0]
+    assert task.kind == ExtensionKind("spark", "1.0", {"job": "daily", "days": [1, 2]})
+    assert task.settings.queue == "spark"
+    assert task.cleanup == TaskCleanup(handles=("job",), extension=True)
+    assert task.to_json()["cleanup"]["run"] == "extension"
+    assert op.output._schedr_reference() == OutputRef("spark")  # type: ignore[attr-defined]
+    validate("Task", task.to_json())
+
+
+@pytest.mark.parametrize(
+    ("given", "error", "match"),
+    [
+        ({"name": "Bad name"}, ValueError, "must be 1 to 64"),
+        ({"name": "a__b"}, ValueError, "without `__`"),
+        ({"name": "discover"}, ValueError, "is a key of `\\[extensions\\]`"),
+        ({"version": ""}, ValueError, "version '' must be"),
+        ({"version": "1 0"}, ValueError, "without spaces"),
+        ({"payload": {"at": timedelta(1)}}, TypeError, "the payload must be JSON"),
+        ({"payload": float("nan")}, TypeError, "the payload must be JSON"),
+        ({"cleanup_handles": ["job"]}, TypeError, "without `cleanup=True`"),
+    ],
+)
+def test_bad_extension_tasks_are_refused(
+    given: dict[str, Any], error: type[Exception], match: str
+) -> None:
+    arguments: dict[str, Any] = {"name": "spark", "version": "1.0"} | given
+    with Dag("d"), pytest.raises(error, match=match):
+        ExtensionTask("spark", **arguments)

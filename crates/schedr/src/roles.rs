@@ -473,6 +473,8 @@ pub fn agent_settings(
                 .join(file_name(&worker_id)),
             memory,
             fork_server: fork_config(config),
+            // Those discovered are added by the role, which may run them (`discover_plugins`).
+            extensions: configured_plugins(config),
         },
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
@@ -494,6 +496,34 @@ pub fn agent_settings(
         // Made by the role, which knows whether it has a database (`SecretPlan::stores`).
         secrets: std::sync::Arc::new(schedr_agent::secrets::SecretStores::none()),
     })
+}
+
+/// The plugins `[extensions.<name>]` configures (decision 510).
+fn configured_plugins(config: &Config) -> schedr_agent::extensions::Plugins {
+    config
+        .extensions
+        .plugins
+        .iter()
+        .map(|(name, plugin)| {
+            let plugin = schedr_agent::extensions::Plugin {
+                command: plugin.command.clone(),
+                versions: plugin.versions.iter().cloned().collect(),
+            };
+            (name.clone(), plugin)
+        })
+        .collect()
+}
+
+/// `agent`'s plugins with those `[extensions] discover = true` finds on the role's `PATH`.
+pub async fn discover_plugins(
+    agent: &mut AgentSettings,
+    config: &Config,
+    env: &BTreeMap<String, String>,
+) {
+    let configured = std::mem::take(&mut agent.setup.extensions);
+    let path = env.get("PATH").map_or("", String::as_str);
+    agent.setup.extensions =
+        schedr_agent::extensions::plugins(configured, config.extensions.discover, path).await;
 }
 
 /// The DAG interpreter's fork server settings, when `fork_server = true`.
@@ -2211,6 +2241,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         .map_err(|e| AppError::BadArgument(format!("can't create {}: {e}", data_dir.display())))?;
     warn_without_dag_roots(&config, false);
     let mut agent = agent_settings(&config, env, &data_dir, WORKER_RESERVE)?;
+    discover_plugins(&mut agent, &config, env).await;
     secure_logs(log_mode(&config), &agent.setup.log_dir)?;
     // Secrets go there as files: a folder another user made first is refused (decision 201).
     schedr_agent::connection_env::prepare(&agent.setup.connection_dir)

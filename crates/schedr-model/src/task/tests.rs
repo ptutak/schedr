@@ -270,3 +270,68 @@ fn a_mapped_tasks_expand_round_trips_and_its_references_count() {
             .is_none()
     );
 }
+
+#[test]
+fn an_extension_kind_keeps_its_payload_as_it_is() {
+    let kind: TaskKind = serde_json::from_value(json!({
+        "kind": "extension", "name": "spark", "version": "1.0",
+        "payload": {"job": "daily", "nested": [1, {"a": null}]}
+    }))
+    .unwrap();
+    let TaskKind::Extension {
+        name,
+        version,
+        payload,
+    } = &kind
+    else {
+        panic!("{kind:?}");
+    };
+    assert_eq!((name.as_str(), version.as_str()), ("spark", "1.0"));
+    assert_eq!(
+        payload,
+        &json!({"job": "daily", "nested": [1, {"a": null}]})
+    );
+    let back = serde_json::to_value(&kind).unwrap();
+    assert_eq!(
+        back["payload"],
+        json!({"job": "daily", "nested": [1, {"a": null}]})
+    );
+    let without: TaskKind =
+        serde_json::from_value(json!({"kind": "extension", "name": "spark", "version": "1"}))
+            .unwrap();
+    assert!(matches!(
+        without,
+        TaskKind::Extension {
+            payload: serde_json::Value::Null,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn an_extension_name_is_a_config_key_of_its_own() {
+    for good in ["spark", "k8s-job", "a_b", "A1"] {
+        assert_eq!(check_extension_name(good), Ok(()), "{good}");
+    }
+    for bad in [
+        "",
+        "1spark",
+        "a b",
+        "a__b",
+        "a.b",
+        "discover",
+        "Discover",
+        &"a".repeat(65),
+    ] {
+        assert!(check_extension_name(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn an_extension_version_is_counted_in_characters() {
+    // Grok's review of M5.2i: the master counted bytes, the SDK characters.
+    assert_eq!(check_extension_version(&"é".repeat(64)), Ok(()));
+    for bad in ["", "1 0", "1\u{7}", &"é".repeat(65), "1\t"] {
+        assert!(check_extension_version(bad).is_err(), "{bad:?}");
+    }
+}

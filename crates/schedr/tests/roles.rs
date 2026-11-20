@@ -429,11 +429,14 @@ fn a_running_task_survives_a_master_restart() {
             .cli_json(&["runs", "list", "pause"])
             .is_some_and(|runs| runs["runs"][0]["state"] == "success")
     });
-    let statuses: Vec<Value> = cluster
-        .attempts(&run_id, "pause")
-        .iter()
-        .map(|a| a["status"].clone())
-        .collect();
+    // A failed read is an empty list (`attempts`): read until one answers, as a busy machine
+    // may time one out (it failed once so in make check, 2026-11-20).
+    let mut attempts = Vec::new();
+    cluster.wait("the attempts to be read", || {
+        attempts = cluster.attempts(&run_id, "pause");
+        !attempts.is_empty()
+    });
+    let statuses: Vec<Value> = attempts.iter().map(|a| a["status"].clone()).collect();
     assert_eq!(
         statuses,
         ["success"],

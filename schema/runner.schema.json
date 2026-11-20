@@ -167,6 +167,95 @@
         },
         {
           "additionalProperties": false,
+          "description": "An extension task's attempt, to its plugin (decision 510): its kind is `extension`, its\npayload in `task`. With `cleanup` set, the plugin's cleanup with those handles instead.",
+          "properties": {
+            "cleanup": {
+              "description": "Set for a cleanup: the task's cleanup function is called with the task's inputs and\nthese handles, in registration order, instead of the task.",
+              "items": {
+                "$ref": "#/$defs/CleanupHandle"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "connection_test": {
+              "description": "Set for `schedr connections test` (decision 174): no task is run; the file is\nimported, and this connection opened and checked (decision 198).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dag_file": {
+              "$ref": "#/$defs/DagFile",
+              "description": "The DAG file to import."
+            },
+            "dag_id": {
+              "description": "The DAG's ID (the file may define several DAGs).",
+              "type": "string"
+            },
+            "inputs": {
+              "additionalProperties": true,
+              "description": "The upstream outputs the task uses, by task ID, as stored JSON.",
+              "type": "object"
+            },
+            "outcomes": {
+              "additionalProperties": true,
+              "default": {},
+              "description": "The upstream tasks' outcomes, by task ID: a name, or `null` for a skipped one (its\nreferences stand for `None`).",
+              "type": "object"
+            },
+            "run": {
+              "$ref": "#/$defs/RunInfo",
+              "description": "The run information."
+            },
+            "secrets": {
+              "description": "The secrets fetched for the attempt (those its arguments name and those it declares,\nprefixes aside): filled into its arguments and read by `task_ctx.secret(...)`.",
+              "items": {
+                "$ref": "#/$defs/SecretValue"
+              },
+              "type": "array"
+            },
+            "sys_path": {
+              "description": "Directories put first on `sys.path` (every DAG root).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/Task",
+              "description": "The task as stored in DAG JSON (its arguments and settings)."
+            },
+            "trigger": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TriggerStart"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set for a trigger: `task` is its function, which yields events until it is stopped."
+            },
+            "type": {
+              "const": "extension_task",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "dag_file",
+            "dag_id",
+            "task",
+            "inputs",
+            "run",
+            "sys_path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The fork server's preload list (its mode's request).",
           "properties": {
             "preload": {
@@ -927,6 +1016,11 @@
             "script"
           ],
           "type": "object"
+        },
+        {
+          "const": "extension",
+          "description": "An extension task's: its plugin run again with the attempt's handles\n(`extension_cleanup`, decision 510).",
+          "type": "string"
         }
       ]
     },
@@ -2227,8 +2321,17 @@
               "$ref": "#/$defs/RunnerMode",
               "description": "The mode the runner was started in."
             },
+            "protocol": {
+              "description": "The protocol version a plugin speaks (`extension` mode, [`EXTENSION_PROTOCOL`]);\nnone from the Python runner, which matches by `schedr_version`.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "schedr_version": {
-              "description": "The installed `schedr` package version; it must equal the agent's.",
+              "description": "The installed `schedr` package version; it must equal the agent's. A plugin's own\nversion, not checked (`extension` mode).",
               "type": "string"
             },
             "type": {
@@ -2893,6 +2996,11 @@
           "const": "watchers",
           "description": "Run the wait steps of one code set as coroutines, long-lived (decision 320).",
           "type": "string"
+        },
+        {
+          "const": "extension",
+          "description": "An extension's plugin, running one of its tasks (decision 510): sent\n[`AgentMessage::ExtensionTask`].",
+          "type": "string"
         }
       ]
     },
@@ -3492,6 +3600,33 @@
           },
           "required": [
             "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An extension's task (decision 510): run by the plugin a worker configured for `name` at\nexactly `version`, in its own process and a task slot (decision note 15). Its payload is\nstored and sent untouched; a worker without the plugin rejects it, no try counted.",
+          "properties": {
+            "kind": {
+              "const": "extension",
+              "type": "string"
+            },
+            "name": {
+              "description": "The extension's name, as the workers' `[extensions.<name>]`.",
+              "type": "string"
+            },
+            "payload": {
+              "default": null,
+              "description": "What the plugin is asked to do: any JSON, under the DAG's limits."
+            },
+            "version": {
+              "description": "The version it is written for, matched exactly.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "version"
           ],
           "type": "object"
         }

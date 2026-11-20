@@ -275,6 +275,58 @@ pub const DEFAULT_IN_FLIGHT: u32 = 16;
 /// trigger's `max_output_size` each.
 pub const MAX_IN_FLIGHT: u32 = 100;
 
+/// The most an extension task's payload may take as JSON (decision 510): it travels with each
+/// attempt, as a connection's values do.
+pub const MAX_EXTENSION_PAYLOAD: usize = 1024 * 1024;
+
+/// The section's own keys under `[extensions]`, never an extension's name.
+pub const EXTENSION_SECTION_KEYS: &[&str] = &["discover"];
+
+/// Whether `name` can name an extension: 1 to 64 letters, digits, `_` and `-`, starting with a
+/// letter, without `__` (environment variables split there), and not a key of `[extensions]`
+/// itself (`discover`).
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub fn check_extension_name(name: &str) -> Result<(), String> {
+    let ok_chars = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if name.is_empty()
+        || name.len() > 64
+        || !ok_chars
+        || !name.starts_with(|c: char| c.is_ascii_alphabetic())
+        || name.contains("__")
+    {
+        return Err(
+            "a name is 1 to 64 letters, digits, `_` and `-`, starting with a letter, without `__`"
+                .to_owned(),
+        );
+    }
+    if EXTENSION_SECTION_KEYS.contains(&name.to_ascii_lowercase().as_str()) {
+        return Err(format!("`{name}` is a key of `[extensions]`, not a name"));
+    }
+    Ok(())
+}
+
+/// Whether `version` can be an extension's version: 1 to 64 characters, none whitespace nor a
+/// control character. The one rule for a task's, a plugin's configured and a discovered one
+/// (Grok's review of M5.2i: they differed).
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub fn check_extension_version(version: &str) -> Result<(), String> {
+    let count = version.chars().count();
+    if count == 0 || count > 64 || version.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(format!(
+            "version `{version}` must be 1 to 64 characters, without spaces or control characters"
+        ));
+    }
+    Ok(())
+}
+
 /// The kind of a task and what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -407,6 +459,18 @@ pub enum TaskKind {
     },
     /// An `EmptyOperator`: completed by the master, no process.
     Empty,
+    /// An extension's task (decision 510): run by the plugin a worker configured for `name` at
+    /// exactly `version`, in its own process and a task slot (decision note 15). Its payload is
+    /// stored and sent untouched; a worker without the plugin rejects it, no try counted.
+    Extension {
+        /// The extension's name, as the workers' `[extensions.<name>]`.
+        name: String,
+        /// The version it is written for, matched exactly.
+        version: String,
+        /// What the plugin is asked to do: any JSON, under the DAG's limits.
+        #[serde(default)]
+        payload: serde_json::Value,
+    },
 }
 
 /// `TriggerDagOperator`'s `wait` when not given: it waits.
@@ -450,6 +514,9 @@ pub enum CleanupRun {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<Template>,
     },
+    /// An extension task's: its plugin run again with the attempt's handles
+    /// (`extension_cleanup`, decision 510).
+    Extension,
 }
 
 /// A task's cleanup: `finally` for each of its attempts (see archive/PROJECT.md, Per-task cleanup).
@@ -550,7 +617,9 @@ impl Task {
     pub fn cleanup_command(&self) -> Option<&CommandLine> {
         match self.cleanup.as_ref().map(|c| &c.run) {
             Some(CleanupRun::Command(command)) => Some(command),
-            Some(CleanupRun::Python | CleanupRun::Script { .. }) | None => None,
+            Some(CleanupRun::Python | CleanupRun::Script { .. } | CleanupRun::Extension) | None => {
+                None
+            }
         }
     }
 
@@ -643,7 +712,11 @@ impl Task {
                 .chain(planned_for)
                 .flat_map(Value::references)
                 .collect(),
-            TaskKind::Empty | TaskKind::FirstOf { .. } | TaskKind::WaitFor { .. } => Vec::new(),
+            // An extension's payload is plain JSON, sent untouched: no references.
+            TaskKind::Empty
+            | TaskKind::FirstOf { .. }
+            | TaskKind::WaitFor { .. }
+            | TaskKind::Extension { .. } => Vec::new(),
         }
     }
 }

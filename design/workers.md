@@ -442,11 +442,12 @@ Each is one line; the reader's page has the diagrams.
 - **One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our
   API, no lifecycle built on them** (D512, planned (M5.2i3)): schedr runs no work of its own design
   where one fault ends unrelated tasks: no `@async_extension` (one controller coroutine serving an
-  extension's tasks, M5.2i3, dropped) and no mode running ordinary tasks in a shared event loop;
-  each task keeps its own process. Wait steps (`@sensor`, `@trigger`) keep sharing a watcher host,
-  as does decision 510's `watcher` form, since they are that public API: an author may build a long-
-  lived lifecycle on them, but schedr builds none and shows no example of one; sensors and triggers
-  are not meant for it.
+  extension's tasks, M5.2i3, dropped) and no mode running ordinary tasks in a shared event loop, nor
+  decision 510's `watcher` form for extensions (decision note 16); each task keeps its own process.
+  Wait steps (`@sensor`, `@trigger`) keep sharing a watcher host, since they are that public API: an
+  author may build a long-lived lifecycle on them, but schedr builds none and shows no example of
+  one; sensors and triggers are not meant for it. *Corrected by DN16:* Decision 512's exception
+  narrowed: only wait steps share a watcher host.
 
 ### From other topics
 
@@ -489,7 +490,7 @@ Each is one line; the reader's page has the diagrams.
 - A round releases the core lock between its batches of assignments (D469, `assignment`; built M5.1c1)
 - The round's slow parts on due flags; what is read before the lock is only what the round alone writes (D506, `assignment`; planned (M5.2cB4))
 - A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster (D509, `assignment`; built M5.2e)
-- Extensions: a task kind run by a plugin executable the open worker supervises (D510, `task-processes`; planned (M5.2i))
+- Extensions: a task kind run by a plugin executable the open worker supervises (D510, `task-processes`; built M5.2i)
 - A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly (D511, `secrets`; built M5.2h6)
 <!-- end of current -->
 

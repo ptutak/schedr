@@ -262,6 +262,10 @@ STANDALONE_PREPARE = prepare() { \
 	done; \
 }
 
+# The dummy extension (examples/extensions/dummy, decision 510) found by discovery: its folder
+# first on the workers' PATH (`uv run` puts the environment's python3 before it).
+EXT_ENV = SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$$PATH"
+
 standalone: SHELL := /bin/bash
 standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of DAGS (examples/); a secret key in .schedr/secret.key, the docs examples' secrets; the UI's Docs from site/ once `make docs` built it
 	cargo build -p schedr
@@ -276,7 +280,7 @@ standalone:      ## Run schedr standalone here: SQLite in .schedr/, the DAGs of 
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 	SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
 	$(if $(wildcard site/index.html),SCHEDR_CONFIG__UI__DOCS_DIR="$(abspath site)") \
-	uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
+	$(EXT_ENV) uv run --no-sync target/debug/schedr standalone --migrate --listen $(LISTEN)
 
 # A federation for trying the UI over many deployments by hand: two standalones without a UI
 # (`--no-ui`), `main` with the DAGs of DAGS and `second` with those of DAGS2, and a `schedr ui`
@@ -323,7 +327,7 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 		SCHEDR_CONFIG__MASTER__GRPC_PORT=$$(($$3 + 70)) \
 		SCHEDR_CONFIG__WORKER__LOG_PORT=$$(($$3 + 81)) \
 		SCHEDR_CONFIG__OPS__PORT=$$(($$3 + 90)) \
-		uv run --no-sync target/debug/schedr standalone --migrate --no-ui --listen $(LISTEN) & \
+		$(EXT_ENV) uv run --no-sync target/debug/schedr standalone --migrate --no-ui --listen $(LISTEN) & \
 		printf '[[ui.deployments]]\nname = "%s"\nurl = "http://127.0.0.1:%s"\n\n' "$$1" $$(($$3 + 80)) >> "$$dir/ui.toml"; \
 	}; \
 	mkdir -p "$$dir"; \
@@ -357,7 +361,7 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 		SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
-		uv run --no-sync target/debug/schedr worker ) & \
+		$(EXT_ENV) uv run --no-sync target/debug/schedr worker ) & \
 	printf '[[ui.deployments]]\nname = "main"\nurl = "http://127.0.0.1:%s"\n\n' $$((main + 80)) >> "$$dir/ui.toml"; \
 	: "the standby once the first master leads (the API answers after the migration);"; \
 	: "\`exec\` in each role: the trap's kill reaches the role itself"; \
@@ -431,7 +435,7 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
-			PATH="$(DIST_ENV)/bin:$$PATH" "$$bin" worker ) & \
+			SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$(DIST_ENV)/bin:$$PATH" "$$bin" worker ) & \
 	done; \
 	printf '[ui]\nbind = "%s"\nport = %s\ndocs_dir = "%s"\n\n[ops]\nbind = "127.0.0.1"\nport = %s\n\n[[ui.deployments]]\nname = "distributed"\nurl = "http://127.0.0.1:%s"\n' \
 		"$(LISTEN)" $$((b + 82)) "$(if $(wildcard site/index.html),$(abspath site))" $$((b + 92)) $$((b + 80)) > "$$d/ui.toml"; \

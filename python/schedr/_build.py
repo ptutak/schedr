@@ -123,6 +123,7 @@ class CleanupWanted:
     line: CommandLine | None = None
     handles: tuple[str, ...] | None = None
     script: CleanupScript | None = None
+    extension: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +266,7 @@ class TaskOptions:
             wanted.handles,
             bool(self.cleanup_anywhere),
             wanted.script,
+            wanted.extension,
         )
 
     def settings(self) -> TaskSettings:

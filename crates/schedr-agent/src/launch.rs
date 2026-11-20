@@ -218,6 +218,18 @@ pub enum TaskProcess {
 }
 
 impl TaskProcess {
+    /// As [`Self::output`], waiting at most `drain` for both pipes to close (B274).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::output`].
+    pub async fn output_within(self, drain: Duration) -> std::io::Result<(TailBuffer, TailBuffer)> {
+        match self {
+            Self::Spawned(process) => process.output_within(drain).await,
+            Self::Forked(process) => process.output_within(drain).await,
+        }
+    }
+
     /// The captured stdout and stderr, once both pipes are closed.
     ///
     /// # Errors
@@ -367,7 +379,11 @@ async fn task_conversation(
         Option<&crate::api::ApiCaller>,
     ),
 ) -> (Option<RunnerMessage>, Option<Duration>) {
-    let request = AgentMessage::Task(Box::new(request));
+    let request = if matches!(request.task.kind, schedr_model::TaskKind::Extension { .. }) {
+        AgentMessage::ExtensionTask(Box::new(request))
+    } else {
+        AgentMessage::Task(Box::new(request))
+    };
     if write_message(stream, &request).await.is_err() {
         return (None, None);
     }
@@ -427,9 +443,31 @@ async fn task_conversation(
                     return (None, import);
                 }
             }
-            message => return (message.ok(), import),
+            Ok(message) => return (Some(message), import),
+            Err(_) => {
+                // A message over the limit, or one that can't be read: the channel is closed
+                // both ways, so a runner still writing fails at once instead of blocking with
+                // no reader, its slot held until a timeout that may not be set (B275).
+                let _ = rustix::net::shutdown(&*stream, rustix::net::Shutdown::Both);
+                return (None, import);
+            }
         }
     }
+}
+
+/// The mode `task`'s runner starts in, and the fork servers it may come from: an extension's
+/// plugin is its own program (decision 510), spawned, never forked from the Python fork server;
+/// a task asking for a fresh process or a hard memory cap is spawned too.
+fn runner_mode<'a>(
+    task: &schedr_model::Task,
+    forks: Option<&'a ForkServers>,
+) -> (RunnerMode, Option<&'a ForkServers>) {
+    if matches!(task.kind, schedr_model::TaskKind::Extension { .. }) {
+        return (RunnerMode::Extension, None);
+    }
+    let settings = &task.settings;
+    let forks = forks.filter(|_| !settings.fresh_process && !settings.hard_memory_limit);
+    (RunnerMode::Task, forks)
 }
 
 /// Runs a Python task: starts the runner (forked by `forks` when there are any and they can,
@@ -467,18 +505,10 @@ pub async fn run_python(
     // The task's own choice: never forked (`fresh_process`), or not from the preloaded server.
     // A hard memory cap is set by `schedr task-exec` before the runner starts: spawned too.
     let settings = &request.task.settings;
-    let forks = forks.filter(|_| !settings.fresh_process && !settings.hard_memory_limit);
+    let (mode, forks) = runner_mode(&request.task, forks);
     let preload = settings.preload;
     let stops = Some((&mut stop, deadline));
-    let start = start_task_runner(
-        process,
-        RunnerMode::Task,
-        forks,
-        preload,
-        hold,
-        stops,
-        spawned,
-    );
+    let start = start_task_runner(process, mode, forks, preload, hold, stops, spawned);
     let (mut process, mut stream, hello_after) = match start.await? {
         Start::Ready(process, stream, hello_after) => (process, stream, hello_after),
         // Cancelled or timed out before its hello: stopped as a running task is, the reason
@@ -541,7 +571,8 @@ pub async fn run_python(
     };
     let supervised = supervised.map_err(LaunchError::Supervise)?;
     let ended = process.ended();
-    let _ = process.output().await;
+    // A child it left may hold its output: read for the drain time at most (B274).
+    let _ = process.output_within(output_drain).await;
     Ok(Ran {
         supervised,
         runner_result,
@@ -602,7 +633,12 @@ pub async fn run_command(
         .await
         .map_err(LaunchError::Supervise)?;
     let ended = process.ended();
-    let output = process.output().await.map_err(LaunchError::Supervise)?;
+    // A child it left may hold its output (`server &`): read for the drain time at most, so it
+    // can't hold the attempt and its slot (B274).
+    let output = process
+        .output_within(spec.output_drain)
+        .await
+        .map_err(LaunchError::Supervise)?;
     Ok(Ran {
         supervised,
         runner_result: None,

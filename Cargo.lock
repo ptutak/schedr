@@ -3303,6 +3303,7 @@ dependencies = [
  "figment",
  "pretty_assertions",
  "rstest",
+ "schedr-model",
  "schemars",
  "serde",
  "serde_json",
@@ -3328,6 +3329,18 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "schedr-extension"
+version = "1.0.0"
+dependencies = [
+ "pretty_assertions",
+ "rustix",
+ "schedr-model",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
